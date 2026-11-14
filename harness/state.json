@@ -1,10 +1,14 @@
 {
-  "stage": "G1 in progress; G0 reference inventory in parallel",
-  "status": "incomplete",
-  "remote": "blocked: shell cannot connect to api.github.com; connector authenticated owner but repository 404",
-  "next": "Build pinned Cocoa engine, implement native app and run bridge tests",
-  "workers": {
-    "reference": "docs/research, docs/parity",
-    "bridge": "Sources/EditorBridge, Tests/BridgeChecks.mm"
-  }
+  "status": "INCOMPLETE PREVIEW",
+  "stage": "G1/G2 working slice; selected G3 features; full G0 normalization and G3/G4 parity remain open",
+  "remote": "https://github.com/funkymonkeyjam/TextTank",
+  "pr": "https://github.com/funkymonkeyjam/TextTank/pull/1",
+  "branch": "implementation/native-mac",
+  "next": [
+    "Finish final independent review repairs and publish validated preview",
+    "Implement reference-compatible search and normalized behavioral inventory",
+    "Continue full required capability ledger; do not waive gaps"
+  ],
+  "evidence": "docs/REVIEW-ME.md",
+  "transport": "Shell network unavailable; GitHub connector commits preserve identical source tree with separate commit ancestry"
 }

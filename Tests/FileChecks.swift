@@ -74,11 +74,24 @@ import Darwin
         let id = UUID()
         let first = RecoverySnapshot(id:id,text:"edited\0😀",format:FileFormat(),originalURL:original.absoluteString,revision:1)
         try store.save(first)
+        let firstPath = storeURL.appendingPathComponent(id.uuidString+".json")
+        let privateDirectoryMode = (try FileManager.default.attributesOfItem(atPath:storeURL.path)[.posixPermissions] as! NSNumber).intValue
+        let privateFileMode = (try FileManager.default.attributesOfItem(atPath:firstPath.path)[.posixPermissions] as! NSNumber).intValue
+        try check(privateDirectoryMode == 0o700 && privateFileMode == 0o600,"recovery directory and initial file private")
         try check(store.load(id:id) == first,"exact snapshot reload")
         // Reinstantiate to demonstrate persistence independent of live store instance.
         try check(RecoveryStore(directory:storeURL).load(id:id) == first,"restart reload")
         let second = RecoverySnapshot(id:id,text:"newer",format:FileFormat(),originalURL:original.absoluteString,revision:2)
+        // Simulate old broad metadata and require replacement to restore private permissions.
+        try FileManager.default.setAttributes([.posixPermissions:0o755],ofItemAtPath:storeURL.path)
+        try FileManager.default.setAttributes([.posixPermissions:0o644],ofItemAtPath:firstPath.path)
+        let parentModeBefore = (try FileManager.default.attributesOfItem(atPath:root.path)[.posixPermissions] as! NSNumber).intValue
         try store.save(second)
+        let replacedMode = (try FileManager.default.attributesOfItem(atPath:firstPath.path)[.posixPermissions] as! NSNumber).intValue
+        let correctedDirectoryMode = (try FileManager.default.attributesOfItem(atPath:storeURL.path)[.posixPermissions] as! NSNumber).intValue
+        let parentModeAfter = (try FileManager.default.attributesOfItem(atPath:root.path)[.posixPermissions] as! NSNumber).intValue
+        try check(replacedMode == 0o600 && correctedDirectoryMode == 0o700,"replacement repairs old broad recovery metadata")
+        try check(parentModeBefore == parentModeAfter,"recovery privacy does not chmod parent")
         rejects("stale write") { try store.save(first) }
         rejects("stale cleanup") { try store.remove(id:id,throughRevision:1) }
         try check(store.load(id:id) == second,"newer survives stale operations")
@@ -91,6 +104,13 @@ import Darwin
         try check(Data(contentsOf:path) == corrupt,"corrupt remains inspectable")
         try check(Data(contentsOf:original) == originalBytes,"original never changed")
         try FileManager.default.removeItem(at:path)
+        let overflow = RecoverySnapshot(id:UUID(),text:"preserve",format:FileFormat(),originalURL:nil,revision:UInt64.max)
+        rejects("unbounded revision rejected before restore arithmetic") { try store.save(overflow) }
+        let overflowPath = storeURL.appendingPathComponent(overflow.id.uuidString+".json")
+        let overflowBytes = try JSONEncoder().encode(overflow); try overflowBytes.write(to:overflowPath)
+        rejects("unbounded persisted revision rejected") { _ = try store.load(id:overflow.id) }
+        try check(Data(contentsOf:overflowPath) == overflowBytes,"invalid revision preserved for review")
+        try FileManager.default.removeItem(at:overflowPath)
         var unknown = first; unknown.schemaVersion = 999
         rejects("unknown write version") { try store.save(unknown) }
         try JSONEncoder().encode(unknown).write(to:path)

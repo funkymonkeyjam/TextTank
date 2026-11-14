@@ -4,24 +4,72 @@
 #include "ILexer.h"
 #include "Lexilla.h"
 #include <vector>
+#include <cstring>
+
+// NSString's UTF-8 constructors consume a leading EF BB BF as an external BOM.
+// Editor bytes are already decoded content, so U+FEFF must remain ordinary text.
+// A temporary ASCII prefix prevents that interpretation; remove only that prefix.
+static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
+    NSMutableData *prefixed = [NSMutableData dataWithCapacity:length + 1];
+    const unsigned char sentinel = 'x';
+    [prefixed appendBytes:&sentinel length:1];
+    if (length) [prefixed appendBytes:bytes length:length];
+    NSString *decoded = [[NSString alloc] initWithData:prefixed encoding:NSUTF8StringEncoding];
+    NSCAssert(decoded != nil, @"Scintilla content must remain valid UTF-8");
+    return decoded ? [decoded substringFromIndex:1] : @"";
+}
+
+// Scintilla's document canvas can be much wider than the viewport. Exposing its
+// full NSView frame makes accessibility clients aim outside the visible editor.
+// Preserve native text/input behavior while describing its visible screen region.
+@interface TTContentView : SCIContentView
+@end
+@implementation TTContentView
+- (NSRect)accessibilityFrame {
+    if (!self.window) return NSZeroRect;
+    return [self.window convertRectToScreen:[self convertRect:self.visibleRect toView:nil]];
+}
+@end
+@interface TTScintillaView : ScintillaView
+@end
+@implementation TTScintillaView
++ (Class)contentViewClass { return TTContentView.class; }
+@end
+
+static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
+    static NSDictionary<NSString *, NSNumber *> *map;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ map = @{
+        @"cut":@(SCI_CUT), @"copy":@(SCI_COPY), @"paste":@(SCI_PASTE), @"selectAll":@(SCI_SELECTALL),
+        @"duplicateLine":@(SCI_LINEDUPLICATE), @"deleteLine":@(SCI_LINEDELETE), @"transposeLine":@(SCI_LINETRANSPOSE),
+        @"upper":@(SCI_UPPERCASE), @"lower":@(SCI_LOWERCASE),
+        @"charLeft":@(SCI_CHARLEFT), @"charRight":@(SCI_CHARRIGHT), @"lineUp":@(SCI_LINEUP), @"lineDown":@(SCI_LINEDOWN),
+        @"home":@(SCI_HOME), @"lineEnd":@(SCI_LINEEND), @"documentStart":@(SCI_DOCUMENTSTART), @"documentEnd":@(SCI_DOCUMENTEND),
+        @"wordLeft":@(SCI_WORDLEFT), @"wordRight":@(SCI_WORDRIGHT),
+        @"charLeftExtend":@(SCI_CHARLEFTEXTEND), @"charRightExtend":@(SCI_CHARRIGHTEXTEND), @"lineUpExtend":@(SCI_LINEUPEXTEND), @"lineDownExtend":@(SCI_LINEDOWNEXTEND),
+        @"homeExtend":@(SCI_HOMEEXTEND), @"lineEndExtend":@(SCI_LINEENDEXTEND), @"documentStartExtend":@(SCI_DOCUMENTSTARTEXTEND), @"documentEndExtend":@(SCI_DOCUMENTENDEXTEND),
+        @"wordLeftExtend":@(SCI_WORDLEFTEXTEND), @"wordRightExtend":@(SCI_WORDRIGHTEXTEND),
+        @"deleteBack":@(SCI_DELETEBACK), @"deleteForward":@(SCI_CLEAR), @"newLine":@(SCI_NEWLINE), @"tab":@(SCI_TAB), @"backTab":@(SCI_BACKTAB)
+    }; });
+    return map;
+}
 
 @interface TTEditor () <ScintillaNotificationProtocol>
 @property(nonatomic, strong) ScintillaView *engine;
 @property(nonatomic, readwrite) NSUInteger revision;
+@property(nonatomic) BOOL macroRecording;
 @end
 @implementation TTEditor
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
         NSAssert(NSThread.isMainThread, @"Editor must be created on the main thread");
-        _engine = [[ScintillaView alloc] initWithFrame:self.bounds];
+        _engine = [[TTScintillaView alloc] initWithFrame:NSZeroRect];
         _engine.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         [self addSubview:_engine];
         _engine.delegate = self;
         [_engine message:SCI_SETCODEPAGE wParam:SC_CP_UTF8];
         [_engine setFontName:@"Menlo" size:14 bold:NO italic:NO];
-        [_engine message:SCI_STYLESETFORE wParam:STYLE_DEFAULT lParam:0x1F2015];
-        [_engine message:SCI_STYLESETBACK wParam:STYLE_DEFAULT lParam:0xF0F6F4];
-        [_engine message:SCI_STYLECLEARALL];
+        [self applyPalette];
         [_engine message:SCI_SETMARGINTYPEN wParam:0 lParam:SC_MARGIN_NUMBER];
         [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:48];
         [_engine message:SCI_MARKERDEFINE wParam:1 lParam:SC_MARK_CIRCLE];
@@ -39,8 +87,37 @@
         [_engine message:SCI_SETMARGINWIDTHN wParam:2 lParam:16];
         [_engine message:SCI_SETMARGINSENSITIVEN wParam:2 lParam:1];
         [_engine message:SCI_SETAUTOMATICFOLD wParam:SC_AUTOMATICFOLD_SHOW | SC_AUTOMATICFOLD_CLICK | SC_AUTOMATICFOLD_CHANGE];
+        // Scintilla creates its scroll view at 100x10. Its initWithFrame does not
+        // position the inner content. Start at zero so this real size transition also
+        // invokes backend Resize, which initializes the document viewport.
+        _engine.frame = self.bounds;
     }
     return self;
+}
+- (void)layout {
+    [super layout];
+    _engine.frame = self.bounds;
+}
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    if (_engine) [self applyPalette];
+}
+- (void)applyPalette {
+    BOOL dark = [[self.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua,NSAppearanceNameDarkAqua]] isEqualToString:NSAppearanceNameDarkAqua];
+    const sptr_t foreground = dark ? 0xF0F6F4 : 0x1F2015;
+    const sptr_t background = dark ? 0x171810 : 0xF0F6F4;
+    [_engine message:SCI_STYLESETFORE wParam:STYLE_DEFAULT lParam:foreground];
+    [_engine message:SCI_STYLESETBACK wParam:STYLE_DEFAULT lParam:background];
+    [_engine message:SCI_STYLECLEARALL];
+    [_engine message:SCI_STYLESETFORE wParam:STYLE_LINENUMBER lParam:dark ? 0xAAB8B3 : 0x59645F];
+    [_engine message:SCI_STYLESETBACK wParam:STYLE_LINENUMBER lParam:dark ? 0x222A25 : 0xE3E9E5];
+    [_engine message:SCI_SETCARETFORE wParam:foreground];
+    [_engine message:SCI_SETSELFORE wParam:1 lParam:dark ? 0xFFFFFF : 0x101010];
+    [_engine message:SCI_SETSELBACK wParam:1 lParam:dark ? 0x725038 : 0xF1D4AF];
+    for (int style : {1, 2, 3}) [_engine message:SCI_STYLESETFORE wParam:style lParam:dark ? 0x9BC18E : 0x47804B];
+    for (int style : {5, 11, 17}) [_engine message:SCI_STYLESETFORE wParam:style lParam:dark ? 0xDBA6C9 : 0xA04470];
+    for (int style : {6, 7, 13}) [_engine message:SCI_STYLESETFORE wParam:style lParam:dark ? 0x8ACFE8 : 0x255EA0];
+    _engine.needsDisplay = YES;
 }
 - (void)dealloc { _engine.delegate = nil; }
 - (BOOL)acceptsFirstResponder { return YES; }
@@ -51,7 +128,7 @@
     const sptr_t length = [_engine message:SCI_GETLENGTH];
     std::vector<char> bytes((size_t)length + 1);
     [_engine message:SCI_GETTEXT wParam:bytes.size() lParam:(sptr_t)bytes.data()];
-    return [[NSString alloc] initWithBytes:bytes.data() length:(NSUInteger)length encoding:NSUTF8StringEncoding] ?: @"";
+    return TTStringFromUTF8(bytes.data(), (NSUInteger)length);
 }
 - (void)setText:(NSString *)text {
     [self assertThread];
@@ -74,7 +151,7 @@
         if (selection) [joined appendBytes:"\n" length:1];
         [joined appendBytes:bytes.data() length:(NSUInteger)(end-start)];
     }
-    return [[NSString alloc] initWithData:joined encoding:NSUTF8StringEncoding] ?: @"";
+    return TTStringFromUTF8(joined.bytes, joined.length);
 }
 - (NSInteger)selectionCount { [self assertThread]; return [_engine message:SCI_GETSELECTIONS]; }
 - (NSInteger)selectionStart { [self assertThread]; return [_engine message:SCI_GETSELECTIONSTART]; }
@@ -175,8 +252,35 @@
         @"unindent": @(SCI_BACKTAB), @"upper": @(SCI_UPPERCASE), @"lower": @(SCI_LOWERCASE),
         @"zoomIn": @(SCI_ZOOMIN), @"zoomOut": @(SCI_ZOOMOUT),
         @"moveLineUp": @(SCI_MOVESELECTEDLINESUP), @"moveLineDown": @(SCI_MOVESELECTEDLINESDOWN)}; });
-    NSNumber *message = commands[identifier];
+    NSNumber *message = commands[identifier] ?: TTMacroCommands()[identifier];
     if (message) [_engine message:message.unsignedIntValue];
+}
+- (void)startRecording { [self assertThread]; _macroRecording = YES; [_engine message:SCI_STARTRECORD]; }
+- (void)stopRecording { [self assertThread]; _macroRecording = NO; [_engine message:SCI_STOPRECORD]; }
+- (void)beginUndoGroup { [self assertThread]; [_engine message:SCI_BEGINUNDOACTION]; }
+- (void)endUndoGroup { [self assertThread]; [_engine message:SCI_ENDUNDOACTION]; }
+- (BOOL)executeMacroStep:(NSDictionary<NSString *, id> *)step {
+    [self assertThread];
+    if (![step isKindOfClass:NSDictionary.class]) return NO;
+    id kind = step[@"kind"];
+    if (![kind isKindOfClass:NSString.class]) return NO;
+    if ([kind isEqualToString:@"insertText"]) {
+        id text = step[@"text"];
+        if (![text isKindOfClass:NSString.class] || self.selectionCount != 1) return NO;
+        [self replaceSelection:text]; return YES;
+    }
+    if ([kind isEqualToString:@"command"]) {
+        id command = step[@"command"];
+        if (![command isKindOfClass:NSString.class]) return NO;
+        // Only symbolic editing commands can reach Scintilla; no imported message
+        // number, pointer, executable, or arbitrary parameter is ever dispatched.
+        NSNumber *message = TTMacroCommands()[command];
+        if (!message && [command isEqualToString:@"indent"]) message = @(SCI_TAB);
+        if (!message && [command isEqualToString:@"unindent"]) message = @(SCI_BACKTAB);
+        if (!message) return NO;
+        [_engine message:message.unsignedIntValue]; return YES;
+    }
+    return NO;
 }
 + (NSArray<NSString *> *)availableLanguages {
     NSMutableArray<NSString *> *names = [NSMutableArray array];
@@ -195,9 +299,7 @@
     [_engine message:SCI_SETILEXER wParam:0 lParam:(sptr_t)lexer];
     [_engine message:SCI_SETPROPERTY wParam:(uptr_t)"fold" lParam:(sptr_t)"1"];
     [_engine message:SCI_SETKEYWORDS wParam:0 lParam:(sptr_t)"if else for while return class struct import func let var true false null int void const static public private"];
-    for (int style : {1, 2, 3}) [_engine message:SCI_STYLESETFORE wParam:style lParam:0x47804B];
-    for (int style : {5, 11, 17}) [_engine message:SCI_STYLESETFORE wParam:style lParam:0xA04470];
-    for (int style : {6, 7, 13}) [_engine message:SCI_STYLESETFORE wParam:style lParam:0x255EA0];
+    [self applyPalette];
     [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
 }
 - (BOOL)find:(NSString *)text matchCase:(BOOL)matchCase backwards:(BOOL)backwards {
@@ -219,6 +321,28 @@
     return YES;
 }
 - (void)notification:(SCNotification *)notification {
+    // Native responder Undo/Redo bypasses the application command dispatcher and
+    // Scintilla does not emit MacroRecord for these operations. Never save a macro
+    // that silently omits their changes.
+    if (_macroRecording && _onMacroStep && notification->nmhdr.code == SCN_MODIFIED &&
+        (notification->modificationType & (SC_PERFORMED_UNDO | SC_PERFORMED_REDO))) {
+        _onMacroStep(@{@"kind":@"unsupported", @"message":@(notification->modificationType & SC_PERFORMED_UNDO ? SCI_UNDO : SCI_REDO)});
+    }
+    if (notification->nmhdr.code == SCN_MACRORECORD && _onMacroStep) {
+        NSDictionary *step = nil;
+        if (notification->message == SCI_REPLACESEL && notification->lParam && self.selectionCount == 1) {
+            const char *utf8 = (const char *)notification->lParam;
+            NSString *text = TTStringFromUTF8(utf8, std::strlen(utf8));
+            if (text.length) step = @{@"kind":@"insertText", @"text":text};
+        } else {
+            for (NSString *name in TTMacroCommands()) {
+                if (TTMacroCommands()[name].unsignedIntValue == notification->message) {
+                    step = @{@"kind":@"command", @"command":name}; break;
+                }
+            }
+        }
+        _onMacroStep(step ?: @{@"kind":@"unsupported", @"message":@(notification->message)});
+    }
     if (notification->nmhdr.code == SCN_FOCUSIN && _onFocus) _onFocus();
     if (notification->nmhdr.code == SCN_MODIFIED &&
         (notification->modificationType & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))) {

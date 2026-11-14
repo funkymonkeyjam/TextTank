@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import Darwin
 
 final class AutomationController: NSObject, NSMenuDelegate {
     private let editorProvider: () -> TTEditor?
@@ -107,11 +108,35 @@ final class AutomationController: NSObject, NSMenuDelegate {
                     continue
                 }
                 try checkShortcutCollisions(proposed)
-                try FileManager.default.createDirectory(at: storage.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try proposed.encoded().write(to: storage, options: .atomic)
-                library = proposed; rebuild(); return
+                try persistLibrary(proposed); return
             } catch { showError(error) }
         }
+    }
+    /// Shared private persistence for edited workflows and explicitly selected destinations.
+    func persistLibrary(_ proposed: AutomationLibrary) throws {
+        if let loadError { throw loadError } // Never overwrite an unreadable existing library.
+        let data = try proposed.encoded()
+        let directory = storage.deletingLastPathComponent()
+        if FileManager.default.fileExists(atPath: directory.path) {
+            let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+            guard attributes[.type] as? FileAttributeType == .typeDirectory else { throw AutomationError.invalid("Automation storage must be a regular directory.") }
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        if FileManager.default.fileExists(atPath: storage.path) {
+            // attributesOfItem performs a fresh lstat; URL resource values may be cached
+            // across an externally replaced path and must not authorize the write.
+            let attributes = try FileManager.default.attributesOfItem(atPath: storage.path)
+            guard attributes[.type] as? FileAttributeType == .typeRegular else { throw AutomationError.invalid("Automation storage must be a regular file.") }
+        }
+        let temporary = directory.appendingPathComponent(".automations-" + UUID().uuidString)
+        let descriptor = open(temporary.path,O_CREAT|O_EXCL|O_WRONLY|O_NOFOLLOW,mode_t(0o600))
+        guard descriptor >= 0 else { throw CocoaError(.fileWriteNoPermission) }
+        let handle = FileHandle(fileDescriptor:descriptor,closeOnDealloc:true)
+        defer { try? handle.close(); try? FileManager.default.removeItem(at:temporary) }
+        try handle.write(contentsOf:data); try handle.synchronize(); try handle.close()
+        guard rename(temporary.path,storage.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        library = proposed; rebuild()
     }
     private func checkShortcutCollisions(_ proposed: AutomationLibrary) throws {
         func existing(_ menu: NSMenu) -> Set<String> {
@@ -220,7 +245,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
                 // Persist chosen default only after explicit Send intent. Failure prevents send.
                 if let index = self.library.workflows.firstIndex(where: {$0.id == workflow.id}) {
                     var proposed = self.library; proposed.workflows[index].destinationID = destinationID
-                    try proposed.encoded().write(to: self.storage, options:.atomic); self.library = proposed
+                    try self.persistLibrary(proposed)
                 }
                 let batch = try await connector.export(rows:rows, destinationID:destinationID, batchID:UUID())
                 self.showReminderResults(batch)

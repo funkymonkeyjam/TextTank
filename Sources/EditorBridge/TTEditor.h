@@ -14,6 +14,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, nullable) void (^onChange)(void);
 @property(nonatomic, copy, nullable) void (^onFocus)(void);
 + (NSArray<NSString *> *)availableLanguages;
+@property(nonatomic, copy, nullable) void (^onMacroStep)(NSDictionary<NSString *, id> *step);
+- (void)startRecording;
+- (void)stopRecording;
+- (BOOL)executeMacroStep:(NSDictionary<NSString *, id> *)step;
+- (void)beginUndoGroup;
+- (void)endUndoGroup;
 @property(nonatomic) BOOL wrap;
 - (void)shareDocumentWith:(TTEditor *)other;
 - (void)executeCommand:(NSString *)identifier;

@@ -6,9 +6,12 @@
     "depends_on": [],
     "suggested_role": "integrator",
     "acceptance": "Identity and existing Git state observed; no unrelated repo mutated",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "complete",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T01",
@@ -19,9 +22,12 @@
     ],
     "suggested_role": "integrator",
     "acceptance": "Curated main bootstrap, implementation/native-mac branch and CI push/PR policy",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "complete",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T02",
@@ -32,9 +38,12 @@
     ],
     "suggested_role": "parity",
     "acceptance": "Source pin + distribution profile; seed dispositions and missing dialogs/preferences/core tools inventoried",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T03",
@@ -45,9 +54,12 @@
     ],
     "suggested_role": "engine",
     "acceptance": "Exact URL/hash/notices and verified target layout; build settings recorded",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "complete",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T04",
@@ -59,9 +71,12 @@
     ],
     "suggested_role": "engine",
     "acceptance": "Actual AppKit typing, IME, Unicode, undo, lexer, clone lifetime and early accessibility evidence",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T05",
@@ -72,9 +87,12 @@
     ],
     "suggested_role": "documents",
     "acceptance": "Fault-injected byte preservation, unique-document dirty close/quit and durable snapshot tests",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T06",
@@ -85,9 +103,12 @@
     ],
     "suggested_role": "integrator",
     "acceptance": "Menus, shortcuts, recording policy, availability and typed effects use shared dispatcher",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T07",
@@ -99,9 +120,12 @@
     ],
     "suggested_role": "editor",
     "acceptance": "Exact behavior rows verified through real command wiring, split/clone and Undo",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T08",
@@ -127,9 +151,12 @@
     ],
     "suggested_role": "languages",
     "acceptance": "Data/configuration plus actual lexing/folding/navigation/UDL import/export coverage",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T10",
@@ -140,9 +167,12 @@
     ],
     "suggested_role": "macros",
     "acceptance": "Persisted edit and Find/Replace parameter playback, repeat/cancel and Undo evidence",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T11",
@@ -196,9 +226,12 @@
     ],
     "suggested_role": "automations",
     "acceptance": "Stable IDs/versioning, editable names, typed steps, preview/cancel/revision and Undo tests",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T15",
@@ -210,9 +243,12 @@
     ],
     "suggested_role": "automations",
     "acceptance": "Menu/shortcut/toolbar/command/context same-definition tests; clipboard/editor/file output",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T16",
@@ -224,9 +260,12 @@
     ],
     "suggested_role": "connectors",
     "acceptance": "Injected-store fault tests and journal; live scratch-list verification separately pending actual consent",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T17",
@@ -238,9 +277,12 @@
     ],
     "suggested_role": "native-ux",
     "acceptance": "Actual light/dark/focus/AX/native icon evidence; single source supports declared OS target",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T18",
@@ -273,9 +315,12 @@
     ],
     "suggested_role": "reviewer",
     "acceptance": "Exact-SHA independent findings/dispositions; no open blocking data-loss issues",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   },
   {
     "id": "T20",
@@ -286,8 +331,11 @@
     ],
     "suggested_role": "integrator",
     "acceptance": "Actual .app/ZIP hash, run instructions, SHA-tied checks, unmerged PR, demo and precise limitations",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "docs/REVIEW-ME.md",
+      "docs/parity/implementation-evidence.json"
+    ]
   }
 ]

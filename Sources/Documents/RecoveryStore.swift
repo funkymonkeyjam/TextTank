@@ -55,7 +55,7 @@ final class RecoveryStore {
             }
         }
         let data = try JSONEncoder().encode(snapshot)
-        try data.write(to: destination, options: .atomic)
+        try privateAtomicWrite(data, to: destination)
     }
     /// Read exactly one identified snapshot, validating its filename identity and schema.
     func load(id: UUID) throws -> RecoverySnapshot {
@@ -105,8 +105,30 @@ final class RecoveryStore {
     private func url(for id: UUID) -> URL { directory.appendingPathComponent(id.uuidString).appendingPathExtension("json") }
     private func prepareDirectory() throws {
         try checkDirectoryIfPresent()
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try checkDirectoryIfPresent()
+        // The injected directory is dedicated to recovery. Never change parent permissions.
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+    }
+    private func privateAtomicWrite(_ data: Data, to destination: URL) throws {
+        let temporary = directory.appendingPathComponent(UUID().uuidString + ".pending")
+        // Create an empty private file before adding any document content. The containing
+        // directory is already 0700, including during initial file creation.
+        guard FileManager.default.createFile(atPath: temporary.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let handle = try FileHandle(forWritingTo: temporary)
+        defer { try? handle.close() }
+        try handle.write(contentsOf: data)
+        try handle.synchronize()
+        try handle.close()
+        if FileManager.default.fileExists(atPath: destination.path) {
+            // Keep the new private metadata, rather than inheriting older broad permissions.
+            _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary, options: .usingNewMetadataOnly)
+        } else {
+            try FileManager.default.moveItem(at: temporary, to: destination)
+        }
     }
     private func checkDirectoryIfPresent() throws {
         guard directory.isFileURL else { throw RecoveryError.unsafeLocation }
@@ -126,7 +148,7 @@ final class RecoveryStore {
         return snapshot
     }
     private func validate(_ snapshot: RecoverySnapshot) throws {
-        guard snapshot.schemaVersion == 1, snapshot.savedAt.timeIntervalSince1970.isFinite else { throw RecoveryError.invalidSnapshot }
+        guard snapshot.schemaVersion == 1, snapshot.revision <= UInt64(Int64.max), snapshot.savedAt.timeIntervalSince1970.isFinite else { throw RecoveryError.invalidSnapshot }
         // Pending edits may be unrepresentable in the selected disk encoding; retain those
         // exact edits for recovery rather than refusing to protect them. Validate only metadata.
         if snapshot.format.bom && [.latin1,.windows1252].contains(snapshot.format.encoding) { throw RecoveryError.invalidSnapshot }
