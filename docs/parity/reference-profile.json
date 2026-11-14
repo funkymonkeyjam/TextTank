@@ -1,0 +1,2308 @@
+{
+  "source_commit": "61246e5741fd7c59352f3feb5ccc7e33e4594d15",
+  "source_version": "8.9.8.1",
+  "profile": "official source standard portable/installer package recipes",
+  "artifact_version": null,
+  "artifact_url": null,
+  "artifact_sha256": null,
+  "artifact_state": "unresolved; official distribution has not been downloaded/verified",
+  "source_url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/packageAll.bat",
+  "standard_bundled_utilities": [
+    "mimeTools",
+    "NppConverter",
+    "NppExport"
+  ],
+  "configurations": [
+    {
+      "path": "PowerEditor/src/langs.model.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/langs.model.xml",
+      "sha256": "fb2a98a1cd701cf5c05723e337666b786ed9d5cb5dbd6c93c11e0d5c80a8a671"
+    },
+    {
+      "path": "PowerEditor/src/stylers.model.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/stylers.model.xml",
+      "sha256": "58fae88e672f389a6cad72a4a2edaffe34cb1b09b1941adcf2d4f9228ea0a536"
+    },
+    {
+      "path": "PowerEditor/installer/packageAll.bat",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/packageAll.bat",
+      "sha256": "89a1f9a1267f42e4d68056549eb6df19eea184b0f25e6b0ab2c25ae79f36c3b6"
+    },
+    {
+      "path": "PowerEditor/installer/msi/defaultPlugins.wxs",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/msi/defaultPlugins.wxs",
+      "sha256": "c6eb03a27c2ab39bc147b709b50ee91af85661cb2c8d634296ba360bfaed3f6a"
+    },
+    {
+      "path": "PowerEditor/installer/nppSetup.nsi",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nppSetup.nsi",
+      "sha256": "864464ceaa06a07e44497fc7b19073b622c35f623851606e73167c1f88283701"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/abkhazian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/abkhazian.xml",
+      "sha256": "2cdb90b034a6864134f75e206a2853be5178d09bdcd1515e25047adae3ca685d"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/afrikaans.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/afrikaans.xml",
+      "sha256": "80a48d38830a64f3976e0f662bd48a79798cae23d1cd3deefa679cd01be88ec8"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/albanian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/albanian.xml",
+      "sha256": "2248e68cbe9421b4277cf81ccb23f2d2d1aa9f0aa3180dbc4d67029fce5dfa5b"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/arabic.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/arabic.xml",
+      "sha256": "f831c5efc0fec679c7d861b9ede39f1eebb6465e66a1b42d487bc70c20033b19"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/aragonese.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/aragonese.xml",
+      "sha256": "6f79e06bc21d38558600eac7d72a1d59ca1c41230c41d51e57cf4a3a3c9ab3e8"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/aranese.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/aranese.xml",
+      "sha256": "c796d6568c8d3ef96a48b0a34d54128185e7227682e0bb7d5c2ab3164f0b7175"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/azerbaijani.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/azerbaijani.xml",
+      "sha256": "d0a31a3e2ee0067562b37eabc31b255d3f87ac56f6440f7e50dbcaf3101eaa61"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/basque.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/basque.xml",
+      "sha256": "ac6358cb8e1b2176caadd032672938393b1313eff8c442f3d4deaa475812a2fc"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/belarusian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/belarusian.xml",
+      "sha256": "b312d28e07e1c1643a87cc71cf27cf66b8a8bc2a98137065377c50698c407480"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/bengali.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/bengali.xml",
+      "sha256": "a08c8b6b1613bce0d433df40c2411de460c4b1e63dcbf3fe345ce1c37a7cea0c"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/bosnian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/bosnian.xml",
+      "sha256": "721bf7e84223d500d9bbbf564f2d77fe755e3c253bd0242e5759cf4460ca3888"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/brazilian_portuguese.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/brazilian_portuguese.xml",
+      "sha256": "63f0b6771b3ad3b06887e95c88fb69d1cf3601afe105e1e936f29662d12accb1"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/breton.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/breton.xml",
+      "sha256": "fbde0d04d749bd8e76d4f87712afcd7cdaa5268331374fc3003fdbdbb93bc77e"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/bulgarian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/bulgarian.xml",
+      "sha256": "8f7d1ba047fb5814d3680e2422190e6157f038a95b5cb38110f7cf92c91c55b4"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/catalan.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/catalan.xml",
+      "sha256": "3487867c999c026edc32c5dc50bf07b8858cfd8fb406b75f79828c5293942b75"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/chineseSimplified.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/chineseSimplified.xml",
+      "sha256": "eaefb61ff64920b1b238fb752e902b6da02ade5f29e2a9d9e855f81de9af65ca"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/corsican.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/corsican.xml",
+      "sha256": "12624e09370912a2686ad1181a3dedb9b11ee41bcbe29bbbc637cd9aa0fb6d3b"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/croatian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/croatian.xml",
+      "sha256": "1ee0af7b32bca19f5b54e3822355676550d1112c5aafb192bcc40bab1ee715e5"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/czech.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/czech.xml",
+      "sha256": "b878600c3c57edb3966dec769df7a5fdc0c7b57dbf1734efacc7175489eb6ec1"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/danish.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/danish.xml",
+      "sha256": "4f5c7ddceeb1b97a4a92ea7e026c583a787c2d139be335d7164ed24195137d08"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/dutch.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/dutch.xml",
+      "sha256": "9a616ae3ceef8a35baa402b7f16c98cc2f5246b4e5a4e2fdb99b82c49db78163"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/english.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/english.xml",
+      "sha256": "0af82d4c5a9cc3c2d376395fe11a892da6c0c0eee0f427b559a324166c1262f4"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/english_customizable.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/english_customizable.xml",
+      "sha256": "ddd50b6657653e1897bb1157044e7cf1677f4cd49b20a30e1ebc46a3d6da0f01"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/esperanto.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/esperanto.xml",
+      "sha256": "f998d25b5cad190f5ec2b44aefdd2798e1c7a3f718fc582ef14f73b7ee9ad5e1"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/estonian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/estonian.xml",
+      "sha256": "c42b795cd9c9836cbf5013c7b8a2408d6d9bb5b5eb224de6e25525d56e1bc488"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/extremaduran.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/extremaduran.xml",
+      "sha256": "e921d74c1e12196448256b9270d8e7f4ca72e58a817d5bae73434400fa853854"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/farsi.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/farsi.xml",
+      "sha256": "54650113d92a74549cb1b9c6820099c5ff762a7c1c72a067b6aaaedb469ab3bf"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/finnish.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/finnish.xml",
+      "sha256": "8e92a73d559e2a2385b9ea0b951efcb9f8d001308650abe0a212b73a607c3d7b"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/french.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/french.xml",
+      "sha256": "e16661f5847ee99303d805727faf35b5ed63f141de8fc91a8aad73f509500850"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/friulian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/friulian.xml",
+      "sha256": "517f0486a167bd6dddd4421254e09e708d3548cb3c223cd35204b37a1c5ad59c"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/galician.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/galician.xml",
+      "sha256": "4c3453574705b7e56e654f8d17ec31bfb842bf2a3ffc3419ae859c31f9b294fc"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/georgian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/georgian.xml",
+      "sha256": "28c3709c16f3c456f76df93be48b33368f8cdbda9dc26d74ab082bc29033e8ea"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/german.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/german.xml",
+      "sha256": "3c556a6645f175df78ec5d3e18e73d0ef7b283381ec70997194a26688fbe6a0e"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/greek.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/greek.xml",
+      "sha256": "2ea15aab1d21738758aac2d66a9bdf7a3be64697347995dcf4ec6fd8f4103c8f"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/gujarati.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/gujarati.xml",
+      "sha256": "3735adaf7bc5cc42286656f831711636a51c70d3f74c270027d315d55784bca0"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/hebrew.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/hebrew.xml",
+      "sha256": "ae3b4bdf3d2769352368b9da2c4445093ea041e69d2b7d7aa2490b4b1e0f9117"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/hindi.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/hindi.xml",
+      "sha256": "8b82df532601a9920a3a060e6273f291d0d7444b3a5c5a5078cdec749d4339bb"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/hongKongCantonese.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/hongKongCantonese.xml",
+      "sha256": "314f797b37cc130049df2dd3639f6ac130b104ff21b97190d4881d033dbe807d"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/hungarian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/hungarian.xml",
+      "sha256": "a45defe80a72a95e88958cbf68b74e87cd0271ed01573a27a765b056eb510b58"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/indonesian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/indonesian.xml",
+      "sha256": "0c8b7a4ebb2127e856dda973d28bbc7ef7829bc4e99b87953f5041fdcc209cf2"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/irish.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/irish.xml",
+      "sha256": "78874ba2d7cbdd263cebf4e909b7505c50b8c95a563dcb75b4bf8204baa5eb26"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/italian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/italian.xml",
+      "sha256": "9697cadd1b6a4ccb690be572a17f5e729fb1fa6efdb96dd586192d61857e768f"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/japanese.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/japanese.xml",
+      "sha256": "e922644b698e9d61717f24cf7a06619427d217894071808302603e7f85d5dd43"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/kabyle.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/kabyle.xml",
+      "sha256": "1601e9eed68b6d3a11cd38e199cf35e98ab9b0c253b2fdf4027545a18411a983"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/kannada.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/kannada.xml",
+      "sha256": "dbacf669558810e5a7b72599a8723350f4389590870c576b3953203bf424ad5b"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/kazakh.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/kazakh.xml",
+      "sha256": "743aa63bfc4ebfa2b98b0e6b1264fcebf5e33e7b520fa77dd77eb2f6d40b30c6"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/korean.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/korean.xml",
+      "sha256": "83db7fa6119065756300ba44ca5e19f5fd65e8a40fe1d0c85cd017ce7c36daed"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/kurdish.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/kurdish.xml",
+      "sha256": "df5ce8cbfc2fd644f7e9c438ddda3768de5cac956d378d8c923961a3fe362588"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/kyrgyz.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/kyrgyz.xml",
+      "sha256": "e45d89753e4054aa62e1dd98cf4723d4e9c40a0633c62b142fe14ab89d19d351"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/latvian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/latvian.xml",
+      "sha256": "e495e068484388873fa4a8653617741b6142e31a3d1be3cdd451a38fc4ade3a7"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/ligurian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/ligurian.xml",
+      "sha256": "46e76ddf324e09cf059b41ecee1c21c04a9598c94aeb1053a73ca4527bd3b3c2"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/lithuanian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/lithuanian.xml",
+      "sha256": "054d3f7e77b904eea4360ec81ad128e351a57b626e38a04af40fdf1203f739de"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/luxembourgish.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/luxembourgish.xml",
+      "sha256": "d04359ab896b47cd6d8435ba82e3ab23c93ecf20fab498537fc364da8dde51e6"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/macedonian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/macedonian.xml",
+      "sha256": "ece920c5f00b578488e5c44ee0a680157ff988faed3f55e20e843d6686eaf741"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/malay.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/malay.xml",
+      "sha256": "d431a41aac804254eb3e6e4239b8b09df7a5d8ade23ee3c336b6d5c835789268"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/marathi.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/marathi.xml",
+      "sha256": "2c3c41629a5a4c5c78fd245b18ffa193878f54d1d2fc69d45a72391ca3439dc5"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/mongolian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/mongolian.xml",
+      "sha256": "ba44f75c70a0ca669afd76db0dca438c7e439d086d1e0c51709f10117f6c9d21"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/nepali.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/nepali.xml",
+      "sha256": "3862cc98e5c26f584d3742b52d49bb7a50bee69a404e30767310856c92181b44"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/norwegian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/norwegian.xml",
+      "sha256": "b7a0629e3a306bb3b568a9bbfbd7717c653870a43d58180761e8d1f3aa0190db"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/nynorsk.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/nynorsk.xml",
+      "sha256": "ff1fe60556d3b4d04143456d6564c2496ca19330fae99bcf69fabe3b7c8e55ba"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/occitan.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/occitan.xml",
+      "sha256": "90831a396f9ba0cae644257741bdd29250a97237afdb6d9fa1ceeb3419efac5f"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/piglatin.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/piglatin.xml",
+      "sha256": "a9aa6764147d2c306cf94205c189d5a500edb890b8660339216a90d299fcbb82"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/polish.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/polish.xml",
+      "sha256": "2d6c1ac7cead4a65de5e1570e1fb2dfe013028bcfb6b4e880356c9467a66a02d"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/portuguese.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/portuguese.xml",
+      "sha256": "f6191d73d2963bbb1f3a862b3841362364a81ecdf33404929ec30555fc4280ae"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/punjabi.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/punjabi.xml",
+      "sha256": "7c78149d61a78eb48cb16ee0477d7bc8d7a67c609294c83c11d000650a917f8a"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/romanian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/romanian.xml",
+      "sha256": "5284accec4f6aa089319a14255cd003c9035a100d5345a04a22b887ac7df6302"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/russian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/russian.xml",
+      "sha256": "68b9c71583a9de5c21109657af44506d1ccbfa23addb4711c780b87d8458d716"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/samogitian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/samogitian.xml",
+      "sha256": "cf9db7bbdb81286b803bda5a95c661ca8e4028b3cc20c88ef54cbfef2639b3e5"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/sardinian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/sardinian.xml",
+      "sha256": "a166de3c51776fde6ec2f64e28def417ec09e61261358e0f7dd2ada6779a5391"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/serbian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/serbian.xml",
+      "sha256": "08430f2c880289876eb37896589e1a51ae8107a66f2bd86b98f1bddbc0389e49"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/serbianCyrillic.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/serbianCyrillic.xml",
+      "sha256": "3103c84c27d0f78083e8571cadfbdb07dc01831b53e17a751e9519667bc16164"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/sinhala.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/sinhala.xml",
+      "sha256": "82feb734d2813fa3b3c2befa4a6dca04aaab989afc4ecd70e62710efd6b62f9d"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/slovak.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/slovak.xml",
+      "sha256": "af1f038dc4d559562b1c9f3802ff1a4cfc916cb2328b0b71cad79c9e636c4023"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/slovenian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/slovenian.xml",
+      "sha256": "79d2058868df330719ff09c1a92f164897c8fe1517af7ca028f7f2ff7a18613e"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/spanish.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/spanish.xml",
+      "sha256": "488c233b842edb44c67701a311a7d5ad9566b1ad4cce5416af79f1bfab660795"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/spanish_ar.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/spanish_ar.xml",
+      "sha256": "6ae338ac03097075d9c15525269232f5a852f321c2cdf3581fa271572c13e822"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/swedish.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/swedish.xml",
+      "sha256": "901d0f41f9b604a152827b726efadeea42f8351b00728f1630d12eaf1e5dc16f"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/tagalog.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/tagalog.xml",
+      "sha256": "1eaac4a273959d4e87ee174401d5a8f63978692c57a65234e4b68fc9f290b183"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/taiwaneseMandarin.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/taiwaneseMandarin.xml",
+      "sha256": "b9cbe0b770b1ff84d8548af6ac6ca906f429e216e001f33b4f59a563843d20df"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/tajikCyrillic.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/tajikCyrillic.xml",
+      "sha256": "cc0d3c9ad388ba5cf2d623fd9ed5d0cecead0029617ecc3daa795881b9fa6bc8"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/tamil.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/tamil.xml",
+      "sha256": "79429022d74aad6dfa02c529adfaec8c6a7a0a13625046bc379b4b74a8379926"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/tatar.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/tatar.xml",
+      "sha256": "47deb7c4c14c8c478a35a181febde065cf34431e62aa4955d577316cebb237c6"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/telugu.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/telugu.xml",
+      "sha256": "9b81e5ce5daa17b941bf3e1ac4bd69df21c24687edee8f4858c652ccf7873672"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/thai.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/thai.xml",
+      "sha256": "a580b3e2832530e537a75d04dd1b56cc3dd2cca8dbb02e80b1d1bb297586d3d2"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/turkish.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/turkish.xml",
+      "sha256": "20a4aca1065a5156b31a491cf48c9e25ed2958b41c5d75e7268ecb61c468a24b"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/ukrainian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/ukrainian.xml",
+      "sha256": "76b441fef486c3efdc78df07f704fb0096b2fbb50b87e34552c41975ed4b1719"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/urdu.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/urdu.xml",
+      "sha256": "77392fd5d5db7498cb337212429d6b7f2032c6bbc8815b530f5aa8e2a7ec3fb8"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/uyghur.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/uyghur.xml",
+      "sha256": "a4f84d9fb2c9712cac3bdd73e7ffcbf87c826388d02f76f302039d51e84bac11"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/uzbek.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/uzbek.xml",
+      "sha256": "eb295a2b3a5672ef7087d9104053bd09d1cb1c2f8852c4ef07b5dcce4e590dc7"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/uzbekCyrillic.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/uzbekCyrillic.xml",
+      "sha256": "dc3d6a8c16a0bef88f97c46a40cc7565b4d2e9621475f6257563e2946d7f8a7a"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/venetian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/venetian.xml",
+      "sha256": "2a220f039ccd027887613092660f43009d7a22e5e13c8eabdacf18d05cca5398"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/vietnamese.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/vietnamese.xml",
+      "sha256": "c79f3d0bf5d8e84325c1b6fbf326a007e03d233506574fe198f4b259fd7e7bb2"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/welsh.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/welsh.xml",
+      "sha256": "bbdb807ecb9d644b9f38297e901093734fe1f3374ebd429ebe833229bb487f13"
+    },
+    {
+      "path": "PowerEditor/installer/nativeLang/zulu.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/nativeLang/zulu.xml",
+      "sha256": "3e1d894ff671bf5bf6582b877c21e18c2a397949b95e717b98c46d30382a1012"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/BaanC.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/BaanC.xml",
+      "sha256": "d408ed3caef21ebb64fb29d633e9ce5069454c1a792a09e2e24f83595d2743be"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/actionscript.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/actionscript.xml",
+      "sha256": "0ece58221295c2965346b81d63ca1b6167ab47d1d8ba3fef377c9beded607491"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/autoit.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/autoit.xml",
+      "sha256": "2ec5e32faa08feea16b56c1d3528328208d0cc011f16284e907d441a748e19e3"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/batch.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/batch.xml",
+      "sha256": "aa4578cb59c281c169b753511d1d7776a3794d1ad225c2b44952a8370d87784b"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/c.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/c.xml",
+      "sha256": "35aadc7531e2332679c54306899a21fe3586b7203132cb5673b64915feb91bad"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/cmake.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/cmake.xml",
+      "sha256": "f902adc5faf041306b54d48914a5bc9c8d45057a4da431786aef451e2c39d1f7"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/cobol.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/cobol.xml",
+      "sha256": "7690e1bbe3ee5d55b993ebc1f41df35f5bf1b7aac7c6b6152a6f1112cb9a6773"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/coffee.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/coffee.xml",
+      "sha256": "785c606ca13b0bd5801df89fc663b48d5e25c1447e10864ebf8de0a53f22052c"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/cpp.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/cpp.xml",
+      "sha256": "859225af31857a4413b72fc91dda16bfdecdeb3c465faa78929a97b14e421d0b"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/cs.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/cs.xml",
+      "sha256": "51167c87e44f41d00756bf36c425de070ab831d8b18e75b5c1d3b1468f20dcf9"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/css.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/css.xml",
+      "sha256": "a7ffa5e1fad7ef02d3cc1e6ef3152d3dbdc20b421f3738da4ea95ca3bb92c28f"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/d.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/d.xml",
+      "sha256": "fd6aaabebea0433bbe35ba1fbeba6e34ae74f85070c132705db6b9868f69e546"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/gdscript.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/gdscript.xml",
+      "sha256": "2e9391ae5807f8d2666ece00bdd473a235ca2ba31c53682f285cd4598f95dcab"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/go.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/go.xml",
+      "sha256": "b32fb13f6fb628eec6b447983dd062c13f7a68e2aded77be3c5af7384935a7ff"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/html.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/html.xml",
+      "sha256": "f2ff7acfcb670ff9d644fb39f3962d38be7a46736869465375cf7322e84f05e2"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/java.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/java.xml",
+      "sha256": "18d4506cbd6c04e33b948b1824662efc432a89e83e18abffb78043a2121f5580"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/javascript.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/javascript.xml",
+      "sha256": "3c259ef3139db6ea3c1957adc55ee145724d223fe91dab8596ae6758bacecd30"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/lisp.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/lisp.xml",
+      "sha256": "7dee0ce72cf218da91221c2be184bd22ba16b120396aa1f209583fc9f62fd8bf"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/lua.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/lua.xml",
+      "sha256": "688c4cae3d61354b636ae8d1bd7cd5ed2f60800b88f3f78b4f2be85a6becfefc"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/nsis.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/nsis.xml",
+      "sha256": "55c3ca2340aaacc64e33ffb40ef45ee82d1487bf0219592952c65009ceddcb47"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/perl.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/perl.xml",
+      "sha256": "adc43e0f7baae79831ad2665cea0fea62a26fad42008360a32c5cbd91d65bb58"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/php.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/php.xml",
+      "sha256": "559c396bbef3ea974de6aa084f87139c9cb427422491551ad16e7c81169510f3"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/powershell.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/powershell.xml",
+      "sha256": "470b8620816ce80cde7c29bda6d6fc07daacf3cf4d322a0599f690b06fba0478"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/python.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/python.xml",
+      "sha256": "e28d91ccb7c65856d02514ef79e380d391be241fcd30ea56c4e96b0ebdee3aa1"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/raku.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/raku.xml",
+      "sha256": "20809301e7d81e43ad38755a07801d290b07062cc7a0775c1101d0dd9847437f"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/rc.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/rc.xml",
+      "sha256": "cd8750aaaa3b70d9e9ce22232b8ac5f5c4e1e13c4261894a1d8e32c22ae8657e"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/rust.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/rust.xml",
+      "sha256": "885fb81b1eaf6ce11eb26533720a8919f084a05cec7f544be747cf34af6e1871"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/sas.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/sas.xml",
+      "sha256": "b70f93743e05a12cb786dc6bb9af91dfcd4cf523d74760173678152956563642"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/sql.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/sql.xml",
+      "sha256": "1b18ca570694e7128d2751a5c7f46464d8ac167be58627a1fd61324284c15ea5"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/tex.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/tex.xml",
+      "sha256": "c916f03b9dea3d64019907120d7d4efc925e86189327bcbb89969c57934e2c23"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/typescript.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/typescript.xml",
+      "sha256": "1649d2d35cb35bc6125e6add9e135073d7e956e6a109eeee1565bf09d440ce11"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/vb.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/vb.xml",
+      "sha256": "53104b87f91458aac8c6709b74a7cd5f0367fc6f2280b98aaa495a59e1788551"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/vhdl.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/vhdl.xml",
+      "sha256": "dffaf09efd41b7eb9b74128585de649c627627b404fa1925acaa6c56709a3542"
+    },
+    {
+      "path": "PowerEditor/installer/APIs/xml.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/APIs/xml.xml",
+      "sha256": "1730bc85e1cd2652ea44d6da42114937fe9fed4527b5e0cb6e2a09f47e0da92e"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/ada.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/ada.xml",
+      "sha256": "b1f552e17f3f62e75d01059987123d2e386d3ffad63eb865991c72baf1cc06a3"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/asm.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/asm.xml",
+      "sha256": "a305c52aba5936e9e500cd23f7c05e0b5316b413364e36c7816ce8c96fde7c54"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/autoit.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/autoit.xml",
+      "sha256": "542b1e13a20f80498a647294ac2a2e87d56c033af8df0c2afccfe6924a1e006c"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/baanc.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/baanc.xml",
+      "sha256": "271ce79a86f99ee8883c602a087aef2b06a18f8ecab5ef277c1eac776df2e422"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/bash.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/bash.xml",
+      "sha256": "c57816733bd96979ce65e4bb8725f10d980362572b5d7c267c69fc656a3d3063"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/batch.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/batch.xml",
+      "sha256": "6904220ca56cc05058cc1dfbb8f23cadde7b4930229726e058c58a20941adbca"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/c.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/c.xml",
+      "sha256": "f5dd1ebcbe83dad52f3f0b2bbee868a01c030f9302f23c317fa80f4edb2527f5"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/cobol-free.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/cobol-free.xml",
+      "sha256": "7581a631e3bdb686b85976b111d7d46425f5b95ecd0788e7a02e634abb237883"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/cobol.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/cobol.xml",
+      "sha256": "f650ac75182957eea5c1f5bed2d0f80d17c5a5fc5f6924c251ecf2ae88672585"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/cpp.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/cpp.xml",
+      "sha256": "29f679d92fd682a7622d9ecfc2a74b2d9cc2d49219f67d15e3e7e30f329624c5"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/cs.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/cs.xml",
+      "sha256": "c804489fbb8820ac389ce7c1d8565ddf16d0142ea4d678e14b25248af7ff814d"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/css.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/css.xml",
+      "sha256": "25c19513c3646bffd7bb420459dd393680de017aabd4bb53de29e6dfcdef53ab"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/d.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/d.xml",
+      "sha256": "6798930fc61e1fbc7ab263206ec720ab01529759f67c7d9fa4ce87411bfb244e"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/fortran.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/fortran.xml",
+      "sha256": "9a9ab1b7c4009a4a109d1d16e9899fc09431cc2b2ceaa602ea4daebdafa49b46"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/fortran77.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/fortran77.xml",
+      "sha256": "cfe61221fae32924cb37547eb99afeb03d73245b75fc2b2ee8c85f597ccd960c"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/gdscript.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/gdscript.xml",
+      "sha256": "1e75815c07a92b25fdcce067fa503b32303a196c2c0732abe21912a0a0ceeb77"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/haskell.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/haskell.xml",
+      "sha256": "77a08505a71041523c927425d9f7a33d6b8b208289d1fa8cce7aad47ac0f5ad9"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/hollywood.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/hollywood.xml",
+      "sha256": "0f3ef18b3cf4218b6ab9500c49a99cbb722df109ea67bb08261f4dbaa2029adf"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/ini.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/ini.xml",
+      "sha256": "f2937d2ba17da1812aad7d1632ff2384be4d6d5c882a87998a1c5e5dedc087ac"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/inno.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/inno.xml",
+      "sha256": "b9c8c5be06d4eb41fcac0179fe03c061c2e5dfab20514cdc84cf59fc5989badc"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/java.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/java.xml",
+      "sha256": "fbb17503d6bf66bcc3d5097863af8b1212519c3d4b061b2a3644fd2428a57ced"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/javascript.js.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/javascript.js.xml",
+      "sha256": "c4606eaedd971a0e3598aeb179b49e643f76f4fbf7d8663335b58fb94bdfa681"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/krl.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/krl.xml",
+      "sha256": "6691e9b909c6bb39acdd05f937752e6c1139e87ff32c0b4d138a756b923beaae"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/latex.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/latex.xml",
+      "sha256": "83c1a3e1cfc505b842f201fc1459f914be414ad1d43b52048ecf7c097c01857e"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/lua.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/lua.xml",
+      "sha256": "aad05ac01dbe728e6fa731fcda0c9ee0c81f4242b016a397e76ec693644e550c"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/makefile.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/makefile.xml",
+      "sha256": "19188b4d953f0d8975cdd042918f2ce8c94fbc1fb4bd3d7e7350b4854357e8e9"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/nim.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/nim.xml",
+      "sha256": "ef8dc9245f9ccb72dd8a9af842c8c67acec7fbfa314068386ad62419538847f1"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/nppexec.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/nppexec.xml",
+      "sha256": "579159f6e8297268cdbe0226de81b21fb92a282604c78315da80baca4f393703"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/nsis.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/nsis.xml",
+      "sha256": "c0cef119d214e31045446ad90c9a159d9b62416b6341b4b0746f2dc202eb7e22"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/overrideMap.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/overrideMap.xml",
+      "sha256": "e1e77e1b64e5761076b649017deacac292e44f39b735431471b1433a2cd03ce8"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/pascal.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/pascal.xml",
+      "sha256": "05843031cf912c16ea0d9a04a547e14a74c6237439d966fbfa6e33011e6116f7"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/perl.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/perl.xml",
+      "sha256": "9eb21643ec6f9fcce65acc562a759650fa47b30280936009acaf99e9a2a376b1"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/php.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/php.xml",
+      "sha256": "cd9150b4f5d1ec74731eeabf2ac7cf98ce06d02517c3d142eecb083a45c604e4"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/powershell.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/powershell.xml",
+      "sha256": "fa7b46f515eb3fa45bc461b1f044d689d26066578245a22c2c71dc7777d4d38e"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/python.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/python.xml",
+      "sha256": "ab8a2a8471172c174b831dfda4c5c81be0d69b1fc508cda51bc86cb054f45229"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/raku.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/raku.xml",
+      "sha256": "1fc4e6f33cf6d99bf646405f81c12cd5165cf5db7e896ba2624b60a99f48f212"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/ruby.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/ruby.xml",
+      "sha256": "101c8f5c517deeacfca5222c523e89e225355e909c978600597afd668cfdbd4c"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/rust.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/rust.xml",
+      "sha256": "cb832ddb6e76c9e5eaececed5c41625c8f6e98a17b84dd31e8589c4c8d075868"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/sas.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/sas.xml",
+      "sha256": "19af60499e70431af77f4270a0e37072e9edbce0c6365aa4c79efcae7dd4c96f"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/sinumerik.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/sinumerik.xml",
+      "sha256": "f6e348973b4e2e6af7881b5913c63c8961b8b03746d710b814120f09731e541e"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/sql.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/sql.xml",
+      "sha256": "8700aa8730b36ac90c85cb707655f6832f4bb91ef6d8e30b85125b80686abdb0"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/tex.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/tex.xml",
+      "sha256": "b716f72a3066e2288f24de24c20df7ca70ed012b7328580f1c3a2185193ff4cc"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/toml.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/toml.xml",
+      "sha256": "d689eaec3b4149a7e589ee38e80fda4fbfa592594d7155aed80d3da415c60157"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/typescript.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/typescript.xml",
+      "sha256": "a028289afde7f5a1c131bd56dfa9e68a7f90abefadb1531a9a79be4d632af6ac"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/universe_basic.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/universe_basic.xml",
+      "sha256": "4ccee6e4082a531c9488214cfe034c1ca8e7da91cd740cb1795d55b9a32d16a0"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/vb.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/vb.xml",
+      "sha256": "28f56f6a0aca6be323a72988cc2134a346a675d5217dd8b09b65cc88fe2093ed"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/vhdl.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/vhdl.xml",
+      "sha256": "e66ff75bd8e7b415ef5b63796f9c4c171568dd727060bc91568b4b84b626d5b5"
+    },
+    {
+      "path": "PowerEditor/installer/functionList/xml.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/functionList/xml.xml",
+      "sha256": "541202b7b3a023965ecbb7f5b6050319deb3143eedfe6e8d659136ba462cfe72"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Bespin.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Bespin.xml",
+      "sha256": "1e723dd7fbad7674b0b4f46089df38d13cad141f6788c0e2111797bf9707a8b9"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Black board.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Black board.xml",
+      "sha256": "06dfd82eff60211ac192de44097f5f11de5eae58eff5eb4aa7cd54a5e720a898"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Choco.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Choco.xml",
+      "sha256": "76183ae4bcee41d7b205e439d5e1a12c81fadce5408af788c17b0122a7e059ac"
+    },
+    {
+      "path": "PowerEditor/installer/themes/DansLeRuSH-Dark.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/DansLeRuSH-Dark.xml",
+      "sha256": "b09c101a6ed8b34345bccd1c3ad7583df3372cc2e8845fe032b72ffe2413f127"
+    },
+    {
+      "path": "PowerEditor/installer/themes/DarkModeDefault.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/DarkModeDefault.xml",
+      "sha256": "85c22263c3237b0319d5b5dee4a45f234e489a6d1c6a71ad77a7a44199ef3632"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Deep Black.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Deep Black.xml",
+      "sha256": "3f88640801a161a9e3da54b689e9568eb7b4e289862ad4583e000a050b126b0a"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Hello Kitty.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Hello Kitty.xml",
+      "sha256": "87023ec4461a92cf848ce0158e9f9ede1690abcf645eef396e0df5730bc6281d"
+    },
+    {
+      "path": "PowerEditor/installer/themes/HotFudgeSundae.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/HotFudgeSundae.xml",
+      "sha256": "6ff83d324d754b686d665b22a3244957eddebab164b36116e8dccd2d559d2f94"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Mono Industrial.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Mono Industrial.xml",
+      "sha256": "3a6b635ed081f38feb6d6a39e4160ec4130a3910e20c74fa530ffda41c9a211b"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Monokai.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Monokai.xml",
+      "sha256": "40113ebd1c84c0a785bebd89b702a5d96e3ccc641dfedc700d450097725cdff9"
+    },
+    {
+      "path": "PowerEditor/installer/themes/MossyLawn.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/MossyLawn.xml",
+      "sha256": "9b2e3d59910264f33d1858f3b8a0cb7d0d57cd69eeff77fc0a78049582bdce90"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Navajo.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Navajo.xml",
+      "sha256": "da96fc3aa700807498c18e2b822b10ce3ffa56e9cf959c3370c85bf5def4e108"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Obsidian.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Obsidian.xml",
+      "sha256": "7bac25fa693831f31e77fc42bf322a4fa353bb430a871da5ec0cfa71bc94eb39"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Plastic Code Wrap.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Plastic Code Wrap.xml",
+      "sha256": "d1721e78c3c5f2b43f50e86b6fdd19e7dcd66d1b5616451b977d685e7d2e7c44"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Ruby Blue.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Ruby Blue.xml",
+      "sha256": "a3e8d3a05df821eb20b974712540c08941e2df693e0902751d9ac6b6e1367a1f"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Solarized-light.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Solarized-light.xml",
+      "sha256": "1bf934c7bbaaf05d8d72e2a7f1dde97c01802086d09c1250377d6822e0a0f224"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Solarized.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Solarized.xml",
+      "sha256": "849795e6a0448e9a8121624406dccf80299f8a8bfe18ee758f7978df9a298e80"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Twilight.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Twilight.xml",
+      "sha256": "94bb1a58f2ae49026c9bbc8138e6e6d6957453b9a3218301825b02496adc097b"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Vibrant Ink.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Vibrant Ink.xml",
+      "sha256": "b57dd5a33fbf23bfa39bbe332b731b5cd8aba42691dbcf087f2dafe6f9246922"
+    },
+    {
+      "path": "PowerEditor/installer/themes/Zenburn.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/Zenburn.xml",
+      "sha256": "9967941cd1b94374b1a6bb152ed317cba70041acfebcd4a855d0ccecaaed7563"
+    },
+    {
+      "path": "PowerEditor/installer/themes/khaki.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/khaki.xml",
+      "sha256": "17f44831fe107e0e23a8e17cacc73fa21800f62b6a5bd1981776ae583bf389e3"
+    },
+    {
+      "path": "PowerEditor/installer/themes/vim Dark Blue.xml",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/themes/vim Dark Blue.xml",
+      "sha256": "1203db3e7333bc5d09dcef5dbb95c23fa7d682fe9a8be8a62c45227a5e9c5fa0"
+    }
+  ],
+  "languages": [
+    {
+      "name": "normal",
+      "extensions": "txt",
+      "comment_line": null,
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": []
+    },
+    {
+      "name": "actionscript",
+      "extensions": "as mx",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "type1",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "ada",
+      "extensions": "ada ads adb",
+      "comment_line": "--",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1"
+      ]
+    },
+    {
+      "name": "asm",
+      "extensions": "asm",
+      "comment_line": ";",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4",
+        "type5",
+        "type6"
+      ]
+    },
+    {
+      "name": "asn1",
+      "extensions": "mib",
+      "comment_line": "",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2"
+      ]
+    },
+    {
+      "name": "asp",
+      "extensions": "asp aspx",
+      "comment_line": "'",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "autoit",
+      "extensions": "au3",
+      "comment_line": ";",
+      "comment_start": "#CS",
+      "comment_end": "#CE",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4",
+        "type5"
+      ]
+    },
+    {
+      "name": "avs",
+      "extensions": "avs avsi",
+      "comment_line": "#",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4"
+      ]
+    },
+    {
+      "name": "baanc",
+      "extensions": "bc cln",
+      "comment_line": "|",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4",
+        "type5",
+        "type6",
+        "type7"
+      ]
+    },
+    {
+      "name": "bash",
+      "extensions": "bash sh bsh csh bash_profile bashrc profile",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "batch",
+      "extensions": "bat cmd nt",
+      "comment_line": "REM",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1"
+      ]
+    },
+    {
+      "name": "blitzbasic",
+      "extensions": "bb",
+      "comment_line": "",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2"
+      ]
+    },
+    {
+      "name": "c",
+      "extensions": "c lex",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "type1",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "caml",
+      "extensions": "ml mli sml thy",
+      "comment_line": "",
+      "comment_start": "(*",
+      "comment_end": "*)",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1"
+      ]
+    },
+    {
+      "name": "cmake",
+      "extensions": "cmake",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "type1",
+        "type2"
+      ]
+    },
+    {
+      "name": "cobol",
+      "extensions": "cbl cbd cdb cdc cob cpy copy lst",
+      "comment_line": "*>",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1"
+      ]
+    },
+    {
+      "name": "csound",
+      "extensions": "orc sco csd",
+      "comment_line": ";",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1"
+      ]
+    },
+    {
+      "name": "coffeescript",
+      "extensions": "coffee litcoffee",
+      "comment_line": "#",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type2"
+      ]
+    },
+    {
+      "name": "cpp",
+      "extensions": "cpp cxx cc h hh hpp hxx ino",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "type1",
+        "type2",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "cs",
+      "extensions": "cs",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "type1",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "css",
+      "extensions": "css",
+      "comment_line": null,
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type3",
+        "type5"
+      ]
+    },
+    {
+      "name": "d",
+      "extensions": "d",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2"
+      ]
+    },
+    {
+      "name": "diff",
+      "extensions": "diff patch",
+      "comment_line": null,
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": []
+    },
+    {
+      "name": "erlang",
+      "extensions": "erl hrl",
+      "comment_line": "%",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4"
+      ]
+    },
+    {
+      "name": "errorlist",
+      "extensions": "err",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": []
+    },
+    {
+      "name": "escseq",
+      "extensions": "ans",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": []
+    },
+    {
+      "name": "escript",
+      "extensions": "src em",
+      "comment_line": "",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1"
+      ]
+    },
+    {
+      "name": "forth",
+      "extensions": "forth",
+      "comment_line": "\\",
+      "comment_start": "(",
+      "comment_end": ")",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4"
+      ]
+    },
+    {
+      "name": "fortran",
+      "extensions": "f for f90 f95 f2k f23",
+      "comment_line": "!",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1"
+      ]
+    },
+    {
+      "name": "fortran77",
+      "extensions": "f77",
+      "comment_line": "C",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1"
+      ]
+    },
+    {
+      "name": "freebasic",
+      "extensions": "bas bi",
+      "comment_line": "",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2"
+      ]
+    },
+    {
+      "name": "go",
+      "extensions": "go",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "type1",
+        "instre2",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "gui4cli",
+      "extensions": "gui",
+      "comment_line": "//",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3"
+      ]
+    },
+    {
+      "name": "haskell",
+      "extensions": "hs lhs las",
+      "comment_line": "--",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1"
+      ]
+    },
+    {
+      "name": "hollywood",
+      "extensions": "hws",
+      "comment_line": ";",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2"
+      ]
+    },
+    {
+      "name": "html",
+      "extensions": "html htm shtml shtm xhtml xht hta",
+      "comment_line": "",
+      "comment_start": "<!--",
+      "comment_end": "-->",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "ini",
+      "extensions": "ini inf url wer",
+      "comment_line": ";",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": []
+    },
+    {
+      "name": "inno",
+      "extensions": "iss",
+      "comment_line": ";",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4"
+      ]
+    },
+    {
+      "name": "ihex",
+      "extensions": "hex",
+      "comment_line": null,
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": []
+    },
+    {
+      "name": "java",
+      "extensions": "java",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "type1",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "javascript",
+      "extensions": "",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "javascript.js",
+      "extensions": "js jsm jsx mjs vue",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "type1",
+        "instre2",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "json",
+      "extensions": "json",
+      "comment_line": "",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2"
+      ]
+    },
+    {
+      "name": "json5",
+      "extensions": "json5 jsonc",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": []
+    },
+    {
+      "name": "jsp",
+      "extensions": "jsp",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "kix",
+      "extensions": "kix",
+      "comment_line": ";",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1"
+      ]
+    },
+    {
+      "name": "lisp",
+      "extensions": "lsp lisp",
+      "comment_line": ";",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2"
+      ]
+    },
+    {
+      "name": "latex",
+      "extensions": "tex sty",
+      "comment_line": "%",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": []
+    },
+    {
+      "name": "lua",
+      "extensions": "lua",
+      "comment_line": "--",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4",
+        "type5",
+        "type6",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4"
+      ]
+    },
+    {
+      "name": "makefile",
+      "extensions": "mak mk",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": []
+    },
+    {
+      "name": "matlab",
+      "extensions": "m",
+      "comment_line": "%",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1"
+      ]
+    },
+    {
+      "name": "mssql",
+      "extensions": "tsql",
+      "comment_line": "--",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4"
+      ]
+    },
+    {
+      "name": "mmixal",
+      "extensions": "mms",
+      "comment_line": "%",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1"
+      ]
+    },
+    {
+      "name": "nim",
+      "extensions": "nim",
+      "comment_line": "#",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1"
+      ]
+    },
+    {
+      "name": "nncrontab",
+      "extensions": "tab spf",
+      "comment_line": "\\",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1"
+      ]
+    },
+    {
+      "name": "nfo",
+      "extensions": "nfo",
+      "comment_line": null,
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": []
+    },
+    {
+      "name": "nsis",
+      "extensions": "nsi nsh",
+      "comment_line": ";",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2"
+      ]
+    },
+    {
+      "name": "oscript",
+      "extensions": "osx",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4"
+      ]
+    },
+    {
+      "name": "objc",
+      "extensions": "mm",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2"
+      ]
+    },
+    {
+      "name": "pascal",
+      "extensions": "pas pp p inc lpr dpr",
+      "comment_line": null,
+      "comment_start": "{",
+      "comment_end": "}",
+      "keyword_sets": [
+        "instre1"
+      ]
+    },
+    {
+      "name": "perl",
+      "extensions": "pl pm plx t",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1"
+      ]
+    },
+    {
+      "name": "php",
+      "extensions": "php php3 php4 php5 phps phpt phtml",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "postscript",
+      "extensions": "ps",
+      "comment_line": "%",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2"
+      ]
+    },
+    {
+      "name": "powershell",
+      "extensions": "ps1 psm1 psd1",
+      "comment_line": "#",
+      "comment_start": "<#",
+      "comment_end": "#>",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4"
+      ]
+    },
+    {
+      "name": "props",
+      "extensions": "properties conf cf cfg gitattributes gitconfig gitmodules editorconfig",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": []
+    },
+    {
+      "name": "purebasic",
+      "extensions": "pb",
+      "comment_line": "",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2"
+      ]
+    },
+    {
+      "name": "python",
+      "extensions": "py pyw pyx pxd pxi pyi",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "gdscript",
+      "extensions": "gd",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "r",
+      "extensions": "r s splus",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1"
+      ]
+    },
+    {
+      "name": "raku",
+      "extensions": "raku rakumod rakudoc rakutest p6 pm6 pod6 t6",
+      "comment_line": "#",
+      "comment_start": "`{",
+      "comment_end": "}",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4",
+        "type5"
+      ]
+    },
+    {
+      "name": "rebol",
+      "extensions": "r2 r3 reb",
+      "comment_line": ";",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4",
+        "type5"
+      ]
+    },
+    {
+      "name": "registry",
+      "extensions": "reg",
+      "comment_line": ";;",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": []
+    },
+    {
+      "name": "rc",
+      "extensions": "rc",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "ruby",
+      "extensions": "rb rbw",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1"
+      ]
+    },
+    {
+      "name": "rust",
+      "extensions": "rs",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4",
+        "type5"
+      ]
+    },
+    {
+      "name": "sas",
+      "extensions": "sas",
+      "comment_line": "*",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2"
+      ]
+    },
+    {
+      "name": "scheme",
+      "extensions": "scm smd ss",
+      "comment_line": ";",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2"
+      ]
+    },
+    {
+      "name": "smalltalk",
+      "extensions": "st",
+      "comment_line": null,
+      "comment_start": "\"",
+      "comment_end": "\"",
+      "keyword_sets": [
+        "instre1"
+      ]
+    },
+    {
+      "name": "fcST",
+      "extensions": "stx",
+      "comment_line": "//",
+      "comment_start": "(*",
+      "comment_end": "*)",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4"
+      ]
+    },
+    {
+      "name": "spice",
+      "extensions": "scp out",
+      "comment_line": "*",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1"
+      ]
+    },
+    {
+      "name": "sql",
+      "extensions": "sql",
+      "comment_line": "--",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type3"
+      ]
+    },
+    {
+      "name": "srec",
+      "extensions": "mot srec",
+      "comment_line": null,
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": []
+    },
+    {
+      "name": "swift",
+      "extensions": "swift",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "type1",
+        "type2",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "tcl",
+      "extensions": "tcl itcl",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4",
+        "type5",
+        "type6",
+        "type7"
+      ]
+    },
+    {
+      "name": "tehex",
+      "extensions": "tek",
+      "comment_line": null,
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": []
+    },
+    {
+      "name": "tex",
+      "extensions": "tex",
+      "comment_line": "%",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": []
+    },
+    {
+      "name": "toml",
+      "extensions": "toml",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1"
+      ]
+    },
+    {
+      "name": "vb",
+      "extensions": "vb vba vbs",
+      "comment_line": "'",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": [
+        "instre1"
+      ]
+    },
+    {
+      "name": "txt2tags",
+      "extensions": "t2t",
+      "comment_line": "",
+      "comment_start": "",
+      "comment_end": "",
+      "keyword_sets": []
+    },
+    {
+      "name": "typescript",
+      "extensions": "ts tsx",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "type1",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "verilog",
+      "extensions": "v sv vh svh",
+      "comment_line": "//",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2"
+      ]
+    },
+    {
+      "name": "vhdl",
+      "extensions": "vhd vhdl",
+      "comment_line": "--",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2",
+        "type3",
+        "type4"
+      ]
+    },
+    {
+      "name": "visualprolog",
+      "extensions": "pro cl i pack ph",
+      "comment_line": "%",
+      "comment_start": "/*",
+      "comment_end": "*/",
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1",
+        "type2"
+      ]
+    },
+    {
+      "name": "xml",
+      "extensions": "xml xaml xsl xslt xsd xul kml svg mxml xsml wsdl xlf xliff xbl sxbl sitemap gml gpx plist slnx targets vcproj vcxproj csproj csxproj vbproj dbproj dproj wxs wixproj ilproj",
+      "comment_line": "",
+      "comment_start": "<!--",
+      "comment_end": "-->",
+      "keyword_sets": [
+        "instre1",
+        "substyle1",
+        "substyle2",
+        "substyle3",
+        "substyle4",
+        "substyle5",
+        "substyle6",
+        "substyle7",
+        "substyle8"
+      ]
+    },
+    {
+      "name": "yaml",
+      "extensions": "yml yaml",
+      "comment_line": "#",
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1"
+      ]
+    },
+    {
+      "name": "searchResult",
+      "extensions": "",
+      "comment_line": null,
+      "comment_start": null,
+      "comment_end": null,
+      "keyword_sets": [
+        "instre1",
+        "instre2",
+        "type1"
+      ]
+    }
+  ],
+  "limits": [
+    "Source packaging recipes establish intended files, not actual released archive contents or exact plugin binary versions.",
+    "All language styles/keywords, per-language settings, APIs, localizations and function-list parsers remain required; data presence is not implementation."
+  ]
+}

@@ -1,0 +1,210 @@
+{
+  "repository": "https://github.com/notepad-plus-plus/notepad-plus-plus",
+  "commit": "61246e5741fd7c59352f3feb5ccc7e33e4594d15",
+  "branch_at_retrieval": "master",
+  "research_date": "2026-10-29",
+  "method": "Static source analysis; no Windows build or runtime verification",
+  "notepad_source_version": "8.9.8.1",
+  "scintilla_version": "5.6.7",
+  "lexilla_version": "5.5.4",
+  "sources": [
+    {
+      "id": 1,
+      "title": "Project scope and platform",
+      "path": "README.md",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/README.md#L1-L50"
+    },
+    {
+      "id": 2,
+      "title": "Build and dependencies",
+      "path": "BUILD.md",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/BUILD.md#L1-L54"
+    },
+    {
+      "id": 3,
+      "title": "Startup and event loop",
+      "path": "PowerEditor/src/winmain.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/winmain.cpp#L612-L962"
+    },
+    {
+      "id": 4,
+      "title": "Windows message routing",
+      "path": "PowerEditor/src/NppBigSwitch.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/NppBigSwitch.cpp#L903-L941"
+    },
+    {
+      "id": 5,
+      "title": "Commands and macro playback",
+      "path": "PowerEditor/src/NppCommands.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/NppCommands.cpp#L83-L158"
+    },
+    {
+      "id": 6,
+      "title": "Editor notifications",
+      "path": "PowerEditor/src/NppNotification.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/NppNotification.cpp#L30-L150"
+    },
+    {
+      "id": 7,
+      "title": "Application coordination",
+      "path": "PowerEditor/src/Notepad_plus.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/Notepad_plus.cpp#L271-L349"
+    },
+    {
+      "id": 8,
+      "title": "Main and hidden editor views",
+      "path": "PowerEditor/src/Notepad_plus.h",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/Notepad_plus.h#L320-L330"
+    },
+    {
+      "id": 9,
+      "title": "Buffer and FileManager contracts",
+      "path": "PowerEditor/src/ScintillaComponent/Buffer.h",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/ScintillaComponent/Buffer.h#L27-L198"
+    },
+    {
+      "id": 10,
+      "title": "File loading, saving and backups",
+      "path": "PowerEditor/src/ScintillaComponent/Buffer.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/ScintillaComponent/Buffer.cpp#L944-L1086"
+    },
+    {
+      "id": 11,
+      "title": "Direct Scintilla calls",
+      "path": "PowerEditor/src/ScintillaComponent/ScintillaEditView.h",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/ScintillaComponent/ScintillaEditView.h#L273-L285"
+    },
+    {
+      "id": 12,
+      "title": "View activation and lexers",
+      "path": "PowerEditor/src/ScintillaComponent/ScintillaEditView.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/ScintillaComponent/ScintillaEditView.cpp#L2330-L2405"
+    },
+    {
+      "id": 13,
+      "title": "Gap-buffer storage",
+      "path": "scintilla/src/SplitVector.h",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/scintilla/src/SplitVector.h#L15-L100"
+    },
+    {
+      "id": 14,
+      "title": "Text, styles and undo ownership",
+      "path": "scintilla/src/CellBuffer.h",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/scintilla/src/CellBuffer.h#L98-L115"
+    },
+    {
+      "id": 15,
+      "title": "Document modifications",
+      "path": "scintilla/src/Document.cxx",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/scintilla/src/Document.cxx#L1400-L1705"
+    },
+    {
+      "id": 16,
+      "title": "Undo implementation",
+      "path": "scintilla/src/UndoHistory.cxx",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/scintilla/src/UndoHistory.cxx#L230-L396"
+    },
+    {
+      "id": 17,
+      "title": "Windows editor control",
+      "path": "scintilla/win32/ScintillaWin.cxx",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/scintilla/win32/ScintillaWin.cxx#L2345-L2445"
+    },
+    {
+      "id": 18,
+      "title": "Editor logic and rendering",
+      "path": "scintilla/src/Editor.cxx",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/scintilla/src/Editor.cxx#L1881-L1960"
+    },
+    {
+      "id": 19,
+      "title": "Scintilla public API",
+      "path": "https://www.scintilla.org/ScintillaDoc.html",
+      "url": "https://www.scintilla.org/ScintillaDoc.html"
+    },
+    {
+      "id": 20,
+      "title": "C++ language lexer",
+      "path": "lexilla/lexers/LexCPP.cxx",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/lexilla/lexers/LexCPP.cxx#L820-L860"
+    },
+    {
+      "id": 21,
+      "title": "Autocomplete and call tips",
+      "path": "PowerEditor/src/ScintillaComponent/AutoCompletion.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/ScintillaComponent/AutoCompletion.cpp#L308-L459"
+    },
+    {
+      "id": 22,
+      "title": "Find and Replace",
+      "path": "PowerEditor/src/ScintillaComponent/FindReplaceDlg.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/ScintillaComponent/FindReplaceDlg.cpp#L2972-L3118"
+    },
+    {
+      "id": 23,
+      "title": "Search options",
+      "path": "PowerEditor/src/ScintillaComponent/FindReplaceDlg.h",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/ScintillaComponent/FindReplaceDlg.h#L110-L134"
+    },
+    {
+      "id": 24,
+      "title": "Boost regular-expression bridge",
+      "path": "boostregex/BoostRegExSearch.cxx",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/boostregex/BoostRegExSearch.cxx#L1-L90"
+    },
+    {
+      "id": 25,
+      "title": "Settings and session persistence",
+      "path": "PowerEditor/src/Parameters.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/Parameters.cpp#L1300-L1415"
+    },
+    {
+      "id": 26,
+      "title": "Application file operations",
+      "path": "PowerEditor/src/NppIO.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/NppIO.cpp#L1768-L1885"
+    },
+    {
+      "id": 27,
+      "title": "Plugin loader",
+      "path": "PowerEditor/src/MISC/PluginsManager/PluginsManager.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/MISC/PluginsManager/PluginsManager.cpp#L99-L175"
+    },
+    {
+      "id": 28,
+      "title": "Plugin interface",
+      "path": "PowerEditor/src/MISC/PluginsManager/PluginInterface.h",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/MISC/PluginsManager/PluginInterface.h#L28-L73"
+    },
+    {
+      "id": 29,
+      "title": "File-write wrapper",
+      "path": "PowerEditor/src/MISC/Common/FileInterface.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/MISC/Common/FileInterface.cpp#L24-L105"
+    },
+    {
+      "id": 30,
+      "title": "Encoding conversion",
+      "path": "PowerEditor/src/Utf8_16.cpp",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/Utf8_16.cpp#L21-L42"
+    },
+    {
+      "id": 31,
+      "title": "Notepad++ version metadata",
+      "path": "PowerEditor/src/resource.h",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/resource.h"
+    },
+    {
+      "id": 32,
+      "title": "Scintilla version metadata",
+      "path": "scintilla/win32/ScintRes.rc",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/scintilla/win32/ScintRes.rc"
+    },
+    {
+      "id": 33,
+      "title": "Lexilla version metadata",
+      "path": "lexilla/src/LexillaVersion.rc",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/lexilla/src/LexillaVersion.rc"
+    }
+  ]
+}

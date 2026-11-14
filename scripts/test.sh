@@ -1,0 +1,12 @@
+#!/bin/bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+mkdir -p build/tests harness/logs
+swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -o build/tests/file-checks Sources/Documents/FileCodec.swift Sources/Documents/RecoveryStore.swift Tests/FileChecks.swift
+build/tests/file-checks | tee harness/logs/file-checks.log
+swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -o build/tests/automation-checks Sources/Automations/AutomationCore.swift Tests/AutomationChecks.swift
+build/tests/automation-checks | tee harness/logs/automation-checks.log
+swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -o build/tests/reminder-checks Sources/Connectors/RemindersConnector.swift Tests/ReminderChecks.swift
+build/tests/reminder-checks | tee harness/logs/reminder-checks.log
+clang++ -std=c++17 -fobjc-arc -mmacosx-version-min=14.0 -I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F build/vendor/Debug -framework Scintilla -framework Cocoa Sources/EditorBridge/TTEditor.mm Tests/BridgeChecks.mm Vendor/lexilla/bin/liblexilla.a -Wl,-rpath,"$PWD/build/vendor/Debug" -o build/tests/bridge-checks
+build/tests/bridge-checks | tee harness/logs/bridge-checks.log

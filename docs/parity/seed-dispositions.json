@@ -1,0 +1,5275 @@
+{
+  "source_commit": "61246e5741fd7c59352f3feb5ccc7e33e4594d15",
+  "definition_count": 531,
+  "definitions": [
+    {
+      "symbol": "IDM_FILE",
+      "expression": "(IDM + 1000)",
+      "source_line": 22,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_FILE_NEW",
+      "expression": "(IDM_FILE + 1)",
+      "source_line": 24,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.new"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_OPEN",
+      "expression": "(IDM_FILE + 2)",
+      "source_line": 25,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.open"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_CLOSE",
+      "expression": "(IDM_FILE + 3)",
+      "source_line": 26,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.close"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_CLOSEALL",
+      "expression": "(IDM_FILE + 4)",
+      "source_line": 27,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.closeall"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_CLOSEALL_BUT_CURRENT",
+      "expression": "(IDM_FILE + 5)",
+      "source_line": 28,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.closeall.but.current"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_SAVE",
+      "expression": "(IDM_FILE + 6)",
+      "source_line": 29,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.save"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_SAVEALL",
+      "expression": "(IDM_FILE + 7)",
+      "source_line": 30,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.saveall"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_SAVEAS",
+      "expression": "(IDM_FILE + 8)",
+      "source_line": 31,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.saveas"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_CLOSEALL_TOLEFT",
+      "expression": "(IDM_FILE + 9)",
+      "source_line": 32,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.closeall.toleft"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_PRINT",
+      "expression": "(IDM_FILE + 10)",
+      "source_line": 33,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.print"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_PRINTNOW",
+      "expression": "1001",
+      "source_line": 34,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.printnow"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_EXIT",
+      "expression": "(IDM_FILE + 11)",
+      "source_line": 35,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.exit"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_LOADSESSION",
+      "expression": "(IDM_FILE + 12)",
+      "source_line": 36,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.loadsession"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_SAVESESSION",
+      "expression": "(IDM_FILE + 13)",
+      "source_line": 37,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.savesession"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_RELOAD",
+      "expression": "(IDM_FILE + 14)",
+      "source_line": 38,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.reload"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_SAVECOPYAS",
+      "expression": "(IDM_FILE + 15)",
+      "source_line": 39,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.savecopyas"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_DELETE",
+      "expression": "(IDM_FILE + 16)",
+      "source_line": 40,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.delete"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_RENAME",
+      "expression": "(IDM_FILE + 17)",
+      "source_line": 41,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.rename"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_CLOSEALL_TORIGHT",
+      "expression": "(IDM_FILE + 18)",
+      "source_line": 42,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.closeall.toright"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_OPEN_FOLDER",
+      "expression": "(IDM_FILE + 19)",
+      "source_line": 43,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.open.folder"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_OPEN_CMD",
+      "expression": "(IDM_FILE + 20)",
+      "source_line": 44,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.open.cmd"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_RESTORELASTCLOSEDFILE",
+      "expression": "(IDM_FILE + 21)",
+      "source_line": 45,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.restorelastclosedfile"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_OPENFOLDERASWORKSPACE",
+      "expression": "(IDM_FILE + 22)",
+      "source_line": 46,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.openfolderasworkspace"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_OPEN_DEFAULT_VIEWER",
+      "expression": "(IDM_FILE + 23)",
+      "source_line": 47,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.open.default.viewer"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_CLOSEALL_UNCHANGED",
+      "expression": "(IDM_FILE + 24)",
+      "source_line": 48,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.closeall.unchanged"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_CONTAININGFOLDERASWORKSPACE",
+      "expression": "(IDM_FILE + 25)",
+      "source_line": 49,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.containingfolderasworkspace"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_CLOSEALL_BUT_PINNED",
+      "expression": "(IDM_FILE + 26)",
+      "source_line": 50,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.closeall.but.pinned"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILE_OPEN_POWERSHELL",
+      "expression": "(IDM_FILE + 27)",
+      "source_line": 51,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.file.open.powershell"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FILEMENU_LASTONE",
+      "expression": "IDM_FILE_OPEN_POWERSHELL",
+      "source_line": 55,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_FILEMENU_EXISTCMDPOSITION",
+      "expression": "22",
+      "source_line": 83,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_EDIT",
+      "expression": "(IDM + 2000)",
+      "source_line": 86,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_EDIT_CUT",
+      "expression": "(IDM_EDIT + 1)",
+      "source_line": 87,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.cut"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_COPY",
+      "expression": "(IDM_EDIT + 2)",
+      "source_line": 88,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.copy"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_UNDO",
+      "expression": "(IDM_EDIT + 3)",
+      "source_line": 89,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.undo"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_REDO",
+      "expression": "(IDM_EDIT + 4)",
+      "source_line": 90,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.redo"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_PASTE",
+      "expression": "(IDM_EDIT + 5)",
+      "source_line": 91,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.paste"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_DELETE",
+      "expression": "(IDM_EDIT + 6)",
+      "source_line": 92,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.delete"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SELECTALL",
+      "expression": "(IDM_EDIT + 7)",
+      "source_line": 93,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.selectall"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_INS_TAB",
+      "expression": "(IDM_EDIT + 8)",
+      "source_line": 94,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.ins.tab"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_RMV_TAB",
+      "expression": "(IDM_EDIT + 9)",
+      "source_line": 95,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.rmv.tab"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_DUP_LINE",
+      "expression": "(IDM_EDIT + 10)",
+      "source_line": 96,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.dup.line"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_TRANSPOSE_LINE",
+      "expression": "(IDM_EDIT + 11)",
+      "source_line": 97,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.transpose.line"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SPLIT_LINES",
+      "expression": "(IDM_EDIT + 12)",
+      "source_line": 98,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.split.lines"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_JOIN_LINES",
+      "expression": "(IDM_EDIT + 13)",
+      "source_line": 99,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.join.lines"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_LINE_UP",
+      "expression": "(IDM_EDIT + 14)",
+      "source_line": 100,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.line.up"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_LINE_DOWN",
+      "expression": "(IDM_EDIT + 15)",
+      "source_line": 101,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.line.down"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_UPPERCASE",
+      "expression": "(IDM_EDIT + 16)",
+      "source_line": 102,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.uppercase"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_LOWERCASE",
+      "expression": "(IDM_EDIT + 17)",
+      "source_line": 103,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.lowercase"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_MACRO_STARTRECORDINGMACRO",
+      "expression": "(IDM_EDIT + 18)",
+      "source_line": 104,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.macro.startrecordingmacro"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_MACRO_STOPRECORDINGMACRO",
+      "expression": "(IDM_EDIT + 19)",
+      "source_line": 105,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.macro.stoprecordingmacro"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_BEGINENDSELECT",
+      "expression": "(IDM_EDIT + 20)",
+      "source_line": 106,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.beginendselect"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_MACRO_PLAYBACKRECORDEDMACRO",
+      "expression": "(IDM_EDIT + 21)",
+      "source_line": 107,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.macro.playbackrecordedmacro"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_BLOCK_COMMENT",
+      "expression": "(IDM_EDIT + 22)",
+      "source_line": 108,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.block.comment"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_STREAM_COMMENT",
+      "expression": "(IDM_EDIT + 23)",
+      "source_line": 109,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.stream.comment"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_TRIMTRAILING",
+      "expression": "(IDM_EDIT + 24)",
+      "source_line": 110,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.trimtrailing"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_MACRO_SAVECURRENTMACRO",
+      "expression": "(IDM_EDIT + 25)",
+      "source_line": 111,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.macro.savecurrentmacro"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_RTL",
+      "expression": "(IDM_EDIT + 26)",
+      "source_line": 112,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.rtl"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_LTR",
+      "expression": "(IDM_EDIT + 27)",
+      "source_line": 113,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.ltr"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_TOGGLEREADONLY",
+      "expression": "(IDM_EDIT + 28)",
+      "source_line": 114,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.togglereadonly"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_FULLPATHTOCLIP",
+      "expression": "(IDM_EDIT + 29)",
+      "source_line": 115,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.fullpathtoclip"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_FILENAMETOCLIP",
+      "expression": "(IDM_EDIT + 30)",
+      "source_line": 116,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.filenametoclip"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_CURRENTDIRTOCLIP",
+      "expression": "(IDM_EDIT + 31)",
+      "source_line": 117,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.currentdirtoclip"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_MACRO_RUNMULTIMACRODLG",
+      "expression": "(IDM_EDIT + 32)",
+      "source_line": 118,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.macro.runmultimacrodlg"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_TOGGLESYSTEMREADONLY",
+      "expression": "(IDM_EDIT + 33)",
+      "source_line": 119,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.togglesystemreadonly"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_COLUMNMODE",
+      "expression": "(IDM_EDIT + 34)",
+      "source_line": 120,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.columnmode"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_BLOCK_COMMENT_SET",
+      "expression": "(IDM_EDIT + 35)",
+      "source_line": 121,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.block.comment.set"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_BLOCK_UNCOMMENT",
+      "expression": "(IDM_EDIT + 36)",
+      "source_line": 122,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.block.uncomment"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_COLUMNMODETIP",
+      "expression": "(IDM_EDIT + 37)",
+      "source_line": 123,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.columnmodetip"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_PASTE_AS_HTML",
+      "expression": "(IDM_EDIT + 38)",
+      "source_line": 124,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.paste.as.html"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_PASTE_AS_RTF",
+      "expression": "(IDM_EDIT + 39)",
+      "source_line": 125,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.paste.as.rtf"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_OPEN_ALL_RECENT_FILE",
+      "expression": "(IDM_EDIT + 40)",
+      "source_line": 126,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.open.all.recent.file"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_CLEAN_RECENT_FILE_LIST",
+      "expression": "(IDM_EDIT + 41)",
+      "source_line": 127,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.clean.recent.file.list"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_TRIMLINEHEAD",
+      "expression": "(IDM_EDIT + 42)",
+      "source_line": 128,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.trimlinehead"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_TRIM_BOTH",
+      "expression": "(IDM_EDIT + 43)",
+      "source_line": 129,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.trim.both"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_EOL2WS",
+      "expression": "(IDM_EDIT + 44)",
+      "source_line": 130,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.eol2ws"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_TRIMALL",
+      "expression": "(IDM_EDIT + 45)",
+      "source_line": 131,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.trimall"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_TAB2SW",
+      "expression": "(IDM_EDIT + 46)",
+      "source_line": 132,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.tab2sw"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_STREAM_UNCOMMENT",
+      "expression": "(IDM_EDIT + 47)",
+      "source_line": 133,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.stream.uncomment"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_COPY_BINARY",
+      "expression": "(IDM_EDIT + 48)",
+      "source_line": 134,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.copy.binary"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_CUT_BINARY",
+      "expression": "(IDM_EDIT + 49)",
+      "source_line": 135,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.cut.binary"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_PASTE_BINARY",
+      "expression": "(IDM_EDIT + 50)",
+      "source_line": 136,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.paste.binary"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_CHAR_PANEL",
+      "expression": "(IDM_EDIT + 51)",
+      "source_line": 137,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.char.panel"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_CLIPBOARDHISTORY_PANEL",
+      "expression": "(IDM_EDIT + 52)",
+      "source_line": 138,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.clipboardhistory.panel"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SW2TAB_LEADING",
+      "expression": "(IDM_EDIT + 53)",
+      "source_line": 139,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sw2tab.leading"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SW2TAB_ALL",
+      "expression": "(IDM_EDIT + 54)",
+      "source_line": 140,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sw2tab.all"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_REMOVEEMPTYLINES",
+      "expression": "(IDM_EDIT + 55)",
+      "source_line": 141,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.removeemptylines"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_REMOVEEMPTYLINESWITHBLANK",
+      "expression": "(IDM_EDIT + 56)",
+      "source_line": 142,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.removeemptylineswithblank"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_BLANKLINEABOVECURRENT",
+      "expression": "(IDM_EDIT + 57)",
+      "source_line": 143,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.blanklineabovecurrent"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_BLANKLINEBELOWCURRENT",
+      "expression": "(IDM_EDIT + 58)",
+      "source_line": 144,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.blanklinebelowcurrent"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_LEXICOGRAPHIC_ASCENDING",
+      "expression": "(IDM_EDIT + 59)",
+      "source_line": 145,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.lexicographic.ascending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_LEXICOGRAPHIC_DESCENDING",
+      "expression": "(IDM_EDIT + 60)",
+      "source_line": 146,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.lexicographic.descending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_INTEGER_ASCENDING",
+      "expression": "(IDM_EDIT + 61)",
+      "source_line": 147,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.integer.ascending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_INTEGER_DESCENDING",
+      "expression": "(IDM_EDIT + 62)",
+      "source_line": 148,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.integer.descending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_DECIMALCOMMA_ASCENDING",
+      "expression": "(IDM_EDIT + 63)",
+      "source_line": 149,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.decimalcomma.ascending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_DECIMALCOMMA_DESCENDING",
+      "expression": "(IDM_EDIT + 64)",
+      "source_line": 150,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.decimalcomma.descending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_DECIMALDOT_ASCENDING",
+      "expression": "(IDM_EDIT + 65)",
+      "source_line": 151,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.decimaldot.ascending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_DECIMALDOT_DESCENDING",
+      "expression": "(IDM_EDIT + 66)",
+      "source_line": 152,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.decimaldot.descending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_PROPERCASE_FORCE",
+      "expression": "(IDM_EDIT + 67)",
+      "source_line": 153,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.propercase.force"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_PROPERCASE_BLEND",
+      "expression": "(IDM_EDIT + 68)",
+      "source_line": 154,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.propercase.blend"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SENTENCECASE_FORCE",
+      "expression": "(IDM_EDIT + 69)",
+      "source_line": 155,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sentencecase.force"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SENTENCECASE_BLEND",
+      "expression": "(IDM_EDIT + 70)",
+      "source_line": 156,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sentencecase.blend"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_INVERTCASE",
+      "expression": "(IDM_EDIT + 71)",
+      "source_line": 157,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.invertcase"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_RANDOMCASE",
+      "expression": "(IDM_EDIT + 72)",
+      "source_line": 158,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.randomcase"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_OPENSELECTEDFILETOEDIT",
+      "expression": "(IDM_EDIT + 73)",
+      "source_line": 159,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.openselectedfiletoedit"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_OPENSELECTEDFILEFOLDERINEXPLORER",
+      "expression": "(IDM_EDIT + 74)",
+      "source_line": 160,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.openselectedfilefolderinexplorer"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SEARCHONINTERNET",
+      "expression": "(IDM_EDIT + 75)",
+      "source_line": 161,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.searchoninternet"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_CHANGESEARCHENGINE",
+      "expression": "(IDM_EDIT + 76)",
+      "source_line": 162,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.changesearchengine"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_REMOVE_CONSECUTIVE_DUP_LINES",
+      "expression": "(IDM_EDIT + 77)",
+      "source_line": 163,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.remove.consecutive.dup.lines"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_RANDOMLY",
+      "expression": "(IDM_EDIT + 78)",
+      "source_line": 164,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.randomly"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_REMOVE_ANY_DUP_LINES",
+      "expression": "(IDM_EDIT + 79)",
+      "source_line": 165,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.remove.any.dup.lines"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_LEXICO_CASE_INSENS_ASCENDING",
+      "expression": "(IDM_EDIT + 80)",
+      "source_line": 166,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.lexico.case.insens.ascending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_LEXICO_CASE_INSENS_DESCENDING",
+      "expression": "(IDM_EDIT + 81)",
+      "source_line": 167,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.lexico.case.insens.descending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_COPY_LINK",
+      "expression": "(IDM_EDIT + 82)",
+      "source_line": 168,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.copy.link"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_REVERSE_ORDER",
+      "expression": "(IDM_EDIT + 83)",
+      "source_line": 169,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.reverse.order"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_INSERT_DATETIME_SHORT",
+      "expression": "(IDM_EDIT + 84)",
+      "source_line": 170,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.insert.datetime.short"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_INSERT_DATETIME_LONG",
+      "expression": "(IDM_EDIT + 85)",
+      "source_line": 171,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.insert.datetime.long"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_INSERT_DATETIME_CUSTOMIZED",
+      "expression": "(IDM_EDIT + 86)",
+      "source_line": 172,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.insert.datetime.customized"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_COPY_ALL_NAMES",
+      "expression": "(IDM_EDIT + 87)",
+      "source_line": 173,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.copy.all.names"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_COPY_ALL_PATHS",
+      "expression": "(IDM_EDIT + 88)",
+      "source_line": 174,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.copy.all.paths"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_BEGINENDSELECT_COLUMNMODE",
+      "expression": "(IDM_EDIT + 89)",
+      "source_line": 175,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.beginendselect.columnmode"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_MULTISELECTALL",
+      "expression": "(IDM_EDIT + 90)",
+      "source_line": 176,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.multiselectall"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_MULTISELECTALLMATCHCASE",
+      "expression": "(IDM_EDIT + 91)",
+      "source_line": 177,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.multiselectallmatchcase"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_MULTISELECTALLWHOLEWORD",
+      "expression": "(IDM_EDIT + 92)",
+      "source_line": 178,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.multiselectallwholeword"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_MULTISELECTALLMATCHCASEWHOLEWORD",
+      "expression": "(IDM_EDIT + 93)",
+      "source_line": 179,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.multiselectallmatchcasewholeword"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_MULTISELECTNEXT",
+      "expression": "(IDM_EDIT + 94)",
+      "source_line": 180,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.multiselectnext"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_MULTISELECTNEXTMATCHCASE",
+      "expression": "(IDM_EDIT + 95)",
+      "source_line": 181,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.multiselectnextmatchcase"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_MULTISELECTNEXTWHOLEWORD",
+      "expression": "(IDM_EDIT + 96)",
+      "source_line": 182,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.multiselectnextwholeword"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_MULTISELECTNEXTMATCHCASEWHOLEWORD",
+      "expression": "(IDM_EDIT + 97)",
+      "source_line": 183,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.multiselectnextmatchcasewholeword"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_MULTISELECTUNDO",
+      "expression": "(IDM_EDIT + 98)",
+      "source_line": 184,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.multiselectundo"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_MULTISELECTSSKIP",
+      "expression": "(IDM_EDIT + 99)",
+      "source_line": 185,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.multiselectsskip"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_LOCALE_ASCENDING",
+      "expression": "(IDM_EDIT + 100)",
+      "source_line": 186,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.locale.ascending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_LOCALE_DESCENDING",
+      "expression": "(IDM_EDIT + 101)",
+      "source_line": 187,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.locale.descending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SETREADONLYFORALLDOCS",
+      "expression": "(IDM_EDIT + 102)",
+      "source_line": 188,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.setreadonlyforalldocs"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_CLEARREADONLYFORALLDOCS",
+      "expression": "(IDM_EDIT + 103)",
+      "source_line": 189,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.clearreadonlyforalldocs"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_LENGTH_ASCENDING",
+      "expression": "(IDM_EDIT + 104)",
+      "source_line": 190,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.length.ascending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_SORTLINES_LENGTH_DESCENDING",
+      "expression": "(IDM_EDIT + 105)",
+      "source_line": 191,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.sortlines.length.descending"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_REDACT_SELECTION",
+      "expression": "(IDM_EDIT + 106)",
+      "source_line": 192,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.redact.selection"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_AUTOCOMPLETE",
+      "expression": "(50000 + 0)",
+      "source_line": 194,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.autocomplete"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_AUTOCOMPLETE_CURRENTFILE",
+      "expression": "(50000 + 1)",
+      "source_line": 195,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.autocomplete.currentfile"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_FUNCCALLTIP",
+      "expression": "(50000 + 2)",
+      "source_line": 196,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.funccalltip"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_AUTOCOMPLETE_PATH",
+      "expression": "(50000 + 6)",
+      "source_line": 197,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.autocomplete.path"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_FUNCCALLTIP_PREVIOUS",
+      "expression": "(50000 + 10)",
+      "source_line": 198,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.funccalltip.previous"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EDIT_FUNCCALLTIP_NEXT",
+      "expression": "(50000 + 11)",
+      "source_line": 199,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.edit.funccalltip.next"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH",
+      "expression": "(IDM + 3000)",
+      "source_line": 202,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_SEARCH_FIND",
+      "expression": "(IDM_SEARCH + 1)",
+      "source_line": 203,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.find"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_FINDNEXT",
+      "expression": "(IDM_SEARCH + 2)",
+      "source_line": 204,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.findnext"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_REPLACE",
+      "expression": "(IDM_SEARCH + 3)",
+      "source_line": 205,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.replace"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GOTOLINE",
+      "expression": "(IDM_SEARCH + 4)",
+      "source_line": 206,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.gotoline"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_TOGGLE_BOOKMARK",
+      "expression": "(IDM_SEARCH + 5)",
+      "source_line": 207,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.toggle.bookmark"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_NEXT_BOOKMARK",
+      "expression": "(IDM_SEARCH + 6)",
+      "source_line": 208,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.next.bookmark"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_PREV_BOOKMARK",
+      "expression": "(IDM_SEARCH + 7)",
+      "source_line": 209,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.prev.bookmark"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_CLEAR_BOOKMARKS",
+      "expression": "(IDM_SEARCH + 8)",
+      "source_line": 210,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.clear.bookmarks"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GOTOMATCHINGBRACE",
+      "expression": "(IDM_SEARCH + 9)",
+      "source_line": 211,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.gotomatchingbrace"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_FINDPREV",
+      "expression": "(IDM_SEARCH + 10)",
+      "source_line": 212,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.findprev"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_FINDINCREMENT",
+      "expression": "(IDM_SEARCH + 11)",
+      "source_line": 213,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.findincrement"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_FINDINFILES",
+      "expression": "(IDM_SEARCH + 13)",
+      "source_line": 214,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.findinfiles"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_VOLATILE_FINDNEXT",
+      "expression": "(IDM_SEARCH + 14)",
+      "source_line": 215,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.volatile.findnext"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_VOLATILE_FINDPREV",
+      "expression": "(IDM_SEARCH + 15)",
+      "source_line": 216,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.volatile.findprev"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_CUTMARKEDLINES",
+      "expression": "(IDM_SEARCH + 18)",
+      "source_line": 217,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.cutmarkedlines"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_COPYMARKEDLINES",
+      "expression": "(IDM_SEARCH + 19)",
+      "source_line": 218,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.copymarkedlines"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_PASTEMARKEDLINES",
+      "expression": "(IDM_SEARCH + 20)",
+      "source_line": 219,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.pastemarkedlines"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_DELETEMARKEDLINES",
+      "expression": "(IDM_SEARCH + 21)",
+      "source_line": 220,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.deletemarkedlines"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_MARKALLEXT1",
+      "expression": "(IDM_SEARCH + 22)",
+      "source_line": 221,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.markallext1"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_UNMARKALLEXT1",
+      "expression": "(IDM_SEARCH + 23)",
+      "source_line": 222,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.unmarkallext1"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_MARKALLEXT2",
+      "expression": "(IDM_SEARCH + 24)",
+      "source_line": 223,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.markallext2"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_UNMARKALLEXT2",
+      "expression": "(IDM_SEARCH + 25)",
+      "source_line": 224,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.unmarkallext2"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_MARKALLEXT3",
+      "expression": "(IDM_SEARCH + 26)",
+      "source_line": 225,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.markallext3"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_UNMARKALLEXT3",
+      "expression": "(IDM_SEARCH + 27)",
+      "source_line": 226,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.unmarkallext3"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_MARKALLEXT4",
+      "expression": "(IDM_SEARCH + 28)",
+      "source_line": 227,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.markallext4"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_UNMARKALLEXT4",
+      "expression": "(IDM_SEARCH + 29)",
+      "source_line": 228,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.unmarkallext4"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_MARKALLEXT5",
+      "expression": "(IDM_SEARCH + 30)",
+      "source_line": 229,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.markallext5"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_UNMARKALLEXT5",
+      "expression": "(IDM_SEARCH + 31)",
+      "source_line": 230,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.unmarkallext5"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_CLEARALLMARKS",
+      "expression": "(IDM_SEARCH + 32)",
+      "source_line": 231,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.clearallmarks"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GOPREVMARKER1",
+      "expression": "(IDM_SEARCH + 33)",
+      "source_line": 233,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.goprevmarker1"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GOPREVMARKER2",
+      "expression": "(IDM_SEARCH + 34)",
+      "source_line": 234,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.goprevmarker2"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GOPREVMARKER3",
+      "expression": "(IDM_SEARCH + 35)",
+      "source_line": 235,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.goprevmarker3"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GOPREVMARKER4",
+      "expression": "(IDM_SEARCH + 36)",
+      "source_line": 236,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.goprevmarker4"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GOPREVMARKER5",
+      "expression": "(IDM_SEARCH + 37)",
+      "source_line": 237,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.goprevmarker5"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GOPREVMARKER_DEF",
+      "expression": "(IDM_SEARCH + 38)",
+      "source_line": 238,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.goprevmarker.def"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GONEXTMARKER1",
+      "expression": "(IDM_SEARCH + 39)",
+      "source_line": 240,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.gonextmarker1"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GONEXTMARKER2",
+      "expression": "(IDM_SEARCH + 40)",
+      "source_line": 241,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.gonextmarker2"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GONEXTMARKER3",
+      "expression": "(IDM_SEARCH + 41)",
+      "source_line": 242,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.gonextmarker3"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GONEXTMARKER4",
+      "expression": "(IDM_SEARCH + 42)",
+      "source_line": 243,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.gonextmarker4"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GONEXTMARKER5",
+      "expression": "(IDM_SEARCH + 43)",
+      "source_line": 244,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.gonextmarker5"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GONEXTMARKER_DEF",
+      "expression": "(IDM_SEARCH + 44)",
+      "source_line": 245,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.gonextmarker.def"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FOCUS_ON_FOUND_RESULTS",
+      "expression": "(IDM_SEARCH + 45)",
+      "source_line": 247,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.focus.on.found.results"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GOTONEXTFOUND",
+      "expression": "(IDM_SEARCH + 46)",
+      "source_line": 248,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.gotonextfound"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_GOTOPREVFOUND",
+      "expression": "(IDM_SEARCH + 47)",
+      "source_line": 249,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.gotoprevfound"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_SETANDFINDNEXT",
+      "expression": "(IDM_SEARCH + 48)",
+      "source_line": 251,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.setandfindnext"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_SETANDFINDPREV",
+      "expression": "(IDM_SEARCH + 49)",
+      "source_line": 252,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.setandfindprev"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_INVERSEMARKS",
+      "expression": "(IDM_SEARCH + 50)",
+      "source_line": 253,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.inversemarks"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_DELETEUNMARKEDLINES",
+      "expression": "(IDM_SEARCH + 51)",
+      "source_line": 254,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.deleteunmarkedlines"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_FINDCHARINRANGE",
+      "expression": "(IDM_SEARCH + 52)",
+      "source_line": 255,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.findcharinrange"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_SELECTMATCHINGBRACES",
+      "expression": "(IDM_SEARCH + 53)",
+      "source_line": 256,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.selectmatchingbraces"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_MARK",
+      "expression": "(IDM_SEARCH + 54)",
+      "source_line": 257,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.mark"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_STYLE1TOCLIP",
+      "expression": "(IDM_SEARCH + 55)",
+      "source_line": 259,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.style1toclip"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_STYLE2TOCLIP",
+      "expression": "(IDM_SEARCH + 56)",
+      "source_line": 260,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.style2toclip"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_STYLE3TOCLIP",
+      "expression": "(IDM_SEARCH + 57)",
+      "source_line": 261,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.style3toclip"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_STYLE4TOCLIP",
+      "expression": "(IDM_SEARCH + 58)",
+      "source_line": 262,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.style4toclip"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_STYLE5TOCLIP",
+      "expression": "(IDM_SEARCH + 59)",
+      "source_line": 263,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.style5toclip"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_ALLSTYLESTOCLIP",
+      "expression": "(IDM_SEARCH + 60)",
+      "source_line": 264,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.allstylestoclip"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_MARKEDTOCLIP",
+      "expression": "(IDM_SEARCH + 61)",
+      "source_line": 265,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.markedtoclip"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_MARKONEEXT1",
+      "expression": "(IDM_SEARCH + 62)",
+      "source_line": 267,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.markoneext1"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_MARKONEEXT2",
+      "expression": "(IDM_SEARCH + 63)",
+      "source_line": 268,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.markoneext2"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_MARKONEEXT3",
+      "expression": "(IDM_SEARCH + 64)",
+      "source_line": 269,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.markoneext3"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_MARKONEEXT4",
+      "expression": "(IDM_SEARCH + 65)",
+      "source_line": 270,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.markoneext4"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_MARKONEEXT5",
+      "expression": "(IDM_SEARCH + 66)",
+      "source_line": 271,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.markoneext5"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_CHANGED_NEXT",
+      "expression": "(IDM_SEARCH + 67)",
+      "source_line": 273,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.changed.next"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_CHANGED_PREV",
+      "expression": "(IDM_SEARCH + 68)",
+      "source_line": 274,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.changed.prev"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SEARCH_CLEAR_CHANGE_HISTORY",
+      "expression": "(IDM_SEARCH + 69)",
+      "source_line": 275,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.search.clear.change.history"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_MISC",
+      "expression": "(IDM + 3500)",
+      "source_line": 277,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_DOCLIST_FILESCLOSE",
+      "expression": "(IDM_MISC + 1)",
+      "source_line": 278,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.doclist.filesclose"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_DOCLIST_FILESCLOSEOTHERS",
+      "expression": "(IDM_MISC + 2)",
+      "source_line": 279,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.doclist.filescloseothers"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_DOCLIST_COPYNAMES",
+      "expression": "(IDM_MISC + 3)",
+      "source_line": 280,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.doclist.copynames"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_DOCLIST_COPYPATHS",
+      "expression": "(IDM_MISC + 4)",
+      "source_line": 281,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.doclist.copypaths"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW",
+      "expression": "(IDM + 4000)",
+      "source_line": 284,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_VIEW_POSTIT",
+      "expression": "(IDM_VIEW + 9)",
+      "source_line": 293,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.postit"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_FOLDALL",
+      "expression": "(IDM_VIEW + 10)",
+      "source_line": 294,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.foldall"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_DISTRACTIONFREE",
+      "expression": "(IDM_VIEW + 11)",
+      "source_line": 295,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.distractionfree"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_ALL_CHARACTERS",
+      "expression": "(IDM_VIEW + 19)",
+      "source_line": 303,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.all.characters"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_INDENT_GUIDE",
+      "expression": "(IDM_VIEW + 20)",
+      "source_line": 304,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.indent.guide"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_WRAP",
+      "expression": "(IDM_VIEW + 22)",
+      "source_line": 306,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.wrap"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_ZOOMIN",
+      "expression": "(IDM_VIEW + 23)",
+      "source_line": 307,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.zoomin"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_ZOOMOUT",
+      "expression": "(IDM_VIEW + 24)",
+      "source_line": 308,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.zoomout"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB_SPACE",
+      "expression": "(IDM_VIEW + 25)",
+      "source_line": 309,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab.space"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_EOL",
+      "expression": "(IDM_VIEW + 26)",
+      "source_line": 310,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.eol"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_ZOOM_SYNC",
+      "expression": "(IDM_VIEW + 27)",
+      "source_line": 311,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.zoom.sync"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_UNFOLDALL",
+      "expression": "(IDM_VIEW + 29)",
+      "source_line": 313,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.unfoldall"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_FOLD_CURRENT",
+      "expression": "(IDM_VIEW + 30)",
+      "source_line": 314,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.fold.current"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_UNFOLD_CURRENT",
+      "expression": "(IDM_VIEW + 31)",
+      "source_line": 315,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.unfold.current"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_FULLSCREENTOGGLE",
+      "expression": "(IDM_VIEW + 32)",
+      "source_line": 316,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.fullscreentoggle"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_ZOOMRESTORE",
+      "expression": "(IDM_VIEW + 33)",
+      "source_line": 317,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.zoomrestore"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_ALWAYSONTOP",
+      "expression": "(IDM_VIEW + 34)",
+      "source_line": 318,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.alwaysontop"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_SYNSCROLLV",
+      "expression": "(IDM_VIEW + 35)",
+      "source_line": 319,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.synscrollv"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_SYNSCROLLH",
+      "expression": "(IDM_VIEW + 36)",
+      "source_line": 320,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.synscrollh"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_WRAP_SYMBOL",
+      "expression": "(IDM_VIEW + 41)",
+      "source_line": 325,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.wrap.symbol"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_HIDELINES",
+      "expression": "(IDM_VIEW + 42)",
+      "source_line": 326,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.hidelines"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_PINTAB",
+      "expression": "(IDM_VIEW + 48)",
+      "source_line": 332,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.pintab"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_SUMMARY",
+      "expression": "(IDM_VIEW + 49)",
+      "source_line": 333,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.summary"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_FOLD",
+      "expression": "(IDM_VIEW + 50)",
+      "source_line": 335,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_VIEW_FOLD_1",
+      "expression": "(IDM_VIEW_FOLD + 1)",
+      "source_line": 336,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.fold.1"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_FOLD_2",
+      "expression": "(IDM_VIEW_FOLD + 2)",
+      "source_line": 337,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.fold.2"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_FOLD_3",
+      "expression": "(IDM_VIEW_FOLD + 3)",
+      "source_line": 338,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.fold.3"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_FOLD_4",
+      "expression": "(IDM_VIEW_FOLD + 4)",
+      "source_line": 339,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.fold.4"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_FOLD_5",
+      "expression": "(IDM_VIEW_FOLD + 5)",
+      "source_line": 340,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.fold.5"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_FOLD_6",
+      "expression": "(IDM_VIEW_FOLD + 6)",
+      "source_line": 341,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.fold.6"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_FOLD_7",
+      "expression": "(IDM_VIEW_FOLD + 7)",
+      "source_line": 342,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.fold.7"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_FOLD_8",
+      "expression": "(IDM_VIEW_FOLD + 8)",
+      "source_line": 343,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.fold.8"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_UNFOLD",
+      "expression": "(IDM_VIEW + 60)",
+      "source_line": 345,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_VIEW_UNFOLD_1",
+      "expression": "(IDM_VIEW_UNFOLD + 1)",
+      "source_line": 346,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.unfold.1"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_UNFOLD_2",
+      "expression": "(IDM_VIEW_UNFOLD + 2)",
+      "source_line": 347,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.unfold.2"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_UNFOLD_3",
+      "expression": "(IDM_VIEW_UNFOLD + 3)",
+      "source_line": 348,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.unfold.3"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_UNFOLD_4",
+      "expression": "(IDM_VIEW_UNFOLD + 4)",
+      "source_line": 349,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.unfold.4"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_UNFOLD_5",
+      "expression": "(IDM_VIEW_UNFOLD + 5)",
+      "source_line": 350,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.unfold.5"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_UNFOLD_6",
+      "expression": "(IDM_VIEW_UNFOLD + 6)",
+      "source_line": 351,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.unfold.6"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_UNFOLD_7",
+      "expression": "(IDM_VIEW_UNFOLD + 7)",
+      "source_line": 352,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.unfold.7"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_UNFOLD_8",
+      "expression": "(IDM_VIEW_UNFOLD + 8)",
+      "source_line": 353,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.unfold.8"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_DOCLIST",
+      "expression": "(IDM_VIEW + 70)",
+      "source_line": 355,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.doclist"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_SWITCHTO_OTHER_VIEW",
+      "expression": "(IDM_VIEW + 72)",
+      "source_line": 356,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.switchto.other.view"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EXPORT_FUNC_LIST_AND_QUIT",
+      "expression": "(IDM_VIEW + 73)",
+      "source_line": 357,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.export.func.list.and.quit"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_DOC_MAP",
+      "expression": "(IDM_VIEW + 80)",
+      "source_line": 359,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.doc.map"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_PROJECT_PANEL_1",
+      "expression": "(IDM_VIEW + 81)",
+      "source_line": 361,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.project.panel.1"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_PROJECT_PANEL_2",
+      "expression": "(IDM_VIEW + 82)",
+      "source_line": 362,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.project.panel.2"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_PROJECT_PANEL_3",
+      "expression": "(IDM_VIEW + 83)",
+      "source_line": 363,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.project.panel.3"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_FUNC_LIST",
+      "expression": "(IDM_VIEW + 84)",
+      "source_line": 365,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.func.list"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_FILEBROWSER",
+      "expression": "(IDM_VIEW + 85)",
+      "source_line": 366,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.filebrowser"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB1",
+      "expression": "(IDM_VIEW + 86)",
+      "source_line": 368,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab1"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB2",
+      "expression": "(IDM_VIEW + 87)",
+      "source_line": 369,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab2"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB3",
+      "expression": "(IDM_VIEW + 88)",
+      "source_line": 370,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab3"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB4",
+      "expression": "(IDM_VIEW + 89)",
+      "source_line": 371,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab4"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB5",
+      "expression": "(IDM_VIEW + 90)",
+      "source_line": 372,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab5"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB6",
+      "expression": "(IDM_VIEW + 91)",
+      "source_line": 373,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab6"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB7",
+      "expression": "(IDM_VIEW + 92)",
+      "source_line": 374,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab7"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB8",
+      "expression": "(IDM_VIEW + 93)",
+      "source_line": 375,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab8"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB9",
+      "expression": "(IDM_VIEW + 94)",
+      "source_line": 376,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab9"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB_NEXT",
+      "expression": "(IDM_VIEW + 95)",
+      "source_line": 377,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab.next"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB_PREV",
+      "expression": "(IDM_VIEW + 96)",
+      "source_line": 378,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab.prev"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_MONITORING",
+      "expression": "(IDM_VIEW + 97)",
+      "source_line": 379,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.monitoring"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB_MOVEFORWARD",
+      "expression": "(IDM_VIEW + 98)",
+      "source_line": 380,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab.moveforward"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB_MOVEBACKWARD",
+      "expression": "(IDM_VIEW + 99)",
+      "source_line": 381,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab.movebackward"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_IN_FIREFOX",
+      "expression": "(IDM_VIEW + 100)",
+      "source_line": 382,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.in.firefox"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_IN_CHROME",
+      "expression": "(IDM_VIEW + 101)",
+      "source_line": 383,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.in.chrome"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_IN_EDGE",
+      "expression": "(IDM_VIEW + 102)",
+      "source_line": 384,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.in.edge"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_IN_IE",
+      "expression": "(IDM_VIEW + 103)",
+      "source_line": 385,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.in.ie"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_SWITCHTO_PROJECT_PANEL_1",
+      "expression": "(IDM_VIEW + 104)",
+      "source_line": 387,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.switchto.project.panel.1"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_SWITCHTO_PROJECT_PANEL_2",
+      "expression": "(IDM_VIEW + 105)",
+      "source_line": 388,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.switchto.project.panel.2"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_SWITCHTO_PROJECT_PANEL_3",
+      "expression": "(IDM_VIEW + 106)",
+      "source_line": 389,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.switchto.project.panel.3"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_SWITCHTO_FILEBROWSER",
+      "expression": "(IDM_VIEW + 107)",
+      "source_line": 390,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.switchto.filebrowser"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_SWITCHTO_FUNC_LIST",
+      "expression": "(IDM_VIEW + 108)",
+      "source_line": 391,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.switchto.func.list"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_SWITCHTO_DOCLIST",
+      "expression": "(IDM_VIEW + 109)",
+      "source_line": 392,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.switchto.doclist"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB_COLOUR_NONE",
+      "expression": "(IDM_VIEW + 110)",
+      "source_line": 394,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab.colour.none"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB_COLOUR_1",
+      "expression": "(IDM_VIEW + 111)",
+      "source_line": 395,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab.colour.1"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB_COLOUR_2",
+      "expression": "(IDM_VIEW + 112)",
+      "source_line": 396,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab.colour.2"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB_COLOUR_3",
+      "expression": "(IDM_VIEW + 113)",
+      "source_line": 397,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab.colour.3"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB_COLOUR_4",
+      "expression": "(IDM_VIEW + 114)",
+      "source_line": 398,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab.colour.4"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB_COLOUR_5",
+      "expression": "(IDM_VIEW + 115)",
+      "source_line": 399,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab.colour.5"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB_START",
+      "expression": "(IDM_VIEW + 116)",
+      "source_line": 400,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab.start"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_TAB_END",
+      "expression": "(IDM_VIEW + 117)",
+      "source_line": 401,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.tab.end"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_NPC",
+      "expression": "(IDM_VIEW + 130)",
+      "source_line": 403,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.npc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_NPC_CCUNIEOL",
+      "expression": "(IDM_VIEW + 131)",
+      "source_line": 404,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.npc.ccunieol"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_GOTO_ANOTHER_VIEW",
+      "expression": "10001",
+      "source_line": 406,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.goto.another.view"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_CLONE_TO_ANOTHER_VIEW",
+      "expression": "10002",
+      "source_line": 407,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.clone.to.another.view"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_GOTO_NEW_INSTANCE",
+      "expression": "10003",
+      "source_line": 408,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.goto.new.instance"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_LOAD_IN_NEW_INSTANCE",
+      "expression": "10004",
+      "source_line": 409,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.load.in.new.instance"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_GOTO_START",
+      "expression": "10005",
+      "source_line": 410,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.goto.start"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_VIEW_GOTO_END",
+      "expression": "10006",
+      "source_line": 411,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.view.goto.end"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT",
+      "expression": "(IDM + 5000)",
+      "source_line": 413,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_FORMAT_TODOS",
+      "expression": "(IDM_FORMAT + 1)",
+      "source_line": 414,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.todos"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_TOUNIX",
+      "expression": "(IDM_FORMAT + 2)",
+      "source_line": 415,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.tounix"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_TOMAC",
+      "expression": "(IDM_FORMAT + 3)",
+      "source_line": 416,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.tomac"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ANSI",
+      "expression": "(IDM_FORMAT + 4)",
+      "source_line": 417,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.ansi"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_UTF_8",
+      "expression": "(IDM_FORMAT + 5)",
+      "source_line": 418,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.utf.8"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_UTF_16BE",
+      "expression": "(IDM_FORMAT + 6)",
+      "source_line": 419,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.utf.16be"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_UTF_16LE",
+      "expression": "(IDM_FORMAT + 7)",
+      "source_line": 420,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.utf.16le"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_AS_UTF_8",
+      "expression": "(IDM_FORMAT + 8)",
+      "source_line": 421,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.as.utf.8"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_CONV2_ANSI",
+      "expression": "(IDM_FORMAT + 9)",
+      "source_line": 422,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.conv2.ansi"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_CONV2_AS_UTF_8",
+      "expression": "(IDM_FORMAT + 10)",
+      "source_line": 423,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.conv2.as.utf.8"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_CONV2_UTF_8",
+      "expression": "(IDM_FORMAT + 11)",
+      "source_line": 424,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.conv2.utf.8"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_CONV2_UTF_16BE",
+      "expression": "(IDM_FORMAT + 12)",
+      "source_line": 425,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.conv2.utf.16be"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_CONV2_UTF_16LE",
+      "expression": "(IDM_FORMAT + 13)",
+      "source_line": 426,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.conv2.utf.16le"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ENCODE",
+      "expression": "(IDM_FORMAT + 20)",
+      "source_line": 428,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_FORMAT_WIN_1250",
+      "expression": "(IDM_FORMAT_ENCODE + 0)",
+      "source_line": 429,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.win.1250"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_WIN_1251",
+      "expression": "(IDM_FORMAT_ENCODE + 1)",
+      "source_line": 430,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.win.1251"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_WIN_1252",
+      "expression": "(IDM_FORMAT_ENCODE + 2)",
+      "source_line": 431,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.win.1252"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_WIN_1253",
+      "expression": "(IDM_FORMAT_ENCODE + 3)",
+      "source_line": 432,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.win.1253"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_WIN_1254",
+      "expression": "(IDM_FORMAT_ENCODE + 4)",
+      "source_line": 433,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.win.1254"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_WIN_1255",
+      "expression": "(IDM_FORMAT_ENCODE + 5)",
+      "source_line": 434,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.win.1255"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_WIN_1256",
+      "expression": "(IDM_FORMAT_ENCODE + 6)",
+      "source_line": 435,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.win.1256"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_WIN_1257",
+      "expression": "(IDM_FORMAT_ENCODE + 7)",
+      "source_line": 436,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.win.1257"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_WIN_1258",
+      "expression": "(IDM_FORMAT_ENCODE + 8)",
+      "source_line": 437,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.win.1258"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ISO_8859_1",
+      "expression": "(IDM_FORMAT_ENCODE + 9)",
+      "source_line": 438,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.iso.8859.1"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ISO_8859_2",
+      "expression": "(IDM_FORMAT_ENCODE + 10)",
+      "source_line": 439,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.iso.8859.2"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ISO_8859_3",
+      "expression": "(IDM_FORMAT_ENCODE + 11)",
+      "source_line": 440,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.iso.8859.3"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ISO_8859_4",
+      "expression": "(IDM_FORMAT_ENCODE + 12)",
+      "source_line": 441,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.iso.8859.4"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ISO_8859_5",
+      "expression": "(IDM_FORMAT_ENCODE + 13)",
+      "source_line": 442,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.iso.8859.5"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ISO_8859_6",
+      "expression": "(IDM_FORMAT_ENCODE + 14)",
+      "source_line": 443,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.iso.8859.6"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ISO_8859_7",
+      "expression": "(IDM_FORMAT_ENCODE + 15)",
+      "source_line": 444,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.iso.8859.7"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ISO_8859_8",
+      "expression": "(IDM_FORMAT_ENCODE + 16)",
+      "source_line": 445,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.iso.8859.8"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ISO_8859_9",
+      "expression": "(IDM_FORMAT_ENCODE + 17)",
+      "source_line": 446,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.iso.8859.9"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ISO_8859_13",
+      "expression": "(IDM_FORMAT_ENCODE + 20)",
+      "source_line": 449,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.iso.8859.13"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ISO_8859_14",
+      "expression": "(IDM_FORMAT_ENCODE + 21)",
+      "source_line": 450,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.iso.8859.14"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ISO_8859_15",
+      "expression": "(IDM_FORMAT_ENCODE + 22)",
+      "source_line": 451,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.iso.8859.15"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_437",
+      "expression": "(IDM_FORMAT_ENCODE + 24)",
+      "source_line": 453,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.437"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_720",
+      "expression": "(IDM_FORMAT_ENCODE + 25)",
+      "source_line": 454,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.720"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_737",
+      "expression": "(IDM_FORMAT_ENCODE + 26)",
+      "source_line": 455,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.737"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_775",
+      "expression": "(IDM_FORMAT_ENCODE + 27)",
+      "source_line": 456,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.775"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_850",
+      "expression": "(IDM_FORMAT_ENCODE + 28)",
+      "source_line": 457,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.850"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_852",
+      "expression": "(IDM_FORMAT_ENCODE + 29)",
+      "source_line": 458,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.852"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_855",
+      "expression": "(IDM_FORMAT_ENCODE + 30)",
+      "source_line": 459,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.855"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_857",
+      "expression": "(IDM_FORMAT_ENCODE + 31)",
+      "source_line": 460,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.857"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_858",
+      "expression": "(IDM_FORMAT_ENCODE + 32)",
+      "source_line": 461,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.858"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_860",
+      "expression": "(IDM_FORMAT_ENCODE + 33)",
+      "source_line": 462,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.860"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_861",
+      "expression": "(IDM_FORMAT_ENCODE + 34)",
+      "source_line": 463,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.861"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_862",
+      "expression": "(IDM_FORMAT_ENCODE + 35)",
+      "source_line": 464,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.862"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_863",
+      "expression": "(IDM_FORMAT_ENCODE + 36)",
+      "source_line": 465,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.863"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_865",
+      "expression": "(IDM_FORMAT_ENCODE + 37)",
+      "source_line": 466,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.865"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_866",
+      "expression": "(IDM_FORMAT_ENCODE + 38)",
+      "source_line": 467,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.866"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_DOS_869",
+      "expression": "(IDM_FORMAT_ENCODE + 39)",
+      "source_line": 468,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.dos.869"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_BIG5",
+      "expression": "(IDM_FORMAT_ENCODE + 40)",
+      "source_line": 469,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.big5"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_GB2312",
+      "expression": "(IDM_FORMAT_ENCODE + 41)",
+      "source_line": 470,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.gb2312"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_SHIFT_JIS",
+      "expression": "(IDM_FORMAT_ENCODE + 42)",
+      "source_line": 471,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.shift.jis"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_KOREAN_WIN",
+      "expression": "(IDM_FORMAT_ENCODE + 43)",
+      "source_line": 472,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.korean.win"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_EUC_KR",
+      "expression": "(IDM_FORMAT_ENCODE + 44)",
+      "source_line": 473,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.euc.kr"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_TIS_620",
+      "expression": "(IDM_FORMAT_ENCODE + 45)",
+      "source_line": 474,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.tis.620"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_MAC_CYRILLIC",
+      "expression": "(IDM_FORMAT_ENCODE + 46)",
+      "source_line": 475,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.mac.cyrillic"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_KOI8U_CYRILLIC",
+      "expression": "(IDM_FORMAT_ENCODE + 47)",
+      "source_line": 476,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.koi8u.cyrillic"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_KOI8R_CYRILLIC",
+      "expression": "(IDM_FORMAT_ENCODE + 48)",
+      "source_line": 477,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.format.koi8r.cyrillic"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORMAT_ENCODE_END",
+      "expression": "IDM_FORMAT_KOI8R_CYRILLIC",
+      "source_line": 478,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_LANG",
+      "expression": "(IDM + 6000)",
+      "source_line": 481,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_LANGSTYLE_CONFIG_DLG",
+      "expression": "(IDM_LANG + 1)",
+      "source_line": 482,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.langstyle.config.dlg"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_C",
+      "expression": "(IDM_LANG + 2)",
+      "source_line": 483,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.c"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_CPP",
+      "expression": "(IDM_LANG + 3)",
+      "source_line": 484,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.cpp"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_JAVA",
+      "expression": "(IDM_LANG + 4)",
+      "source_line": 485,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.java"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_HTML",
+      "expression": "(IDM_LANG + 5)",
+      "source_line": 486,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.html"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_XML",
+      "expression": "(IDM_LANG + 6)",
+      "source_line": 487,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.xml"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_JS",
+      "expression": "(IDM_LANG + 7)",
+      "source_line": 488,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.js"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_PHP",
+      "expression": "(IDM_LANG + 8)",
+      "source_line": 489,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.php"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_ASP",
+      "expression": "(IDM_LANG + 9)",
+      "source_line": 490,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.asp"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_CSS",
+      "expression": "(IDM_LANG + 10)",
+      "source_line": 491,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.css"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_PASCAL",
+      "expression": "(IDM_LANG + 11)",
+      "source_line": 492,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.pascal"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_PYTHON",
+      "expression": "(IDM_LANG + 12)",
+      "source_line": 493,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.python"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_PERL",
+      "expression": "(IDM_LANG + 13)",
+      "source_line": 494,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.perl"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_OBJC",
+      "expression": "(IDM_LANG + 14)",
+      "source_line": 495,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.objc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_ASCII",
+      "expression": "(IDM_LANG + 15)",
+      "source_line": 496,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.ascii"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_TEXT",
+      "expression": "(IDM_LANG + 16)",
+      "source_line": 497,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.text"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_RC",
+      "expression": "(IDM_LANG + 17)",
+      "source_line": 498,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.rc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_MAKEFILE",
+      "expression": "(IDM_LANG + 18)",
+      "source_line": 499,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.makefile"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_INI",
+      "expression": "(IDM_LANG + 19)",
+      "source_line": 500,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.ini"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_SQL",
+      "expression": "(IDM_LANG + 20)",
+      "source_line": 501,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.sql"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_VB",
+      "expression": "(IDM_LANG + 21)",
+      "source_line": 502,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.vb"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_BATCH",
+      "expression": "(IDM_LANG + 22)",
+      "source_line": 503,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.batch"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_CS",
+      "expression": "(IDM_LANG + 23)",
+      "source_line": 504,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.cs"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_LUA",
+      "expression": "(IDM_LANG + 24)",
+      "source_line": 505,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.lua"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_TEX",
+      "expression": "(IDM_LANG + 25)",
+      "source_line": 506,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.tex"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_FORTRAN",
+      "expression": "(IDM_LANG + 26)",
+      "source_line": 507,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.fortran"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_BASH",
+      "expression": "(IDM_LANG + 27)",
+      "source_line": 508,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.bash"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_FLASH",
+      "expression": "(IDM_LANG + 28)",
+      "source_line": 509,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.flash"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_NSIS",
+      "expression": "(IDM_LANG + 29)",
+      "source_line": 510,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.nsis"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_TCL",
+      "expression": "(IDM_LANG + 30)",
+      "source_line": 511,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.tcl"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_LISP",
+      "expression": "(IDM_LANG + 31)",
+      "source_line": 512,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.lisp"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_SCHEME",
+      "expression": "(IDM_LANG + 32)",
+      "source_line": 513,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.scheme"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_ASM",
+      "expression": "(IDM_LANG + 33)",
+      "source_line": 514,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.asm"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_DIFF",
+      "expression": "(IDM_LANG + 34)",
+      "source_line": 515,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.diff"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_PROPS",
+      "expression": "(IDM_LANG + 35)",
+      "source_line": 516,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.props"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_PS",
+      "expression": "(IDM_LANG + 36)",
+      "source_line": 517,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.ps"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_RUBY",
+      "expression": "(IDM_LANG + 37)",
+      "source_line": 518,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.ruby"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_SMALLTALK",
+      "expression": "(IDM_LANG + 38)",
+      "source_line": 519,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.smalltalk"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_VHDL",
+      "expression": "(IDM_LANG + 39)",
+      "source_line": 520,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.vhdl"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_CAML",
+      "expression": "(IDM_LANG + 40)",
+      "source_line": 521,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.caml"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_KIX",
+      "expression": "(IDM_LANG + 41)",
+      "source_line": 522,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.kix"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_ADA",
+      "expression": "(IDM_LANG + 42)",
+      "source_line": 523,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.ada"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_VERILOG",
+      "expression": "(IDM_LANG + 43)",
+      "source_line": 524,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.verilog"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_AU3",
+      "expression": "(IDM_LANG + 44)",
+      "source_line": 525,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.au3"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_MATLAB",
+      "expression": "(IDM_LANG + 45)",
+      "source_line": 526,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.matlab"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_HASKELL",
+      "expression": "(IDM_LANG + 46)",
+      "source_line": 527,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.haskell"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_INNO",
+      "expression": "(IDM_LANG + 47)",
+      "source_line": 528,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.inno"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_CMAKE",
+      "expression": "(IDM_LANG + 48)",
+      "source_line": 529,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.cmake"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_YAML",
+      "expression": "(IDM_LANG + 49)",
+      "source_line": 530,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.yaml"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_COBOL",
+      "expression": "(IDM_LANG + 50)",
+      "source_line": 531,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.cobol"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_D",
+      "expression": "(IDM_LANG + 51)",
+      "source_line": 532,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.d"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_GUI4CLI",
+      "expression": "(IDM_LANG + 52)",
+      "source_line": 533,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.gui4cli"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_POWERSHELL",
+      "expression": "(IDM_LANG + 53)",
+      "source_line": 534,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.powershell"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_R",
+      "expression": "(IDM_LANG + 54)",
+      "source_line": 535,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.r"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_JSP",
+      "expression": "(IDM_LANG + 55)",
+      "source_line": 536,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.jsp"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_COFFEESCRIPT",
+      "expression": "(IDM_LANG + 56)",
+      "source_line": 537,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.coffeescript"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_JSON",
+      "expression": "(IDM_LANG + 57)",
+      "source_line": 538,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.json"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_FORTRAN_77",
+      "expression": "(IDM_LANG + 58)",
+      "source_line": 539,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.fortran.77"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_BAANC",
+      "expression": "(IDM_LANG + 59)",
+      "source_line": 540,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.baanc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_SREC",
+      "expression": "(IDM_LANG + 60)",
+      "source_line": 541,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.srec"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_IHEX",
+      "expression": "(IDM_LANG + 61)",
+      "source_line": 542,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.ihex"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_TEHEX",
+      "expression": "(IDM_LANG + 62)",
+      "source_line": 543,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.tehex"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_SWIFT",
+      "expression": "(IDM_LANG + 63)",
+      "source_line": 544,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.swift"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_ASN1",
+      "expression": "(IDM_LANG + 64)",
+      "source_line": 545,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.asn1"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_AVS",
+      "expression": "(IDM_LANG + 65)",
+      "source_line": 546,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.avs"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_BLITZBASIC",
+      "expression": "(IDM_LANG + 66)",
+      "source_line": 547,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.blitzbasic"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_PUREBASIC",
+      "expression": "(IDM_LANG + 67)",
+      "source_line": 548,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.purebasic"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_FREEBASIC",
+      "expression": "(IDM_LANG + 68)",
+      "source_line": 549,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.freebasic"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_CSOUND",
+      "expression": "(IDM_LANG + 69)",
+      "source_line": 550,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.csound"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_ERLANG",
+      "expression": "(IDM_LANG + 70)",
+      "source_line": 551,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.erlang"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_ESCRIPT",
+      "expression": "(IDM_LANG + 71)",
+      "source_line": 552,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.escript"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_FORTH",
+      "expression": "(IDM_LANG + 72)",
+      "source_line": 553,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.forth"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_LATEX",
+      "expression": "(IDM_LANG + 73)",
+      "source_line": 554,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.latex"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_MMIXAL",
+      "expression": "(IDM_LANG + 74)",
+      "source_line": 555,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.mmixal"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_NIM",
+      "expression": "(IDM_LANG + 75)",
+      "source_line": 556,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.nim"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_NNCRONTAB",
+      "expression": "(IDM_LANG + 76)",
+      "source_line": 557,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.nncrontab"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_OSCRIPT",
+      "expression": "(IDM_LANG + 77)",
+      "source_line": 558,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.oscript"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_REBOL",
+      "expression": "(IDM_LANG + 78)",
+      "source_line": 559,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.rebol"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_REGISTRY",
+      "expression": "(IDM_LANG + 79)",
+      "source_line": 560,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.registry"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_RUST",
+      "expression": "(IDM_LANG + 80)",
+      "source_line": 561,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.rust"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_SPICE",
+      "expression": "(IDM_LANG + 81)",
+      "source_line": 562,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.spice"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_TXT2TAGS",
+      "expression": "(IDM_LANG + 82)",
+      "source_line": 563,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.txt2tags"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_VISUALPROLOG",
+      "expression": "(IDM_LANG + 83)",
+      "source_line": 564,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.visualprolog"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_TYPESCRIPT",
+      "expression": "(IDM_LANG + 84)",
+      "source_line": 565,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.typescript"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_JSON5",
+      "expression": "(IDM_LANG + 85)",
+      "source_line": 566,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.json5"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_MSSQL",
+      "expression": "(IDM_LANG + 86)",
+      "source_line": 567,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.mssql"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_GDSCRIPT",
+      "expression": "(IDM_LANG + 87)",
+      "source_line": 568,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.gdscript"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_HOLLYWOOD",
+      "expression": "(IDM_LANG + 88)",
+      "source_line": 569,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.hollywood"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_GOLANG",
+      "expression": "(IDM_LANG + 89)",
+      "source_line": 570,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.golang"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_RAKU",
+      "expression": "(IDM_LANG + 90)",
+      "source_line": 571,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.raku"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_TOML",
+      "expression": "(IDM_LANG + 91)",
+      "source_line": 572,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.toml"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_SAS",
+      "expression": "(IDM_LANG + 92)",
+      "source_line": 573,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.sas"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_ERRORLIST",
+      "expression": "(IDM_LANG + 93)",
+      "source_line": 574,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.errorlist"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_ESCSEQ",
+      "expression": "(IDM_LANG + 94)",
+      "source_line": 575,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.escseq"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_STTXT",
+      "expression": "(IDM_LANG + 95)",
+      "source_line": 576,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.sttxt"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_EXTERNAL",
+      "expression": "(IDM_LANG + 165)",
+      "source_line": 578,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_LANG_EXTERNAL_LIMIT",
+      "expression": "(IDM_LANG + 179)",
+      "source_line": 579,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_LANG_USER",
+      "expression": "(IDM_LANG + 180)",
+      "source_line": 581,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.user"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_USER_LIMIT",
+      "expression": "(IDM_LANG + 210)",
+      "source_line": 582,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_LANG_USER_DLG",
+      "expression": "(IDM_LANG + 250)",
+      "source_line": 583,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.user.dlg"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_OPENUDLDIR",
+      "expression": "(IDM_LANG + 300)",
+      "source_line": 584,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.openudldir"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_LANG_UDLCOLLECTION_PROJECT_SITE",
+      "expression": "(IDM_LANG + 301)",
+      "source_line": 585,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.lang.udlcollection.project.site"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_ABOUT",
+      "expression": "(IDM  + 7000)",
+      "source_line": 589,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.about"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_HOMESWEETHOME",
+      "expression": "(IDM_ABOUT  + 1)",
+      "source_line": 590,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.homesweethome"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_PROJECTPAGE",
+      "expression": "(IDM_ABOUT  + 2)",
+      "source_line": 591,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.projectpage"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_ONLINEDOCUMENT",
+      "expression": "(IDM_ABOUT  + 3)",
+      "source_line": 592,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.onlinedocument"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_FORUM",
+      "expression": "(IDM_ABOUT  + 4)",
+      "source_line": 593,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.forum"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_UPDATE_NPP",
+      "expression": "(IDM_ABOUT  + 6)",
+      "source_line": 595,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.update.npp"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_CONFUPDATERPROXY",
+      "expression": "(IDM_ABOUT  + 9)",
+      "source_line": 598,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.confupdaterproxy"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_CMDLINEARGUMENTS",
+      "expression": "(IDM_ABOUT  + 10)",
+      "source_line": 599,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.cmdlinearguments"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_DEBUGINFO",
+      "expression": "(IDM_ABOUT  + 12)",
+      "source_line": 601,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.debuginfo"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SETTING",
+      "expression": "(IDM + 8000)",
+      "source_line": 604,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_SETTING_IMPORTPLUGIN",
+      "expression": "(IDM_SETTING + 5)",
+      "source_line": 609,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.setting.importplugin"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SETTING_IMPORTSTYLETHEMES",
+      "expression": "(IDM_SETTING + 6)",
+      "source_line": 610,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.setting.importstylethemes"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SETTING_TRAYICON",
+      "expression": "(IDM_SETTING + 8)",
+      "source_line": 611,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.setting.trayicon"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SETTING_SHORTCUT_MAPPER",
+      "expression": "(IDM_SETTING + 9)",
+      "source_line": 612,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.setting.shortcut.mapper"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SETTING_REMEMBER_LAST_SESSION",
+      "expression": "(IDM_SETTING + 10)",
+      "source_line": 613,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.setting.remember.last.session"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SETTING_PREFERENCE",
+      "expression": "(IDM_SETTING + 11)",
+      "source_line": 614,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.setting.preference"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SETTING_OPENPLUGINSDIR",
+      "expression": "(IDM_SETTING + 14)",
+      "source_line": 615,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.setting.openpluginsdir"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SETTING_PLUGINADM",
+      "expression": "(IDM_SETTING + 15)",
+      "source_line": 616,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.setting.pluginadm"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SETTING_SHORTCUT_MAPPER_MACRO",
+      "expression": "(IDM_SETTING + 16)",
+      "source_line": 617,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.setting.shortcut.mapper.macro"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SETTING_SHORTCUT_MAPPER_RUN",
+      "expression": "(IDM_SETTING + 17)",
+      "source_line": 618,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.setting.shortcut.mapper.run"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SETTING_EDITCONTEXTMENU",
+      "expression": "(IDM_SETTING + 18)",
+      "source_line": 619,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.setting.editcontextmenu"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_TOOL",
+      "expression": "(IDM + 8500)",
+      "source_line": 621,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_TOOL_MD5_GENERATE",
+      "expression": "(IDM_TOOL + 1)",
+      "source_line": 622,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.tool.md5.generate"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_TOOL_MD5_GENERATEFROMFILE",
+      "expression": "(IDM_TOOL + 2)",
+      "source_line": 623,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.tool.md5.generatefromfile"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_TOOL_MD5_GENERATEINTOCLIPBOARD",
+      "expression": "(IDM_TOOL + 3)",
+      "source_line": 624,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.tool.md5.generateintoclipboard"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_TOOL_SHA256_GENERATE",
+      "expression": "(IDM_TOOL + 4)",
+      "source_line": 625,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.tool.sha256.generate"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_TOOL_SHA256_GENERATEFROMFILE",
+      "expression": "(IDM_TOOL + 5)",
+      "source_line": 626,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.tool.sha256.generatefromfile"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_TOOL_SHA256_GENERATEINTOCLIPBOARD",
+      "expression": "(IDM_TOOL + 6)",
+      "source_line": 627,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.tool.sha256.generateintoclipboard"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_TOOL_SHA1_GENERATE",
+      "expression": "(IDM_TOOL + 7)",
+      "source_line": 628,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.tool.sha1.generate"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_TOOL_SHA1_GENERATEFROMFILE",
+      "expression": "(IDM_TOOL + 8)",
+      "source_line": 629,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.tool.sha1.generatefromfile"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_TOOL_SHA1_GENERATEINTOCLIPBOARD",
+      "expression": "(IDM_TOOL + 9)",
+      "source_line": 630,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.tool.sha1.generateintoclipboard"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_TOOL_SHA512_GENERATE",
+      "expression": "(IDM_TOOL + 10)",
+      "source_line": 631,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.tool.sha512.generate"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_TOOL_SHA512_GENERATEFROMFILE",
+      "expression": "(IDM_TOOL + 11)",
+      "source_line": 632,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.tool.sha512.generatefromfile"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_TOOL_SHA512_GENERATEINTOCLIPBOARD",
+      "expression": "(IDM_TOOL + 12)",
+      "source_line": 633,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.tool.sha512.generateintoclipboard"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EXECUTE",
+      "expression": "(IDM + 9000)",
+      "source_line": 635,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.execute"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_EXECUTE_VALIDATE_SHORTCUTSXML",
+      "expression": "(IDM_EXECUTE + 1)",
+      "source_line": 636,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.execute.validate.shortcutsxml"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SYSTRAYPOPUP",
+      "expression": "(IDM + 3100)",
+      "source_line": 638,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_SYSTRAYPOPUP_ACTIVATE",
+      "expression": "(IDM_SYSTRAYPOPUP + 1)",
+      "source_line": 639,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.systraypopup.activate"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SYSTRAYPOPUP_NEWDOC",
+      "expression": "(IDM_SYSTRAYPOPUP + 2)",
+      "source_line": 640,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.systraypopup.newdoc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SYSTRAYPOPUP_NEW_AND_PASTE",
+      "expression": "(IDM_SYSTRAYPOPUP + 3)",
+      "source_line": 641,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.systraypopup.new.and.paste"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SYSTRAYPOPUP_OPENFILE",
+      "expression": "(IDM_SYSTRAYPOPUP + 4)",
+      "source_line": 642,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.systraypopup.openfile"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_SYSTRAYPOPUP_CLOSE",
+      "expression": "(IDM_SYSTRAYPOPUP + 5)",
+      "source_line": 643,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.systraypopup.close"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_WINDOWS",
+      "expression": "(IDR_WINDOWS_MENU + 1)",
+      "source_line": 646,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.windows"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_SORT_FN_ASC",
+      "expression": "(IDR_WINDOWS_MENU + 2)",
+      "source_line": 647,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.sort.fn.asc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_SORT_FN_DSC",
+      "expression": "(IDR_WINDOWS_MENU + 3)",
+      "source_line": 648,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.sort.fn.dsc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_SORT_FP_ASC",
+      "expression": "(IDR_WINDOWS_MENU + 4)",
+      "source_line": 649,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.sort.fp.asc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_SORT_FP_DSC",
+      "expression": "(IDR_WINDOWS_MENU + 5)",
+      "source_line": 650,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.sort.fp.dsc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_SORT_FT_ASC",
+      "expression": "(IDR_WINDOWS_MENU + 6)",
+      "source_line": 651,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.sort.ft.asc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_SORT_FT_DSC",
+      "expression": "(IDR_WINDOWS_MENU + 7)",
+      "source_line": 652,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.sort.ft.dsc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_SORT_FS_ASC",
+      "expression": "(IDR_WINDOWS_MENU + 8)",
+      "source_line": 653,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.sort.fs.asc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_SORT_FS_DSC",
+      "expression": "(IDR_WINDOWS_MENU + 9)",
+      "source_line": 654,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.sort.fs.dsc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_SORT_FD_ASC",
+      "expression": "(IDR_WINDOWS_MENU + 10)",
+      "source_line": 655,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.sort.fd.asc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_SORT_FD_DSC",
+      "expression": "(IDR_WINDOWS_MENU + 11)",
+      "source_line": 656,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.sort.fd.dsc"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_MRU_FIRST",
+      "expression": "(IDR_WINDOWS_MENU + 20)",
+      "source_line": 657,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.mru.first"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_MRU_LIMIT",
+      "expression": "(IDR_WINDOWS_MENU + 59)",
+      "source_line": 658,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    },
+    {
+      "symbol": "IDM_WINDOW_COPY_NAME",
+      "expression": "(IDM_WINDOW_MRU_LIMIT + 1)",
+      "source_line": 659,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.copy.name"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_WINDOW_COPY_PATH",
+      "expression": "(IDM_WINDOW_MRU_LIMIT + 2)",
+      "source_line": 660,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.window.copy.path"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_DROPLIST_LIST",
+      "expression": "(IDR_DROPLIST_MENU + 1)",
+      "source_line": 663,
+      "disposition": "required-command-surface",
+      "capability_ids": [
+        "command.droplist.list"
+      ],
+      "reason": "Command surface is required; not a claim that the label fully defines all behaviors."
+    },
+    {
+      "symbol": "IDM_DROPLIST_MRU_FIRST",
+      "expression": "(IDR_DROPLIST_MENU + 20)",
+      "source_line": 664,
+      "disposition": "alias/group",
+      "capability_ids": [],
+      "reason": "Group/range/menu-position metadata; dynamic behavior tracked separately."
+    }
+  ],
+  "range_expansion_state": "incomplete; dynamic per-document/menu, user languages and extension commands need detailed runtime-instance contracts"
+}

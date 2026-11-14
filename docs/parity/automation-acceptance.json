@@ -1,0 +1,426 @@
+{
+  "schema_version": 1,
+  "capabilities": [
+    {
+      "id": "automation.identity.rename",
+      "behavior": "Rename and reload preserve stable UUID, saved steps, parameters and shortcut/toolbar bindings; names never choose behavior.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.versions.reject",
+      "behavior": "Unknown or malformed workflow versions fail safely without execution.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.input.selection",
+      "behavior": "Selection input captures only selected bytes and revision; never changes whole document.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.input.clipboard",
+      "behavior": "Rich clipboard text can be explicitly extracted as plain text; ordinary paste remains ordinary.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.input.document",
+      "behavior": "Document input captures authoritative text and revision.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.input.file",
+      "behavior": "User-chosen file input reads data without executing file content.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.steps.parameters",
+      "behavior": "Ordered typed steps preserve saved and ask-at-run parameters through serialization.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.preview.edit",
+      "behavior": "Preview permits editing included item rows before committing output.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.preview.cancel",
+      "behavior": "Cancel leaves editor, clipboard, files and external destinations unchanged.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.triggers.shared",
+      "behavior": "Menu, shortcut, pinned toolbar, palette and context action invoke the same saved ID/version.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.shortcuts.collisions",
+      "behavior": "Shortcut conflicts are visible and cannot silently steal existing commands.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.editor.undo",
+      "behavior": "Editor transform applies through Scintilla as one Undo operation; stale revisions are rejected.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.output.clipboard",
+      "behavior": "Explicit clipboard output writes only the reviewed transformed content.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.output.file",
+      "behavior": "Explicit file output uses native destination choice and safe failure handling.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.output.new-document",
+      "behavior": "New-document output creates an editable unsaved native document.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.recipe.quantities",
+      "behavior": "2 eggs, \u00bd, 1\u00bd, 1/2, ranges, units, accented names and punctuation survive cleanup.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.recipe.markers",
+      "behavior": "Only recognized list markers are removed; quantity-leading rows are not numbered-list markers.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.recipe.duplicates",
+      "behavior": "Duplicates remain unless an explicit deduplication step is configured.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.recipe.wrapping",
+      "behavior": "Ambiguous wrapping/headings remain reviewable; no automatic quantity scaling or merging.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.reminders.destination",
+      "behavior": "Show selected writable list identifier plus name/account/source; duplicate names remain distinguishable.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "connectors",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.reminders.permission",
+      "behavior": "Request access only on need; denied/revoked access and missing/read-only/deleted destinations do not write.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "connectors",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.reminders.explicit-send",
+      "behavior": "Only explicit reviewed send creates one reminder per included row.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "connectors",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.reminders.outcomes",
+      "behavior": "Report per-row success/failure/uncertainty, retaining unsent/uncertain rows.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "connectors",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.reminders.retry",
+      "behavior": "Double invocation and retries cannot silently duplicate a batch; uncertain outcomes do not promise exactly-once.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "connectors",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.reminders.undo",
+      "behavior": "Editor Undo never implies external reminders were deleted.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "connectors",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.reminders.live-consent",
+      "behavior": "Actual system access requires explicit consent and a designated scratch list; fake tests remain labeled fake.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "connectors",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.commands.inert",
+      "behavior": "Workflow import/rename/open never executes commands; explicit invocation and configured argv/shell mode required.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    },
+    {
+      "id": "automation.macros.independent",
+      "behavior": "Recorded editing macros retain their independent record/save/replay/repeat behavior and may be called by configured steps.",
+      "classification": "standard-required",
+      "reference": {
+        "evidence_type": "user product contract",
+        "handoff_date": "2026-11-14"
+      },
+      "owner": "automations",
+      "implementation_state": "unassessed",
+      "verification_state": "not-run",
+      "implementation_paths": [],
+      "acceptance_evidence": [],
+      "candidate_commit": null
+    }
+  ],
+  "completion_claim": false
+}
