@@ -26,11 +26,16 @@ struct UserDefinedLanguage:Codable,Equatable {
             let id=Self.styleNames.firstIndex(of:style.name)!
             guard let nesting=Int(style.attributes["nesting"] ?? "0"),(0...0x7ffffff).contains(nesting),let font=Int(style.attributes["fontStyle"] ?? "0") else{throw LanguageError.invalid("Invalid UDL style parameters.")}
             properties[String(format:"userDefine.nesting.%02d",id)]=String(nesting)
-            converted.append(.init(id:id,name:style.name,foreground:style.attributes["fgColor"] ?? "000000",fontStyle:font))
+            converted.append(.init(id:id,name:style.name,foreground:style.attributes["fgColor"] ?? "000000",fontStyle:font,useCustomColor:true,fontName:style.attributes["fontName"].flatMap{$0.isEmpty ? nil:$0},fontSize:style.attributes["fontSize"].flatMap{Double($0)}))
         }
         let digest=SHA256.hash(data:Data(name.utf8)).map{String(format:"%02x",$0)}.joined()
-        let profile=LanguageProfile(id:"udl."+digest.prefix(24),title:name,lexer:"user",extensions:extensions.split(whereSeparator:\.isWhitespace).map(String.init),keywordLists:lists,referenceKeywordClasses:keywords,properties:properties,styles:converted,functionPattern:nil,udl:self)
+        let profile=LanguageProfile(id:"udl."+digest.prefix(24),title:name,lexer:"user",extensions:extensions.split(whereSeparator:\.isWhitespace).map(String.init),keywordLists:lists,referenceKeywordClasses:keywords,properties:properties,styles:converted,functionPattern:nil,udl:self,comments:.init(line:Self.simpleComment(keywords["Comments"] ?? "",code:"00"),blockOpen:Self.simpleComment(keywords["Comments"] ?? "",code:"03"),blockClose:Self.simpleComment(keywords["Comments"] ?? "",code:"04")))
         try profile.validate();return profile
+    }
+    private static func simpleComment(_ text:String,code:String)->String? {
+        // Editing uses the first simple delimiter; lexer properties retain the complete UDL grammar.
+        guard let token=text.split(whereSeparator:\.isWhitespace).first(where:{$0.hasPrefix(code)}),token.count>2 else{return nil}
+        return String(token.dropFirst(2))
     }
     /// Notepad++ multi-part quoted words encode spaces as vertical-tab/backspace markers.
     static func words(_ input:String)throws->String {

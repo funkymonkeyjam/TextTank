@@ -1,90 +1,73 @@
-# TextTank — INCOMPLETE PREVIEW
+# TextTank — incomplete review build
 
-A launchable native Swift/AppKit editor using Scintilla Cocoa and Lexilla, with the selected Carbon Caret identity. This is a working review checkpoint, **not** a completed Notepad++ replacement. Every standard capability in the frozen reference remains required; no missing feature has been waived.
+Native Swift/AppKit, Scintilla Cocoa and Lexilla editor with Carbon Caret branding. This build adds substantial working functionality; **full standard Notepad++ coverage is not complete or certified**. All required behaviors remain in the ledger. No menu count or assertion count is a capability completion percentage.
 
 Repository: https://github.com/funkymonkeyjam/TextTank
 
-Unmerged implementation PR: https://github.com/funkymonkeyjam/TextTank/pull/1
+Unmerged PR: https://github.com/funkymonkeyjam/TextTank/pull/1
 
-## Run and rebuild
+## Run
 
-From the repository root, launch the packaged candidate:
+From the repository root:
 
 ```sh
 ./scripts/launch-review.sh
 ```
 
-The packaging script produces `output/review/TextTank-review.zip` and a `Launch-TextTank.command` launcher. Use that launcher from the extracted review folder; it stages the app outside synced storage before launch. The development build can also be launched with:
+This launches `output/review/TextTank-review.zip` after extraction to a temporary directory outside synced storage. The package also contains `Launch-TextTank.command`, the application, source/dependency archives, licenses and hashes. `output/review/manifest.json` identifies the packaged commit/tree and archive; `validation.json` records observed tests and exact remote CI. Read those candidate-specific records instead of inferring results from an older run.
+
+Rebuild and test on an arm64 Mac with Xcode:
+
+```sh
+./scripts/build.sh
+./scripts/test.sh
+./scripts/test-performance.sh
+```
+
+Launch a development build:
 
 ```sh
 open build/DerivedData/Build/Products/Debug/TextTank.app
 ```
 
-Reproduce the native arm64 build and checks on a Mac with Xcode:
-
-```sh
-./scripts/build.sh
-./scripts/test.sh
-./scripts/test-macros.sh
-```
-
-The build pins Scintilla 5.6.9 and Lexilla 5.5.5 with SHA-256 verification in `Dependencies.lock.json`. Initial dependency downloads need network access; ordinary editor and deterministic automation behavior do not require an account, subscription or paid API. Deployment target is macOS 14. The observed host is arm64; Intel and macOS 14 runtime behavior are not verified. Local ad-hoc signing is not notarized public distribution.
-
-To package a committed, clean candidate with corresponding source and pinned dependency archives:
+To package a committed clean source tree:
 
 ```sh
 ./scripts/package-review.sh
 (cd output/review && shasum -a 256 -c SHA256SUMS)
 ```
 
-Packaging rebuilds the committed source, verifies local signatures, preserves an earlier delivery under `output/review-previous-*`, and emits `manifest.json`, `SHA256SUMS`, the app and ZIP. `manifest.json` records the commit, dependency pins, architecture, ZIP hash and documented app-tree fingerprint. It does not infer CI success. Use `TEXTTANK_SOURCE_ARCHIVES` to supply a directory of pinned archives for offline packaging if they are absent from `build/downloads`.
+The minimum deployment target remains macOS 14. Local testing used the current arm64 host; a deployment target is not macOS 14 runtime evidence. Ad-hoc signing is for local review and is not notarized public distribution. Initial pinned dependency downloads need network access; ordinary editing and deterministic automations do not need an account or paid service.
 
-**Candidate-specific records:** `output/review/manifest.json` records the source commit and artifact fingerprints. The accompanying `output/review/validation.json` records final observed test/review results and exact-SHA CI status. Consult those records for the delivered candidate; this source document does not certify later changes or infer CI success. Validation is kept alongside the ZIP to avoid self-referential source/ZIP hashes.
+## Review walkthrough
 
-## Five-minute walkthrough
+Use synthetic scratch files, not personal documents.
 
-1. Create a document and paste `café · ½ cup · 👩🏽‍💻` plus several lines. Exercise typing, selection, Undo/Redo and Save. Use synthetic review files.
-2. Choose **View → Clone in Split View**. Edit either pane, Undo from the other, then close the split. The shared document should remain intact. The repaired viewport passed native tests and a CUA recheck showing both panes rendering Unicode text.
-3. Use **Search → Find and Replace** for literal text, then try line move/duplicate, braces, bookmarks, folding and whitespace controls. Use **Search → Find in Folder** for cancellable literal searches with extension filters and clickable results. Skipped files and limits are shown; stale results do not change selection. Reference-compatible regex and multi-file replacements remain open.
-4. Choose **Automations → Add Recipe Buttons** if your existing configuration has no recipe buttons. Give the two workflows your own names. Paste the full ingredient section, then click the cleanup toolbar button: it cleans the current editor directly, with one Undo. Click the separate Reminders button when ready to choose a list and Send. The saved step configuration controls behavior; the user-visible name never selects code. Advanced JSON supports editing steps, header regex, input/output, preview, shortcut and toolbar pin. Unknown unmarked content in a marked list aborts safely instead of dropping ingredients.
-5. In a scratch document choose **Macros → Start Recording**, type a short string, then **Stop Recording**. Play the last recording with a repeat count and Undo. Save it under your chosen name. Native capture and replay tests pass; this exact menu walkthrough has not yet been observed through CUA.
+1. **Editing and files:** paste `café · ½ cup · 👩🏽‍💻`, save, clone in split view, edit either pane and Undo from the other. Try line transforms, rectangular/multiple selections, Column Insert / Number, language-specific comments, and EOL conversion. Encoding conversion retains text; Reload As reinterprets disk bytes and confirms discarding dirty text. Read Only prevents mutation. The visible Close Tab X retains native Save/Discard/Cancel review.
+2. **Search:** use Search → Find and Replace. Select Normal, Extended or Regular expression (Boost); test `([a-z]+)=(\d+)` → `$1:$2`, count/results, selection/current/all-open scopes and Undo. Folder search supports explicit saved workspace roots, include/exclude filters and skipped/partial outcomes. Disk replacement is separately confirmed, skips open documents, makes private recovery copies/reports, and reports each file; it is not atomic across files.
+3. **Languages:** choose Python, paste a class with a function, open Function List and double-click the symbol. Try keyword completion, syntax font/color settings and synthetic UDL XML import/edit/export. A real ported LexUser handles tested keyword/comment/delimiter cases; complete language/UDL/API semantics are still open.
+4. **Workspace:** open the document/folder/recent browser, save/reopen a session snapshot, and explicitly enable Monitor Current File. Monitoring reports changes without replacing editor text. Reload remains explicit and protects dirty buffers. Printing uses a detached representation rather than a second editable model.
+5. **Macros and automations:** record a named editing/search macro, play it and Undo. Test repeat/Stop. Create or rename a workflow, edit/reorder processing steps, choose runtime parameters, and verify labels follow its saved name. Import/open/restore never executes a shell command or connector output.
+6. **Recipe:** paste the complete ingredient section. Click the existing named cleanup button: it transforms the same editor and one Undo restores the original. The separate Add to Reminders action still requires choosing/reviewing a destination and explicit Send. **The user confirmed a successful live ingredient transfer.** Additional tests in this run use injected stores; they do not establish live revocation/deleted-list/partial-write behavior. Do not use a personal list for fault tests.
+7. **Utilities and Run:** try Base64/URL/quoted-printable/hex/number conversions and styled HTML/RTF export. Add the sample text extension under Run, invoke it on synthetic text, inspect the preview and explicitly Apply. Argv stays separate unless intentional shell mode is configured. Run cancellation/output limits and stale preview guards have focused tests; see `EXTENSIONS-AND-RUN.md`.
+8. **Settings and closing:** change a nonconflicting shortcut/font setting, restart and check persistence. Exercise dirty close and Quit Save/Discard/Cancel with scratch documents. Earlier Quit-crash repairs and detached-controller regression tests remain in place; the complete physical dialog matrix is not certified by automated tests alone.
 
-6. Try the visible **Close Tab** X, then Cancel the unsaved-document dialog. Use **File → Save Session Snapshot** and **Open Session Snapshot**: snapshots restore as new unsaved documents, preserving text, encoding, selection and bookmarks without overwriting originals. **File → Print** creates a static monospaced print representation; complete reference printing options remain open.
+## Evidence and repaired findings
 
-Reminders export requires explicit access, destination and Send choices, with durable per-row outcomes/history. **The user confirmed successful live ingredient transfer to Reminders.** This is user-reported happy-path evidence; injected-store tests do not establish live failure/retry behavior.
+The detailed records are in `harness/reviews/` and `docs/parity/implementation-evidence.json`. Observed suite results are bound to source hashes in ignored logs and the delivered validation record. The native walkthrough observed Unicode save, actual Boost replacement, Python rendering, symbol navigation and native step-editor controls.
 
-## Observed checks at this checkpoint
+Independent reviews found and repaired default shortcut collisions, canonical-Unicode duplicate-line loss, invalid-surrogate regex replacement, shared AppKit field-editor confusion, detached/stale extension application, an old preview applying a newer result, leading-FEFF output loss, corrupt workspace settings overwrite, and discarded folder-replacement outcomes. Additional scope/indicator changes require their own final results rather than inheriting those passes.
 
-| Check | Observed result |
-|---|---|
-| FileChecks | 642 assertions |
-| AutomationChecks | 47 assertions, including exact Markdown/native-copy28 rows and regex timeout |
-| AutomationControllerChecks | 30 native assertions, direct same-editor apply/Undo and failure preservation |
-| ReminderChecks | 35 assertions using injected stores only |
-| BridgeChecks | 54 PASS lines |
-| DocumentChecks | 64 native assertions, including detached-controller crash regression, session restore/recovery and static print view |
-| WorkspaceChecks | 39 assertions, including private persistence and nonblocking FIFO rejection |
-| MacroChecks | 12 pure; 24 native assertions |
-| FolderSearchChecks | 38 assertions, Unicode offsets/filtering/limits/symlink/FIFO/cancellation |
-| FolderSearchControllerChecks | 11 native assertions, dirty-buffer and stale-result preservation |
+Synthetic native performance checks covered 1/10/100 MiB loading, literal find, a replacement and Undo, a 10 MiB long line, and creation of 100 independent buffers. They do not establish physical scroll responsiveness, 100 actual tabs, every search mode, disk/recovery budgets or sustained memory behavior. The observed peak memory includes fixture construction and text verification copies.
 
-The integrator observed Chrome's open RecipeTin ingredient container selected and copied with Command-C, then pasted into native TextTank with Command-V. One cleanup click produced all 28 rows in the same editor, without a preview. Only this one site was observed. Browser bookmark-manager access was blocked by browser security; no workaround was attempted. Separate named cleanup/send toolbar buttons, native naming configuration, visible close control, dirty-close Cancel/Undo and dirty-quit Cancel followed by saved quit were observed. Earlier observations include Unicode shared-pane editing and forced restart recovery of two snapshots.
+## Required gaps and external validation limits
 
-Folder-search UI was observed finding five `panko` matches in five recipe fixtures, reporting the filtered README, and selecting the exact match after double-click. Cancellation is cooperative: a maximum-size decode may finish before stopping (roughly two seconds in the reviewed 32 MiB sample).
+- Reference normalization retains every seed plus discovered dialog/language surfaces, but is not a fully verified behavioral denominator. Official release metadata/hash is recorded; downloaded binary bytes and source/release differences remain unresolved. The same version label covers different source commits.
+- Complete encoding/code-page choices, coordinated save fault/race coverage, metadata/recovery/dirty-clone lifetime combinations, monitoring/tail-follow and every tab/window/session variant remain open.
+- Search still needs full Windows reference differential tests, uncommon wildcard/locale/word-boundary behavior, true project-file membership, every history/mark/dialog option and broad pathological/performance coverage. A noncooperating external writer can race a final per-file compare/rename; recovery reports do not constitute an automatic recovery UI.
+- Advanced editor command variants, full macro command coverage, document-map behavior, all preference/shortcut/context/toolbar customization and localization remain incomplete.
+- Imported language configurations are not full semantic tests. Objective-C and internal SearchResult-specific patched lexer factories are not supplied by stock Lexilla. Complex embedded/substyle/UDL nesting/folding/number/lifetime behavior, API-signature completion/call tips and upstream function-list XML semantics remain incomplete or unverified.
+- The version 1 text-extension interface is a tested Mac equivalent for explicit text transforms, not the entire Notepad++ plugin event/message ecosystem. Utility reference malformed/binary/options semantics have documented differences in `docs/research/utility-audit.md`.
+- Live connector failure/retry verification needs a designated scratch Reminders list. User-confirmed success closes only that observed happy path. IME/dead keys, VoiceOver, complete keyboard/light/dark/high-contrast checks and actual macOS 14/Intel runtimes remain unverified.
 
-Two concrete quit crash reports identified a detached document force-cast in a window-update observer. The controller teardown repair removes observers/callbacks and retains its editor safely; native lifecycle regression tests pass. See `harness/reviews/quit-crash-2026-11-14.md`. Full physical clean/dirty Quit Save/Discard/Cancel coverage remains open; absence of a new crash report alone does not prove process exit. Saved macro menu walkthrough, IME, VoiceOver and modal keyboard edge cases remain unverified.
-
-Counts are assertions, not completed capabilities. The limited evidence ledger and external `output/review/validation.json` bind checks to sources and the delivered candidate. No final exact-SHA CI outcome is claimed here.
-
-## Required work still open
-
-- Finish the normalized reference inventory and freeze the actual official standard distribution artifact; package profile currently relies on pinned source recipes.
-- Complete all encoding interpretation/conversion options, session/tab/window variants, external-change handling, metadata, broader fault/crash recovery and dirty-clone quit cases. A synthetic forced termination/restart recovered two snapshots, but that is not exhaustive recovery verification.
-- Implement reference-compatible Boost regex/extended search and replacements, all scopes/results, count/mark, cancellation and macro search semantics.
-- Complete advanced selections/column editing, all sort/case/comment variants, UDL/LexUser, language keyword/style data, completion/call tips, function lists and themes.
-- Complete document/project/folder panels, monitoring, full printing options, preferences, shortcut/context customization and localization.
-- Implement required Mac extension facilities, configured Run commands, and bundled mimeTools/NppConverter/NppExport equivalents. Windows DLL compatibility is not claimed.
-- Complete macro command coverage/run-until-end and automation ask-at-run parameters, progress/cancellation, multi-selection output and all trigger/output combinations. Individual user-named toolbar pins now exist; complete trigger UI coverage remains open.
-- Verify remaining real EventKit failure/retry cases with a designated scratch list, IME/dead keys, VoiceOver, performance budgets, older macOS/Intel runtime, clean-checkout build, final exact-SHA CI and integrated independent review.
-
-No tagged release or merge is authorized by this preview. Review findings and remaining gaps should drive the next implementation checkpoint.
+No merge, tagged release, public-release certification or full-parity claim is implied.

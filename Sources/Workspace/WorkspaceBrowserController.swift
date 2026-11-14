@@ -9,6 +9,8 @@ final class WorkspaceBrowserNode {
 
 final class WorkspaceBrowserController:NSObject,NSOutlineViewDataSource,NSOutlineViewDelegate,NSMenuDelegate {
     let store:WorkspaceBrowserStore
+    let monitor=DocumentMonitor()
+    var currentDocument:()->TextDocument?={NSApp.mainWindow?.windowController?.document as? TextDocument}
     private(set) var window:NSPanel?
     private let outline=NSOutlineView()
     private let mode=NSSegmentedControl(labels:["Open Documents","Folders","Recent Files"],trackingMode:.selectOne,target:nil,action:nil)
@@ -23,17 +25,21 @@ final class WorkspaceBrowserController:NSObject,NSOutlineViewDataSource,NSOutlin
         let support=ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"].map{URL(fileURLWithPath:$0)} ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("TextTank")
         store=WorkspaceBrowserStore(url:storeURL ?? support.appendingPathComponent("WorkspaceBrowser.json"))
         super.init()
+        monitor.onStatus = { [weak self] value in self?.status.stringValue=value.message }
     }
     func menu()->NSMenu {
         let menu=NSMenu(title:"Workspace");menu.delegate=self;rootMenu=menu
         let show=NSMenuItem(title:"Show Workspace Browser",action:#selector(show(_:)),keyEquivalent:"");show.target=self;menu.addItem(show)
         let add=NSMenuItem(title:"Add Folder to Workspace…",action:#selector(addFolder(_:)),keyEquivalent:"");add.target=self;menu.addItem(add)
+        let monitor=NSMenuItem(title:"Monitor Current File",action:#selector(toggleMonitor(_:)),keyEquivalent:"");monitor.target=self;menu.addItem(monitor)
+        let reload=NSMenuItem(title:"Reload Monitored File…",action:#selector(reloadMonitored(_:)),keyEquivalent:"");reload.target=self;menu.addItem(reload)
         menu.addItem(.separator())
         let recent=NSMenuItem(title:"Reopen Recent File",action:nil,keyEquivalent:"");recent.submenu=NSMenu(title:"Recent Files");menu.addItem(recent)
         return menu
     }
     func menuNeedsUpdate(_ menu:NSMenu) {
         guard menu === rootMenu,let submenu=menu.items.last?.submenu else { return }
+        menu.items.first{$0.action == #selector(toggleMonitor(_:))}?.state=monitor.document == nil ? .off:.on
         submenu.removeAllItems()
         for url in recentURLs() {
             let item=NSMenuItem(title:url.lastPathComponent,action:#selector(openRecent(_:)),keyEquivalent:"");item.target=self;item.representedObject=url;item.toolTip=url.path;submenu.addItem(item)
@@ -42,6 +48,20 @@ final class WorkspaceBrowserController:NSObject,NSOutlineViewDataSource,NSOutlin
     private func recentURLs()->[URL] {
         var seen=Set<String>()
         return (store.state.recent + NSDocumentController.shared.recentDocumentURLs).filter{seen.insert($0.standardizedFileURL.path).inserted}.prefix(100).map{$0}
+    }
+    @objc private func toggleMonitor(_ sender:NSMenuItem) {
+        if monitor.document != nil {monitor.stop();sender.state = .off;return}
+        guard let document=currentDocument() else{NSAlert(error:WorkspaceError.invalid("Choose a saved document window before enabling monitoring.")).runModal();return}
+        do{try monitor.start(document);sender.state = .on;show(nil)}catch{NSAlert(error:error).runModal()}
+    }
+    @objc private func reloadMonitored(_ sender:Any?) {
+        guard let document=monitor.document else{status.stringValue="No document is being monitored.";return}
+        guard !document.isDocumentEdited else{NSAlert(error:WorkspaceError.invalid("The document has unsaved edits. Use Save As to keep them, or explicitly Revert to Saved; monitoring will not discard them.")).runModal();return}
+        let revision=document.editor.revision
+        let alert=NSAlert();alert.messageText="Reload Monitored File?";alert.informativeText="Replace the clean editor contents with the current disk bytes. This clears its Undo history."
+        alert.addButton(withTitle:"Reload");alert.addButton(withTitle:"Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else{return}
+        do{try monitor.reload(expectedRevision:revision)}catch{NSAlert(error:error).runModal()}
     }
     @objc func show(_ sender:Any?) {
         if window == nil { buildWindow() }

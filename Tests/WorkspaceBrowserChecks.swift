@@ -65,6 +65,24 @@ import Darwin
         let corruptController=WorkspaceBrowserController(storeURL:corruptURL,recordsSystemRecent:false)
         _ = try corruptController.open(fresh)
         check(try Data(contentsOf:corruptURL)==corruptBytes,"opening document preserves corrupt workspace evidence")
+        let watched=try corruptController.open(fresh)
+        let monitor=DocumentMonitor();try monitor.start(watched)
+        func waitFor(_ wanted:DocumentMonitorStatus){let end=Date().addingTimeInterval(4);while monitor.status != wanted && Date()<end{RunLoop.current.run(until:Date().addingTimeInterval(0.01))};check(monitor.status==wanted,"background monitor result")}
+        waitFor(.unchanged)
+        try Data("changed on disk".utf8).write(to:fresh);monitor.poll();waitFor(.changed)
+        check(watched.editor.text=="fresh","monitor never automatically reloads")
+        watched.editor.replaceSelection("local edit")
+        rejects("monitor cannot reload dirty document"){try monitor.reload(expectedRevision:watched.editor.revision)}
+        check(watched.editor.text.contains("local edit"),"dirty monitor preserves edits")
+        let staleRevision=watched.editor.revision
+        watched.editor.replaceSelection("newer")
+        rejects("monitor rejects stale explicit reload"){try monitor.reload(expectedRevision:staleRevision)}
+        watched.editor.executeCommand("undo");watched.editor.executeCommand("undo")
+        try monitor.reload(expectedRevision:watched.editor.revision)
+        check(watched.editor.text=="changed on disk","explicit clean monitor reload")
+        try FileManager.default.removeItem(at:fresh);monitor.poll();waitFor(.missing)
+        check(watched.editor.text=="changed on disk","missing monitored file preserves text")
+        monitor.stop();check(monitor.status == .stopped && monitor.document == nil,"monitor stops explicitly")
         controller.window?.close()
         print("WorkspaceBrowserChecks: \(count) assertions passed")
     }

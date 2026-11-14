@@ -20,7 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let workspace = WorkspaceController()
     let workspaceBrowser = WorkspaceBrowserController()
     let settings = SettingsController()
-    lazy var folderSearch = FolderSearchController()
+    lazy var folderSearch:FolderSearchController = {
+        let controller=FolderSearchController();controller.workspaceRoots={ [weak self] in self?.workspaceBrowser.store.state.folders ?? [] };return controller
+    }()
     weak var lastDocumentController:EditorWindowController?
     var currentEditor:TTEditor? {
         if let controller=NSApp.mainWindow?.windowController as? EditorWindowController { lastDocumentController=controller }
@@ -128,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let nativeActions:[String:Selector]=["undo":NSSelectorFromString("undo:"),"redo":NSSelectorFromString("redo:"),"cut":#selector(NSText.cut(_:)),"copy":#selector(NSText.copy(_:)),"paste":#selector(NSText.paste(_:)),"selectAll":#selector(NSText.selectAll(_:))]
             item(edit,label,nativeActions[id] ?? #selector(EditorWindowController.command(_:)),key,id)
         }
+        for comment in CommentCommand.allCases { item(edit,comment.title,#selector(EditorWindowController.comment(_:)),"",comment.rawValue) }
         for transform in EditorTransform.allCases { item(edit,transform.title,#selector(EditorWindowController.command(_:)),"","transform."+transform.rawValue) }
         for (title,id) in [("Rectangular Selection","rectangularSelection"),("Stream Selection","streamSelection"),("Add Next Occurrence","addNextOccurrence"),("Select All Occurrences","selectAllOccurrences"),("Clear Additional Selections","clearAdditionalSelections"),("Duplicate Selection","duplicateSelection"),("Delete Word Left","deleteWordLeft"),("Delete Word Right","deleteWordRight"),("Delete to Line Start","deleteLineLeft"),("Delete to Line End","deleteLineRight")] { item(edit,title,#selector(EditorWindowController.command(_:)),"",id) }
         item(edit,"Column Insert / Number…",#selector(EditorWindowController.columnInsert(_:)))
@@ -410,20 +413,25 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     @objc func findNext(_ sender:Any?) { performFind(backwards:false) }
     @objc func findPrevious(_ sender:Any?) { performFind(backwards:true) }
     func performFind(backwards:Bool) {
-        let query=findField.currentEditor()?.string ?? findField.stringValue;guard !query.isEmpty else { return }
-        let editor=activeEditor
+        let editor=activeEditor;window?.makeFirstResponder(nil)
+        let query=findField.stringValue;guard !query.isEmpty else { return }
         if !editor.find(query,matchCase:caseBox.state == .on,backwards:backwards) { NSSound.beep() }
         (NSApp.delegate as? AppDelegate)?.macros.recordFind(text:query,matchCase:caseBox.state == .on,backwards:backwards,editor:editor)
     }
     @objc func replaceSelection(_ sender:Any?) {
-        let text=replaceField.currentEditor()?.string ?? replaceField.stringValue;let editor=activeEditor
+        let editor=activeEditor;window?.makeFirstResponder(nil);let text=replaceField.stringValue
         editor.replaceSelection(text); (NSApp.delegate as? AppDelegate)?.macros.recordReplace(text:text,editor:editor)
     }
-    @objc func clone(_ sender:Any?) { guard secondary == nil else { return }; let clone=TTEditor(frame:split.bounds); clone.shareDocument(with:primaryEditor); clone.readOnly=primaryEditor.readOnly; if let app=NSApp.delegate as? AppDelegate,let doc=document as? TextDocument { _ = app.languages.apply(identifier:doc.languageIdentifier,to:clone) }; secondary=clone;clone.onFocus = { [weak self, weak clone] in guard let clone else { return };self?.lastEditor=clone;(NSApp.delegate as? AppDelegate)?.lastDocumentController=self;(NSApp.delegate as? AppDelegate)?.macros.editorDidFocus(clone) };split.addArrangedSubview(clone);split.adjustSubviews();split.layoutSubtreeIfNeeded();clone.layoutSubtreeIfNeeded();window?.makeFirstResponder(clone) }
+    @objc func clone(_ sender:Any?) { guard secondary == nil else { return }; let clone=TTEditor(frame:split.bounds); clone.shareDocument(with:primaryEditor); clone.readOnly=primaryEditor.readOnly; if let app=NSApp.delegate as? AppDelegate,let doc=document as? TextDocument { app.settings.apply(to:clone);clone.menu=app.automations.contextMenu();_ = app.languages.apply(identifier:doc.languageIdentifier,to:clone) }; secondary=clone;clone.onFocus = { [weak self, weak clone] in guard let clone else { return };self?.lastEditor=clone;(NSApp.delegate as? AppDelegate)?.lastDocumentController=self;(NSApp.delegate as? AppDelegate)?.macros.editorDidFocus(clone) };split.addArrangedSubview(clone);split.adjustSubviews();split.layoutSubtreeIfNeeded();clone.layoutSubtreeIfNeeded();window?.makeFirstResponder(clone) }
     @objc func closeSplit(_ sender:Any?) { lastEditor=primaryEditor; window?.makeFirstResponder(primaryEditor); secondary?.removeFromSuperview(); secondary=nil }
     @objc func toggleWrap(_ sender:Any?) { activeEditor.wrap.toggle() }
+    @objc func comment(_ sender:NSMenuItem) {
+        guard let raw=sender.representedObject as? String,let command=CommentCommand(rawValue:raw),let app=NSApp.delegate as? AppDelegate,let document=document as? TextDocument,let profile=app.languages.profile(identifier:document.languageIdentifier) else {NSSound.beep();return}
+        app.macros.invalidateRecording(reason:"Language-specific comments are not yet recorded.")
+        do {try command.apply(to:activeEditor,profile:profile)}catch{NSAlert(error:error).runModal()}
+    }
     @objc func columnInsert(_ sender:Any?) {
-        let editor=activeEditor;let revision=editor.revision
+        let editor=activeEditor;let revision=editor.revision,selections=editor.selectionRanges
         let alert=NSAlert();alert.messageText="Insert into Each Selection";alert.informativeText="Use Option-drag for a rectangle or add multiple carets. Text replaces each selected range; numbering follows selection order."
         let text=NSTextField(string:"");text.placeholderString="Text to insert"
         let number=NSButton(checkboxWithTitle:"Insert sequential numbers",target:nil,action:nil)
@@ -438,7 +446,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             for i in 0..<editor.selectionCount { values.append(String(value));if i+1<editor.selectionCount { let(next,overflow)=value.addingReportingOverflow(increment);guard !overflow else {NSSound.beep();return};value=next } }
         }
         (NSApp.delegate as? AppDelegate)?.macros.invalidateRecording(reason:"Column insertion is not yet recorded.")
-        if !editor.replaceSelections(values,expectedRevision:revision) {let error=NSAlert();error.messageText="Selections changed or are not writable";error.informativeText="No column insertion was applied.";error.runModal()}
+        if !Self.applyColumn(values,to:editor,revision:revision,selections:selections) {let error=NSAlert();error.messageText="Selections changed or are not writable";error.informativeText="No column insertion was applied.";error.runModal()}
+    }
+    static func applyColumn(_ values:[String],to editor:TTEditor,revision:UInt,selections:[[String:NSNumber]])->Bool {
+        guard editor.window != nil,editor.selectionRanges==selections else{return false}
+        return editor.replaceSelections(values,expectedRevision:revision)
     }
     @objc func convertEOL(_ sender:NSMenuItem) {
         guard let mode=sender.representedObject as? String else { return }

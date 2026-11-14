@@ -159,8 +159,9 @@ final class AutomationController: NSObject, NSMenuDelegate {
             guard response == .alertFirstButtonReturn else { return }; break
         }
         do {
-            workflow.name = name.currentEditor()?.string ?? name.stringValue
-            workflow.shortcut = shortcut.currentEditor()?.string ?? shortcut.stringValue
+            edit.window.makeFirstResponder(nil)
+            workflow.name = name.stringValue
+            workflow.shortcut = shortcut.stringValue
             if let value = input.titleOfSelectedItem, let typed = AutomationDefinition.Input(rawValue:value) { workflow.input = typed }
             if let value = output.titleOfSelectedItem, let typed = AutomationDefinition.Output(rawValue:value) { workflow.output = typed }
             workflow.previewBeforeApply = preview.state == .on; workflow.pinToToolbar = pinned.state == .on
@@ -174,7 +175,8 @@ final class AutomationController: NSObject, NSMenuDelegate {
         alert.addButton(withTitle:"Create"); alert.addButton(withTitle:"Cancel")
         let name = NSTextField(string:"My Automation"); name.frame = NSRect(x:0,y:0,width:440,height:28); alert.accessoryView = name
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let definition = AutomationDefinition(id:UUID(),name:name.currentEditor()?.string ?? name.stringValue,input:.document,steps:[],output:.editor)
+        alert.window.makeFirstResponder(nil)
+        let definition = AutomationDefinition(id:UUID(),name:name.stringValue,input:.document,steps:[],output:.editor)
         do { try definition.validate(); guard let edited = AutomationStepEditor.edit(definition) else { return }; var proposed = library; proposed.workflows.append(edited); try persistLibrary(proposed) } catch { showError(error) }
     }
     @objc func addRecipeButtons() {
@@ -190,9 +192,10 @@ final class AutomationController: NSObject, NSMenuDelegate {
         alert.accessoryView = settingsView(rows:[("Cleanup name",cleanName),("Send name",sendName)],options:[preview])
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
-            var clean = AutomationDefinition.example; clean.id = UUID(); clean.name = cleanName.currentEditor()?.string ?? cleanName.stringValue
+            alert.window.makeFirstResponder(nil)
+            var clean = AutomationDefinition.example; clean.id = UUID(); clean.name = cleanName.stringValue
             clean.previewBeforeApply = preview.state == .on; clean.pinToToolbar = true
-            var send = AutomationDefinition.remindersExample; send.id = UUID(); send.name = sendName.currentEditor()?.string ?? sendName.stringValue; send.pinToToolbar = true
+            var send = AutomationDefinition.remindersExample; send.id = UUID(); send.name = sendName.stringValue; send.pinToToolbar = true
             var proposed = library; proposed.workflows.append(contentsOf:[clean,send])
             try checkShortcutCollisions(proposed); try persistLibrary(proposed)
         } catch { showError(error) }
@@ -306,7 +309,8 @@ final class AutomationController: NSObject, NSMenuDelegate {
             alert.addButton(withTitle:"Continue"); alert.addButton(withTitle:"Cancel")
             let field = NSTextField(string:initial); field.frame = NSRect(x:0,y:0,width:500,height:28); alert.accessoryView = field
             guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-            return field.currentEditor()?.string ?? field.stringValue
+            alert.window.makeFirstResponder(nil)
+            return field.stringValue
         }) else { return }
         if workflow.input == .selection, workflow.output == .editor, let editor, editor.selectionCount > 1, let revision, let selections {
             let bytes = Data(editor.text.utf8)

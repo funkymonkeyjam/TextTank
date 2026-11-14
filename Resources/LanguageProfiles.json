@@ -37,7 +37,12 @@
         "fold.comment": "1"
       },
       "styles": [],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": null,
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "actionscript",
@@ -236,7 +241,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "ada",
@@ -328,7 +338,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "--",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "asm",
@@ -449,7 +464,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": ";",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "asn1",
@@ -548,7 +568,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "asp",
@@ -683,7 +708,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "'",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "autoit",
@@ -809,7 +839,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": ";",
+        "blockOpen": "#CS",
+        "blockClose": "#CE"
+      }
     },
     {
       "id": "avs",
@@ -941,7 +976,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "baanc",
@@ -1130,7 +1170,12 @@
           "fontStyle": 5
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "|",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "bash",
@@ -1306,7 +1351,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "batch",
@@ -1392,7 +1442,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "REM",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "blitzbasic",
@@ -1509,7 +1564,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "c",
@@ -1702,7 +1762,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "caml",
@@ -1827,7 +1892,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "",
+        "blockOpen": "(*",
+        "blockClose": "*)"
+      }
     },
     {
       "id": "cmake",
@@ -1949,7 +2019,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "cobol",
@@ -2078,7 +2153,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "*>",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "csound",
@@ -2208,7 +2288,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": ";",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "coffeescript",
@@ -2361,7 +2446,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "cpp",
@@ -2567,7 +2657,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "cs",
@@ -2759,7 +2854,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "css",
@@ -2912,7 +3012,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": null,
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "d",
@@ -3075,7 +3180,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "diff",
@@ -3146,7 +3256,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": null,
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "erlang",
@@ -3338,7 +3453,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "%",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "errorlist",
@@ -3624,7 +3744,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "escseq",
@@ -4636,7 +4761,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "escript",
@@ -4741,7 +4871,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "forth",
@@ -4848,7 +4983,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "\\",
+        "blockOpen": "(",
+        "blockClose": ")"
+      }
     },
     {
       "id": "fortran",
@@ -4969,7 +5109,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "!",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "fortran77",
@@ -5085,7 +5230,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "C",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "freebasic",
@@ -5209,7 +5359,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "go",
@@ -5415,7 +5570,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "gui4cli",
@@ -5509,7 +5669,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "haskell",
@@ -5643,7 +5808,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "--",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "hollywood",
@@ -5766,7 +5936,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": ";",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "html",
@@ -5973,7 +6148,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "",
+        "blockOpen": "<!--",
+        "blockClose": "-->"
+      }
     },
     {
       "id": "ini",
@@ -6040,7 +6220,12 @@
           "fontStyle": 2
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": ";",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "inno",
@@ -6153,7 +6338,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": ";",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "ihex",
@@ -6289,7 +6479,12 @@
           "fontStyle": 2
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": null,
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "java",
@@ -6463,7 +6658,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "javascript",
@@ -6622,7 +6822,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "javascript.js",
@@ -6813,7 +7018,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": "(?m)^[ \\t]*(?:export[ \\t]+)?(?:async[ \\t]+)?(?:function|class)[ \\t]+([\\p{L}_$][\\p{L}\\p{N}_$]*)"
+      "functionPattern": "(?m)^[ \\t]*(?:export[ \\t]+)?(?:async[ \\t]+)?(?:function|class)[ \\t]+([\\p{L}_$][\\p{L}\\p{N}_$]*)",
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "json",
@@ -6928,7 +7138,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "json5",
@@ -6958,7 +7173,12 @@
         "lexer.json.escape.sequence": "1"
       },
       "styles": [],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "jsp",
@@ -6994,7 +7214,12 @@
         "fold.comment": "1"
       },
       "styles": [],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "kix",
@@ -7086,7 +7311,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": ";",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "lisp",
@@ -7184,7 +7414,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": ";",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "latex",
@@ -7291,7 +7526,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "%",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "lua",
@@ -7476,7 +7716,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "--",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "makefile",
@@ -7547,7 +7792,12 @@
           "fontStyle": 2
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "matlab",
@@ -7631,7 +7881,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "%",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "mssql",
@@ -7756,7 +8011,12 @@
           "fontStyle": 2
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "--",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "mmixal",
@@ -7896,7 +8156,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "%",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "nim",
@@ -8022,7 +8287,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "nncrontab",
@@ -8121,7 +8391,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "\\",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "nfo",
@@ -8155,7 +8430,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": null,
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "nsis",
@@ -8303,7 +8583,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": ";",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "oscript",
@@ -8452,7 +8737,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "objc",
@@ -8593,7 +8883,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "pascal",
@@ -8718,7 +9013,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": null,
+        "blockOpen": "{",
+        "blockClose": "}"
+      }
     },
     {
       "id": "perl",
@@ -8997,7 +9297,12 @@
           "fontStyle": 3
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "php",
@@ -9161,7 +9466,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "postscript",
@@ -9290,7 +9600,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "%",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "powershell",
@@ -9429,7 +9744,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": "<#",
+        "blockClose": "#>"
+      }
     },
     {
       "id": "props",
@@ -9500,7 +9820,12 @@
           "fontStyle": 2
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "purebasic",
@@ -9623,7 +9948,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "python",
@@ -9835,7 +10165,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": "(?m)^[ \\t]*(?:async[ \\t]+)?(?:def|class)[ \\t]+([\\p{L}_][\\p{L}\\p{N}_]*)"
+      "functionPattern": "(?m)^[ \\t]*(?:async[ \\t]+)?(?:def|class)[ \\t]+([\\p{L}_][\\p{L}\\p{N}_]*)",
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "gdscript",
@@ -10024,7 +10359,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "r",
@@ -10154,7 +10494,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "raku",
@@ -10371,7 +10716,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": "`{",
+        "blockClose": "}"
+      }
     },
     {
       "id": "rebol",
@@ -10583,7 +10933,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": ";",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "registry",
@@ -10695,7 +11050,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": ";;",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "rc",
@@ -10886,7 +11246,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "ruby",
@@ -11043,7 +11408,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": "(?m)^[ \\t]*(?:def|class|module)[ \\t]+([\\p{L}_][\\p{L}\\p{N}_?.!]*)"
+      "functionPattern": "(?m)^[ \\t]*(?:def|class|module)[ \\t]+([\\p{L}_][\\p{L}\\p{N}_?.!]*)",
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "rust",
@@ -11241,7 +11611,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": "(?m)^[ \\t]*(?:pub(?:\\([^)]*\\))?[ \\t]+)?(?:async[ \\t]+)?(?:fn|struct|enum|trait|mod)[ \\t]+([\\p{L}_][\\p{L}\\p{N}_]*)"
+      "functionPattern": "(?m)^[ \\t]*(?:pub(?:\\([^)]*\\))?[ \\t]+)?(?:async[ \\t]+)?(?:fn|struct|enum|trait|mod)[ \\t]+([\\p{L}_][\\p{L}\\p{N}_]*)",
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "sas",
@@ -11352,7 +11727,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "*",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "scheme",
@@ -11451,7 +11831,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": ";",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "smalltalk",
@@ -11583,7 +11968,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": null,
+        "blockOpen": "\"",
+        "blockClose": "\""
+      }
     },
     {
       "id": "fcST",
@@ -11732,7 +12122,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "(*",
+        "blockClose": "*)"
+      }
     },
     {
       "id": "spice",
@@ -11819,7 +12214,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "*",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "sql",
@@ -11917,7 +12317,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "--",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "srec",
@@ -12054,7 +12459,12 @@
           "fontStyle": 2
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": null,
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "swift",
@@ -12247,7 +12657,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": "(?m)^[ \\t]*(?:(?:public|private|internal|fileprivate|open|final|static|class|override|mutating)[ \\t]+)*(?:func|class|struct|enum|protocol)[ \\t]+([\\p{L}_][\\p{L}\\p{N}_]*)"
+      "functionPattern": "(?m)^[ \\t]*(?:(?:public|private|internal|fileprivate|open|final|static|class|override|mutating)[ \\t]+)*(?:func|class|struct|enum|protocol)[ \\t]+([\\p{L}_][\\p{L}\\p{N}_]*)",
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "tcl",
@@ -12418,7 +12833,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "tehex",
@@ -12530,7 +12950,12 @@
           "fontStyle": 2
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": null,
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "tex",
@@ -12594,7 +13019,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "%",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "toml",
@@ -12714,7 +13144,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "vb",
@@ -12794,7 +13229,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "'",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "txt2tags",
@@ -12978,7 +13418,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "",
+        "blockOpen": "",
+        "blockClose": ""
+      }
     },
     {
       "id": "typescript",
@@ -13165,7 +13610,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "verilog",
@@ -13271,7 +13721,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "//",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "vhdl",
@@ -13403,7 +13858,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "--",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "visualprolog",
@@ -13578,7 +14038,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "%",
+        "blockOpen": "/*",
+        "blockClose": "*/"
+      }
     },
     {
       "id": "xml",
@@ -13814,7 +14279,12 @@
           "fontStyle": 1
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "",
+        "blockOpen": "<!--",
+        "blockClose": "-->"
+      }
     },
     {
       "id": "yaml",
@@ -13899,7 +14369,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": "#",
+        "blockOpen": null,
+        "blockClose": null
+      }
     },
     {
       "id": "searchResult",
@@ -13959,7 +14434,12 @@
           "fontStyle": 0
         }
       ],
-      "functionPattern": null
+      "functionPattern": null,
+      "comments": {
+        "line": null,
+        "blockOpen": null,
+        "blockClose": null
+      }
     }
   ]
 }

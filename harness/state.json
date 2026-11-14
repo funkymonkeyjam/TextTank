@@ -1,6 +1,6 @@
 {
   "status": "INCOMPLETE PREVIEW",
-  "stage": "G3 integrated expansion; G4 scoped review/repair running; full parity still incomplete",
+  "stage": "G3 expanded native implementation; scoped G4 reviews repaired; required parity and runtime verification remain open",
   "remote": "https://github.com/funkymonkeyjam/TextTank",
   "pr": "https://github.com/funkymonkeyjam/TextTank/pull/1",
   "branch": "implementation/native-mac",
@@ -22,8 +22,19 @@
       "search": "search engine and controllers",
       "automation": "workflows, connectors, macros"
     },
-    "next_action": "Integrate monitoring/comment/style APIs, rerun affected/full checks, exact-source packaging and remote CI; retain unverified requirements",
-    "status": "running; no completion claim",
-    "checkpoint": "Full integrated suite passed before final Run FEFF/duplicate-ID regressions; subsequent repairs require affected tests. Root collecting exact candidate evidence. Monitoring/comments/style work continuing."
-  }
+    "next_action": "Verify committed candidate in clean checkout, observe exact remote CI, verify packaged launch; then resume required open capability ledger without waiving gaps.",
+    "status": "candidate verification and packaging",
+    "checkpoint": "Integrated suite passed expanded source; final88 document regression independently passed after column/clone repairs. Final clean candidate build/test/CI/package still being bound."
+  },
+  "remote_source_checkpoint": {
+    "local": "a5dc5f3d020d2d599f3be73b0e8e8b4cb2697202",
+    "remote": "6c9b3be41f02a7b6aa9d06bb47ec806ccb171218",
+    "tree": "ee448991ed7d9d9c6fd74c6d1368e963e9c9b6d9"
+  },
+  "known_external_validation_limits": [
+    "Official release binary bytes unavailable through current shell DNS and UTF8-only connector; metadata is not downloaded artifact evidence",
+    "Actual macOS14 and Intel runtimes unavailable in this session",
+    "Additional live Reminders fault tests require a designated scratch list"
+  ],
+  "required_implementation_gaps": "docs/REVIEW-ME.md and per-feature reviews; remaining work is not all externally blocked"
 }

@@ -48,6 +48,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)showCompletions:(NSArray<NSString *> *)words;
 - (void)setSyntaxStyle:(NSInteger)index foreground:(NSColor *)foreground background:(nullable NSColor *)background bold:(BOOL)bold italic:(BOOL)italic;
 - (void)showCallTip:(NSString *)text;
+- (void)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size;
+- (BOOL)setSearchHighlights:(NSArray<NSValue *> *)ranges;
+- (void)clearSearchHighlights;
 
 - (BOOL)find:(NSString *)text matchCase:(BOOL)matchCase backwards:(BOOL)backwards;
 @end

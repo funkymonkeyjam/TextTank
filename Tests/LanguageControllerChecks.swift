@@ -44,6 +44,25 @@ import AppKit
   check(NSFontManager.shared.traits(of:commentFont).contains(.italicFontMask),"actual LexUser block comment style")
   check(NSFontManager.shared.traits(of:stringFont).contains(.italicFontMask),"actual LexUser delimiter style")
   check(!editor.modified,"UDL lexing never marks document dirty")
+  let index=custom.profiles.firstIndex{$0.id==user.id}!, styleIndex=custom.profiles[index].styles.firstIndex{$0.name=="KEYWORDS1"}!
+  let chosenFont=NSFont.userFixedPitchFont(ofSize:19.25)!.fontName
+  custom.profiles[index].styles[styleIndex].fontName=chosenFont;custom.profiles[index].styles[styleIndex].fontSize=19.25;custom.profiles[index].styles[styleIndex].useCustomColor=true;custom.profiles[index].styles[styleIndex].foreground="123456"
+  try controller.persist(custom);let beforeStyleRevision=editor.revision;_ = controller.apply(identifier:user.id,to:editor)
+  func styleMatches()->Bool {
+   let output=editor.attributedText(forSelection:false),font=output.attribute(.font,at:0,effectiveRange:nil) as! NSFont,color=(output.attribute(.foregroundColor,at:0,effectiveRange:nil) as! NSColor).usingColorSpace(.sRGB)!
+   return abs(font.pointSize-19.25)<0.01 && abs(color.redComponent-Double(0x12)/255)<0.005 && abs(color.greenComponent-Double(0x34)/255)<0.005 && abs(color.blueComponent-Double(0x56)/255)<0.005
+  }
+  check(styleMatches(),"actual lexer export honors configured font size and RGB")
+  editor.appearance=NSAppearance(named:.darkAqua);editor.viewDidChangeEffectiveAppearance()
+  check(styleMatches(),"custom font and RGB survive appearance change")
+  check(editor.revision==beforeStyleRevision && !editor.modified,"font and color changes never edit document")
+  let settingsWindow=NSWindow(contentRect:NSRect(x:0,y:0,width:400,height:180),styleMask:[.titled],backing:.buffered,defer:false)
+  let fontField=NSTextField(string:chosenFont),sizeField=NSTextField(string:"12");fontField.frame=NSRect(x:20,y:100,width:300,height:24);sizeField.frame=NSRect(x:20,y:50,width:300,height:24);settingsWindow.contentView?.addSubview(fontField);settingsWindow.contentView?.addSubview(sizeField)
+  settingsWindow.makeFirstResponder(sizeField);(settingsWindow.firstResponder as? NSTextView)?.string="21.5"
+  let read=try LanguageController.readStyle(custom.profiles[index].styles[styleIndex],font:fontField,size:sizeField,color:.red,custom:true,bold:false,italic:false,window:settingsWindow)
+  check(read.fontName==chosenFont && read.fontSize==21.5 && read.foreground=="FF0000","focused shared size field commits independently of font name")
+  let styledRestored=LanguageController(editorProvider:{editor},languageProvider:{user.id},setLanguage:{_ in})
+  check(styledRestored.catalog==custom,"font and color preferences persist exactly")
   print("LEXER CONFIGURATION: \(supported) available; missing \(missing). This proves loading and text integrity, not every lexical semantic.")
   print("PASS LanguageControllerChecks: \(checks) native assertions")
  }

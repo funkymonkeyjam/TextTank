@@ -68,6 +68,13 @@ int main() {
         check([second.text isEqual:@"a\nb\nc\n"], "Mixed EOL conversion exact");
         [second executeCommand:@"undo"];
         check([second.text isEqual:@"a\r\nb\rc\n"], "EOL conversion single Undo preserves original mix");
+        [second resetUndoHistory];[second setSavePoint];NSUInteger markedRevision=second.revision;
+        check([second setSearchHighlights:@[[NSValue valueWithRange:NSMakeRange(0,1)]]], "Mark accepts validated byte range");
+        check(second.revision==markedRevision && !second.modified, "Mark does not edit document");
+        TTEditor *markClone=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,500,300)];[markClone shareDocumentWith:second];
+        ScintillaView *markNative=(ScintillaView *)markClone.subviews.firstObject;
+        check([markNative message:SCI_INDICGETSTYLE wParam:20]==INDIC_ROUNDBOX, "New shared clone has search mark appearance");
+        [second clearSearchHighlights];check(second.revision==markedRevision && !second.modified,"Clear marks preserves dirty and Undo state");
         second.text = @"int value = 42; // comment\n";
         [second setLanguage:@"cpp"];
         ScintillaView *native = (ScintillaView *)second.subviews.firstObject;

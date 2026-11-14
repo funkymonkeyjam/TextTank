@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "recorded_at_utc": "2026-11-14T20:02:56.073367+00:00",
-  "status": "INCOMPLETE PREVIEW; incremental observed behaviors, final candidate validation external",
+  "status": "INCOMPLETE PREVIEW \u2014 expanded native candidate under integrated verification",
   "full_parity_claim": false,
   "ci": {
     "repository": "https://github.com/funkymonkeyjam/TextTank",
@@ -551,5 +551,32 @@
     "ui": "5 matches in5recipefiles;1extensionfiltered;doubleclickselectedexactpanko",
     "cancellation": "cooperative;32MiBdecode observed about2seconds delay;worker offmain",
     "review": "harness/reviews/folder-search-review-2026-11-14.md"
+  },
+  "continued_execution": {
+    "source": "post-a5dc5f3 integrated expansion, final identity in delivery manifest",
+    "implemented_paths": [
+      "Sources/Search",
+      "Sources/Languages",
+      "Sources/Documents/CommentCommands.swift",
+      "Sources/Documents/EditorCommands.swift",
+      "Sources/Documents/EditorSettings.swift",
+      "Sources/Workspace",
+      "Sources/Run",
+      "Sources/Utilities",
+      "Sources/Automations",
+      "Sources/Connectors",
+      "Sources/Macros"
+    ],
+    "review_records": [
+      "harness/reviews/search-independent-automation-worker.md",
+      "harness/reviews/folder-replacement-review-2026-11-14.md",
+      "harness/reviews/foundation-review-2026-11-14.md",
+      "harness/reviews/run-independent-search-worker.md",
+      "harness/reviews/languages-independent-search-worker.md",
+      "harness/reviews/utility-independent-search-worker.md"
+    ],
+    "user_live_evidence": "docs/parity/user-validation-2026-11-14.json",
+    "coverage_rule": "Each test demonstrates only its named behavior. Configuration/loading tests do not certify every lexer, and native object tests do not certify physical UI. Required gaps stay open; see docs/REVIEW-ME.md.",
+    "intermediate_full_suite": "Passed first integrated expansion. Subsequent new features/repairs require exact-candidate rerun; a header modification interrupted one later compile, not a test assertion failure."
   }
 }

@@ -38,6 +38,16 @@ import AppKit
         for _ in 0..<200 {if !controller.status.stringValue.hasPrefix("Searching"){break};try await Task.sleep(nanoseconds:10_000_000)}
         check(editor.text=="one:12 two:34" && controller.queryField.stringValue=="([a-z]+)=(\\d+)","active shared field editor commits only replacement and preserves regex query")
         editor.executeCommand("undo");check(editor.text=="one=12 two=34","native focused-field replace all one Undo")
+        editor.setSavePoint();editor.readOnly=true;_ = editor.setSelectionAnchor(0,caret:3)
+        let markRevision=editor.revision,markSelection=editor.selectionRanges
+        controller.mark(nil)
+        for _ in 0..<200 {if !controller.status.stringValue.hasPrefix("Searching"){break};try await Task.sleep(nanoseconds:10_000_000)}
+        check(controller.status.stringValue.hasPrefix("Marked 2 matches") && editor.revision==markRevision && !editor.modified && editor.selectionRanges==markSelection,"native mark action works read-only without text dirty or selection change")
+        controller.clearMarks(nil)
+        check(controller.status.stringValue.hasPrefix("Cleared search highlights") && editor.revision==markRevision && !editor.modified && editor.selectionRanges==markSelection,"native clear marks preserves content and selection")
+        editor.readOnly=false;controller.mark(nil);editor.text="changed during search";let changedRevision=editor.revision
+        for _ in 0..<200 {if !controller.status.stringValue.hasPrefix("Searching"){break};try await Task.sleep(nanoseconds:10_000_000)}
+        check(controller.status.stringValue.contains("1 changed/closed") && editor.text=="changed during search" && editor.revision==changedRevision,"stale asynchronous mark preserves new content")
         print("PASS SearchControllerChecks: \(checks) assertions")
     }
 }

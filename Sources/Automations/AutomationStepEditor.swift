@@ -47,9 +47,10 @@ final class AutomationStepEditor {
         }
         stack.addArrangedSubview(askFind); stack.addArrangedSubview(askReplacement); stack.frame = NSRect(x:0,y:0,width:560,height:170); alert.accessoryView = stack
         while alert.runModal() == .alertFirstButtonReturn {
+            alert.window.makeFirstResponder(nil)
             guard let value = kind.titleOfSelectedItem, let typed = AutomationDefinition.Step.Kind(rawValue:value) else { return nil }
             let needsFind = typed == .replaceLiteral || typed == .removeMatchingLines
-            let step = AutomationDefinition.Step(kind:typed,find:needsFind ? (find.currentEditor()?.string ?? find.stringValue) : nil,replacement:typed == .replaceLiteral ? (replacement.currentEditor()?.string ?? replacement.stringValue) : nil,askForFind:needsFind && askFind.state == .on,askForReplacement:typed == .replaceLiteral && askReplacement.state == .on)
+            let step = AutomationDefinition.Step(kind:typed,find:needsFind ? find.stringValue : nil,replacement:typed == .replaceLiteral ? replacement.stringValue : nil,askForFind:needsFind && askFind.state == .on,askForReplacement:typed == .replaceLiteral && askReplacement.state == .on)
             var probe = AutomationDefinition.example; probe.steps = [step]
             do { try probe.validate(); return step } catch { NSAlert(error:error).runModal() }
         }

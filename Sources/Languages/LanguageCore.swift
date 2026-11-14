@@ -2,18 +2,29 @@
 import Foundation
 
 struct LanguageProfile: Codable,Equatable,Identifiable {
-    struct Style:Codable,Equatable { var id:Int,name:String,foreground:String,fontStyle:Int }
+    struct Style:Codable,Equatable { var id:Int,name:String,foreground:String,fontStyle:Int
+        var useCustomColor:Bool?
+        var fontName:String?
+        var fontSize:Double?
+    }
+    struct Comments:Codable,Equatable {var line:String?,blockOpen:String?,blockClose:String?}
     var id:String,title:String,lexer:String,extensions:[String],keywordLists:[String:String]
     var referenceKeywordClasses:[String:String]
     var properties:[String:String],styles:[Style]
     var functionPattern:String?
     var udl:UserDefinedLanguage?
+    var comments:Comments?
     func validate() throws {
         guard !id.isEmpty,id.count<=100,!title.isEmpty,title.count<=150,!lexer.isEmpty,lexer.count<=100,!lexer.contains("\0"),extensions.count<=200,
               extensions.allSatisfy({ !$0.isEmpty && $0.count<=100 && !$0.contains("/") && !$0.contains("\\") }),
               keywordLists.count<=32,keywordLists.allSatisfy({ Int($0.key).map { (0..<32).contains($0) } == true && $0.value.utf8.count<=1048576 && !$0.value.contains("\0") }),
               properties.count<=100,properties.allSatisfy({ !$0.key.isEmpty && !$0.key.contains("\0") && !$0.value.contains("\0") && $0.value.count<=4096 }),
               styles.count<=256,styles.allSatisfy({ (0...255).contains($0.id) && (0...7).contains($0.fontStyle) && $0.foreground.range(of:"^[0-9A-Fa-f]{6}$",options:.regularExpression) != nil }) else { throw LanguageError.invalid("Invalid language profile fields or safety limits.") }
+        for style in styles {
+            if let name=style.fontName {guard name.count<=150,!name.contains("\0") else{throw LanguageError.invalid("Invalid syntax font name.")}}
+            if let size=style.fontSize {guard size.isFinite,(6...72).contains(size) else{throw LanguageError.invalid("Syntax font size must be 6–72 points.")}}
+        }
+        if let comments {for marker in [comments.line,comments.blockOpen,comments.blockClose].compactMap({$0}) {guard marker.utf8.count<=100,!marker.contains("\n"),!marker.contains("\r"),!marker.contains("\0") else{throw LanguageError.invalid("Invalid comment delimiter.")}}}
         if let pattern=functionPattern {
             guard !pattern.isEmpty,pattern.count<=2048 else { throw LanguageError.invalid("Function pattern must contain 1–2048 characters.") }
             let regex=try NSRegularExpression(pattern:pattern)

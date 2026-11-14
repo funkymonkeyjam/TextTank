@@ -21,7 +21,7 @@ for lang in ET.parse(root/paths[0]).findall('.//Language'):
  if style is not None:
   for e in style.findall('WordsStyle'):
    rows.append({'id':int(e.get('styleID','0')),'name':e.get('name',''),'foreground':e.get('fgColor','000000'),'fontStyle':int(e.get('fontStyle','0') or '0')})
- profiles.append({'id':name,'title':title,'lexer':lexer,'extensions':lang.get('ext','').split(),'keywordLists':keywords,'referenceKeywordClasses':raw,'properties':props,'styles':rows,'functionPattern':None})
+ profiles.append({'id':name,'title':title,'lexer':lexer,'extensions':lang.get('ext','').split(),'keywordLists':keywords,'referenceKeywordClasses':raw,'properties':props,'styles':rows,'functionPattern':None,'comments':{'line':lang.get('commentLine'),'blockOpen':lang.get('commentStart'),'blockClose':lang.get('commentEnd')}})
 # Native basic symbol navigation patterns are explicitly separate from upstream functionList parser semantics.
 patterns={'python':r'(?m)^[ \t]*(?:async[ \t]+)?(?:def|class)[ \t]+([\p{L}_][\p{L}\p{N}_]*)','swift':r'(?m)^[ \t]*(?:(?:public|private|internal|fileprivate|open|final|static|class|override|mutating)[ \t]+)*(?:func|class|struct|enum|protocol)[ \t]+([\p{L}_][\p{L}\p{N}_]*)','javascript.js':r'(?m)^[ \t]*(?:export[ \t]+)?(?:async[ \t]+)?(?:function|class)[ \t]+([\p{L}_$][\p{L}\p{N}_$]*)','rust':r'(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:async[ \t]+)?(?:fn|struct|enum|trait|mod)[ \t]+([\p{L}_][\p{L}\p{N}_]*)','ruby':r'(?m)^[ \t]*(?:def|class|module)[ \t]+([\p{L}_][\p{L}\p{N}_?.!]*)'}
 for p in profiles:p['functionPattern']=patterns.get(p['id'])

@@ -18,12 +18,13 @@ final class LanguageController:NSObject,NSMenuDelegate {
         do {
             let bundled=Bundle.main.url(forResource:"LanguageProfiles",withExtension:"json") ?? URL(fileURLWithPath:"Resources/LanguageProfiles.json")
             catalog=try LanguageCatalog.decode(Self.readRegular(FileManager.default.fileExists(atPath:storage.path) ? storage:bundled))
+            if let defaults=try? LanguageCatalog.decode(Self.readRegular(bundled)) {for index in catalog!.profiles.indices where catalog!.profiles[index].comments==nil {catalog!.profiles[index].comments=defaults.profiles.first{$0.id==catalog!.profiles[index].id}?.comments}}
         }catch{loadError=error}
     }
     func menu()->NSMenu {
         let menu=NSMenu(title:"Language");menu.delegate=self
         func add(_ name:String,_ action:Selector){let item=NSMenuItem(title:name,action:action,keyEquivalent:"");item.target=self;menu.addItem(item)}
-        add("Complete Word",#selector(complete));add("Function List…",#selector(functions));add("Show Keyword Help",#selector(callTip));add("Edit Language Profiles…",#selector(configure));add("Import Notepad++ UDL…",#selector(importUDL));add("Edit Current UDL…",#selector(editUDL));add("Export Current UDL…",#selector(exportUDL));menu.addItem(.separator())
+        add("Complete Word",#selector(complete));add("Function List…",#selector(functions));add("Show Keyword Help",#selector(callTip));add("Syntax Style Settings…",#selector(styleSettings));add("Edit Language Profiles…",#selector(configure));add("Import Notepad++ UDL…",#selector(importUDL));add("Edit Current UDL…",#selector(editUDL));add("Export Current UDL…",#selector(exportUDL));menu.addItem(.separator())
         let available=Set(TTEditor.availableLanguages())
         for profile in (catalog?.profiles ?? []).sorted(by:{$0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending}) where available.contains(profile.lexer) {
             let item=NSMenuItem(title:profile.title,action:#selector(selectLanguage(_:)),keyEquivalent:"");item.target=self;item.representedObject=profile.id;menu.addItem(item)
@@ -76,12 +77,14 @@ final class LanguageController:NSObject,NSMenuDelegate {
         for (key,value) in profile.properties {editor.setLexerProperty(key,value:value)}
         for style in profile.styles {
             editor.setSyntaxStyle(style.id,foreground:Self.color(style),background:nil,bold:style.fontStyle & 1 != 0,italic:style.fontStyle & 2 != 0)
+            if style.fontName != nil || style.fontSize != nil {editor.setSyntaxFont(style.id,name:style.fontName ?? NSFont.monospacedSystemFont(ofSize:12,weight:.regular).fontName,size:style.fontSize ?? 12)}
         }
         return true
     }
     private static func color(_ style:LanguageProfile.Style)->NSColor {
-        // Keep native dynamic contrast; original imported RGB remains inspectable in the profile.
-        NSColor(name:nil,dynamicProvider:{ appearance in
+        if style.useCustomColor==true {return rgb(style.foreground)}
+        // Keep native dynamic contrast unless the user selected a fixed RGB color.
+        return NSColor(name:nil,dynamicProvider:{ appearance in
             let dark=appearance.bestMatch(from:[.darkAqua,.aqua]) == .darkAqua
             let name=style.name.uppercased()
             if name.contains("COMMENT") {return dark ? NSColor(calibratedRed:0.62,green:0.72,blue:0.64,alpha:1):NSColor(calibratedRed:0.25,green:0.39,blue:0.28,alpha:1)}
@@ -90,6 +93,50 @@ final class LanguageController:NSObject,NSMenuDelegate {
             if name.contains("NUMBER") {return dark ? NSColor(calibratedRed:0.86,green:0.69,blue:0.96,alpha:1):NSColor(calibratedRed:0.44,green:0.19,blue:0.55,alpha:1)}
             return .textColor
         })
+    }
+    func profile(identifier:String)->LanguageProfile? {catalog?.profiles.first{$0.id==identifier}}
+    private static func rgb(_ hex:String)->NSColor {
+        let value=UInt32(hex,radix:16) ?? 0
+        return NSColor(srgbRed:Double((value>>16)&255)/255,green:Double((value>>8)&255)/255,blue:Double(value&255)/255,alpha:1)
+    }
+    static func readStyle(_ original:LanguageProfile.Style,font:NSTextField,size:NSTextField,color:NSColor,custom:Bool,bold:Bool,italic:Bool,window:NSWindow)throws->LanguageProfile.Style {
+        window.makeFirstResponder(nil)
+        let name=font.stringValue
+        guard let points=Double(size.stringValue),(6...72).contains(points),NSFont(name:name,size:points) != nil,let chosen=color.usingColorSpace(.sRGB) else{throw LanguageError.invalid("Enter an installed font name and a size between 6 and 72 points.")}
+        var style=original;style.fontName=name;style.fontSize=points;style.useCustomColor=custom;style.fontStyle=(bold ? 1:0)+(italic ? 2:0)
+        style.foreground=String(format:"%02X%02X%02X",Int((chosen.redComponent*255).rounded()),Int((chosen.greenComponent*255).rounded()),Int((chosen.blueComponent*255).rounded()))
+        return style
+    }
+    @objc func styleSettings() {
+        do {
+            if let loadError{throw loadError}
+            guard var proposed=catalog,let profileIndex=proposed.profiles.firstIndex(where:{$0.id==languageProvider()}) else{throw LanguageError.invalid("Choose a language first.")}
+            if proposed.profiles[profileIndex].styles.isEmpty {proposed.profiles[profileIndex].styles=[.init(id:0,name:"DEFAULT",foreground:"15201F",fontStyle:0)]}
+            let choose=NSAlert();choose.messageText="Syntax Style Settings";choose.informativeText="Choose the syntax category to customize for this language.";choose.addButton(withTitle:"Edit");choose.addButton(withTitle:"Cancel")
+            let selector=NSPopUpButton(frame:NSRect(x:0,y:0,width:440,height:28),pullsDown:false)
+            for style in proposed.profiles[profileIndex].styles{selector.addItem(withTitle:style.name)};choose.accessoryView=selector
+            guard choose.runModal() == .alertFirstButtonReturn,selector.indexOfSelectedItem>=0 else{return}
+            let styleIndex=selector.indexOfSelectedItem;var style=proposed.profiles[profileIndex].styles[styleIndex]
+            let edit=NSAlert();edit.messageText="\(proposed.profiles[profileIndex].title) — \(style.name)";edit.informativeText="Choose a font and size. Custom RGB stays fixed in light/dark appearances; turn it off to use the adaptive native syntax palette. Changes affect this language only."
+            edit.addButton(withTitle:"Save");edit.addButton(withTitle:"Cancel")
+            let font=NSTextField(string:style.fontName ?? NSFont.monospacedSystemFont(ofSize:12,weight:.regular).fontName),size=NSTextField(string:String(style.fontSize ?? 12))
+            let color=NSColorWell();color.color=Self.rgb(style.foreground)
+            let custom=NSButton(checkboxWithTitle:"Use custom text color",target:nil,action:nil);custom.state=style.useCustomColor==true ? .on:.off
+            let bold=NSButton(checkboxWithTitle:"Bold",target:nil,action:nil),italic=NSButton(checkboxWithTitle:"Italic",target:nil,action:nil);bold.state=style.fontStyle&1 != 0 ? .on:.off;italic.state=style.fontStyle&2 != 0 ? .on:.off
+            let stack=NSStackView();stack.orientation = .vertical;stack.alignment = .leading;stack.spacing=8
+            for (label,control) in [("Font name",font as NSView),("Size (6–72 pt)",size),("Text color",color)]{let row=NSStackView(views:[NSTextField(labelWithString:label),control]);control.widthAnchor.constraint(equalToConstant:300).isActive=true;stack.addArrangedSubview(row)}
+            for control in [custom,bold,italic]{stack.addArrangedSubview(control)};stack.frame=NSRect(x:0,y:0,width:460,height:220);edit.accessoryView=stack
+            while edit.runModal() == .alertFirstButtonReturn {
+                do {
+                    style=try Self.readStyle(style,font:font,size:size,color:color.color,custom:custom.state == .on,bold:bold.state == .on,italic:italic.state == .on,window:edit.window)
+                    let name=style.fontName!,points=style.fontSize!
+                    proposed.profiles[profileIndex].styles[styleIndex]=style
+                    // Keep exported UDL font/color data in step with native style edits.
+                    if var udl=proposed.profiles[profileIndex].udl,let index=udl.styles.firstIndex(where:{$0.name==style.name}) {udl.styles[index].attributes["fontName"]=name;udl.styles[index].attributes["fontSize"]=String(points);udl.styles[index].attributes["fontStyle"]=String(style.fontStyle);udl.styles[index].attributes["fgColor"]=style.foreground;proposed.profiles[profileIndex].udl=udl}
+                    try persist(proposed);if let editor=editorProvider(){_ = apply(identifier:proposed.profiles[profileIndex].id,to:editor)};return
+                }catch{NSAlert(error:error).runModal()}
+            }
+        }catch{NSAlert(error:error).runModal()}
     }
     @objc private func selectLanguage(_ item:NSMenuItem){guard let id=item.representedObject as? String,let editor=editorProvider(),apply(identifier:id,to:editor) else{return};setLanguage(id)}
     @objc func complete(){guard let editor=editorProvider(),let profile=catalog?.profiles.first(where:{$0.id==languageProvider()}) else{return};editor.showCompletions(profile.completions)}

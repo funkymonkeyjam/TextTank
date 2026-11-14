@@ -5,6 +5,7 @@
 #include "Lexilla.h"
 #include <vector>
 #include <cstring>
+#include <cmath>
 extern "C" Scintilla::ILexer5 *TextTankCreateUserLexer();
 
 // NSString's UTF-8 constructors consume a leading EF BB BF as an external BOM.
@@ -60,12 +61,13 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
 @property(nonatomic, readwrite) NSUInteger revision;
 @property(nonatomic) BOOL macroRecording;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxStyles;
+@property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxFonts;
 @end
 @implementation TTEditor
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
         NSAssert(NSThread.isMainThread, @"Editor must be created on the main thread");
-        _syntaxStyles=[NSMutableDictionary dictionary];
+        _syntaxStyles=[NSMutableDictionary dictionary];_syntaxFonts=[NSMutableDictionary dictionary];
         _engine = [[TTScintillaView alloc] initWithFrame:NSZeroRect];
         _engine.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         [self addSubview:_engine];
@@ -85,6 +87,10 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
         [_engine message:SCI_SETMULTIPASTE wParam:SC_MULTIPASTE_EACH];
         [_engine message:SCI_SETTABWIDTH wParam:4];
         [_engine message:SCI_SETPROPERTY wParam:(uptr_t)"fold" lParam:(sptr_t)"1"];
+        for(int marker=SC_MARKNUM_FOLDEREND;marker<=SC_MARKNUM_FOLDEROPEN;++marker) {
+            int symbol=(marker==SC_MARKNUM_FOLDER || marker==SC_MARKNUM_FOLDEREND) ? SC_MARK_BOXPLUS : (marker==SC_MARKNUM_FOLDEROPEN || marker==SC_MARKNUM_FOLDEROPENMID) ? SC_MARK_BOXMINUS : SC_MARK_VLINE;
+            [_engine message:SCI_MARKERDEFINE wParam:marker lParam:symbol];
+        }
         [_engine message:SCI_SETMARGINTYPEN wParam:2 lParam:SC_MARGIN_SYMBOL];
         [_engine message:SCI_SETMARGINMASKN wParam:2 lParam:SC_MASK_FOLDERS];
         [_engine message:SCI_SETMARGINWIDTHN wParam:2 lParam:16];
@@ -114,6 +120,9 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     [_engine message:SCI_STYLECLEARALL];
     [_engine message:SCI_STYLESETFORE wParam:STYLE_LINENUMBER lParam:dark ? 0xAAB8B3 : 0x59645F];
     [_engine message:SCI_STYLESETBACK wParam:STYLE_LINENUMBER lParam:dark ? 0x222A25 : 0xE3E9E5];
+    [_engine message:SCI_SETFOLDMARGINCOLOUR wParam:1 lParam:background];[_engine message:SCI_SETFOLDMARGINHICOLOUR wParam:1 lParam:background];
+    for(int marker=SC_MARKNUM_FOLDEREND;marker<=SC_MARKNUM_FOLDEROPEN;++marker){[_engine message:SCI_MARKERSETFORE wParam:marker lParam:background];[_engine message:SCI_MARKERSETBACK wParam:marker lParam:foreground];}
+    [_engine message:SCI_INDICSETSTYLE wParam:20 lParam:INDIC_ROUNDBOX];[_engine message:SCI_INDICSETFORE wParam:20 lParam:0x5BF4C7];[_engine message:SCI_INDICSETALPHA wParam:20 lParam:70];[_engine message:SCI_INDICSETOUTLINEALPHA wParam:20 lParam:160];
     [_engine message:SCI_SETCARETFORE wParam:foreground];
     [_engine message:SCI_SETSELFORE wParam:1 lParam:dark ? 0xFFFFFF : 0x101010];
     [_engine message:SCI_SETSELBACK wParam:1 lParam:dark ? 0x725038 : 0xF1D4AF];
@@ -122,6 +131,7 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     for (int style : {6, 7, 13}) [_engine message:SCI_STYLESETFORE wParam:style lParam:dark ? 0x8ACFE8 : 0x255EA0];
     NSDictionary *styles=[_syntaxStyles copy];
     for(NSNumber *index in styles) {NSDictionary *s=styles[index];[self setSyntaxStyle:index.integerValue foreground:s[@"foreground"] background:s[@"background"] bold:[s[@"bold"] boolValue] italic:[s[@"italic"] boolValue]];}
+    NSDictionary *fonts=[_syntaxFonts copy];for(NSNumber *index in fonts){NSDictionary *f=fonts[index];[self setSyntaxFont:index.integerValue name:f[@"name"] size:[f[@"size"] doubleValue]];}
     _engine.needsDisplay = YES;
 }
 - (void)dealloc { _engine.delegate = nil; }
@@ -412,7 +422,7 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
 }
 - (void)setLanguage:(NSString *)language {
     [self assertThread];
-    [_syntaxStyles removeAllObjects];
+    [_syntaxStyles removeAllObjects];[_syntaxFonts removeAllObjects];
     auto lexer = [language isEqualToString:@"user"] ? TextTankCreateUserLexer() : CreateLexer(language.UTF8String);
     if (!lexer) lexer = CreateLexer("null");
     [_engine message:SCI_SETILEXER wParam:0 lParam:(sptr_t)lexer];
@@ -460,6 +470,24 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     [_engine message:SCI_STYLESETFORE wParam:index lParam:packed(foreground)];
     if(background)[_engine message:SCI_STYLESETBACK wParam:index lParam:packed(background)];
     [_engine message:SCI_STYLESETBOLD wParam:index lParam:bold];[_engine message:SCI_STYLESETITALIC wParam:index lParam:italic];
+}
+- (void)clearSearchHighlights {
+    [self assertThread];[_engine message:SCI_SETINDICATORCURRENT wParam:20];[_engine message:SCI_INDICATORCLEARRANGE wParam:0 lParam:[_engine message:SCI_GETLENGTH]];
+}
+- (BOOL)setSearchHighlights:(NSArray<NSValue *> *)ranges {
+    [self assertThread];if(ranges.count>100000)return NO;const NSUInteger length=[_engine message:SCI_GETLENGTH];
+    for(NSValue *value in ranges){if(![value isKindOfClass:NSValue.class] || strcmp(value.objCType,@encode(NSRange))!=0)return NO;NSRange r=value.rangeValue;
+        if(r.location>length || r.length>length-r.location)return NO;
+        for(NSUInteger p : {r.location,NSMaxRange(r)})if(p<length && ([_engine message:SCI_GETCHARAT wParam:p]&0xC0)==0x80)return NO;
+    }
+    [self clearSearchHighlights];[_engine message:SCI_INDICSETSTYLE wParam:20 lParam:INDIC_ROUNDBOX];[_engine message:SCI_INDICSETFORE wParam:20 lParam:0x5BF4C7];[_engine message:SCI_INDICSETALPHA wParam:20 lParam:70];[_engine message:SCI_INDICSETOUTLINEALPHA wParam:20 lParam:160];
+    for(NSValue *value in ranges){NSRange r=value.rangeValue;[_engine message:SCI_INDICATORFILLRANGE wParam:r.location lParam:r.length];}return YES;
+}
+- (void)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size {
+    [self assertThread];if(index<0 || index>255 || !std::isfinite(size) || size<6 || size>96 || name.length>200 || [name rangeOfString:@"\0"].location!=NSNotFound)return;
+    NSFont *font=[NSFont fontWithName:name size:size];if(!font)return;
+    _syntaxFonts[@(index)]=@{@"name":name,@"size":@(size)};
+    [_engine message:SCI_STYLESETFONT wParam:index lParam:(sptr_t)name.UTF8String];[_engine message:SCI_STYLESETSIZEFRACTIONAL wParam:index lParam:(sptr_t)lround(size*100)];
 }
 - (void)showCallTip:(NSString *)text {
     [self assertThread];if([text rangeOfString:@"\0"].location!=NSNotFound)return;

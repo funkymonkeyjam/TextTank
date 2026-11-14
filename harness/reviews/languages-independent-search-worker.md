@@ -13,3 +13,11 @@ UDL import rejects DTD/entity declarations, disables external entity resolution,
 Read WorkspaceBrowserCore/Controller and associated tests. Directory enumeration uses an owned descriptor, skips symbolic links/special files and reports bounded listings. Open reads once through the regular-file helper and preserves existing dirty NSDocument instances. Stored paths remain inert on loading.
 
 P2 repaired by author: corrupt/unsupported saved workspace data initially set loadError but noteRecent/add/remove could overwrite it with empty defaults. Save now refuses mutations while loadError exists. Re-read the guard after repair; author added corrupt-state preservation tests. No broad monitoring, path-alias or full workspace parity claim follows from this scoped review.
+
+## Subsequent scoped comments/styles and monitoring review
+
+Read CommentCommands.swift: UTF-8 boundaries and overlapping edits are rejected before mutation, line selections exclude an end positioned at the next line start, CRLF is retained, and block wrapping rejects embedded closing markers. Native application validates editor/revision/selection and groups Undo. No concrete new defect was identified in this inspection; author-owned native tests cover actual editing.
+
+P2 style settings repaired: separate font/size fields initially read the shared AppKit field editor via each control, the same class of bug observed in search. Production readStyle now commits editing before reading distinct stringValue values; author reports a real focused-size field regression with distinct preserved font name. Re-read repaired helper and its invocation.
+
+Read DocumentMonitor.swift: background byte-bounded snapshots do not access the editor; generation, document identity, URL, revision, baseline fingerprint and attachment gates reject stale results. Reload is explicit and refuses dirty/stale/closed documents. No concrete blocking finding in the reviewed source. The 32 MiB byte cap does not establish an I/O time deadline; a pending read briefly retains its document until completion. The timer callback is weak and no persistent cycle was found.

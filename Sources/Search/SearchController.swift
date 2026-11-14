@@ -31,14 +31,15 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
         if let data=UserDefaults.standard.data(forKey:"TextTank.Search.v1"),let saved=try? JSONDecoder().decode(SearchOptions.self,from:data){options=saved}
         queryField.stringValue=options.query;replacementField.stringValue=options.replacement;mode.selectItem(at:options.mode.rawValue)
         caseButton.state=options.matchCase ? .on:.off;wordButton.state=options.wholeWord ? .on:.off;dotButton.state=options.dotMatchesNewline ? .on:.off;wrapButton.state=options.wrap ? .on:.off
-        let actions:[(String,Selector)]=[("Previous",#selector(previous(_:))),("Next",#selector(next(_:))),("Find All / Count",#selector(findAll(_:))),("Replace",#selector(replaceOne(_:))),("Replace All",#selector(replaceAll(_:))),("Bookmark Matches",#selector(bookmark(_:)))]
+        let actions:[(String,Selector)]=[("Previous",#selector(previous(_:))),("Next",#selector(next(_:))),("Find All / Count",#selector(findAll(_:))),("Replace",#selector(replaceOne(_:))),("Replace All",#selector(replaceAll(_:))),("Bookmark Matches",#selector(bookmark(_:))),("Mark Matches",#selector(mark(_:))),("Clear Marks",#selector(clearMarks(_:)))]
         searchButtons=actions.map{NSButton(title:$0.0,target:self,action:$0.1)}
         let cancel=NSButton(title:"Cancel Search",target:self,action:#selector(cancel(_:)))
-        let opts=NSStackView(views:[mode,scope]),flags=NSStackView(views:[caseButton,wordButton,dotButton,wrapButton]),buttons=NSStackView(views:searchButtons+[cancel]);buttons.distribution = .fillProportionally
+        let opts=NSStackView(views:[mode,scope]),flags=NSStackView(views:[caseButton,wordButton,dotButton,wrapButton]),buttons=NSStackView(views:Array(searchButtons.prefix(5))+[cancel]);buttons.distribution = .fillProportionally
+        let marks=NSStackView(views:Array(searchButtons.suffix(3)));marks.spacing=8
         let col=NSTableColumn(identifier:.init("result"));col.title="Document · UTF-16 offset · Match";col.width=730;table.addTableColumn(col);table.dataSource=self;table.delegate=self;table.target=self;table.doubleAction=#selector(openResult(_:))
         let scroll=NSScrollView();scroll.documentView=table;scroll.hasVerticalScroller=true;table.usesAlternatingRowBackgroundColors=true
-        let root=NSStackView(views:[queryField,replacementField,opts,flags,buttons,status,scroll]);root.orientation = .vertical;root.alignment = .leading;root.spacing=8;root.edgeInsets=NSEdgeInsets(top:12,left:12,bottom:12,right:12);window.contentView=root
-        for v in [queryField,replacementField,opts,flags,buttons,status,scroll] {v.widthAnchor.constraint(equalTo:root.widthAnchor,constant:-24).isActive=true}
+        let root=NSStackView(views:[queryField,replacementField,opts,flags,buttons,marks,status,scroll]);root.orientation = .vertical;root.alignment = .leading;root.spacing=8;root.edgeInsets=NSEdgeInsets(top:12,left:12,bottom:12,right:12);window.contentView=root
+        for v in [queryField,replacementField,opts,flags,buttons,marks,status,scroll] {v.widthAnchor.constraint(equalTo:root.widthAnchor,constant:-24).isActive=true}
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant:150).isActive=true
         window.minSize=NSSize(width:780,height:390)
     }
@@ -58,10 +59,19 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
     @objc func replaceAll(_ sender:Any?){run(.replaceAll)}
     @objc func replaceOne(_ sender:Any?){run(.replaceOne)}
     @objc func bookmark(_ sender:Any?){run(.bookmark)}
+    @objc func mark(_ sender:Any?){onUnrecordableCommand?("Search highlighting is not recorded in macros yet.");run(.mark)}
+    @objc func clearMarks(_ sender:Any?){
+        onUnrecordableCommand?("Clearing search highlights is not recorded in macros yet.")
+        cancellation?.cancel();task?.cancel();generation=UUID();finish()
+        let editors=scope.indexOfSelectedItem==2 ? openEditors():currentEditor().map{[$0]} ?? []
+        var cleared=Set<ObjectIdentifier>()
+        for editor in editors where editor.window != nil {if cleared.insert(ObjectIdentifier(editor)).inserted{editor.clearSearchHighlights()}}
+        status.stringValue="Cleared search highlights from \(cleared.count) document(s)."
+    }
     @objc func cancel(_ sender:Any?){cancellation?.cancel();task?.cancel();generation=UUID();finish();status.stringValue="Cancelled; no pending replacements applied."}
     func windowWillClose(_ notification:Notification){cancel(nil)}
     private func finish(){searchButtons.forEach{$0.isEnabled=true};cancellation=nil;task=nil}
-    private enum Action {case next,previous,all,replaceAll,replaceOne,bookmark}
+    private enum Action {case next,previous,all,replaceAll,replaceOne,bookmark,mark}
     private func run(_ action:Action){
         let opts=readOptions();guard !opts.query.isEmpty else{status.stringValue="Enter a search expression.";return}
         var editors=scope.indexOfSelectedItem==2 ? openEditors():currentEditor().map{[$0]} ?? []
@@ -108,10 +118,19 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
                     }
                     self.status.stringValue="Replaced \(changed) matches; \(stale) changed documents skipped. Undo is per document."
                     if changed>0,stale==0,currentDocumentScope,let editor=buffers.first?.editor {self.onCommand?(opts,action == .replaceOne ? "replaceOne":"replaceAll",editor)}
+                case .mark:
+                    guard !truncated else{self.status.stringValue="Result limit reached; previous highlights were preserved. Narrow the scope.";return}
+                    var marked=0,stale=0,zeroWidth=0
+                    for b in buffers {
+                        let hits=self.rows.filter{$0.buffer.editor===b.editor}.map{$0.hit}
+                        if selectionScope && (b.editor.selectionAnchor != b.anchor || b.editor.selectionCaret != b.caret){stale+=1;continue}
+                        if Self.highlight(hits,text:b.text,revision:b.revision,in:b.editor){marked+=hits.filter{$0.range.length>0}.count;zeroWidth+=hits.filter{$0.range.length==0}.count}else{stale+=1}
+                    }
+                    self.status.stringValue="Marked \(marked) matches; \(stale) changed/closed documents skipped."+(zeroWidth>0 ? " \(zeroWidth) zero-width matches have no visible span.":"")
                 case .bookmark:
                     var stale=0
                     for b in buffers {
-                        guard b.editor.revision==b.revision,b.editor.text==b.text else{stale+=1;continue}
+                        guard b.editor.window != nil,b.editor.revision==b.revision,b.editor.text==b.text else{stale+=1;continue}
                         var lines=Set(b.editor.bookmarkLines.map{$0.intValue})
                         for row in self.rows where row.buffer.editor===b.editor {let prefix=(b.text as NSString).substring(to:row.hit.range.location);var line=0,priorCR=false;for u in prefix.utf16{if u==13{line+=1}else if u==10 && !priorCR{line+=1};priorCR=u==13};lines.insert(line)}
                         _=b.editor.setBookmarks(lines.sorted().map{NSNumber(value:$0)})
@@ -136,6 +155,10 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
             let hit=(backwards ? candidates.last:candidates.first) ?? (options.wrap ? (backwards ? report.hits.last:report.hits.first):nil)
             if let hit,let bytes=SearchCore.byteRange(hit.range,in:text),editor.setSelectionAnchor(bytes.location,caret:NSMaxRange(bytes)){lastNavigation=(editor,revision,hit.range)}
         }else{throw NSError(domain:"TextTank.Search",code:6,userInfo:[NSLocalizedDescriptionKey:"Unrecognized recorded search action."])}
+    }
+    @discardableResult static func highlight(_ hits:[SearchHit],text:String,revision:UInt,in editor:TTEditor)->Bool {
+        guard editor.window != nil,editor.revision==revision,editor.text==text,let ranges=SearchCore.byteRanges(hits.map(\.range),in:text) else{return false}
+        return editor.setSearchHighlights(ranges.filter{$0.length>0}.map{NSValue(range:$0)})
     }
     @discardableResult static func apply(_ hits:[SearchHit],text:String,revision:UInt,to editor:TTEditor)->Bool {
         guard editor.window != nil,!editor.readOnly,editor.revision==revision,editor.text==text,editor.selectionCount==1,!hits.isEmpty else{return false}

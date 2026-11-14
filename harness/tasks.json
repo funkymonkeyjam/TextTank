@@ -128,7 +128,7 @@
       "docs/REVIEW-ME.md",
       "docs/parity/implementation-evidence.json"
     ],
-    "progress": "Added column insertion/multiselection commands and additional line transforms with byte-preserving duplicate removal. Complete command parity remains open."
+    "progress": "Column/multiselection, line transforms, language-specific comments and Mark/Clear integrated; column stale-selection and clone-settings review findings repaired. Full command parity remains open."
   },
   {
     "id": "T08",
@@ -148,7 +148,7 @@
       "Tests/FolderSearchControllerChecks.swift",
       "harness/reviews/folder-search-review-2026-11-14.md"
     ],
-    "progress": "Boost normal/extended/regex snapshot search, scopes, macros and disk replacement with per-file backup/report implemented; focused native field-editor bug repaired. Differential Windows parity remains unverified."
+    "progress": "Boost modes, all-open/selection search, workspace-root scopes/filters/persistence, Mark/Clear, macros and guarded disk replacement integrated. Overlapping excluded roots omission independently repaired. Full differential/project membership/dialog parity remains open."
   },
   {
     "id": "T09",
@@ -166,7 +166,7 @@
       "docs/REVIEW-ME.md",
       "docs/parity/implementation-evidence.json"
     ],
-    "progress": "Imported96 profiles;94 upstream factories load; audited LexUser port with synthetic UDL import/export/keyword/comment/delimiter tests. Full semantics/API completion/function-list parity remains open."
+    "progress": "96 profiles, audited LexUser port, UDL XML editing, completion/function navigation and syntax font/color controls implemented with111 native assertions; full language semantic/API/function XML parity unverified."
   },
   {
     "id": "T10",
@@ -198,7 +198,7 @@
     "status": "partial",
     "owner": null,
     "implementation_evidence": [],
-    "progress": "Native folder/document/recent browser added with25 tests; monitoring in progress, full workspace variants remain open."
+    "progress": "Native folder/document/recent browser plus explicit background monitoring and safe explicit reload;35 native tests. Full workspace/session/tail-follow variants remain open."
   },
   {
     "id": "T12",
@@ -342,7 +342,7 @@
       "docs/REVIEW-ME.md",
       "docs/parity/implementation-evidence.json"
     ],
-    "progress": "Independent feature reviews found and repaired shortcut collision, Unicode duplicate normalization, invalid regex surrogate expansion, active field-editor query mixup, stale extension preview and FEFF output loss. Final integrated candidate review pending."
+    "progress": "Independent feature and integration reviews completed with concrete findings repaired; final88 document assertions independently passed. No full-parity certification; see harness/reviews/integrated-expansion-review.md."
   },
   {
     "id": "T20",

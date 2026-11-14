@@ -33,3 +33,9 @@ No claim of complete parity or an independently reviewed final candidate is made
 ## Repair recheck
 
 The independent native document runner passed 89 assertions after the literal-byte duplicate repair, including the composed/decomposed two-line case. The dynamic font buffer was source-reviewed. No open blocking finding remains in this bounded foundation review; broad parity/runtime limitations above remain.
+
+## Run output/configuration follow-up
+
+A further source review found that Foundation `String(data:encoding:.utf8)` removed a leading UTF-8 FEFF from extension output. The integrator replaced it with decoding plus exact UTF-8 byte equality; an independent native RunController runner passed **6 assertions**, including leading FEFF plus embedded NUL, stale and detached editor rejection, explicit preview result identity and one Undo. It uses actual TTEditor/AppKit with a minimal test owner, avoiding unrelated app-source churn. Log: `harness/logs/reference-run-controller-checks.log`.
+
+The integrator also repaired duplicate configured Run UUID acceptance with a shared library validator used during load and persistence. Source recheck confirms the guard; the dedicated RunChecks runtime is integrator-owned. Export/plugin process behavior outside these cases remains covered only by its separate review and tests.

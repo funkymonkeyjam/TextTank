@@ -94,6 +94,10 @@ import AppKit
         try check(document.windowControllers.count == 1,"NSDocument owns one window controller")
         guard let controller = document.windowControllers.first as? EditorWindowController, let window = controller.window else { fatalError("missing controller/window") }
         try check(controller.document === document && window.windowController === controller,"native controller document/window ownership")
+        let columnRevision=document.editor.revision,columnSelections=document.editor.selectionRanges
+        _ = document.editor.setSelectionAnchor(0,caret:1)
+        try check(!EditorWindowController.applyColumn(["X"],to:document.editor,revision:columnRevision,selections:columnSelections),"column dialog stale selection cannot edit different range")
+        try check(document.editor.text.utf8.elementsEqual(String(decoding:initial,as:UTF8.self).utf8),"rejected column leaves original bytes unchanged")
         document.showWindows()
         window.orderFront(nil)
         try check(window.isVisible,"native window visible after showWindows")
@@ -134,7 +138,13 @@ import AppKit
         window.displayIfNeeded()
         print("APP-GEOMETRY window=\(window.frame) root=\(String(describing:window.contentView?.frame)) split=\(controller.split.frame) rootAmbiguous=\(window.contentView?.hasAmbiguousLayout ?? false)"); fflush(stdout)
         try inspectGeometry(document.editor,label:"before-clone")
+        let priorDelegate=app.delegate
+        let cloneDelegate=AppDelegate();app.delegate=cloneDelegate
+        var cloneSettings=EditorSettings();cloneSettings.wrap=true;cloneSettings.tabWidth=8;cloneSettings.useTabs=false
+        try cloneDelegate.settings.save(cloneSettings)
         controller.clone(nil)
+        try check(controller.secondary?.wrap == true && controller.secondary?.menu != nil,"new clone inherits persisted view settings and automation context")
+        app.delegate=priorDelegate
         window.contentView?.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
         guard let clone = controller.secondary else { fatalError("clone missing") }

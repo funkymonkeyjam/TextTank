@@ -8,7 +8,7 @@ struct SearchSpan: Equatable, Codable, Sendable {
     let length:Int
 }
 struct FolderSearchRequest: Sendable {
-    let directory:URL
+    var directory:URL
     let query:String
     var matchCase=true
     var mode:SearchOptions.Mode = .normal
@@ -18,6 +18,9 @@ struct FolderSearchRequest: Sendable {
     var includeHidden=false
     /// Exact filename extensions, without dots; empty searches all regular files.
     var extensions:Set<String>=[]
+    var filenameFilters="*.*"
+    /// Canonical file paths already searched by another explicit root.
+    var excludingSearchedFiles:Set<String>=[]
     var maximumFiles=10000
     var maximumEntries=100000
     var maximumFileBytes=32*1024*1024
@@ -37,9 +40,10 @@ struct FolderSearchMatch: Equatable, Sendable {
     let previewMatchRange:SearchSpan
     let isMatchTruncatedInPreview:Bool
     var sourceSHA256:String?=nil
+    var sourceRoot:URL?=nil
 }
 enum FolderSearchSkipReason: Equatable, Sendable {
-    case symbolicLink, hidden, nonRecursiveDirectory, extensionFiltered, notRegularFile, fileTooLarge
+    case symbolicLink, hidden, nonRecursiveDirectory, extensionFiltered, filenameFiltered, folderFiltered, duplicateScope, notRegularFile, fileTooLarge
     case invalidEncoding(String), unreadable(String)
 }
 struct FolderSearchSkipped: Equatable, Sendable {
@@ -54,6 +58,7 @@ struct FolderSearchReport: Sendable {
     var filesConsidered=0
     var filesSearched=0
     var bytesRead=0
+    var searchedFiles:Set<String>=[]
     var wasCancelled=false
     var reachedLimit:FolderSearchLimit?
     /// Policy exclusions are expected; unreadable/oversized files make coverage incomplete.
@@ -95,13 +100,50 @@ enum FolderSearch {
         let work=Task.detached(priority:.userInitiated){try run(request,cancellation:cancellation,progress:progress)}
         return try await withTaskCancellationHandler(operation:{try await work.value},onCancel:{cancellation.cancel()})
     }
+    /// Saved folder roots share one global work/result budget. Overlapping roots
+    /// retain union semantics even when parent filters/hidden policies skip children.
+    static func searchAcross(_ template:FolderSearchRequest,directories:[URL],cancellation:FolderSearchCancellation=FolderSearchCancellation(),progress:(@Sendable(FolderSearchProgress)->Void)?=nil)async throws->FolderSearchReport {
+        guard !directories.isEmpty,directories.count<=100 else{throw FolderSearchError.invalidRequest("Choose between one and 100 workspace folders.")}
+        try validate(template);_=try FolderSearchFilters(template.filenameFilters)
+        var report=FolderSearchReport(),roots:[URL]=[]
+        for directory in directories {
+            if cancellation.isCancelled || Task.isCancelled{report.wasCancelled=true;return report}
+            guard directory.isFileURL,!directory.path.contains("\0"),(directory.host ?? "").isEmpty || directory.host=="localhost" else{throw FolderSearchError.invalidRequest("Workspace search roots must be local directories.")}
+            let fd=open(directory.path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_NONBLOCK)
+            guard fd>=0 else{report.skipped.append(.init(url:directory,reason:.unreadable("Workspace root is unavailable or is a symbolic link.")));continue}
+            var path=[CChar](repeating:0,count:Int(MAXPATHLEN));let result=fcntl(fd,F_GETPATH,&path);close(fd)
+            guard result==0 else{report.skipped.append(.init(url:directory,reason:.unreadable("Workspace root could not be resolved.")));continue}
+            let canonical=URL(fileURLWithPath:String(cString:path),isDirectory:true)
+            if !roots.contains(canonical){roots.append(canonical)}
+        }
+        roots.sort{$0.path.count == $1.path.count ? $0.path<$1.path:$0.path.count<$1.path.count}
+        // Every explicit root has its own root-relative folder filters. Do not
+        // collapse child roots: even an unfiltered parent may skip a hidden root.
+        for root in roots {
+            if cancellation.isCancelled || Task.isCancelled{report.wasCancelled=true;break}
+            var request=template;request.directory=root;request.excludingSearchedFiles.formUnion(report.searchedFiles)
+            request.maximumFiles=template.maximumFiles-report.filesConsidered;request.maximumEntries=template.maximumEntries-report.entriesVisited;request.maximumTotalBytes=template.maximumTotalBytes-report.bytesRead;request.maximumResults=template.maximumResults-report.matches.count
+            if request.maximumFiles<=0{report.reachedLimit = .files;break};if request.maximumEntries<=0{report.reachedLimit = .entries;break};if request.maximumTotalBytes<=0{report.reachedLimit = .totalBytes;break};if request.maximumResults<=0{report.reachedLimit = .results;break}
+            let baseline=report
+            do {
+                let part=try await search(request,cancellation:cancellation,progress:{p in progress?(.init(filesSearched:baseline.filesSearched+p.filesSearched,bytesRead:baseline.bytesRead+p.bytesRead,matches:baseline.matches.count+p.matches,currentURL:p.currentURL))})
+                report.matches+=part.matches;report.skipped+=part.skipped;report.entriesVisited+=part.entriesVisited;report.filesConsidered+=part.filesConsidered;report.filesSearched+=part.filesSearched;report.bytesRead+=part.bytesRead;report.searchedFiles.formUnion(part.searchedFiles)
+                report.wasCancelled=part.wasCancelled;report.reachedLimit=part.reachedLimit
+                if report.wasCancelled || report.reachedLimit != nil{break}
+            }catch{report.skipped.append(.init(url:root,reason:.unreadable(error.localizedDescription)))}
+        }
+        report.matches.sort{$0.url.path == $1.url.path ? $0.utf16Range.location<$1.utf16Range.location:$0.url.path<$1.url.path}
+        return report
+    }
     private static func validate(_ request:FolderSearchRequest)throws {
         guard request.directory.isFileURL,(request.directory.host ?? "").isEmpty || request.directory.host == "localhost",!request.directory.path.contains("\0"),!request.query.isEmpty else {throw FolderSearchError.invalidRequest("Choose a local directory and nonempty search expression.")}
         guard request.maximumFiles>0,request.maximumEntries>0,request.maximumFileBytes>0,request.maximumTotalBytes>0,request.maximumResults>0,(16...8192).contains(request.previewUTF16Length) else {throw FolderSearchError.invalidRequest("Search limits must be positive and preview length must be 16–8192 UTF-16 units.")}
+        _=try FolderSearchFilters(request.filenameFilters)
         guard request.extensions.allSatisfy({!$0.isEmpty && !$0.contains("/") && !$0.contains("\\") && !$0.contains("\0") && !$0.contains(".")}) else {throw FolderSearchError.invalidRequest("Extension filters must be exact extensions without dots or path separators.")}
     }
     private static func run(_ request:FolderSearchRequest,cancellation:FolderSearchCancellation,progress:(@Sendable(FolderSearchProgress)->Void)?)throws->FolderSearchReport {
         try validate(request)
+        let filters=try FolderSearchFilters(request.filenameFilters)
         let rootFD=open(request.directory.path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW)
         guard rootFD>=0 else {throw POSIXError(POSIXErrorCode(rawValue:errno) ?? .EIO)}
         defer{close(rootFD)}
@@ -126,11 +168,15 @@ enum FolderSearch {
             if values.isSymbolicLink == true{report.skipped.append(.init(url:url,reason:.symbolicLink));continue}
             if !request.includeHidden && (values.isHidden == true || url.lastPathComponent.hasPrefix(".")){if values.isDirectory == true{iterator.skipDescendants()};report.skipped.append(.init(url:url,reason:.hidden));continue}
             if values.isDirectory == true {
+                let depth=url.pathComponents.count-root.pathComponents.count
+                if filters.excludesFolder(url.lastPathComponent,depth:depth){iterator.skipDescendants();report.skipped.append(.init(url:url,reason:.folderFiltered));continue}
                 if !request.recursive{iterator.skipDescendants();report.skipped.append(.init(url:url,reason:.nonRecursiveDirectory))}
                 continue
             }
             guard values.isRegularFile == true else{report.skipped.append(.init(url:url,reason:.notRegularFile));continue}
+            if !filters.acceptsFile(url.lastPathComponent){report.skipped.append(.init(url:url,reason:.filenameFiltered));continue}
             if !extensionFilter.isEmpty && !extensionFilter.contains(url.pathExtension.lowercased()){report.skipped.append(.init(url:url,reason:.extensionFiltered));continue}
+            if request.excludingSearchedFiles.contains(url.path){report.skipped.append(.init(url:url,reason:.duplicateScope));continue}
             if report.filesConsidered>=request.maximumFiles{report.reachedLimit = .files;break}
             report.filesConsidered+=1
             if (values.fileSize ?? 0)>request.maximumFileBytes{report.skipped.append(.init(url:url,reason:.fileTooLarge));continue}
@@ -147,7 +193,7 @@ enum FolderSearch {
             let decoded:DecodedFile
             do{decoded=try FileCodec.decode(bytes)}catch{report.skipped.append(.init(url:url,reason:.invalidEncoding(error.localizedDescription)));continue}
             if cancellation.isCancelled{report.wasCancelled=true;break}
-            report.filesSearched+=1
+            report.filesSearched+=1;report.searchedFiles.insert(url.path)
             let fingerprint=SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined()
             let text=decoded.text as NSString
             var cursor=UTFPositionCursor(decoded.text)
@@ -162,7 +208,7 @@ enum FolderSearch {
                 let startByte=cursor.byteOffset,line=cursor.line,column=cursor.columnUTF16
                 guard cursor.advance(to:NSMaxRange(match),cancellation:cancellation) else {if cancellation.isCancelled{report.wasCancelled=true;break searchLoop};throw FolderSearchError.invalidRequest("Matching split a Unicode character.")}
                 let snippet=preview(text,match:match,maximum:request.previewUTF16Length)
-                report.matches.append(.init(url:url,line:line,columnUTF16:column,utf16Range:.init(location:match.location,length:match.length),utf8Range:.init(location:startByte,length:cursor.byteOffset-startByte),preview:snippet.text,previewMatchRange:snippet.range,isMatchTruncatedInPreview:snippet.truncated,sourceSHA256:fingerprint))
+                report.matches.append(.init(url:url,line:line,columnUTF16:column,utf16Range:.init(location:match.location,length:match.length),utf8Range:.init(location:startByte,length:cursor.byteOffset-startByte),preview:snippet.text,previewMatchRange:snippet.range,isMatchTruncatedInPreview:snippet.truncated,sourceSHA256:fingerprint,sourceRoot:root))
                 if report.matches.count>=request.maximumResults{report.reachedLimit = .results;break searchLoop}
             }
             progress?(.init(filesSearched:report.filesSearched,bytesRead:report.bytesRead,matches:report.matches.count,currentURL:url))

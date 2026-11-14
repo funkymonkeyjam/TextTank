@@ -1,6 +1,6 @@
 import AppKit
 @main struct FolderSearchControllerChecks {
-    @MainActor static func main() throws {
+    @MainActor static func main() async throws {
         let support=FileManager.default.temporaryDirectory.appendingPathComponent("TextTankFolderUIChecks-"+UUID().uuidString)
         setenv("TEXTTANK_SUPPORT_DIRECTORY",support.path,1)
         defer { try? FileManager.default.removeItem(at:support) }
@@ -23,13 +23,29 @@ import AppKit
         check(document.editor.revision==beforeNavigation && document.isDocumentEdited,"navigation preserves dirty content and revision")
         document.editor.text="🥑 changed";_ = document.editor.setSelectionAnchor(0,caret:4)
         check(!FolderSearchController.selectResult(match,in:document,query:"Test",matchCase:true) && document.editor.selectionAnchor==0 && document.editor.selectionCaret==4,"stale result leaves native selection unchanged")
-        let controller=FolderSearchController()
+        let suite="TextTankFolderNative-"+UUID().uuidString
+        let isolated=UserDefaults(suiteName:suite)!;defer{isolated.removePersistentDomain(forName:suite)}
+        let controller=FolderSearchController(defaults:isolated)
         check(controller.window?.title=="Find in Folder" && controller.status.stringValue.contains("Boost regex"),"native title and status expose search modes")
         check(controller.table.tableColumns.count==3 && controller.details.isSelectable,"native results and skip details selectable")
         controller.windowWillClose(Notification(name:NSWindow.willCloseNotification))
         controller.retainReplacementOutcomes([FolderReplacementOutcome(url:url,status:.replaced,message:"committed before close",backup:URL(fileURLWithPath:"/tmp/review-backup"),recoveryReport:URL(fileURLWithPath:"/tmp/review-backup.json"))])
         controller.showReplacementReport(nil)
         check(controller.lastReplacementOutcomes.count==1 && controller.details.string.contains("committed before close") && controller.details.string.contains("review-backup.json"),"replacement completion retained after close with durable report path")
+        controller.filterField.stringValue="*.txt !+\\build";controller.extensionField.stringValue="txt";controller.queryField.stringValue="needle";controller.replacementField.stringValue="replacement";controller.mode.selectItem(at:1);controller.scope.selectItem(at:1);controller.hiddenButton.state = .on;controller.recursiveButton.state = .off
+        try controller.saveSettings()
+        let restored=FolderSearchController(defaults:isolated)
+        check(restored.filterField.stringValue=="*.txt !+\\build" && restored.extensionField.stringValue=="txt" && restored.queryField.stringValue=="needle" && restored.replacementField.stringValue=="replacement" && restored.mode.indexOfSelectedItem==1 && restored.scope.indexOfSelectedItem==1 && restored.hiddenButton.state == .on && restored.recursiveButton.state == .off,"native restart restores all folder search controls")
+        let first=support.appendingPathComponent("workspace-one"),second=support.appendingPathComponent("workspace-two")
+        try FileManager.default.createDirectory(at:first,withIntermediateDirectories:true);try FileManager.default.createDirectory(at:second,withIntermediateDirectories:true)
+        try Data("needle".utf8).write(to:first.appendingPathComponent("one.txt"));try Data("needle".utf8).write(to:second.appendingPathComponent("two.txt"));try Data("needle".utf8).write(to:second.appendingPathComponent("skip.log"))
+        restored.workspaceRoots={ [first,second] };restored.mode.selectItem(at:0)
+        check(NSApp.sendAction(restored.queryField.action!,to:restored.queryField.target,from:restored.queryField),"native workspace search action dispatched")
+        for _ in 0..<200 {if !restored.status.stringValue.hasPrefix("Searching"){break};try await Task.sleep(nanoseconds:10_000_000)}
+        check(restored.status.stringValue.hasPrefix("2 matches") && restored.numberOfRows(in:restored.table)==2,"native saved workspace roots search respects filename filters")
+        let corrupt=Data("invalid settings".utf8);isolated.set(corrupt,forKey:"TextTank.FolderSearch.v1")
+        let invalid=FolderSearchController(defaults:isolated);invalid.queryField.stringValue="new";try invalid.saveSettings()
+        check(isolated.data(forKey:"TextTank.FolderSearch.v1")==corrupt,"native corrupt settings stay preserved after attempted save")
         document.close()
         print("PASS FolderSearchControllerChecks: \(checks) assertions")
     }
