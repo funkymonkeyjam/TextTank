@@ -1,0 +1,293 @@
+[
+  {
+    "id": "T00",
+    "stage": "G0",
+    "title": "Verify instructions, exact GitHub owner, local checkout and toolchain",
+    "depends_on": [],
+    "suggested_role": "integrator",
+    "acceptance": "Identity and existing Git state observed; no unrelated repo mutated",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T01",
+    "stage": "G0",
+    "title": "Create/reuse public repo and bootstrap base branch",
+    "depends_on": [
+      "T00"
+    ],
+    "suggested_role": "integrator",
+    "acceptance": "Curated main bootstrap, implementation/native-mac branch and CI push/PR policy",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T02",
+    "stage": "G0",
+    "title": "Freeze reference distribution; normalize complete behavior inventory",
+    "depends_on": [
+      "T00"
+    ],
+    "suggested_role": "parity",
+    "acceptance": "Source pin + distribution profile; seed dispositions and missing dialogs/preferences/core tools inventoried",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T03",
+    "stage": "G0",
+    "title": "Pin dependencies and reproducible native build setup",
+    "depends_on": [
+      "T01"
+    ],
+    "suggested_role": "engine",
+    "acceptance": "Exact URL/hash/notices and verified target layout; build settings recorded",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T04",
+    "stage": "G1",
+    "title": "Prove native Scintilla Cocoa/Lexilla/Objective-C++ vertical slice",
+    "depends_on": [
+      "T02",
+      "T03"
+    ],
+    "suggested_role": "engine",
+    "acceptance": "Actual AppKit typing, IME, Unicode, undo, lexer, clone lifetime and early accessibility evidence",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T05",
+    "stage": "G2",
+    "title": "Implement document bytes, lifecycle, save and recovery",
+    "depends_on": [
+      "T04"
+    ],
+    "suggested_role": "documents",
+    "acceptance": "Fault-injected byte preservation, unique-document dirty close/quit and durable snapshot tests",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T06",
+    "stage": "G2",
+    "title": "Freeze command contracts and wire native basic editing/search",
+    "depends_on": [
+      "T04"
+    ],
+    "suggested_role": "integrator",
+    "acceptance": "Menus, shortcuts, recording policy, availability and typed effects use shared dispatcher",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T07",
+    "stage": "G3",
+    "title": "Complete advanced selections, editing and views",
+    "depends_on": [
+      "T05",
+      "T06"
+    ],
+    "suggested_role": "editor",
+    "acceptance": "Exact behavior rows verified through real command wiring, split/clone and Undo",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T08",
+    "stage": "G3",
+    "title": "Complete reference search/replace subsystem",
+    "depends_on": [
+      "T05",
+      "T06"
+    ],
+    "suggested_role": "search",
+    "acceptance": "Normal/extended/Boost-compatible semantics, replacement, all scopes, failure and cancellation tests",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T09",
+    "stage": "G3",
+    "title": "Implement language/UDL/style/completion/function-list features",
+    "depends_on": [
+      "T05",
+      "T06"
+    ],
+    "suggested_role": "languages",
+    "acceptance": "Data/configuration plus actual lexing/folding/navigation/UDL import/export coverage",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T10",
+    "stage": "G3",
+    "title": "Implement full standard recorded macros",
+    "depends_on": [
+      "T08"
+    ],
+    "suggested_role": "macros",
+    "acceptance": "Persisted edit and Find/Replace parameter playback, repeat/cancel and Undo evidence",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T11",
+    "stage": "G3",
+    "title": "Complete workspace, sessions, monitoring, printing and utility panels",
+    "depends_on": [
+      "T05",
+      "T06"
+    ],
+    "suggested_role": "workspace",
+    "acceptance": "Native functionality and failure paths, not panel placeholders",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T12",
+    "stage": "G3",
+    "title": "Complete preferences, shortcuts, context menus and localization",
+    "depends_on": [
+      "T06"
+    ],
+    "suggested_role": "preferences",
+    "acceptance": "Restart persistence, collision tests, reference-localization coverage and native conventions",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T13",
+    "stage": "G3",
+    "title": "Implement Mac Run/core extension equivalents and required bundled tools",
+    "depends_on": [
+      "T02",
+      "T05",
+      "T06"
+    ],
+    "suggested_role": "extensions",
+    "acceptance": "Explicit trusted execution contract, safe arguments, real sample extension and required utility tests",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T14",
+    "stage": "G3",
+    "title": "Implement generic user-named automation configuration and engine",
+    "depends_on": [
+      "T05",
+      "T06"
+    ],
+    "suggested_role": "automations",
+    "acceptance": "Stable IDs/versioning, editable names, typed steps, preview/cancel/revision and Undo tests",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T15",
+    "stage": "G3",
+    "title": "Wire every automation trigger and local connectors",
+    "depends_on": [
+      "T12",
+      "T14"
+    ],
+    "suggested_role": "automations",
+    "acceptance": "Menu/shortcut/toolbar/command/context same-definition tests; clipboard/editor/file output",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T16",
+    "stage": "G3",
+    "title": "Implement EventKit connector and recipe example configuration",
+    "depends_on": [
+      "T14",
+      "T15"
+    ],
+    "suggested_role": "connectors",
+    "acceptance": "Injected-store fault tests and journal; live scratch-list verification separately pending actual consent",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T17",
+    "stage": "G3",
+    "title": "Integrate Carbon Caret and native UI/accessibility/icon assets",
+    "depends_on": [
+      "T04",
+      "T12"
+    ],
+    "suggested_role": "native-ux",
+    "acceptance": "Actual light/dark/focus/AX/native icon evidence; single source supports declared OS target",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T18",
+    "stage": "G4",
+    "title": "Close remaining behavioral coverage and integrated hardening",
+    "depends_on": [
+      "T07",
+      "T08",
+      "T09",
+      "T10",
+      "T11",
+      "T12",
+      "T13",
+      "T15",
+      "T16",
+      "T17"
+    ],
+    "suggested_role": "integrator",
+    "acceptance": "Required rows verified or explicit blockers; 49 targeted cases plus discovered requirements accounted for",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T19",
+    "stage": "G4",
+    "title": "Run fresh integrated candidate review and repair",
+    "depends_on": [
+      "T18"
+    ],
+    "suggested_role": "reviewer",
+    "acceptance": "Exact-SHA independent findings/dispositions; no open blocking data-loss issues",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  },
+  {
+    "id": "T20",
+    "stage": "G5",
+    "title": "Clean rebuild, observe CI and deliver local review app + PR",
+    "depends_on": [
+      "T19"
+    ],
+    "suggested_role": "integrator",
+    "acceptance": "Actual .app/ZIP hash, run instructions, SHA-tied checks, unmerged PR, demo and precise limitations",
+    "status": "planned",
+    "owner": null,
+    "implementation_evidence": []
+  }
+]

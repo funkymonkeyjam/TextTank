@@ -1,0 +1,7 @@
+build/
+Vendor/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+harness/logs/
+output/
