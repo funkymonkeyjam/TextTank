@@ -146,6 +146,18 @@ int main() {
         [recorded removeAllObjects]; [right startRecording];
         [rightNative message:SCI_GOTOPOS wParam:0]; [right stopRecording];
         check(recorded.count == 1 && [recorded[0][@"kind"] isEqual:@"unsupported"], "Unsupported macroable actions are reported instead of silently omitted");
+        left.text = @"a🦋é\r\nsecond\nthird";
+        [left resetUndoHistory]; [left setSavePoint];
+        NSUInteger beforeRestoreRevision = left.revision;
+        check([left setSelectionAnchor:5 caret:1] && left.selectionAnchor == 5 && left.selectionCaret == 1 && [left.selectedText isEqual:@"🦋"], "Session selection restores reverse direction using UTF-8 byte positions");
+        check(![left setSelectionAnchor:2 caret:1] && left.selectionAnchor == 5 && left.selectionCaret == 1, "Split-codepoint position rejected without changing selection");
+        check(![left setSelectionAnchor:-1 caret:1] && ![left setSelectionAnchor:999 caret:1], "Out-of-range positions rejected rather than clamped");
+        check([left setBookmarks:@[@0,@2]] && [left.bookmarkLines isEqual:@[@0,@2]], "Session bookmark lines restored through native markers");
+        check([right.bookmarkLines isEqual:@[@0,@2]], "Bookmark storage follows shared document");
+        check(![left setBookmarks:@[@0,@99]] && [left.bookmarkLines isEqual:@[@0,@2]], "Invalid bookmark set preserves all prior markers");
+        check(![left setBookmarks:@[@1,@1]] && ![left setBookmarks:@[@1.5]], "Duplicate and fractional bookmark indices rejected");
+        check([left setBookmarks:@[]] && left.bookmarkLines.count == 0, "Empty bookmark set explicitly clears bookmarks");
+        check(!left.modified && left.revision == beforeRestoreRevision, "Selection and bookmark restore never changes authoritative bytes or text undo state");
         NSLog(@"Bridge checks passed; IME, VoiceOver, UI focus and permission tests not covered.");
     }
     return 0;

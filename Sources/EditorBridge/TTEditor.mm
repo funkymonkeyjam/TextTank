@@ -156,6 +156,44 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
 - (NSInteger)selectionCount { [self assertThread]; return [_engine message:SCI_GETSELECTIONS]; }
 - (NSInteger)selectionStart { [self assertThread]; return [_engine message:SCI_GETSELECTIONSTART]; }
 - (NSInteger)selectionEnd { [self assertThread]; return [_engine message:SCI_GETSELECTIONEND]; }
+- (NSInteger)selectionAnchor { [self assertThread]; return [_engine message:SCI_GETANCHOR]; }
+- (NSInteger)selectionCaret { [self assertThread]; return [_engine message:SCI_GETCURRENTPOS]; }
+- (BOOL)setSelectionAnchor:(NSInteger)anchor caret:(NSInteger)caret {
+    [self assertThread];
+    const sptr_t length = [_engine message:SCI_GETLENGTH];
+    for (NSInteger position : {anchor, caret}) {
+        if (position < 0 || position > length) return NO;
+        if (position < length && ([_engine message:SCI_GETCHARAT wParam:position] & 0xC0) == 0x80) return NO;
+    }
+    [_engine message:SCI_SETSEL wParam:anchor lParam:caret];
+    [_engine message:SCI_SCROLLCARET];
+    return YES;
+}
+- (NSArray<NSNumber *> *)bookmarkLines {
+    [self assertThread];
+    NSMutableArray<NSNumber *> *lines = [NSMutableArray array];
+    sptr_t line = [_engine message:SCI_MARKERNEXT wParam:0 lParam:(1 << 1)];
+    while (line >= 0) {
+        [lines addObject:@(line)];
+        line = [_engine message:SCI_MARKERNEXT wParam:line+1 lParam:(1 << 1)];
+    }
+    return lines;
+}
+- (BOOL)setBookmarks:(NSArray<NSNumber *> *)lines {
+    [self assertThread];
+    if (![lines isKindOfClass:NSArray.class]) return NO;
+    const sptr_t count = [_engine message:SCI_GETLINECOUNT];
+    NSMutableSet<NSNumber *> *seen = [NSMutableSet set];
+    for (id value in lines) {
+        if (![value isKindOfClass:NSNumber.class]) return NO;
+        NSInteger line = [value integerValue];
+        if (line < 0 || line >= count || [value doubleValue] != (double)line || [seen containsObject:@(line)]) return NO;
+        [seen addObject:@(line)];
+    }
+    [_engine message:SCI_MARKERDELETEALL wParam:1];
+    for (NSNumber *line in seen) [_engine message:SCI_MARKERADD wParam:line.integerValue lParam:1];
+    return YES;
+}
 - (BOOL)modified { [self assertThread]; return [_engine message:SCI_GETMODIFY] != 0; }
 - (void)setSavePoint { [self assertThread]; [_engine message:SCI_SETSAVEPOINT]; }
 - (void)resetUndoHistory { [self assertThread]; [_engine message:SCI_EMPTYUNDOBUFFER]; }

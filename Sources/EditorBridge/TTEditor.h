@@ -11,6 +11,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) NSInteger selectionCount;
 @property(nonatomic, readonly) NSInteger selectionStart;
 @property(nonatomic, readonly) NSInteger selectionEnd;
+@property(nonatomic, readonly) NSInteger selectionAnchor;
+@property(nonatomic, readonly) NSInteger selectionCaret;
+/// Restores one ordinary selection. Rejects out-of-bounds or split UTF-8 code points.
+- (BOOL)setSelectionAnchor:(NSInteger)anchor caret:(NSInteger)caret;
+@property(nonatomic, readonly) NSArray<NSNumber *> *bookmarkLines;
+/// Validates all line numbers before replacing marker-1 bookmarks; never changes text.
+- (BOOL)setBookmarks:(NSArray<NSNumber *> *)lines;
 @property(nonatomic, copy, nullable) void (^onChange)(void);
 @property(nonatomic, copy, nullable) void (^onFocus)(void);
 + (NSArray<NSString *> *)availableLanguages;

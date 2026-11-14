@@ -50,6 +50,8 @@ for raw in subprocess.check_output(['git','ls-files','-z','--','docs','harness/r
     if not raw:continue
     relative=pathlib.Path(os.fsdecode(raw));target=package/relative
     target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(root/relative,target)
+shutil.copyfile(root/'scripts/launch-review.sh',package/'Launch-TextTank.command')
+(package/'Launch-TextTank.command').chmod(0o755)
 review=(root/'docs/REVIEW-ME.md').read_text().replace('](parity/','](docs/parity/').replace('](../harness/','](harness/')
 (package/'REVIEW-ME.md').write_text(review)
 licenses=package/'Licenses';licenses.mkdir()

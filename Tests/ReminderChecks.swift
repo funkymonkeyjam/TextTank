@@ -53,7 +53,10 @@ import Darwin
         fake.permission = .denied
         await rejects("denied") { _ = try await connector.export(rows:["a"],destinationID:"a",batchID:UUID()) }
         try check(fake.saves.isEmpty && fake.permissionRequests == 0,"denied does not auto request")
-        try await connector.requestAccess(); try check(fake.permissionRequests == 1,"explicit request only")
+        await rejects("denied access does not repeatedly request system consent") { try await connector.requestAccess() }
+        fake.permission = .notDetermined
+        try await connector.requestAccess(); try check(fake.permissionRequests == 1,"explicit first-use request only")
+        try await connector.requestAccess(); try check(fake.permissionRequests == 1,"authorized access does not request again")
         let id = UUID(), rows = ["2 eggs","½ cup flour","2 eggs"]
         let run = try await connector.export(rows:rows,destinationID:"b",batchID:id)
         try check(run.rows.map(\.title) == rows && run.rows.allSatisfy {$0.status == .confirmed},"quantities duplicates exact")

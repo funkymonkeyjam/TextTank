@@ -17,6 +17,7 @@ struct TextTankMain {
 #endif
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    let workspace = WorkspaceController()
     lazy var macros = MacroController(editorProvider: { (NSApp.mainWindow?.windowController as? EditorWindowController)?.activeEditor })
     lazy var automations = AutomationController(editorProvider: { [weak self] in
         self?.macros.invalidateRecording(reason:"An automation was invoked during macro recording. Automation side effects are not recorded.")
@@ -68,6 +69,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item(file,"Save All",#selector(NSDocumentController.saveAllDocuments(_:)))
         item(file, "Revert to Saved…", #selector(NSDocument.revertToSaved(_:)))
         item(file, "Close", #selector(NSWindow.performClose(_:)), "w")
+        file.addItem(.separator())
+        item(file,"Page Setup…",#selector(NSDocument.runPageLayout(_:)))
+        item(file,"Print…",#selector(NSDocument.printDocument(_:)),"p")
+        let saveSession=NSMenuItem(title:"Save Session Snapshot…",action:#selector(WorkspaceController.saveSession(_:)),keyEquivalent:"");saveSession.target=workspace;file.addItem(saveSession)
+        let openSession=NSMenuItem(title:"Open Session Snapshot…",action:#selector(WorkspaceController.openSession(_:)),keyEquivalent:"");openSession.target=workspace;file.addItem(openSession)
         let encoding = menu("Encoding")
         for (title,code) in [("UTF-8","utf8"),("UTF-8 with BOM","utf8bom"),("UTF-16 LE with BOM","utf16LE"),("UTF-16 BE with BOM","utf16BE"),("Windows-1252","windows1252"),("ISO-8859-1","latin1")] { item(encoding,"Convert to \(title)",#selector(TextDocument.convertEncoding(_:)),"",code) }
         let edit = menu("Edit")
@@ -124,6 +130,8 @@ final class TextDocument: NSDocument {
         didSet { if !loading && format != oldValue { recoveryBase += 1; updateChangeCount(format != savedFormat || editor.modified ? .changeDone : .changeCleared) } }
     }
     private var diskBytes: Data?
+    var originalDiskFingerprint:String? { diskBytes.map(WorkspaceStore.fingerprint) }
+    var languageIdentifier="null"
     private var loading = false
     override init() {
         super.init()
@@ -137,7 +145,7 @@ final class TextDocument: NSDocument {
     }
     func flushRecovery() {
         do {
-            if editor.modified || format != savedFormat {
+            if isDocumentEdited || editor.modified || format != savedFormat {
                 try Self.recovery.save(RecoverySnapshot(id:recoveryID,text:editor.text,format:format,originalURL:fileURL?.absoluteString,revision:recoveryBase+UInt64(editor.revision)))
             } else { try Self.recovery.remove(id:recoveryID,throughRevision:recoveryBase+UInt64(editor.revision)) }
         } catch { windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.status.stringValue="Recovery failed: \(error.localizedDescription)" } }
@@ -145,6 +153,7 @@ final class TextDocument: NSDocument {
     override func close() {
         (NSApp.delegate as? AppDelegate)?.macros.editorWillReset(editor,reason:"The recording document was closed.")
         recoveryTimer?.invalidate()
+        windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.prepareForClose() }
         // NSDocument only reaches close after the user has chosen Save or Discard.
         try? Self.recovery.remove(id:recoveryID,throughRevision:recoveryBase+UInt64(editor.revision))
         super.close()
@@ -176,6 +185,25 @@ final class TextDocument: NSDocument {
         do { _ = try FileCodec.encode(editor.text,format:target); format=target; flushRecovery(); windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.status.stringValue="\(code) · INCOMPLETE PREVIEW" } }
         catch { presentError(error) }
     }
+    override func printOperation(withSettings printSettings:[NSPrintInfo.AttributeKey:Any]) throws -> NSPrintOperation {
+        let settings=printInfo.copy() as! NSPrintInfo
+        settings.dictionary().addEntries(from:printSettings)
+        settings.horizontalPagination = .fit;settings.verticalPagination = .automatic
+        settings.isHorizontallyCentered=false;settings.isVerticallyCentered=false
+        let width=max(72,settings.paperSize.width-settings.leftMargin-settings.rightMargin)
+        // A static print representation, never a second editable document model.
+        let printable=NSTextView(frame:NSRect(x:0,y:0,width:width,height:100))
+        printable.isRichText=false;printable.font = .monospacedSystemFont(ofSize:10,weight:.regular)
+        printable.textColor = .black;printable.backgroundColor = .white;printable.textContainerInset = .zero
+        printable.isHorizontallyResizable=false;printable.isVerticallyResizable=true
+        printable.textContainer?.containerSize=NSSize(width:width,height:CGFloat.greatestFiniteMagnitude)
+        printable.textContainer?.widthTracksTextView=true;printable.string=editor.text
+        if let container=printable.textContainer,let layout=printable.layoutManager {
+            layout.ensureLayout(for:container);printable.setFrameSize(NSSize(width:width,height:max(1,ceil(layout.usedRect(for:container).height))))
+        }
+        let operation=NSPrintOperation(view:printable,printInfo:settings)
+        operation.jobTitle=displayName;return operation
+    }
     override func data(ofType typeName: String) throws -> Data { try FileCodec.encode(editor.text, format: format) }
     override func writeSafely(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType) throws {
         if url == fileURL, let diskBytes {
@@ -197,13 +225,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     var secondary: TTEditor?
     weak var lastEditor: TTEditor?
     var focusObserver: NSObjectProtocol?
-    var textDocument: TextDocument { document as! TextDocument }
+    var automationObserver: NSObjectProtocol?
+    let primaryEditor: TTEditor
     var activeEditor: TTEditor {
         if let secondary, let responder = window?.firstResponder as? NSView, responder.isDescendant(of: secondary) { lastEditor=secondary; return secondary }
-        if let responder=window?.firstResponder as? NSView, responder.isDescendant(of:textDocument.editor) { lastEditor=textDocument.editor }
-        return lastEditor ?? textDocument.editor
+        if let responder=window?.firstResponder as? NSView, responder.isDescendant(of:primaryEditor) { lastEditor=primaryEditor }
+        return lastEditor ?? primaryEditor
     }
     init(document: TextDocument) {
+        primaryEditor = document.editor
         let window = NSWindow(contentRect:NSRect(x:0,y:0,width:1080,height:720),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
         super.init(window:window)
         lastEditor = document.editor
@@ -213,10 +243,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         }
         if let app=NSApp.delegate as? AppDelegate {
             document.editor.menu=app.automations.contextMenu()
-            let toolbar=NSToolbar(identifier:"TextTankToolbar");toolbar.delegate=self;window.toolbar=toolbar
+            let toolbar=NSToolbar(identifier:"TextTankToolbar");toolbar.delegate=self;toolbar.displayMode = .iconOnly;window.toolbar=toolbar
+            automationObserver = NotificationCenter.default.addObserver(forName:.textTankAutomationsDidChange,object:app.automations,queue:.main) { [weak self] _ in self?.refreshAutomationToolbar() }
         }
         focusObserver = NotificationCenter.default.addObserver(forName:NSWindow.didUpdateNotification,object:window,queue:.main) { [weak self] _ in _ = self?.activeEditor }
         window.title = "TextTank"; window.center(); window.tabbingMode = .preferred
+        window.titleVisibility = .visible; window.titlebarAppearsTransparent = false
+        for button in [NSWindow.ButtonType.closeButton,.miniaturizeButton,.zoomButton] { window.standardWindowButton(button)?.isHidden = false }
         window.contentMinSize=NSSize(width:800,height:500)
         let root = NSView(frame:NSRect(origin:.zero,size:window.contentLayoutRect.size)); window.contentView = root
         split.isVertical = true; split.dividerStyle = .thin; split.addArrangedSubview(document.editor)
@@ -228,9 +261,31 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         NSLayoutConstraint.activate([split.heightAnchor.constraint(greaterThanOrEqualToConstant:200),search.topAnchor.constraint(equalTo:root.topAnchor,constant:10),search.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),search.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),findField.widthAnchor.constraint(greaterThanOrEqualToConstant:200),replaceField.widthAnchor.constraint(greaterThanOrEqualToConstant:160),split.topAnchor.constraint(equalTo:search.bottomAnchor,constant:10),split.leadingAnchor.constraint(equalTo:root.leadingAnchor),split.trailingAnchor.constraint(equalTo:root.trailingAnchor),split.bottomAnchor.constraint(equalTo:status.topAnchor,constant:-6),status.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),status.bottomAnchor.constraint(equalTo:root.bottomAnchor,constant:-6)])
         status.font = .systemFont(ofSize:11); status.textColor = .secondaryLabelColor
     }
-    func toolbarAllowedItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier] { [.init("TextTank.Automations"),.flexibleSpace] }
-    func toolbarDefaultItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier] { [.flexibleSpace,.init("TextTank.Automations")] }
-    func toolbar(_ toolbar:NSToolbar,itemForItemIdentifier identifier:NSToolbarItem.Identifier,willBeInsertedIntoToolbar:Bool)->NSToolbarItem? { (NSApp.delegate as? AppDelegate)?.automations.makeToolbarItem() }
+    func toolbarAllowedItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
+    func toolbarDefaultItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier] {
+        ((NSApp.delegate as? AppDelegate)?.automations.toolbarIdentifiers() ?? []) + [.flexibleSpace,.init("TextTank.Automations"),.init("TextTank.CloseTab")]
+    }
+    func toolbar(_ toolbar:NSToolbar,itemForItemIdentifier identifier:NSToolbarItem.Identifier,willBeInsertedIntoToolbar:Bool)->NSToolbarItem? {
+        if identifier.rawValue == "TextTank.CloseTab" {
+            let item=NSToolbarItem(itemIdentifier:identifier);item.label="Close Tab";item.paletteLabel="Close Tab"
+            let button=NSButton(title:"Close Tab",image:NSImage(systemSymbolName:"xmark",accessibilityDescription:"Close Tab")!,target:self,action:#selector(closeTab(_:)))
+            button.bezelStyle = .rounded;button.imagePosition = .imageLeading;button.toolTip="Close this tab (⌘W). Unsaved changes will be reviewed."
+            item.view=button;return item
+        }
+        guard let automations=(NSApp.delegate as? AppDelegate)?.automations else { return nil }
+        return identifier.rawValue == "TextTank.Automations" ? automations.makeToolbarItem() : automations.makeToolbarItem(identifier:identifier)
+    }
+    func refreshAutomationToolbar() {
+        guard let toolbar=window?.toolbar else { return }
+        while !toolbar.items.isEmpty { toolbar.removeItem(at:0) }
+        for (index,id) in toolbarDefaultItemIdentifiers(toolbar).enumerated() { toolbar.insertItem(withItemIdentifier:id,at:index) }
+    }
+    @objc func closeTab(_ sender:Any?) { window?.performClose(sender) }
+    func prepareForClose() {
+        if let focusObserver { NotificationCenter.default.removeObserver(focusObserver);self.focusObserver=nil }
+        if let automationObserver { NotificationCenter.default.removeObserver(automationObserver);self.automationObserver=nil }
+        primaryEditor.onFocus=nil;secondary?.onFocus=nil
+    }
     required init?(coder:NSCoder) { fatalError("init(coder:) not used") }
     override func windowDidLoad() { super.windowDidLoad() }
     @objc func command(_ sender:NSMenuItem) {
@@ -243,8 +298,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         (NSApp.delegate as? AppDelegate)?.macros.willExecuteCommand(id,on:editor)
         editor.executeCommand(id)
     }
-    deinit { if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) } }
-    @objc func language(_ sender:NSMenuItem) { if let id=sender.representedObject as? String { activeEditor.setLanguage(id); status.stringValue="\(id) · INCOMPLETE PREVIEW" } }
+    deinit { if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }; if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) } }
+    @objc func language(_ sender:NSMenuItem) { if let id=sender.representedObject as? String { activeEditor.setLanguage(id); (document as? TextDocument)?.languageIdentifier=id; status.stringValue="\(id) · INCOMPLETE PREVIEW" } }
     @objc func showFind(_ sender:Any?) { _ = activeEditor; window?.makeFirstResponder(findField) }
     @objc func findNext(_ sender:Any?) { performFind(backwards:false) }
     @objc func findPrevious(_ sender:Any?) { performFind(backwards:true) }
@@ -258,7 +313,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         let text=replaceField.currentEditor()?.string ?? replaceField.stringValue;let editor=activeEditor
         editor.replaceSelection(text); (NSApp.delegate as? AppDelegate)?.macros.recordReplace(text:text,editor:editor)
     }
-    @objc func clone(_ sender:Any?) { guard secondary == nil else { return }; let clone=TTEditor(frame:split.bounds); clone.shareDocument(with:textDocument.editor); secondary=clone;clone.onFocus = { [weak self, weak clone] in guard let clone else { return };self?.lastEditor=clone;(NSApp.delegate as? AppDelegate)?.macros.editorDidFocus(clone) };split.addArrangedSubview(clone);split.adjustSubviews();split.layoutSubtreeIfNeeded();clone.layoutSubtreeIfNeeded();window?.makeFirstResponder(clone) }
-    @objc func closeSplit(_ sender:Any?) { lastEditor=textDocument.editor; window?.makeFirstResponder(textDocument.editor); secondary?.removeFromSuperview(); secondary=nil }
+    @objc func clone(_ sender:Any?) { guard secondary == nil else { return }; let clone=TTEditor(frame:split.bounds); clone.shareDocument(with:primaryEditor); secondary=clone;clone.onFocus = { [weak self, weak clone] in guard let clone else { return };self?.lastEditor=clone;(NSApp.delegate as? AppDelegate)?.macros.editorDidFocus(clone) };split.addArrangedSubview(clone);split.adjustSubviews();split.layoutSubtreeIfNeeded();clone.layoutSubtreeIfNeeded();window?.makeFirstResponder(clone) }
+    @objc func closeSplit(_ sender:Any?) { lastEditor=primaryEditor; window?.makeFirstResponder(primaryEditor); secondary?.removeFromSuperview(); secondary=nil }
     @objc func toggleWrap(_ sender:Any?) { activeEditor.wrap.toggle() }
 }

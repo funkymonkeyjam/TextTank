@@ -5,7 +5,8 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
     enum Input: String, Codable { case selection, document, clipboard, file }
     enum Output: String, Codable { case editor, clipboard, newDocument, file, reminders }
     struct Step: Codable, Equatable {
-        enum Kind: String, Codable { case removeListMarkers, removeBlankLines, sortLines, deduplicateLines, replaceLiteral }
+        enum Kind: String, Codable { case removeListMarkers, removeBlankLines, sortLines, deduplicateLines, replaceLiteral
+            case removeMatchingLines, removeMarkdownHeadings, removeMarkdownFormatting, removeCheckboxMarkers, removeNoteReferences, keepMarkedListRows }
         var kind: Kind
         var find: String?
         var replacement: String?
@@ -19,10 +20,22 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
     /// A single ASCII letter. UI binds Command-Option-letter and rejects collisions.
     var shortcut: String?
     var destinationID: String?
+    /// Older definitions decode without these keys. False means apply local output directly;
+    /// external connectors still require their own explicit destination/send confirmation.
+    var previewBeforeApply: Bool?
+    var pinToToolbar: Bool?
 
     static var example: AutomationDefinition {
-        AutomationDefinition(id: UUID(), name: "My ingredient cleanup", input: .clipboard,
-            steps: [Step(kind: .removeListMarkers), Step(kind: .removeBlankLines)], output: .newDocument)
+        AutomationDefinition(id: UUID(uuidString: "A931733F-310A-4EBF-9C48-38C59202D586")!, name: "Clean up text", input: .document,
+            steps: [Step(kind: .removeMatchingLines, find: #"(?i)^[ \t]*(?:Ingredients|Cups|Metric|Garnish[ \t]*\(optional\))[ \t]*$"#), Step(kind: .keepMarkedListRows), Step(kind: .removeMarkdownHeadings), Step(kind: .removeListMarkers),
+                    Step(kind: .removeMarkdownFormatting), Step(kind: .removeCheckboxMarkers),
+                    Step(kind: .removeNoteReferences), Step(kind: .removeBlankLines)],
+            output: .editor, previewBeforeApply: false, pinToToolbar: true)
+    }
+    static var remindersExample: AutomationDefinition {
+        AutomationDefinition(id: UUID(uuidString: "AE932D35-4371-4D64-9091-95780DCD2441")!, name: "Add to Reminders", input: .document,
+            steps: [Step(kind: .removeBlankLines)], output: .reminders,
+            previewBeforeApply: false, pinToToolbar: true)
     }
     func validate() throws {
         guard version == 1 else { throw AutomationError.invalid("Unsupported workflow version \(version).") }
@@ -37,13 +50,19 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         }
         for step in steps {
             switch step.kind {
+            case .removeMatchingLines:
+                guard let pattern = step.find, !pattern.isEmpty, pattern.count <= 500, step.replacement == nil else {
+                    throw AutomationError.invalid("removeMatchingLines requires a nonempty regex find (up to 500 characters) and no replacement.")
+                }
+                do { _ = try NSRegularExpression(pattern: pattern) }
+                catch { throw AutomationError.invalid("Invalid removeMatchingLines regex: \(error.localizedDescription)") }
             case .replaceLiteral:
                 guard let find = step.find, !find.isEmpty, step.replacement != nil else {
                     throw AutomationError.invalid("replaceLiteral requires a nonempty find and a replacement string.")
                 }
             default:
                 guard step.find == nil, step.replacement == nil else {
-                    throw AutomationError.invalid("Only replaceLiteral accepts find/replacement parameters.")
+                    throw AutomationError.invalid("Only replaceLiteral accepts find/replacement; removeMatchingLines accepts find only.")
                 }
             }
         }
@@ -51,8 +70,34 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
     func transform(_ input: String) throws -> String {
         try validate()
         var result = input
+        var regexTimeRemaining: TimeInterval = 0.1
         for step in steps {
             switch step.kind {
+            case .removeMatchingLines:
+                let regex = try NSRegularExpression(pattern: step.find!)
+                var timedOut = false
+                result = Self.mapLines(result) { line in
+                    guard !timedOut else { return line }
+                    let range = NSRange(line.startIndex..., in: line)
+                    let started = ProcessInfo.processInfo.systemUptime
+                    var matched = false
+                    regex.enumerateMatches(in: line, options: [.reportProgress], range: range) { match, _, stop in
+                        if ProcessInfo.processInfo.systemUptime - started > regexTimeRemaining {
+                            timedOut = true; stop.pointee = true; return
+                        }
+                        if let match {
+                            // Whole-line matches only: a keyword inside an ingredient cannot erase it.
+                            matched = match.range == range
+                            stop.pointee = true
+                        }
+                    }
+                    regexTimeRemaining -= ProcessInfo.processInfo.systemUptime - started
+                    if regexTimeRemaining <= 0 { timedOut = true }
+                    return matched ? "" : line
+                }
+                guard !timedOut else {
+                    throw AutomationError.invalid("The line-matching pattern exceeded its time limit. Nothing was changed. Simplify the removeMatchingLines regex or use literal replacement steps.")
+                }
             case .replaceLiteral:
                 result = result.replacingOccurrences(of: step.find!, with: step.replacement!)
             case .removeListMarkers:
@@ -61,6 +106,37 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
                     // Strip only an explicit bullet followed by whitespace, preserving other text.
                     line.replacingOccurrences(of: "^[\\t ]*[-*•][\\t ]+", with: "", options: .regularExpression)
                 }
+            case .keepMarkedListRows:
+                let parts = try Self.lines(result)
+                let marked = parts.lines.filter { line in
+                    line.range(of: #"^[ \t]*(?:[-*•][ \t]+|(?:\*{1,3}|_{1,3})?(?:[▢☐☑☒□]|\[[ xX]\](?:[ \t]+|$)))"#, options: .regularExpression) != nil
+                }
+                // Markers distinguish list data, but cannot establish that an unmarked
+                // ingredient/continuation is a heading. Fail before changing the document.
+                if !marked.isEmpty {
+                    for (index, line) in parts.lines.enumerated() {
+                        if marked.contains(line) || line.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+                        let heading = line.range(of: #"^[ \t]{0,3}#{1,6}(?:[ \t]+|$)"#, options: .regularExpression) != nil
+                        let colonLabel = line.range(of: #"^[ \t]*[\p{L}][^:]*:[ \t]*$"#, options: .regularExpression) != nil
+                        guard heading || colonLabel else {
+                            throw AutomationError.invalid("Line \(index + 1) has no list marker: ‘\(line.prefix(100))’. Nothing was changed. If it is a heading, prefix it with # and a space; if it is an item or continuation, add a bullet. Or remove keepMarkedListRows from this automation to preserve all lines.")
+                        }
+                    }
+                    result = marked.joined(separator: parts.eol) + (parts.trailing ? parts.eol : "")
+                }
+            case .removeMarkdownHeadings:
+                result = Self.mapLines(result) { line in
+                    // ATX headings only. A hashtag or an ordinary ingredient is not a heading.
+                    line.range(of: #"^[ \t]{0,3}#{1,6}(?:[ \t]+|$)"#, options: .regularExpression) == nil ? line : ""
+                }
+            case .removeMarkdownFormatting:
+                result = Self.mapLines(result, Self.removeInlineMarkdown)
+            case .removeCheckboxMarkers:
+                result = Self.mapLines(result) { line in
+                    line.replacingOccurrences(of: #"^[ \t]*(?:[▢☐☑☒□][ \t]*|\[[ xX]\](?:[ \t]+|$))"#, with: "", options: .regularExpression)
+                }
+            case .removeNoteReferences:
+                result = Self.mapLines(result, Self.removeNotes)
             case .removeBlankLines, .sortLines, .deduplicateLines:
                 let parts = try Self.lines(result)
                 var body = parts.lines
@@ -73,6 +149,67 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
             }
         }
         return result
+    }
+    private static func removeInlineMarkdown(_ line: String) -> String {
+        var result = inlineLinksToLabels(line)
+        // Deliberately bounded inline syntax, not a Markdown renderer. Pair delimiters
+        // before unescaping so escaped literal stars/underscores are not mistaken for markup.
+        let pairs: [(String,String)] = [
+            (#"(?<!\\)\*\*(?=\S)(.+?)(?<=\S)(?<!\\)\*\*"#, "$1"),
+            (#"(?<![\\\w])__(?=\S)(.+?)(?<=\S)(?<!\\)__(?!\w)"#, "$1"),
+            (#"(?<![\\*])\*(?=\S)(.+?)(?<=\S)(?<!\\)\*(?!\*)"#, "$1"),
+            (#"(?<![\\\w])_(?=\S)(.+?)(?<=\S)(?<!\\)_(?!\w)"#, "$1"),
+            (#"(?<!\\)`([^`]+)`"#, "$1")
+        ]
+        // Two passes handle common nesting while bounding runtime; unmatched markers stay data.
+        for _ in 0..<2 {
+            for (pattern,replacement) in pairs {
+                result = result.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
+            }
+        }
+        result = result.replacingOccurrences(of: #"\\([\\*`_\[\]])"#, with: "$1", options: .regularExpression)
+        if result != line {
+            // Delimiter padding in copied Markdown can leave a space before a comma.
+            result = result.replacingOccurrences(of: #"[ \t]+(?=[,;])"#, with: "", options: .regularExpression)
+        }
+        return result
+    }
+    private static func inlineLinksToLabels(_ line: String) -> String {
+        // Scan balanced labels/destinations instead of greedily deleting ingredient parentheses.
+        // Links are never opened or fetched. Malformed/reference-style links remain unchanged.
+        let chars = Array(line); var out = ""; var index = 0
+        while index < chars.count {
+            if chars[index] == "\\", index + 1 < chars.count {
+                out.append(chars[index]);out.append(chars[index+1]);index += 2;continue
+            }
+            guard chars[index] == "[" else {out.append(chars[index]);index += 1;continue}
+            var close = index + 1, depth = 1
+            while close < chars.count && depth > 0 {
+                if chars[close] == "\\", close + 1 < chars.count {close += 2;continue}
+                if chars[close] == "[" {depth += 1}
+                if chars[close] == "]" {depth -= 1}
+                if depth > 0 {close += 1}
+            }
+            guard depth == 0, close + 1 < chars.count, chars[close+1] == "(" else {out.append(chars[index]);index += 1;continue}
+            var end = close + 2; depth = 1
+            while end < chars.count && depth > 0 {
+                if chars[end] == "\\", end + 1 < chars.count {end += 2;continue}
+                if chars[end] == "(" {depth += 1}
+                if chars[end] == ")" {depth -= 1}
+                if depth > 0 {end += 1}
+            }
+            guard depth == 0 else {out.append(chars[index]);index += 1;continue}
+            out += String(chars[(index+1)..<close]);index = end + 1
+        }
+        return out
+    }
+    private static func removeNotes(_ line: String) -> String {
+        // Remove explicit Note N references only, keeping other parenthetical options.
+        let note = #"(?:see[ \t]+)?Notes?[ \t]+[0-9]+(?:[ \t]*(?:,|and|–|-)[ \t]*[0-9]+)*"#
+        var result = line.replacingOccurrences(of: #"(?i)[\(\[][ \t]*"# + note + #"[ \t]*[\)\]]"#, with: "", options: .regularExpression)
+        result = result.replacingOccurrences(of: #"(?i)[,;][ \t]*"# + note + #"\b"#, with: "", options: .regularExpression)
+        result = result.replacingOccurrences(of: #"(?i)\b"# + note + #"\b"#, with: "", options: .regularExpression)
+        return result.trimmingCharacters(in: .whitespaces)
     }
     private static func lines(_ text: String) throws -> (lines: [String], eol: String, trailing: Bool) {
         let eol = text.contains("\r\n") ? "\r\n" : (text.contains("\r") && !text.contains("\n") ? "\r" : "\n")

@@ -1,28 +1,35 @@
 {
   "schema_version": 1,
-  "recorded_at_utc": "2026-11-14T15:46:56.460874+00:00",
-  "status": "INCOMPLETE PREVIEW; source-frozen evidence snapshot",
+  "recorded_at_utc": "2026-11-14T19:51:42.918884+00:00",
+  "status": "INCOMPLETE PREVIEW; incremental observed behaviors, final candidate validation external",
   "full_parity_claim": false,
-  "baseline_commit": "61246e5741fd7c59352f3feb5ccc7e33e4594d15",
   "ci": {
     "repository": "https://github.com/funkymonkeyjam/TextTank",
     "pull_request": "https://github.com/funkymonkeyjam/TextTank/pull/1",
     "exact_candidate_status_record": "output/review/validation.json",
     "limit": "No final-candidate CI outcome is inferred from earlier passing runs."
   },
-  "source_hash_binding": "The final observed local build/test completed with exit 0. Every Sources/Tests/scripts entry in harness/logs/test-source-manifest.json was checked against the frozen files and matched. This ledger retains source/log fingerprints; the external validation sidecar binds the committed delivered candidate, packaging and exact-SHA CI. Changing a source hash requires affected checks to be refreshed.",
+  "source_hash_binding": "Hashes below identify files inspected for this incremental checkpoint, not a final packaged commit. Final source/test consistency, artifact hashes and exact-SHA CI belong to output/review/validation.json; no earlier run certifies later edits.",
   "source_snapshot": [
     {
-      "path": "Sources/EditorBridge/TTEditor.h",
-      "sha256": "0e1d319a21d72b36c8754925820ce74b923222a1f00ffd944550bb5475fb0739"
+      "path": "Dependencies.lock.json",
+      "sha256": "e81c2b107a3b7b93a72bd89258b025d44be7edb6bc50db04a15e4655c8ef282a"
     },
     {
-      "path": "Sources/EditorBridge/TTEditor.mm",
-      "sha256": "7e02b69418b33ccd3ec9d487c0b80e365e1a2e4e95310acce2a1989e7868a833"
+      "path": "Resources/TextTank.icns",
+      "sha256": "ad63b96ce98fbac1d6acb0c4156323c16b76f0cd061aee8e7341a204ce7ea3c9"
     },
     {
-      "path": "Sources/TextTankApp/App.swift",
-      "sha256": "1fd44b1b5f9641cd6e2feab5ca519af4ab11901d53c57f1f9fd50100a0e68525"
+      "path": "Sources/Automations/AutomationController.swift",
+      "sha256": "ba9ce687ce161fcc9d598e99e1c0f69222c1a168ee740e0fe8aa8f11563f330b"
+    },
+    {
+      "path": "Sources/Automations/AutomationCore.swift",
+      "sha256": "9de8a141b5ba7bae916e439ce1d7ef2cf1d70a4b9bede9edb37b8371bec20169"
+    },
+    {
+      "path": "Sources/Connectors/RemindersConnector.swift",
+      "sha256": "01d2d064fcbf6de5e35d5ca1b080f7c35c01445d117f1ebf057b8e980022dcaa"
     },
     {
       "path": "Sources/Documents/FileCodec.swift",
@@ -33,80 +40,88 @@
       "sha256": "44ea8c0afac95dcbd85b458da695b3d074240c9b07ccb691a29885feee93b1da"
     },
     {
-      "path": "Sources/Automations/AutomationCore.swift",
-      "sha256": "e19d1d8c8f5e52940921fbb6bbed5747315cb475039c215edf859db2a5a279f0"
+      "path": "Sources/EditorBridge/TTEditor.h",
+      "sha256": "40778a5b1c415e6d8f213dbdfeb0a367767bb4fdfc0a668b2e0187c6f1edb095"
     },
     {
-      "path": "Sources/Automations/AutomationController.swift",
-      "sha256": "fac0f7da87b72a5e586009d67555d1986693fe23ef3da8f803cdd8602e3780d9"
-    },
-    {
-      "path": "Sources/Connectors/RemindersConnector.swift",
-      "sha256": "9365343a4b2041d79fff12aa1e52982ea4d51b3855d1d149667f2a4e1b295ba2"
-    },
-    {
-      "path": "Sources/Macros/MacroCore.swift",
-      "sha256": "1757f6b41b31715679d7e1b8cc88b3fe45c08af19a17407a80cb3432b24c8d99"
+      "path": "Sources/EditorBridge/TTEditor.mm",
+      "sha256": "a1139068d09a604acff2fcd89e768c6cd88d3fbfda118215f018e9147d52c0ac"
     },
     {
       "path": "Sources/Macros/MacroController.swift",
       "sha256": "4600bae686da8f043e42af5e0eca71633c438e35ca9fcff044f7ec5a5e7d8b26"
     },
     {
-      "path": "Tests/FileChecks.swift",
-      "sha256": "4072af7ebf2c56b56bf723e70249102c9249a748b702f24d2daaa5b8257341e7"
+      "path": "Sources/Macros/MacroCore.swift",
+      "sha256": "1757f6b41b31715679d7e1b8cc88b3fe45c08af19a17407a80cb3432b24c8d99"
     },
     {
-      "path": "Tests/BridgeChecks.mm",
-      "sha256": "7dcc399169e7d778afb735a8debfdbe12f5b69381d13ea4a22b88a01a068cf36"
+      "path": "Sources/TextTankApp/App.swift",
+      "sha256": "01971c830ba4a2b39906cc597fee44bfc37a1a5c9737185057ad95965f9fedaa"
     },
     {
-      "path": "Tests/DocumentChecks.swift",
-      "sha256": "af9702036d2e0bc40f23d26568eb39c8b5a92837973bd6e0c24747693472ed40"
+      "path": "Sources/Workspace/WorkspaceController.swift",
+      "sha256": "98aafb55ee85f387cbd0d260e0b8a718744a084c0b54c404bd1f54668c2b0cd9"
+    },
+    {
+      "path": "Sources/Workspace/WorkspaceCore.swift",
+      "sha256": "7d1a60f01e78821c8d195bb1e4734b67b073c769351f567f2bf7c168b6bcb73c"
     },
     {
       "path": "Tests/AutomationChecks.swift",
-      "sha256": "e4bf6d10218c52b752e968557f7e0bbaf2b34898576d938fea123a5a60dc4665"
+      "sha256": "e87dbae57b755993b5b4d9abfa270cc7e1651e49482d468149ceb599a0f50f88"
     },
     {
-      "path": "Tests/ReminderChecks.swift",
-      "sha256": "40f5c0360f14294dfda002ca83a7490037fcfc825274f80fa362f573aa69b0da"
+      "path": "Tests/AutomationControllerChecks.swift",
+      "sha256": "450915245b36954a22cb01df372ec7c38569c1c3a655492c856ae031165a6b8c"
+    },
+    {
+      "path": "Tests/BridgeChecks.mm",
+      "sha256": "4208d9ff6b3744c3b0985a1aeff6b8ebb280f675883ab26a6d100fa31dbcb57a"
+    },
+    {
+      "path": "Tests/DocumentChecks.swift",
+      "sha256": "612cd5e280659ab9e9215e2adb65570d1728679a0bf51a3c22e8ad9b2559115a"
+    },
+    {
+      "path": "Tests/FileChecks.swift",
+      "sha256": "4072af7ebf2c56b56bf723e70249102c9249a748b702f24d2daaa5b8257341e7"
     },
     {
       "path": "Tests/MacroChecks.swift",
       "sha256": "4560cb18af4de25338dfdc7f7ca433695fe05f34bf0de1f5228ee6bd237aaf52"
     },
     {
-      "path": "scripts/build.sh",
-      "sha256": "c8357a4c84ce58fee9a1415285bab099c3d9ebec5d71be78fbedf59aab1cd9e3"
+      "path": "Tests/ReminderChecks.swift",
+      "sha256": "cf437aadc970a1ce8ca8d2c445bac82a78960899cad8889b24f8f78e97ecd701"
     },
     {
-      "path": "scripts/test.sh",
-      "sha256": "870cd589658903e8742bbda3e8e1e40d7a8f6c7d6ded7fc6da38443819616a9f"
-    },
-    {
-      "path": "scripts/test-documents.sh",
-      "sha256": "69461a7e591d2b5a2c7eb6b7c5cf9fc42d3db3c73767545f4b1808eef165054b"
+      "path": "Tests/WorkspaceChecks.swift",
+      "sha256": "238ce173f13c09d83ec4f1f71662cd2e351687964440af9d55d5edd766f94cde"
     },
     {
       "path": "scripts/build-icon.swift",
       "sha256": "c8d2a64f6983c464dbea35328639fc101f5f2cfd3afdcfe27256c86ec3281f3f"
     },
     {
-      "path": "Resources/TextTank.icns",
-      "sha256": "ad63b96ce98fbac1d6acb0c4156323c16b76f0cd061aee8e7341a204ce7ea3c9"
+      "path": "scripts/build.sh",
+      "sha256": "64c741aff604e88fd8bdde9248ced902b6897de3905a79e5b823311dac397e28"
     },
     {
-      "path": "Dependencies.lock.json",
-      "sha256": "e81c2b107a3b7b93a72bd89258b025d44be7edb6bc50db04a15e4655c8ef282a"
+      "path": "scripts/package-review.sh",
+      "sha256": "ebf03624e2ae717e3ea0936de917e0e50ae49fdc01f78b788ed4ded87ffe5676"
+    },
+    {
+      "path": "scripts/test-documents.sh",
+      "sha256": "f769128de1217fa49c4e06e8fa18d4ddf23ee22a2e5227cce4ac53ce245eaca0"
     },
     {
       "path": "scripts/test-macros.sh",
       "sha256": "11ab76556dbca99d9081174b759a8d75e2e3a905818e7e89b506f515c3da519a"
     },
     {
-      "path": "scripts/package-review.sh",
-      "sha256": "1735cbf8e78f32bfc407c9987af8b0f3020923efb83aaa5c24172e58f42e017c"
+      "path": "scripts/test.sh",
+      "sha256": "681044f9bea545d2feaf046156553ed192e5e1dc82cefc3a62f1623d4f386205"
     }
   ],
   "log_snapshot": [
@@ -116,19 +131,19 @@
     },
     {
       "path": "harness/logs/bridge-checks.log",
-      "sha256": "eb1b71ddccf43a0f6fa2dec1fba3ea6c696db8f6af2929b56f26b286cfbedb67"
+      "sha256": "2229112cc15c0daf164fe508a044ff2a80f5809ae9cdf3b93e23ff10f14c1278"
     },
     {
       "path": "harness/logs/document-checks.log",
-      "sha256": "d0053b5d552cf8c6c1195d7b42e71fa10fb3321a59eb8b142ed9b5d9e1cf1ada"
+      "sha256": "41454cd95027cdc078b8c99ef2865113e2c77d6eafa0d7890f453ff3598daa87"
     },
     {
       "path": "harness/logs/automation-checks.log",
-      "sha256": "891eebcc3dfac66fd9aee332e80384b6d4dfea58ba3c522a4d2ed7ac3f17563e"
+      "sha256": "12134a35cbe4c96e41832a95de8b69f6da9397c85ce2e65042a909db664377ce"
     },
     {
       "path": "harness/logs/reminder-checks.log",
-      "sha256": "1fe63a985b49001e309cb9f553c9f9691bbc21860412e15317fab6ad3d374865"
+      "sha256": "f04fb8586d3ce51d2de882b1da00fa6b2440b0236d751cb9e6e34fe4309c2465"
     },
     {
       "path": "harness/reviews/native-ui-observations.json",
@@ -152,21 +167,23 @@
     },
     {
       "path": "harness/logs/test-source-manifest.json",
-      "sha256": "97224a6ee5b5c9eaa2227116a8a5b099dfe17a6834bc34f2d6c7574de9c0298c"
+      "sha256": "8882ad0f15aed93cfec3ee581c8a08e0d98f38ca3d7a8084074376b606403bd5"
     },
     {
       "path": "harness/logs/app-build.log",
-      "sha256": "2051a6cdb5e8dafa6cc26f93c40f32e2ed5d6b2f3e3af5280be8c2ee0b33a775"
+      "sha256": "335fabf72e15482c16518c9feb916eff81bfb17982b121c1cc8bf2131af826d3"
     }
   ],
   "test_counts": {
     "FileChecks": 642,
-    "AutomationChecks": 17,
-    "ReminderChecks_fake_only": 33,
-    "BridgeChecks_pass_lines": 45,
-    "DocumentChecks": 49,
+    "AutomationChecks": 47,
+    "ReminderChecks_fake_only": 35,
+    "BridgeChecks_pass_lines": 54,
+    "DocumentChecks": 63,
     "MacroChecks_pure": 12,
-    "MacroChecks_native_conditional": 24
+    "MacroChecks_native_conditional": 24,
+    "AutomationControllerChecks_native": 30,
+    "WorkspaceChecks": 39
   },
   "observations": [
     {
@@ -244,7 +261,7 @@
       ],
       "closes_required_rows": false,
       "limits": [
-        "45 PASS assertions in current bridge log cover this and other bridge behaviors; full command variants/selection interactions remain open.",
+        "54 PASS assertions in current bridge log cover this and other bridge behaviors; full command variants/selection interactions remain open.",
         "Enumerating lexer factories does not verify all language keyword/style data or UDL."
       ]
     },
@@ -264,14 +281,14 @@
       ],
       "closes_required_rows": false,
       "limits": [
-        "49 assertions passed after repairs in the inspected log.",
+        "63 assertions passed after repairs in the inspected log.",
         "Shell native tests reported no physical NSScreen; native state/bitmap assertions are distinct from CUA onscreen observations.",
         "Clean-quit return policy is tested; physical process termination and full dirty Quit/Cancel UI remain unverified."
       ]
     },
     {
       "id": "automations.core",
-      "limited_behavior": "Stable ID rename/bindings, quantities/fractions/duplicates, literal replacement and schema/step validation.",
+      "limited_behavior": "Stable ID rename/bindings, quantities/fractions/duplicates, literal replacement and schema/step validation. Exact28-row Markdown and native-browser recipe fixtures; generic configured full-line regex,100ms cumulative regex budget, ambiguity rejection, optional direct apply and toolbar flags.",
       "observed_result": "pass",
       "evidence_type": "helper tests",
       "evidence_paths": [
@@ -286,7 +303,7 @@
       ],
       "closes_required_rows": false,
       "limits": [
-        "17 pure-core assertions; UI and destination integration not proved by helper tests."
+        "47 pure-core assertions; UI and destination integration not proved by helper tests."
       ]
     },
     {
@@ -327,7 +344,7 @@
       ],
       "closes_required_rows": false,
       "limits": [
-        "33 assertions use injected stores only. No real EventKit permission, personal list read or export occurred.",
+        "35 assertions use injected stores only. No real EventKit permission, personal list read or export occurred.",
         "Live end-to-end requires explicit consent and a designated writable test list."
       ]
     },
@@ -389,6 +406,70 @@
       "limits": [
         "Conventional square fallback; actual Dock/older-system appearance and newer Icon Composer variants unverified."
       ]
+    },
+    {
+      "id": "automations.recipe-direct",
+      "limited_behavior": "Native30 assertions; integrator CUA copied full open RecipeTin ingredient container through Chrome Control-C then native Control-V. One cleanup toolbar click yielded28 rows in same editor without preview. Separate send button and user-named native configuration observed.",
+      "observed_result": "pass",
+      "evidence_type": "native tests and integrator-reported CUA where stated",
+      "evidence_paths": [
+        "Tests/AutomationControllerChecks.swift",
+        "Tests/AutomationChecks.swift",
+        "harness/reviews/recipe-toolbar-review.md"
+      ],
+      "related_required_rows": [],
+      "closes_required_rows": false,
+      "limits": [
+        "One website observed only. Browser bookmark manager blocked by security; no workaround. No live EventKit access."
+      ]
+    },
+    {
+      "id": "documents.quit-crash-repair",
+      "limited_behavior": "Two .ips reports pinpoint detached document access from window-update observer; teardown callbacks/observer repair regression included in native63. Visible X, close Cancel and Undo observed.",
+      "observed_result": "pass",
+      "evidence_type": "native tests and integrator-reported CUA where stated",
+      "evidence_paths": [
+        "harness/reviews/quit-crash-2026-11-14.md",
+        "Tests/DocumentChecks.swift"
+      ],
+      "related_required_rows": [],
+      "closes_required_rows": false,
+      "limits": [
+        "Full physical quit Save/Discard/Cancel matrix not established."
+      ]
+    },
+    {
+      "id": "workspace.snapshot",
+      "limited_behavior": "Private snapshot save/load validates all documents, restores as new unsaved documents with text/format/selection/bookmarks/language and recovery, never overwrites originals. UI observed by integrator; native63 and core39 include coverage. FIFO hang found independently and repaired.",
+      "observed_result": "pass",
+      "evidence_type": "native tests and integrator-reported CUA where stated",
+      "evidence_paths": [
+        "Sources/Workspace/WorkspaceCore.swift",
+        "Sources/Workspace/WorkspaceController.swift",
+        "Tests/WorkspaceChecks.swift",
+        "Tests/DocumentChecks.swift",
+        "harness/reviews/session-review-2026-11-14.md"
+      ],
+      "related_required_rows": [],
+      "closes_required_rows": false,
+      "limits": [
+        "Not full session/tab/split-layout parity."
+      ]
+    },
+    {
+      "id": "documents.print-static",
+      "limited_behavior": "Native print operation creates monospaced static NSTextView from authoritative text; native63 includes representation checks.",
+      "observed_result": "pass",
+      "evidence_type": "native tests and integrator-reported CUA where stated",
+      "evidence_paths": [
+        "Sources/TextTankApp/App.swift",
+        "Tests/DocumentChecks.swift"
+      ],
+      "related_required_rows": [],
+      "closes_required_rows": false,
+      "limits": [
+        "No physical printer job, complete pagination or reference printing-option parity claim."
+      ]
     }
   ],
   "required_open_gaps": [
@@ -398,11 +479,11 @@
     "Boost-compatible regex/extended search and replacement captures/escapes/zero-width/Unicode, selection/open-document/folder/project scopes, find-all/count/mark results and cancellation.",
     "Full advanced selection/column edit, all sorting/case/whitespace/comment variants and preference-dependent behavior.",
     "Notepad++ UDL LexUser deltas, complete language styles/keywords/associations, completion/call tips, function-list parsers and theme settings.",
-    "Document map/list, folder/project workspaces, monitoring append/truncate/conflicts, printing/page setup and utility panels.",
+    "Document map/list, folder/project workspaces, monitoring append/truncate/conflicts, full printing/page setup options and utility panels.",
     "Full macro recordability, regex find/replace macros, run-until-end, cancellation/progress and native saved-macro menu validation.",
     "Preferences, arbitrary shortcut remapping/collisions, context-menu customization, localization and per-language defaults.",
     "Configured Run commands, native extension contract/sample, and required bundled mimeTools/NppConverter/NppExport Mac equivalents.",
-    "Automation ask-at-run parameters, broader typed actions, asynchronous progress/cancellation, multi-selection output, per-workflow toolbar pins and all trigger/output acceptance combinations.",
+    "Automation ask-at-run parameters, broader typed actions, asynchronous progress/cancellation, multi-selection output, all trigger/output acceptance combinations beyond the verified pinned recipe workflows.",
     "Live Reminders integration requires explicit consent and a dedicated writable scratch list; fake checks do not close native export.",
     "IME/dead keys, VoiceOver keyboard/accessibility, deterministic large-file/long-line/many-tab performance budgets, macOS14 runtime and Intel runtime.",
     "Clean-checkout final-candidate build, exact-SHA CI observation, candidate packaging hashes and final independent integrated review closure."
@@ -416,7 +497,11 @@
   "review_scope": {
     "records": [
       "harness/reviews/final-bridge-review.md",
-      "harness/reviews/final-files-review.md"
+      "harness/reviews/final-files-review.md",
+      "harness/reviews/recipe-toolbar-review.md",
+      "harness/reviews/quit-crash-2026-11-14.md",
+      "harness/reviews/session-review-2026-11-14.md",
+      "harness/reviews/integrated-native-review-2026-11-14.md"
     ],
     "disposition": "Substantiated scoped findings repaired and relevant regressions passed. No full-parity certification.",
     "independence_limit": "Reviewers challenged components authored by other workers, then repaired findings. Self-authored components and their repairs are identified as self-review; not an independent second audit."
@@ -430,15 +515,12 @@
   ],
   "tested_source_manifest": {
     "path": "harness/logs/test-source-manifest.json",
-    "sha256": "97224a6ee5b5c9eaa2227116a8a5b099dfe17a6834bc34f2d6c7574de9c0298c",
-    "files_checked": 27,
-    "all_current_hashes_match": true,
-    "note": "Manifest identifies the source tree used by the observed final local test run. Its historical base-commit/dirty fields are not the delivered candidate identity; use the delivery manifest and validation sidecar."
+    "status": "Historical until final candidate checks regenerate and validate it; this incremental ledger does not claim all current hashes match.",
+    "final_record": "output/review/validation.json"
   },
   "final_ui_recheck": {
-    "outcome": "blocked",
-    "observation": "Final native UI recheck returned cgWindowNotFound while Finder was targeted. No latest app process-exit verification was obtained.",
-    "evidence_path": "harness/reviews/native-ui-observations.json",
-    "effect": "Earlier observed CUA flows remain bounded evidence; this failed recheck does not certify final Quit, filename selection or modal routing behavior."
+    "outcome": "incremental flows observed; final candidate validation external",
+    "observation": "New recipe toolbar, dirty-close Cancel/Undo and dirty-quit Cancel followed by saved quit observed by integrator. Session restore tested in native harness. Prior Finder cgWindowNotFound is historical, not evidence that new flows failed. Full physical Quit matrix remains open.",
+    "candidate_record": "output/review/validation.json"
   }
 }

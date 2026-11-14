@@ -11,6 +11,8 @@ import Foundation
     }
     static func main() throws {
         var definition = AutomationDefinition.example
+        // This older generic bullet-only configuration intentionally keeps unmarked rows.
+        definition.steps = [.init(kind:.removeListMarkers),.init(kind:.removeBlankLines)]
         let input = "• 2 eggs\r\n\r\n- ½ cup flour\r\n* 1½ cups café\r\n1/2 tsp salt\r\n2–3 cloves garlic\r\n2 eggs\r\n2 eggs\r\n1. 5 cups\r\n"
         let expected = "2 eggs\r\n½ cup flour\r\n1½ cups café\r\n1/2 tsp salt\r\n2–3 cloves garlic\r\n2 eggs\r\n2 eggs\r\n1. 5 cups\r\n"
         try check(definition.transform(input) == expected, "quantities fractions ranges names duplicates CRLF preserved")
@@ -51,6 +53,56 @@ import Foundation
         var fileExport = definition; fileExport.steps = []; fileExport.input = .file; fileExport.output = .reminders
         let fileLibrary = try AutomationLibrary.decode(AutomationLibrary(workflows:[fileExport]).encoded())
         try check(fileLibrary.workflows[0].input == .file && fileLibrary.workflows[0].output == .reminders,"file and reminders definitions roundtrip without execution")
+        let fixtures=URL(fileURLWithPath:#filePath).deletingLastPathComponent().appendingPathComponent("Fixtures")
+        let recipe=try String(contentsOf:fixtures.appendingPathComponent("recipe-markdown-input.txt"),encoding:.utf8)
+        let cleaned=try String(contentsOf:fixtures.appendingPathComponent("recipe-cleaned-expected.txt"),encoding:.utf8)
+        let actual=try AutomationDefinition.example.transform(recipe)
+        try check(recipe.split(separator:"\n").filter {$0.hasPrefix("- ")}.count == 28,"independently count source28 ingredient rows")
+        try check(cleaned.split(separator:"\n").count == 28,"expected28 ingredient rows")
+        try check(actual == cleaned,"exact user Markdown recipe cleanup: \(actual.debugDescription)")
+        try check(AutomationDefinition.example.input == .document && AutomationDefinition.example.output == .editor,"cleanup targets current editor")
+        try check(AutomationDefinition.example.previewBeforeApply == false && AutomationDefinition.example.pinToToolbar == true,"direct cleanup button defaults")
+        try check(AutomationDefinition.remindersExample.output == .reminders && AutomationDefinition.remindersExample.id != AutomationDefinition.example.id,"separate reusable reminder output")
+        let noNewKeys = Data("{\"version\":1,\"workflows\":[{\"version\":1,\"id\":\"A931733F-310A-4EBF-9C48-38C59202D586\",\"name\":\"Old name\",\"input\":\"selection\",\"steps\":[],\"output\":\"editor\"}]}".utf8)
+        let legacy = try AutomationLibrary.decode(noNewKeys).workflows[0]
+        try check(legacy.previewBeforeApply == nil && legacy.pinToToolbar == nil,"old libraries remain decodable with flags absent")
+        var format=AutomationDefinition.example;format.steps=[.init(kind:.removeMarkdownFormatting)]
+        try check(format.transform("2 * 3 * 4, snake_case, **salt** and *pepper*") == "2 * 3 * 4, snake_case, salt and pepper","formatting preserves multiplication and intraword underscores")
+        try check(format.transform("[salt](https://example.invalid/a_(b)) (optional)") == "salt (optional)","balanced URL parentheses do not eat ingredient options")
+        try check(format.transform("[salt](broken") == "[salt](broken","malformed links retained")
+        try check(format.transform(#"\*literal\*"#) == "*literal*","escaped stars remain literal")
+        var notes=AutomationDefinition.example;notes.steps=[.init(kind:.removeNoteReferences)]
+        try check(notes.transform("1 cup flour (optional, Note 2) (finely sifted)") == "1 cup flour (optional) (finely sifted)","remove explicit note while preserving parenthetical options")
+        try check(notes.transform("1 notebook (optional) — 2 eggs") == "1 notebook (optional) — 2 eggs","ordinary note-like words unchanged")
+        var marks=AutomationDefinition.example;marks.steps=[.init(kind:.removeCheckboxMarkers)]
+        try check(marks.transform("▢2 eggs\n☐salt to taste\n[x] pepper\n[ ] ½ cup flour") == "2 eggs\nsalt to taste\npepper\n½ cup flour","checkbox glyphs and ASCII boxes independent of numeric content")
+        var filtered=AutomationDefinition.example;filtered.steps=[.init(kind:.keepMarkedListRows)]
+        try check(filtered.transform("Heading:\n\n▢salt to taste\n▢2 eggs\n") == "▢salt to taste\n▢2 eggs\n","explicit marked-row filter removes structural headers")
+        try check(filtered.transform("salt to taste\n2 eggs\n½ cup flour") == "salt to taste\n2 eggs\n½ cup flour","unmarked plain lists do not require checkboxes")
+        rejects("unmarked continuation never silently lost") { _ = try filtered.transform("• 2 eggs\nunmarked continuation\n") }
+        rejects("optional ingredient cannot be guessed as heading") { _ = try filtered.transform("Salt (optional)\n▢2 eggs\n") }
+        try check(filtered.transform("# Any heading\n▢salt\n") == "▢salt\n", "explicit Markdown heading accepted")
+        let plain = try String(contentsOf:fixtures.appendingPathComponent("recipe-plain-copy-derived.txt"),encoding:.utf8)
+        try check(AutomationDefinition.example.transform(plain) == cleaned.replacingOccurrences(of:"chopped\"",with:"chopped"), "configured optional heading removed from derived copy")
+        let explicit = plain.replacingOccurrences(of:"Garnish (optional)",with:"# Garnish (optional)")
+        try check(AutomationDefinition.example.transform(explicit) == cleaned.replacingOccurrences(of:"chopped\"",with:"chopped"), "plain copied28 rows retain quantities after explicit heading markup")
+        let native = try String(contentsOf:fixtures.appendingPathComponent("recipe-browser-plain-input.txt"),encoding:.utf8)
+        let nativeExpected = try String(contentsOf:fixtures.appendingPathComponent("recipe-browser-cleaned-expected.txt"),encoding:.utf8)
+        try check(AutomationDefinition.example.transform(native) == nativeExpected, "observed native browser copy cleans28 exactly: \(try AutomationDefinition.example.transform(native).debugDescription)")
+        try check(nativeExpected.split(separator:"\n").count == 28, "native expected28 ingredient rows")
+        rejects("unknown unmarked ingredient aborts entire transform") { _ = try AutomationDefinition.example.transform(native + "salt to taste\n") }
+        var matching = AutomationDefinition.example; matching.steps = [.init(kind:.removeMatchingLines,find:"Ingredients")]
+        try check(matching.transform("Ingredients\n2 cups Ingredients mix\n") == "\n2 cups Ingredients mix\n", "regex filter requires full-line match")
+        matching.steps = [.init(kind:.removeMatchingLines,find:"[")]
+        rejects("invalid heading regex") { try matching.validate() }
+        matching.steps = [.init(kind:.removeMatchingLines,find:"",replacement:"x")]
+        rejects("invalid heading parameters") { try matching.validate() }
+        var renamed = AutomationDefinition.example; renamed.name = "My chosen label"
+        try check(renamed.transform(native) == nativeExpected, "configured recipe behavior independent of user name")
+        matching.steps = [.init(kind:.removeMatchingLines,find:"(a+)+$")]
+        let regexStarted = ProcessInfo.processInfo.systemUptime
+        rejects("pathological regex interrupted before applying") { _ = try matching.transform(String(repeating:"a",count:32) + "!") }
+        try check(ProcessInfo.processInfo.systemUptime - regexStarted < 2, "regex timeout bounded below two seconds")
         print("PASS AutomationChecks: \(count) assertions (pure core; native UI and external outputs not covered)")
     }
 }

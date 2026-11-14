@@ -1,0 +1,7 @@
+# Recipe regression fixtures
+
+The supplied Markdown recipe contains 28 marked ingredient rows; its exact expected output preserves the trailing chat quote, quantities, options and duplicates. The browser plain input was captured by root from the native TextTank accessibility text after Chrome copy/paste; its independent expected output preserves copied spacing, quantities and options.
+
+The plain-copy-derived fixture is an approximation made from Markdown, not an observed clipboard. Delimiters, bullets and the chat trailing quote were removed, link labels retained and delimiter spaces before commas normalized.
+
+The cleanup preset contains a user-editable `removeMatchingLines` regex parameter for the exact whole-line recipe controls Ingredients, Cups, Metric and Garnish (optional). Behavior is selected by typed steps and saved parameters, never the automation name. Other unmarked nonblank rows in a marked list must be explicit Markdown or colon headings; unknown material rejects the operation before document editing, protecting unmarked ingredients and continuations. Entirely unmarked lists are retained. The default filter is intentionally recipe-oriented and can be removed or edited in configuration for other source text.

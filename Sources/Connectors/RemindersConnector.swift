@@ -95,7 +95,13 @@ enum ReminderConnectorError: Error, LocalizedError {
     private var busy = false
     init(storageURL: URL) { self.storageURL = storageURL; self.store = EventKitReminderStore() }
     init(storageURL: URL, store: ReminderStore) { self.storageURL = storageURL; self.store = store }
-    func requestAccess() async throws { try await store.requestAccess() }
+    func requestAccess() async throws {
+        switch store.permission {
+        case .authorized: return
+        case .notDetermined: try await store.requestAccess()
+        case .denied: throw ReminderConnectorError.permissionRequired
+        }
+    }
     func destinations() throws -> [ReminderDestination] {
         guard store.permission == .authorized else { throw ReminderConnectorError.permissionRequired }
         return try store.destinations()

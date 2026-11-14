@@ -24,3 +24,7 @@ swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -o bui
 build/tests/macro-checks | tee harness/logs/macro-checks.log
 
 scripts/test-macros.sh
+
+scripts/test-automation-ui.sh
+
+scripts/test-workspace.sh

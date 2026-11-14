@@ -10,5 +10,6 @@
     "Continue full required capability ledger; do not waive gaps"
   ],
   "evidence": "docs/REVIEW-ME.md",
-  "transport": "Shell network unavailable; GitHub connector commits preserve identical source tree with separate commit ancestry"
+  "transport": "Shell network unavailable; GitHub connector commits preserve identical source tree with separate commit ancestry",
+  "incremental_checkpoint": "Recipe28 direct cleanup, configured native toolbar workflows, detached-controller crash repair, snapshot sessions and static print view. Full parity incomplete; final candidate packaging and CI recorded externally."
 }

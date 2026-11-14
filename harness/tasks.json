@@ -184,9 +184,10 @@
     ],
     "suggested_role": "workspace",
     "acceptance": "Native functionality and failure paths, not panel placeholders",
-    "status": "planned",
+    "status": "partial",
     "owner": null,
-    "implementation_evidence": []
+    "implementation_evidence": [],
+    "progress": "Explicit private session snapshots restore unsaved documents; static print operation added. Native63/Workspace39 cover limited behaviors. Full workspace/session/monitoring/printing baseline remains required."
   },
   {
     "id": "T12",
@@ -231,7 +232,8 @@
     "implementation_evidence": [
       "docs/REVIEW-ME.md",
       "docs/parity/implementation-evidence.json"
-    ]
+    ],
+    "progress": "User-named pinned cleanup/send presets, direct same-editor recipe28 cleanup and one-step Undo verified; native30/core47. Fake Reminders35 only; live EventKit and complete automation baseline remain open."
   },
   {
     "id": "T15",
@@ -248,7 +250,8 @@
     "implementation_evidence": [
       "docs/REVIEW-ME.md",
       "docs/parity/implementation-evidence.json"
-    ]
+    ],
+    "progress": "User-named pinned cleanup/send presets, direct same-editor recipe28 cleanup and one-step Undo verified; native30/core47. Fake Reminders35 only; live EventKit and complete automation baseline remain open."
   },
   {
     "id": "T16",
@@ -265,7 +268,8 @@
     "implementation_evidence": [
       "docs/REVIEW-ME.md",
       "docs/parity/implementation-evidence.json"
-    ]
+    ],
+    "progress": "User-named pinned cleanup/send presets, direct same-editor recipe28 cleanup and one-step Undo verified; native30/core47. Fake Reminders35 only; live EventKit and complete automation baseline remain open."
   },
   {
     "id": "T17",
