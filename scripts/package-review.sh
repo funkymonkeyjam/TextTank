@@ -21,7 +21,7 @@ stage=pathlib.Path(tempfile.mkdtemp(prefix='.review-package-',dir=output))
 package=stage/'TextTank-review';package.mkdir();sources=package/'Source';sources.mkdir()
 app=root/'build/DerivedData/Build/Products/Debug/TextTank.app'
 if not app.is_dir():raise SystemExit('Built application is missing')
-subprocess.run(['ditto','--noqtn',str(app),str(package/'TextTank.app')],check=True)
+subprocess.run(['ditto','--norsrc','--noextattr','--noqtn',str(app),str(package/'TextTank.app')],check=True)
 subprocess.run(['codesign','--verify','--deep','--strict',str(package/'TextTank.app')],check=True)
 source_tar=sources/'TextTank-source.tar.gz'
 # gzip -n omits transient filename/timestamp headers. git archive contains tracked files only.
