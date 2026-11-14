@@ -137,9 +137,14 @@
     ],
     "suggested_role": "search",
     "acceptance": "Normal/extended/Boost-compatible semantics, replacement, all scopes, failure and cancellation tests",
-    "status": "planned",
-    "owner": null,
-    "implementation_evidence": []
+    "status": "partial",
+    "owner": "integrator",
+    "implementation_evidence": [
+      "Sources/Search",
+      "Tests/FolderSearchChecks.swift",
+      "Tests/FolderSearchControllerChecks.swift",
+      "harness/reviews/folder-search-review-2026-11-14.md"
+    ]
   },
   {
     "id": "T09",

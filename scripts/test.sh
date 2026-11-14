@@ -28,3 +28,5 @@ scripts/test-macros.sh
 scripts/test-automation-ui.sh
 
 scripts/test-workspace.sh
+
+scripts/test-folder-search.sh

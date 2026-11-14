@@ -9,7 +9,7 @@ swiftc -swift-version 5 -D TESTING -target arm64-apple-macos14.0 -module-cache-p
   -import-objc-header Sources/EditorBridge/TTEditor.h -F build/vendor/Debug \
   -framework Scintilla -framework Cocoa -framework EventKit -lc++ \
   -Xlinker -rpath -Xlinker "$PWD/build/vendor/Debug" \
-  Sources/Workspace/*.swift Sources/Macros/*.swift Sources/Documents/*.swift Sources/Automations/*.swift Sources/Connectors/*.swift Sources/TextTankApp/*.swift \
+  Sources/Search/*.swift Sources/Workspace/*.swift Sources/Macros/*.swift Sources/Documents/*.swift Sources/Automations/*.swift Sources/Connectors/*.swift Sources/TextTankApp/*.swift \
   Tests/DocumentChecks.swift build/tests/DocumentBridge.o Vendor/lexilla/bin/liblexilla.a \
   -o build/tests/document-checks
 build/tests/document-checks 2>&1 | tee harness/logs/document-checks.log

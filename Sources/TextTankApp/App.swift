@@ -18,6 +18,7 @@ struct TextTankMain {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let workspace = WorkspaceController()
+    lazy var folderSearch = FolderSearchController()
     lazy var macros = MacroController(editorProvider: { (NSApp.mainWindow?.windowController as? EditorWindowController)?.activeEditor })
     lazy var automations = AutomationController(editorProvider: { [weak self] in
         self?.macros.invalidateRecording(reason:"An automation was invoked during macro recording. Automation side effects are not recorded.")
@@ -82,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item(edit,label,nativeActions[id] ?? #selector(EditorWindowController.command(_:)),key,id)
         }
         let search = menu("Search"); item(search,"Find and Replace…",#selector(EditorWindowController.showFind(_:)),"f"); item(search,"Find Next",#selector(EditorWindowController.findNext(_:)),"g"); item(search,"Find Previous",#selector(EditorWindowController.findPrevious(_:)),"G")
+        let folderSearchItem=NSMenuItem(title:"Find in Folder…",action:#selector(FolderSearchController.showSearch(_:)),keyEquivalent:"F");folderSearchItem.target=folderSearch;search.addItem(folderSearchItem)
         let view = menu("View"); item(view,"Clone in Split View",#selector(EditorWindowController.clone(_:))); item(view,"Close Split View",#selector(EditorWindowController.closeSplit(_:))); item(view,"Wrap Lines",#selector(EditorWindowController.toggleWrap(_:))); item(view,"Zoom In",#selector(EditorWindowController.command(_:)),"+","zoomIn"); item(view,"Zoom Out",#selector(EditorWindowController.command(_:)),"-","zoomOut")
         for (label,id) in [("Move Line Up","moveLineUp"),("Move Line Down","moveLineDown"),("Join Selected Lines","joinLines"),("Trim Trailing Whitespace","trimTrailing"),("Toggle Overtype","toggleOvertype")] { item(edit,label,#selector(EditorWindowController.command(_:)),"",id) }
         for (label,id) in [("Fold All","foldAll"),("Unfold All","unfoldAll"),("Show Whitespace","showWhitespace"),("Show Line Endings","toggleEOL"),("Show Line Numbers","toggleLineNumbers")] { item(view,label,#selector(EditorWindowController.command(_:)),"",id) }

@@ -45,7 +45,7 @@ Packaging rebuilds the committed source, verifies local signatures, preserves an
 
 1. Create a document and paste `café · ½ cup · 👩🏽‍💻` plus several lines. Exercise typing, selection, Undo/Redo and Save. Use synthetic review files.
 2. Choose **View → Clone in Split View**. Edit either pane, Undo from the other, then close the split. The shared document should remain intact. The repaired viewport passed native tests and a CUA recheck showing both panes rendering Unicode text.
-3. Use **Search → Find and Replace** for literal text, then try line move/duplicate, braces, bookmarks, folding and whitespace controls. Regex and multi-file search are not implemented.
+3. Use **Search → Find and Replace** for literal text, then try line move/duplicate, braces, bookmarks, folding and whitespace controls. Use **Search → Find in Folder** for cancellable literal searches with extension filters and clickable results. Skipped files and limits are shown; stale results do not change selection. Reference-compatible regex and multi-file replacements remain open.
 4. Choose **Automations → Add Recipe Buttons** if your existing configuration has no recipe buttons. Give the two workflows your own names. Paste the full ingredient section, then click the cleanup toolbar button: it cleans the current editor directly, with one Undo. Click the separate Reminders button when ready to choose a list and Send. The saved step configuration controls behavior; the user-visible name never selects code. Advanced JSON supports editing steps, header regex, input/output, preview, shortcut and toolbar pin. Unknown unmarked content in a marked list aborts safely instead of dropping ingredients.
 5. In a scratch document choose **Macros → Start Recording**, type a short string, then **Stop Recording**. Play the last recording with a repeat count and Undo. Save it under your chosen name. Native capture and replay tests pass; this exact menu walkthrough has not yet been observed through CUA.
 
@@ -65,8 +65,12 @@ Reminders export requires explicit access, destination and Send choices, with du
 | DocumentChecks | 64 native assertions, including detached-controller crash regression, session restore/recovery and static print view |
 | WorkspaceChecks | 39 assertions, including private persistence and nonblocking FIFO rejection |
 | MacroChecks | 12 pure; 24 native assertions |
+| FolderSearchChecks | 38 assertions, Unicode offsets/filtering/limits/symlink/FIFO/cancellation |
+| FolderSearchControllerChecks | 11 native assertions, dirty-buffer and stale-result preservation |
 
 The integrator observed Chrome's open RecipeTin ingredient container selected and copied with Command-C, then pasted into native TextTank with Command-V. One cleanup click produced all 28 rows in the same editor, without a preview. Only this one site was observed. Browser bookmark-manager access was blocked by browser security; no workaround was attempted. Separate named cleanup/send toolbar buttons, native naming configuration, visible close control, dirty-close Cancel/Undo and dirty-quit Cancel followed by saved quit were observed. Earlier observations include Unicode shared-pane editing and forced restart recovery of two snapshots.
+
+Folder-search UI was observed finding five `panko` matches in five recipe fixtures, reporting the filtered README, and selecting the exact match after double-click. Cancellation is cooperative: a maximum-size decode may finish before stopping (roughly two seconds in the reviewed 32 MiB sample).
 
 Two concrete quit crash reports identified a detached document force-cast in a window-update observer. The controller teardown repair removes observers/callbacks and retains its editor safely; native lifecycle regression tests pass. See `harness/reviews/quit-crash-2026-11-14.md`. Full physical clean/dirty Quit Save/Discard/Cancel coverage remains open; absence of a new crash report alone does not prove process exit. Saved macro menu walkthrough, IME, VoiceOver and modal keyboard edge cases remain unverified.
 

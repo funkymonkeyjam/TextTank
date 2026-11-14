@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "recorded_at_utc": "2026-11-14T19:51:42.918884+00:00",
+  "recorded_at_utc": "2026-11-14T20:02:56.073367+00:00",
   "status": "INCOMPLETE PREVIEW; incremental observed behaviors, final candidate validation external",
   "full_parity_claim": false,
   "ci": {
@@ -57,7 +57,7 @@
     },
     {
       "path": "Sources/TextTankApp/App.swift",
-      "sha256": "01971c830ba4a2b39906cc597fee44bfc37a1a5c9737185057ad95965f9fedaa"
+      "sha256": "0f94ec10eb797f2381d5aa8932f7b5ca8e2f6277f334c026fbc8a11482a5d9bc"
     },
     {
       "path": "Sources/Workspace/WorkspaceController.swift",
@@ -81,7 +81,7 @@
     },
     {
       "path": "Tests/DocumentChecks.swift",
-      "sha256": "612cd5e280659ab9e9215e2adb65570d1728679a0bf51a3c22e8ad9b2559115a"
+      "sha256": "2eae90c661d5be292649e63ec27d36f7be0fe90e615f049e44e56563472ed389"
     },
     {
       "path": "Tests/FileChecks.swift",
@@ -109,11 +109,11 @@
     },
     {
       "path": "scripts/package-review.sh",
-      "sha256": "ebf03624e2ae717e3ea0936de917e0e50ae49fdc01f78b788ed4ded87ffe5676"
+      "sha256": "1f6e9a26e225d075b24acdde5eb14c8ed86b080610af3718efb3d55cb086c9ed"
     },
     {
       "path": "scripts/test-documents.sh",
-      "sha256": "f769128de1217fa49c4e06e8fa18d4ddf23ee22a2e5227cce4ac53ce245eaca0"
+      "sha256": "8111310d0ce72c0cc8c587b834d7e0f6a56baa8116e5fc7dabb77bdd0d535dd0"
     },
     {
       "path": "scripts/test-macros.sh",
@@ -121,7 +121,27 @@
     },
     {
       "path": "scripts/test.sh",
-      "sha256": "681044f9bea545d2feaf046156553ed192e5e1dc82cefc3a62f1623d4f386205"
+      "sha256": "9116377371914dc50b8866f3ea8633d9856a30ef0188ee2442cdb98633ba88c2"
+    },
+    {
+      "path": "Sources/Search/FolderSearch.swift",
+      "sha256": "2e6f4c05ff7e1ca69315a9a39c8302ee060a58dacc8d2ebb0eedc18d9a5d7015"
+    },
+    {
+      "path": "Sources/Search/FolderSearchController.swift",
+      "sha256": "f487bed9289cccb9bfeefe98c09cd4ff999ae8000c616ad0b11e2fb78585d43e"
+    },
+    {
+      "path": "Tests/FolderSearchChecks.swift",
+      "sha256": "a0f983c3614051bc8304b04fd8c3dc9668faf8b7124359307aba7ed76184f50b"
+    },
+    {
+      "path": "Tests/FolderSearchControllerChecks.swift",
+      "sha256": "5df55ecb106a73e02400dcf8b9fd55464eb1e33560a5c71c3a9660af55a5b615"
+    },
+    {
+      "path": "scripts/test-folder-search.sh",
+      "sha256": "2ce2d2222f286bbf30acccf61b70ee55d08dacf27428f7d92bdbb21f3b14700a"
     }
   ],
   "log_snapshot": [
@@ -501,7 +521,8 @@
       "harness/reviews/recipe-toolbar-review.md",
       "harness/reviews/quit-crash-2026-11-14.md",
       "harness/reviews/session-review-2026-11-14.md",
-      "harness/reviews/integrated-native-review-2026-11-14.md"
+      "harness/reviews/integrated-native-review-2026-11-14.md",
+      "harness/reviews/folder-search-review-2026-11-14.md"
     ],
     "disposition": "Substantiated scoped findings repaired and relevant regressions passed. No full-parity certification.",
     "independence_limit": "Reviewers challenged components authored by other workers, then repaired findings. Self-authored components and their repairs are identified as self-review; not an independent second audit."
@@ -522,5 +543,13 @@
     "outcome": "incremental flows observed; final candidate validation external",
     "observation": "New recipe toolbar, dirty-close Cancel/Undo and dirty-quit Cancel followed by saved quit observed by integrator. Session restore tested in native harness. Prior Finder cgWindowNotFound is historical, not evidence that new flows failed. Full physical Quit matrix remains open.",
     "candidate_record": "output/review/validation.json"
+  },
+  "folder_search": {
+    "scope": "Literal only; regex/replacement/reference parity still required",
+    "core_assertions": 38,
+    "native_controller_assertions": 11,
+    "ui": "5 matches in5recipefiles;1extensionfiltered;doubleclickselectedexactpanko",
+    "cancellation": "cooperative;32MiBdecode observed about2seconds delay;worker offmain",
+    "review": "harness/reviews/folder-search-review-2026-11-14.md"
   }
 }
