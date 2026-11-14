@@ -17,7 +17,7 @@ TEXTTANK_PACKAGE_SHA="$candidate_sha" python3 - <<'PY'
 import datetime,hashlib,json,os,pathlib,shutil,subprocess,tarfile,tempfile,urllib.request
 root=pathlib.Path.cwd();sha=os.environ['TEXTTANK_PACKAGE_SHA']
 output=root/'output';output.mkdir(exist_ok=True)
-stage=pathlib.Path(tempfile.mkdtemp(prefix='.review-package-',dir=output))
+stage=pathlib.Path(tempfile.mkdtemp(prefix='TextTank-review-package-'))
 package=stage/'TextTank-review';package.mkdir();sources=package/'Source';sources.mkdir()
 app=root/'build/DerivedData/Build/Products/Debug/TextTank.app'
 if not app.is_dir():raise SystemExit('Built application is missing')
@@ -68,7 +68,7 @@ def capture(*args):return subprocess.check_output(args,text=True).strip()
 manifest={'schema_version':1,'status':'INCOMPLETE PREVIEW','source_commit':sha,'built_from_clean_commit':True,'created_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'app_tree_sha256':tree_hash(package/'TextTank.app'),'app_tree_hash_algorithm':'Sorted relative paths: SHA256 of type byte F/L, NUL, UTF8 path, NUL, raw SHA256 file bytes or UTF8 symlink target, NUL; directories/xattrs excluded.','architecture':capture('lipo','-archs',str(package/'TextTank.app/Contents/MacOS/TextTank')),'host_macos':capture('sw_vers','-productVersion'),'xcode':capture('xcodebuild','-version'),'deployment_target':lock['deploymentTarget'],'signing':'local ad-hoc; codesign deep/strict verification passed; not notarized','dependencies':lock['dependencies'],'files':{str(p.relative_to(package)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(sources.iterdir())},'ci_status':'Not inferred by packaging. Consult the exact source-commit CI result.','limitations':'Not full Notepad++ parity; see REVIEW-ME.md. No Intel/older-macOS or live EventKit claim.'}
 (package/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 zipfile=stage/'TextTank-review.zip'
-subprocess.run(['ditto','-c','-k','--sequesterRsrc','--keepParent',str(package),str(zipfile)],check=True)
+subprocess.run(['ditto','-c','-k','--norsrc','--noextattr','--keepParent',str(package),str(zipfile)],check=True)
 zip_hash=hashlib.sha256(zipfile.read_bytes()).hexdigest()
 if capture('git','rev-parse','HEAD') != sha or capture('git','status','--porcelain','--untracked-files=normal'):
     raise SystemExit('Source changed during packaging; staged files were not delivered')
