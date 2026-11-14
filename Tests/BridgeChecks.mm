@@ -46,6 +46,28 @@ int main() {
         check([second.text isEqual:@"alpha β alpha"], "UTF-8 search range replacement preserves surrounding bytes");
         [second executeCommand:@"undo"];
         check([second.text isEqual:@"alpha 🦋 alpha"], "Selection transform undoes in one step");
+        second.text = @"a😀b café";
+        NSArray *ranges=@[@{@"anchor":@1,@"caret":@5},@{@"anchor":@13,@"caret":@7}];
+        // café ends at byte 12, not 13: reject before any selection mutation.
+        check(![second setSelectionRanges:ranges], "Invalid multi-selection rejected atomically");
+        ranges=@[@{@"anchor":@1,@"caret":@5},@{@"anchor":@12,@"caret":@7}];
+        check([second setSelectionRanges:ranges] && second.selectionCount==2, "Multiple Unicode byte selections set");
+        NSUInteger revision=second.revision;
+        check([second replaceSelections:@[@"β",@"tea"] expectedRevision:revision], "Atomic multi-selection replacement succeeds");
+        check([second.text isEqual:@"aβb tea"], "Multi-selection output preserves boundaries and order");
+        [second executeCommand:@"undo"];
+        check([second.text isEqual:@"a😀b café"], "Multi-selection replacement has one shared Undo");
+        check(![second replaceSelections:@[@"x",@"y"] expectedRevision:revision], "Stale multi-selection replacement rejected");
+        check(![second setSelectionRanges:@[@{@"anchor":@2,@"caret":@5}]], "Split UTF8 scalar selection rejected");
+        check(![second setSelectionRanges:@[@{@"anchor":@0,@"caret":@5},@{@"anchor":@1,@"caret":@5}]], "Overlapping ranges rejected");
+        second.readOnly=YES; revision=second.revision;
+        [second replaceSelection:@"forbidden"]; [second convertLineEndings:@"CRLF"];
+        check(second.revision==revision && [second.text isEqual:@"a😀b café"], "Read-only editing preserves bytes and revision");
+        second.readOnly=NO;second.text=@"a\r\nb\rc\n";[second resetUndoHistory];
+        [second convertLineEndings:@"LF"];
+        check([second.text isEqual:@"a\nb\nc\n"], "Mixed EOL conversion exact");
+        [second executeCommand:@"undo"];
+        check([second.text isEqual:@"a\r\nb\rc\n"], "EOL conversion single Undo preserves original mix");
         second.text = @"int value = 42; // comment\n";
         [second setLanguage:@"cpp"];
         ScintillaView *native = (ScintillaView *)second.subviews.firstObject;

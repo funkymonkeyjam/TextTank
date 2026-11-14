@@ -55,7 +55,7 @@ shutil.copyfile(root/'scripts/launch-review.sh',package/'Launch-TextTank.command
 review=(root/'docs/REVIEW-ME.md').read_text().replace('](parity/','](docs/parity/').replace('](../harness/','](harness/')
 (package/'REVIEW-ME.md').write_text(review)
 licenses=package/'Licenses';licenses.mkdir()
-for path in [root/'Resources/scintilla-License.txt',root/'Resources/lexilla-License.txt',root/'Resources/Brand/Inter-OFL.txt',root/'Resources/Brand/SpaceGrotesk-OFL.txt']:
+for path in [root/'Resources/scintilla-License.txt',root/'Resources/lexilla-License.txt',root/'Resources/boost-License.txt',root/'Resources/Brand/Inter-OFL.txt',root/'Resources/Brand/SpaceGrotesk-OFL.txt']:
     shutil.copyfile(path,licenses/path.name)
 def tree_hash(directory):
     digest=hashlib.sha256()
@@ -67,7 +67,7 @@ def tree_hash(directory):
         digest.update(kind+b'\0'+relative+b'\0'+value+b'\0')
     return digest.hexdigest()
 def capture(*args):return subprocess.check_output(args,text=True).strip()
-manifest={'schema_version':1,'status':'INCOMPLETE PREVIEW','source_commit':sha,'built_from_clean_commit':True,'created_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'app_tree_sha256':tree_hash(package/'TextTank.app'),'app_tree_hash_algorithm':'Sorted relative paths: SHA256 of type byte F/L, NUL, UTF8 path, NUL, raw SHA256 file bytes or UTF8 symlink target, NUL; directories/xattrs excluded.','architecture':capture('lipo','-archs',str(package/'TextTank.app/Contents/MacOS/TextTank')),'host_macos':capture('sw_vers','-productVersion'),'xcode':capture('xcodebuild','-version'),'deployment_target':lock['deploymentTarget'],'signing':'local ad-hoc; codesign deep/strict verification passed; not notarized','dependencies':lock['dependencies'],'files':{str(p.relative_to(package)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(sources.iterdir())},'ci_status':'Not inferred by packaging. Consult the exact source-commit CI result.','limitations':'Not full Notepad++ parity; see REVIEW-ME.md. No Intel/older-macOS or live EventKit claim.'}
+manifest={'schema_version':1,'status':'INCOMPLETE PREVIEW','source_commit':sha,'built_from_clean_commit':True,'created_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'app_tree_sha256':tree_hash(package/'TextTank.app'),'app_tree_hash_algorithm':'Sorted relative paths: SHA256 of type byte F/L, NUL, UTF8 path, NUL, raw SHA256 file bytes or UTF8 symlink target, NUL; directories/xattrs excluded.','architecture':capture('lipo','-archs',str(package/'TextTank.app/Contents/MacOS/TextTank')),'host_macos':capture('sw_vers','-productVersion'),'xcode':capture('xcodebuild','-version'),'deployment_target':lock['deploymentTarget'],'signing':'local ad-hoc; codesign deep/strict verification passed; not notarized','dependencies':lock['dependencies'],'files':{str(p.relative_to(package)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(sources.iterdir())},'ci_status':'Not inferred by packaging. Consult the exact source-commit CI result.','limitations':'Not full Notepad++ parity; see REVIEW-ME.md. No Intel/older-macOS runtime claim; live EventKit happy path is user-confirmed, remaining live failure/retry cases are unverified.'}
 (package/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 zipfile=stage/'TextTank-review.zip'
 subprocess.run(['ditto','-c','-k','--norsrc','--noextattr','--keepParent',str(package),str(zipfile)],check=True)

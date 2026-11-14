@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import Darwin
 
 struct AutomationDefinition: Codable, Equatable, Identifiable {
     enum Input: String, Codable { case selection, document, clipboard, file }
     enum Output: String, Codable { case editor, clipboard, newDocument, file, reminders }
     struct Step: Codable, Equatable {
-        enum Kind: String, Codable { case removeListMarkers, removeBlankLines, sortLines, deduplicateLines, replaceLiteral
+        enum Kind: String, Codable, CaseIterable { case removeListMarkers, removeBlankLines, sortLines, deduplicateLines, replaceLiteral
             case removeMatchingLines, removeMarkdownHeadings, removeMarkdownFormatting, removeCheckboxMarkers, removeNoteReferences, keepMarkedListRows }
         var kind: Kind
         var find: String?
         var replacement: String?
+        var askForFind: Bool?
+        var askForReplacement: Bool?
     }
     var version: Int = 1
     var id: UUID
@@ -49,6 +52,8 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
             }
         }
         for step in steps {
+            if step.askForFind == true && step.kind != .replaceLiteral && step.kind != .removeMatchingLines { throw AutomationError.invalid("This step does not accept a find parameter.") }
+            if step.askForReplacement == true && step.kind != .replaceLiteral { throw AutomationError.invalid("This step does not accept a replacement parameter.") }
             switch step.kind {
             case .removeMatchingLines:
                 guard let pattern = step.find, !pattern.isEmpty, pattern.count <= 500, step.replacement == nil else {
@@ -67,16 +72,34 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
             }
         }
     }
-    func transform(_ input: String) throws -> String {
+    /// Resolves only explicitly configured prompts. Cancelling any prompt cancels the whole run.
+    func resolvingParameters(_ ask: (Int, String, String) throws -> String?) throws -> AutomationDefinition? {
+        try validate()
+        var resolved = self
+        for index in steps.indices {
+            if steps[index].askForFind == true {
+                guard let value = try ask(index, "Find", steps[index].find ?? "") else { return nil }
+                resolved.steps[index].find = value
+            }
+            if steps[index].askForReplacement == true {
+                guard let value = try ask(index, "Replacement", steps[index].replacement ?? "") else { return nil }
+                resolved.steps[index].replacement = value
+            }
+        }
+        try resolved.validate()
+        return resolved
+    }
+    func transform(_ input: String, control: AutomationRunControl? = nil) throws -> String {
         try validate()
         var result = input
         var regexTimeRemaining: TimeInterval = 0.1
-        for step in steps {
+        for (index,step) in steps.enumerated() {
+            try control?.checkpoint(completed:index,total:steps.count)
             switch step.kind {
             case .removeMatchingLines:
                 let regex = try NSRegularExpression(pattern: step.find!)
                 var timedOut = false
-                result = Self.mapLines(result) { line in
+                result = try Self.mapLines(result, control:control) { line in
                     guard !timedOut else { return line }
                     let range = NSRange(line.startIndex..., in: line)
                     let started = ProcessInfo.processInfo.systemUptime
@@ -101,7 +124,7 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
             case .replaceLiteral:
                 result = result.replacingOccurrences(of: step.find!, with: step.replacement!)
             case .removeListMarkers:
-                result = Self.mapLines(result) { line in
+                result = try Self.mapLines(result, control:control) { line in
                     // No numeric prefixes: "2 eggs" and "1. 5 cups" may be quantities.
                     // Strip only an explicit bullet followed by whitespace, preserving other text.
                     line.replacingOccurrences(of: "^[\\t ]*[-*•][\\t ]+", with: "", options: .regularExpression)
@@ -125,18 +148,18 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
                     result = marked.joined(separator: parts.eol) + (parts.trailing ? parts.eol : "")
                 }
             case .removeMarkdownHeadings:
-                result = Self.mapLines(result) { line in
+                result = try Self.mapLines(result, control:control) { line in
                     // ATX headings only. A hashtag or an ordinary ingredient is not a heading.
                     line.range(of: #"^[ \t]{0,3}#{1,6}(?:[ \t]+|$)"#, options: .regularExpression) == nil ? line : ""
                 }
             case .removeMarkdownFormatting:
-                result = Self.mapLines(result, Self.removeInlineMarkdown)
+                result = try Self.mapLines(result, control:control, Self.removeInlineMarkdown)
             case .removeCheckboxMarkers:
-                result = Self.mapLines(result) { line in
+                result = try Self.mapLines(result, control:control) { line in
                     line.replacingOccurrences(of: #"^[ \t]*(?:[▢☐☑☒□][ \t]*|\[[ xX]\](?:[ \t]+|$))"#, with: "", options: .regularExpression)
                 }
             case .removeNoteReferences:
-                result = Self.mapLines(result, Self.removeNotes)
+                result = try Self.mapLines(result, control:control, Self.removeNotes)
             case .removeBlankLines, .sortLines, .deduplicateLines:
                 let parts = try Self.lines(result)
                 var body = parts.lines
@@ -148,6 +171,7 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
                 result = body.joined(separator: parts.eol) + (parts.trailing && !body.isEmpty ? parts.eol : "")
             }
         }
+        try control?.checkpoint(completed:steps.count,total:steps.count)
         return result
     }
     private static func removeInlineMarkdown(_ line: String) -> String {
@@ -222,10 +246,11 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         if trailing { lines.removeLast() }
         return (lines, eol, trailing)
     }
-    private static func mapLines(_ text: String, _ transform: (String)->String) -> String {
+    private static func mapLines(_ text: String, control: AutomationRunControl?, _ transform: (String)->String) throws -> String {
         // Preserve each exact separator, including mixed line endings.
         var output = "", line = ""
-        for scalar in text.unicodeScalars {
+        for (index,scalar) in text.unicodeScalars.enumerated() {
+            if index % 4096 == 0 { try control?.checkCancellation() }
             if scalar == "\r" || scalar == "\n" { output += transform(line); output.unicodeScalars.append(scalar); line = "" }
             else { line.unicodeScalars.append(scalar) }
         }
@@ -260,5 +285,37 @@ struct AutomationLibrary: Codable, Equatable {
     func encoded() throws -> Data {
         try validate(); let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(self)
+    }
+}
+
+/// Shared by the worker and native progress controls; no editor escapes onto the worker queue.
+final class AutomationRunControl: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    var onProgress: ((Int,Int)->Void)?
+    func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+    func checkCancellation() throws { lock.lock(); let value = cancelled; lock.unlock(); if value { throw AutomationError.invalid("Automation cancelled. Nothing was changed.") } }
+    func checkpoint(completed:Int,total:Int) throws { try checkCancellation(); onProgress?(completed,total) }
+}
+
+/// Explicit file inputs are bounded regular UTF-8 files, never pipes/devices or followed symlinks.
+enum AutomationFileInput {
+    static func read(_ url:URL, limit:Int = 32 * 1024 * 1024) throws -> String {
+        guard url.isFileURL else { throw AutomationError.invalid("Choose a local text file.") }
+        let descriptor = open(url.path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK)
+        guard descriptor >= 0 else { throw CocoaError(.fileReadNoPermission) }
+        defer { close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor,&info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= limit else { throw AutomationError.invalid("Automation input must be a regular file no larger than 32 MiB.") }
+        var data = Data(), chunk = [UInt8](repeating:0,count:65536)
+        while true {
+            let count = Darwin.read(descriptor,&chunk,chunk.count)
+            if count < 0 { if errno == EINTR { continue }; throw CocoaError(.fileReadUnknown) }
+            if count == 0 { break }
+            guard data.count <= limit - count else { throw AutomationError.invalid("Automation file input exceeds its size limit.") }
+            data.append(contentsOf:chunk.prefix(count))
+        }
+        guard let text = String(data:data,encoding:.utf8) else { throw AutomationError.invalid("Automation file input requires valid UTF-8. Open the file with its encoding first.") }
+        return text
     }
 }

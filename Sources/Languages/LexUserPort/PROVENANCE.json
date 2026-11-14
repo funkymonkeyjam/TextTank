@@ -1,0 +1,48 @@
+{
+  "source_commit": "61246e5741fd7c59352f3feb5ccc7e33e4594d15",
+  "license": "LexUser GPL-2.0-or-later, combined application GPL-3.0-or-later; original file notice retained",
+  "sources": [
+    {
+      "path": "lexilla/lexers/LexUser.cxx",
+      "sha256": "d96a2e1f3592610097481f505944854a553d3a11d4c0d49814014c0c7f4d14e7",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/lexilla/lexers/LexUser.cxx"
+    },
+    {
+      "path": "lexilla/include/SciLexer.h",
+      "sha256": "4fe1d3edcae4e50dc2d8df6037896bab3908b6dfe38728f51639b7b9cdc15b04",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/lexilla/include/SciLexer.h"
+    },
+    {
+      "path": "lexilla/lexlib/StyleContext.cxx",
+      "sha256": "7e8e0cfaed2413eb7e06ad94e12b633125c1108e0982836b0cd90915ef33d957",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/lexilla/lexlib/StyleContext.cxx"
+    },
+    {
+      "path": "lexilla/lexlib/WordList.h",
+      "sha256": "ea23ce1645ecbf5e3c3514d05d270946ae897c854dbff05a643e96ba05189e7e",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/lexilla/lexlib/WordList.h"
+    },
+    {
+      "path": "PowerEditor/src/ScintillaComponent/ScintillaEditView.cpp",
+      "sha256": "1330d3e6f1824a681b66fb20235d2cf1ff4c22898f616b36f6e832571db14304",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/ScintillaComponent/ScintillaEditView.cpp"
+    },
+    {
+      "path": "PowerEditor/src/ScintillaComponent/UserDefineDialog.h",
+      "sha256": "98c111041ca3e3e47951cea7e1aebe5ebc6ea4189da6ded0fcdd9e92d7013304",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/src/ScintillaComponent/UserDefineDialog.h"
+    }
+  ],
+  "native_changes": [
+    "Remove unused windows.h; replace decimal _itoa with bounded snprintf",
+    "Local WordList facade supplies StartAt/reordering without changing pinned dependency ABI",
+    "Port MatchIgnoreCase2 to local helper",
+    "Own 15 UDL keyword lists rather than indexing upstream 9-list LexerBase storage",
+    "Per-lexer generated cache identifiers replace pointer truncation; Release erases cache entries"
+  ],
+  "limitations": [
+    "Native semantic fixtures cover keywords, ignore-case, comments and delimiters; complete UDL feature matrix remains open",
+    "Case matching retains upstream byte-oriented behavior; Unicode case equivalence is not certified",
+    "Imported style RGB is retained; native dynamic semantic palette adapts light/dark; exact UDL colorStyle/font face/size parity remains open"
+  ]
+}

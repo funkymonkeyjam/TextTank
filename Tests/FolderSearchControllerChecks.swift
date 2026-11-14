@@ -24,9 +24,12 @@ import AppKit
         document.editor.text="🥑 changed";_ = document.editor.setSelectionAnchor(0,caret:4)
         check(!FolderSearchController.selectResult(match,in:document,query:"Test",matchCase:true) && document.editor.selectionAnchor==0 && document.editor.selectionCaret==4,"stale result leaves native selection unchanged")
         let controller=FolderSearchController()
-        check(controller.window?.title=="Find in Folder — Literal Search" && controller.status.stringValue.contains("Literal search"),"native title and status state literal-only scope")
+        check(controller.window?.title=="Find in Folder" && controller.status.stringValue.contains("Boost regex"),"native title and status expose search modes")
         check(controller.table.tableColumns.count==3 && controller.details.isSelectable,"native results and skip details selectable")
         controller.windowWillClose(Notification(name:NSWindow.willCloseNotification))
+        controller.retainReplacementOutcomes([FolderReplacementOutcome(url:url,status:.replaced,message:"committed before close",backup:URL(fileURLWithPath:"/tmp/review-backup"),recoveryReport:URL(fileURLWithPath:"/tmp/review-backup.json"))])
+        controller.showReplacementReport(nil)
+        check(controller.lastReplacementOutcomes.count==1 && controller.details.string.contains("committed before close") && controller.details.string.contains("review-backup.json"),"replacement completion retained after close with durable report path")
         document.close()
         print("PASS FolderSearchControllerChecks: \(checks) assertions")
     }

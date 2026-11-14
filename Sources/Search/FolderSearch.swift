@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import Darwin
+import CryptoKit
 
 struct SearchSpan: Equatable, Codable, Sendable {
     let location:Int
@@ -10,6 +11,9 @@ struct FolderSearchRequest: Sendable {
     let directory:URL
     let query:String
     var matchCase=true
+    var mode:SearchOptions.Mode = .normal
+    var wholeWord=false
+    var dotMatchesNewline=false
     var recursive=true
     var includeHidden=false
     /// Exact filename extensions, without dots; empty searches all regular files.
@@ -32,6 +36,7 @@ struct FolderSearchMatch: Equatable, Sendable {
     let preview:String
     let previewMatchRange:SearchSpan
     let isMatchTruncatedInPreview:Bool
+    var sourceSHA256:String?=nil
 }
 enum FolderSearchSkipReason: Equatable, Sendable {
     case symbolicLink, hidden, nonRecursiveDirectory, extensionFiltered, notRegularFile, fileTooLarge
@@ -68,7 +73,8 @@ struct FolderSearchProgress: Sendable {
 final class FolderSearchCancellation: @unchecked Sendable {
     private let lock=NSLock()
     private var cancelled=false
-    func cancel(){lock.lock();cancelled=true;lock.unlock()}
+    let engineToken=TTSearchCancellation()
+    func cancel(){lock.lock();cancelled=true;lock.unlock();engineToken.cancel()}
     var isCancelled:Bool{lock.lock();defer{lock.unlock()};return cancelled}
 }
 enum FolderSearchError: LocalizedError {
@@ -76,8 +82,8 @@ enum FolderSearchError: LocalizedError {
     var errorDescription:String? { switch self {case .invalidRequest(let reason):return reason} }
 }
 
-/// Read-only literal search. This does not implement Boost/Notepad++ regex semantics,
-/// replacement, glob syntax, word boundaries or automatic legacy-encoding guessing.
+/// Read-only normal, extended and Boost snapshot search. Disk replacement and glob
+/// syntax are separate capabilities; no automatic legacy-encoding guessing.
 /// Foundation case-insensitive literal matching is explicitly a Mac behavior here.
 /// Cancellation is cooperative between bounded reads and during scalar mapping;
 /// FileCodec decode and Foundation literal matching finish their current operation
@@ -90,7 +96,7 @@ enum FolderSearch {
         return try await withTaskCancellationHandler(operation:{try await work.value},onCancel:{cancellation.cancel()})
     }
     private static func validate(_ request:FolderSearchRequest)throws {
-        guard request.directory.isFileURL,(request.directory.host ?? "").isEmpty || request.directory.host == "localhost",!request.directory.path.contains("\0"),!request.query.isEmpty else {throw FolderSearchError.invalidRequest("Choose a local directory and nonempty literal search text.")}
+        guard request.directory.isFileURL,(request.directory.host ?? "").isEmpty || request.directory.host == "localhost",!request.directory.path.contains("\0"),!request.query.isEmpty else {throw FolderSearchError.invalidRequest("Choose a local directory and nonempty search expression.")}
         guard request.maximumFiles>0,request.maximumEntries>0,request.maximumFileBytes>0,request.maximumTotalBytes>0,request.maximumResults>0,(16...8192).contains(request.previewUTF16Length) else {throw FolderSearchError.invalidRequest("Search limits must be positive and preview length must be 16–8192 UTF-16 units.")}
         guard request.extensions.allSatisfy({!$0.isEmpty && !$0.contains("/") && !$0.contains("\\") && !$0.contains("\0") && !$0.contains(".")}) else {throw FolderSearchError.invalidRequest("Extension filters must be exact extensions without dots or path separators.")}
     }
@@ -142,21 +148,22 @@ enum FolderSearch {
             do{decoded=try FileCodec.decode(bytes)}catch{report.skipped.append(.init(url:url,reason:.invalidEncoding(error.localizedDescription)));continue}
             if cancellation.isCancelled{report.wasCancelled=true;break}
             report.filesSearched+=1
+            let fingerprint=SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined()
             let text=decoded.text as NSString
             var cursor=UTFPositionCursor(decoded.text)
-            var offset=0
-            let options:NSString.CompareOptions=request.matchCase ? [.literal] : [.literal,.caseInsensitive]
-            while offset<text.length {
+            var options=SearchOptions();options.query=request.query;options.mode=request.mode;options.matchCase=request.matchCase;options.wholeWord=request.wholeWord;options.dotMatchesNewline=request.dotMatchesNewline
+            let hits:SearchReport
+            do { hits=try SearchCore.search(decoded.text,options:options,cancellation:cancellation.engineToken,limit:min(100000,request.maximumResults-report.matches.count)) }
+            catch { if cancellation.isCancelled{report.wasCancelled=true;break};report.skipped.append(.init(url:url,reason:.unreadable("Search: " + error.localizedDescription)));continue }
+            for hit in hits.hits {
                 if cancellation.isCancelled{report.wasCancelled=true;break searchLoop}
-                let match=text.range(of:request.query,options:options,range:NSRange(location:offset,length:text.length-offset))
-                if match.location == NSNotFound{break}
-                guard match.length>0,cursor.advance(to:match.location,cancellation:cancellation) else {if cancellation.isCancelled{report.wasCancelled=true;break searchLoop};throw FolderSearchError.invalidRequest("Literal matching produced an invalid Unicode range.")}
+                let match=hit.range
+                guard cursor.advance(to:match.location,cancellation:cancellation) else {if cancellation.isCancelled{report.wasCancelled=true;break searchLoop};throw FolderSearchError.invalidRequest("Matching produced an invalid Unicode range.")}
                 let startByte=cursor.byteOffset,line=cursor.line,column=cursor.columnUTF16
-                guard cursor.advance(to:NSMaxRange(match),cancellation:cancellation) else {if cancellation.isCancelled{report.wasCancelled=true;break searchLoop};throw FolderSearchError.invalidRequest("Literal matching split a Unicode character.")}
+                guard cursor.advance(to:NSMaxRange(match),cancellation:cancellation) else {if cancellation.isCancelled{report.wasCancelled=true;break searchLoop};throw FolderSearchError.invalidRequest("Matching split a Unicode character.")}
                 let snippet=preview(text,match:match,maximum:request.previewUTF16Length)
-                report.matches.append(.init(url:url,line:line,columnUTF16:column,utf16Range:.init(location:match.location,length:match.length),utf8Range:.init(location:startByte,length:cursor.byteOffset-startByte),preview:snippet.text,previewMatchRange:snippet.range,isMatchTruncatedInPreview:snippet.truncated))
+                report.matches.append(.init(url:url,line:line,columnUTF16:column,utf16Range:.init(location:match.location,length:match.length),utf8Range:.init(location:startByte,length:cursor.byteOffset-startByte),preview:snippet.text,previewMatchRange:snippet.range,isMatchTruncatedInPreview:snippet.truncated,sourceSHA256:fingerprint))
                 if report.matches.count>=request.maximumResults{report.reachedLimit = .results;break searchLoop}
-                offset=NSMaxRange(match)
             }
             progress?(.init(filesSearched:report.filesSearched,bytesRead:report.bytesRead,matches:report.matches.count,currentURL:url))
         }

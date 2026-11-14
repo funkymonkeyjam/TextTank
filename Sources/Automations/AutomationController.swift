@@ -12,6 +12,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
     private var loadError: Error?
     private var busy = false
     private var exportInProgress = false
+    private var exportTask: Task<Void,Never>?
     private lazy var automationMenu: NSMenu = { let m = NSMenu(title: "Automations"); m.delegate = self; return m }()
 
     init(editorProvider: @escaping () -> TTEditor?, newDocument: @escaping (String) -> Void) {
@@ -118,41 +119,63 @@ final class AutomationController: NSObject, NSMenuDelegate {
     func manage() {
         guard !busy, !exportInProgress else { return }
         if let loadError { showError(loadError); return }
-        guard !library.workflows.isEmpty else { addRecipeButtons(); return }
+        guard !library.workflows.isEmpty else { createAutomation(); return }
         busy = true; defer { busy = false }
         let choose = NSAlert(); choose.messageText = "Manage Automations"
         choose.informativeText = "Rename an automation, choose its input and output, and turn its preview or toolbar button on or off. Advanced configuration edits the ordered processing steps."
-        for title in ["Edit", "Cancel", "Advanced Configuration…", "Add Recipe Buttons…"] { choose.addButton(withTitle:title) }
+        for title in ["Edit", "Cancel", "Advanced Configuration…", "Add Recipe Buttons…", "Create Automation…", "Delete Automation"] { choose.addButton(withTitle:title) }
         let selection = NSPopUpButton(frame:NSRect(x:0,y:0,width:550,height:28),pullsDown:false)
         for workflow in library.workflows { selection.addItem(withTitle:workflow.name); selection.lastItem?.representedObject = workflow.id.uuidString }
         choose.accessoryView = selection
         let response = choose.runModal()
         if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 { busy = false; manageAdvanced(); return }
         if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 { busy = false; addRecipeButtons(); return }
+        if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 4 { busy = false; createAutomation(); return }
+        if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 5 {
+            if let id = selection.selectedItem?.representedObject as? String {
+                let confirm = NSAlert(); confirm.messageText = "Delete this automation?"; confirm.informativeText = "Its saved definition and trigger bindings will be removed. Documents and exported reminders are unchanged."; confirm.addButton(withTitle:"Delete"); confirm.addButton(withTitle:"Cancel")
+                if confirm.runModal() == .alertFirstButtonReturn { do { var proposed = library; proposed.workflows.removeAll { $0.id.uuidString == id }; try persistLibrary(proposed) } catch { showError(error) } }
+            }; return
+        }
         guard response == .alertFirstButtonReturn,
               let id = selection.selectedItem?.representedObject as? String,
               let index = library.workflows.firstIndex(where: { $0.id.uuidString == id }) else { return }
         var workflow = library.workflows[index]
         let edit = NSAlert(); edit.messageText = "Edit Automation"
         edit.informativeText = "The name changes its labels, not its behavior. Editor changes can be undone. Reminders always requires an explicit destination and Send."
-        edit.addButton(withTitle:"Save"); edit.addButton(withTitle:"Cancel")
+        edit.addButton(withTitle:"Save"); edit.addButton(withTitle:"Cancel"); edit.addButton(withTitle:"Edit Processing Steps…")
         let name = NSTextField(string:workflow.name)
+        let shortcut = NSTextField(string:workflow.shortcut ?? ""); shortcut.placeholderString = "Lowercase letter for Command-Option; blank for none"
         let input = NSPopUpButton(); let output = NSPopUpButton()
         for value in ["document","selection","clipboard","file"] { input.addItem(withTitle:value) }
         for value in ["editor","clipboard","newDocument","file","reminders"] { output.addItem(withTitle:value) }
         input.selectItem(withTitle:workflow.input.rawValue); output.selectItem(withTitle:workflow.output.rawValue)
         let preview = NSButton(checkboxWithTitle:"Preview before applying",target:nil,action:nil); preview.state = workflow.previewBeforeApply == true ? .on : .off
         let pinned = NSButton(checkboxWithTitle:"Show a named toolbar button",target:nil,action:nil); pinned.state = workflow.pinToToolbar == true ? .on : .off
-        edit.accessoryView = settingsView(rows:[("Name",name),("Input",input),("Output",output)],options:[preview,pinned])
-        guard edit.runModal() == .alertFirstButtonReturn else { return }
+        edit.accessoryView = settingsView(rows:[("Name",name),("Input",input),("Output",output),("Shortcut",shortcut)],options:[preview,pinned])
+        while true {
+            let response = edit.runModal()
+            if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 { if let revised = AutomationStepEditor.edit(workflow) { workflow.steps = revised.steps }; continue }
+            guard response == .alertFirstButtonReturn else { return }; break
+        }
         do {
             workflow.name = name.currentEditor()?.string ?? name.stringValue
+            workflow.shortcut = shortcut.currentEditor()?.string ?? shortcut.stringValue
             if let value = input.titleOfSelectedItem, let typed = AutomationDefinition.Input(rawValue:value) { workflow.input = typed }
             if let value = output.titleOfSelectedItem, let typed = AutomationDefinition.Output(rawValue:value) { workflow.output = typed }
             workflow.previewBeforeApply = preview.state == .on; workflow.pinToToolbar = pinned.state == .on
             var proposed = library; proposed.workflows[index] = workflow
             try checkShortcutCollisions(proposed); try persistLibrary(proposed)
         } catch { showError(error) }
+    }
+    private func createAutomation() {
+        guard !busy, !exportInProgress else { return }
+        let alert = NSAlert(); alert.messageText = "Create Automation"; alert.informativeText = "Choose a name. You can then edit its ordered processing steps, input, output and triggers."
+        alert.addButton(withTitle:"Create"); alert.addButton(withTitle:"Cancel")
+        let name = NSTextField(string:"My Automation"); name.frame = NSRect(x:0,y:0,width:440,height:28); alert.accessoryView = name
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let definition = AutomationDefinition(id:UUID(),name:name.currentEditor()?.string ?? name.stringValue,input:.document,steps:[],output:.editor)
+        do { try definition.validate(); guard let edited = AutomationStepEditor.edit(definition) else { return }; var proposed = library; proposed.workflows.append(edited); try persistLibrary(proposed) } catch { showError(error) }
     }
     @objc func addRecipeButtons() {
         guard !busy, !exportInProgress else { return }
@@ -266,15 +289,42 @@ final class AutomationController: NSObject, NSMenuDelegate {
         guard let identifier = sender.representedObject as? String, let id = UUID(uuidString: identifier) else { return }
         do { try runSavedAutomation(id: id) } catch { showError(error) }
     }
-    private func run(_ workflow: AutomationDefinition, capturedEditor: TTEditor?) throws {
+    private func run(_ original: AutomationDefinition, capturedEditor: TTEditor?) throws {
+        let workflow = original
         // Capture once before showing the preview. Never re-query the frontmost editor on Apply.
         let editor = capturedEditor
         let revision = editor?.revision
         let start = editor?.selectionStart
         let end = editor?.selectionEnd
+        let selections = editor?.selectionRanges
         if workflow.input == .selection || workflow.output == .editor {
             guard let editor else { throw AutomationError.invalid("This automation requires an open editor document.") }
-            guard editor.selectionCount == 1 else { throw AutomationError.invalid("This automation supports a single selection. Multiple or rectangular selections are not changed.") }
+            guard editor.selectionCount == 1 || (workflow.input == .selection && workflow.output == .editor) else { throw AutomationError.invalid("Multiple selections require selection input and editor output. Other outputs are not changed.") }
+        }
+        guard let resolved = try workflow.resolvingParameters({ index, label, initial in
+            let alert = NSAlert(); alert.messageText = "\(workflow.name) — Step \(index + 1)"; alert.informativeText = label
+            alert.addButton(withTitle:"Continue"); alert.addButton(withTitle:"Cancel")
+            let field = NSTextField(string:initial); field.frame = NSRect(x:0,y:0,width:500,height:28); alert.accessoryView = field
+            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+            return field.currentEditor()?.string ?? field.stringValue
+        }) else { return }
+        if workflow.input == .selection, workflow.output == .editor, let editor, editor.selectionCount > 1, let revision, let selections {
+            let bytes = Data(editor.text.utf8)
+            var outputs:[String] = []
+            for (index,range) in selections.enumerated() {
+                guard let anchor = range["anchor"]?.intValue, let caret = range["caret"]?.intValue, anchor != caret,
+                      min(anchor,caret) >= 0,max(anchor,caret) <= bytes.count,
+                      let text = String(data:bytes.subdata(in:min(anchor,caret)..<max(anchor,caret)),encoding:.utf8) else { throw AutomationError.invalid("Select text in every selection before running this automation.") }
+                var output = try transformWithProgress(resolved,input:text)
+                if workflow.previewBeforeApply == true {
+                    let alert = NSAlert(); alert.messageText = "\(workflow.name) — Selection \(index + 1) of \(selections.count)"; alert.informativeText = "All selections apply together after every preview is accepted. Cancel preserves the entire editor."; alert.addButton(withTitle:"Accept"); alert.addButton(withTitle:"Cancel")
+                    let preview = makeTextView(height:250); preview.editor.string = output; alert.accessoryView = preview.scroll
+                    guard alert.runModal() == .alertFirstButtonReturn else { return }; output = preview.editor.string
+                }
+                outputs.append(output)
+            }
+            guard editor.window != nil, editor.selectionRanges == selections, editor.replaceSelections(outputs,expectedRevision:revision) else { throw AutomationError.invalid("The document or selections changed, closed or became read-only. Nothing was replaced.") }
+            return
         }
         let input: String
         switch workflow.input {
@@ -288,14 +338,12 @@ final class AutomationController: NSObject, NSMenuDelegate {
             let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
             guard panel.runModal() == .OK, let url = panel.url else { return }
             // File input explicitly accepts valid UTF-8 only; never guess or replace invalid bytes.
-            let bytes = try Data(contentsOf: url)
-            guard let value = String(data: bytes, encoding: .utf8) else { throw AutomationError.invalid("Automation file input requires valid UTF-8. Open the file in the editor with its encoding first.") }
-            input = value
+            input = try AutomationFileInput.read(url)
         case .clipboard:
             guard let value = plainClipboardText() else { throw AutomationError.invalid("The clipboard does not contain supported text.") }
             input = value
         }
-        var output = try workflow.transform(input)
+        var output = try transformWithProgress(resolved,input:input)
         if workflow.previewBeforeApply == true {
             let alert = NSAlert(); alert.messageText = workflow.name
             let scope = workflow.input == .document ? "entire captured document" : "captured selection"
@@ -308,7 +356,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
         }
         switch workflow.output {
         case .editor:
-            guard let editor, editor.window != nil, editor.revision == revision else { throw AutomationError.invalid("The original document changed or closed. Run the automation again with the current text.") }
+            guard let editor, editor.window != nil, !editor.readOnly, editor.revision == revision else { throw AutomationError.invalid("The original document changed or closed. Run the automation again with the current text.") }
             guard editor.selectionCount == 1, editor.selectionStart == start, editor.selectionEnd == end else { throw AutomationError.invalid("The editor selection changed. No text was replaced.") }
             if workflow.input == .document { editor.text = output }
             else { editor.replaceSelection(output) }
@@ -324,13 +372,36 @@ final class AutomationController: NSObject, NSMenuDelegate {
             try Data(output.utf8).write(to: url, options: .atomic)
         }
     }
+    private var runControl: AutomationRunControl?
+    @objc private func cancelTransform() { runControl?.cancel() }
+    private func transformWithProgress(_ workflow:AutomationDefinition,input:String) throws -> String {
+        // Small recipe workflows stay synchronous and preserve their one-click interaction.
+        guard input.utf8.count > 262144 else { return try workflow.transform(input) }
+        let control = AutomationRunControl(); runControl = control
+        defer { runControl = nil }
+        let panel = NSPanel(contentRect:NSRect(x:0,y:0,width:420,height:130),styleMask:[.titled],backing:.buffered,defer:false)
+        panel.title = workflow.name
+        let status = NSTextField(labelWithString:"Processing captured text…"); status.frame = NSRect(x:20,y:85,width:380,height:24)
+        let progress = NSProgressIndicator(frame:NSRect(x:20,y:60,width:380,height:18)); progress.isIndeterminate = false; progress.minValue = 0; progress.maxValue = Double(max(1,workflow.steps.count))
+        let cancel = NSButton(title:"Cancel",target:self,action:#selector(cancelTransform)); cancel.frame = NSRect(x:290,y:15,width:110,height:30)
+        panel.contentView?.addSubview(status); panel.contentView?.addSubview(progress); panel.contentView?.addSubview(cancel)
+        var outcome: Result<String,Error>?
+        control.onProgress = { completed,total in DispatchQueue.main.async { progress.doubleValue = Double(completed); status.stringValue = "Processing step \(min(completed+1,total)) of \(total)…" } }
+        DispatchQueue.global(qos:.userInitiated).async {
+            let result = Result { try workflow.transform(input,control:control) }
+            DispatchQueue.main.async { outcome = result; if NSApp.modalWindow === panel { NSApp.stopModal() } }
+        }
+        panel.center(); NSApp.runModal(for:panel); panel.orderOut(nil)
+        guard let outcome else { control.cancel(); throw AutomationError.invalid("Automation cancelled. Nothing was changed.") }
+        return try outcome.get()
+    }
     private func beginReminderExport(_ text: String, workflow: AutomationDefinition) {
         let rows = text.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !rows.isEmpty else { showError(AutomationError.invalid("There are no nonblank reminder rows to send.")); return }
         guard !exportInProgress else { return }
         exportInProgress = true // Acquire before scheduling, so double-clicks cannot queue two exports.
-        Task { @MainActor in
-            defer { self.exportInProgress = false }
+        exportTask = Task { @MainActor in
+            defer { self.exportInProgress = false; self.exportTask = nil }
             do {
                 let connector = RemindersConnector(storageURL: self.storage.deletingLastPathComponent().appendingPathComponent("ReminderExports", isDirectory: true))
                 try await connector.requestAccess()
@@ -364,10 +435,20 @@ final class AutomationController: NSObject, NSMenuDelegate {
                     if response == .alertFirstButtonReturn { self.showReminderResults(existing); return }
                     guard response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 else { return }
                 }
-                let batch = try await connector.export(rows:rows, destinationID:destinationID, batchID:UUID())
+                let progress = self.exportProgressPanel(total:rows.count); defer { progress.panel.orderOut(nil) }
+                let batch = try await connector.export(rows:rows, destinationID:destinationID, batchID:UUID(),progress:progress.update)
                 self.showReminderResults(batch)
             } catch { self.showError(error) }
         }
+    }
+    @objc private func cancelExport() { exportTask?.cancel() }
+    private func exportProgressPanel(total:Int) -> (panel:NSPanel,update:(Int,Int)->Void) {
+        let panel = NSPanel(contentRect:NSRect(x:0,y:0,width:440,height:130),styleMask:[.titled],backing:.buffered,defer:false); panel.title = "Sending to Reminders"
+        let label = NSTextField(labelWithString:"Preparing \(total) items…"); label.frame = NSRect(x:20,y:85,width:400,height:24)
+        let indicator = NSProgressIndicator(frame:NSRect(x:20,y:60,width:400,height:16)); indicator.isIndeterminate = false; indicator.maxValue = Double(total)
+        let cancel = NSButton(title:"Stop Sending",target:self,action:#selector(cancelExport)); cancel.frame = NSRect(x:280,y:15,width:140,height:30)
+        panel.contentView?.addSubview(label); panel.contentView?.addSubview(indicator); panel.contentView?.addSubview(cancel); panel.center(); panel.makeKeyAndOrderFront(nil)
+        return (panel,{ completed,total in label.stringValue = "Processed \(completed) of \(total). Sent items remain in Reminders."; indicator.doubleValue = Double(completed) })
     }
     static func matchingExport(rows: [String], destinationID: String, batches: [ReminderBatch]) -> ReminderBatch? {
         batches.filter { $0.destinationID == destinationID && $0.rows.map(\.title) == rows }
@@ -375,7 +456,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
     }
     @MainActor private func showReminderResults(_ batch: ReminderBatch) {
         let alert = NSAlert(); alert.messageText = "Reminder Export Results"
-        alert.informativeText = "Batch \(batch.id). Confirmed items are not resent. Uncertain items require inspection in Reminders and are never automatically retried. Failed items remain available in Export History. Editor Undo does not affect reminders."
+        alert.informativeText = "Batch \(batch.id). Confirmed items are not resent. Uncertain items require inspection in Reminders and are never automatically retried. Failed and unsent pending items remain available in Export History. Resume retries those items only. Editor Undo does not affect reminders."
         let text = makeTextView(height:300); text.editor.isEditable = false
         text.editor.string = "Destination: \(batch.destinationTitle) — \(batch.destinationSource) [\(batch.destinationID)]\n\n" + batch.rows.map { row in "[\(row.status.rawValue)] \(row.title)\(row.message.map { " — " + $0 } ?? "")" }.joined(separator:"\n")
         alert.accessoryView = text.scroll; alert.addButton(withTitle:"Done"); alert.runModal()
@@ -383,15 +464,15 @@ final class AutomationController: NSObject, NSMenuDelegate {
     @objc private func reminderHistory() {
         guard !busy, !exportInProgress else { return }
         exportInProgress = true
-        Task { @MainActor in
-            defer { self.exportInProgress = false }
+        exportTask = Task { @MainActor in
+            defer { self.exportInProgress = false; self.exportTask = nil }
             do {
                 let connector = RemindersConnector(storageURL:self.storage.deletingLastPathComponent().appendingPathComponent("ReminderExports",isDirectory:true))
                 let batches = try connector.storedBatches()
                 guard !batches.isEmpty else { throw AutomationError.invalid("There are no recorded reminder exports.") }
                 let alert = NSAlert(); alert.messageText = "Reminder Export History"
                 alert.informativeText = "Choose a recorded batch to inspect its durable per-item results. Reading this history does not request system access."
-                alert.addButton(withTitle:"Review"); alert.addButton(withTitle:"Cancel"); alert.addButton(withTitle:"Request Access and Retry Failed")
+                alert.addButton(withTitle:"Review"); alert.addButton(withTitle:"Cancel"); alert.addButton(withTitle:"Request Access and Resume Unsent")
                 let choice = NSPopUpButton(frame:NSRect(x:0,y:0,width:650,height:28),pullsDown:false)
                 for batch in batches { choice.addItem(withTitle:"\(batch.destinationTitle) — \(batch.destinationSource) · \(batch.rows.count) rows · \(batch.id)"); choice.lastItem?.representedObject = batch.id.uuidString }
                 alert.accessoryView = choice
@@ -400,7 +481,8 @@ final class AutomationController: NSObject, NSMenuDelegate {
                 if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
                     // The explicit retry choice authorizes a new access request, never a new batch ID.
                     try await connector.requestAccess()
-                    let retried = try await connector.export(rows:batch.rows.map(\.title),destinationID:batch.destinationID,batchID:batch.id,retryFailed:true)
+                    let progress = self.exportProgressPanel(total:batch.rows.count); defer { progress.panel.orderOut(nil) }
+                    let retried = try await connector.export(rows:batch.rows.map(\.title),destinationID:batch.destinationID,batchID:batch.id,retryFailed:true,progress:progress.update)
                     self.showReminderResults(retried)
                 } else { self.showReminderResults(batch) }
             } catch { self.showError(error) }

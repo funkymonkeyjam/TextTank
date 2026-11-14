@@ -115,16 +115,19 @@ enum ReminderConnectorError: Error, LocalizedError {
                 return try load(id)
             }
     }
-    func export(rows: [String], destinationID: String, batchID: UUID, retryFailed: Bool = false) async throws -> ReminderBatch {
+    func export(rows: [String], destinationID: String, batchID: UUID, retryFailed: Bool = false, progress: ((Int,Int)->Void)? = nil) async throws -> ReminderBatch {
         guard !busy else { throw ReminderConnectorError.busy }
+        guard !rows.isEmpty, rows.count <= 10000, rows.allSatisfy({ !$0.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && $0.utf8.count <= 1048576 }) else { throw ReminderConnectorError.invalidBatch }
         busy = true; defer { busy = false }
         // A process lock covers retries across connector instances and app processes.
         // Never wait for it on the UI actor; a competing request is reported as busy.
         try checkDirectory()
         try preparePrivateDirectory()
         let lockPath = storageURL.appendingPathComponent(".export.lock").path
-        let descriptor = open(lockPath, O_CREAT | O_RDWR | O_NOFOLLOW, mode_t(0o600))
+        let descriptor = open(lockPath, O_CREAT | O_RDWR | O_NOFOLLOW | O_NONBLOCK, mode_t(0o600))
         guard descriptor >= 0 else { throw ReminderConnectorError.invalidBatch }
+        var lockInfo = stat()
+        guard fstat(descriptor,&lockInfo) == 0, lockInfo.st_mode & S_IFMT == S_IFREG else { close(descriptor); throw ReminderConnectorError.invalidBatch }
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { close(descriptor); throw ReminderConnectorError.busy }
         defer { flock(descriptor, LOCK_UN); close(descriptor) }
         let selected = try destinations().first { $0.id == destinationID && $0.writable }
@@ -138,6 +141,7 @@ enum ReminderConnectorError: Error, LocalizedError {
                                   destinationSource: selected.source, rows: rows.map { ReminderRow(id: UUID(), title: $0) }, createdAt: Date())
             try persist(batch)
         }
+        progress?(batch.rows.filter { $0.status != .pending }.count,batch.rows.count)
         for index in batch.rows.indices {
             if Task.isCancelled { break } // Unsent pending rows remain resumable under this batch ID.
             guard batch.rows[index].status == .pending || (retryFailed && batch.rows[index].status == .failed) else { continue }
@@ -155,6 +159,7 @@ enum ReminderConnectorError: Error, LocalizedError {
             }
             // If this write fails, disk retains uncertain, never a replayable pending row.
             try persist(batch)
+            progress?(index + 1,batch.rows.count)
             await Task.yield() // Allow UI cancellation without releasing the batch journal lock.
         }
         return batch
@@ -163,16 +168,21 @@ enum ReminderConnectorError: Error, LocalizedError {
     private func checkDirectory() throws {
         guard storageURL.isFileURL else { throw ReminderConnectorError.invalidBatch }
         if FileManager.default.fileExists(atPath: storageURL.path) {
-            let values = try storageURL.resourceValues(forKeys: [.isDirectoryKey,.isSymbolicLinkKey])
-            guard values.isDirectory == true, values.isSymbolicLink != true else { throw ReminderConnectorError.invalidBatch }
+            let values = try FileManager.default.attributesOfItem(atPath:storageURL.path)
+            guard values[.type] as? FileAttributeType == .typeDirectory else { throw ReminderConnectorError.invalidBatch }
         }
     }
     private func load(_ id: UUID) throws -> ReminderBatch {
         try checkDirectory()
         let url = path(id)
-        let values = try url.resourceValues(forKeys: [.isRegularFileKey,.isSymbolicLinkKey])
-        guard values.isRegularFile == true, values.isSymbolicLink != true else { throw ReminderConnectorError.invalidBatch }
-        let batch = try JSONDecoder().decode(ReminderBatch.self, from: Data(contentsOf: url))
+        let descriptor = open(url.path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK)
+        guard descriptor >= 0 else { throw ReminderConnectorError.invalidBatch }
+        let handle = FileHandle(fileDescriptor:descriptor,closeOnDealloc:true); defer { try? handle.close() }
+        var info = stat()
+        guard fstat(descriptor,&info) == 0,info.st_mode & S_IFMT == S_IFREG,info.st_size <= 32 * 1024 * 1024 else { throw ReminderConnectorError.invalidBatch }
+        let data = try handle.read(upToCount:32 * 1024 * 1024 + 1) ?? Data()
+        guard data.count <= 32 * 1024 * 1024 else { throw ReminderConnectorError.invalidBatch }
+        let batch = try JSONDecoder().decode(ReminderBatch.self, from:data)
         guard batch.schemaVersion == 1, batch.id == id, Set(batch.rows.map(\.id)).count == batch.rows.count,
               batch.rows.allSatisfy({ $0.status != .confirmed || !($0.reminderID ?? "").isEmpty }) else { throw ReminderConnectorError.invalidBatch }
         return batch

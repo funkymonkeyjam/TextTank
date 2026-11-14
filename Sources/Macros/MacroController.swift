@@ -12,6 +12,7 @@ final class MacroController: NSObject, NSMenuDelegate {
     private var lastRecording: RecordedMacro?
     private var captureError: Error?
     private var playing = false
+    var searchPlayback: ((RecordedMacro.Search,TTEditor) throws -> Void)?
     private lazy var macroMenu = NSMenu(title:"Macros")
     init(editorProvider: @escaping ()->TTEditor?) {
         self.editorProvider=editorProvider
@@ -91,6 +92,7 @@ final class MacroController: NSObject, NSMenuDelegate {
     func recordFind(text:String,matchCase:Bool,backwards:Bool,editor:TTEditor) {
         append(.init(kind:.findLiteral,text:text,matchCase:matchCase,backwards:backwards),editor:editor)
     }
+    func recordSearch(_ search:RecordedMacro.Search,editor:TTEditor) { append(.init(kind:.search,search:search),editor:editor) }
     /// The bridge's target-based replaceSelection is not SCN_MACRORECORD text input.
     func recordReplace(text:String,editor:TTEditor) { append(.init(kind:.replaceSelection,text:text),editor:editor) }
     private func append(_ step:RecordedMacro.Step,editor:TTEditor) {
@@ -108,27 +110,40 @@ final class MacroController: NSObject, NSMenuDelegate {
         let alert=NSAlert();alert.messageText="Play \(macro.name)"
         alert.informativeText="Repeat count (1–10000). Playback changes the captured editor as one Undo group. Literal find stops on no match; earlier edits remain undoable. Clipboard commands operate on the current clipboard. No shell or external workflow runs."
         alert.addButton(withTitle:"Play");alert.addButton(withTitle:"Cancel")
-        let count=NSTextField(string:"1");count.frame=NSRect(x:0,y:0,width:200,height:24);alert.accessoryView=count
+        let count=NSTextField(string:"1");count.frame=NSRect(x:0,y:0,width:200,height:24)
+        let untilEnd = NSButton(checkboxWithTitle:"Repeat until end of document",target:nil,action:nil)
+        let controls = NSStackView(views:[count,untilEnd]); controls.orientation = .vertical; controls.frame = NSRect(x:0,y:0,width:400,height:60); alert.accessoryView=controls
         guard alert.runModal() == .alertFirstButtonReturn else{return}
-        do {guard editor.revision == revision,editor.selectionStart == selectionStart,editor.selectionEnd == selectionEnd else {throw MacroError.invalid("The editor changed while choosing playback. Run the macro again.")};guard let repeats=Int(count.stringValue),repeats > 0,repeats <= 10000,macro.steps.count <= 100000/repeats else {throw MacroError.invalid("Choose a valid count; at most 100000 total steps per invocation.")};try play(macro,on:editor,repeats:repeats)}catch{showError(error)}
+        do {guard editor.revision == revision,editor.selectionStart == selectionStart,editor.selectionEnd == selectionEnd else {throw MacroError.invalid("The editor changed while choosing playback. Run the macro again.")};guard let repeats=Int(count.stringValue),repeats > 0,repeats <= 10000,macro.steps.count <= 100000/repeats else {throw MacroError.invalid("Choose a valid count; at most 100000 total steps per invocation.")};try playInteractively(macro,on:editor,repeats:repeats,untilEnd:untilEnd.state == .on)}catch{showError(error)}
     }
-    func play(_ macro:RecordedMacro,on editor:TTEditor,repeats:Int=1)throws {
-        guard !playing,recordingEditor == nil,editor.window != nil,editor.selectionCount == 1,repeats > 0,repeats <= 10000,macro.steps.count <= 100000/repeats else {throw MacroError.invalid("Macro playback is unavailable for this editor or repeat count.")}
-        try macro.validate();playing=true;editor.beginUndoGroup()
-        defer {editor.endUndoGroup();playing=false;rebuild()}
-        for _ in 0..<repeats {
-            for step in macro.steps {
-                switch step.kind {
-                case .findLiteral:
-                    guard editor.find(step.text!,matchCase:step.matchCase!,backwards:step.backwards!) else {throw MacroError.invalid("Macro stopped: literal find did not match. Prior edits remain in one Undo group.")}
-                case .replaceSelection: editor.replaceSelection(step.text!)
-                case .insertText,.command:
-                    let data=try JSONEncoder().encode(step)
-                    let dictionary=try JSONSerialization.jsonObject(with:data) as! [String:Any]
-                    guard editor.executeMacroStep(dictionary) else {throw MacroError.invalid("The editor rejected a macro step. Prior edits remain undoable.")}
-                }
-            }
+    private var playbackCancelled = false
+    @objc private func cancelPlayback() { playbackCancelled = true }
+    private func playInteractively(_ macro:RecordedMacro,on editor:TTEditor,repeats:Int,untilEnd:Bool) throws {
+        guard !playing,recordingEditor == nil else { throw MacroError.invalid("Macro playback is unavailable.") }
+        let session = try MacroPlayback(macro:macro,editor:editor,repeats:repeats,untilEnd:untilEnd,searchPlayback:searchPlayback)
+        playing = true; playbackCancelled = false; editor.beginUndoGroup()
+        defer { editor.endUndoGroup(); playing = false; rebuild() }
+        let panel = NSPanel(contentRect:NSRect(x:0,y:0,width:440,height:120),styleMask:[.titled],backing:.buffered,defer:false); panel.title = macro.name
+        let status = NSTextField(labelWithString:"Playing recorded editing steps…"); status.frame = NSRect(x:20,y:70,width:400,height:24)
+        let stop = NSButton(title:"Stop",target:self,action:#selector(cancelPlayback)); stop.frame = NSRect(x:310,y:20,width:110,height:30); panel.contentView?.addSubview(status); panel.contentView?.addSubview(stop)
+        var failure:Error?
+        let timer = Timer(timeInterval:0.005,repeats:true) { [weak self] timer in
+            guard let self else { timer.invalidate(); NSApp.stopModal(); return }
+            do {
+                let finished = try session.advance(budget:50,shouldCancel:{ self.playbackCancelled })
+                status.stringValue = "Played \(session.performed) steps. Stop preserves one Undo."
+                if finished { timer.invalidate(); NSApp.stopModal() }
+            } catch { failure = error; timer.invalidate(); NSApp.stopModal() }
         }
+        RunLoop.main.add(timer,forMode:.modalPanel); panel.center(); NSApp.runModal(for:panel); timer.invalidate(); panel.orderOut(nil)
+        if let failure { throw failure }
+    }
+    func play(_ macro:RecordedMacro,on editor:TTEditor,repeats:Int=1,untilEnd:Bool=false,shouldCancel:()->Bool = {false}) throws {
+        guard !playing,recordingEditor == nil else { throw MacroError.invalid("Macro playback is unavailable.") }
+        let session = try MacroPlayback(macro:macro,editor:editor,repeats:repeats,untilEnd:untilEnd,searchPlayback:searchPlayback)
+        playing=true;editor.beginUndoGroup()
+        defer {editor.endUndoGroup();playing=false;rebuild()}
+        while try !session.advance(budget:100,shouldCancel:shouldCancel) {}
     }
     @objc private func saveLast() {
         guard var macro=lastRecording,loadingError == nil else {if let loadingError {showError(loadingError)};return}
@@ -144,12 +159,25 @@ final class MacroController: NSObject, NSMenuDelegate {
         guard !playing,recordingEditor == nil else{return}
         if let loadingError {showError(MacroError.invalid("Saved macros could not be loaded and are preserved: \(loadingError.localizedDescription)"));return}
         let alert=NSAlert();alert.messageText="Manage Saved Macros";alert.informativeText="Edit names or steps, or remove entries. Preserve id to rename. Only validated text, editor commands and literal find/replace steps are accepted. Saving never executes macros."
-        alert.addButton(withTitle:"Save");alert.addButton(withTitle:"Cancel")
+        alert.addButton(withTitle:"Save");alert.addButton(withTitle:"Cancel");alert.addButton(withTitle:"Import…");alert.addButton(withTitle:"Export…")
         let scroll=NSScrollView(frame:NSRect(x:0,y:0,width:650,height:400));scroll.hasVerticalScroller=true
         let text=NSTextView(frame:scroll.bounds);text.isRichText=false;text.isAutomaticQuoteSubstitutionEnabled=false;text.isAutomaticDashSubstitutionEnabled=false;text.font = .monospacedSystemFont(ofSize:12,weight:.regular);text.autoresizingMask=[.width];text.isVerticallyResizable=true;text.textContainer?.widthTracksTextView=true;scroll.documentView=text
         text.string=String(data:(try? library.encoded()) ?? Data(),encoding:.utf8) ?? "";alert.accessoryView=scroll
-        while alert.runModal() == .alertFirstButtonReturn {
-            do {try persist(MacroLibrary.decode(Data(text.string.utf8)));return}catch{showError(error)}
+        while true {
+            let response = alert.runModal()
+            if response == .alertSecondButtonReturn { return }
+            do {
+                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
+                    let panel = NSOpenPanel(); panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
+                    if panel.runModal() == .OK,let url = panel.url { text.string = String(data:try MacroLibrary.decode(Data(contentsOf:url)).encoded(),encoding:.utf8)! }; continue
+                }
+                let proposed = try MacroLibrary.decode(Data(text.string.utf8))
+                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
+                    let panel = NSSavePanel(); panel.nameFieldStringValue = "TextTank-Macros.json"
+                    if panel.runModal() == .OK,let url = panel.url { try proposed.encoded().write(to:url,options:.atomic) }; continue
+                }
+                try persist(proposed); return
+            } catch { showError(error) }
         }
     }
     private func persist(_ proposed:MacroLibrary)throws {
@@ -170,4 +198,50 @@ final class MacroController: NSObject, NSMenuDelegate {
         library=proposed;rebuild()
     }
     private func showError(_ error:Error){NSAlert(error:error).runModal()}
+}
+
+/// Bounded incremental playback shared by native progress UI and deterministic tests.
+private final class MacroPlayback {
+    let macro:RecordedMacro, editor:TTEditor
+    let repeats:Int, untilEnd:Bool
+    let searchPlayback: ((RecordedMacro.Search,TTEditor) throws -> Void)?
+    var performed = 0
+    private var index = 0, iterations = 0
+    private var cycleCaret:Int, cycleRevision:UInt
+    init(macro:RecordedMacro,editor:TTEditor,repeats:Int,untilEnd:Bool,searchPlayback:((RecordedMacro.Search,TTEditor) throws -> Void)?) throws {
+        try macro.validate()
+        guard editor.window != nil,editor.selectionCount == 1,!editor.readOnly,repeats > 0,repeats <= 10000,macro.steps.count <= 100000/repeats else { throw MacroError.invalid("Macro playback is unavailable for this editor or repeat count.") }
+        self.macro = macro; self.editor = editor; self.repeats = repeats; self.untilEnd = untilEnd; self.searchPlayback = searchPlayback
+        cycleCaret = editor.selectionCaret; cycleRevision = editor.revision
+    }
+    func advance(budget:Int,shouldCancel:()->Bool) throws -> Bool {
+        let started = ProcessInfo.processInfo.systemUptime
+        for offset in 0..<budget {
+            if offset > 0 && ProcessInfo.processInfo.systemUptime - started >= 0.02 { return false }
+            if shouldCancel() { throw MacroError.invalid("Macro stopped. Prior edits remain in one Undo group.") }
+            guard editor.window != nil,!editor.readOnly,editor.selectionCount == 1 else { throw MacroError.invalid("The macro editor closed, became read-only or changed selection mode. Prior edits remain undoable.") }
+            if index == 0 && untilEnd && editor.selectionCaret >= editor.text.utf8.count { return true }
+            guard performed < 100000 else { throw MacroError.invalid("Macro stopped at the 100000-step limit. Prior edits remain undoable.") }
+            let step = macro.steps[index]
+            switch step.kind {
+            case .search:
+                guard let searchPlayback else { throw MacroError.invalid("Search playback is not available. Prior edits remain undoable.") }; try searchPlayback(step.search!,editor)
+            case .findLiteral:
+                guard editor.find(step.text!,matchCase:step.matchCase!,backwards:step.backwards!) else { throw MacroError.invalid("Macro stopped: literal find did not match. Prior edits remain undoable.") }
+            case .replaceSelection: editor.replaceSelection(step.text!)
+            case .insertText,.command:
+                let data = try JSONEncoder().encode(step)
+                let dictionary = try JSONSerialization.jsonObject(with:data) as! [String:Any]
+                guard editor.executeMacroStep(dictionary) else { throw MacroError.invalid("The editor rejected a macro step. Prior edits remain undoable.") }
+            }
+            performed += 1; index += 1
+            if index == macro.steps.count {
+                iterations += 1; index = 0
+                if !untilEnd && iterations >= repeats { return true }
+                if untilEnd && editor.selectionCaret == cycleCaret && editor.revision == cycleRevision { throw MacroError.invalid("Macro stopped because a repetition made no progress toward the end of the document.") }
+                cycleCaret = editor.selectionCaret; cycleRevision = editor.revision
+            }
+        }
+        return false
+    }
 }

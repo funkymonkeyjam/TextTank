@@ -1,0 +1,722 @@
+{
+  "upstream": "https://github.com/notepad-plus-plus/notepad-plus-plus",
+  "commit": "61246e5741fd7c59352f3feb5ccc7e33e4594d15",
+  "source_path": "boostregex/boost",
+  "boost_version": "1.90.0",
+  "license": "Boost Software License 1.0",
+  "audit": "Unmodified headers only. No Notepad++ Windows editor sources or PadPlus files imported. Platform conditional headers retained for their include graph.",
+  "files": [
+    {
+      "path": "LICENSE_1_0.txt",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+    },
+    {
+      "path": "boost/assert/source_location.hpp",
+      "sha256": "ad76405105ee3b1c8d557f3eaeb51d429beac4dc336950a10cde2c06d53f3c01"
+    },
+    {
+      "path": "boost/config/abi/borland_prefix.hpp",
+      "sha256": "9bcb32c03327907d1a79f1a687d1e889f048f89a02f01c9306ffccd270ccd53a"
+    },
+    {
+      "path": "boost/config/abi/borland_suffix.hpp",
+      "sha256": "ddf73eec710e6a40e5649e70ff0f5ee262b92648ab5b1ab2abb563a5fb6bc556"
+    },
+    {
+      "path": "boost/config/abi/msvc_prefix.hpp",
+      "sha256": "0846f71a84d25120bd54ae29095b33af1e9691f162a3a81d518b044a76037613"
+    },
+    {
+      "path": "boost/config/abi/msvc_suffix.hpp",
+      "sha256": "e401a3cc760fde65b6ff0681094eaab365a5716632d8526d4847e98f842927ac"
+    },
+    {
+      "path": "boost/config/abi_prefix.hpp",
+      "sha256": "2c91adbed9b2f363856f9bb39b03e3f3f70db8d8543d69f6428bad7f4dc3f0f4"
+    },
+    {
+      "path": "boost/config/abi_suffix.hpp",
+      "sha256": "6951e7209ff3c9ebc4fe3fe9ac5d1a383fe8d4093a3f4d697bf002bed12bae21"
+    },
+    {
+      "path": "boost/config/assert_cxx03.hpp",
+      "sha256": "ac53f867ce812feb87922a0d3672706df1616b9c534ae625d5dd6b939dd187ee"
+    },
+    {
+      "path": "boost/config/assert_cxx11.hpp",
+      "sha256": "013754c083a68555b6d0d37e9c1dd6fbcd3cc75dff2a083365a9fb9b89bd62f1"
+    },
+    {
+      "path": "boost/config/assert_cxx14.hpp",
+      "sha256": "aefdd5b309d61ed614a73d80a7a4f17a684cccc12ded8917d44295c97ffef654"
+    },
+    {
+      "path": "boost/config/assert_cxx17.hpp",
+      "sha256": "0b3bc95dac2c4d3337b2aeb85dd16f8ee37596d6959031fdd93751c7c14ecc46"
+    },
+    {
+      "path": "boost/config/assert_cxx20.hpp",
+      "sha256": "37962b1500a24d3a8d730d8b968abbc03bb3ed5c8f1d3811fad40bf274d641b0"
+    },
+    {
+      "path": "boost/config/assert_cxx23.hpp",
+      "sha256": "241e8e27b0ad400389ecc9fa0328ca0a593a528175b0616ce50a0ed312fc0a84"
+    },
+    {
+      "path": "boost/config/assert_cxx98.hpp",
+      "sha256": "054da6c9fd59d539ceffdf8e8e4bbc2131367c09e6297ec355a573da09ad432a"
+    },
+    {
+      "path": "boost/config/auto_link.hpp",
+      "sha256": "10f4ea3f8770852fb290e114ed91b5f8a286510171fc57ef15228d357b04c487"
+    },
+    {
+      "path": "boost/config/compiler/borland.hpp",
+      "sha256": "f6d666069ae4d226fde34055fa3d8010c7bad2662d929a0853dfe2fe4f0596c4"
+    },
+    {
+      "path": "boost/config/compiler/clang.hpp",
+      "sha256": "ec01f6ff90a8d73d2c46dcd722ff3cafc9ad1192a25eb404858dcab3f1b4f474"
+    },
+    {
+      "path": "boost/config/compiler/clang_version.hpp",
+      "sha256": "eaf8b6349c686ff27afb29c28dc1fc891fb7613fc8304939b276900c4e5b8ccd"
+    },
+    {
+      "path": "boost/config/compiler/codegear.hpp",
+      "sha256": "e64a776b872cbbb2d03887ef90cdc388b57eba4b1bbba8472648251db98b118c"
+    },
+    {
+      "path": "boost/config/compiler/comeau.hpp",
+      "sha256": "710f475254cdce46a9409b53a618f241267f91fd4ff66b24796b4ea596044227"
+    },
+    {
+      "path": "boost/config/compiler/common_edg.hpp",
+      "sha256": "b26f5e467b515a5e672a2e789a05c5579319ce256cea46593426b7dcb5305e70"
+    },
+    {
+      "path": "boost/config/compiler/compaq_cxx.hpp",
+      "sha256": "5db1c8909dfc9e25ccaca4b205c4def731e3565a73e7529c7ceb31b98f255203"
+    },
+    {
+      "path": "boost/config/compiler/cray.hpp",
+      "sha256": "f4a6202415c270190c069f4f778d820b4c43cc2d3ed375b550b615c42da5918e"
+    },
+    {
+      "path": "boost/config/compiler/diab.hpp",
+      "sha256": "b60af9eae596c5c9b8e26cfaa82d91f8e1024e442d91dbf8245be373de43ed9c"
+    },
+    {
+      "path": "boost/config/compiler/digitalmars.hpp",
+      "sha256": "b65273363cc59db4a8ed578b226b847938ac15fc33fc7fbc7c078988d40e8125"
+    },
+    {
+      "path": "boost/config/compiler/gcc.hpp",
+      "sha256": "4d72f17a36be0b38d8f7a96a21306a56f7fa8bb48ccdccaaea05c9397ee6de4d"
+    },
+    {
+      "path": "boost/config/compiler/gcc_xml.hpp",
+      "sha256": "0480c3bd08e67ea385d2b1356339d9c24012d61d3078ca3fc6c7e6cd392b1312"
+    },
+    {
+      "path": "boost/config/compiler/greenhills.hpp",
+      "sha256": "2fa76a673c90ac4dfa2868f87c6fdd42601c1ff69bd4a1aae14dbd374dd49714"
+    },
+    {
+      "path": "boost/config/compiler/hp_acc.hpp",
+      "sha256": "298ee5824095a698e22b9cdca037891b5d474278227bbbd48d36395203cb71d4"
+    },
+    {
+      "path": "boost/config/compiler/intel.hpp",
+      "sha256": "b9cc40152d9c504ab8d6611c2b083455bed9ebd5ed954b7e51880b6a5670a9d5"
+    },
+    {
+      "path": "boost/config/compiler/kai.hpp",
+      "sha256": "6a92aed2cecd022d9c1321a47929ae0b518c6e502396df8b70042d90a653e306"
+    },
+    {
+      "path": "boost/config/compiler/metrowerks.hpp",
+      "sha256": "d408ad5af37a751e8b3c4602b31bcd0cccae67f683244df3b6c75812ef4ff07c"
+    },
+    {
+      "path": "boost/config/compiler/mpw.hpp",
+      "sha256": "d524e1c8ffccb887d2a0b4123ad3527c118c4add9c1b8498592a35dca1916eb3"
+    },
+    {
+      "path": "boost/config/compiler/nvcc.hpp",
+      "sha256": "28725fc9dfd261c23903b9eb92922ed3b5da10d6a4e90f2b649bac3ac5a944b3"
+    },
+    {
+      "path": "boost/config/compiler/pathscale.hpp",
+      "sha256": "307552e5a406ed12a115df42804a3275d6fd5959787a2f6257f51d82c41a23b9"
+    },
+    {
+      "path": "boost/config/compiler/pgi.hpp",
+      "sha256": "0545c8d13c7680d2b46308794b54196f76b86625c475dd0ff809ebe8b8724bb4"
+    },
+    {
+      "path": "boost/config/compiler/sgi_mipspro.hpp",
+      "sha256": "0911c1cf0f124ba79239bd9ee73bc1a78c529e9f99186dc2820c0c33e64097ca"
+    },
+    {
+      "path": "boost/config/compiler/sunpro_cc.hpp",
+      "sha256": "3536e25616e8cee7173430c7fc7579037902a98944ccb3c6fe59cb55f16ddeeb"
+    },
+    {
+      "path": "boost/config/compiler/vacpp.hpp",
+      "sha256": "f11022a0ae63e1c23e640768645642c9c6aee8f7e9202176f373fd93c08bddb0"
+    },
+    {
+      "path": "boost/config/compiler/visualc.hpp",
+      "sha256": "1b607140adc4547e10b1203e779c9f0fa0a51173c2b9c750bec3e9daae04bb65"
+    },
+    {
+      "path": "boost/config/compiler/xlcpp.hpp",
+      "sha256": "33b636cbaf274c0548babd262114bf87cfd18e8d5c0be5c9a842250b36fd5dfe"
+    },
+    {
+      "path": "boost/config/compiler/xlcpp_zos.hpp",
+      "sha256": "c2715f8af811f3a4c392bf34498ba036aa7c77e9c72dc1ac749dcc64d1dc49a4"
+    },
+    {
+      "path": "boost/config/detail/cxx_composite.hpp",
+      "sha256": "e1d48a1e474d7b3585f33b188aebc6d9a650155bc299122129896a7a1774841d"
+    },
+    {
+      "path": "boost/config/detail/posix_features.hpp",
+      "sha256": "bba105d0af558c09307941fe64ce5ce9d775990b96684708adf4a9a92070fc0a"
+    },
+    {
+      "path": "boost/config/detail/select_compiler_config.hpp",
+      "sha256": "73059f6ceb2952375b9cfb71ee609bd29c595d9f82014a01676fcc47c3a692d3"
+    },
+    {
+      "path": "boost/config/detail/select_platform_config.hpp",
+      "sha256": "b24a891ef5cf8b032f1073c3e7d7416bba54657e58fec6f89e66c8ff9439665e"
+    },
+    {
+      "path": "boost/config/detail/select_stdlib_config.hpp",
+      "sha256": "d26cb12104c9942b2031500c291ee13754dbb43b1d944fb30a7b98b119b83456"
+    },
+    {
+      "path": "boost/config/detail/suffix.hpp",
+      "sha256": "f46a617b5bd44d2076c978ad7151b31f9921517d881f57ee927b26ae4c2383ec"
+    },
+    {
+      "path": "boost/config/header_deprecated.hpp",
+      "sha256": "2371bc12b4634f37ec04a2a43e492cd04f5a4e905cc646a1215acb546a4b7502"
+    },
+    {
+      "path": "boost/config/helper_macros.hpp",
+      "sha256": "ecf739b9b06545ebb0d691e8207cf7b70a5d42d7cb378d5d5502c0c96eefafc2"
+    },
+    {
+      "path": "boost/config/no_tr1/cmath.hpp",
+      "sha256": "88333f68b514da159a18b2aac33be864f279ce4efc215c3f8425baf2c9ea1fa4"
+    },
+    {
+      "path": "boost/config/no_tr1/complex.hpp",
+      "sha256": "c91b0824f8f22581547c364626decc91d94092518be46aa5ed473046565ac0dd"
+    },
+    {
+      "path": "boost/config/no_tr1/functional.hpp",
+      "sha256": "aa14f93ad82f3ef4d5be7107e388f4636e057cc056602527ae82319bd6d91949"
+    },
+    {
+      "path": "boost/config/no_tr1/memory.hpp",
+      "sha256": "a0be3cb94459966b29df1a4c36d4bf7bc18d57d2a06a433c12e1ed60ec29851c"
+    },
+    {
+      "path": "boost/config/no_tr1/utility.hpp",
+      "sha256": "f2f768cf5c0a2800fb8bee3bd521e1e77feb1ca8dc7120d3fed4c7b2a70cacde"
+    },
+    {
+      "path": "boost/config/platform/aix.hpp",
+      "sha256": "202780bd2c63a581860b273d439c27aebf5380ec6ef88c3ae6f45fe5498ea7f4"
+    },
+    {
+      "path": "boost/config/platform/amigaos.hpp",
+      "sha256": "281591f1f79e5560b06fbc5671ed86596e10c0ecd02215f3c5e12c101165ea0b"
+    },
+    {
+      "path": "boost/config/platform/beos.hpp",
+      "sha256": "0bfb4c40d6a696aafc3068e0613768b4ca3bd914dfda24677afe87e6eed39bfd"
+    },
+    {
+      "path": "boost/config/platform/bsd.hpp",
+      "sha256": "79ea600b73cc525bfd0350c73a62387a3274d0221182db0d775d6c7875b0e6ec"
+    },
+    {
+      "path": "boost/config/platform/cloudabi.hpp",
+      "sha256": "e9c3693c4033f2625f90185806c9a7be6bffb1982fbbf48adddd565fa2e09680"
+    },
+    {
+      "path": "boost/config/platform/cray.hpp",
+      "sha256": "4cdb37d8dfc102a686fdff50aaa77641aebd5e674dd617c73c405748ffb94b24"
+    },
+    {
+      "path": "boost/config/platform/cygwin.hpp",
+      "sha256": "d65ce33fcdf02ac41dd1ccbe6e616646fb0e543fb83d035f54f39e6c999bc2b5"
+    },
+    {
+      "path": "boost/config/platform/haiku.hpp",
+      "sha256": "8e66f4725bfa196668a3252964ed5468c81dbd1006a733c49edd4f87f0e7fd4c"
+    },
+    {
+      "path": "boost/config/platform/hpux.hpp",
+      "sha256": "1e1ada36b46783f7a3f336b8d060a38cd519e9701cc606c958fcc202e8e4f4ce"
+    },
+    {
+      "path": "boost/config/platform/irix.hpp",
+      "sha256": "8ea7e1e081993ed5aa631acf35b69146193f6285624011872fdc861d12274115"
+    },
+    {
+      "path": "boost/config/platform/linux.hpp",
+      "sha256": "f508f04c0fe1e1dab43a5c5cb287bb5514b58f63ea3d4705d3aafea528be2341"
+    },
+    {
+      "path": "boost/config/platform/macos.hpp",
+      "sha256": "d5f923845074c86a3abfb0b5fee1e5795646e92274f722291f6e2a1e6e4d7b0d"
+    },
+    {
+      "path": "boost/config/platform/qnxnto.hpp",
+      "sha256": "a994c5204414f356008d0cbb491bb1215f24adac65f71ea62e8f1641b5741482"
+    },
+    {
+      "path": "boost/config/platform/solaris.hpp",
+      "sha256": "da27516af05fb2bc561fcc06e293202524b22c962eb9c077646fa7a592afcac3"
+    },
+    {
+      "path": "boost/config/platform/symbian.hpp",
+      "sha256": "301de8231e5be4e9bbb812e7142235c15d6b8b31b05c3b5c55944e898f059e9c"
+    },
+    {
+      "path": "boost/config/platform/vms.hpp",
+      "sha256": "e479c2501ba061a46720795cbc7845137c12a081df6325d58b9ffe7317ca00a1"
+    },
+    {
+      "path": "boost/config/platform/vxworks.hpp",
+      "sha256": "7b22c4a33fc277b75f5f15cc50bd5e9d409303212eff24cac473fc953155da72"
+    },
+    {
+      "path": "boost/config/platform/wasm.hpp",
+      "sha256": "6eb2f991c46456f669b37016b43d24b65e3d6ce868c577ea71a2a0122316035b"
+    },
+    {
+      "path": "boost/config/platform/win32.hpp",
+      "sha256": "eaa82c93bc49969f4e91edd333e1068bb4aeeb97c9a3dcdf51c0f8dab05dc225"
+    },
+    {
+      "path": "boost/config/platform/zos.hpp",
+      "sha256": "108f3d2d0c14c98e258b6bb012119edc5c0f954981f4836f019f563e7ec4e729"
+    },
+    {
+      "path": "boost/config/pragma_message.hpp",
+      "sha256": "1951b59b8db3e8bf1e02c622605c7f45067dc3ce86eee8fba00f656099c64ab9"
+    },
+    {
+      "path": "boost/config/requires_threads.hpp",
+      "sha256": "e2eaa665b71d42068b0158ad8179a9c9e46376e6356a9d89f9bc3bcc96b606e7"
+    },
+    {
+      "path": "boost/config/stdlib/dinkumware.hpp",
+      "sha256": "6f8b6f608e92d92e18e436aefe1a56a157b2ad119ad1dec0122e057f1ad11a15"
+    },
+    {
+      "path": "boost/config/stdlib/libcomo.hpp",
+      "sha256": "900d7df20047190b21af43160d66ba3c3842ac165cf8fe300d642e27f46d4c1c"
+    },
+    {
+      "path": "boost/config/stdlib/libcpp.hpp",
+      "sha256": "263bce663ed70c5c7ba738088126392a38891e9d3682423c504ff3fff1e228e2"
+    },
+    {
+      "path": "boost/config/stdlib/libstdcpp3.hpp",
+      "sha256": "3568e83c96b9f7fb823b9ae3f5ae0cc126ee5da3cfd613dd3724d5cb6cd352ed"
+    },
+    {
+      "path": "boost/config/stdlib/modena.hpp",
+      "sha256": "5a93eed622333f0177e2bee978da04cfe596e19d0ad0cfa7f153e68576f2039c"
+    },
+    {
+      "path": "boost/config/stdlib/msl.hpp",
+      "sha256": "4cb169daab7f7317c6612e2ecf61b944d44156fb247ae73abddecba2ba934c1d"
+    },
+    {
+      "path": "boost/config/stdlib/roguewave.hpp",
+      "sha256": "0d19486610b1401350e06070c1b4f6e30460f514fc46789e26810aacec92c4bc"
+    },
+    {
+      "path": "boost/config/stdlib/sgi.hpp",
+      "sha256": "1a3ce59a405bd3dc68d853330227eb5d548884cb025b589714737666b40a62b8"
+    },
+    {
+      "path": "boost/config/stdlib/stlport.hpp",
+      "sha256": "cc599eba3157783469c39396fd41650ab0e4e33115979b05212703294a992dfe"
+    },
+    {
+      "path": "boost/config/stdlib/vacpp.hpp",
+      "sha256": "310b7658be7b028b506088ae8567f3190735db7eb5293dbcebed9a6092981850"
+    },
+    {
+      "path": "boost/config/stdlib/xlcpp_zos.hpp",
+      "sha256": "6afd690828f31abc0a0653d6b1bb3cc94f550e27430e2f9fa4cc1fbb366e9cb1"
+    },
+    {
+      "path": "boost/config/user.hpp",
+      "sha256": "d24c2d771df2ee757c930466d69a0fac11cf721aaf89820f32c05c923a4ebca7"
+    },
+    {
+      "path": "boost/config/warning_disable.hpp",
+      "sha256": "51afb69aa2a3907b10d253ed93d000cee51f88cd6ff1bc7ca23a3296997e7453"
+    },
+    {
+      "path": "boost/config/workaround.hpp",
+      "sha256": "58a94045ef72552481b69a8b614a6c92e0d21ee19798677560ec4d59e10b0f99"
+    },
+    {
+      "path": "boost/config.hpp",
+      "sha256": "373206390d20aa5bb9e2628eb08543399d73b853af7bfc5f1d2bd9a00bc07593"
+    },
+    {
+      "path": "boost/cstdint.hpp",
+      "sha256": "dbbf2bba3a0b6316d7f1850ff656eb4567bb2aa10197435a525cb8ff70b6d8f5"
+    },
+    {
+      "path": "boost/exception/all.hpp",
+      "sha256": "6ab1f44d0f7090ad4ddb80b5afb7b65d6f28c4268be11eb05832ba6a690f1e7d"
+    },
+    {
+      "path": "boost/exception/current_exception_cast.hpp",
+      "sha256": "855d4f30df925cd8f5fa84687254778c753f4f98fcc36463d532c3fb60ddfc96"
+    },
+    {
+      "path": "boost/exception/detail/clone_current_exception.hpp",
+      "sha256": "5c11b14f9302d7e655fb31fb566984f12228173a12bb5f30dc7fff974bf364e7"
+    },
+    {
+      "path": "boost/exception/detail/error_info_impl.hpp",
+      "sha256": "a89d00c21b349ad24bef263cce3311a970890ec1928fb10b8203dbd3065d6f53"
+    },
+    {
+      "path": "boost/exception/detail/exception_ptr.hpp",
+      "sha256": "f2526d02197398ef3788ee7de79cf2f5cbdfed82f4189afab88d0d3b041690e3"
+    },
+    {
+      "path": "boost/exception/detail/is_output_streamable.hpp",
+      "sha256": "b60f958374a5660d5a4ca8fc6a9b89605751b7e74965ee81d012861bcf0f8713"
+    },
+    {
+      "path": "boost/exception/detail/object_hex_dump.hpp",
+      "sha256": "479ee5c445ff90badd58db853f56180f6f66dc28ab924a9fe478122f7dc631a2"
+    },
+    {
+      "path": "boost/exception/detail/requires_cxx11.hpp",
+      "sha256": "817eb77329cfd0d9fd50fa89f8fa7b7480c293dce6205dde418c7826a9503686"
+    },
+    {
+      "path": "boost/exception/detail/shared_ptr.hpp",
+      "sha256": "d4858949256ca3e6613ceb9aaa90ccb0d36962c185c5d9b05a2c5d909f6e5c30"
+    },
+    {
+      "path": "boost/exception/detail/type_info.hpp",
+      "sha256": "f7d33ab98079648fd633f45d460616b5eb400f3ffd5aafab7443630f6cec86a5"
+    },
+    {
+      "path": "boost/exception/diagnostic_information.hpp",
+      "sha256": "c2479ff372b8ee08668aee1d9f1b1a6c4943295b3300a79adb686fb7bd85fbe3"
+    },
+    {
+      "path": "boost/exception/enable_current_exception.hpp",
+      "sha256": "e4f8e64178b62d41d8e797f735b423fb80969042139b9004c9b40ae5e022d018"
+    },
+    {
+      "path": "boost/exception/enable_error_info.hpp",
+      "sha256": "8dbc5575e9b72b31f62239e17bbd8291649585edb8da50028ce35a06de17693d"
+    },
+    {
+      "path": "boost/exception/errinfo_api_function.hpp",
+      "sha256": "b251d361427b82a24dcdb49d730e3b67249ad1cc136c50f8cf24b893479f35ba"
+    },
+    {
+      "path": "boost/exception/errinfo_at_line.hpp",
+      "sha256": "9c44753a89ba7d303c52b0fcd1541c20234492eaccb4e6db1c9460870637bf92"
+    },
+    {
+      "path": "boost/exception/errinfo_errno.hpp",
+      "sha256": "f36a59af82553131aee0c98d8c05ce11d5220f0225ed7fb04ba0bd14edcd834a"
+    },
+    {
+      "path": "boost/exception/errinfo_file_handle.hpp",
+      "sha256": "f3a10547e1be9c674d4bcdb7a761d69fdbb8470a0b37ac048cf74e5772f21df7"
+    },
+    {
+      "path": "boost/exception/errinfo_file_name.hpp",
+      "sha256": "8ad9efd5aed2982d5e9e078d309dda9d96593b785c130a297717479524fd36f0"
+    },
+    {
+      "path": "boost/exception/errinfo_file_open_mode.hpp",
+      "sha256": "4ac0e9ae5b90cbf898f61d2b49c15c97e33d90e39ff8f635c38aff7161a6db95"
+    },
+    {
+      "path": "boost/exception/errinfo_nested_exception.hpp",
+      "sha256": "ad0ecc2d7337f03929be73d675d677598f3f701ad4ea3d8f86f33ee1bfc07286"
+    },
+    {
+      "path": "boost/exception/errinfo_type_info_name.hpp",
+      "sha256": "f0ef0a741e084992ceb06bcdfce65987e40ad49ae789e6bc00f26ce0fc850330"
+    },
+    {
+      "path": "boost/exception/error_info.hpp",
+      "sha256": "24c2171e33cbf70c74d95f00bb387965fe90b20dcef36615c6c74ada4742cf4f"
+    },
+    {
+      "path": "boost/exception/exception.hpp",
+      "sha256": "062f57bcd7f1bdd92014beec36c59fdad44b00717ef9b108a1adb48069afee95"
+    },
+    {
+      "path": "boost/exception/get_error_info.hpp",
+      "sha256": "3edb7e26b0013e03e978d253bdd790fa06f82b12bb02b05afe512c3b247f6fb3"
+    },
+    {
+      "path": "boost/exception/info.hpp",
+      "sha256": "6e0c19d95f09535b9a2493f0b8148b22a1bc8904b22e44a00a85d5a70795994a"
+    },
+    {
+      "path": "boost/exception/info_tuple.hpp",
+      "sha256": "9240ee75c4c7d56274643a7105d98d12d708413ef310ea60ad89ecc6e7dc9fc1"
+    },
+    {
+      "path": "boost/exception/to_string.hpp",
+      "sha256": "1d3b6a465aa73498de0e9b53c11f8dfee47e6e512406d5b7aa28cb569671d107"
+    },
+    {
+      "path": "boost/exception/to_string_stub.hpp",
+      "sha256": "76efcc719c6ee67933348a46447aae3f89acc41156c2778915e03d89c793b8c4"
+    },
+    {
+      "path": "boost/regex/concepts.hpp",
+      "sha256": "a6c19d1bfa5156331b0d6bd9afdec1735f50c324a986c04a2f9ed3a93128b021"
+    },
+    {
+      "path": "boost/regex/config.hpp",
+      "sha256": "26dab5debbf17c80cee4128b3d9fe0748fe9c32a00a91732e04d55f2d1d0858e"
+    },
+    {
+      "path": "boost/regex/icu.hpp",
+      "sha256": "faba17da04c7a20462a6ca16ceb7457a734f537722b0f420ad5e1bfebb688280"
+    },
+    {
+      "path": "boost/regex/mfc.hpp",
+      "sha256": "10282d24d23327762f5d51cc8403c7caa200e7261d7335d2fa37f2be583c7753"
+    },
+    {
+      "path": "boost/regex/pattern_except.hpp",
+      "sha256": "608cba4749bc4637bf9466467b561e7a0b87f7b1ad0dd30b7a7138ae1e24bc5a"
+    },
+    {
+      "path": "boost/regex/pending/object_cache.hpp",
+      "sha256": "26f5b5318e6bc24b2ee137f37e31f71d3be187ac56d63ca1beb7f1364339f048"
+    },
+    {
+      "path": "boost/regex/pending/unicode_iterator.hpp",
+      "sha256": "e9ab568bd2c6fe76248186073be9f1e786f8e247b9246d99166e94ac9aebffed"
+    },
+    {
+      "path": "boost/regex/regex_traits.hpp",
+      "sha256": "bf3b5c58b4d3c246324d45d2471f881285a1ca3e528628c3fd9fe7be0662979b"
+    },
+    {
+      "path": "boost/regex/user.hpp",
+      "sha256": "f3032ea68f413360f38951e516870630faf721aa4bdedfc38270578bdc35aad8"
+    },
+    {
+      "path": "boost/regex/v5/basic_regex.hpp",
+      "sha256": "5ff272796b68040efe58acd4ecdf03736a8d3033bdce81ceb7c745e94cc56896"
+    },
+    {
+      "path": "boost/regex/v5/basic_regex_creator.hpp",
+      "sha256": "3d20e2b6a4926088a283f02e1dfe7dada6dca8880547ad561ef88d8abc76da68"
+    },
+    {
+      "path": "boost/regex/v5/basic_regex_parser.hpp",
+      "sha256": "f514c7322b6f92041f0b2bc44922e1253efac70a035fba023a3e163302f35417"
+    },
+    {
+      "path": "boost/regex/v5/c_regex_traits.hpp",
+      "sha256": "4a0e60e03a4e25ebf197be2439ec9e66cdf189302151785fef88526f4ace89e5"
+    },
+    {
+      "path": "boost/regex/v5/char_regex_traits.hpp",
+      "sha256": "7803c734def636576c13c90dbf0d4fa5ea612793f83cb6428f259fb5cc728a68"
+    },
+    {
+      "path": "boost/regex/v5/cpp_regex_traits.hpp",
+      "sha256": "2a1e02fcca0a8fd253477da804d322d8ac37fee29316821997fcbfb4a6a3e1f1"
+    },
+    {
+      "path": "boost/regex/v5/cregex.hpp",
+      "sha256": "a0c7d5aab7549eb1d19603ebed3b7e89b821fb6ec8c5f3a9f0ec23a3ad887214"
+    },
+    {
+      "path": "boost/regex/v5/error_type.hpp",
+      "sha256": "f9fe572dfa63cf1e48eb87b4f49a3c140229fa11f9a1e391c3fff331abec95fd"
+    },
+    {
+      "path": "boost/regex/v5/icu.hpp",
+      "sha256": "b6975381220ff2429eb4aae9a958908fdfc1dbd97830de07eca7d368e26c58d0"
+    },
+    {
+      "path": "boost/regex/v5/iterator_category.hpp",
+      "sha256": "95a3b71c0086b5bc1da42a250feeed3ecbe617509bbfe015936048266a756ac1"
+    },
+    {
+      "path": "boost/regex/v5/iterator_traits.hpp",
+      "sha256": "dd4518eb44ea67ff8f24d188d944c8377c16a71dc36b3bdee534e982caa15c4e"
+    },
+    {
+      "path": "boost/regex/v5/match_flags.hpp",
+      "sha256": "aebabba3b00adc9ed0276eb9052ae30a9d8601e7252423bb19cd000ded5ad05e"
+    },
+    {
+      "path": "boost/regex/v5/match_results.hpp",
+      "sha256": "8274eb6278ccb20c3a6605a4f8ee6a9c387955347e28aa8ab9d6383cd101a442"
+    },
+    {
+      "path": "boost/regex/v5/mem_block_cache.hpp",
+      "sha256": "e5be209321f6fc931384c2ad1906ce62e3bbd53a7caa642dc6a44f5f49e60702"
+    },
+    {
+      "path": "boost/regex/v5/object_cache.hpp",
+      "sha256": "3fb8040f7a55573530f14d8e18827ed84bc0b5de1b6291945c70fb15c761ecd0"
+    },
+    {
+      "path": "boost/regex/v5/pattern_except.hpp",
+      "sha256": "77e09c1bdab496f1653b3149cc582a6b1bae780053c62795a027088dc36350cd"
+    },
+    {
+      "path": "boost/regex/v5/perl_matcher.hpp",
+      "sha256": "bf9144047d64377a64a44969c6a13fd25c0c9c353e940403ffe3efe28b02afa0"
+    },
+    {
+      "path": "boost/regex/v5/perl_matcher_common.hpp",
+      "sha256": "b52a734d0644080bb608b97ddc178688030f463b423a917c2243281338f37337"
+    },
+    {
+      "path": "boost/regex/v5/perl_matcher_non_recursive.hpp",
+      "sha256": "0323cfd2ab555681652d59cbd097e2567981f9100d904413edb819df91cfb66a"
+    },
+    {
+      "path": "boost/regex/v5/primary_transform.hpp",
+      "sha256": "b81332b169a712ec3e623321b50437f3b5bb3b7ff1ebae8459ae62b8b7364f28"
+    },
+    {
+      "path": "boost/regex/v5/regbase.hpp",
+      "sha256": "06970c5f4e620559f22e100f598d19c6038635e7561ba732dc24e74886e36177"
+    },
+    {
+      "path": "boost/regex/v5/regex.hpp",
+      "sha256": "5faf75d7575906ef2d74446b890059ffa04167a65ced5d7e0c8eea62ac047456"
+    },
+    {
+      "path": "boost/regex/v5/regex_format.hpp",
+      "sha256": "2dc2e520b0a8b74cafe56eb3aba38f12b8c8fb9f603ac9623894c9aee937dc2f"
+    },
+    {
+      "path": "boost/regex/v5/regex_fwd.hpp",
+      "sha256": "e9e3db723cf45b60b69bc81c1eca8d0d02c20f582c40f02abfb1968fbedf8bd4"
+    },
+    {
+      "path": "boost/regex/v5/regex_grep.hpp",
+      "sha256": "6c3aabe7d51f992c37b81db2b32adb3b6a264eade7ab317e1e772a43f2d72b3f"
+    },
+    {
+      "path": "boost/regex/v5/regex_iterator.hpp",
+      "sha256": "d93a6ced925cbbfff856f53bef12c4d5dfa4457d220c3702d74f3234abf9aefb"
+    },
+    {
+      "path": "boost/regex/v5/regex_match.hpp",
+      "sha256": "702863ab4661a48a56e4f1e9681d27c2fca2987f2f41661c2306f69892f670a8"
+    },
+    {
+      "path": "boost/regex/v5/regex_merge.hpp",
+      "sha256": "5446cfaf73464307f3c8d35bbcd42d27294387270ba7e0dd1fef04f7143873fa"
+    },
+    {
+      "path": "boost/regex/v5/regex_raw_buffer.hpp",
+      "sha256": "79d723825c273f38582c1c89498c67be617ed5de019eee002480d0cb73029e61"
+    },
+    {
+      "path": "boost/regex/v5/regex_replace.hpp",
+      "sha256": "eeab539d4802d2177fd65935f9344cb9eb95843a0b4ecff8ff5dfd2087a3b49f"
+    },
+    {
+      "path": "boost/regex/v5/regex_search.hpp",
+      "sha256": "76bf30b2e63e56d5fda076752752afc64342bb065c4b68e16594149b30cf79c8"
+    },
+    {
+      "path": "boost/regex/v5/regex_split.hpp",
+      "sha256": "8c647fe1c45281ec0ec57c37a4eda459911cbf5dd9443ec2d99f2466314749e1"
+    },
+    {
+      "path": "boost/regex/v5/regex_token_iterator.hpp",
+      "sha256": "a6bc9f797fd96320ce2dc4b8e19d8dc2c501f2897b43f5d137ef641a592faa96"
+    },
+    {
+      "path": "boost/regex/v5/regex_traits.hpp",
+      "sha256": "8ece89c4942d49bde0a963706bd971cd2a296864dd8db7491f11d78ee24519fa"
+    },
+    {
+      "path": "boost/regex/v5/regex_traits_defaults.hpp",
+      "sha256": "a07b271a8df23ce012c45ca7e6d785b743bb20b6bb4d5b5dcd4d040a0e5d91db"
+    },
+    {
+      "path": "boost/regex/v5/regex_workaround.hpp",
+      "sha256": "5bca4c96f621c50d5d774637e583087e5e550102cc0bb56aa5efe67a839171e4"
+    },
+    {
+      "path": "boost/regex/v5/states.hpp",
+      "sha256": "06b53c56f31ca1854ee2b99363ed4ff50470e65bee3cddc18f5e750e628d161c"
+    },
+    {
+      "path": "boost/regex/v5/sub_match.hpp",
+      "sha256": "8bd1a01e2398e8808fdf737e319cb35d397aa1a4dfb5583ceb79920b513a2a27"
+    },
+    {
+      "path": "boost/regex/v5/syntax_type.hpp",
+      "sha256": "47df0e955a453e7bf25eaaafaf72f1567d9f200433057536503dc0768d24d715"
+    },
+    {
+      "path": "boost/regex/v5/u32regex_iterator.hpp",
+      "sha256": "3202d43de7db9348f58030b4916649c5f2d717848976ca48dc3e6b7825d3a00f"
+    },
+    {
+      "path": "boost/regex/v5/u32regex_token_iterator.hpp",
+      "sha256": "677e58c952ef3fc2b5fbad36ca7c93aa12efaac0f7d732065e5f6092a09ea43c"
+    },
+    {
+      "path": "boost/regex/v5/unicode_iterator.hpp",
+      "sha256": "2654f4727b41caa269a4c50ea29e811fab861f19f0486713aedcdd1fe10e108e"
+    },
+    {
+      "path": "boost/regex/v5/w32_regex_traits.hpp",
+      "sha256": "7b240bcd59cf9bc50b7ffe8bacc350f232bf17a7e8e1031337db31d619dd927b"
+    },
+    {
+      "path": "boost/regex.hpp",
+      "sha256": "2aac703fcb0795481e4286753398bf08e6f26713a510ceb2778d2c74acb95885"
+    },
+    {
+      "path": "boost/regex_fwd.hpp",
+      "sha256": "2a3d260c68fc15ed0722ee313c5e5fab3154e39868fd22d0cdf65239648c02fb"
+    },
+    {
+      "path": "boost/throw_exception.hpp",
+      "sha256": "fbf66a8b406e803d30dde7c616c15e0f1407bf0325f1d4f9665a8788aeedd745"
+    },
+    {
+      "path": "boost/version.hpp",
+      "sha256": "1a3a432bf24fbd21b3c9c90b3f5dce9456f2334f1d2b79b1e3318c780d8b1935"
+    }
+  ]
+}

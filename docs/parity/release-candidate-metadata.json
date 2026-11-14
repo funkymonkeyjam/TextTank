@@ -1,0 +1,918 @@
+{
+  "release_url": "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/tag/v8.9.8.1",
+  "tag": "v8.9.8.1",
+  "published_at": "2026-09-24T15:21:27Z",
+  "asset": {
+    "name": "npp.8.9.8.1.portable.x64.zip",
+    "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.8.1/npp.8.9.8.1.portable.x64.zip",
+    "size": 8250001,
+    "publisher_digest": "sha256:beddf5548e75c97930d1575ba1c7d113e6e2b33d0a200310e734ca08e225f414"
+  },
+  "evidence": "GitHub release metadata; binary not downloaded, extracted, hash verified or executed",
+  "source_comparison": {
+    "release_tag_commit": "dd40fe45598791e9aa38f3aeb200e10fb3d6338a",
+    "required_source_commit": "61246e5741fd7c59352f3feb5ccc7e33e4594d15",
+    "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/compare/dd40fe45598791e9aa38f3aeb200e10fb3d6338a...61246e5741fd7c59352f3feb5ccc7e33e4594d15",
+    "status": "ahead",
+    "ahead_by": 80,
+    "behind_by": 0,
+    "total_commits": 80,
+    "files": [
+      {
+        "filename": ".github/workflows/CI_build.yml",
+        "status": "modified",
+        "changes": 102
+      },
+      {
+        "filename": "CONTRIBUTING.md",
+        "status": "modified",
+        "changes": 9
+      },
+      {
+        "filename": "PowerEditor/Test/FunctionList/c/unitTest",
+        "status": "modified",
+        "changes": 32
+      },
+      {
+        "filename": "PowerEditor/Test/FunctionList/c/unitTest.expected.result",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/Test/FunctionList/typescript/unitTest",
+        "status": "modified",
+        "changes": 10
+      },
+      {
+        "filename": "PowerEditor/Test/FunctionList/typescript/unitTest.expected.result",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/bin/userDefineLangs/markdown._preinstalled.udl.xml",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/bin/userDefineLangs/markdown._preinstalled_DM.udl.xml",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/installer/functionList/c.xml",
+        "status": "modified",
+        "changes": 3
+      },
+      {
+        "filename": "PowerEditor/installer/functionList/typescript.xml",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/brazilian_portuguese.xml",
+        "status": "modified",
+        "changes": 20
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/chineseSimplified.xml",
+        "status": "modified",
+        "changes": 51
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/corsican.xml",
+        "status": "modified",
+        "changes": 68
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/croatian.xml",
+        "status": "modified",
+        "changes": 21
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/dutch.xml",
+        "status": "modified",
+        "changes": 9
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/english.xml",
+        "status": "modified",
+        "changes": 18
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/english_customizable.xml",
+        "status": "modified",
+        "changes": 18
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/french.xml",
+        "status": "modified",
+        "changes": 47
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/german.xml",
+        "status": "modified",
+        "changes": 38
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/hungarian.xml",
+        "status": "modified",
+        "changes": 6
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/japanese.xml",
+        "status": "modified",
+        "changes": 16
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/russian.xml",
+        "status": "modified",
+        "changes": 6
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/slovak.xml",
+        "status": "modified",
+        "changes": 20
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/taiwaneseMandarin.xml",
+        "status": "modified",
+        "changes": 12
+      },
+      {
+        "filename": "PowerEditor/installer/nativeLang/ukrainian.xml",
+        "status": "modified",
+        "changes": 63
+      },
+      {
+        "filename": "PowerEditor/installer/themes/DarkModeDefault.xml",
+        "status": "modified",
+        "changes": 23
+      },
+      {
+        "filename": "PowerEditor/installer/themes/Zenburn.xml",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/scintilla.original.forUpdating/lexilla554.zip",
+        "status": "renamed",
+        "changes": 0
+      },
+      {
+        "filename": "PowerEditor/scintilla.original.forUpdating/scintilla567.zip",
+        "status": "renamed",
+        "changes": 0
+      },
+      {
+        "filename": "PowerEditor/src/MISC/Common/Common.cpp",
+        "status": "modified",
+        "changes": 65
+      },
+      {
+        "filename": "PowerEditor/src/MISC/Common/Common.h",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "PowerEditor/src/MISC/Common/FileInterface.h",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "PowerEditor/src/MISC/Common/NppConstants.h",
+        "status": "modified",
+        "changes": 10
+      },
+      {
+        "filename": "PowerEditor/src/MISC/PluginsManager/Notepad_plus_msgs.h",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/src/MISC/md5/md5Dlgs.cpp",
+        "status": "modified",
+        "changes": 81
+      },
+      {
+        "filename": "PowerEditor/src/MISC/md5/md5Dlgs.h",
+        "status": "modified",
+        "changes": 13
+      },
+      {
+        "filename": "PowerEditor/src/Notepad_plus.cpp",
+        "status": "modified",
+        "changes": 372
+      },
+      {
+        "filename": "PowerEditor/src/Notepad_plus.h",
+        "status": "modified",
+        "changes": 75
+      },
+      {
+        "filename": "PowerEditor/src/Notepad_plus.rc",
+        "status": "modified",
+        "changes": 10
+      },
+      {
+        "filename": "PowerEditor/src/NppBigSwitch.cpp",
+        "status": "modified",
+        "changes": 73
+      },
+      {
+        "filename": "PowerEditor/src/NppCommands.cpp",
+        "status": "modified",
+        "changes": 14
+      },
+      {
+        "filename": "PowerEditor/src/NppDarkMode.cpp",
+        "status": "modified",
+        "changes": 50
+      },
+      {
+        "filename": "PowerEditor/src/NppDarkMode.h",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/src/NppIO.cpp",
+        "status": "modified",
+        "changes": 12
+      },
+      {
+        "filename": "PowerEditor/src/NppNotification.cpp",
+        "status": "modified",
+        "changes": 10
+      },
+      {
+        "filename": "PowerEditor/src/NppXml.h",
+        "status": "modified",
+        "changes": 20
+      },
+      {
+        "filename": "PowerEditor/src/Parameters.cpp",
+        "status": "modified",
+        "changes": 145
+      },
+      {
+        "filename": "PowerEditor/src/Parameters.h",
+        "status": "modified",
+        "changes": 36
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/Buffer.cpp",
+        "status": "modified",
+        "changes": 612
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/Buffer.h",
+        "status": "modified",
+        "changes": 40
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/DocTabView.h",
+        "status": "modified",
+        "changes": 3
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/FindReplaceDlg.cpp",
+        "status": "modified",
+        "changes": 675
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/FindReplaceDlg.h",
+        "status": "modified",
+        "changes": 71
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/FindReplaceDlg.rc",
+        "status": "modified",
+        "changes": 6
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/FindReplaceDlg_rc.h",
+        "status": "modified",
+        "changes": 21
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/FunctionCallTip.cpp",
+        "status": "modified",
+        "changes": 5
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/FunctionCallTip.h",
+        "status": "modified",
+        "changes": 14
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/ScintillaEditView.cpp",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/ScintillaEditView.h",
+        "status": "modified",
+        "changes": 8
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/SmartHighlighter.cpp",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/UserDefineDialog.cpp",
+        "status": "modified",
+        "changes": 16
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/UserDefineDialog.rc",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/src/ScintillaComponent/columnEditor.rc",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/AboutDlg/AboutDlg.cpp",
+        "status": "modified",
+        "changes": 113
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/AboutDlg/AboutDlg.h",
+        "status": "modified",
+        "changes": 17
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/AboutDlg/URLCtrl.cpp",
+        "status": "modified",
+        "changes": 19
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/AboutDlg/URLCtrl.h",
+        "status": "modified",
+        "changes": 10
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/AnsiCharPanel/ListView.cpp",
+        "status": "modified",
+        "changes": 183
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/AnsiCharPanel/ListView.h",
+        "status": "modified",
+        "changes": 29
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/ClipboardHistory/clipboardHistoryPanel.cpp",
+        "status": "modified",
+        "changes": 333
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/ClipboardHistory/clipboardHistoryPanel.h",
+        "status": "modified",
+        "changes": 64
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/ClipboardHistory/clipboardHistoryPanel.rc",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/ColourPicker/ColourPopup.cpp",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/ColourPicker/WordStyleDlg.h",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/ColourPicker/WordStyleDlg.rc",
+        "status": "modified",
+        "changes": 6
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/DockingWnd/DockingManager.cpp",
+        "status": "modified",
+        "changes": 44
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/DockingWnd/DockingManager.h",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/DockingWnd/DockingSplitter.cpp",
+        "status": "modified",
+        "changes": 53
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/DockingWnd/DockingSplitter.h",
+        "status": "modified",
+        "changes": 9
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/DoubleBuffer/DoubleBuffer.cpp",
+        "status": "modified",
+        "changes": 58
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/DoubleBuffer/DoubleBuffer.h",
+        "status": "modified",
+        "changes": 6
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/Grid/BabyGridWrapper.h",
+        "status": "modified",
+        "changes": 19
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/Grid/ShortcutMapper.cpp",
+        "status": "modified",
+        "changes": 102
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/Grid/ShortcutMapper.h",
+        "status": "modified",
+        "changes": 29
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/ImageListSet/ImageListSet.cpp",
+        "status": "modified",
+        "changes": 6
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/PluginsAdmin/pluginsAdmin.cpp",
+        "status": "modified",
+        "changes": 8
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/PluginsAdmin/pluginsAdmin.h",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/Preference/preference.rc",
+        "status": "modified",
+        "changes": 36
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/Preference/preferenceDlg.cpp",
+        "status": "modified",
+        "changes": 144
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/Preference/preference_rc.h",
+        "status": "modified",
+        "changes": 10
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/StaticDialog/RunDlg/RunDlg.cpp",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/StaticDialog/StaticDialog.cpp",
+        "status": "modified",
+        "changes": 189
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/StaticDialog/StaticDialog.h",
+        "status": "modified",
+        "changes": 8
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/StatusBar/StatusBar.cpp",
+        "status": "modified",
+        "changes": 290
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/StatusBar/StatusBar.h",
+        "status": "modified",
+        "changes": 24
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/TabBar/TabBar.cpp",
+        "status": "modified",
+        "changes": 47
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/TabBar/TabBar.h",
+        "status": "modified",
+        "changes": 3
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/TaskList/TaskList.cpp",
+        "status": "modified",
+        "changes": 24
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/TaskList/TaskList.h",
+        "status": "modified",
+        "changes": 10
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/TaskList/TaskListDlg.cpp",
+        "status": "modified",
+        "changes": 52
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/ToolBar/ToolBar.cpp",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/WindowsDlg/SizeableDlg.cpp",
+        "status": "modified",
+        "changes": 20
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/WindowsDlg/SizeableDlg.h",
+        "status": "modified",
+        "changes": 12
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/WindowsDlg/WinMgr.cpp",
+        "status": "modified",
+        "changes": 11
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/WindowsDlg/WinMgr.h",
+        "status": "modified",
+        "changes": 17
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/WindowsDlg/WindowsDlg.cpp",
+        "status": "modified",
+        "changes": 156
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/WindowsDlg/WindowsDlg.h",
+        "status": "modified",
+        "changes": 15
+      },
+      {
+        "filename": "PowerEditor/src/WinControls/shortcut/shortcut.rc",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "PowerEditor/src/dpiManagerV2.cpp",
+        "status": "modified",
+        "changes": 69
+      },
+      {
+        "filename": "PowerEditor/src/dpiManagerV2.h",
+        "status": "modified",
+        "changes": 10
+      },
+      {
+        "filename": "PowerEditor/src/langs.model.xml",
+        "status": "modified",
+        "changes": 20
+      },
+      {
+        "filename": "PowerEditor/src/menuCmdID.h",
+        "status": "modified",
+        "changes": 1
+      },
+      {
+        "filename": "PowerEditor/src/resource.h",
+        "status": "modified",
+        "changes": 1
+      },
+      {
+        "filename": "PowerEditor/src/stylers.model.xml",
+        "status": "modified",
+        "changes": 21
+      },
+      {
+        "filename": "PowerEditor/src/winmain.cpp",
+        "status": "modified",
+        "changes": 127
+      },
+      {
+        "filename": "boostregex/BoostRegExSearch.cxx",
+        "status": "modified",
+        "changes": 13
+      },
+      {
+        "filename": "boostregex/UTF8DocumentIterator.h",
+        "status": "modified",
+        "changes": 6
+      },
+      {
+        "filename": "lexilla/cppcheck.suppress",
+        "status": "modified",
+        "changes": 3
+      },
+      {
+        "filename": "lexilla/doc/Lexilla.html",
+        "status": "modified",
+        "changes": 8
+      },
+      {
+        "filename": "lexilla/doc/LexillaDownload.html",
+        "status": "modified",
+        "changes": 10
+      },
+      {
+        "filename": "lexilla/doc/LexillaHistory.html",
+        "status": "modified",
+        "changes": 17
+      },
+      {
+        "filename": "lexilla/lexers/LexCPP.cxx",
+        "status": "modified",
+        "changes": 47
+      },
+      {
+        "filename": "lexilla/lexers/LexHTML.cxx",
+        "status": "modified",
+        "changes": 10
+      },
+      {
+        "filename": "lexilla/lexers/LexTCL.cxx",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "lexilla/lexers/LexYAML.cxx",
+        "status": "modified",
+        "changes": 35
+      },
+      {
+        "filename": "lexilla/lexlib/LexerBase.h",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "lexilla/lexlib/LexerModule.h",
+        "status": "modified",
+        "changes": 16
+      },
+      {
+        "filename": "lexilla/lexlib/OptionSet.h",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "lexilla/lexlib/SubStyles.h",
+        "status": "modified",
+        "changes": 59
+      },
+      {
+        "filename": "lexilla/src/Lexilla/Info.plist",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "lexilla/src/Lexilla/Lexilla.xcodeproj/project.pbxproj",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "lexilla/src/LexillaVersion.rc",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "lexilla/test/Metadata/lexerMetadata.txt",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "lexilla/test/examples/cpp/55Continuation.cxx",
+        "status": "added",
+        "changes": 19
+      },
+      {
+        "filename": "lexilla/test/examples/cpp/55Continuation.cxx.folded",
+        "status": "added",
+        "changes": 20
+      },
+      {
+        "filename": "lexilla/test/examples/cpp/55Continuation.cxx.styled",
+        "status": "added",
+        "changes": 19
+      },
+      {
+        "filename": "lexilla/test/examples/cpp/SciTE.properties",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "lexilla/test/examples/yaml/326-textOverEmpty.yaml.styled",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "lexilla/version.txt",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "scintilla/cocoa/Scintilla/Info.plist",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "scintilla/cocoa/Scintilla/Scintilla.xcodeproj/project.pbxproj",
+        "status": "modified",
+        "changes": 8
+      },
+      {
+        "filename": "scintilla/doc/ScintillaDownload.html",
+        "status": "modified",
+        "changes": 10
+      },
+      {
+        "filename": "scintilla/doc/ScintillaHistory.html",
+        "status": "modified",
+        "changes": 27
+      },
+      {
+        "filename": "scintilla/doc/index.html",
+        "status": "modified",
+        "changes": 8
+      },
+      {
+        "filename": "scintilla/qt/ScintillaEdit/ScintillaEdit.pro",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "scintilla/qt/ScintillaEditBase/ScintillaEditBase.pro",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "scintilla/src/CellBuffer.cxx",
+        "status": "modified",
+        "changes": 126
+      },
+      {
+        "filename": "scintilla/src/CellBuffer.h",
+        "status": "modified",
+        "changes": 88
+      },
+      {
+        "filename": "scintilla/src/ChangeHistory.h",
+        "status": "modified",
+        "changes": 6
+      },
+      {
+        "filename": "scintilla/src/ContractionState.cxx",
+        "status": "modified",
+        "changes": 178
+      },
+      {
+        "filename": "scintilla/src/ContractionState.h",
+        "status": "modified",
+        "changes": 26
+      },
+      {
+        "filename": "scintilla/src/Debugging.h",
+        "status": "modified",
+        "changes": 6
+      },
+      {
+        "filename": "scintilla/src/Document.cxx",
+        "status": "modified",
+        "changes": 589
+      },
+      {
+        "filename": "scintilla/src/Document.h",
+        "status": "modified",
+        "changes": 61
+      },
+      {
+        "filename": "scintilla/src/EditModel.cxx",
+        "status": "modified",
+        "changes": 1
+      },
+      {
+        "filename": "scintilla/src/EditModel.h",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "scintilla/src/EditView.cxx",
+        "status": "modified",
+        "changes": 265
+      },
+      {
+        "filename": "scintilla/src/EditView.h",
+        "status": "modified",
+        "changes": 12
+      },
+      {
+        "filename": "scintilla/src/Editor.cxx",
+        "status": "modified",
+        "changes": 108
+      },
+      {
+        "filename": "scintilla/src/Editor.h",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "scintilla/src/Geometry.cxx",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "scintilla/src/Geometry.h",
+        "status": "modified",
+        "changes": 89
+      },
+      {
+        "filename": "scintilla/src/Partitioning.h",
+        "status": "modified",
+        "changes": 15
+      },
+      {
+        "filename": "scintilla/src/Position.h",
+        "status": "modified",
+        "changes": 4
+      },
+      {
+        "filename": "scintilla/src/PositionCache.cxx",
+        "status": "modified",
+        "changes": 213
+      },
+      {
+        "filename": "scintilla/src/PositionCache.h",
+        "status": "modified",
+        "changes": 71
+      },
+      {
+        "filename": "scintilla/src/RunStyles.cxx",
+        "status": "modified",
+        "changes": 23
+      },
+      {
+        "filename": "scintilla/src/RunStyles.h",
+        "status": "modified",
+        "changes": 22
+      },
+      {
+        "filename": "scintilla/src/Selection.cxx",
+        "status": "modified",
+        "changes": 16
+      },
+      {
+        "filename": "scintilla/src/Selection.h",
+        "status": "modified",
+        "changes": 80
+      },
+      {
+        "filename": "scintilla/src/SparseVector.h",
+        "status": "modified",
+        "changes": 22
+      },
+      {
+        "filename": "scintilla/src/SplitVector.h",
+        "status": "modified",
+        "changes": 58
+      },
+      {
+        "filename": "scintilla/src/UndoHistory.cxx",
+        "status": "modified",
+        "changes": 12
+      },
+      {
+        "filename": "scintilla/src/UndoHistory.h",
+        "status": "modified",
+        "changes": 36
+      },
+      {
+        "filename": "scintilla/src/UniConversion.h",
+        "status": "modified",
+        "changes": 40
+      },
+      {
+        "filename": "scintilla/test/simpleTests.py",
+        "status": "modified",
+        "changes": 138
+      },
+      {
+        "filename": "scintilla/test/unit/testCellBuffer.cxx",
+        "status": "modified",
+        "changes": 14
+      },
+      {
+        "filename": "scintilla/version.txt",
+        "status": "modified",
+        "changes": 2
+      },
+      {
+        "filename": "scintilla/win32/ScintRes.rc",
+        "status": "modified",
+        "changes": 4
+      }
+    ]
+  }
+}

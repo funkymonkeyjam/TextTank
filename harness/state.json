@@ -1,6 +1,6 @@
 {
   "status": "INCOMPLETE PREVIEW",
-  "stage": "G1/G2 working slice; selected G3 features; full G0 normalization and G3/G4 parity remain open",
+  "stage": "G3 integrated expansion; G4 scoped review/repair running; full parity still incomplete",
   "remote": "https://github.com/funkymonkeyjam/TextTank",
   "pr": "https://github.com/funkymonkeyjam/TextTank/pull/1",
   "branch": "implementation/native-mac",
@@ -13,5 +13,17 @@
   "transport": "Shell network unavailable; GitHub connector commits preserve identical source tree with separate commit ancestry",
   "incremental_checkpoint": "Direct recipe cleanup, close/Quit crash repair, session snapshots, printing and cancellable literal folder search with native navigation. Full standard capability requirement remains open.",
   "remaining_execution_plan": "docs/ONE-SHOT-BUILD-PLAN.md",
-  "user_validation": "User confirmed successful live ingredient transfer to Reminders; see docs/parity/user-validation-2026-11-14.json"
+  "user_validation": "User confirmed successful live ingredient transfer to Reminders; see docs/parity/user-validation-2026-11-14.json",
+  "active_run": {
+    "base_commit": "4927107",
+    "integrator": "document lifecycle, bridge/catalog/settings, build/integration",
+    "workers": {
+      "reference": "reference normalization and utilities",
+      "search": "search engine and controllers",
+      "automation": "workflows, connectors, macros"
+    },
+    "next_action": "Integrate monitoring/comment/style APIs, rerun affected/full checks, exact-source packaging and remote CI; retain unverified requirements",
+    "status": "running; no completion claim",
+    "checkpoint": "Full integrated suite passed before final Run FEFF/duplicate-ID regressions; subsequent repairs require affected tests. Root collecting exact candidate evidence. Monitoring/comments/style work continuing."
+  }
 }

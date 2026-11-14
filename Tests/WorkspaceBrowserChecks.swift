@@ -1,0 +1,71 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import AppKit
+import Darwin
+@main struct WorkspaceBrowserChecks {
+    static func main()throws {
+        var count=0
+        func check(_ value:Bool,_ message:String){precondition(value,message);count += 1}
+        func rejects(_ message:String,_ body:()throws->Void){do{try body();preconditionFailure(message)}catch{count += 1}}
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent("TextTankBrowser-"+UUID().uuidString)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        setenv("TEXTTANK_SUPPORT_DIRECTORY",root.appendingPathComponent("support").path,1)
+        defer{NSDocumentController.shared.documents.forEach{$0.close()};try? FileManager.default.removeItem(at:root)}
+        _ = NSApplication.shared
+        let folder=root.appendingPathComponent("project");try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+        let source=folder.appendingPathComponent("café.txt");try Data("café 👩🏽‍💻\n".utf8).write(to:source)
+        let nested=folder.appendingPathComponent("nested");try FileManager.default.createDirectory(at:nested,withIntermediateDirectories:true)
+        try Data("hidden".utf8).write(to:folder.appendingPathComponent(".hidden"))
+        let symlink=folder.appendingPathComponent("alias");try FileManager.default.createSymbolicLink(at:symlink,withDestinationURL:source)
+        let fifo=folder.appendingPathComponent("pipe");check(mkfifo(fifo.path,0o600)==0,"create FIFO")
+        let listing=try WorkspaceBrowserStore.list(folder)
+        check(listing.entries.count==2 && listing.skipped==3,"listing skips hidden symlink FIFO")
+        check(listing.entries.first?.directory == true,"directories before files")
+        check(try WorkspaceBrowserStore.list(folder,showHidden:true).entries.count==3,"explicit hidden listing")
+        check(try WorkspaceBrowserStore.list(folder,limit:1).truncated,"listing cap visible")
+        rejects("FIFO cannot be listed"){_ = try WorkspaceBrowserStore.list(fifo)}
+        rejects("symlink cannot be listed"){_ = try WorkspaceBrowserStore.list(symlink)}
+        let configuration=root.appendingPathComponent("state/browser.json")
+        let store=WorkspaceBrowserStore(url:configuration);try store.addFolder(folder);try store.addFolder(folder)
+        check(store.state.folders.count==1,"duplicate root no-op")
+        let reloaded=WorkspaceBrowserStore(url:configuration)
+        check(reloaded.state.folders.map(\.path)==[folder.standardizedFileURL.path],"folder survives restart")
+        try store.noteRecent(source);try store.noteRecent(source)
+        check(store.state.recent.map(\.path)==[source.standardizedFileURL.path],"recent dedup")
+        var invalid=store.state;invalid.version=2
+        let before=try Data(contentsOf:configuration)
+        rejects("future version rejected"){try store.save(invalid)}
+        check(try Data(contentsOf:configuration)==before,"invalid save leaves prior bytes")
+        let controller=WorkspaceBrowserController(storeURL:configuration,recordsSystemRecent:false)
+        let document=try controller.open(source)
+        check(document.editor.text=="café 👩🏽‍💻\n" && !document.isDocumentEdited,"browser opens exact clean Unicode")
+        document.editor.replaceSelection("dirty ")
+        let text=document.editor.text,revision=document.editor.revision
+        try Data("externally changed".utf8).write(to:source)
+        let again=try controller.open(source)
+        check(again === document && document.editor.text==text && document.editor.revision==revision,"existing dirty document preserved")
+        rejects("FIFO open rejects without blocking"){_ = try controller.open(fifo)}
+        rejects("symlink open rejects"){_ = try controller.open(symlink)}
+        let bad=folder.appendingPathComponent("bad.txt");try Data([0xFF]).write(to:bad)
+        let documents=NSDocumentController.shared.documents.count
+        rejects("bad UTF8 open rejects"){_ = try controller.open(bad)}
+        check(NSDocumentController.shared.documents.count==documents,"failed decode creates no document")
+        controller.show(nil)
+        check(controller.window != nil && controller.window?.contentView != nil,"native browser built")
+        let menu=controller.menu();controller.menuNeedsUpdate(menu)
+        check((menu.items.last?.submenu?.items.count ?? 0)>0,"recent native menu populated")
+        try store.removeFolder(folder)
+        check(store.state.folders.isEmpty && FileManager.default.fileExists(atPath:source.path),"remove folder preserves files")
+        let corruptURL=root.appendingPathComponent("corrupt-state.json")
+        let corruptBytes=Data("{invalid JSON, retain me".utf8);try corruptBytes.write(to:corruptURL)
+        let corruptStore=WorkspaceBrowserStore(url:corruptURL)
+        check(corruptStore.loadError != nil,"corrupt state reports load error")
+        rejects("corrupt state cannot be silently replaced"){try corruptStore.noteRecent(source)}
+        check(try Data(contentsOf:corruptURL)==corruptBytes,"corrupt state preserved after persistence attempt")
+        let fresh=folder.appendingPathComponent("fresh.txt");try Data("fresh".utf8).write(to:fresh)
+        let corruptController=WorkspaceBrowserController(storeURL:corruptURL,recordsSystemRecent:false)
+        _ = try corruptController.open(fresh)
+        check(try Data(contentsOf:corruptURL)==corruptBytes,"opening document preserves corrupt workspace evidence")
+        controller.window?.close()
+        print("WorkspaceBrowserChecks: \(count) assertions passed")
+    }
+}

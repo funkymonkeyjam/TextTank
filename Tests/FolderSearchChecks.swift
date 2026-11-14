@@ -57,6 +57,16 @@ import Darwin
         check(try await FolderSearch.search(literal).matches.count==2,"regex metacharacters are literal and case option works")
         literal.matchCase=true
         check(try await FolderSearch.search(literal).matches.count==1,"case-sensitive literal distinction")
+        var regex=FolderSearchRequest(directory:root,query:"[aA]\\.\\*[bB]");regex.mode = .regularExpression
+        check(try await FolderSearch.search(regex).matches.count==2,"Boost folder pattern exact matches")
+        var extended=FolderSearchRequest(directory:root,query:"\\0tail");extended.mode = .extended
+        check(try await FolderSearch.search(extended).matches.count==1,"extended folder NUL query")
+        var zero=FolderSearchRequest(directory:root,query:"(?=tail)");zero.mode = .regularExpression
+        let zeros=try await FolderSearch.search(zero)
+        check(zeros.matches.count==1 && zeros.matches[0].utf8Range.length==0,"zero-width folder offsets")
+        var malformed=FolderSearchRequest(directory:root,query:"(");malformed.mode = .regularExpression
+        let malformedReport=try await FolderSearch.search(malformed)
+        check(!malformedReport.isComplete && malformedReport.matches.isEmpty && malformedReport.skipped.contains{if case .unreadable(let reason) = $0.reason{return reason.hasPrefix("Search:")};return false},"invalid folder regex explicit per-file failure")
         let nul=try await FolderSearch.search(FolderSearchRequest(directory:root,query:"\0tail"))
         check(nul.matches.count==1 && nul.matches[0].utf8Range.length==5,"embedded NUL literal query retained")
         let crossing=try await FolderSearch.search(FolderSearchRequest(directory:root,query:"\r\nβ"))
@@ -95,6 +105,6 @@ import Darwin
         let fifo=root.appendingPathComponent("named-pipe")
         guard mkfifo(fifo.path,mode_t(0o600))==0 else{fatalError("fixture mkfifo failed")}
         check(try await FolderSearch.search(request).skipped.contains{$0.url.lastPathComponent==fifo.lastPathComponent && $0.reason == .notRegularFile},"FIFO skipped without blocking reader")
-        print("PASS FolderSearchChecks: \(checks) assertions; literal only, no regex parity or file replacement claim")
+        print("PASS FolderSearchChecks: \(checks) assertions; normal/extended/Boost cases, no complete parity or disk replacement claim")
     }
 }

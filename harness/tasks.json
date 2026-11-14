@@ -43,7 +43,8 @@
     "implementation_evidence": [
       "docs/REVIEW-ME.md",
       "docs/parity/implementation-evidence.json"
-    ]
+    ],
+    "progress": "Expanded source ledger to 1,375 retained surfaces; release metadata obtained but binary fetch and source/release reconciliation unresolved."
   },
   {
     "id": "T03",
@@ -92,7 +93,8 @@
     "implementation_evidence": [
       "docs/REVIEW-ME.md",
       "docs/parity/implementation-evidence.json"
-    ]
+    ],
+    "progress": "Added explicit encoding reload, read-only, external state check, EOL conversion, atomic multi-selection bridge and closure write lock; native regressions pass."
   },
   {
     "id": "T06",
@@ -125,7 +127,8 @@
     "implementation_evidence": [
       "docs/REVIEW-ME.md",
       "docs/parity/implementation-evidence.json"
-    ]
+    ],
+    "progress": "Added column insertion/multiselection commands and additional line transforms with byte-preserving duplicate removal. Complete command parity remains open."
   },
   {
     "id": "T08",
@@ -144,7 +147,8 @@
       "Tests/FolderSearchChecks.swift",
       "Tests/FolderSearchControllerChecks.swift",
       "harness/reviews/folder-search-review-2026-11-14.md"
-    ]
+    ],
+    "progress": "Boost normal/extended/regex snapshot search, scopes, macros and disk replacement with per-file backup/report implemented; focused native field-editor bug repaired. Differential Windows parity remains unverified."
   },
   {
     "id": "T09",
@@ -161,7 +165,8 @@
     "implementation_evidence": [
       "docs/REVIEW-ME.md",
       "docs/parity/implementation-evidence.json"
-    ]
+    ],
+    "progress": "Imported96 profiles;94 upstream factories load; audited LexUser port with synthetic UDL import/export/keyword/comment/delimiter tests. Full semantics/API completion/function-list parity remains open."
   },
   {
     "id": "T10",
@@ -177,7 +182,8 @@
     "implementation_evidence": [
       "docs/REVIEW-ME.md",
       "docs/parity/implementation-evidence.json"
-    ]
+    ],
+    "progress": "Recorded typed search parameters, repeat-until-end, Stop and import/export implemented; full command coverage remains open."
   },
   {
     "id": "T11",
@@ -192,7 +198,7 @@
     "status": "partial",
     "owner": null,
     "implementation_evidence": [],
-    "progress": "Explicit private session snapshots restore unsaved documents; static print operation added. Native64/Workspace39 cover limited behaviors. Full workspace/session/monitoring/printing baseline remains required."
+    "progress": "Native folder/document/recent browser added with25 tests; monitoring in progress, full workspace variants remain open."
   },
   {
     "id": "T12",
@@ -203,9 +209,10 @@
     ],
     "suggested_role": "preferences",
     "acceptance": "Restart persistence, collision tests, reference-localization coverage and native conventions",
-    "status": "planned",
+    "status": "partial",
     "owner": null,
-    "implementation_evidence": []
+    "implementation_evidence": [],
+    "progress": "Versioned basic settings with default/custom shortcut conflict protection implemented; complete preferences/localization/customization remain open."
   },
   {
     "id": "T13",
@@ -218,9 +225,10 @@
     ],
     "suggested_role": "extensions",
     "acceptance": "Explicit trusted execution contract, safe arguments, real sample extension and required utility tests",
-    "status": "planned",
+    "status": "partial",
     "owner": null,
-    "implementation_evidence": []
+    "implementation_evidence": [],
+    "progress": "19 utility transforms, styled export, number/hex dialogs, explicit Run and version1 text extensions implemented. Full extension and bundled reference edge semantics remain open."
   },
   {
     "id": "T14",
@@ -239,7 +247,7 @@
       "docs/parity/implementation-evidence.json",
       "docs/parity/user-validation-2026-11-14.json"
     ],
-    "progress": "Direct same-editor recipe cleanup and user-named pinned triggers verified in native tests. User subsequently confirmed successful live ingredient transfer to Reminders; this is happy-path user evidence only. Complete automation and connector failure/retry coverage remains open."
+    "progress": "Native ordered step editor, runtime parameters and cancellable file/multiselection input implemented; same-editor recipe retained."
   },
   {
     "id": "T15",
@@ -258,7 +266,7 @@
       "docs/parity/implementation-evidence.json",
       "docs/parity/user-validation-2026-11-14.json"
     ],
-    "progress": "Direct same-editor recipe cleanup and user-named pinned triggers verified in native tests. User subsequently confirmed successful live ingredient transfer to Reminders; this is happy-path user evidence only. Complete automation and connector failure/retry coverage remains open."
+    "progress": "Shared named triggers retained and native configuration expanded; full trigger coverage remains open."
   },
   {
     "id": "T16",
@@ -277,7 +285,7 @@
       "docs/parity/implementation-evidence.json",
       "docs/parity/user-validation-2026-11-14.json"
     ],
-    "progress": "Direct same-editor recipe cleanup and user-named pinned triggers verified in native tests. User subsequently confirmed successful live ingredient transfer to Reminders; this is happy-path user evidence only. Complete automation and connector failure/retry coverage remains open."
+    "progress": "Additional injected failure/resume/cancel tests; live happy path user-confirmed, other live states unverified."
   },
   {
     "id": "T17",
@@ -314,9 +322,10 @@
     ],
     "suggested_role": "integrator",
     "acceptance": "Required rows verified or explicit blockers; 49 targeted cases plus discovered requirements accounted for",
-    "status": "planned",
+    "status": "partial",
     "owner": null,
-    "implementation_evidence": []
+    "implementation_evidence": [],
+    "progress": "First expanded integrated suite passed; subsequent review repairs and remaining capability/runtime gaps still require verification."
   },
   {
     "id": "T19",
@@ -332,7 +341,8 @@
     "implementation_evidence": [
       "docs/REVIEW-ME.md",
       "docs/parity/implementation-evidence.json"
-    ]
+    ],
+    "progress": "Independent feature reviews found and repaired shortcut collision, Unicode duplicate normalization, invalid regex surrogate expansion, active field-editor query mixup, stale extension preview and FEFF output loss. Final integrated candidate review pending."
   },
   {
     "id": "T20",

@@ -149,7 +149,7 @@ enum WorkspaceStore {
         guard info.st_size >= 0,info.st_size <= maximumBytes else { throw WorkspaceError.tooLarge }
         var data=Data()
         while true {
-            let chunk=try handle.read(upToCount:min(64*1024,maximumBytes-data.count+1)) ?? Data()
+            let chunk=try handle.read(upToCount:min(64*1024,maximumBytes-data.count) + (maximumBytes-data.count < 64*1024 ? 1 : 0)) ?? Data()
             if chunk.isEmpty { break }
             data.append(chunk)
             guard data.count <= maximumBytes else { throw WorkspaceError.tooLarge }
@@ -158,7 +158,9 @@ enum WorkspaceStore {
     }
     static func load(from url:URL)throws->WorkspaceSession { try WorkspaceSession.decode(readRegularFile(url)) }
     static func save(_ session:WorkspaceSession,to url:URL)throws {
-        let data=try session.encoded()
+        try writePrivate(try session.encoded(),to:url)
+    }
+    static func writePrivate(_ data:Data,to url:URL)throws {
         guard data.count <= maximumSessionBytes else { throw WorkspaceError.tooLarge }
         let dir=try directoryDescriptor(for:url);defer{close(dir)}
         let destination=url.lastPathComponent

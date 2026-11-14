@@ -51,7 +51,7 @@ Packaging rebuilds the committed source, verifies local signatures, preserves an
 
 6. Try the visible **Close Tab** X, then Cancel the unsaved-document dialog. Use **File → Save Session Snapshot** and **Open Session Snapshot**: snapshots restore as new unsaved documents, preserving text, encoding, selection and bookmarks without overwriting originals. **File → Print** creates a static monospaced print representation; complete reference printing options remain open.
 
-Reminders export requires explicit access, destination and Send choices, with durable per-row outcomes/history. **No real EventKit access or export was tested.** Injected-store tests do not establish live connector behavior.
+Reminders export requires explicit access, destination and Send choices, with durable per-row outcomes/history. **The user confirmed successful live ingredient transfer to Reminders.** This is user-reported happy-path evidence; injected-store tests do not establish live failure/retry behavior.
 
 ## Observed checks at this checkpoint
 
@@ -85,6 +85,6 @@ Counts are assertions, not completed capabilities. The limited evidence ledger a
 - Complete document/project/folder panels, monitoring, full printing options, preferences, shortcut/context customization and localization.
 - Implement required Mac extension facilities, configured Run commands, and bundled mimeTools/NppConverter/NppExport equivalents. Windows DLL compatibility is not claimed.
 - Complete macro command coverage/run-until-end and automation ask-at-run parameters, progress/cancellation, multi-selection output and all trigger/output combinations. Individual user-named toolbar pins now exist; complete trigger UI coverage remains open.
-- Verify real EventKit with consent, IME/dead keys, VoiceOver, performance budgets, older macOS/Intel runtime, clean-checkout build, final exact-SHA CI and integrated independent review.
+- Verify remaining real EventKit failure/retry cases with a designated scratch list, IME/dead keys, VoiceOver, performance budgets, older macOS/Intel runtime, clean-checkout build, final exact-SHA CI and integrated independent review.
 
 No tagged release or merge is authorized by this preview. Review findings and remaining gaps should drive the next implementation checkpoint.

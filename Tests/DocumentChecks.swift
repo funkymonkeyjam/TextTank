@@ -52,6 +52,30 @@ import AppKit
         rejects("automation persistence rejects symlink target") { try automation.persistLibrary(configuration) }
         try check(Data(contentsOf:alternate) == configBytes,"automation symlink target unchanged")
         try FileManager.default.removeItem(at:configurationURL)
+        let settings=SettingsController(url:root.appendingPathComponent("Settings.json"))
+        var configured=EditorSettings();configured.tabWidth=8;configured.useTabs=false;configured.wrap=true;configured.shortcuts=["upper":"u"]
+        try settings.save(configured)
+        try check(SettingsController(url:settings.url).value == configured,"versioned settings persist across controller restart")
+        var conflict=configured;conflict.shortcuts=["upper":"d"]
+        rejects("shortcut conflicts with default command binding") {try settings.save(conflict)}
+        conflict.shortcuts=["upper":","]
+        rejects("shortcut cannot steal Settings") {try settings.save(conflict)}
+        conflict.shortcuts=["upper":"u","lower":"u"]
+        rejects("duplicate custom shortcuts rejected") {try settings.save(conflict)}
+        try check(SettingsController(url:settings.url).value == configured,"rejected settings retain prior on-disk configuration")
+        conflict.version=99
+        rejects("future settings version rejected") {try settings.save(conflict)}
+        try check(EditorTransform.sortAscending.transform("b\r\na\n") == "a\r\nb\n","line sorting retains mixed separator positions")
+        try check(EditorTransform.reverseLines.transform("a\nb") == "b\na","reverse retains absence of final EOL")
+        try check(EditorTransform.uniqueLines.transform("a\na\nb\n") == "a\nb\n","duplicate removal preserves kept row separators")
+        try check(EditorTransform.trimBoth.transform(" \tα  \r\n b\t") == "α\r\nb","trim preserves Unicode and EOL")
+        try check(EditorTransform.uniqueLines.transform("é\ne\u{301}\n").utf8.elementsEqual("é\ne\u{301}\n".utf8),"duplicate removal preserves canonically equivalent distinct bytes")
+        let transformed=TextDocument();transformed.editor.text="b\na\n";transformed.editor.resetUndoHistory()
+        try EditorTransform.sortAscending.apply(to:transformed.editor)
+        try check(transformed.editor.text == "a\nb\n","native line sorting changes authoritative buffer")
+        transformed.editor.executeCommand("undo")
+        try check(transformed.editor.text == "b\na\n","native line sorting one Undo")
+        transformed.close()
         let bomDocument = TextDocument()
         let doubleBOM = Data([0xEF,0xBB,0xBF,0xEF,0xBB,0xBF,0x61])
         try bomDocument.read(from:doubleBOM,ofType:"Plain Text")
@@ -137,6 +161,22 @@ import AppKit
         document.editor.executeCommand("undo")
         try check(document.editor.text == "reverted from disk","actual NSDocument revert replaces text and clears undo")
         try check(!document.editor.modified && !document.isDocumentEdited,"actual NSDocument revert clears both dirty states")
+        document.editor.replaceSelection("unsaved")
+        rejects("reinterpretation refuses dirty editor without discard") { try document.reload(using:.latin1) }
+        let protectedText=document.editor.text
+        try Data([0xC3]).write(to:saved)
+        rejects("invalid explicit reload preserves buffer") { try document.reload(using:.utf8,discard:true) }
+        try check(document.editor.text == protectedText && document.isDocumentEdited,"failed reload preserves dirty text")
+        try check(try document.diskState() == .changed,"external byte changes detected")
+        try Data([0x63,0x61,0x66,0xE9]).write(to:saved)
+        try document.reload(using:.latin1,discard:true)
+        try check(document.editor.text == "café" && document.format.encoding == .latin1,"explicit encoding reinterpretation reads disk bytes")
+        try check(!document.isDocumentEdited && !document.editor.modified,"successful reload resets dirty state")
+        try check(try document.diskState() == .unchanged,"reload updates external-change baseline")
+        document.editor.readOnly=true
+        try Data("locked reload".utf8).write(to:saved)
+        try document.reload(using:.utf8)
+        try check(document.editor.text == "locked reload" && document.editor.readOnly,"explicit reload works while retaining read-only flag")
         document.close()
         try check(!window.isVisible,"closing document hides its native window")
         NotificationCenter.default.post(name:NSWindow.didUpdateNotification,object:window)

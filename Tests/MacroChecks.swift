@@ -71,6 +71,26 @@ import AppKit
         controller.startRecording();editor.executeCommand("charRight")
         controller.willExecuteCommand("zoomIn",on:editor);editor.executeCommand("zoomIn")
         try check(controller.finishRecording()?.steps.count == 1,"view-only zoom does not invalidate valid edit recording")
+        editor.text = "a\nb\nc"; editor.resetUndoHistory(); _ = editor.setSelectionAnchor(0,caret:0)
+        let advance = RecordedMacro(id:UUID(),name:"Advance",steps:[.init(kind:.command,command:"charRight")])
+        try controller.play(advance,on:editor,untilEnd:true)
+        try check(editor.selectionCaret == editor.text.utf8.count,"until-end playback reaches document boundary")
+        _ = editor.setSelectionAnchor(0,caret:0)
+        let stalled = RecordedMacro(id:UUID(),name:"No movement",steps:[.init(kind:.command,command:"home")])
+        rejects("until-end no-progress guard") { try controller.play(stalled,on:editor,untilEnd:true) }
+        editor.text = "original"; editor.resetUndoHistory(); _ = editor.setSelectionAnchor(0,caret:0)
+        let typing = RecordedMacro(id:UUID(),name:"Typing",steps:[.init(kind:.insertText,text:"x")])
+        var calls = 0
+        rejects("cancel playback between steps") { try controller.play(typing,on:editor,repeats:100,shouldCancel:{ calls += 1; return calls > 3 }) }
+        try check(editor.text == "xxxoriginal","cancel retains only completed steps")
+        editor.executeCommand("undo"); try check(editor.text == "original","cancelled playback remains one Undo")
+        let search = RecordedMacro.Search(query:"(egg)",replacement:"$1s",mode:2,matchCase:true,wholeWord:false,dotMatchesNewline:false,wrap:true,action:"replaceAll")
+        let searchMacro = RecordedMacro(id:UUID(),name:"Captured search",steps:[.init(kind:.search,search:search)])
+        try check(MacroLibrary.decode(MacroLibrary(macros:[searchMacro]).encoded()).macros[0] == searchMacro,"all regex parameters roundtrip")
+        var observed:RecordedMacro.Search?
+        controller.searchPlayback = { captured,target in observed = captured; target.replaceSelection("called") }
+        try controller.play(searchMacro,on:editor)
+        try check(observed == search,"search playback uses captured parameters through adapter")
         #endif
         print("PASS MacroChecks: \(checks) assertions; persistence/security checks; native integration only when TEXTTANK_NATIVE_MACRO_TEST is defined")
     }

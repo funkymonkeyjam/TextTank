@@ -153,6 +153,32 @@ import Darwin
         let crashFake = FakeReminderStore(), crashConnector = RemindersConnector(storageURL:crashDirectory,store:crashFake)
         let crashRun = try await crashConnector.export(rows:["crash item"],destinationID:"a",batchID:crashID,retryFailed:true)
         try check(crashRun.rows[0].status == .uncertain && crashFake.saves.isEmpty,"crash uncertainty never replayed")
+        // Destination identity survives a rename/account label change; deletion/read-only never redirect.
+        let movedFake = FakeReminderStore(), movedID = UUID()
+        let movedConnector = RemindersConnector(storageURL:root.appendingPathComponent("moved"),store:movedFake)
+        movedFake.beforeSave = { index in if index == 1 { movedFake.lists = [] } }
+        let deleted = try await movedConnector.export(rows:["first","second","third"],destinationID:"a",batchID:movedID)
+        try check(deleted.rows.map(\.status) == [.confirmed,.failed,.failed],"deleted list mid-batch leaves exact per-row failures")
+        movedFake.beforeSave = nil
+        movedFake.lists = [ReminderDestination(id:"a",title:"Renamed",source:"Moved account label",writable:true)]
+        var progress:[Int] = []
+        let resumed = try await movedConnector.export(rows:["first","second","third"],destinationID:"a",batchID:movedID,retryFailed:true,progress:{ done,_ in progress.append(done) })
+        try check(resumed.rows.allSatisfy { $0.status == .confirmed } && movedFake.saves.count == 3,"same destination ID resumes after rename without duplicate confirmed item")
+        try check(progress.last == 3,"connector reports completion progress")
+        let pendingResume = try await cancelConnector.export(rows:["first","second","third"],destinationID:"a",batchID:cancelID)
+        try check(pendingResume.rows.allSatisfy { $0.status == .confirmed } && cancelFake.saves.count == 3,"cancelled pending rows resume same batch without duplicating first")
+        await rejects("empty batch rejected before external writes") { _ = try await connector.export(rows:[],destinationID:"a",batchID:UUID()) }
+        await rejects("blank row rejected") { _ = try await connector.export(rows:["  "],destinationID:"a",batchID:UUID()) }
+        let fifoDirectory = root.appendingPathComponent("fifo-journal")
+        try FileManager.default.createDirectory(at:fifoDirectory,withIntermediateDirectories:true)
+        let fifoID = UUID(), fifoURL = fifoDirectory.appendingPathComponent(UUID().uuidString)
+        let journalFIFO = fifoDirectory.appendingPathComponent(fifoID.uuidString+".json")
+        precondition(mkfifo(journalFIFO.path,0o600) == 0)
+        let fifoConnector = RemindersConnector(storageURL:fifoDirectory,store:FakeReminderStore())
+        let fifoStart = ProcessInfo.processInfo.systemUptime
+        await rejects("FIFO journal rejects without read hang") { _ = try fifoConnector.storedBatches() }
+        try check(ProcessInfo.processInfo.systemUptime - fifoStart < 1,"journal FIFO rejection below one second")
+        _ = fifoURL
         print("PASS ReminderChecks: \(assertions) assertions; injected stores only, no EventKit access")
     }
 }

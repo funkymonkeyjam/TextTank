@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p build/tests harness/logs
+scripts/build-user-lexer.sh
 python3 - <<'PYMANIFEST'
 import datetime,hashlib,json,pathlib,subprocess
 root=pathlib.Path.cwd()
@@ -15,7 +16,7 @@ swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -o bui
 build/tests/automation-checks | tee harness/logs/automation-checks.log
 swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -o build/tests/reminder-checks Sources/Connectors/RemindersConnector.swift Tests/ReminderChecks.swift
 build/tests/reminder-checks | tee harness/logs/reminder-checks.log
-clang++ -std=c++17 -fobjc-arc -mmacosx-version-min=14.0 -I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F build/vendor/Debug -framework Scintilla -framework Cocoa Sources/EditorBridge/TTEditor.mm Tests/BridgeChecks.mm Vendor/lexilla/bin/liblexilla.a -Wl,-rpath,"$PWD/build/vendor/Debug" -o build/tests/bridge-checks
+clang++ -std=c++17 -fobjc-arc -mmacosx-version-min=14.0 -I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F build/vendor/Debug -framework Scintilla -framework Cocoa Sources/EditorBridge/TTEditor.mm Tests/BridgeChecks.mm build/tests/UserLexer.o Vendor/lexilla/bin/liblexilla.a -Wl,-rpath,"$PWD/build/vendor/Debug" -o build/tests/bridge-checks
 build/tests/bridge-checks | tee harness/logs/bridge-checks.log
 
 scripts/test-documents.sh
@@ -30,3 +31,10 @@ scripts/test-automation-ui.sh
 scripts/test-workspace.sh
 
 scripts/test-folder-search.sh
+
+scripts/test-search.sh
+scripts/test-utilities.sh
+scripts/test-run.sh
+scripts/test-languages.sh
+scripts/test-workspace-browser.sh
+python3 docs/parity/check_inventory.py

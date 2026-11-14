@@ -5,6 +5,7 @@
 #include "Lexilla.h"
 #include <vector>
 #include <cstring>
+extern "C" Scintilla::ILexer5 *TextTankCreateUserLexer();
 
 // NSString's UTF-8 constructors consume a leading EF BB BF as an external BOM.
 // Editor bytes are already decoded content, so U+FEFF must remain ordinary text.
@@ -58,11 +59,13 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
 @property(nonatomic, strong) ScintillaView *engine;
 @property(nonatomic, readwrite) NSUInteger revision;
 @property(nonatomic) BOOL macroRecording;
+@property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxStyles;
 @end
 @implementation TTEditor
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
         NSAssert(NSThread.isMainThread, @"Editor must be created on the main thread");
+        _syntaxStyles=[NSMutableDictionary dictionary];
         _engine = [[TTScintillaView alloc] initWithFrame:NSZeroRect];
         _engine.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         [self addSubview:_engine];
@@ -117,6 +120,8 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     for (int style : {1, 2, 3}) [_engine message:SCI_STYLESETFORE wParam:style lParam:dark ? 0x9BC18E : 0x47804B];
     for (int style : {5, 11, 17}) [_engine message:SCI_STYLESETFORE wParam:style lParam:dark ? 0xDBA6C9 : 0xA04470];
     for (int style : {6, 7, 13}) [_engine message:SCI_STYLESETFORE wParam:style lParam:dark ? 0x8ACFE8 : 0x255EA0];
+    NSDictionary *styles=[_syntaxStyles copy];
+    for(NSNumber *index in styles) {NSDictionary *s=styles[index];[self setSyntaxStyle:index.integerValue foreground:s[@"foreground"] background:s[@"background"] bold:[s[@"bold"] boolValue] italic:[s[@"italic"] boolValue]];}
     _engine.needsDisplay = YES;
 }
 - (void)dealloc { _engine.delegate = nil; }
@@ -152,6 +157,72 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
         [joined appendBytes:bytes.data() length:(NSUInteger)(end-start)];
     }
     return TTStringFromUTF8(joined.bytes, joined.length);
+}
+- (BOOL)readOnly { [self assertThread]; return [_engine message:SCI_GETREADONLY] != 0; }
+- (void)setReadOnly:(BOOL)value { [self assertThread]; [_engine message:SCI_SETREADONLY wParam:value]; }
+- (void)configureTabWidth:(NSInteger)width useTabs:(BOOL)useTabs {
+    [self assertThread]; if (width < 1 || width > 32) return;
+    [_engine message:SCI_SETTABWIDTH wParam:width]; [_engine message:SCI_SETUSETABS wParam:useTabs];
+}
+- (void)convertLineEndings:(NSString *)mode {
+    [self assertThread]; if (self.readOnly) return;
+    NSDictionary *modes = @{@"LF":@(SC_EOL_LF), @"CRLF":@(SC_EOL_CRLF), @"CR":@(SC_EOL_CR)};
+    NSNumber *value = modes[mode]; if (!value) return;
+    [_engine message:SCI_BEGINUNDOACTION]; [_engine message:SCI_CONVERTEOLS wParam:value.integerValue];
+    [_engine message:SCI_SETEOLMODE wParam:value.integerValue]; [_engine message:SCI_ENDUNDOACTION];
+}
+- (NSArray<NSDictionary<NSString *, NSNumber *> *> *)selectionRanges {
+    [self assertThread]; NSMutableArray *ranges = [NSMutableArray array];
+    for (sptr_t i=0; i<[_engine message:SCI_GETSELECTIONS]; ++i) {
+        [ranges addObject:@{@"anchor":@([_engine message:SCI_GETSELECTIONNANCHOR wParam:i]), @"caret":@([_engine message:SCI_GETSELECTIONNCARET wParam:i])}];
+    }
+    return ranges;
+}
+- (BOOL)validSelectionRanges:(NSArray *)ranges {
+    if (![ranges isKindOfClass:NSArray.class] || ranges.count == 0 || ranges.count > 10000) return NO;
+    const sptr_t length = [_engine message:SCI_GETLENGTH];
+    NSMutableArray *intervals = [NSMutableArray array];
+    for (id range in ranges) {
+        if (![range isKindOfClass:NSDictionary.class]) return NO;
+        for (NSString *key in @[@"anchor",@"caret"]) {
+            id value = range[key]; if (![value isKindOfClass:NSNumber.class]) return NO;
+            NSInteger p=[value integerValue]; if ([value doubleValue] != (double)p || p<0 || p>length) return NO;
+            if (p<length && ([_engine message:SCI_GETCHARAT wParam:p] & 0xC0)==0x80) return NO;
+        }
+        NSInteger a=[range[@"anchor"] integerValue], c=[range[@"caret"] integerValue];
+        [intervals addObject:@[@(MIN(a,c)),@(MAX(a,c))]];
+    }
+    [intervals sortUsingComparator:^NSComparisonResult(NSArray *a, NSArray *b) { return [a[0] compare:b[0]]; }];
+    for (NSUInteger i=1;i<intervals.count;++i) {
+        NSInteger previousEnd=[intervals[i-1][1] integerValue], start=[intervals[i][0] integerValue];
+        if (start<previousEnd || (start==previousEnd && [intervals[i-1][0] integerValue]==start)) return NO;
+    }
+    return YES;
+}
+- (BOOL)setSelectionRanges:(NSArray<NSDictionary<NSString *,NSNumber *> *> *)ranges {
+    [self assertThread]; if (![self validSelectionRanges:ranges]) return NO;
+    [_engine message:SCI_SETSELECTIONMODE wParam:SC_SEL_STREAM];
+    [_engine message:SCI_SETSELECTION wParam:[ranges[0][@"caret"] integerValue] lParam:[ranges[0][@"anchor"] integerValue]];
+    for (NSUInteger i=1;i<ranges.count;++i) [_engine message:SCI_ADDSELECTION wParam:[ranges[i][@"caret"] integerValue] lParam:[ranges[i][@"anchor"] integerValue]];
+    [_engine message:SCI_SETMAINSELECTION wParam:0]; return YES;
+}
+- (BOOL)replaceSelections:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision {
+    [self assertThread]; NSArray *ranges=self.selectionRanges;
+    if (revision!=self.revision || self.readOnly || ![texts isKindOfClass:NSArray.class] || texts.count!=ranges.count || ![self validSelectionRanges:ranges]) return NO;
+    for (id text in texts) if (![text isKindOfClass:NSString.class]) return NO;
+    NSMutableArray *indices=[NSMutableArray array]; for (NSUInteger i=0;i<ranges.count;++i) [indices addObject:@(i)];
+    [indices sortUsingComparator:^NSComparisonResult(NSNumber *a,NSNumber *b) {
+        NSDictionary *ra=ranges[a.unsignedIntegerValue], *rb=ranges[b.unsignedIntegerValue];
+        return [@(MIN([rb[@"anchor"] integerValue],[rb[@"caret"] integerValue])) compare:@(MIN([ra[@"anchor"] integerValue],[ra[@"caret"] integerValue]))];
+    }];
+    [_engine message:SCI_BEGINUNDOACTION];
+    for (NSNumber *index in indices) {
+        NSDictionary *range=ranges[index.unsignedIntegerValue]; NSInteger a=[range[@"anchor"] integerValue], c=[range[@"caret"] integerValue];
+        NSData *bytes=[texts[index.unsignedIntegerValue] dataUsingEncoding:NSUTF8StringEncoding];
+        [_engine message:SCI_SETTARGETRANGE wParam:MIN(a,c) lParam:MAX(a,c)];
+        [_engine message:SCI_REPLACETARGET wParam:bytes.length lParam:(sptr_t)bytes.bytes];
+    }
+    [_engine message:SCI_ENDUNDOACTION]; return YES;
 }
 - (NSInteger)selectionCount { [self assertThread]; return [_engine message:SCI_GETSELECTIONS]; }
 - (NSInteger)selectionStart { [self assertThread]; return [_engine message:SCI_GETSELECTIONSTART]; }
@@ -218,6 +289,13 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
 }
 - (void)executeCommand:(NSString *)identifier {
     [self assertThread];
+    if ([identifier isEqualToString:@"rectangularSelection"] || [identifier isEqualToString:@"streamSelection"]) {
+        [_engine message:SCI_SETSELECTIONMODE wParam:[identifier isEqualToString:@"rectangularSelection"] ? SC_SEL_RECTANGLE : SC_SEL_STREAM]; return;
+    }
+    if ([identifier isEqualToString:@"clearAdditionalSelections"]) { [_engine message:SCI_CLEARSELECTIONS]; return; }
+    if ([identifier isEqualToString:@"addNextOccurrence"] || [identifier isEqualToString:@"selectAllOccurrences"]) {
+        [_engine message:[identifier isEqualToString:@"addNextOccurrence"] ? SCI_MULTIPLESELECTADDNEXT : SCI_MULTIPLESELECTADDEACH]; return;
+    }
     if ([identifier isEqualToString:@"foldAll"] || [identifier isEqualToString:@"unfoldAll"]) {
         [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
         [_engine message:SCI_FOLDALL wParam:[identifier isEqualToString:@"foldAll"] ? SC_FOLDACTION_CONTRACT : SC_FOLDACTION_EXPAND];
@@ -288,6 +366,7 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
         @"duplicateLine": @(SCI_LINEDUPLICATE), @"deleteLine": @(SCI_LINEDELETE),
         @"transposeLine": @(SCI_LINETRANSPOSE), @"indent": @(SCI_TAB),
         @"unindent": @(SCI_BACKTAB), @"upper": @(SCI_UPPERCASE), @"lower": @(SCI_LOWERCASE),
+        @"duplicateSelection": @(SCI_SELECTIONDUPLICATE), @"deleteWordLeft": @(SCI_DELWORDLEFT), @"deleteWordRight": @(SCI_DELWORDRIGHT), @"deleteLineLeft": @(SCI_DELLINELEFT), @"deleteLineRight": @(SCI_DELLINERIGHT),
         @"zoomIn": @(SCI_ZOOMIN), @"zoomOut": @(SCI_ZOOMOUT),
         @"moveLineUp": @(SCI_MOVESELECTEDLINESUP), @"moveLineDown": @(SCI_MOVESELECTEDLINESDOWN)}; });
     NSNumber *message = commands[identifier] ?: TTMacroCommands()[identifier];
@@ -328,17 +407,70 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
         NSString *value = [NSString stringWithUTF8String:name];
         if (value) [names addObject:value];
     }
+    [names addObject:@"user"];
     return [names sortedArrayUsingSelector:@selector(compare:)];
 }
 - (void)setLanguage:(NSString *)language {
     [self assertThread];
-    auto lexer = CreateLexer(language.UTF8String);
+    [_syntaxStyles removeAllObjects];
+    auto lexer = [language isEqualToString:@"user"] ? TextTankCreateUserLexer() : CreateLexer(language.UTF8String);
     if (!lexer) lexer = CreateLexer("null");
     [_engine message:SCI_SETILEXER wParam:0 lParam:(sptr_t)lexer];
     [_engine message:SCI_SETPROPERTY wParam:(uptr_t)"fold" lParam:(sptr_t)"1"];
     [_engine message:SCI_SETKEYWORDS wParam:0 lParam:(sptr_t)"if else for while return class struct import func let var true false null int void const static public private"];
     [self applyPalette];
     [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
+}
+- (void)setKeywordList:(NSInteger)index words:(NSString *)words {
+    [self assertThread]; if (index<0 || index>31 || [words rangeOfString:@"\0"].location!=NSNotFound) return;
+    [_engine message:SCI_SETKEYWORDS wParam:index lParam:(sptr_t)words.UTF8String]; [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
+}
+- (void)setLexerProperty:(NSString *)name value:(NSString *)value {
+    [self assertThread]; if ([name rangeOfString:@"\0"].location!=NSNotFound || [value rangeOfString:@"\0"].location!=NSNotFound) return;
+    [_engine message:SCI_SETPROPERTY wParam:(uptr_t)name.UTF8String lParam:(sptr_t)value.UTF8String]; [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
+}
+- (NSAttributedString *)attributedTextForSelection:(BOOL)selection {
+    [self assertThread]; [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
+    sptr_t start=selection ? self.selectionStart : 0,end=selection ? self.selectionEnd : [_engine message:SCI_GETLENGTH];
+    NSMutableAttributedString *result=[[NSMutableAttributedString alloc] initWithString:@""];
+    for (sptr_t p=start;p<end;) {
+        sptr_t style=[_engine message:SCI_GETSTYLEAT wParam:p],q=p+1;
+        while (q<end && [_engine message:SCI_GETSTYLEAT wParam:q]==style) ++q;
+        // Style runs normally align to scalar boundaries; extend malformed style
+        // boundaries to avoid splitting a UTF8 character in exported text.
+        while (q<end && ([_engine message:SCI_GETCHARAT wParam:q]&0xC0)==0x80) ++q;
+        std::vector<char> bytes((size_t)(q-p)+1);Sci_TextRangeFull range={{p,q},bytes.data()};
+        [_engine message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&range];
+        NSString *text=TTStringFromUTF8(bytes.data(),q-p);
+        auto color=[](sptr_t c) { return [NSColor colorWithSRGBRed:(c&255)/255.0 green:((c>>8)&255)/255.0 blue:((c>>16)&255)/255.0 alpha:1]; };
+        CGFloat size=[_engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:style]/100.0;
+        std::vector<char> face((size_t)[_engine message:SCI_STYLEGETFONT wParam:style lParam:0]+1);[_engine message:SCI_STYLEGETFONT wParam:style lParam:(sptr_t)face.data()];
+        NSFont *font=[NSFont fontWithName:[NSString stringWithUTF8String:face.data()] size:size] ?: [NSFont monospacedSystemFontOfSize:MAX(1,size) weight:NSFontWeightRegular];
+        NSFontTraitMask traits=0;if ([_engine message:SCI_STYLEGETBOLD wParam:style]) traits|=NSBoldFontMask;if ([_engine message:SCI_STYLEGETITALIC wParam:style]) traits|=NSItalicFontMask;
+        if(traits)font=[[NSFontManager sharedFontManager] convertFont:font toHaveTrait:traits];
+        [result appendAttributedString:[[NSAttributedString alloc] initWithString:text attributes:@{NSFontAttributeName:font,NSForegroundColorAttributeName:color([_engine message:SCI_STYLEGETFORE wParam:style]),NSBackgroundColorAttributeName:color([_engine message:SCI_STYLEGETBACK wParam:style])}]];
+        p=q;
+    }
+    return result;
+}
+- (void)setSyntaxStyle:(NSInteger)index foreground:(NSColor *)foreground background:(NSColor *)background bold:(BOOL)bold italic:(BOOL)italic {
+    [self assertThread]; if(index<0 || index>255)return;
+    NSMutableDictionary *configuration=[@{@"foreground":foreground,@"bold":@(bold),@"italic":@(italic)} mutableCopy];if(background)configuration[@"background"]=background;_syntaxStyles[@(index)]=configuration;
+    auto packed=[](NSColor *color)->sptr_t {NSColor *c=[color colorUsingColorSpace:NSColorSpace.sRGBColorSpace];return ((NSInteger)lround(c.redComponent*255))|((NSInteger)lround(c.greenComponent*255)<<8)|((NSInteger)lround(c.blueComponent*255)<<16);};
+    [_engine message:SCI_STYLESETFORE wParam:index lParam:packed(foreground)];
+    if(background)[_engine message:SCI_STYLESETBACK wParam:index lParam:packed(background)];
+    [_engine message:SCI_STYLESETBOLD wParam:index lParam:bold];[_engine message:SCI_STYLESETITALIC wParam:index lParam:italic];
+}
+- (void)showCallTip:(NSString *)text {
+    [self assertThread];if([text rangeOfString:@"\0"].location!=NSNotFound)return;
+    [_engine message:SCI_CALLTIPSHOW wParam:[_engine message:SCI_GETCURRENTPOS] lParam:(sptr_t)text.UTF8String];
+}
+- (void)showCompletions:(NSArray<NSString *> *)words {
+    [self assertThread]; if(words.count==0)return;
+    sptr_t caret=[_engine message:SCI_GETCURRENTPOS],start=[_engine message:SCI_WORDSTARTPOSITION wParam:caret lParam:1];
+    NSMutableArray *safe=[NSMutableArray array];for(NSString *word in words) if([word rangeOfCharacterFromSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]].location==NSNotFound && [word rangeOfString:@"\0"].location==NSNotFound) [safe addObject:word];
+    NSString *list=[[safe sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@" "];
+    if(list.length)[_engine message:SCI_AUTOCSHOW wParam:caret-start lParam:(sptr_t)list.UTF8String];
 }
 - (BOOL)find:(NSString *)text matchCase:(BOOL)matchCase backwards:(BOOL)backwards {
     [self assertThread];

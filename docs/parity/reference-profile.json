@@ -5,7 +5,7 @@
   "artifact_version": null,
   "artifact_url": null,
   "artifact_sha256": null,
-  "artifact_state": "unresolved; official distribution has not been downloaded/verified",
+  "artifact_state": "blocked: shell download DNS unavailable; GitHub connector provides metadata only, not binary payloads. Official 8.9.8.1 x64 portable URL/publisher digest identified. Release tag dd40fe45 is 80 commits behind required source 61246e57; file-level difference inventory retained.",
   "source_url": "https://github.com/notepad-plus-plus/notepad-plus-plus/blob/61246e5741fd7c59352f3feb5ccc7e33e4594d15/PowerEditor/installer/packageAll.bat",
   "standard_bundled_utilities": [
     "mimeTools",
@@ -2304,5 +2304,6 @@
   "limits": [
     "Source packaging recipes establish intended files, not actual released archive contents or exact plugin binary versions.",
     "All language styles/keywords, per-language settings, APIs, localizations and function-list parsers remain required; data presence is not implementation."
-  ]
+  ],
+  "release_candidate_metadata": "release-candidate-metadata.json"
 }

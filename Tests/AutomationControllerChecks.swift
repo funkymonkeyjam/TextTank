@@ -100,6 +100,35 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         try check(editor.text == "before\n2 eggs\n½ cup flour\nafter","configured selection cleanup preserves surrounding document")
         editor.executeCommand("undo")
         try check(editor.text == selectionSource,"selection cleanup undoes together")
+        let multiSource = "- 2 eggs | - ½ cup flour"
+        editor.text = multiSource; editor.resetUndoHistory(); editor.setSavePoint()
+        try check(editor.setSelectionRanges([["anchor":NSNumber(value:0),"caret":NSNumber(value:8)],["anchor":NSNumber(value:multiSource.utf8.count),"caret":NSNumber(value:11)]]),"set separate reversed Unicode selections")
+        try restarted.runSavedAutomation(id:AutomationDefinition.example.id)
+        try check(editor.text == "2 eggs | ½ cup flour","automation transforms each captured selection independently")
+        editor.executeCommand("undo")
+        try check(editor.text == multiSource,"multiple automation selections undo together")
+        saved.workflows[0].steps = [.init(kind:.removeMatchingLines,find:"(a+)+$")]
+        try restarted.persistLibrary(saved)
+        let multiFailure = "safe | " + String(repeating:"a",count:32) + "!"
+        editor.text = multiFailure; editor.resetUndoHistory(); editor.setSavePoint()
+        _ = editor.setSelectionRanges([["anchor":NSNumber(value:0),"caret":NSNumber(value:4)],["anchor":NSNumber(value:7),"caret":NSNumber(value:multiFailure.utf8.count)]])
+        do { try restarted.runSavedAutomation(id:AutomationDefinition.example.id); fatalError("expected second-selection timeout") } catch {}
+        try check(editor.text == multiFailure && !editor.modified,"later selection failure preserves all earlier selections")
+        saved.workflows[0].steps = AutomationDefinition.example.steps
+        _ = editor.setSelectionAnchor(0,caret:0)
+        saved.workflows[0].input = .document; saved.workflows[0].output = .newDocument
+        var capturedNewDocument:String?
+        let outputController = AutomationController(editorProvider:{editor},newDocument:{ capturedNewDocument = $0 })
+        try outputController.persistLibrary(saved)
+        editor.text = "- eggs\n- flour"; editor.resetUndoHistory(); editor.setSavePoint()
+        _ = editor.setSelectionRanges([["anchor":NSNumber(value:0),"caret":NSNumber(value:6)],["anchor":NSNumber(value:7),"caret":NSNumber(value:14)]])
+        try outputController.runSavedAutomation(id:AutomationDefinition.example.id)
+        try check(editor.text == "- eggs\n- flour" && !editor.modified && capturedNewDocument == "eggs\nflour","document input external output never mutates multi-selection editor")
+        saved.workflows[0].output = .editor; try restarted.persistLibrary(saved)
+        _ = editor.setSelectionAnchor(0,caret:0); editor.readOnly = true
+        do { try restarted.runSavedAutomation(id:AutomationDefinition.example.id); fatalError("read-only expected rejection") } catch {}
+        try check(editor.text == "- eggs\n- flour" && !editor.modified,"read-only automation explicitly rejects without changes")
+        editor.readOnly = false
         saved.workflows[0].pinToToolbar = false
         try restarted.persistLibrary(saved)
         try check(restarted.toolbarIdentifiers().count == 1,"toolbar pin setting hides only configured workflow")

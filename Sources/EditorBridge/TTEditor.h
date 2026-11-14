@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <AppKit/AppKit.h>
+#import "../Search/TTSearchEngine.h"
 NS_ASSUME_NONNULL_BEGIN
 /// Main-thread-only view. All positions remain inside the UTF-8 Scintilla model.
 @interface TTEditor : NSView
@@ -9,6 +10,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) NSUInteger revision;
 /// Byte positions of the primary selection; selectionCount includes additional selections.
 @property(nonatomic, readonly) NSInteger selectionCount;
+@property(nonatomic, readonly) NSArray<NSDictionary<NSString *, NSNumber *> *> *selectionRanges;
+- (BOOL)setSelectionRanges:(NSArray<NSDictionary<NSString *, NSNumber *> *> *)ranges;
+- (BOOL)replaceSelections:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision;
+@property(nonatomic) BOOL readOnly;
+- (void)convertLineEndings:(NSString *)mode;
+- (void)configureTabWidth:(NSInteger)width useTabs:(BOOL)useTabs;
+
 @property(nonatomic, readonly) NSInteger selectionStart;
 @property(nonatomic, readonly) NSInteger selectionEnd;
 @property(nonatomic, readonly) NSInteger selectionAnchor;
@@ -34,6 +42,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setSavePoint;
 - (void)resetUndoHistory;
 - (void)setLanguage:(NSString *)language;
+- (void)setKeywordList:(NSInteger)index words:(NSString *)words;
+- (void)setLexerProperty:(NSString *)name value:(NSString *)value;
+- (NSAttributedString *)attributedTextForSelection:(BOOL)selection;
+- (void)showCompletions:(NSArray<NSString *> *)words;
+- (void)setSyntaxStyle:(NSInteger)index foreground:(NSColor *)foreground background:(nullable NSColor *)background bold:(BOOL)bold italic:(BOOL)italic;
+- (void)showCallTip:(NSString *)text;
+
 - (BOOL)find:(NSString *)text matchCase:(BOOL)matchCase backwards:(BOOL)backwards;
 @end
 NS_ASSUME_NONNULL_END

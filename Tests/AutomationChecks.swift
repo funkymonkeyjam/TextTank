@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import Darwin
 
 @main struct AutomationChecks {
     static var count = 0
@@ -103,6 +104,33 @@ import Foundation
         let regexStarted = ProcessInfo.processInfo.systemUptime
         rejects("pathological regex interrupted before applying") { _ = try matching.transform(String(repeating:"a",count:32) + "!") }
         try check(ProcessInfo.processInfo.systemUptime - regexStarted < 2, "regex timeout bounded below two seconds")
+        var prompted = AutomationDefinition.example
+        prompted.steps = [.init(kind:.replaceLiteral,find:"saved",replacement:"default",askForFind:true,askForReplacement:true)]
+        var labels:[String] = []
+        let resolved = try prompted.resolvingParameters { index,label,value in labels.append(label); return label == "Find" ? "½" : "$()" }
+        try check(resolved?.transform("½ cup") == "$() cup" && labels == ["Find","Replacement"],"runtime parameters are ordered literal data")
+        try check(prompted.steps[0].find == "saved", "runtime parameters do not mutate saved defaults")
+        try check(prompted.resolvingParameters { _,_,_ in nil } == nil,"parameter cancellation returns no runnable definition")
+        rejects("runtime empty find rejected") { _ = try prompted.resolvingParameters { _,label,_ in label == "Find" ? "" : "value" } }
+        prompted.steps = [.init(kind:.removeBlankLines,askForFind:true)]
+        rejects("irrelevant parameter prompt rejected") { try prompted.validate() }
+        let control = AutomationRunControl(); control.cancel()
+        rejects("cancelled transform cannot produce output") { _ = try AutomationDefinition.example.transform(native,control:control) }
+        let progress = AutomationRunControl(); var completed:[Int] = []; progress.onProgress = { step,_ in completed.append(step) }
+        _ = try AutomationDefinition.example.transform(native,control:progress)
+        try check(completed.first == 0 && completed.last == AutomationDefinition.example.steps.count,"progress reaches all steps")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AutomationFiles-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let utf8 = root.appendingPathComponent("sample.txt"); try Data("café\u{0}👩🏽‍💻".utf8).write(to:utf8)
+        try check(AutomationFileInput.read(utf8) == "café\u{0}👩🏽‍💻","file input preserves Unicode and NUL")
+        rejects("file bound") { _ = try AutomationFileInput.read(utf8,limit:2) }
+        let link = root.appendingPathComponent("link"); try FileManager.default.createSymbolicLink(at:link,withDestinationURL:utf8)
+        rejects("symlink input") { _ = try AutomationFileInput.read(link) }
+        let fifo = root.appendingPathComponent("fifo"); precondition(mkfifo(fifo.path,0o600) == 0)
+        let started = ProcessInfo.processInfo.systemUptime
+        rejects("FIFO input rejects without blocking") { _ = try AutomationFileInput.read(fifo) }
+        try check(ProcessInfo.processInfo.systemUptime - started < 1,"FIFO rejection below one second")
         print("PASS AutomationChecks: \(count) assertions (pure core; native UI and external outputs not covered)")
     }
 }

@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Import data only from the frozen official Notepad++ source. GPL-3.0-or-later."""
+import hashlib,json,pathlib,re,sys,xml.etree.ElementTree as ET
+root=pathlib.Path(sys.argv[1]); out=pathlib.Path(sys.argv[2])
+paths=['PowerEditor/src/langs.model.xml','PowerEditor/src/stylers.model.xml','PowerEditor/src/ScintillaComponent/ScintillaEditView.cpp']
+source=(root/paths[2]).read_text()
+mapping={m[0]:(m[1],m[2]) for m in re.findall(r'\{L"([^"]+)",\s*L"([^"]+)",\s*L"[^"]+",\s*\w+,\s*"([^"]+)"\}',source)}
+styles={e.get('name'):e for e in ET.parse(root/paths[1]).findall('.//LexerType')}
+classes=['instre1','instre2','type1','type2','type3','type4','type5','type6','type7']
+profiles=[]
+for lang in ET.parse(root/paths[0]).findall('.//Language'):
+ name=lang.get('name'); title,lexer=mapping.get(name,(name,'null'))
+ raw={k.get('name'):' '.join((k.text or '').split()) for k in lang.findall('Keywords')}
+ keywords={str(i):raw.get(k,'') for i,k in enumerate(classes)}
+ if lexer=='cpp': keywords={'0':raw.get('instre1',''),'1':raw.get('type1',''),'2':'','3':raw.get('instre2','')}
+ props={'fold':'1','fold.compact':'0','fold.comment':'1'}
+ if lexer=='cpp':props.update({'lexer.cpp.track.preprocessor':'0','fold.preprocessor':'1'})
+ if name=='go':props['lexer.cpp.backquoted.strings']='1'
+ if name=='json5': props.update({'lexer.json.allow.comments':'1','lexer.json.escape.sequence':'1'})
+ style=styles.get(name); rows=[]
+ if style is not None:
+  for e in style.findall('WordsStyle'):
+   rows.append({'id':int(e.get('styleID','0')),'name':e.get('name',''),'foreground':e.get('fgColor','000000'),'fontStyle':int(e.get('fontStyle','0') or '0')})
+ profiles.append({'id':name,'title':title,'lexer':lexer,'extensions':lang.get('ext','').split(),'keywordLists':keywords,'referenceKeywordClasses':raw,'properties':props,'styles':rows,'functionPattern':None})
+# Native basic symbol navigation patterns are explicitly separate from upstream functionList parser semantics.
+patterns={'python':r'(?m)^[ \t]*(?:async[ \t]+)?(?:def|class)[ \t]+([\p{L}_][\p{L}\p{N}_]*)','swift':r'(?m)^[ \t]*(?:(?:public|private|internal|fileprivate|open|final|static|class|override|mutating)[ \t]+)*(?:func|class|struct|enum|protocol)[ \t]+([\p{L}_][\p{L}\p{N}_]*)','javascript.js':r'(?m)^[ \t]*(?:export[ \t]+)?(?:async[ \t]+)?(?:function|class)[ \t]+([\p{L}_$][\p{L}\p{N}_$]*)','rust':r'(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:async[ \t]+)?(?:fn|struct|enum|trait|mod)[ \t]+([\p{L}_][\p{L}\p{N}_]*)','ruby':r'(?m)^[ \t]*(?:def|class|module)[ \t]+([\p{L}_][\p{L}\p{N}_?.!]*)'}
+for p in profiles:p['functionPattern']=patterns.get(p['id'])
+result={'version':1,'sourceCommit':'61246e5741fd7c59352f3feb5ccc7e33e4594d15','sourceHashes':{p:hashlib.sha256((root/p).read_bytes()).hexdigest() for p in paths},'limitations':['Imported data and lexer mapping are source evidence, not full language verification.','Complex embedded lexer properties, substyles and reference function-list XML semantics remain unverified.','LexUser UDL requires the Notepad++ engine delta; generic profiles are not UDL compatibility.'],'profiles':profiles}
+out.write_text(json.dumps(result,indent=2,ensure_ascii=False)+'\n')
+print(len(profiles),'profiles imported')
