@@ -1,0 +1,8 @@
+{
+  "date": "2026-11-14",
+  "evidence_type": "user-reported runtime observation",
+  "observation": "User confirmed the ingredients transferred correctly to Reminders after the delivered cleanup/export workflow.",
+  "candidate_context": "Latest delivered review package; exact running binary, list identity, row count and system permission state not independently inspected during the report.",
+  "scope": "Successful live transfer happy path only.",
+  "remaining": "Revoked/denied access, unavailable/read-only/deleted list, partial/uncertain failure, crash reconciliation, duplicate retry and other accounts remain subject to targeted verification."
+}

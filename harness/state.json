@@ -5,11 +5,13 @@
   "pr": "https://github.com/funkymonkeyjam/TextTank/pull/1",
   "branch": "implementation/native-mac",
   "next": [
-    "Finish final independent review repairs and publish validated preview",
-    "Implement reference-compatible search and normalized behavioral inventory",
-    "Continue full required capability ledger; do not waive gaps"
+    "Execute remaining plan continuously: normalize reference and shared command contracts, then close document safety gaps",
+    "Integrate remaining editor/search/language/workspace/automation/utility packages with independent review and repairs",
+    "Deliver exact-candidate tested review build; preserve full required capability scope"
   ],
   "evidence": "docs/REVIEW-ME.md",
   "transport": "Shell network unavailable; GitHub connector commits preserve identical source tree with separate commit ancestry",
-  "incremental_checkpoint": "Direct recipe cleanup, close/Quit crash repair, session snapshots, printing and cancellable literal folder search with native navigation. Full standard capability requirement remains open."
+  "incremental_checkpoint": "Direct recipe cleanup, close/Quit crash repair, session snapshots, printing and cancellable literal folder search with native navigation. Full standard capability requirement remains open.",
+  "remaining_execution_plan": "docs/ONE-SHOT-BUILD-PLAN.md",
+  "user_validation": "User confirmed successful live ingredient transfer to Reminders; see docs/parity/user-validation-2026-11-14.json"
 }

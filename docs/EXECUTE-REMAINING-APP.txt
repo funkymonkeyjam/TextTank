@@ -1,0 +1,11 @@
+Finish TextTank in one continuous execution run using docs/ONE-SHOT-BUILD-PLAN.md.
+
+Read applicable AGENTS.md, that plan, PLANS.md, harness/state.json, harness/tasks.json and the indexed research before changing code. Recheck actual HEAD and preserve existing user work. Reuse the current public funkymonkeyjam/TextTank repository, implementation/native-mac branch and unmerged PR 1.
+
+Implement all remaining required standard Notepad++ capabilities and configurable user-named automations using the adopted native Swift/AppKit, Scintilla Cocoa and Lexilla architecture and Carbon Caret identity. Keep the working direct recipe cleanup, separate Reminders button and close/Quit repairs. The user confirmed live ingredient transfer succeeded; preserve this as user-reported happy-path evidence, not exhaustive connector certification.
+
+Execute every package in the plan with up to three workers plus one integrator. Continue automatically through internal milestones, builds, tests, independent reviews and repairs. Do not stop at a green build or return a planning-only answer during execution. Keep durable progress and resume across context compaction. Do not pretend a background job will continue after a turn ends.
+
+Maintain the complete capability requirement and evidence ledger. Do not substitute menus, stubs, test counts or unobserved assumptions for implemented and verified behavior. Finish independent work around genuine external blockers and report exactly what remains blocked. Do not claim the full job is done while required behavior is missing.
+
+Deliver a launchable local review app, corresponding curated pushed source, an unmerged PR, package/source hashes, observed exact-head CI, exact run instructions and a concise walkthrough. Do not merge, tag a release, buy services, change account security, force-push, overwrite personal documents or publish private research. Routine engineering choices require no further approvals.

@@ -192,7 +192,7 @@
     "status": "partial",
     "owner": null,
     "implementation_evidence": [],
-    "progress": "Explicit private session snapshots restore unsaved documents; static print operation added. Native63/Workspace39 cover limited behaviors. Full workspace/session/monitoring/printing baseline remains required."
+    "progress": "Explicit private session snapshots restore unsaved documents; static print operation added. Native64/Workspace39 cover limited behaviors. Full workspace/session/monitoring/printing baseline remains required."
   },
   {
     "id": "T12",
@@ -236,9 +236,10 @@
     "owner": "integrator",
     "implementation_evidence": [
       "docs/REVIEW-ME.md",
-      "docs/parity/implementation-evidence.json"
+      "docs/parity/implementation-evidence.json",
+      "docs/parity/user-validation-2026-11-14.json"
     ],
-    "progress": "User-named pinned cleanup/send presets, direct same-editor recipe28 cleanup and one-step Undo verified; native30/core47. Fake Reminders35 only; live EventKit and complete automation baseline remain open."
+    "progress": "Direct same-editor recipe cleanup and user-named pinned triggers verified in native tests. User subsequently confirmed successful live ingredient transfer to Reminders; this is happy-path user evidence only. Complete automation and connector failure/retry coverage remains open."
   },
   {
     "id": "T15",
@@ -254,9 +255,10 @@
     "owner": "integrator",
     "implementation_evidence": [
       "docs/REVIEW-ME.md",
-      "docs/parity/implementation-evidence.json"
+      "docs/parity/implementation-evidence.json",
+      "docs/parity/user-validation-2026-11-14.json"
     ],
-    "progress": "User-named pinned cleanup/send presets, direct same-editor recipe28 cleanup and one-step Undo verified; native30/core47. Fake Reminders35 only; live EventKit and complete automation baseline remain open."
+    "progress": "Direct same-editor recipe cleanup and user-named pinned triggers verified in native tests. User subsequently confirmed successful live ingredient transfer to Reminders; this is happy-path user evidence only. Complete automation and connector failure/retry coverage remains open."
   },
   {
     "id": "T16",
@@ -272,9 +274,10 @@
     "owner": "integrator",
     "implementation_evidence": [
       "docs/REVIEW-ME.md",
-      "docs/parity/implementation-evidence.json"
+      "docs/parity/implementation-evidence.json",
+      "docs/parity/user-validation-2026-11-14.json"
     ],
-    "progress": "User-named pinned cleanup/send presets, direct same-editor recipe28 cleanup and one-step Undo verified; native30/core47. Fake Reminders35 only; live EventKit and complete automation baseline remain open."
+    "progress": "Direct same-editor recipe cleanup and user-named pinned triggers verified in native tests. User subsequently confirmed successful live ingredient transfer to Reminders; this is happy-path user evidence only. Complete automation and connector failure/retry coverage remains open."
   },
   {
     "id": "T17",
