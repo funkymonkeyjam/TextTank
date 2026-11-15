@@ -98,7 +98,12 @@ final class RunController: NSObject, NSMenuItemValidation {
         // Indentation is not counted against the 1 MiB limit; persist applies that limit to the
         // compact form that is stored. This bound only keeps the decoder's input finite.
         guard json.count <= 4 * ConfiguredRun.maximumLibraryBytes else { throw RunFailure.configurationTooLarge }
-        try persist(try JSONDecoder().decode([ConfiguredRun].self, from: json))
+        let updated = try JSONDecoder().decode([ConfiguredRun].self, from: json)
+        try ConfiguredRun.validateLibrary(updated)
+        // JSON object key order is not stable across encodes or OS versions. An unchanged
+        // library keeps its existing bytes and file identity instead of being rewritten.
+        guard updated != commands else { return }
+        try persist(updated)
     }
     static let manageHelp =
         "Each entry is one saved command: name, executable (an absolute path), arguments, shellMode and extensionMode. Edit an entry to change it, or remove an entry to delete it. Keep id to keep a command's identity. Saving never runs a command."

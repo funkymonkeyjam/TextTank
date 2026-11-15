@@ -315,7 +315,13 @@ import AppKit
             try ConfiguredRun.decodeLibrary(Data(text.utf8)) == [sample, other],
             "F137 the managed text is the version-1 library")
         let before = try Data(contentsOf: controller.storage)
+        let beforeIdentity =
+            try FileManager.default.attributesOfItem(atPath: controller.storage.path)[.systemFileNumber] as? NSNumber
         try controller.replaceLibrary(json: Data(text.utf8))
+        check(
+            try FileManager.default.attributesOfItem(atPath: controller.storage.path)[.systemFileNumber] as? NSNumber
+                == beforeIdentity,
+            "F137 saving an unchanged library preserves the file identity instead of rewriting it")
         check(
             try Data(contentsOf: controller.storage) == before, "F137 saving the managed text unchanged keeps the file")
 
