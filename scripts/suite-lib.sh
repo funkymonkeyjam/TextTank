@@ -15,6 +15,9 @@
 #
 # TEXTTANK_SUITE_TIMEOUT sets the per-suite limit in seconds (default 300).
 
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+source "$TEXTTANK_ROOT/scripts/lib/test-common.sh"
+
 SUITE_BROKEN=" "
 SUITE_OWNER=0
 SUITE_FIRST_RECORD=1
@@ -25,7 +28,14 @@ suite_begin() {
     TEXTTANK_SUITE_RESULTS=$(mktemp "${TMPDIR:-/tmp}/texttank-suites.XXXXXX")
     export TEXTTANK_SUITE_RESULTS
     SUITE_OWNER=1
+    TEXTTANK_NATIVE_OBJECT_DIR=$(mktemp -d "$PWD/build/tests/native-objects.XXXXXX")
+    export TEXTTANK_NATIVE_OBJECT_DIR
+    trap 'rm -rf "$TEXTTANK_NATIVE_OBJECT_DIR"' EXIT
   fi
+  BRIDGE_OBJECT="$TEXTTANK_NATIVE_OBJECT_DIR/TTEditor.o"
+  SEARCH_OBJECT="$TEXTTANK_NATIVE_OBJECT_DIR/TTSearchEngine.o"
+  USER_LEXER_OBJECT="$TEXTTANK_NATIVE_OBJECT_DIR/UserLexer.o"
+  export BRIDGE_OBJECT SEARCH_OBJECT USER_LEXER_OBJECT
   SUITE_FIRST_RECORD=$(( $(wc -l < "$TEXTTANK_SUITE_RESULTS") + 1 ))
   # The shared harness is passed by absolute path so that #filePath, and with it
   # the repository root the checks derive, does not depend on the current directory.
@@ -33,8 +43,8 @@ suite_begin() {
 }
 
 suite_require_build() {
-  if [[ ! -d build/vendor/Debug/Scintilla.framework || ! -f Vendor/lexilla/bin/liblexilla.a ]]; then
-    echo "The native dependencies are not built (build/vendor/Debug/Scintilla.framework and Vendor/lexilla/bin/liblexilla.a are required). Run scripts/build.sh first." >&2
+  if [[ ! -d "$VENDOR_BUILD/Scintilla.framework" || ! -f "$LEXILLA_LIBRARY" ]]; then
+    echo "The native dependencies are not built ($CONFIGURATION Scintilla.framework and liblexilla.a are required). Run scripts/build.sh first." >&2
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then echo "::error::Native dependencies are not built; run scripts/build.sh first"; fi
     suite_record "NOT-BUILT" "$(basename "$0")" "run scripts/build.sh first"
     suite_finish

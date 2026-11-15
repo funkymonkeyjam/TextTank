@@ -14,7 +14,7 @@ if [[ "${1:-}" == --runner-selftest ]]; then
     source scripts/suite-lib.sh
     suite_begin
     suite_run stand-in-pass "$SELFTEST_WORK/pass.log" /bin/sh -c "echo PASS StandIn: 1 assertions"
-    suite_build "stand-in-unbuilt" /usr/bin/false
+ suite_build "stand-in-unbuilt" /usr/bin/false
     suite_run stand-in-unbuilt "$SELFTEST_WORK/unbuilt.log" /bin/sh -c "echo must not run"
     suite_run stand-in-fail "$SELFTEST_WORK/fail.log" /bin/sh -c "echo FAIL Tests/StandIn.swift:7 deliberate failure; exit 3"
     suite_run stand-in-hang "$SELFTEST_WORK/hang.log" /bin/sleep 30
@@ -46,7 +46,7 @@ fi
 
 source scripts/suite-lib.sh
 suite_begin
-suite_build "harness-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache "$SUITE_SUPPORT" Tests/HarnessChecks.swift -o build/tests/harness-checks
+suite_build "harness-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/HarnessChecks.swift -o build/tests/harness-checks
 suite_run harness-checks harness/logs/harness-checks.log build/tests/harness-checks
 suite_run runner-selftest harness/logs/runner-selftest.log scripts/test-harness.sh --runner-selftest
 # The tool that proves a formatting commit changed layout only must itself accept
