@@ -176,7 +176,8 @@ final class SettingsController: NSObject {
         alert.accessoryView = stack
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Reset Defaults")
+        // The ellipsis says a confirmation follows (DS-22); the confirmation holds the destructive button.
+        alert.addButton(withTitle: "Reset Defaults…")
         let result = alert.runModal()
         guard result != .alertSecondButtonReturn else { return }
         do {

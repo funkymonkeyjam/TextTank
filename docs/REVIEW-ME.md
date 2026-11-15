@@ -4,7 +4,9 @@ Native Swift/AppKit, Scintilla Cocoa and Lexilla editor with Carbon Caret brandi
 
 Repository: https://github.com/funkymonkeyjam/TextTank
 
-Unmerged PR: https://github.com/funkymonkeyjam/TextTank/pull/1
+Development line: `main`. The first implementation pull request (https://github.com/funkymonkeyjam/TextTank/pull/1) was merged on 15 November 2026.
+
+Interface rules: [DESIGN-STANDARDS.md](DESIGN-STANDARDS.md).
 
 ## Run
 
