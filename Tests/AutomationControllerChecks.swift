@@ -108,6 +108,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             var aligned = false
             let timer = Timer(timeInterval:0.1,repeats:false) { _ in
                 let frames = alert.buttons.map { $0.convert($0.bounds,to:alert.window.contentView) }
+                print("ACTION_GEOMETRY",index,frames);fflush(stdout)
                 aligned = frames.allSatisfy { abs($0.midY-frames[0].midY)<1 } && frames[2].maxX<frames[1].minX && frames[1].maxX<frames[0].minX
                 alert.buttons[index].performClick(nil)
             }
