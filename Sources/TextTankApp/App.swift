@@ -253,17 +253,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             bar.addItem(item)
             return m
         }
-        func item(_ m: NSMenu, _ title: String, _ action: Selector, _ key: String = "", _ object: String? = nil) {
-            let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
-            i.representedObject = object
-            m.addItem(i)
-        }
         let app = menu("TextTank")
-        item(app, "About TextTank", #selector(about))
-        let preferences = NSMenuItem(
-            title: "Settings…", action: #selector(SettingsController.showSettings(_:)), keyEquivalent: ",")
-        preferences.target = settings
-        app.addItem(preferences)
+        app.addItem(title: "About TextTank", action: #selector(about))
+        app.addItem(
+            title: "Settings…", action: #selector(SettingsController.showSettings(_:)), keyEquivalent: ",",
+            target: settings)
         app.addItem(.separator())
         // The standard application items. AppKit fills the Services menu.
         let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
@@ -272,41 +266,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.servicesMenu = services
         app.addItem(servicesItem)
         app.addItem(.separator())
-        item(app, "Hide TextTank", #selector(NSApplication.hide(_:)), "h")
-        let hideOthers = NSMenuItem(
-            title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
-        hideOthers.keyEquivalentModifierMask = [.command, .option]
-        app.addItem(hideOthers)
-        item(app, "Show All", #selector(NSApplication.unhideAllApplications(_:)))
+        app.addItem(title: "Hide TextTank", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        app.addItem(
+            title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h",
+            modifiers: [.command, .option])
+        app.addItem(title: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)))
         app.addItem(.separator())
-        item(app, "Quit TextTank", #selector(NSApplication.terminate(_:)), "q")
+        app.addItem(title: "Quit TextTank", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let file = menu("File")
-        item(file, "New", #selector(newDocument(_:)), "n")
-        item(file, "Open…", #selector(NSDocumentController.openDocument(_:)), "o")
+        file.addItem(title: "New", action: #selector(newDocument(_:)), keyEquivalent: "n")
+        file.addItem(title: "Open…", action: #selector(NSDocumentController.openDocument(_:)), keyEquivalent: "o")
         let recentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
         let recentMenu = NSMenu(title: "Open Recent")
         recentMenu.delegate = recentDocumentsMenu
         recentItem.submenu = recentMenu
         file.addItem(recentItem)
-        item(file, "Save", #selector(NSDocument.save(_:)), "s")
-        item(file, "Save As…", #selector(NSDocument.saveAs(_:)), "S")
-        item(file, "Save Copy…", #selector(TextDocument.saveCopy(_:)))
-        item(file, "Save All", #selector(NSDocumentController.saveAllDocuments(_:)))
-        item(file, "Revert to Saved…", #selector(NSDocument.revertToSaved(_:)))
-        item(file, "Check for External Changes", #selector(TextDocument.checkExternalChanges(_:)))
-        item(file, "Read Only", #selector(TextDocument.toggleReadOnly(_:)))
-        item(file, "Close", #selector(NSWindow.performClose(_:)), "w")
+        file.addItem(title: "Save", action: #selector(NSDocument.save(_:)), keyEquivalent: "s")
+        file.addItem(title: "Save As…", action: #selector(NSDocument.saveAs(_:)), keyEquivalent: "S")
+        file.addItem(title: "Save Copy…", action: #selector(TextDocument.saveCopy(_:)))
+        file.addItem(title: "Save All", action: #selector(NSDocumentController.saveAllDocuments(_:)))
+        file.addItem(title: "Revert to Saved…", action: #selector(NSDocument.revertToSaved(_:)))
+        file.addItem(title: "Check for External Changes", action: #selector(TextDocument.checkExternalChanges(_:)))
+        file.addItem(title: "Read Only", action: #selector(TextDocument.toggleReadOnly(_:)))
+        file.addItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         file.addItem(.separator())
-        item(file, "Page Setup…", #selector(NSDocument.runPageLayout(_:)))
-        item(file, "Print…", #selector(NSDocument.printDocument(_:)), "p")
-        let saveSession = NSMenuItem(
-            title: "Save Session Snapshot…", action: #selector(WorkspaceController.saveSession(_:)), keyEquivalent: "")
-        saveSession.target = workspace
-        file.addItem(saveSession)
-        let openSession = NSMenuItem(
-            title: "Open Session Snapshot…", action: #selector(WorkspaceController.openSession(_:)), keyEquivalent: "")
-        openSession.target = workspace
-        file.addItem(openSession)
+        file.addItem(title: "Page Setup…", action: #selector(NSDocument.runPageLayout(_:)))
+        file.addItem(title: "Print…", action: #selector(NSDocument.printDocument(_:)), keyEquivalent: "p")
+        file.addItem(
+            title: "Save Session Snapshot…", action: #selector(WorkspaceController.saveSession(_:)), target: workspace)
+        file.addItem(
+            title: "Open Session Snapshot…", action: #selector(WorkspaceController.openSession(_:)), target: workspace)
         let workspaceRoot = NSMenuItem()
         workspaceRoot.title = "Workspace"
         workspaceRoot.submenu = workspaceBrowser.menu()
@@ -315,7 +304,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for (title, code) in [
             ("UTF-8", "utf8"), ("UTF-8 with BOM", "utf8bom"), ("UTF-16 LE with BOM", "utf16LE"),
             ("UTF-16 BE with BOM", "utf16BE"), ("Windows-1252", "windows1252"), ("ISO-8859-1", "latin1")
-        ] { item(encoding, "Convert to \(title)", #selector(TextDocument.convertEncoding(_:)), "", code) }
+        ] {
+            encoding.addItem(
+                title: "Convert to \(title)", action: #selector(TextDocument.convertEncoding(_:)),
+                representedObject: code)
+        }
         encoding.addItem(.separator())
         // The same names as the Convert items above, never the stored identifier.
         let encodingNames: [FileEncoding: String] = [
@@ -323,9 +316,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .latin1: "ISO-8859-1"
         ]
         for value in FileEncoding.allCases {
-            item(
-                encoding, "Reload as \(encodingNames[value] ?? value.rawValue)…",
-                #selector(TextDocument.reloadEncoding(_:)), "", value.rawValue)
+            encoding.addItem(
+                title: "Reload as \(encodingNames[value] ?? value.rawValue)…",
+                action: #selector(TextDocument.reloadEncoding(_:)), representedObject: value.rawValue)
         }
         let edit = menu("Edit")
         // Grouped by what the command acts on. Every item keeps its command identifier as its
@@ -338,18 +331,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return child
         }
         func command(_ m: NSMenu, _ title: String, _ id: String, _ key: String = "") {
-            item(m, title, #selector(EditorWindowController.command(_:)), key, id)
+            m.addItem(
+                title: title, action: #selector(EditorWindowController.command(_:)), keyEquivalent: key,
+                representedObject: id)
         }
         func transform(_ m: NSMenu, _ value: EditorTransform) {
             command(m, value.title, "transform." + value.rawValue)
         }
-        item(edit, "Undo", NSSelectorFromString("undo:"), "z", "undo")
-        item(edit, "Redo", NSSelectorFromString("redo:"), "Z", "redo")
+        edit.addItem(
+            title: "Undo", action: NSSelectorFromString("undo:"), keyEquivalent: "z", representedObject: "undo")
+        edit.addItem(
+            title: "Redo", action: NSSelectorFromString("redo:"), keyEquivalent: "Z", representedObject: "redo")
         edit.addItem(.separator())
-        item(edit, "Cut", #selector(NSText.cut(_:)), "x", "cut")
-        item(edit, "Copy", #selector(NSText.copy(_:)), "c", "copy")
-        item(edit, "Paste", #selector(NSText.paste(_:)), "v", "paste")
-        item(edit, "Select All", #selector(NSText.selectAll(_:)), "a", "selectAll")
+        edit.addItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x", representedObject: "cut")
+        edit.addItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c", representedObject: "copy")
+        edit.addItem(
+            title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v", representedObject: "paste")
+        edit.addItem(
+            title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a",
+            representedObject: "selectAll")
         edit.addItem(.separator())
         let lines = group("Lines")
         command(lines, "Duplicate Line", "duplicateLine", "d")
@@ -378,7 +378,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         transform(letterCase, .invertCase)
         let comments = group("Comment")
         for comment in CommentCommand.allCases {
-            item(comments, comment.title, #selector(EditorWindowController.comment(_:)), "", comment.rawValue)
+            comments.addItem(
+                title: comment.title, action: #selector(EditorWindowController.comment(_:)),
+                representedObject: comment.rawValue)
         }
         let selection = group("Selection")
         for (title, id) in [
@@ -387,7 +389,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ("Clear Additional Selections", "clearAdditionalSelections"), ("Duplicate Selection", "duplicateSelection")
         ] { command(selection, title, id) }
         selection.addItem(.separator())
-        item(selection, "Column Insert / Number…", #selector(EditorWindowController.columnInsert(_:)))
+        selection.addItem(title: "Column Insert / Number…", action: #selector(EditorWindowController.columnInsert(_:)))
         let deletion = group("Delete")
         for (title, id) in [
             ("Delete Word Left", "deleteWordLeft"), ("Delete Word Right", "deleteWordRight"),
@@ -395,7 +397,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ] { command(deletion, title, id) }
         let endings = group("Line Endings")
         for mode in ["LF", "CRLF", "CR"] {
-            item(endings, "Convert to \(mode)", #selector(EditorWindowController.convertEOL(_:)), "", mode)
+            endings.addItem(
+                title: "Convert to \(mode)", action: #selector(EditorWindowController.convertEOL(_:)),
+                representedObject: mode)
         }
         edit.addItem(.separator())
         command(edit, "Toggle Overtype", "toggleOvertype")
@@ -409,20 +413,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // One Find. Command-F opens the find bar in the document window; Find Next, Find Previous
         // and Use Selection for Find share its text with the system find pasteboard. Find and
         // Replace is the window with scopes, regular expressions and results.
-        item(search, "Find…", #selector(EditorWindowController.showFind(_:)), "f")
-        let findAndReplace = NSMenuItem(
-            title: "Find and Replace…", action: #selector(SearchController.showSearch(_:)), keyEquivalent: "f")
-        findAndReplace.keyEquivalentModifierMask = [.command, .option]
-        findAndReplace.target = searchController
-        search.addItem(findAndReplace)
+        search.addItem(title: "Find…", action: #selector(EditorWindowController.showFind(_:)), keyEquivalent: "f")
+        search.addItem(
+            title: "Find and Replace…", action: #selector(SearchController.showSearch(_:)), keyEquivalent: "f",
+            modifiers: [.command, .option], target: searchController)
         for (title, action, key) in [
             ("Find Next", #selector(findNextShared(_:)), "g"), ("Find Previous", #selector(findPreviousShared(_:)), "G")
         ] {
-            let entry = NSMenuItem(title: title, action: action, keyEquivalent: key)
-            entry.target = self
-            search.addItem(entry)
+            search.addItem(title: title, action: action, keyEquivalent: key, target: self)
         }
-        item(search, "Use Selection for Find", #selector(EditorWindowController.useSelectionForFind(_:)), "e")
+        search.addItem(
+            title: "Use Selection for Find", action: #selector(EditorWindowController.useSelectionForFind(_:)),
+            keyEquivalent: "e")
+        search.addItem(
+            title: "Find in Folder…", action: #selector(FolderSearchController.showSearch(_:)), keyEquivalent: "F",
+            target: folderSearch)
+        search.addItem(title: "Go to Line…", action: #selector(EditorWindowController.goToLine(_:)), keyEquivalent: "l")
+        for (label, id) in [
+            ("Matching Brace", "gotoMatchingBrace"), ("Select to Matching Brace", "selectMatchingBrace"),
+            ("Toggle Bookmark", "bookmarkToggle"), ("Next Bookmark", "bookmarkNext"),
+            ("Previous Bookmark", "bookmarkPrevious")
+        ] { search.addItem(title: label, action: #selector(EditorWindowController.command(_:)), representedObject: id) }
         let runRoot = NSMenuItem()
         runRoot.title = "Run"
         runRoot.submenu = runner.makeMenu()
@@ -431,26 +442,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         utilityRoot.title = "Text Utilities"
         utilityRoot.submenu = utilities.makeMenu()
         bar.addItem(utilityRoot)
-        let folderSearchItem = NSMenuItem(
-            title: "Find in Folder…", action: #selector(FolderSearchController.showSearch(_:)), keyEquivalent: "F")
-        folderSearchItem.target = folderSearch
-        search.addItem(folderSearchItem)
-        item(search, "Go to Line…", #selector(EditorWindowController.goToLine(_:)), "l")
         let view = menu("View")
-        item(view, "Clone in Split View", #selector(EditorWindowController.clone(_:)))
-        item(view, "Close Split View", #selector(EditorWindowController.closeSplit(_:)))
-        item(view, "Wrap Lines", #selector(EditorWindowController.toggleWrap(_:)))
-        item(view, "Zoom In", #selector(EditorWindowController.command(_:)), "+", "zoomIn")
-        item(view, "Zoom Out", #selector(EditorWindowController.command(_:)), "-", "zoomOut")
+        view.addItem(title: "Clone in Split View", action: #selector(EditorWindowController.clone(_:)))
+        view.addItem(title: "Close Split View", action: #selector(EditorWindowController.closeSplit(_:)))
+        view.addItem(title: "Wrap Lines", action: #selector(EditorWindowController.toggleWrap(_:)))
+        view.addItem(
+            title: "Zoom In", action: #selector(EditorWindowController.command(_:)), keyEquivalent: "+",
+            representedObject: "zoomIn")
+        view.addItem(
+            title: "Zoom Out", action: #selector(EditorWindowController.command(_:)), keyEquivalent: "-",
+            representedObject: "zoomOut")
         for (label, id) in [
             ("Fold All", "foldAll"), ("Unfold All", "unfoldAll"), ("Show Whitespace", "showWhitespace"),
             ("Show Line Endings", "toggleEOL"), ("Show Line Numbers", "toggleLineNumbers")
-        ] { item(view, label, #selector(EditorWindowController.command(_:)), "", id) }
-        for (label, id) in [
-            ("Matching Brace", "gotoMatchingBrace"), ("Select to Matching Brace", "selectMatchingBrace"),
-            ("Toggle Bookmark", "bookmarkToggle"), ("Next Bookmark", "bookmarkNext"),
-            ("Previous Bookmark", "bookmarkPrevious")
-        ] { item(search, label, #selector(EditorWindowController.command(_:)), "", id) }
+        ] { view.addItem(title: label, action: #selector(EditorWindowController.command(_:)), representedObject: id) }
         let languageRoot = NSMenuItem()
         languageRoot.title = "Language"
         languageRoot.submenu = languages.menu()
@@ -466,25 +471,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The palette's one menu entry, with Shift-Command-P, is in the Automations menu.
         let window = menu("Window")
         NSApp.windowsMenu = window
-        let nextTab = NSMenuItem(title: "Next Tab", action: #selector(nextDocumentTab(_:)), keyEquivalent: "\t")
-        nextTab.target = self
-        nextTab.keyEquivalentModifierMask = [.control]
-        window.addItem(nextTab)
-        let previousTab = NSMenuItem(
-            title: "Previous Tab", action: #selector(previousDocumentTab(_:)), keyEquivalent: "\t")
-        previousTab.target = self
-        previousTab.keyEquivalentModifierMask = [.control, .shift]
-        window.addItem(previousTab)
-        item(window, "Open Documents…", #selector(showDocumentTabs(_:)))
+        window.addItem(
+            title: "Next Tab", action: #selector(nextDocumentTab(_:)), keyEquivalent: "\t", modifiers: [.control],
+            target: self)
+        window.addItem(
+            title: "Previous Tab", action: #selector(previousDocumentTab(_:)), keyEquivalent: "\t",
+            modifiers: [.control, .shift], target: self)
+        window.addItem(title: "Open Documents…", action: #selector(showDocumentTabs(_:)))
         window.addItem(.separator())
-        item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")
-        item(window, "Zoom", #selector(NSWindow.performZoom(_:)))
+        window.addItem(title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        window.addItem(title: "Zoom", action: #selector(NSWindow.performZoom(_:)))
         window.addItem(.separator())
-        item(window, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:)))
+        window.addItem(title: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)))
         // AppKit puts its search field in the Help menu; it finds any command in the menus above.
         let help = menu("Help")
         NSApp.helpMenu = help
-        item(help, "TextTank Help (Online)", #selector(openOnlineHelp(_:)), "?")
+        help.addItem(title: "TextTank Help (Online)", action: #selector(openOnlineHelp(_:)), keyEquivalent: "?")
     }
     /// The project page, which carries the review guide and where each command lives. There is no
     /// bundled help book yet.
@@ -2171,17 +2173,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             _ title: String, _ action: Selector, _ target: AnyObject, _ value: String? = nil, _ checked: Bool = false,
             _ enabled: Bool = true
         ) {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = target
-            item.representedObject = value
-            item.state = checked ? .on : .off
-            item.isEnabled = enabled
-            menu.addItem(item)
+            menu.addItem(
+                title: title, action: action, target: target, representedObject: value,
+                isEnabled: enabled, state: checked ? .on : .off)
         }
         func heading(_ title: String) {
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
+            menu.addItem(title: title, action: nil, isEnabled: false)
         }
         switch key {
         case "encoding":

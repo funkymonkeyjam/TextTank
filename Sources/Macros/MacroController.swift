@@ -46,23 +46,26 @@ final class MacroController: NSObject, NSMenuDelegate {
     private func rebuild() {
         macroMenu.removeAllItems()
         macroMenu.autoenablesItems = false
-        func item(_ title: String, _ action: Selector, _ enabled: Bool = true, _ id: String? = nil) {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            item.isEnabled = enabled
-            item.representedObject = id
-            macroMenu.addItem(item)
-        }
-        item("Start Recording", #selector(startRecording), recordingEditor == nil && !playing)
-        item(
-            discardReason == nil ? "Stop Recording" : "Stop Recording (Already Discarded)", #selector(stopRecording),
-            recordingEditor != nil)
-        item("Play Last Recording…", #selector(playLast), lastRecording != nil && recordingEditor == nil && !playing)
-        item("Save Last Recording…", #selector(saveLast), lastRecording != nil && recordingEditor == nil)
-        item("Manage Saved Macros…", #selector(manage), recordingEditor == nil && !playing)
+        macroMenu.addItem(
+            title: "Start Recording", action: #selector(startRecording), target: self,
+            isEnabled: recordingEditor == nil && !playing)
+        macroMenu.addItem(
+            title: discardReason == nil ? "Stop Recording" : "Stop Recording (Already Discarded)",
+            action: #selector(stopRecording), target: self, isEnabled: recordingEditor != nil)
+        macroMenu.addItem(
+            title: "Play Last Recording…", action: #selector(playLast), target: self,
+            isEnabled: lastRecording != nil && recordingEditor == nil && !playing)
+        macroMenu.addItem(
+            title: "Save Last Recording…", action: #selector(saveLast), target: self,
+            isEnabled: lastRecording != nil && recordingEditor == nil)
+        macroMenu.addItem(
+            title: "Manage Saved Macros…", action: #selector(manage), target: self,
+            isEnabled: recordingEditor == nil && !playing)
         if !library.macros.isEmpty { macroMenu.addItem(.separator()) }
         for macro in library.macros {
-            item(macro.name, #selector(playSaved(_:)), recordingEditor == nil && !playing, macro.id.uuidString)
+            macroMenu.addItem(
+                title: macro.name, action: #selector(playSaved(_:)), target: self,
+                representedObject: macro.id.uuidString, isEnabled: recordingEditor == nil && !playing)
         }
     }
     @objc func startRecording() {

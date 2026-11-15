@@ -95,19 +95,14 @@ final class LanguageController: NSObject, NSMenuDelegate {
     }
     private func populate(_ menu: LanguageMenu) {
         menu.removeAllItems()
-        func add(_ name: String, _ action: Selector) {
-            let item = NSMenuItem(title: name, action: action, keyEquivalent: "")
-            item.target = self
-            menu.addItem(item)
-        }
-        add("Complete Word", #selector(complete))
-        add("Function List…", #selector(functions))
-        add("Show Keyword Help", #selector(callTip))
+        menu.addItem(title: "Complete Word", action: #selector(complete), target: self)
+        menu.addItem(title: "Function List…", action: #selector(functions), target: self)
+        menu.addItem(title: "Show Keyword Help", action: #selector(callTip), target: self)
         menu.addItem(styleSettingsMenuItem())
-        add("Edit Language Profiles…", #selector(configure))
-        add("Import Notepad++ UDL…", #selector(importUDL))
-        add("Edit Current UDL…", #selector(editUDL))
-        add("Export Current UDL…", #selector(exportUDL))
+        menu.addItem(title: "Edit Language Profiles…", action: #selector(configure), target: self)
+        menu.addItem(title: "Import Notepad++ UDL…", action: #selector(importUDL), target: self)
+        menu.addItem(title: "Edit Current UDL…", action: #selector(editUDL), target: self)
+        menu.addItem(title: "Export Current UDL…", action: #selector(exportUDL), target: self)
         menu.addItem(.separator())
         for item in languageMenuItems() { menu.addItem(item) }
         menu.generation = generation
