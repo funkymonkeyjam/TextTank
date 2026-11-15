@@ -169,9 +169,12 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         preferenceNotice.setAccessibilityLabel("Saved Find in Folder settings status")
         preferenceNotice.lineBreakMode = .byWordWrapping
         preferenceNotice.maximumNumberOfLines = 2
-        let preferenceRow = NSStackView(views: [preferenceNotice, resetPreferencesButton])
+        let preferenceSpacer = NSView()
+        preferenceSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        resetPreferencesButton.setContentHuggingPriority(.required, for: .horizontal)
+        let preferenceRow = NSStackView(views: [preferenceNotice, preferenceSpacer, resetPreferencesButton])
         preferenceRow.spacing = 8
-        preferenceRow.isHidden = preferences.state.error == nil
+        preferenceNotice.isHidden = preferences.state.error == nil
         let root = NSStackView(views: [
             location, queryField, replacements, filterField, semantics, options, preferenceRow, status, results,
             detailScroll
@@ -259,13 +262,13 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         preferenceNotice.stringValue =
             "Saved search settings are unavailable. Searches still work; reset the settings to keep new choices."
         preferenceNotice.toolTip = error.localizedDescription
-        preferenceNotice.superview?.isHidden = false
+        preferenceNotice.isHidden = false
         resetPreferencesButton.isHidden = false
     }
     private func savePreferencesOrReport() {
         do {
             try saveSettings()
-            preferenceNotice.superview?.isHidden = true
+            preferenceNotice.isHidden = true
         } catch { showPreferenceFailure(error) }
     }
     @objc func resetSavedPreferences(_ sender: Any?) {
@@ -273,7 +276,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         do {
             try preferences.reset()
             applySavedPreferences(preferences.value)
-            preferenceNotice.superview?.isHidden = true
+            preferenceNotice.isHidden = true
             status.stringValue = "Saved folder search settings were reset. Documents were not changed."
         } catch { showPreferenceFailure(error) }
     }

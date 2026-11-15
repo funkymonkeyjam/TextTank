@@ -69,7 +69,7 @@ final class CountingWindow: NSWindow {
             await waitUntil("search with unreadable preferences to finish") { !degraded.isSearching }
             check(
                 degraded.lastOutcome == .found(matches: 1, documents: 1, truncated: false)
-                    && degraded.preferenceNotice.superview?.isHidden == false
+                    && degraded.preferenceNotice.isHidden == false
                     && degraded.resetPreferencesButton.isHidden == false,
                 "F212 unreadable preferences leave search functional with persistent recovery controls")
             check(
@@ -85,9 +85,14 @@ final class CountingWindow: NSWindow {
             await waitUntil("search with a failed preference save to finish") { !transient.isSearching }
             check(
                 transient.lastOutcome == .found(matches: 1, documents: 1, truncated: false)
-                    && transient.preferenceNotice.superview?.isHidden == false,
+                    && transient.preferenceNotice.isHidden == false,
                 "F212 preference write failure is reported without aborting the requested search")
             let fresh0 = SearchOptions()
+            check(
+                !controller.resetPreferencesButton.isHidden
+                    && controller.resetPreferencesButton.superview?.isHidden == false
+                    && controller.preferenceNotice.isHidden,
+                "F212 healthy saved settings retain a discoverable explicit Reset action")
             check(
                 controller.queryField.stringValue == fresh0.query
                     && controller.caseButton.state == (fresh0.matchCase ? .on : .off)

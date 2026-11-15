@@ -522,7 +522,7 @@ import AppKit
         let finder = SearchController(preferencesURL: preferenceURL)
         finder.queryField.stringValue = "reset this query"
         check(
-            finder.preferenceNotice.superview?.isHidden == false,
+            finder.preferenceNotice.isHidden == false,
             "F212 failed Find preferences expose persistent recovery")
         _ = try recovery(
             "store.recover.move",
@@ -535,7 +535,8 @@ import AppKit
             includingPropertiesForKeys: nil
         ).filter { $0.lastPathComponent.hasPrefix("damaged-find.previous-") }
         check(
-            finder.queryField.stringValue.isEmpty && finder.preferenceNotice.superview?.isHidden == true
+            finder.queryField.stringValue.isEmpty && finder.preferenceNotice.isHidden == true
+                && finder.resetPreferencesButton.superview?.isHidden == false
                 && preferenceBackups.count == 1,
             "F212 explicit preference reset uses common recovery and restores default controls")
         if let backup = preferenceBackups.first {

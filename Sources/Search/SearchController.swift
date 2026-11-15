@@ -170,11 +170,14 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         resetPreferencesButton.action = #selector(resetSavedPreferences(_:))
         resetPreferencesButton.setAccessibilityLabel("Reset saved Find and Replace settings")
         preferenceNotice.setAccessibilityLabel("Saved Find and Replace settings status")
-        let preferenceRow = NSStackView(views: [preferenceNotice, resetPreferencesButton])
+        let preferenceSpacer = NSView()
+        preferenceSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        resetPreferencesButton.setContentHuggingPriority(.required, for: .horizontal)
+        let preferenceRow = NSStackView(views: [preferenceNotice, preferenceSpacer, resetPreferencesButton])
         preferenceRow.spacing = 8
         preferenceNotice.lineBreakMode = .byWordWrapping
         preferenceNotice.maximumNumberOfLines = 2
-        preferenceRow.isHidden = preferences.state.error == nil
+        preferenceNotice.isHidden = preferences.state.error == nil
         preferenceNotice.stringValue =
             preferences.state.error == nil
             ? "" : "Saved search settings could not be read. Reset them to keep new settings."
@@ -216,7 +219,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         o.wrap = wrapButton.state == .on
         do {
             try preferences.save(FindPreferences(options: o))
-            preferenceNotice.superview?.isHidden = true
+            preferenceNotice.isHidden = true
         } catch { showPreferenceFailure(error) }
         options = o
         return o
@@ -225,7 +228,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         preferenceNotice.stringValue =
             "The search can run, but its settings were not saved. Reset saved settings or try again."
         preferenceNotice.toolTip = error.localizedDescription
-        preferenceNotice.superview?.isHidden = false
+        preferenceNotice.isHidden = false
         resetPreferencesButton.isHidden = false
     }
     @objc func resetSavedPreferences(_ sender: Any?) {
@@ -240,7 +243,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             wordButton.state = options.wholeWord ? .on : .off
             dotButton.state = options.dotMatchesNewline ? .on : .off
             wrapButton.state = options.wrap ? .on : .off
-            preferenceNotice.superview?.isHidden = true
+            preferenceNotice.isHidden = true
             status.stringValue = "Saved search settings were reset. Documents were not changed."
         } catch { showPreferenceFailure(error) }
     }
