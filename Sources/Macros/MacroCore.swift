@@ -90,20 +90,40 @@ enum MacroError: LocalizedError {
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
 struct MacroLibrary: Codable, Equatable {
+    /// Same 32 MiB resource envelope as saved automations; bound both import and persistence.
+    static let maximumBytes = 32 * 1024 * 1024
     var version: Int = 1
     var macros: [RecordedMacro]
     func validate() throws {
         guard version == 1 else { throw MacroError.invalid("Saved macros require version 1.") }
         guard macros.count <= 200 else { throw MacroError.invalid("Keep at most 200 saved macros.") }
         var seen = Set<UUID>()
+        var remaining = Self.maximumBytes
+        func consume(_ text: String?) throws {
+            guard let text else { return }
+            let count = text.utf8.count
+            guard count <= remaining else {
+                throw MacroError.invalid("Saved macros exceed the 32 MiB limit. The file was not changed.")
+            }
+            remaining -= count
+        }
         for macro in macros {
             guard seen.insert(macro.id).inserted else {
                 throw MacroError.invalid("Macro “\(String(macro.name.prefix(120)))” appears more than once.")
             }
             try macro.validate()
+            try consume(macro.name)
+            for step in macro.steps {
+                try consume(step.text)
+                try consume(step.search?.query)
+                try consume(step.search?.replacement)
+            }
         }
     }
     static func decode(_ data: Data) throws -> MacroLibrary {
+        guard data.count <= maximumBytes else {
+            throw MacroError.invalid("Saved macros exceed the 32 MiB limit. The file was not changed.")
+        }
         let library = try JSONInputFailure.decode(Self.self, from: data, context: "Saved macros")
         try library.validate()
         return library
@@ -112,6 +132,10 @@ struct MacroLibrary: Codable, Equatable {
         try validate()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(self)
+        let data = try encoder.encode(self)
+        guard data.count <= Self.maximumBytes else {
+            throw MacroError.invalid("Saved macros exceed the 32 MiB limit. The file was not changed.")
+        }
+        return data
     }
 }

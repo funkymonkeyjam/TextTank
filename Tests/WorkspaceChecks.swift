@@ -10,6 +10,50 @@ import Darwin
             ).resolvingSymlinksInPath()
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: root) }
+            Checks.section("F149 shared private byte I/O") {
+                let owned = root.appendingPathComponent("private-store")
+                try PrivateFileStore.prepareDirectory(owned)
+                let file = owned.appendingPathComponent("value.json")
+                let before = Data("old exact bytes".utf8), after = Data("new exact bytes".utf8)
+                try PrivateFileStore.write(before, to: file, maximumBytes: 100)
+                rejects("F149 a failed fsync prevents atomic replacement", where: { $0.posixCode == .EIO }) {
+                    try PrivateFileStore.write(
+                        after, to: file, maximumBytes: 100,
+                        synchronize: { _ in
+                            errno = EIO
+                            return -1
+                        })
+                }
+                check(try Data(contentsOf: file) == before, "F149 failed sync preserves the prior bytes")
+                check(
+                    try FileManager.default.contentsOfDirectory(atPath: owned.path) == ["value.json"],
+                    "F149 failed sync cleans its own temporary file")
+                try PrivateFileStore.write(after, to: file, maximumBytes: 100)
+                check(
+                    try PrivateFileStore.read(file, maximumBytes: 100) == after,
+                    "F149 shared I/O roundtrips exact bytes")
+                check(
+                    (try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber)?
+                        .intValue == 0o600, "F149 shared writes retain private 0600 mode")
+                check(
+                    (try FileManager.default.attributesOfItem(atPath: owned.path)[.posixPermissions] as? NSNumber)?
+                        .intValue == 0o700, "F149 shared app directories retain private 0700 mode")
+                let alias = root.appendingPathComponent("chosen-parent")
+                try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: owned)
+                let selected = alias.appendingPathComponent("value.json")
+                check(
+                    try PrivateFileStore.read(selected, maximumBytes: 100, parent: .selectedInput) == after,
+                    "F149 a chosen regular import still accepts a symlinked parent")
+                rejects("F149 an app-owned store refuses a symlinked immediate parent") {
+                    _ = try PrivateFileStore.read(selected, maximumBytes: 100)
+                }
+                rejects("F149 shared reads enforce their caller's byte bound") {
+                    _ = try PrivateFileStore.read(file, maximumBytes: 1)
+                }
+                rejects("F149 shared writes enforce the same caller's byte bound") {
+                    try PrivateFileStore.write(after, to: file, maximumBytes: 1)
+                }
+            }
             let unsafeLocation: (Error) -> Bool = {
                 if case WorkspaceError.unsafeLocation = $0 { return true }
                 return false

@@ -6,7 +6,7 @@ final class MacroController: NSObject, NSMenuDelegate {
     private let editorProvider: () -> TTEditor?
     private var library = MacroLibrary(macros: [])
     private let storage: URL
-    private var loadingError: Error?
+    private(set) var loadingError: Error?
     private var recordingEditor: TTEditor?
     private var recorded: [RecordedMacro.Step] = []
     private var lastRecording: RecordedMacro?
@@ -31,7 +31,10 @@ final class MacroController: NSObject, NSMenuDelegate {
         super.init()
         macroMenu.delegate = self
         if FileManager.default.fileExists(atPath: storage.path) {
-            do { library = try MacroLibrary.decode(Data(contentsOf: storage)) } catch { loadingError = error }
+            do {
+                library = try MacroLibrary.decode(
+                    PrivateFileStore.read(storage, maximumBytes: MacroLibrary.maximumBytes))
+            } catch { loadingError = error }
         }
     }
     func menu() -> NSMenu {
@@ -385,7 +388,10 @@ final class MacroController: NSObject, NSMenuDelegate {
                     panel.canChooseDirectories = false
                     if panel.runModal() == .OK, let url = panel.url {
                         text.string = String(
-                            data: try MacroLibrary.decode(Data(contentsOf: url)).encoded(), encoding: .utf8)!
+                            data: try MacroLibrary.decode(
+                                PrivateFileStore.read(
+                                    url, maximumBytes: MacroLibrary.maximumBytes, parent: .selectedInput)
+                            ).encoded(), encoding: .utf8)!
                     }
                     continue
                 }
@@ -403,34 +409,17 @@ final class MacroController: NSObject, NSMenuDelegate {
             } catch { TTAlert.present(error) }
         }
     }
-    private func persist(_ proposed: MacroLibrary) throws {
+    /// One guarded save boundary for the manager, recording commands and native checks.
+    func persist(_ proposed: MacroLibrary) throws {
+        if let loadingError { throw loadingError }
         let data = try proposed.encoded()
-        let directory = storage.deletingLastPathComponent()
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        if FileManager.default.fileExists(atPath: storage.path) {
-            let values = try storage.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
-            guard values.isSymbolicLink != true, values.isRegularFile == true else {
-                throw MacroError.invalid("Macro storage must be a regular file.")
-            }
-        }
-        let temporary = directory.appendingPathComponent(".macros-" + UUID().uuidString)
-        let descriptor = open(temporary.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer {
-            try? handle.close()
-            try? FileManager.default.removeItem(at: temporary)
-        }
-        try handle.write(contentsOf: data)
-        try handle.synchronize()
-        try handle.close()
-        guard rename(temporary.path, storage.path) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
+        try PrivateFileStore.prepareDirectory(storage.deletingLastPathComponent())
+        try PrivateFileStore.write(
+            data, to: storage, maximumBytes: MacroLibrary.maximumBytes, temporaryPrefix: ".macros-")
         library = proposed
         rebuild()
     }
+
 }
 
 /// Bounded incremental playback shared by native progress UI and deterministic tests.

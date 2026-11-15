@@ -97,3 +97,13 @@ Recovery snapshot (`RecoverySnapshot`, one `<id>.json` per unsaved document in t
 | `savedAt` | date | yes | When the snapshot was written. Shown in the recovery prompt and the recovered window's status line. |
 
 The Recovery folder may also hold `<UUID>.pending` files: the temporary file of a write in progress. One left by a process that died during a write is deleted by the next launch's scan. A `.json` entry is never deleted except by saving, closing or explicitly discarding the document it belongs to.
+
+## Macro storage hardening
+
+Saved macro libraries and chosen macro imports are regular files bounded to32MiB,
+matching the resource envelope of saved automations. The encoder and decoder use
+the same ceiling, including JSON overhead. This deliberately replaces the older
+unbounded, symlink-following Macro load policy (F149; conflicting G358 clause).
+A failed load blocks saving; refusal leaves the original file or link and target
+bytes untouched. `PrivateFileStore` supplies the bounded no-follow byte I/O and
+private fsync-before-rename write mechanism; model validation stays in MacroCore.

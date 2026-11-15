@@ -607,6 +607,18 @@ import Foundation
             let library = MacroLibrary(macros: [macro])
             let data = try library.encoded()
             check(try MacroLibrary.decode(data) == library, "capture data exact Unicode/NUL and find params roundtrip")
+            Checks.section("F149 bounded macro libraries") {
+                var large = macro
+                large.steps = [.init(kind: .insertText, text: String(repeating: "x", count: 32 * 1024 * 1024))]
+                let largeLibrary = MacroLibrary(macros: [large])
+                let oversized = try JSONEncoder().encode(largeLibrary)
+                rejects("F149 the macro reader refuses a valid library over 32 MiB", message: "32 MiB") {
+                    _ = try MacroLibrary.decode(oversized)
+                }
+                rejects("F149 the macro writer cannot create a library its reader refuses", message: "32 MiB") {
+                    _ = try largeLibrary.encoded()
+                }
+            }
             macro.name = "Renamed"
             check(
                 try MacroLibrary.decode(MacroLibrary(macros: [macro]).encoded()).macros[0].id == id,
@@ -648,6 +660,64 @@ import Foundation
                 let isolatedSupport = try IsolatedSupportDirectory("TextTankMacroChecks")
                 defer { isolatedSupport.restore() }
                 _ = NSApplication.shared
+                Checks.section("F149 unsafe macro storage") {
+                    let originalOverride = isolatedSupport.url.path
+                    defer { setenv("TEXTTANK_SUPPORT_DIRECTORY", originalOverride, 1) }
+                    let valid = try MacroLibrary(macros: [macro]).encoded()
+                    for kind in ["symlink", "fifo"] {
+                        let directory = isolatedSupport.url.appendingPathComponent("unsafe-" + kind)
+                        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                        let path = directory.appendingPathComponent("Macros.json")
+                        let target = directory.appendingPathComponent("original.json")
+                        try valid.write(to: target)
+                        var release: DispatchWorkItem?
+                        if kind == "symlink" {
+                            try FileManager.default.createSymbolicLink(at: path, withDestinationURL: target)
+                        } else {
+                            try require(mkfifo(path.path, 0o600) == 0, "fixture: macro FIFO exists")
+                            // The old reader blocks until this writer arrives and then wrongly accepts
+                            // its JSON. The fixed reader rejects the FIFO without opening the writer.
+                            let writer = DispatchWorkItem {
+                                let descriptor = open(path.path, O_WRONLY | O_NONBLOCK)
+                                if descriptor >= 0 {
+                                    _ = valid.withUnsafeBytes { write(descriptor, $0.baseAddress, $0.count) }
+                                    close(descriptor)
+                                }
+                            }
+                            release = writer
+                            DispatchQueue.global().asyncAfter(deadline: .now() + 0.2, execute: writer)
+                        }
+                        setenv("TEXTTANK_SUPPORT_DIRECTORY", directory.path, 1)
+                        let unsafe = MacroController(editorProvider: { nil })
+                        release?.cancel()
+                        check(unsafe.loadingError != nil, "F149 a refused macro \(kind) latches its load failure")
+                        rejects("F149 a refused macro \(kind) cannot be overwritten") {
+                            try unsafe.persist(library)
+                        }
+                        check(
+                            !unsafe.menu().items.contains { $0.representedObject as? String == macro.id.uuidString },
+                            "F149 a macro \(kind) is refused instead of loaded")
+                        check(
+                            try Data(contentsOf: target) == valid,
+                            "F149 refusing a macro \(kind) preserves its target bytes")
+                        var node = stat()
+                        check(
+                            lstat(path.path, &node) == 0
+                                && node.st_mode & S_IFMT == (kind == "symlink" ? S_IFLNK : S_IFIFO),
+                            "F149 refusing a macro \(kind) leaves the original node in place")
+                    }
+                    let corruptDirectory = isolatedSupport.url.appendingPathComponent("corrupt-library")
+                    try FileManager.default.createDirectory(at: corruptDirectory, withIntermediateDirectories: true)
+                    let corruptFile = corruptDirectory.appendingPathComponent("Macros.json")
+                    let corruptBytes = Data("{preserve this unreadable library".utf8)
+                    try corruptBytes.write(to: corruptFile)
+                    setenv("TEXTTANK_SUPPORT_DIRECTORY", corruptDirectory.path, 1)
+                    let corruptController = MacroController(editorProvider: { nil })
+                    rejects("F198 the macro save boundary refuses an unreadable existing regular file") {
+                        try corruptController.persist(library)
+                    }
+                    check(try Data(contentsOf: corruptFile) == corruptBytes, "F198 unreadable macro bytes stay exact")
+                }
                 let window = NSWindow(
                     contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered,
                     defer: false)

@@ -5,7 +5,7 @@ source scripts/suite-lib.sh
 suite_begin
 suite_require_build
 suite_build "run-checks run-controller-checks" scripts/build-user-lexer.sh
-suite_build "run-checks" swiftc Sources/Documents/FailureContext.swift "${SWIFT_BASE[@]}" Sources/Run/RunCore.swift "$SUITE_SUPPORT" Tests/RunChecks.swift -o build/tests/run-checks
+suite_build "run-checks" swiftc Sources/Documents/FailureContext.swift Sources/Documents/PrivateFileStore.swift "${SWIFT_BASE[@]}" Sources/Run/RunCore.swift "$SUITE_SUPPORT" Tests/RunChecks.swift -o build/tests/run-checks
 suite_run run-checks harness/logs/run-checks.log build/tests/run-checks
 suite_build "run-controller-checks" build_bridge_object
 suite_build "run-controller-checks" build_search_object

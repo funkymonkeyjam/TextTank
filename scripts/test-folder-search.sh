@@ -6,7 +6,7 @@ suite_begin
 suite_require_build
 suite_build "folder-search-checks folder-search-controller-checks" scripts/build-user-lexer.sh
 suite_build "folder-search-checks" build_search_object
-suite_build "folder-search-checks" swiftc Sources/Documents/FailureContext.swift -swift-version 5 "${SWIFT_BASE[@]}" -import-objc-header Sources/Search/TTSearchEngine.h Sources/Documents/FileCodec.swift Sources/Search/SearchCore.swift Sources/Search/FolderSearchFilters.swift Sources/Search/FolderSearch.swift "$SUITE_SUPPORT" Tests/FolderSearchChecks.swift "$SEARCH_OBJECT" -lc++ -o build/tests/folder-search-checks
+suite_build "folder-search-checks" swiftc Sources/Documents/FailureContext.swift Sources/Documents/PrivateFileStore.swift -swift-version 5 "${SWIFT_BASE[@]}" -import-objc-header Sources/Search/TTSearchEngine.h Sources/Documents/FileCodec.swift Sources/Search/SearchCore.swift Sources/Search/FolderSearchFilters.swift Sources/Search/FolderSearch.swift "$SUITE_SUPPORT" Tests/FolderSearchChecks.swift "$SEARCH_OBJECT" -lc++ -o build/tests/folder-search-checks
 suite_run folder-search-checks harness/logs/folder-search-checks.log build/tests/folder-search-checks
 suite_build "folder-search-controller-checks" build_bridge_object
 suite_build "folder-search-controller-checks" build_search_object
