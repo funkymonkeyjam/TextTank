@@ -738,7 +738,8 @@ final class TextDocument: NSDocument {
     func loadUnsavedSnapshot(text: String, format snapshotFormat: FileFormat) {
         loading = true
         format = snapshotFormat
-        editor.text = text
+        // A new document: writable and empty, so the load cannot be refused.
+        _ = editor.loadDocumentText(text)
         editor.setLineEndingMode(LineEnding.detect(in: text).rawValue)
         editor.resetUndoHistory()
         savepointMatchesDisk = false
@@ -766,7 +767,8 @@ final class TextDocument: NSDocument {
         editor.readOnly = false
         // One minimal-span edit: bookmarks, folds and the caret outside the changed bytes survive a
         // reload. An empty buffer (first open) takes this as a plain insert.
-        _ = editor.replaceDocumentText(decoded.text)
+        // No undo record is kept: the history is emptied below, as for every open and reload.
+        _ = editor.loadDocumentText(decoded.text)
         editor.setLineEndingMode(LineEnding.detect(in: decoded.text).rawValue)
         editor.resetUndoHistory()
         format = decoded.format
@@ -811,6 +813,38 @@ final class TextDocument: NSDocument {
         format = target
         flushRecovery()
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.refreshStatusDetails() }
+    }
+    /// Printing lays the whole document out on the main thread before the print panel appears.
+    /// At and above this many UTF-8 bytes the person is told so first and can cancel.
+    static var largePrintBytes = 4 * 1024 * 1024
+    /// Asks whether to go on with a slow print; returns false to cancel. Replaced in checks.
+    var confirmLargePrint: (_ message: String, _ detail: String) -> Bool = { message, detail in
+        let alert = TTAlert()
+        alert.messageText = message
+        alert.informativeText = detail
+        alert.addButton(withTitle: "Print")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+    /// The warning shown before printing a large document, or nil when none is needed. Reads only
+    /// the document's size.
+    func largePrintWarning() -> (message: String, detail: String)? {
+        let bytes = editor.byteLength
+        guard bytes >= Self.largePrintBytes else { return nil }
+        let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        return (
+            "This document is large (\(size)). Preparing it for printing can take a while.",
+            "TextTank will not respond until the pages are laid out, and the print panel appears only after that. The document itself is not changed. To print part of it, copy that part into a new document."
+        )
+    }
+    /// False when the person cancelled a large print. Nothing has been laid out by then.
+    func shouldBeginPrinting() -> Bool {
+        guard let warning = largePrintWarning() else { return true }
+        return confirmLargePrint(warning.message, warning.detail)
+    }
+    override func printDocument(_ sender: Any?) {
+        guard shouldBeginPrinting() else { return }
+        super.printDocument(sender)
     }
     override func printOperation(withSettings printSettings: [NSPrintInfo.AttributeKey: Any]) throws -> NSPrintOperation
     {
@@ -936,6 +970,31 @@ final class ExplicitEncodingOpener: NSObject {
 }
 
 /// Borderless native buttons preserve keyboard and accessibility activation.
+/// What the status bar shows about the whole text: its Unicode scalar count and the line endings
+/// it contains ("" for none, "Mixed EOL" for more than one kind). One pass over the UTF-8 bytes,
+/// safe on any queue; the bytes are valid UTF-8, so every byte that is not a continuation byte
+/// starts one scalar.
+enum StatusMetrics {
+    static func scan(_ utf8: Data) -> (characters: Int, endings: String) {
+        var count = 0, cr = false, lf = false, crlf = false, priorCR = false
+        utf8.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+            for byte in bytes {
+                if byte & 0xC0 != 0x80 { count += 1 }
+                if byte == 13 {
+                    if priorCR { cr = true }
+                    priorCR = true
+                } else {
+                    if byte == 10 { if priorCR { crlf = true } else { lf = true } } else if priorCR { cr = true }
+                    priorCR = false
+                }
+            }
+        }
+        if priorCR { cr = true }
+        let endings = [crlf ? "CRLF" : nil, lf ? "LF" : nil, cr ? "CR" : nil].compactMap { $0 }
+        return (count, endings.count > 1 ? "Mixed EOL" : endings.first ?? "")
+    }
+}
+
 private final class StatusBadge: NSButton {
     var activate: ((StatusBadge) -> Void)?
     init(_ text: String) {
@@ -1052,8 +1111,26 @@ private final class DocumentTabWindow: NSWindow {
         super.makeKeyAndOrderFront(sender)
         contentView?.layoutSubtreeIfNeeded()
         if let sharedFrame { setFrame(sharedFrame, display: true) }
+        (windowController as? EditorWindowController)?.visibilityChanged()
         (windowController as? EditorWindowController)?.refreshStatusDetails()
         if let controller = windowController as? EditorWindowController { makeFirstResponder(controller.activeEditor) }
+    }
+    // The recurring status refresh runs only while the tab is on screen.
+    override func orderOut(_ sender: Any?) {
+        super.orderOut(sender)
+        (windowController as? EditorWindowController)?.visibilityChanged()
+    }
+    override func orderFront(_ sender: Any?) {
+        super.orderFront(sender)
+        (windowController as? EditorWindowController)?.visibilityChanged()
+    }
+    override func orderFrontRegardless() {
+        super.orderFrontRegardless()
+        (windowController as? EditorWindowController)?.visibilityChanged()
+    }
+    override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        super.order(place, relativeTo: otherWin)
+        (windowController as? EditorWindowController)?.visibilityChanged()
     }
     override func close() {
         let wasVisible = isVisible
@@ -1188,11 +1265,25 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     private let statusDetails = StatusBadgeRow()
     private let documentTabs = DocumentTabStrip()
     private var statusTimer: Timer?
+    /// True while the recurring refresh is scheduled, which is only while the window is on screen.
+    var statusTimerActive: Bool { statusTimer != nil }
+    private var statusClosed = false
+    private var stateObserver: NSObjectProtocol?
     private(set) var statusRefreshCount = 0
+    /// Whole-document captures started for the character count and line-ending badges.
+    private(set) var statusMetricsCaptureCount = 0
     private var statusRevision: UInt?
+    /// The revision the previous timer tick saw; a recurring refresh captures the document only
+    /// once the revision has stayed the same for a whole tick.
+    private var statusTickRevision: UInt?
     private var statusMetricsPending = false
     private var cachedCharacterCount = 0
-    private var cachedSelectionKey = ""
+    private struct SelectionKey: Equatable {
+        let editor: ObjectIdentifier
+        let revision: UInt, generation: UInt
+        let count: Int, anchor: Int, caret: Int
+    }
+    private var cachedSelectionKey: SelectionKey?
     private var cachedSelectedCount = 0
     private var cachedEndings = "LF"
     var secondary: TTEditor?
@@ -1288,11 +1379,46 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
         statusDetails.onActivate = { [weak self] key, view in self?.showStatusOptions(key, at: view) }
-        statusTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            guard let self, self.window?.isVisible == true else { return }
-            self.refreshStatusDetails()
+        // Editor events make the bar follow an edit or a selection change in the same turn of
+        // the run loop; the timer started by visibilityChanged() covers state no event reports.
+        stateObserver = NotificationCenter.default.addObserver(
+            forName: .TTEditorStateDidChange, object: nil, queue: nil
+        ) { [weak self] note in
+            guard let self, !self.statusClosed, self.window?.isVisible == true,
+                let editor = note.object as? TTEditor
+            else { return }
+            if editor === self.primaryEditor || editor === self.secondary {
+                self.refreshStatusDetails(recurring: true)
+            } else {
+                // Another document changed: only its title in this window's tab strip can differ.
+                self.documentTabs.refresh()
+            }
         }
+        visibilityChanged()
         refreshStatusDetails(for: document)
+    }
+    /// Starts the recurring status refresh when the window comes on screen and stops it when the
+    /// window leaves, so a hidden tab has no timer at all.
+    func visibilityChanged() {
+        let visible = window?.isVisible == true && !statusClosed
+        if !visible {
+            statusTimer?.invalidate()
+            statusTimer = nil
+            return
+        }
+        guard statusTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard self.window?.isVisible == true else {
+                self.visibilityChanged()
+                return
+            }
+            self.refreshStatusDetails(recurring: true)
+            self.statusTickRevision = (self.document as? TextDocument)?.editor.revision
+        }
+        timer.tolerance = 0.05
+        RunLoop.main.add(timer, forMode: .default)
+        statusTimer = timer
     }
     /// A failed recovery write is shown in red with a tooltip as well as in words, and stays
     /// until the document reports a successful write.
@@ -1304,31 +1430,24 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             ? "Crash-recovery copies of this document are not being written. Save the document to keep your work. This message clears when a recovery copy is written again."
             : nil
     }
-    func refreshStatusDetails(for suppliedDocument: TextDocument? = nil) {
+    /// Updates every badge now. `recurring` is the timer and the editor-event path: there the
+    /// whole-document capture waits until the revision has been the same for one timer tick, so
+    /// continuous typing copies nothing. A direct call captures at once.
+    func refreshStatusDetails(for suppliedDocument: TextDocument? = nil, recurring: Bool = false) {
         guard let doc = suppliedDocument ?? document as? TextDocument else { return }
         statusRefreshCount += 1
+        if !recurring && statusTimer == nil { visibilityChanged() }
         documentTabs.refresh()
         let editor = activeEditor, info = editor.statusInfo
-        if statusRevision != doc.editor.revision && !statusMetricsPending {
-            // Capture authoritative bytes once on main; scans/temporary allocations
-            // happen off-main. One in-flight task bounds work for rapid edits.
-            let revision = doc.editor.revision, text = doc.editor.text
+        let revision = doc.editor.revision
+        if statusRevision != revision && !statusMetricsPending && (!recurring || statusTickRevision == revision) {
+            // Capture the authoritative bytes in one copy on main; the scan happens off-main.
+            // One in-flight task bounds work for rapid edits.
+            let bytes = doc.editor.utf8Data
             statusMetricsPending = true
+            statusMetricsCaptureCount += 1
             DispatchQueue.global(qos: .utility).async { [weak self, weak doc] in
-                let count = text.unicodeScalars.count
-                var cr = false, lf = false, crlf = false, priorCR = false
-                for byte in text.utf8 {
-                    if byte == 13 {
-                        if priorCR { cr = true }
-                        priorCR = true
-                    } else {
-                        if byte == 10 { if priorCR { crlf = true } else { lf = true } } else if priorCR { cr = true }
-                        priorCR = false
-                    }
-                }
-                if priorCR { cr = true }
-                let endings = [crlf ? "CRLF" : nil, lf ? "LF" : nil, cr ? "CR" : nil].compactMap { $0 }
-                let eol = endings.count > 1 ? "Mixed EOL" : endings.first ?? ""
+                let (count, eol) = StatusMetrics.scan(bytes)
                 DispatchQueue.main.async { [weak self, weak doc] in
                     guard let self else { return }
                     self.statusMetricsPending = false
@@ -1352,12 +1471,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         let indentation =
             (info["useTabs"]?.boolValue == true ? "Tabs" : "Spaces") + ": \(info["tabWidth"]?.intValue ?? 4)"
         var fields = [
-            doc.displayName + (doc.isDocumentEdited ? " *" : ""), "\(doc.editor.bookmarkLines.count) Bookmarks",
+            doc.displayName + (doc.isDocumentEdited ? " *" : ""), "\(doc.editor.bookmarkCount) Bookmarks",
             language,
             "Ln \(info["line"]?.intValue ?? 1), Col \(info["column"]?.intValue ?? 1)", "\(cachedCharacterCount) chars",
             "\(info["lines"]?.intValue ?? 1) lines"
         ]
-        let selectionKey = "\(ObjectIdentifier(editor))-\(doc.editor.revision)-\(editor.selectionRanges)"
+        // The generation changes with every edit, every bridge call that can move a selection
+        // and every selection update Scintilla reports; the main range is compared as well.
+        let selectionKey = SelectionKey(
+            editor: ObjectIdentifier(editor), revision: revision, generation: editor.selectionGeneration,
+            count: editor.selectionCount, anchor: editor.selectionAnchor, caret: editor.selectionCaret)
         if cachedSelectionKey != selectionKey {
             cachedSelectedCount = editor.selectedCharacterCount
             cachedSelectionKey = selectionKey
@@ -1562,8 +1685,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     }
     @objc func closeTab(_ sender: Any?) { window?.performClose(sender) }
     func prepareForClose() {
+        statusClosed = true
         statusTimer?.invalidate()
         statusTimer = nil
+        if let stateObserver {
+            NotificationCenter.default.removeObserver(stateObserver)
+            self.stateObserver = nil
+        }
         if let focusObserver {
             NotificationCenter.default.removeObserver(focusObserver)
             self.focusObserver = nil
@@ -1613,6 +1741,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     }
     deinit {
         statusTimer?.invalidate()
+        if let stateObserver { NotificationCenter.default.removeObserver(stateObserver) }
         if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }
         if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
     }

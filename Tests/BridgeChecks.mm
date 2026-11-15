@@ -2,6 +2,7 @@
 #import <AppKit/AppKit.h>
 #import "TTEditor.h"
 #import "ScintillaView.h"
+#import <objc/runtime.h>
 #import "Checks.h"
 int main() {
     @autoreleasepool {
@@ -663,6 +664,229 @@ int main() {
         [ed goToLine:1];
         [ed executeCommand:@"undo"];
         check(ed.selectionCaret==caret && ed.firstVisibleLine==top, "Undo restores the caret and scroll position the edit was made from");
+        });
+        // Audit package 22 (F33, F234): callbacks and overlay redraws only when they are needed.
+        auto lineNumberOverlay = [](TTEditor *editor) {
+            NSMutableArray<NSView *> *queue=[NSMutableArray arrayWithObject:editor];
+            while (queue.count) {
+                NSView *view=queue.firstObject;[queue removeObjectAtIndex:0];
+                if ([view.className isEqualToString:@"TTEmptyLineNumbersView"]) return view;
+                [queue addObjectsFromArray:view.subviews];
+            }
+            return (NSView *)nil;
+        };
+        ttchecks::section("change callback coalescing", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ed.text=@"a b c d";[ed resetUndoHistory];[ed setSavePoint];
+        __block int calls=0;__block BOOL dirtyAtCall=NO;
+        __weak TTEditor *weakEd=ed;
+        ed.onChange=^{++calls;dirtyAtCall=weakEd.modified;};
+        [ed setSelectionAnchor:0 caret:0];
+        check([ed replaceSelection:@"x"] && calls>=1 && dirtyAtCall, "a single edit outside a group reports the change, already dirty, before it returns");
+        calls=0;NSUInteger before=ed.revision;
+        [ed beginUndoGroup];
+        NSUInteger stale=ed.revision;
+        for (int i=0;i<50;++i) [ed replaceSelection:@"y"];
+        check(ed.revision>=before+50, "revision advances with every modification step inside an undo group");
+        [ed setSelectionRanges:@[@{@"anchor":@0,@"caret":@1}]];
+        check(![ed replaceSelections:@[@"z"] expectedRevision:stale] && [ed.text hasPrefix:@"xy"], "a revision captured before a grouped edit is stale after its first step");
+        [ed beginUndoGroup];[ed replaceSelection:@"n"];[ed endUndoGroup];
+        check(calls==0, "no change callback is delivered while an undo group is open, nested groups included");
+        [ed endUndoGroup];
+        check(calls==1 && dirtyAtCall, "one change callback is delivered when the outermost undo group ends");
+        calls=0;before=ed.revision;NSString *grouped=ed.text;
+        [ed executeCommand:@"undo"];
+        check(calls==1 && ed.revision>=before+50 && ![ed.text isEqual:grouped], "Undo of a multi-step group delivers one change callback and still advances revision per step");
+        calls=0;[ed executeCommand:@"redo"];
+        check(calls==1 && [ed.text isEqual:grouped], "Redo of a multi-step group delivers one change callback");
+        ed.text=@"one two three";calls=0;before=ed.revision;
+        [ed setSelectionRanges:@[@{@"anchor":@0,@"caret":@3},@{@"anchor":@4,@"caret":@7},@{@"anchor":@8,@"caret":@13}]];
+        check([ed replaceSelections:@[@"1",@"2",@"3"] expectedRevision:ed.revision] && calls==1 && ed.revision>=before+3, "a multi-selection replacement delivers one change callback");
+        NSMutableString *padded=[NSMutableString string];for(int i=0;i<100;++i)[padded appendString:@"text   \n"];
+        ed.text=padded;calls=0;before=ed.revision;
+        [ed executeCommand:@"trimTrailing"];
+        check(calls==1 && ed.revision>=before+100 && ![ed.text containsString:@" \n"], "trimming 100 lines delivers one change callback");
+        TTEditor *clone=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        [clone shareDocumentWith:ed];
+        calls=0;before=ed.revision;
+        [clone beginUndoGroup];
+        for (int i=0;i<10;++i) [clone replaceSelection:@"q"];
+        check(calls==0 && ed.revision>=before+10, "a group opened on the split clone holds back the primary view's callback while its revision advances");
+        [clone endUndoGroup];
+        check(calls==1, "ending the clone's group delivers the primary view's change callback once");
+        calls=0;[ed setSavePoint];
+        check(calls==1, "reaching the save point outside a group is reported at once");
+        });
+        ttchecks::section("line-number overlay invalidation", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *host=hosted(ed); (void)host;
+        ed.text=@"first line\nsecond line\n";
+        NSView *overlay=lineNumberOverlay(ed);
+        require(overlay!=nil, "Fixture: the filler line-number view exists");
+        // NSView.needsDisplay cannot be read back in a window that is never on screen, so count
+        // the redraw requests the overlay receives instead.
+        static int redraws=0;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            SEL selector=@selector(setNeedsDisplay:);
+            void (*inherited)(id,SEL,BOOL)=(void (*)(id,SEL,BOOL))[NSView instanceMethodForSelector:selector];
+            class_addMethod(overlay.class, selector, imp_implementationWithBlock(^(NSView *view,BOOL flag){ if(flag)++redraws; inherited(view,selector,flag); }), "v@:c");
+        });
+        [host.contentView layoutSubtreeIfNeeded];
+        auto settle = [&] { redraws=0; };
+        [ed setSelectionAnchor:3 caret:3];
+        [ed resetUndoHistory];
+        settle();
+        [ed replaceSelection:@"x"];
+        check(redraws==0, "typing inside a line does not redraw the line-number overlay");
+        [ed setSelectionAnchor:0 caret:5];
+        check(redraws==0, "a selection change does not redraw the line-number overlay");
+        [ed replaceSelection:@"new\nline\n"];
+        check(redraws>0, "adding lines redraws the line-number overlay");
+        settle();[ed executeCommand:@"zoomIn"];
+        check(redraws>0, "zoom redraws the line-number overlay");
+        settle();ed.wrap=YES;
+        check(redraws>0, "a wrap change redraws the line-number overlay");
+        settle();[ed executeCommand:@"toggleLineNumbers"];
+        check(redraws>0, "hiding the line-number margin redraws the overlay");
+        [ed executeCommand:@"toggleLineNumbers"];
+        ed.wrap=NO;[ed setLanguage:@"cpp"];ed.text=@"void f() {\n  int a;\n  int b;\n}\nint tail;\n";
+        settle();[ed executeCommand:@"foldAll"];
+        check(redraws>0, "folding redraws the line-number overlay");
+        settle();[ed executeCommand:@"undo"];
+        check(redraws>0 && ![ed.text hasPrefix:@"void"], "Undo that restores lines redraws the line-number overlay");
+        });
+        // Audit package 22 (F221, F24, F218, F287, F32, F229): one-copy reads and cheap accessors.
+        ttchecks::section("text reads straight from the engine buffer", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        auto bytesOf = [](NSString *text) { return [text dataUsingEncoding:NSUTF8StringEncoding]; };
+        check(ed.text!=nil && ed.text.length==0 && [ed.text isEqual:@""] && ed.byteLength==0 && ed.utf8Data.length==0, "an empty document reads as an empty string with no bytes");
+        ed.text=@"﻿";
+        const unsigned char bom[]={0xEF,0xBB,0xBF};
+        check(ed.text.length==1 && [bytesOf(ed.text) isEqual:[NSData dataWithBytes:bom length:3]] && ed.byteLength==3, "a document that is exactly U+FEFF reads back as that one scalar");
+        const unsigned char nul[]={'a',0,'b',0xC3,0xA9,0};
+        NSString *withNul=[[NSString alloc] initWithBytes:nul length:sizeof(nul) encoding:NSUTF8StringEncoding];
+        ed.text=withNul;
+        check([bytesOf(ed.text) isEqual:[NSData dataWithBytes:nul length:sizeof(nul)]] && ed.byteLength==(NSInteger)sizeof(nul), "embedded and trailing NUL bytes read back exactly");
+        check([ed.utf8Data isEqual:[NSData dataWithBytes:nul length:sizeof(nul)]], "the raw UTF-8 accessor returns the exact bytes, NUL included");
+        NSString *multi=@"α one\r\nβ two 😀\nγ three";
+        ed.text=multi;[ed resetUndoHistory];
+        [ed setSelectionAnchor:8 caret:8];
+        check([ed replaceSelection:@"é"] && [ed.text isEqual:@"α one\r\néβ two 😀\nγ three"], "a read after an insert in the middle returns the whole text");
+        check([ed replaceSelection:@"ü"] && [ed.text isEqual:@"α one\r\néüβ two 😀\nγ three"], "the document stays editable at the same caret after a read");
+        check([ed.utf8Data isEqual:bytesOf(ed.text)] && ed.byteLength==(NSInteger)bytesOf(ed.text).length, "raw bytes and byte length agree with the decoded text after mid-buffer edits");
+        [ed executeCommand:@"undo"];[ed executeCommand:@"undo"];
+        check([ed.text isEqual:multi] && [ed.utf8Data isEqual:bytesOf(multi)], "Undo after interleaved reads restores the exact text");
+        ed.text=@"﻿ab cd";
+        [ed setSelectionRanges:@[@{@"anchor":@0,@"caret":@5},@{@"anchor":@6,@"caret":@8}]];
+        check([ed.selectedText isEqual:@"﻿ab\ncd"], "a multi-selection starting with U+FEFF joins with a line feed and keeps the scalar");
+        [ed setSelectionRanges:@[@{@"anchor":@6,@"caret":@8},@{@"anchor":@3,@"caret":@3}]];
+        check([ed.selectedText isEqual:@"cd\n"], "an empty additional selection contributes an empty row");
+        [ed setSelectionAnchor:3 caret:3];
+        check([ed.selectedText isEqual:@""], "an empty single selection reads as an empty string");
+        check([[ed attributedTextForSelection:NO].string isEqual:ed.text], "styled text of a document starting with U+FEFF has the same string as text");
+        });
+        ttchecks::section("selection generation, bookmark count and state notification", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ed.text=@"one two three\nfour\nfive\n";
+        NSArray *one=@[@{@"anchor":@0,@"caret":@3}],*two=@[@{@"anchor":@0,@"caret":@3},@{@"anchor":@4,@"caret":@7}];
+        [ed setSelectionRanges:one];NSUInteger generation=ed.selectionGeneration;
+        [ed setSelectionRanges:two];
+        check(ed.selectionGeneration!=generation, "selectionGeneration changes when a non-main selection is added");
+        generation=ed.selectionGeneration;[ed setSelectionRanges:one];
+        check(ed.selectionGeneration!=generation, "selectionGeneration changes when a non-main selection is removed");
+        generation=ed.selectionGeneration;[ed executeCommand:@"selectAll"];
+        check(ed.selectionGeneration!=generation, "selectionGeneration changes after a selection command");
+        generation=ed.selectionGeneration;[ed setSelectionAnchor:1 caret:1];[ed replaceSelection:@"x"];
+        check(ed.selectionGeneration!=generation, "selectionGeneration changes after an edit");
+        generation=ed.selectionGeneration;(void)ed.statusInfo;(void)ed.text;(void)ed.selectedCharacterCount;
+        check(ed.selectionGeneration==generation, "reading editor state leaves selectionGeneration alone");
+        check(ed.bookmarkCount==0, "a document without bookmarks counts none");
+        check([ed setBookmarks:@[@0,@2]] && ed.bookmarkCount==2 && ed.bookmarkCount==(NSInteger)ed.bookmarkLines.count, "bookmarkCount equals the number of bookmark lines");
+        __block int posts=0;__block BOOL insideEdit=NO,postedInsideEdit=NO;
+        id observer=[NSNotificationCenter.defaultCenter addObserverForName:TTEditorStateDidChangeNotification object:ed queue:nil usingBlock:^(NSNotification *note){ ++posts; if(insideEdit)postedInsideEdit=YES; }];
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        posts=0;insideEdit=YES;
+        for (int i=0;i<20;++i) [ed replaceSelection:@"y"];
+        [ed setSelectionAnchor:0 caret:2];ed.wrap=YES;ed.readOnly=YES;ed.readOnly=NO;
+        insideEdit=NO;
+        check(posts==0 && !postedInsideEdit, "the state notification is never posted from inside an editor call");
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        check(posts==1, "many changes in one turn of the run loop post one state notification");
+        posts=0;[[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        check(posts==0, "an idle editor posts no state notification");
+        [ed setSelectionAnchor:0 caret:0];
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        check(posts==1, "a selection-only change posts a state notification");
+        [NSNotificationCenter.defaultCenter removeObserver:observer];
+        });
+        ttchecks::section("loadDocumentText", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSString *original=numbered(50);
+        check([ed loadDocumentText:original] && [ed.text isEqual:original] && !ed.modified, "loading into an empty editor sets the text at the save point");
+        [ed executeCommand:@"undo"];
+        check([ed.text isEqual:original], "a load cannot be undone");
+        [ed setSelectionAnchor:0 caret:0];[ed replaceSelection:@"edit "];
+        check([ed setBookmarks:@[@10,@40]], "Fixture: bookmarks before a reload");
+        NSUInteger revision=ed.revision;
+        NSString *reloaded=[original stringByReplacingOccurrencesOfString:@"line 20\n" withString:@"line twenty\nextra\n"];
+        check([ed loadDocumentText:reloaded] && [ed.text isEqual:reloaded] && !ed.modified && ed.revision!=revision, "a reload replaces the text, advances revision and is the save point");
+        check([ed.bookmarkLines isEqual:@[@10,@41]], "a reload keeps bookmarks on their lines");
+        [ed executeCommand:@"undo"];
+        check([ed.text isEqual:reloaded] && !ed.modified, "Undo cannot cross a reload");
+        [ed setSelectionAnchor:0 caret:0];[ed replaceSelection:@"z"];[ed executeCommand:@"undo"];
+        check([ed.text isEqual:reloaded] && !ed.modified, "undo collection works again after a load");
+        ed.readOnly=YES;revision=ed.revision;
+        check(![ed loadDocumentText:@"other"] && [ed.text isEqual:reloaded] && ed.revision==revision, "a read-only document refuses a load unchanged");
+        ed.readOnly=NO;
+        unichar lone=0xD800;
+        check(![ed loadDocumentText:[NSString stringWithCharacters:&lone length:1]] && [ed.text isEqual:reloaded], "an unencodable load changes nothing");
+        [ed setSelectionAnchor:0 caret:0];[ed replaceSelection:@"k"];[ed executeCommand:@"undo"];
+        check([ed.text isEqual:reloaded], "undo collection is on after a refused load");
+        });
+        ttchecks::section("styled text export", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        [ed setLanguage:@"cpp"];
+        ed.text=@"// café \U0001F600\nint n = 42; /* αβ */ \"sü\"\nreturn n;\n";
+        // The implementation this replaces: one style query per byte, attributes resolved per run.
+        auto reference = [&](sptr_t start, sptr_t end) {
+            NSMutableAttributedString *result=[[NSMutableAttributedString alloc] initWithString:@""];
+            for (sptr_t p=start;p<end;) {
+                sptr_t style=[sv message:SCI_GETSTYLEAT wParam:p],q=p+1;
+                while (q<end && [sv message:SCI_GETSTYLEAT wParam:q]==style) ++q;
+                while (q<end && ([sv message:SCI_GETCHARAT wParam:q]&0xC0)==0x80) ++q;
+                std::vector<char> bytes((size_t)(q-p)+1);Sci_TextRangeFull range={{p,q},bytes.data()};
+                [sv message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&range];
+                NSString *text=[[NSString alloc] initWithBytes:bytes.data() length:(NSUInteger)(q-p) encoding:NSUTF8StringEncoding];
+                auto color=[](sptr_t c) { return [NSColor colorWithSRGBRed:(c&255)/255.0 green:((c>>8)&255)/255.0 blue:((c>>16)&255)/255.0 alpha:1]; };
+                CGFloat size=[sv message:SCI_STYLEGETSIZEFRACTIONAL wParam:style]/100.0;
+                std::vector<char> face((size_t)[sv message:SCI_STYLEGETFONT wParam:style lParam:0]+1);[sv message:SCI_STYLEGETFONT wParam:style lParam:(sptr_t)face.data()];
+                NSFont *font=[NSFont fontWithName:[NSString stringWithUTF8String:face.data()] size:size] ?: [NSFont monospacedSystemFontOfSize:MAX(1,size) weight:NSFontWeightRegular];
+                NSFontTraitMask traits=0;if ([sv message:SCI_STYLEGETBOLD wParam:style]) traits|=NSBoldFontMask;if ([sv message:SCI_STYLEGETITALIC wParam:style]) traits|=NSItalicFontMask;
+                if(traits)font=[[NSFontManager sharedFontManager] convertFont:font toHaveTrait:traits];
+                [result appendAttributedString:[[NSAttributedString alloc] initWithString:text attributes:@{NSFontAttributeName:font,NSForegroundColorAttributeName:color([sv message:SCI_STYLEGETFORE wParam:style]),NSBackgroundColorAttributeName:color([sv message:SCI_STYLEGETBACK wParam:style])}]];
+                p=q;
+            }
+            return result;
+        };
+        [ed setSyntaxStyle:5 foreground:NSColor.redColor background:NSColor.yellowColor bold:YES italic:NO];
+        [ed setSyntaxStyle:2 foreground:NSColor.blueColor background:nil bold:NO italic:YES];
+        NSAttributedString *whole=[ed attributedTextForSelection:NO];
+        NSRange first;[whole attributesAtIndex:0 effectiveRange:&first];
+        check([whole.string isEqual:ed.text] && first.length<whole.length, "Fixture: the styled export has the document text in more than one style run");
+        check([whole isEqualToAttributedString:reference(0,ed.byteLength)], "whole-document styled export equals the per-byte reference, fonts and colours included");
+        // Selection bounds on multi-byte scalars: from the e-acute (2 bytes) to after the emoji (4 bytes).
+        [ed setSelectionAnchor:6 caret:13];
+        NSAttributedString *part=[ed attributedTextForSelection:YES];
+        check([part.string isEqual:@"é \U0001F600"] && [part isEqualToAttributedString:reference(6,13)], "a selection bounded by multi-byte scalars exports exactly those scalars with their styles");
+        [ed setSelectionRanges:@[@{@"anchor":@14,@"caret":@17},@{@"anchor":@0,@"caret":@2}]];
+        NSAttributedString *mainOnly=[ed attributedTextForSelection:YES];
+        check([mainOnly.string isEqual:@"int"] && [mainOnly isEqualToAttributedString:reference(14,17)], "with several selections the styled export is the main selection only");
+        [ed setSelectionAnchor:3 caret:3];
+        check([ed attributedTextForSelection:YES].length==0, "an empty selection exports an empty styled string");
+        ed.text=@"";
+        check([ed attributedTextForSelection:NO].length==0, "an empty document exports an empty styled string");
         });
         return ttchecks::finish("BridgeChecks", "IME, VoiceOver, UI focus and permission tests not covered");
     }

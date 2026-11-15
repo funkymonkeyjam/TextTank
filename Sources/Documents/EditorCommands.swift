@@ -27,6 +27,13 @@ enum EditorTransform: String, CaseIterable {
             // so does a titlecase digraph. Upper if that changes the scalar, else lower.
             var inverted = String.UnicodeScalarView()
             for scalar in text.unicodeScalars {
+                // ASCII, the bulk of most text, needs no property lookup and no temporary string.
+                if scalar.value < 0x80 {
+                    let v = scalar.value
+                    let letter = (v | 0x20) >= 0x61 && (v | 0x20) <= 0x7A
+                    inverted.append(letter ? Unicode.Scalar(UInt8(v ^ 0x20)) : scalar)
+                    continue
+                }
                 let properties = scalar.properties, original = String(scalar)
                 let mapped =
                     properties.generalCategory == .titlecaseLetter
@@ -39,53 +46,66 @@ enum EditorTransform: String, CaseIterable {
         }
         // Keep original separators by position for reordering, and move separators
         // with retained rows for deletion. A terminal newline is not an empty row.
-        var rows: [(String, String)] = []
-        var content = ""
-        var i = text.startIndex
-        while i < text.endIndex {
-            let c = text[i]
-            if c == "\r\n" || c == "\r" || c == "\n" {
-                rows.append((content, String(c)))
-                content = ""
-            } else {
-                content.append(c)
+        // Rows are slices of the text found by scanning its UTF-8 bytes for CR, LF and CR LF,
+        // so nothing is copied or allocated per character.
+        typealias Row = (content: Substring, separator: Substring)
+        var rows: [Row] = []
+        let utf8 = text.utf8
+        var rowStart = utf8.startIndex, i = utf8.startIndex
+        while i < utf8.endIndex {
+            let byte = utf8[i]
+            guard byte == 13 || byte == 10 else {
+                i = utf8.index(after: i)
+                continue
             }
-            i = text.index(after: i)
+            var next = utf8.index(after: i)
+            if byte == 13, next < utf8.endIndex, utf8[next] == 10 { next = utf8.index(after: next) }
+            rows.append((text[rowStart..<i], text[i..<next]))
+            rowStart = next
+            i = next
         }
-        if !content.isEmpty || rows.isEmpty { rows.append((content, "")) }
+        if rowStart < utf8.endIndex || rows.isEmpty { rows.append((text[rowStart...], "")) }
         switch self {
         case .trimLeading, .trimBoth:
             rows = rows.map { row in
-                var s = row.0
-                while s.first == " " || s.first == "\t" { s.removeFirst() }
-                if self == .trimBoth { while s.last == " " || s.last == "\t" { s.removeLast() } }
-                return (s, row.1)
+                var content = row.content.drop { $0 == " " || $0 == "\t" }
+                if self == .trimBoth {
+                    while let last = content.last, last == " " || last == "\t" { content = content.dropLast() }
+                }
+                return (content, row.separator)
             }
-        case .removeEmptyLines: rows = rows.filter { !$0.0.isEmpty }
+        case .removeEmptyLines: rows = rows.filter { !$0.content.isEmpty }
         case .uniqueLines:
             // A duplicate final row without a line ending must not leave the previous row's behind.
-            let unterminated = rows.last?.1.isEmpty == true
+            let unterminated = rows.last?.separator.isEmpty == true
             var seen = Set<Data>()
-            rows = rows.filter { seen.insert(Data($0.0.utf8)).inserted }
-            if unterminated, !rows.isEmpty { rows[rows.count - 1].1 = "" }
+            rows = rows.filter { seen.insert(Data($0.content.utf8)).inserted }
+            if unterminated, !rows.isEmpty { rows[rows.count - 1].separator = "" }
         default:
-            let values = rows.enumerated().map { ($0.offset, $0.element.0) }
-            let sorted: [(Int, String)]
+            // Each sort key is computed once per row; ties keep their original order.
+            var order = Array(rows.indices)
             switch self {
-            case .reverseLines: sorted = Array(values.reversed())
-            case .sortDescending: sorted = values.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 > $1.1 }
+            case .reverseLines: order.reverse()
+            case .sortDescending:
+                order.sort { rows[$0].content == rows[$1].content ? $0 < $1 : rows[$0].content > rows[$1].content }
             case .sortCaseInsensitive:
-                sorted = values.sorted {
-                    let a = $0.1.lowercased(), b = $1.1.lowercased()
-                    return a == b ? $0.0 < $1.0 : a < b
-                }
+                let keys = rows.map { $0.content.lowercased() }
+                order.sort { keys[$0] == keys[$1] ? $0 < $1 : keys[$0] < keys[$1] }
             case .sortLength:
-                sorted = values.sorted { $0.1.count == $1.1.count ? $0.0 < $1.0 : $0.1.count < $1.1.count }
-            default: sorted = values.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 < $1.1 }
+                let keys = rows.map { $0.content.count }
+                order.sort { keys[$0] == keys[$1] ? $0 < $1 : keys[$0] < keys[$1] }
+            default:
+                order.sort { rows[$0].content == rows[$1].content ? $0 < $1 : rows[$0].content < rows[$1].content }
             }
-            rows = zip(sorted, rows).map { ($0.0.1, $0.1.1) }
+            rows = zip(order, rows).map { (rows[$0.0].content, $0.1.separator) }
         }
-        return rows.map { $0.0 + $0.1 }.joined()
+        var output = ""
+        output.reserveCapacity(utf8.count)
+        for row in rows {
+            output += row.content
+            output += row.separator
+        }
+        return output
     }
     func apply(to editor: TTEditor) throws {
         try editor.requireWritable()

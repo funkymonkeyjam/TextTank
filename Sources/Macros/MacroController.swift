@@ -416,7 +416,7 @@ private final class MacroPlayback {
                 throw MacroError.invalid(
                     "The macro editor closed, became read-only or changed selection mode. Prior edits remain undoable.")
             }
-            if index == 0 && untilEnd && editor.selectionCaret >= editor.text.utf8.count { return true }
+            if index == 0 && untilEnd && editor.selectionCaret >= editor.byteLength { return true }
             guard performed < 100000 else {
                 throw MacroError.invalid("Macro stopped at the 100000-step limit. Prior edits remain undoable.")
             }

@@ -159,7 +159,7 @@ final class UtilityController: NSObject {
         guard let editor = activeEditor(), editor.window != nil else { throw UtilityFailure.noDocument }
         guard editor.selectionCount == 1 else { throw UtilityFailure.multipleSelections }
         let selected = editor.selectionStart != editor.selectionEnd
-        let bytes = selected ? editor.selectionEnd - editor.selectionStart : editor.text.utf8.count
+        let bytes = selected ? editor.selectionEnd - editor.selectionStart : editor.byteLength
         guard bytes <= 16 * 1024 * 1024 else { throw UtilityFailure.tooLarge }
         let snapshot = editor.attributedText(forSelection: selected)
         guard format == "html" || format == "rtf" else { throw UtilityFailure.malformed("export format") }
