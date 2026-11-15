@@ -174,19 +174,19 @@ import Darwin
                 _ = try AutomationDefinition.example.transform(native + "salt to taste\n")
             }
             var matching = AutomationDefinition.example
-            matching.steps = [.init(kind: .removeMatchingLines, find: "Ingredients")]
+            matching.steps = [.init(kind: .clearLinesMatching, find: "Ingredients")]
             check(
                 try matching.transform("Ingredients\n2 cups Ingredients mix\n") == "\n2 cups Ingredients mix\n",
                 "regex filter requires full-line match")
-            matching.steps = [.init(kind: .removeMatchingLines, find: "[")]
+            matching.steps = [.init(kind: .clearLinesMatching, find: "[")]
             rejects("invalid heading regex") { try matching.validate() }
-            matching.steps = [.init(kind: .removeMatchingLines, find: "", replacement: "x")]
+            matching.steps = [.init(kind: .clearLinesMatching, find: "", replacement: "x")]
             rejects("invalid heading parameters") { try matching.validate() }
             var renamed = AutomationDefinition.example
             renamed.name = "My chosen label"
             check(
                 try renamed.transform(native) == nativeExpected, "configured recipe behavior independent of user name")
-            matching.steps = [.init(kind: .removeMatchingLines, find: "(a+)+$")]
+            matching.steps = [.init(kind: .clearLinesMatching, find: "(a+)+$")]
             let regexStarted = ProcessInfo.processInfo.systemUptime
             rejects("pathological regex interrupted before applying", message: "exceeded its time limit") {
                 _ = try matching.transform(String(repeating: "a", count: 32) + "!")
@@ -253,7 +253,7 @@ import Darwin
             )
             // Friendly literal rules must never reinterpret typed punctuation as regex.
             let literalKinds: [AutomationDefinition.Step.Kind] = [
-                .removeLinesEqualTo, .removeLinesContaining, .removeLinesStartingWith
+                .clearLinesEqualTo, .clearLinesContaining, .clearLinesStartingWith
             ]
             for kind in literalKinds {
                 var rule = AutomationDefinition.example
@@ -261,9 +261,9 @@ import Darwin
                 let source = "Note\r\n Note\r\nnote\r\nNote: optional\r\n2 eggs\r\n2 eggs\r\n½–¾ cup café\r\n"
                 let expected: String
                 switch kind {
-                case .removeLinesEqualTo:
+                case .clearLinesEqualTo:
                     expected = "\r\n Note\r\nnote\r\nNote: optional\r\n2 eggs\r\n2 eggs\r\n½–¾ cup café\r\n"
-                case .removeLinesContaining: expected = "\r\n\r\nnote\r\n\r\n2 eggs\r\n2 eggs\r\n½–¾ cup café\r\n"
+                case .clearLinesContaining: expected = "\r\n\r\nnote\r\n\r\n2 eggs\r\n2 eggs\r\n½–¾ cup café\r\n"
                 default: expected = "\r\n Note\r\nnote\r\n\r\n2 eggs\r\n2 eggs\r\n½–¾ cup café\r\n"
                 }
                 check(
@@ -272,8 +272,8 @@ import Darwin
                 rule.steps = [.init(kind: kind, find: "[x].*")]
                 let punctuationInput: String
                 switch kind {
-                case .removeLinesEqualTo: punctuationInput = "[x].*\n[x] pepper\n2 eggs\n"
-                case .removeLinesContaining: punctuationInput = "before [x].* after\n[x] pepper\n2 eggs\n"
+                case .clearLinesEqualTo: punctuationInput = "[x].*\n[x] pepper\n2 eggs\n"
+                case .clearLinesContaining: punctuationInput = "before [x].* after\n[x] pepper\n2 eggs\n"
                 default: punctuationInput = "[x].* annotation\n[x] pepper\n2 eggs\n"
                 }
                 check(
@@ -325,9 +325,9 @@ import Darwin
             rejects("trim rejects meaningless runtime find prompt") { try trimming.validate() }
             var friendly = AutomationDefinition.example
             friendly.steps = [
-                .init(kind: .removeLinesStartingWith, find: "Serves:"), .init(kind: .trimWhitespace),
-                .init(kind: .removeLinesEqualTo, find: "Ingredients"),
-                .init(kind: .removeLinesContaining, find: "(advertisement)"), .init(kind: .removeBlankLines)
+                .init(kind: .clearLinesStartingWith, find: "Serves:"), .init(kind: .trimWhitespace),
+                .init(kind: .clearLinesEqualTo, find: "Ingredients"),
+                .init(kind: .clearLinesContaining, find: "(advertisement)"), .init(kind: .removeBlankLines)
             ]
             let friendlyLibrary = AutomationLibrary(workflows: [friendly])
             check(
@@ -385,7 +385,7 @@ import Darwin
             let portable = AutomationRuleSet(
                 name: "Literal heading cleanup",
                 steps: [
-                    .init(kind: .removeLinesEqualTo, find: "Ingredients", askForFind: true),
+                    .init(kind: .clearLinesEqualTo, find: "Ingredients", askForFind: true),
                     .init(kind: .removeBlankLines)
                 ])
             let portableData = try portable.encoded()
@@ -412,7 +412,7 @@ import Darwin
                 _ = try AutomationRuleSet.decode(Data(repeating: 32, count: 1048577))
             }
             var invalidPortable = portable
-            invalidPortable.steps = [.init(kind: .removeLinesEqualTo, find: "")]
+            invalidPortable.steps = [.init(kind: .clearLinesEqualTo, find: "")]
             rejects("invalid portable rule rejects loading") {
                 _ = try AutomationRuleSet.decode(JSONEncoder().encode(invalidPortable))
             }
@@ -471,6 +471,352 @@ import Darwin
             check(
                 try bounded.transform(escapedMalformed) == escapedMalformed,
                 "odd-offset escaped malformed link preserves bytes with threshold checkpoints")
+            // Audit package 14. Each group names the finding it guards.
+            var rule = AutomationDefinition.example
+            // F55: the regex budget is charged for regex work, not for the number of lines.
+            rule.steps = [
+                .init(kind: .clearLinesMatching, find: AutomationDefinition.recipeHeadingPattern),
+                .init(kind: .clearLinesMatching, find: AutomationDefinition.colonLabelPattern)
+            ]
+            let manyLines = String(repeating: "2 cups flour, sifted\n", count: 200_000)
+            check(
+                try rule.transform(manyLines).utf8.elementsEqual(manyLines.utf8),
+                "F55 two heading patterns leave 200,000 short non-matching lines unchanged without a false time limit")
+            rule.steps = [.init(kind: .clearLinesMatching, find: "(a+)+$")]
+            let slowLines = String(repeating: "aaaaaaaaaaaaaaaaaaaaaaaa!\n", count: 5000)
+            let slowLinesStarted = ProcessInfo.processInfo.systemUptime
+            rejects("F55 a pathological pattern over thousands of lines is still rejected", message: "time limit") {
+                _ = try rule.transform(slowLines)
+            }
+            check(
+                ProcessInfo.processInfo.systemUptime - slowLinesStarted < 10,
+                "F55 the pathological many-line rejection returns well inside the hang guard")
+            // F58 and F110: Keep marked list rows is linear and observes cancellation.
+            rule.steps = [.init(kind: .keepMarkedListRows)]
+            let markedRows = (0..<100_000).map { "- item \($0)\n" }.joined()
+            let markedStarted = ProcessInfo.processInfo.systemUptime
+            check(
+                try rule.transform(markedRows).utf8.elementsEqual(markedRows.utf8),
+                "F58 100,000 distinct marked rows are kept exactly")
+            check(
+                ProcessInfo.processInfo.systemUptime - markedStarted < 10,
+                "F58 Keep marked list rows over 100,000 rows is not quadratic")
+            rejects("F58 the first unmarked row is still reported by line number", message: "Line 3 has no list marker")
+            { _ = try rule.transform("- a\n\nplain\n- b\nplain again\n") }
+            let markedCancel = AutomationRunControl()
+            markedCancel.onProgress = { completed, _ in if completed == 0 { markedCancel.cancel() } }
+            // Without a cancellation check inside the step the unmarked last row would be reported instead.
+            rejects("F110 Keep marked list rows observes a pending cancellation", message: "Automation cancelled") {
+                _ = try rule.transform(markedRows + "unmarked last row\n", control: markedCancel)
+            }
+            // F62: note removal tidies only the lines it changed.
+            rule.steps = [.init(kind: .removeNoteReferences)]
+            check(
+                try rule.transform("    indented code\n\tTabbed") == "    indented code\n\tTabbed",
+                "F62 note removal leaves indentation alone on lines without a note")
+            check(
+                try rule.transform("a  \r\nb (Note 1)\r\n") == "a  \r\nb\r\n",
+                "F62 note removal trims only the line whose note was removed")
+            check(
+                try rule.transform("1/2 tsp herbs (Note 4)") == "1/2 tsp herbs",
+                "F62 the gap left by a removed note is still tidied")
+            check(
+                try AutomationDefinition.example.transform("- 2 eggs  \n") == "2 eggs\n",
+                "F62 the built-in recipe cleanup still trims line edges")
+            // F63: a whole-line match is anchored, in validation and in the run alike.
+            rule.steps = [.init(kind: .clearLinesMatching, find: "Cups|Cups Metric")]
+            check(
+                try rule.transform("Cups Metric\n2 Cups Metric flour\n") == "\n2 Cups Metric flour\n",
+                "F63 an alternation clears a line its longer branch matches entirely")
+            rule.steps = [.init(kind: .clearLinesMatching, find: "(?i)cups")]
+            check(try rule.transform("CUPS") == "", "F63 inline flags still apply inside the anchored pattern")
+            rule.steps = [.init(kind: .clearLinesMatching, find: "(?x) Cups # label")]
+            check(
+                try rule.transform("Cups\nCups x") == "\nCups x",
+                "F63 a free-spacing pattern ending in a comment still validates and clears its line")
+            rule.steps = [.init(kind: .clearLinesMatching, find: #"\QCups"#)]
+            check(
+                try rule.transform("Cups\nCups x") == "\nCups x",
+                "F63 an unterminated quoted literal still validates and clears its line")
+            rule.steps = [.init(kind: .clearLinesMatching, find: AutomationDefinition.colonLabelPattern)]
+            check(
+                try rule.transform("Sauce:\nSauce: 2 tbsp") == "\nSauce: 2 tbsp",
+                "F63 the colon-label pattern clears a label and keeps a line with text after the colon")
+            // G345: literal rules and dedupe compare bytes, as Find and Remove Duplicate Lines do.
+            rule.steps = [.init(kind: .deduplicateLines)]
+            check(
+                try rule.transform("\u{E9}\ne\u{301}\n").utf8.elementsEqual("\u{E9}\ne\u{301}\n".utf8),
+                "G345 dedupe keeps precomposed and decomposed spellings as different rows")
+            rule.steps = [.init(kind: .clearLinesContaining, find: "\u{1F469}")]
+            check(
+                try rule.transform("\u{1F469}\u{200D}\u{1F467}") == "",
+                "G345 contains finds a scalar inside a joined emoji sequence")
+            rule.steps = [.init(kind: .clearLinesContaining, find: "e")]
+            check(try rule.transform("cafe\u{301}") == "", "G345 contains finds the base letter of a decomposed accent")
+            rule.steps = [.init(kind: .clearLinesStartingWith, find: "e")]
+            check(
+                try rule.transform("e\u{301}x") == "", "G345 starts-with matches the base letter of a decomposed accent"
+            )
+            rule.steps = [.init(kind: .clearLinesEqualTo, find: "\u{E9}")]
+            check(
+                try rule.transform("e\u{301}").utf8.elementsEqual("e\u{301}".utf8),
+                "G345 equal-to does not treat a decomposed spelling as the precomposed text")
+            rule.steps = [.init(kind: .trimWhitespace)]
+            check(
+                try rule.transform("\u{A0}2 eggs\u{A0}") == "2 eggs",
+                "G345 trim still removes no-break spaces at line edges")
+            rule.steps = [.init(kind: .replaceLiteral, find: "\u{E9}", replacement: "E")]
+            check(
+                try rule.transform("e\u{301} \u{E9}").utf8.elementsEqual("e\u{301} E".utf8),
+                "G345 literal replacement leaves a decomposed spelling untouched")
+            // G351: mixed endings that run together are refused, not reordered.
+            for kind in [
+                AutomationDefinition.Step.Kind.sortLines, .removeBlankLines, .deduplicateLines, .keepMarkedListRows
+            ] {
+                rule.steps = [.init(kind: kind)]
+                rejects(
+                    "G351 \(kind.rawValue) refuses CR, CRLF and LF that run together", message: "uniform line endings"
+                ) { _ = try rule.transform(kind == .keepMarkedListRows ? "- a\r\r\n\n- b" : "a\r\r\n\nb") }
+            }
+            rule.steps = [.init(kind: .sortLines)]
+            rejects("G351 a longer run of mixed endings is refused", message: "uniform line endings") {
+                _ = try rule.transform("a\r\n\r\r\n\n\r\nb")
+            }
+            check(
+                try rule.transform("b\r\n\r\na") == "\r\na\r\nb", "G351 uniform CRLF with an empty line still sorts")
+            // G378: Markdown removal does not edit spacing it did not create.
+            check(try format.transform("a , b **c**") == "a , b c", "G378 unrelated space before a comma is kept")
+            check(try format.transform("x ; y *z*") == "x ; y z", "G378 unrelated space before a semicolon is kept")
+            check(
+                try format.transform("**salt *, fine***") == "salt, fine",
+                "G378 padding before a nested opening delimiter is still removed")
+            check(
+                try format.transform("salt *, fine*") == "salt, fine",
+                "G378 padding before an opening delimiter is still removed")
+            check(
+                try format.transform("salt _; fine_ and __, x__") == "salt; fine and, x",
+                "G378 underscore delimiters take their padding the same way")
+            check(
+                try format.transform("salt *, fine") == "salt *, fine",
+                "G378 an unmatched delimiter keeps its padding")
+            // G382: the preview charges one regex budget across all pattern rules, as a run does.
+            let catastrophic = String(repeating: "a", count: 32) + "!"
+            rule.steps = [
+                .init(kind: .clearLinesMatching, find: "(a+)+$"), .init(kind: .clearLinesMatching, find: "Ingredients")
+            ]
+            rejects("G382 the preview rejects a pathological pattern rule", message: "time limit") {
+                _ = try rule.testSample(catastrophic)
+            }
+            // Find a line that one pattern rule handles in a few milliseconds, then repeat the rule
+            // 100 times: one shared 0.1 s budget is exhausted, a fresh budget per rule never is.
+            var length = 10, single = 0.0
+            rule.steps = [.init(kind: .clearLinesMatching, find: "(a+)+$")]
+            while length < 24 {
+                let line = String(repeating: "a", count: length) + "!"
+                single = .infinity
+                for _ in 0..<3 {
+                    let began = ProcessInfo.processInfo.systemUptime
+                    guard (try? rule.transform(line)) != nil else {
+                        single = .infinity
+                        break
+                    }
+                    single = min(single, ProcessInfo.processInfo.systemUptime - began)
+                }
+                if single >= 0.004 { break }
+                length += 1
+            }
+            try require(single >= 0.004 && single < 0.05, "fixture: one pattern rule takes a few milliseconds")
+            rule.steps = Array(repeating: rule.steps[0], count: 100)
+            rejects("G382 the preview shares one regex budget across pattern rules", message: "time limit") {
+                _ = try rule.testSample(String(repeating: "a", count: length) + "!")
+            }
+            // F71: a rule that asks for its text when running may be saved with no default.
+            for kind in literalKinds + [.clearLinesMatching, .replaceLiteral] {
+                var asking = AutomationDefinition.example
+                asking.steps = [
+                    .init(kind: kind, find: "", replacement: kind == .replaceLiteral ? "" : nil, askForFind: true)
+                ]
+                check((try? asking.validate()) != nil, "F71 \(kind.rawValue) may ask at run time with an empty default")
+                asking.steps[0].find = nil
+                check((try? asking.validate()) != nil, "F71 \(kind.rawValue) may ask at run time with no default")
+                check(
+                    try AutomationLibrary.decode(AutomationLibrary(workflows: [asking]).encoded()).workflows == [
+                        asking
+                    ],
+                    "F71 \(kind.rawValue) ask-only rule persists")
+                rejects("F71 \(kind.rawValue) run without a value explains what is missing", message: "needs a value") {
+                    _ = try asking.transform("text")
+                }
+                rejects("F71 \(kind.rawValue) test without a value explains what is missing", message: "needs a value")
+                { _ = try asking.testSample("text") }
+                rejects("F71 \(kind.rawValue) an empty answer at run time is rejected", message: "needs a value") {
+                    _ = try asking.resolvingParameters { _, _, _ in "" }
+                }
+                let answered = try asking.resolvingParameters { _, _, initial in initial.isEmpty ? "drop" : initial }
+                check(
+                    try answered?.transform("drop\nkeep") == "\nkeep",
+                    "F71 \(kind.rawValue) runs with the value supplied at run time")
+            }
+            // F188: Swift names say what a rule does; the stored spellings are pinned.
+            check(
+                AutomationDefinition.Step.Kind.allCases.map(\.rawValue) == [
+                    "removeListMarkers", "removeBlankLines", "sortLines", "deduplicateLines", "replaceLiteral",
+                    "removeLinesEqualTo", "removeLinesContaining", "removeLinesStartingWith", "trimWhitespace",
+                    "removeMatchingLines", "removeMarkdownHeadings", "removeMarkdownFormatting",
+                    "removeCheckboxMarkers", "removeNoteReferences", "keepMarkedListRows", "sortLinesLocalized"
+                ], "F188 every persisted step spelling and its order is unchanged")
+            check(
+                AutomationDefinition.Step.Kind.clearLinesEqualTo.rawValue == "removeLinesEqualTo"
+                    && AutomationDefinition.Step.Kind.clearLinesContaining.rawValue == "removeLinesContaining"
+                    && AutomationDefinition.Step.Kind.clearLinesStartingWith.rawValue == "removeLinesStartingWith"
+                    && AutomationDefinition.Step.Kind.clearLinesMatching.rawValue == "removeMatchingLines"
+                    && AutomationDefinition.Step.Kind.clearMarkdownHeadings.rawValue == "removeMarkdownHeadings",
+                "F188 the clear rules keep their stored remove spellings")
+            let storedSpellings = Data(
+                #"{"version":1,"workflows":[{"version":1,"id":"A931733F-310A-4EBF-9C48-38C59202D586","name":"Stored","input":"document","output":"editor","steps":[{"kind":"removeLinesEqualTo","find":"a"},{"kind":"removeLinesContaining","find":"b"},{"kind":"removeLinesStartingWith","find":"c"},{"kind":"removeMatchingLines","find":"d"},{"kind":"removeMarkdownHeadings"}]}]}"#
+                    .utf8)
+            let storedLibrary = try AutomationLibrary.decode(storedSpellings)
+            check(
+                storedLibrary.workflows[0].steps.map(\.kind) == [
+                    .clearLinesEqualTo, .clearLinesContaining, .clearLinesStartingWith, .clearLinesMatching,
+                    .clearMarkdownHeadings
+                ], "F188 a library written with the stored spellings decodes to the renamed cases")
+            let reencoded = String(data: try storedLibrary.encoded(), encoding: .utf8) ?? ""
+            check(
+                [
+                    "removeLinesEqualTo", "removeLinesContaining", "removeLinesStartingWith", "removeMatchingLines",
+                    "removeMarkdownHeadings"
+                ].allSatisfy { reencoded.contains("\"\($0)\"") } && !reencoded.contains("clear"),
+                "F188 encoding writes the stored spellings back")
+            check(
+                try storedLibrary.workflows[0].transform("a\nxbx\ncc\nd\n# h\nkeep\n") == "\n\n\n\n\nkeep\n",
+                "F188 the clear rules empty a matching line and keep its line ending")
+            // G347: a locale-aware sort beside the unchanged code-point sort.
+            rule.steps = [.init(kind: .sortLines)]
+            check(
+                try rule.transform("apples\nZucchini\n\u{C9}clairs\nbananas\nitem 10\nitem 9\n")
+                    == "Zucchini\napples\nbananas\nitem 10\nitem 9\n\u{C9}clairs\n",
+                "G347 the default sort is still code-point order")
+            rule.steps = [.init(kind: .sortLinesLocalized)]
+            check(
+                try rule.transform("apples\r\nZucchini\r\n\u{C9}clairs\r\nbananas\r\nitem 10\r\nitem 9")
+                    == "apples\r\nbananas\r\n\u{C9}clairs\r\nitem 9\r\nitem 10\r\nZucchini",
+                "G347 the locale sort puts case and accents second and numbers by value")
+            check(
+                try rule.transform("e\u{301}\n\u{E9}\ne\u{301}\n").utf8.elementsEqual(
+                    "e\u{301}\ne\u{301}\n\u{E9}\n".utf8)
+                    && rule.transform("\u{E9}\ne\u{301}\n").utf8.elementsEqual("e\u{301}\n\u{E9}\n".utf8),
+                "G347 lines the locale treats as equal get one fixed order and keep their bytes")
+            rejects("G347 the locale sort refuses mixed line endings", message: "uniform line endings") {
+                _ = try rule.transform("b\r\na\n")
+            }
+            check(
+                try AutomationLibrary.decode(AutomationLibrary(workflows: [rule]).encoded()).workflows[0].steps
+                    == [.init(kind: .sortLinesLocalized)], "G347 the locale sort rule persists")
+            rule.steps = [.init(kind: .sortLinesLocalized, find: "x")]
+            rejects("G347 the locale sort takes no parameter") { try rule.validate() }
+            let sortCancel = AutomationRunControl()
+            var comparisonsSeen = false
+            sortCancel.onProgress = { completed, _ in
+                if completed == 0 { sortCancel.cancel() } else { comparisonsSeen = true }
+            }
+            rule.steps = [.init(kind: .sortLinesLocalized)]
+            rejects("G347 the locale sort observes cancellation", message: "Automation cancelled") {
+                _ = try rule.transform((0..<20_000).map { "row \(20_000 - $0)\n" }.joined(), control: sortCancel)
+            }
+            check(!comparisonsSeen, "G347 a cancelled sort never reports its step complete")
+            check(
+                LineOrder.codePointAscending("Z", "a") && !LineOrder.localizedAscending("Z", "a")
+                    && LineOrder.localizedAscending("item 9", "item 10")
+                    && !LineOrder.codePointAscending("item 9", "item 10"),
+                "G347 the shared comparators differ exactly on case and numbers")
+            // G376: the first-run preset is named for what it does.
+            check(
+                AutomationDefinition.example.id.uuidString == "A931733F-310A-4EBF-9C48-38C59202D586"
+                    && AutomationDefinition.example.name == "Clean up recipe list",
+                "G376 the first-run preset keeps its identifier and is named as a recipe cleanup")
+            let userSample = try String(
+                contentsOf: fixtures.appendingPathComponent("recipe-user-sample1-input.txt"), encoding: .utf8)
+            rejects(
+                "G376 the strict preset refuses a list that mixes marked and unmarked rows", message: "no list marker"
+            ) { _ = try AutomationDefinition.example.transform(userSample) }
+            check(
+                AutomationDefinition.example.steps.first?.find == AutomationDefinition.recipeHeadingPattern,
+                "G376 the preset uses the one named heading pattern")
+            // G377: templates are bundled rule files with no sample-specific text.
+            let templateFolder = TestPaths.resources.appendingPathComponent("AutomationTemplates")
+            check(
+                Set(try FileManager.default.contentsOfDirectory(atPath: templateFolder.path))
+                    == Set(AutomationTemplates.resourceNames.map { $0 + ".rules.json" }),
+                "G377 every bundled template file is listed and every listed template exists")
+            let bundled = AutomationTemplates.loadAll()
+            check(
+                bundled.problems.isEmpty && bundled.sets.count == AutomationTemplates.resourceNames.count,
+                "G377 every bundled template decodes and validates: \(bundled.problems)")
+            check(
+                bundled.sets.map(\.name) == [
+                    "Trim and remove empty lines", "Sort unique lines", "Recipe ingredient cleanup"
+                ], "G377 the template names and order are unchanged")
+            check(
+                bundled.sets.count == 3
+                    && bundled.sets[0].steps == [.init(kind: .trimWhitespace), .init(kind: .removeBlankLines)]
+                    && bundled.sets[1].steps == [.init(kind: .sortLines), .init(kind: .deduplicateLines)],
+                "G377 the two general templates keep their rules")
+            if bundled.sets.count == 3 {
+                let recipeTemplate = bundled.sets[2].steps
+                check(
+                    recipeTemplate.prefix(2).map(\.find) == [
+                        AutomationDefinition.recipeHeadingPattern, AutomationDefinition.colonLabelPattern
+                    ], "G377 the recipe template uses the two named patterns")
+                check(
+                    recipeTemplate.map(\.kind) == [
+                        .clearLinesMatching, .clearLinesMatching, .clearMarkdownHeadings, .removeListMarkers,
+                        .removeMarkdownFormatting, .removeCheckboxMarkers, .removeNoteReferences, .trimWhitespace,
+                        .removeBlankLines
+                    ] && recipeTemplate.dropFirst(2).allSatisfy { $0.find == nil && $0.replacement == nil },
+                    "G377 the recipe template holds only general rules")
+            }
+            rejects("G377 a missing template is an error, not an empty rule list") {
+                _ = try AutomationTemplates.load("no-such-template")
+            }
+            // F141: clipboard HTML becomes text by a local scan; nothing is rendered or fetched.
+            func html(_ text: String) -> String? { AutomationHTMLText.plainText(from: Data(text.utf8)) }
+            check(
+                html(
+                    #"<ul><li>2 eggs</li><li>½ cup flour</li></ul><img src="http://127.0.0.1:1/x.png"><script>alert("x")</script>"#
+                ) == "2 eggs\n½ cup flour\n", "F141 list items become rows; images and scripts leave nothing behind")
+            check(
+                html("<p>a &amp; b &lt;c&gt; &quot;d&quot; &#233; &#xE9; &nbsp;e &bogus; &#0; x&y</p>")
+                    == "a & b <c> \"d\" \u{E9} \u{E9} \u{A0}e &bogus; &#0; x&y\n",
+                "F141 basic character references are decoded and unknown ones are kept as text")
+            check(
+                html("<div>one<br>two<br/><br>three</div><h2>Head</h2><table><tr><td>a</td><td>b</td></tr></table>")
+                    == "one\ntwo\n\nthree\nHead\nab\n", "F141 line breaks and block ends become line endings")
+            check(
+                html(
+                    "<html><head><title>T</title><style>p{color:red}</style></head><body><style>x{}</style>  keep \n  this  <!-- not <b>this</b> --></body></html>"
+                ) == "keep this", "F141 head, style and comments are dropped and white space is collapsed")
+            check(
+                html("<head><meta charset=utf-8><body><p title=\"a > b\">kept</p>") == "kept\n",
+                "F141 an unclosed head ends at body and a quoted > does not end a tag")
+            check(html("<pre>a\n  b</pre>c") == "a\n  b\nc", "F141 preformatted text keeps its spacing")
+            check(
+                html("2 < 3 and <notclosed") == "2 < 3 and", "F141 a bare < is text and an unterminated tag is dropped")
+            check(
+                html("text<script>never closed") == "text" && html("a<!-- never closed") == "a",
+                "F141 unterminated script and comment content never becomes text")
+            check(
+                html("<img src=\"x.png\">") == nil && html("") == nil && html("<p> \n </p>") == nil,
+                "F141 markup with no text yields nothing")
+            check(
+                AutomationHTMLText.plainText(from: Data([0xFF, 0xFE]) + "<b>hi</b>".data(using: .utf16LittleEndian)!)
+                    == "hi"
+                    && AutomationHTMLText.plainText(from: Data([0xEF, 0xBB, 0xBF]) + Data("<i>hi</i>".utf8)) == "hi"
+                    && AutomationHTMLText.plainText(from: Data([0xC3, 0x28])) == nil,
+                "F141 UTF-16 and UTF-8 byte order marks are accepted and invalid bytes are refused")
+            check(
+                html("<SCRIPT type='x'>var a = '</p>';</SCRIPT><P>ok</P>") == "ok\n",
+                "F141 tag names are matched without regard to case")
             Checks.summary {
                 "PASS AutomationChecks: \(Checks.count) assertions (pure core; native UI and external outputs not covered)"
             }

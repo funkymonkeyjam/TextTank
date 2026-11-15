@@ -2,6 +2,16 @@
 import AppKit
 import Darwin
 
+/// Runs a block on the main thread through the main run loop in the common modes, which include
+/// modal panels and event tracking. Unlike the main dispatch queue, this still delivers while a
+/// main-queue block or main-actor job is itself inside a nested modal run loop.
+enum MainRunLoop {
+    static func perform(_ block: @escaping () -> Void) {
+        CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue, block)
+        CFRunLoopWakeUp(CFRunLoopGetMain())
+    }
+}
+
 extension Notification.Name {
     static let textTankAutomationsDidChange = Notification.Name("TextTankAutomationsDidChange")
 }
@@ -13,6 +23,8 @@ final class AutomationController: NSObject, NSMenuDelegate {
     private var library = AutomationLibrary(workflows: [])
     private var loadError: Error?
     private var busy = false
+    /// The pasteboard used for clipboard input and output. Checks substitute a private one.
+    var pasteboard = NSPasteboard.general
     private var exportInProgress = false
     private var exportTask: Task<Void, Never>?
     private lazy var automationMenu: NSMenu = {
@@ -379,7 +391,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
         let alert = TTAlert()
         alert.messageText = "Advanced Automation Configuration"
         alert.informativeText =
-            "Edit the JSON below. Rename by changing name, keeping id unchanged. Input: selection, document, clipboard, file. Output: editor, clipboard, newDocument, file, reminders. Steps: removeListMarkers, removeCheckboxMarkers, removeMarkdownHeadings, removeMarkdownFormatting, removeNoteReferences, keepMarkedListRows, removeBlankLines, sortLines, deduplicateLines, replaceLiteral (find/replacement), removeMatchingLines (whole-line regex find). Optional shortcut: a lowercase letter, bound to Command-Option. Set previewBeforeApply true for a preview, false or omit to apply directly. Set pinToToolbar true for a named toolbar button. Mixed line endings are retained unless a line-reordering step requires a uniform format. No automation runs when saved or imported."
+            "Edit the JSON below. Rename by changing name, keeping id unchanged. Input: selection, document, clipboard, file. Output: editor, clipboard, newDocument, file, reminders. Steps: removeListMarkers, removeCheckboxMarkers, removeMarkdownFormatting, removeNoteReferences, trimWhitespace, keepMarkedListRows, removeBlankLines, sortLines (character-code order), sortLinesLocalized (locale order), deduplicateLines, replaceLiteral (find/replacement), removeLinesEqualTo, removeLinesContaining and removeLinesStartingWith (literal find), removeMatchingLines (whole-line regex find), removeMarkdownHeadings. The removeLines…, removeMatchingLines and removeMarkdownHeadings steps empty a matching line and keep its line ending; add removeBlankLines after them to drop the empty lines. Optional shortcut: a lowercase letter, bound to Command-Option. Set previewBeforeApply true for a preview, false or omit to apply directly. Set pinToToolbar true for a named toolbar button. Mixed line endings are retained unless a line-reordering step requires a uniform format. No automation runs when saved or imported."
         for title in ["Save", "Cancel", "Import…", "Export…"] { alert.addButton(withTitle: title) }
         let text = makeTextView(height: 400)
         let initial = library.workflows.isEmpty ? AutomationLibrary(workflows: [.example]) : library
@@ -563,7 +575,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
             // File input explicitly accepts valid UTF-8 only; never guess or replace invalid bytes.
             input = try AutomationFileInput.read(url)
         case .clipboard:
-            guard let value = plainClipboardText() else {
+            guard let value = Self.plainText(from: pasteboard) else {
                 throw AutomationError.invalid("The clipboard does not contain supported text.")
             }
             input = value
@@ -595,8 +607,8 @@ final class AutomationController: NSObject, NSMenuDelegate {
             }
             if workflow.input == .document { editor.text = output } else { editor.replaceSelection(output) }
         case .clipboard:
-            NSPasteboard.general.clearContents()
-            guard NSPasteboard.general.setString(output, forType: .string) else {
+            pasteboard.clearContents()
+            guard pasteboard.setString(output, forType: .string) else {
                 throw AutomationError.invalid("The clipboard could not be updated.")
             }
         case .newDocument: newDocument(output)
@@ -610,13 +622,60 @@ final class AutomationController: NSObject, NSMenuDelegate {
         }
     }
     private var runControl: AutomationRunControl?
-    @objc private func cancelTransform() { runControl?.cancel() }
+    private var runPanel: NSPanel?
+    /// Cancel ends the modal itself. The worker is only asked to stop, because sorting, splitting
+    /// and joining cannot be interrupted; it holds a copy of the text and nothing of the editor.
+    @objc private func cancelTransform() {
+        guard let runControl else { return }
+        runControl.cancel()
+        if let runPanel, NSApp.modalWindow === runPanel { NSApp.stopModal() }
+    }
+    /// The worker's result, handed across threads under a lock.
+    private final class TransformOutcome: @unchecked Sendable {
+        private let lock = NSLock()
+        private var result: Result<String, Error>?
+        func set(_ value: Result<String, Error>) {
+            lock.lock()
+            result = value
+            lock.unlock()
+        }
+        func get() -> Result<String, Error>? {
+            lock.lock()
+            defer { lock.unlock() }
+            return result
+        }
+    }
+    /// Progress controls, created only when a run outlasts the short wait. Main thread only.
+    private final class TransformProgress {
+        var panel: NSPanel?
+        var bar: NSProgressIndicator?
+        var status: NSTextField?
+    }
+    /// Every run goes to a worker with a run control, whatever the size of its input. The main
+    /// thread waits briefly, so an ordinary cleanup still completes in the same event with no
+    /// panel and no run-loop turn. A run that takes longer gets the modal panel and its Cancel.
     private func transformWithProgress(_ workflow: AutomationDefinition, input: String) throws -> String {
-        // Small recipe workflows stay synchronous and preserve their one-click interaction.
-        guard input.utf8.count > 262144 else { return try workflow.transform(input) }
         let control = AutomationRunControl()
         runControl = control
-        defer { runControl = nil }
+        defer {
+            runControl = nil
+            runPanel = nil
+        }
+        let outcome = TransformOutcome(), finished = DispatchSemaphore(value: 0), ui = TransformProgress()
+        // Progress and completion are delivered through the run loop, not the main queue, so they
+        // arrive even when this run was itself started from a main-queue block.
+        control.onProgress = { completed, total in
+            MainRunLoop.perform {
+                ui.bar?.doubleValue = Double(completed)
+                ui.status?.stringValue = "Processing step \(min(completed+1,total)) of \(total)…"
+            }
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            outcome.set(Result { try workflow.transform(input, control: control) })
+            finished.signal()
+            MainRunLoop.perform { if let panel = ui.panel, NSApp.modalWindow === panel { NSApp.stopModal() } }
+        }
+        if finished.wait(timeout: .now() + 0.2) == .success, let result = outcome.get() { return try result.get() }
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 130), styleMask: [.titled], backing: .buffered,
             defer: false)
@@ -627,34 +686,30 @@ final class AutomationController: NSObject, NSMenuDelegate {
         progress.isIndeterminate = false
         progress.minValue = 0
         progress.maxValue = Double(max(1, workflow.steps.count))
+        progress.setAccessibilityLabel("Automation progress")
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelTransform))
         cancel.frame = NSRect(x: 290, y: 15, width: 110, height: 30)
         cancel.identifier = NSUserInterfaceItemIdentifier("automation.transform.cancel")
+        cancel.keyEquivalent = "\u{1b}"
         panel.contentView?.addSubview(status)
         panel.contentView?.addSubview(progress)
         panel.contentView?.addSubview(cancel)
-        var outcome: Result<String, Error>?
-        control.onProgress = { completed, total in
-            DispatchQueue.main.async {
-                progress.doubleValue = Double(completed)
-                status.stringValue = "Processing step \(min(completed+1,total)) of \(total)…"
-            }
-        }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = Result { try workflow.transform(input, control: control) }
-            DispatchQueue.main.async {
-                outcome = result
-                if NSApp.modalWindow === panel { NSApp.stopModal() }
-            }
-        }
+        ui.panel = panel
+        ui.bar = progress
+        ui.status = status
+        runPanel = panel
         panel.center()
-        NSApp.runModal(for: panel)
+        // A worker that finished during the wait or the setup has its stop block queued for the
+        // modal run loop; skipping the modal when the result is already here saves a flash.
+        if outcome.get() == nil { NSApp.runModal(for: panel) }
         panel.orderOut(nil)
-        guard let outcome else {
+        // Cancel wins over a result that arrived at the same moment.
+        try control.checkCancellation()
+        guard let result = outcome.get() else {
             control.cancel()
             throw AutomationError.invalid("Automation cancelled. Nothing was changed.")
         }
-        return try outcome.get()
+        return try result.get()
     }
     private func beginReminderExport(_ text: String, workflow: AutomationDefinition) {
         let rows = text.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -829,16 +884,18 @@ final class AutomationController: NSObject, NSMenuDelegate {
             } catch { self.showError(error) }
         }
     }
-    private func plainClipboardText() -> String? {
-        if let string = NSPasteboard.general.string(forType: .string) { return string }
-        for (type, format) in [(NSPasteboard.PasteboardType.rtf, NSAttributedString.DocumentType.rtf), (.html, .html)] {
-            if let data = NSPasteboard.general.data(forType: type),
-                let rich = try? NSAttributedString(
-                    data: data, options: [.documentType: format], documentAttributes: nil)
-            {
-                return rich.string
-            }
+    /// Clipboard input as plain text: a plain-text flavour first, then RTF through the local Cocoa
+    /// reader, then HTML through `AutomationHTMLText`. HTML is never handed to
+    /// `NSAttributedString`, whose HTML importer is WebKit-backed and may load remote resources.
+    static func plainText(from pasteboard: NSPasteboard) -> String? {
+        if let string = pasteboard.string(forType: .string) { return string }
+        if let data = pasteboard.data(forType: .rtf),
+            let rich = try? NSAttributedString(
+                data: data, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil)
+        {
+            return rich.string
         }
+        if let data = pasteboard.data(forType: .html) { return AutomationHTMLText.plainText(from: data) }
         return nil
     }
     private func makeTextView(height: CGFloat) -> (scroll: NSScrollView, editor: NSTextView) {

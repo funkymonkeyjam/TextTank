@@ -26,7 +26,7 @@ ALL_DIRECT="file-checks automation-checks reminder-checks bridge-checks"
 suite_build "$ALL_DIRECT" scripts/build-user-lexer.sh
 suite_build "file-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -o build/tests/file-checks Sources/Documents/FileCodec.swift Sources/Documents/RecoveryStore.swift Sources/Documents/RecoveryWriter.swift "$SUITE_SUPPORT" Tests/FileChecks.swift
 suite_run file-checks harness/logs/file-checks.log build/tests/file-checks
-suite_build "automation-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -o build/tests/automation-checks Sources/Automations/AutomationCore.swift "$SUITE_SUPPORT" Tests/AutomationChecks.swift
+suite_build "automation-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -o build/tests/automation-checks Sources/Automations/AutomationCore.swift Sources/Documents/LineOrder.swift "$SUITE_SUPPORT" Tests/AutomationChecks.swift
 suite_run automation-checks harness/logs/automation-checks.log build/tests/automation-checks
 suite_build "reminder-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -o build/tests/reminder-checks Sources/Connectors/RemindersConnector.swift "$SUITE_SUPPORT" Tests/ReminderChecks.swift
 suite_run reminder-checks harness/logs/reminder-checks.log build/tests/reminder-checks

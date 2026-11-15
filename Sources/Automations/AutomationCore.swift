@@ -6,11 +6,20 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
     enum Input: String, Codable { case selection, document, clipboard, file }
     enum Output: String, Codable { case editor, clipboard, newDocument, file, reminders }
     struct Step: Codable, Equatable {
+        /// Raw values are the persisted spellings in Automations.json and rule files and never
+        /// change. The five `clear…` kinds empty a matching line and keep its line ending, so their
+        /// Swift names say "clear" although the stored spelling says "remove".
         enum Kind: String, Codable, CaseIterable {
             case removeListMarkers, removeBlankLines, sortLines, deduplicateLines, replaceLiteral
-            case removeLinesEqualTo, removeLinesContaining, removeLinesStartingWith, trimWhitespace
-            case removeMatchingLines, removeMarkdownHeadings, removeMarkdownFormatting, removeCheckboxMarkers,
-                removeNoteReferences, keepMarkedListRows
+            case clearLinesEqualTo = "removeLinesEqualTo"
+            case clearLinesContaining = "removeLinesContaining"
+            case clearLinesStartingWith = "removeLinesStartingWith"
+            case trimWhitespace
+            case clearLinesMatching = "removeMatchingLines"
+            case clearMarkdownHeadings = "removeMarkdownHeadings"
+            case removeMarkdownFormatting, removeCheckboxMarkers, removeNoteReferences, keepMarkedListRows
+            /// Locale-aware order (`LineOrder.localizedAscending`); `sortLines` stays code-point order.
+            case sortLinesLocalized
         }
         var kind: Kind
         var find: String?
@@ -32,16 +41,21 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
     var previewBeforeApply: Bool?
     var pinToToolbar: Bool?
 
+    /// The whole-line recipe controls the built-in recipe cleanup clears.
+    static let recipeHeadingPattern = #"(?i)^[ \t]*(?:Ingredients|Cups|Metric|Garnish[ \t]*\(optional\))[ \t]*$"#
+    /// An unmarked line that starts with a letter and ends in a colon: a section label.
+    static let colonLabelPattern = #"^[ \t]*[\p{L}][^:]*:[ \t]*$"#
+    /// The first-run preset: a strict, marker-based recipe cleanup. Its name says so, because it
+    /// refuses a list that mixes marked rows with unmarked rows instead of guessing.
     static var example: AutomationDefinition {
         AutomationDefinition(
-            id: UUID(uuidString: "A931733F-310A-4EBF-9C48-38C59202D586")!, name: "Clean up text", input: .document,
+            id: UUID(uuidString: "A931733F-310A-4EBF-9C48-38C59202D586")!, name: "Clean up recipe list",
+            input: .document,
             steps: [
-                Step(
-                    kind: .removeMatchingLines,
-                    find: #"(?i)^[ \t]*(?:Ingredients|Cups|Metric|Garnish[ \t]*\(optional\))[ \t]*$"#),
-                Step(kind: .keepMarkedListRows), Step(kind: .removeMarkdownHeadings), Step(kind: .removeListMarkers),
+                Step(kind: .clearLinesMatching, find: recipeHeadingPattern),
+                Step(kind: .keepMarkedListRows), Step(kind: .clearMarkdownHeadings), Step(kind: .removeListMarkers),
                 Step(kind: .removeMarkdownFormatting), Step(kind: .removeCheckboxMarkers),
-                Step(kind: .removeNoteReferences), Step(kind: .removeBlankLines)
+                Step(kind: .removeNoteReferences), Step(kind: .trimWhitespace), Step(kind: .removeBlankLines)
             ],
             output: .editor, previewBeforeApply: false, pinToToolbar: true)
     }
@@ -51,7 +65,10 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
             steps: [Step(kind: .removeBlankLines)], output: .reminders,
             previewBeforeApply: false, pinToToolbar: true)
     }
-    func validate() throws {
+    /// A saved definition may leave the text of an "ask when running" rule empty. A definition that
+    /// is about to run or be tested must have every value; `requiringValues` checks that.
+    func validate() throws { try validate(requiringValues: false) }
+    private func validate(requiringValues: Bool) throws {
         guard version == 1 else { throw AutomationError.invalid("Unsupported workflow version \(version).") }
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 120 else {
             throw AutomationError.invalid("Each automation needs a name of 1–120 characters.")
@@ -62,11 +79,11 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
                 throw AutomationError.invalid("Shortcut must be one lowercase ASCII letter, or omitted.")
             }
         }
-        for step in steps {
+        for (index, step) in steps.enumerated() {
             if step.askForFind == true
                 && ![
-                    Step.Kind.replaceLiteral, .removeMatchingLines, .removeLinesEqualTo, .removeLinesContaining,
-                    .removeLinesStartingWith
+                    Step.Kind.replaceLiteral, .clearLinesMatching, .clearLinesEqualTo, .clearLinesContaining,
+                    .clearLinesStartingWith
                 ].contains(step.kind)
             {
                 throw AutomationError.invalid("This step does not accept a find parameter.")
@@ -74,21 +91,32 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
             if step.askForReplacement == true && step.kind != .replaceLiteral {
                 throw AutomationError.invalid("This step does not accept a replacement parameter.")
             }
+            // The text may be left empty only when the rule asks for it at run time.
+            let awaitsValue = step.askForFind == true && (step.find ?? "").isEmpty
+            if awaitsValue && requiringValues {
+                throw AutomationError.invalid(
+                    "Rule \(index + 1) needs a value: it asks for its text when running and none was supplied. Nothing was changed."
+                )
+            }
             switch step.kind {
-            case .removeLinesEqualTo, .removeLinesContaining, .removeLinesStartingWith:
-                guard let find = step.find, !find.isEmpty, step.replacement == nil else {
+            case .clearLinesEqualTo, .clearLinesContaining, .clearLinesStartingWith:
+                guard awaitsValue || !(step.find ?? "").isEmpty, step.replacement == nil else {
                     throw AutomationError.invalid("This line rule needs nonempty text and no replacement.")
                 }
-            case .removeMatchingLines:
-                guard let pattern = step.find, !pattern.isEmpty, pattern.count <= 500, step.replacement == nil else {
+            case .clearLinesMatching:
+                let pattern = step.find ?? ""
+                guard awaitsValue || !pattern.isEmpty, pattern.count <= 500, step.replacement == nil else {
                     throw AutomationError.invalid(
                         "removeMatchingLines requires a nonempty regex find (up to 500 characters) and no replacement.")
                 }
-                do { _ = try NSRegularExpression(pattern: pattern) } catch {
-                    throw AutomationError.invalid("Invalid removeMatchingLines regex: \(error.localizedDescription)")
+                if !pattern.isEmpty {
+                    do { _ = try Self.wholeLineRegex(pattern) } catch {
+                        throw AutomationError.invalid(
+                            "Invalid removeMatchingLines regex: \(error.localizedDescription)")
+                    }
                 }
             case .replaceLiteral:
-                guard let find = step.find, !find.isEmpty, step.replacement != nil else {
+                guard awaitsValue || !(step.find ?? "").isEmpty, step.replacement != nil else {
                     throw AutomationError.invalid("replaceLiteral requires a nonempty find and a replacement string.")
                 }
             default:
@@ -113,125 +141,190 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
                 resolved.steps[index].replacement = value
             }
         }
-        try resolved.validate()
+        try resolved.validate(requiringValues: true)
         return resolved
     }
     func transform(_ input: String, control: AutomationRunControl? = nil) throws -> String {
-        try validate()
+        try validate(requiringValues: true)
         try control?.checkCancellation()
         guard input.utf8.count <= Self.maximumTransformBytes else {
             throw AutomationError.invalid("Automation input exceeds 32 MiB. Nothing was changed.")
         }
         var result = input
-        var regexTimeRemaining: TimeInterval = 0.1
+        var regexTimeRemaining = Self.regexBudget
         for (index, step) in steps.enumerated() {
             try control?.checkpoint(completed: index, total: steps.count)
-            switch step.kind {
-            case .removeLinesEqualTo, .removeLinesContaining, .removeLinesStartingWith:
-                result = try Self.mapLines(result, control: control) { line in
-                    let needle = step.find!
-                    let matches =
-                        step.kind == .removeLinesEqualTo
-                        ? line == needle
-                        : (step.kind == .removeLinesContaining ? line.contains(needle) : line.hasPrefix(needle))
-                    return matches ? "" : line
-                }
-            case .trimWhitespace:
-                result = try Self.mapLines(result, control: control) { $0.trimmingCharacters(in: .whitespaces) }
-            case .removeMatchingLines:
-                let regex = try NSRegularExpression(pattern: step.find!)
-                var timedOut = false
-                result = try Self.mapLines(result, control: control) { line in
-                    guard !timedOut else { return line }
-                    let range = NSRange(line.startIndex..., in: line)
-                    let started = ProcessInfo.processInfo.systemUptime
-                    var matched = false
-                    regex.enumerateMatches(in: line, options: [.reportProgress], range: range) { match, _, stop in
-                        if ProcessInfo.processInfo.systemUptime - started > regexTimeRemaining {
-                            timedOut = true
-                            stop.pointee = true
-                            return
-                        }
-                        if let match {
-                            // Whole-line matches only: a keyword inside an ingredient cannot erase it.
-                            matched = match.range == range
-                            stop.pointee = true
-                        }
-                    }
-                    regexTimeRemaining -= ProcessInfo.processInfo.systemUptime - started
-                    if regexTimeRemaining <= 0 { timedOut = true }
-                    return matched ? "" : line
-                }
-                guard !timedOut else {
-                    throw AutomationError.invalid(
-                        "The line-matching pattern exceeded its time limit. Nothing was changed. Simplify the removeMatchingLines regex or use literal replacement steps."
-                    )
-                }
-            case .replaceLiteral:
-                result = try Self.boundedReplacement(
-                    result, find: step.find!, replacement: step.replacement!, control: control)
-            case .removeListMarkers:
-                result = try Self.mapLines(result, control: control) { line in
-                    // No numeric prefixes: "2 eggs" and "1. 5 cups" may be quantities.
-                    // Strip only an explicit bullet followed by whitespace, preserving other text.
-                    line.replacingOccurrences(of: "^[\\t ]*[-*•][\\t ]+", with: "", options: .regularExpression)
-                }
-            case .keepMarkedListRows:
-                let parts = try Self.lines(result)
-                let marked = parts.lines.filter { line in
-                    line.range(
-                        of: #"^[ \t]*(?:[-*•][ \t]+|(?:\*{1,3}|_{1,3})?(?:[▢☐☑☒□]|\[[ xX]\](?:[ \t]+|$)))"#,
-                        options: .regularExpression) != nil
-                }
-                // Markers distinguish list data, but cannot establish that an unmarked
-                // ingredient/continuation is a heading. Fail before changing the document.
-                if !marked.isEmpty {
-                    for (index, line) in parts.lines.enumerated() {
-                        if marked.contains(line) || line.trimmingCharacters(in: .whitespaces).isEmpty { continue }
-                        let heading =
-                            line.range(of: #"^[ \t]{0,3}#{1,6}(?:[ \t]+|$)"#, options: .regularExpression) != nil
-                        let colonLabel =
-                            line.range(of: #"^[ \t]*[\p{L}][^:]*:[ \t]*$"#, options: .regularExpression) != nil
-                        guard heading || colonLabel else {
-                            throw AutomationError.invalid(
-                                "Line \(index + 1) has no list marker: ‘\(line.prefix(100))’. Nothing was changed. If it is a heading, prefix it with # and a space; if it is an item or continuation, add a bullet. Or remove keepMarkedListRows from this automation to preserve all lines."
-                            )
-                        }
-                    }
-                    result = marked.joined(separator: parts.eol) + (parts.trailing ? parts.eol : "")
-                }
-            case .removeMarkdownHeadings:
-                result = try Self.mapLines(result, control: control) { line in
-                    // ATX headings only. A hashtag or an ordinary ingredient is not a heading.
-                    line.range(of: #"^[ \t]{0,3}#{1,6}(?:[ \t]+|$)"#, options: .regularExpression) == nil ? line : ""
-                }
-            case .removeMarkdownFormatting:
-                result = try Self.mapLines(result, control: control) {
-                    try Self.removeInlineMarkdown($0, control: control)
-                }
-            case .removeCheckboxMarkers:
-                result = try Self.mapLines(result, control: control) { line in
-                    line.replacingOccurrences(
-                        of: #"^[ \t]*(?:[▢☐☑☒□][ \t]*|\[[ xX]\](?:[ \t]+|$))"#, with: "", options: .regularExpression)
-                }
-            case .removeNoteReferences:
-                result = try Self.mapLines(result, control: control, Self.removeNotes)
-            case .removeBlankLines, .sortLines, .deduplicateLines:
-                let parts = try Self.lines(result)
-                var body = parts.lines
-                if step.kind == .removeBlankLines { body.removeAll { $0.trimmingCharacters(in: .whitespaces).isEmpty } }
-                if step.kind == .sortLines { body.sort() }
-                if step.kind == .deduplicateLines {
-                    var seen = Set<String>()
-                    body = body.filter { seen.insert($0).inserted }
-                }
-                result = body.joined(separator: parts.eol) + (parts.trailing && !body.isEmpty ? parts.eol : "")
-            }
-            guard result.utf8.count <= Self.maximumTransformBytes else {
-                throw AutomationError.invalid("Automation result exceeds 32 MiB. Nothing was changed.")
-            }
+            result = try Self.apply(step, to: result, regexTimeRemaining: &regexTimeRemaining, control: control)
         }
         try control?.checkpoint(completed: steps.count, total: steps.count)
+        return result
+    }
+    /// One run, or one sample test, spends at most this long inside pattern matching, summed over
+    /// every pattern rule and every line.
+    static let regexBudget: TimeInterval = 0.1
+    /// The fixed cost of asking the regex engine about one cheap line is not charged to the budget,
+    /// so the number of lines alone can never exhaust it.
+    static let regexPerLineAllowance: TimeInterval = 0.000_005
+    /// Compiles a pattern for the whole-line rule. The pattern is compiled as typed first, so
+    /// validation errors describe the user's own text. It is then wrapped as `\A(?:…)\z`, which makes
+    /// the engine try every alternative that could cover the line. A pattern that is valid as typed
+    /// but not when wrapped (free-spacing ending in a comment, an unterminated `\Q`) keeps the plain
+    /// form, and the caller compares the first match with the line instead.
+    static func wholeLineRegex(_ pattern: String) throws -> (regex: NSRegularExpression, anchored: Bool) {
+        let plain = try NSRegularExpression(pattern: pattern)
+        if let wrapped = try? NSRegularExpression(pattern: "\\A(?:" + pattern + ")\\z"),
+            wrapped.numberOfCaptureGroups == plain.numberOfCaptureGroups
+        {
+            return (wrapped, true)
+        }
+        return (plain, false)
+    }
+    private static let markedRowPattern =
+        #"^[ \t]*(?:[-*•][ \t]+|(?:\*{1,3}|_{1,3})?(?:[▢☐☑☒□]|\[[ xX]\](?:[ \t]+|$)))"#
+    private static let atxHeadingPattern = #"^[ \t]{0,3}#{1,6}(?:[ \t]+|$)"#
+    /// One rule applied to the whole text. A run and a sample test both go through here and pass
+    /// the same regex budget along, so they follow the same rules.
+    private static func apply(
+        _ step: Step, to input: String, regexTimeRemaining: inout TimeInterval, control: AutomationRunControl?
+    ) throws -> String {
+        var result = input
+        switch step.kind {
+        case .clearLinesEqualTo, .clearLinesContaining, .clearLinesStartingWith:
+            // Literal means the same scalars, as in Find: no canonical-equivalence or
+            // grapheme-boundary matching.
+            let needle = step.find ?? ""
+            result = try mapLines(result, control: control) { line in
+                let matches: Bool
+                switch step.kind {
+                case .clearLinesEqualTo: matches = line.utf8.elementsEqual(needle.utf8)
+                case .clearLinesContaining:
+                    matches = (line as NSString).range(of: needle, options: .literal).location != NSNotFound
+                default: matches = line.utf8.starts(with: needle.utf8)
+                }
+                return matches ? "" : line
+            }
+        case .trimWhitespace:
+            // Unicode spaces and tab: web-copied text often carries no-break spaces.
+            result = try mapLines(result, control: control) { $0.trimmingCharacters(in: .whitespaces) }
+        case .clearLinesMatching:
+            let (regex, anchored) = try wholeLineRegex(step.find ?? "")
+            var timedOut = false
+            var remaining = regexTimeRemaining
+            result = try mapLines(result, control: control) { line in
+                guard !timedOut else { return line }
+                let range = NSRange(line.startIndex..., in: line)
+                let started = ProcessInfo.processInfo.systemUptime
+                var matched = false
+                regex.enumerateMatches(in: line, options: [.reportProgress], range: range) { match, _, stop in
+                    if ProcessInfo.processInfo.systemUptime - started > remaining {
+                        timedOut = true
+                        stop.pointee = true
+                        return
+                    }
+                    if let match {
+                        // Whole-line matches only: a keyword inside an ingredient cannot erase it.
+                        matched = anchored || match.range == range
+                        stop.pointee = true
+                    }
+                }
+                remaining -= max(0, ProcessInfo.processInfo.systemUptime - started - regexPerLineAllowance)
+                if remaining <= 0 { timedOut = true }
+                return matched ? "" : line
+            }
+            regexTimeRemaining = remaining
+            guard !timedOut else {
+                throw AutomationError.invalid(
+                    "The line-matching pattern exceeded its time limit. Nothing was changed. Simplify the removeMatchingLines regex or use literal replacement steps."
+                )
+            }
+        case .replaceLiteral:
+            result = try boundedReplacement(
+                result, find: step.find ?? "", replacement: step.replacement ?? "", control: control)
+        case .removeListMarkers:
+            result = try mapLines(result, control: control) { line in
+                // No numeric prefixes: "2 eggs" and "1. 5 cups" may be quantities.
+                // Strip only an explicit bullet followed by whitespace, preserving other text.
+                line.replacingOccurrences(of: "^[\\t ]*[-*•][\\t ]+", with: "", options: .regularExpression)
+            }
+        case .keepMarkedListRows:
+            let parts = try lines(result)
+            try control?.checkCancellation()
+            // Whether a row is marked depends only on its own text, so each row is classified once.
+            var isMarked = [Bool](repeating: false, count: parts.lines.count)
+            var anyMarked = false
+            for (index, line) in parts.lines.enumerated() {
+                if index % 4096 == 0 { try control?.checkCancellation() }
+                if line.range(of: markedRowPattern, options: .regularExpression) != nil {
+                    isMarked[index] = true
+                    anyMarked = true
+                }
+            }
+            // Markers distinguish list data, but cannot establish that an unmarked
+            // ingredient/continuation is a heading. Fail before changing the document.
+            if anyMarked {
+                var marked: [String] = []
+                for (index, line) in parts.lines.enumerated() {
+                    if index % 4096 == 0 { try control?.checkCancellation() }
+                    if isMarked[index] {
+                        marked.append(line)
+                        continue
+                    }
+                    if line.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+                    let heading = line.range(of: atxHeadingPattern, options: .regularExpression) != nil
+                    let colonLabel = line.range(of: colonLabelPattern, options: .regularExpression) != nil
+                    guard heading || colonLabel else {
+                        throw AutomationError.invalid(
+                            "Line \(index + 1) has no list marker: ‘\(line.prefix(100))’. Nothing was changed. If it is a heading, prefix it with # and a space; if it is an item or continuation, add a bullet. Or remove keepMarkedListRows from this automation to preserve all lines."
+                        )
+                    }
+                }
+                try control?.checkCancellation()
+                result = marked.joined(separator: parts.eol) + (parts.trailing ? parts.eol : "")
+            }
+        case .clearMarkdownHeadings:
+            result = try mapLines(result, control: control) { line in
+                // ATX headings only. A hashtag or an ordinary ingredient is not a heading.
+                line.range(of: atxHeadingPattern, options: .regularExpression) == nil ? line : ""
+            }
+        case .removeMarkdownFormatting:
+            result = try mapLines(result, control: control) {
+                try removeInlineMarkdown($0, control: control)
+            }
+        case .removeCheckboxMarkers:
+            result = try mapLines(result, control: control) { line in
+                line.replacingOccurrences(
+                    of: #"^[ \t]*(?:[▢☐☑☒□][ \t]*|\[[ xX]\](?:[ \t]+|$))"#, with: "", options: .regularExpression)
+            }
+        case .removeNoteReferences:
+            result = try mapLines(result, control: control, removeNotes)
+        case .removeBlankLines, .sortLines, .sortLinesLocalized, .deduplicateLines:
+            // Splitting, sorting and joining cannot be interrupted, so cancellation is checked
+            // between them; the locale-aware comparator, the slow one, also checks as it goes.
+            let parts = try lines(result)
+            try control?.checkCancellation()
+            var body = parts.lines
+            if step.kind == .removeBlankLines { body.removeAll { $0.trimmingCharacters(in: .whitespaces).isEmpty } }
+            if step.kind == .sortLines { body.sort(by: LineOrder.codePointAscending) }
+            if step.kind == .sortLinesLocalized {
+                var comparisons = 0
+                try body.sort { a, b in
+                    comparisons += 1
+                    if comparisons % 4096 == 0 { try control?.checkCancellation() }
+                    return LineOrder.localizedAscending(a, b)
+                }
+            }
+            if step.kind == .deduplicateLines {
+                // Byte-exact, as Remove Duplicate Lines in the Edit menu: canonically equivalent
+                // spellings are different rows.
+                var seen = Set<Data>()
+                body = body.filter { seen.insert(Data($0.utf8)).inserted }
+            }
+            try control?.checkCancellation()
+            result = body.joined(separator: parts.eol) + (parts.trailing && !body.isEmpty ? parts.eol : "")
+        }
+        guard result.utf8.count <= maximumTransformBytes else {
+            throw AutomationError.invalid("Automation result exceeds 32 MiB. Nothing was changed.")
+        }
         return result
     }
     static let maximumTransformBytes = 32 * 1024 * 1024
@@ -251,7 +344,8 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         }
         while cursor < source.length {
             try control?.checkCancellation()
-            let range = source.range(of: find, range: NSRange(location: cursor, length: source.length - cursor))
+            let range = source.range(
+                of: find, options: .literal, range: NSRange(location: cursor, length: source.length - cursor))
             if range.location == NSNotFound { break }
             try append(source.substring(with: NSRange(location: cursor, length: range.location - cursor)))
             try append(replacement)
@@ -262,10 +356,12 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
     }
     /// Draft-only test harness: never resolves inputs/parameters or invokes an output.
     func testSample(_ input: String, control: AutomationRunControl? = nil) throws -> String {
-        try validate()
+        try validate(requiringValues: true)
         guard input.utf8.count <= 65536 else { throw AutomationError.invalid("Use a sample of at most 64 KiB.") }
         var text = input
         let started = ProcessInfo.processInfo.systemUptime
+        // One budget for every pattern rule, exactly as in a run.
+        var regexTimeRemaining = Self.regexBudget
         for step in steps {
             try control?.checkCancellation()
             guard ProcessInfo.processInfo.systemUptime - started < 2 else {
@@ -283,37 +379,56 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
                     )
                 }
             }
-            var single = self
-            single.steps = [step]
-            text = try single.transform(text, control: control)
+            text = try Self.apply(step, to: text, regexTimeRemaining: &regexTimeRemaining, control: control)
             guard text.utf8.count <= 1_048_576 else { throw AutomationError.invalid("Sample result exceeds 1 MiB.") }
         }
+        try control?.checkpoint(completed: steps.count, total: steps.count)
         try control?.checkCancellation()
         return text
+    }
+    /// Emphasis pairs, then code spans. The flag says whether the pair also takes its padding.
+    private static let inlinePairs: [(NSRegularExpression, Bool)] = [
+        (#"(?<!\\)\*\*(?=\S)(.+?)(?<=\S)(?<!\\)\*\*"#, true),
+        (#"(?<![\\\w])__(?=\S)(.+?)(?<=\S)(?<!\\)__(?!\w)"#, true),
+        (#"(?<![\\*])\*(?=\S)(.+?)(?<=\S)(?<!\\)\*(?!\*)"#, true),
+        (#"(?<![\\\w])_(?=\S)(.+?)(?<=\S)(?<!\\)_(?!\w)"#, true),
+        (#"(?<!\\)`([^`]+)`"#, false)
+    ].map { (try! NSRegularExpression(pattern: $0.0), $0.1) }
+    /// Replaces each delimited span with its content. Copied Markdown pads an emphasised
+    /// continuation as "each) *, halved*", so a pair whose content starts with a comma or semicolon
+    /// also takes the spaces directly before its opening delimiter. No other spacing on the line
+    /// is touched, and a delimiter that has no partner keeps its padding.
+    private static func unwrap(_ text: String, pair: NSRegularExpression, takesPadding: Bool) -> String {
+        let source = text as NSString
+        var output = "", cursor = 0
+        pair.enumerateMatches(in: text, range: NSRange(location: 0, length: source.length)) { match, _, _ in
+            guard let match else { return }
+            let content = match.range(at: 1)
+            var end = match.range.location
+            let first = source.character(at: content.location)
+            if takesPadding, first == 0x2C || first == 0x3B {
+                while end > cursor, source.character(at: end - 1) == 0x20 || source.character(at: end - 1) == 0x09 {
+                    end -= 1
+                }
+            }
+            output += source.substring(with: NSRange(location: cursor, length: end - cursor))
+            output += source.substring(with: content)
+            cursor = NSMaxRange(match.range)
+        }
+        return cursor == 0 ? text : output + source.substring(from: cursor)
     }
     private static func removeInlineMarkdown(_ line: String, control: AutomationRunControl?) throws -> String {
         var result = try inlineLinksToLabels(line, control: control)
         // Deliberately bounded inline syntax, not a Markdown renderer. Pair delimiters
         // before unescaping so escaped literal stars/underscores are not mistaken for markup.
-        let pairs: [(String, String)] = [
-            (#"(?<!\\)\*\*(?=\S)(.+?)(?<=\S)(?<!\\)\*\*"#, "$1"),
-            (#"(?<![\\\w])__(?=\S)(.+?)(?<=\S)(?<!\\)__(?!\w)"#, "$1"),
-            (#"(?<![\\*])\*(?=\S)(.+?)(?<=\S)(?<!\\)\*(?!\*)"#, "$1"),
-            (#"(?<![\\\w])_(?=\S)(.+?)(?<=\S)(?<!\\)_(?!\w)"#, "$1"),
-            (#"(?<!\\)`([^`]+)`"#, "$1")
-        ]
         // Two passes handle common nesting while bounding runtime; unmatched markers stay data.
         for _ in 0..<2 {
-            for (pattern, replacement) in pairs {
+            for (pair, takesPadding) in inlinePairs {
                 try control?.checkCancellation()
-                result = result.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
+                result = unwrap(result, pair: pair, takesPadding: takesPadding)
             }
         }
         result = result.replacingOccurrences(of: #"\\([\\*`_\[\]])"#, with: "$1", options: .regularExpression)
-        if result != line {
-            // Delimiter padding in copied Markdown can leave a space before a comma.
-            result = result.replacingOccurrences(of: #"[ \t]+(?=[,;])"#, with: "", options: .regularExpression)
-        }
         return result
     }
     private static func inlineLinksToLabels(_ line: String, control: AutomationRunControl?) throws -> String {
@@ -391,17 +506,28 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         result = result.replacingOccurrences(
             of: #"(?i)[,;][ \t]*"# + note + #"\b"#, with: "", options: .regularExpression)
         result = result.replacingOccurrences(of: #"(?i)\b"# + note + #"\b"#, with: "", options: .regularExpression)
-        return result.trimmingCharacters(in: .whitespaces)
+        // Tidy the gap a removed reference leaves, and only on a line that had one.
+        return result == line ? line : result.trimmingCharacters(in: .whitespaces)
     }
     private static func lines(_ text: String) throws -> (lines: [String], eol: String, trailing: Bool) {
-        let eol = text.contains("\r\n") ? "\r\n" : (text.contains("\r") && !text.contains("\n") ? "\r" : "\n")
-        let withoutCRLF = text.replacingOccurrences(of: "\r\n", with: "")
-        if (text.contains("\r\n") && (withoutCRLF.contains("\r") || withoutCRLF.contains("\n")))
-            || (!text.contains("\r\n") && text.contains("\r") && text.contains("\n"))
-        {
+        // Classify by bytes. CR+LF is one Character in Swift, so character-based searches miss
+        // a lone CR or LF that sits next to a CRLF.
+        var cr = false, lf = false, crlf = false, priorCR = false
+        for byte in text.utf8 {
+            if byte == 0x0A {
+                if priorCR { crlf = true } else { lf = true }
+                priorCR = false
+            } else {
+                if priorCR { cr = true }
+                priorCR = byte == 0x0D
+            }
+        }
+        if priorCR { cr = true }
+        guard [cr, lf, crlf].filter({ $0 }).count <= 1 else {
             throw AutomationError.invalid(
                 "Line filtering/reordering requires uniform line endings. Mixed endings were not changed.")
         }
+        let eol = crlf ? "\r\n" : (cr ? "\r" : "\n")
         var lines = text.components(separatedBy: eol)
         let trailing = text.hasSuffix(eol)
         if trailing { lines.removeLast() }
@@ -557,5 +683,181 @@ struct AutomationRuleSet: Codable {
         let data = try encoder.encode(self)
         guard data.count <= 1_048_576 else { throw AutomationError.invalid("Rule files must be at most 1 MiB.") }
         return data
+    }
+}
+
+/// Built-in rule templates ship as rule-set JSON resources and are read with the same bounded
+/// decoder as an imported rule file. They carry no sample-specific text.
+enum AutomationTemplates {
+    /// Resource names in the order the Load Rules list shows them.
+    static let resourceNames = ["trim-and-remove-empty-lines", "sort-unique-lines", "recipe-ingredient-cleanup"]
+    static func url(_ name: String) -> URL {
+        Bundle.main.url(forResource: name + ".rules", withExtension: "json")
+            ?? URL(fileURLWithPath: "Resources/AutomationTemplates/\(name).rules.json")
+    }
+    static func load(_ name: String) throws -> AutomationRuleSet {
+        try AutomationRuleSet.decode(AutomationFileInput.readData(url(name), limit: 1_048_576))
+    }
+    /// Every template that loads, and one line for each that does not, so a damaged resource is
+    /// reported instead of silently missing from the list.
+    static func loadAll() -> (sets: [AutomationRuleSet], problems: [String]) {
+        var sets: [AutomationRuleSet] = [], problems: [String] = []
+        for name in resourceNames {
+            do { sets.append(try load(name)) } catch {
+                problems.append("\(name): \(error.localizedDescription)")
+            }
+        }
+        return (sets, problems)
+    }
+}
+
+/// Plain text from clipboard HTML by a local scan. Nothing is rendered, run or fetched: markup never
+/// reaches AppKit's WebKit-backed importer, which may load the resources a page refers to.
+enum AutomationHTMLText {
+    static func plainText(from data: Data) -> String? {
+        guard data.count <= AutomationDefinition.maximumTransformBytes else { return nil }
+        if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]) {
+            return String(data: data, encoding: .utf16).flatMap(plainText(from:))
+        }
+        return String(data: data, encoding: .utf8).flatMap(plainText(from:))
+    }
+    /// Text outside tags, with script, style and head content dropped, line breaks at `<br>` and at
+    /// the end of paragraphs, list items, table rows, headings and divisions, runs of white space
+    /// collapsed outside `<pre>`, and the basic character references decoded. Returns nil when no
+    /// text remains. An unterminated tag or comment drops the rest of the input, as a browser does.
+    static func plainText(from html: String) -> String? {
+        let source = Array(html.unicodeScalars)
+        var out = String.UnicodeScalarView()
+        var index = source.first == "\u{FEFF}" ? 1 : 0
+        var pendingSpace = false, preDepth = 0, hasText = false
+        let commentOpen = Array("!--".unicodeScalars), commentClose = Array("-->".unicodeScalars)
+        func isSpace(_ scalar: Unicode.Scalar) -> Bool {
+            scalar == " " || scalar == "\t" || scalar == "\n" || scalar == "\r" || scalar == "\u{C}"
+        }
+        func isNameScalar(_ scalar: Unicode.Scalar) -> Bool {
+            scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar))
+        }
+        func emit(_ scalar: Unicode.Scalar) {
+            if preDepth == 0 && isSpace(scalar) {
+                pendingSpace = true
+                return
+            }
+            if pendingSpace, let last = out.last, last != "\n" { out.append(" ") }
+            pendingSpace = false
+            if !isSpace(scalar) { hasText = true }
+            out.append(scalar)
+        }
+        func lineBreak(always: Bool) {
+            pendingSpace = false
+            if always || (out.last != nil && out.last != "\n") { out.append("\n") }
+        }
+        /// True when the ASCII text `word`, compared without case, starts at `position`.
+        func matches(_ word: [Unicode.Scalar], at position: Int) -> Bool {
+            guard position + word.count <= source.count else { return false }
+            for (offset, expected) in word.enumerated() {
+                let scalar = source[position + offset]
+                let value = scalar.value, folded = value >= 0x41 && value <= 0x5A ? value + 0x20 : value
+                guard folded == expected.value else { return false }
+            }
+            return true
+        }
+        /// The index of the `>` that ends the tag opened before `start`, honouring quoted attributes.
+        func tagEnd(from start: Int) -> Int? {
+            var quote: Unicode.Scalar?, position = start
+            while position < source.count {
+                let scalar = source[position]
+                if let open = quote {
+                    if scalar == open { quote = nil }
+                } else if scalar == "\"" || scalar == "'" {
+                    quote = scalar
+                } else if scalar == ">" {
+                    return position
+                }
+                position += 1
+            }
+            return nil
+        }
+        func decodeReference(at start: Int) -> (Unicode.Scalar, Int)? {
+            var end = start + 1
+            while end < source.count, end - start <= 10, source[end] != ";" { end += 1 }
+            guard end < source.count, source[end] == ";" else { return nil }
+            let body = String(String.UnicodeScalarView(source[(start + 1)..<end]))
+            let named: [String: Unicode.Scalar] = [
+                "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "nbsp": "\u{A0}"
+            ]
+            if let scalar = named[body] { return (scalar, end - start + 1) }
+            guard body.hasPrefix("#") else { return nil }
+            let digits = body.dropFirst()
+            let value =
+                digits.hasPrefix("x") || digits.hasPrefix("X")
+                ? UInt32(digits.dropFirst(), radix: 16) : UInt32(digits, radix: 10)
+            guard let value, value != 0, let scalar = Unicode.Scalar(value) else { return nil }
+            return (scalar, end - start + 1)
+        }
+        while index < source.count {
+            let scalar = source[index]
+            if scalar == "&", let (decoded, length) = decodeReference(at: index) {
+                emit(decoded)
+                index += length
+                continue
+            }
+            guard scalar == "<", index + 1 < source.count else {
+                emit(scalar)
+                index += 1
+                continue
+            }
+            if matches(commentOpen, at: index + 1) {
+                var close = index + 4
+                while close < source.count, !matches(commentClose, at: close) { close += 1 }
+                index = close < source.count ? close + 3 : source.count
+                continue
+            }
+            let next = source[index + 1]
+            guard next == "/" || next == "!" || next == "?" || (next.isASCII && CharacterSet.letters.contains(next))
+            else {
+                emit(scalar)
+                index += 1
+                continue
+            }
+            guard let end = tagEnd(from: index + 1) else { break }
+            let closing = next == "/"
+            var nameEnd = index + (closing ? 2 : 1)
+            let nameStart = nameEnd
+            while nameEnd < end, isNameScalar(source[nameEnd]) { nameEnd += 1 }
+            let name = String(String.UnicodeScalarView(source[nameStart..<nameEnd])).lowercased()
+            index = end + 1
+            if !closing, ["script", "style", "head"].contains(name) {
+                // Raw content: skip to the matching end tag. A head that never closes ends at <body>.
+                let endTag = Array(("</" + name).unicodeScalars), body = Array("<body".unicodeScalars)
+                var position = index, found = false
+                while position < source.count {
+                    if source[position] == "<" {
+                        if matches(endTag, at: position) {
+                            found = true
+                            break
+                        }
+                        if name == "head", matches(body, at: position) { break }
+                    }
+                    position += 1
+                }
+                if found {
+                    guard let close = tagEnd(from: position + 1) else { break }
+                    index = close + 1
+                } else {
+                    index = position
+                }
+                continue
+            }
+            switch name {
+            case "br": lineBreak(always: true)
+            case "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6":
+                if closing { lineBreak(always: false) }
+            case "pre":
+                preDepth = closing ? max(0, preDepth - 1) : preDepth + 1
+                if closing { lineBreak(always: false) }
+            default: break
+            }
+        }
+        return hasText ? String(out) : nil
     }
 }

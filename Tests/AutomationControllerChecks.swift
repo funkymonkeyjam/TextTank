@@ -387,7 +387,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     editor.text == ambiguous && editor.revision == unchangedRevision && !editor.modified,
                     "ambiguous recipe rejection leaves original bytes undo and dirty state untouched")
                 var slowPattern = saved
-                slowPattern.workflows[0].steps = [.init(kind: .removeMatchingLines, find: "(a+)+$")]
+                slowPattern.workflows[0].steps = [.init(kind: .clearLinesMatching, find: "(a+)+$")]
                 try controller.persistLibrary(slowPattern)
                 let slowInput = String(repeating: "a", count: 32) + "!"
                 editor.text = slowInput
@@ -454,7 +454,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 )
                 editor.executeCommand("undo")
                 check(editor.text == multiSource, "multiple automation selections undo together")
-                saved.workflows[0].steps = [.init(kind: .removeMatchingLines, find: "(a+)+$")]
+                saved.workflows[0].steps = [.init(kind: .clearLinesMatching, find: "(a+)+$")]
                 try restarted.persistLibrary(saved)
                 let multiFailure = "safe | " + String(repeating: "a", count: 32) + "!"
                 editor.text = multiFailure
@@ -512,7 +512,10 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 saved.workflows[0].input = .document
                 saved.workflows[0].output = .editor
                 saved.workflows[0].previewBeforeApply = false
-                saved.workflows[0].steps = AutomationDefinition.shoppingRecipeSteps
+                saved.workflows[0].steps =
+                    try AutomationRuleSet.decode(
+                        Data(contentsOf: TestPaths.fixtures.appendingPathComponent("recipe-user-samples.rules.json"))
+                    ).steps
                 try restarted.persistLibrary(saved)
                 let sampleWindows = NSApp.windows.count
                 for sample in 1...4 {
@@ -576,13 +579,17 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             }
             Checks.section("rule list editing") { ruleListChecks() }
             Checks.section("large-input worker path") {
-                // F124: over 256 KiB the transform runs on a worker behind a modal progress panel.
+                // F124 and G409: every run is on a worker; one that outlasts the short wait gets the
+                // modal progress panel, whatever the size of its input.
+                let slowRules =
+                    Array(repeating: AutomationDefinition.Step(kind: .trimWhitespace), count: 25)
+                    + [.init(kind: .removeBlankLines)]
                 let workflowID = saved.workflows[0].id
                 var large = saved
                 large.workflows[0].input = .document
                 large.workflows[0].output = .editor
                 large.workflows[0].previewBeforeApply = false
-                large.workflows[0].steps = [.init(kind: .trimWhitespace), .init(kind: .removeBlankLines)]
+                large.workflows[0].steps = slowRules
                 try restarted.persistLibrary(large)
                 let rows = (0..<100000).map { "row \($0)" }
                 let largeInput = rows.map { "  \($0)  " }.joined(separator: "\n\n") + "\n",
@@ -602,7 +609,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 ) { try restarted.runSavedAutomation(id: workflowID) }
                 check(
                     applied.acted && !applied.timedOut,
-                    "an input over 256 KiB runs behind the modal progress panel, which closes itself")
+                    "a run that outlasts the short wait runs behind the modal progress panel, which closes itself")
                 check(editor.text == largeExpected, "the worker result replaces the large document exactly")
                 editor.executeCommand("undo")
                 check(
@@ -630,14 +637,14 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 check(
                     editor.text == largeInput && editor.revision == revision && !editor.modified,
                     "a cancelled large run leaves text, revision and save point untouched")
-                // F110: Keep marked list rows never checks for cancellation and Cancel cannot end the
-                // modal itself, so the panel stays up until the step finishes (seconds here).
-                let marker = "- " + String(repeating: "x", count: 40)
-                let markedInput = (0..<12000).map { marker + String($0) }.joined(separator: "\n") + "\n"
-                try require(markedInput.utf8.count > 262144, "fixture: the marked list is over the worker threshold")
-                large.workflows[0].steps = [.init(kind: .keepMarkedListRows)]
+                // F110: Cancel ends the modal itself. One Markdown pass over this single line takes
+                // seconds and cannot be interrupted, so before the repair the panel stayed up until the
+                // pass had finished. Should that pass ever become fast, no panel appears and the first
+                // check below fails: pick another long uninterruptible step then.
+                let stubbornInput = String(repeating: "*a ", count: 6000)
+                large.workflows[0].steps = [.init(kind: .removeMarkdownFormatting)]
                 try restarted.persistLibrary(large)
-                revision = load(markedInput)
+                revision = load(stubbornInput)
                 clickedAt = nil
                 cancelError = nil
                 cancelled = drivingModal(
@@ -651,14 +658,139 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 ) { do { try restarted.runSavedAutomation(id: workflowID) } catch { cancelError = error } }
                 afterCancel = ProcessInfo.processInfo.systemUptime - (clickedAt ?? 0)
                 check(
-                    cancelled.acted && !cancelled.timedOut && cancelError != nil,
-                    "Cancel during Keep marked list rows still ends in an error, not a result")
+                    cancelled.acted && !cancelled.timedOut
+                        && cancelError?.localizedDescription == "Automation cancelled. Nothing was changed.",
+                    "Cancel during an uninterruptible step ends the run with the cancellation error")
                 check(
-                    editor.text == markedInput && editor.revision == revision && !editor.modified,
-                    "a late cancellation still leaves text, revision and save point untouched")
-                knownDefect(
-                    "F110", "Cancel during Keep marked list rows closes the progress panel within a second",
-                    fixed: afterCancel < 1)
+                    editor.text == stubbornInput && editor.revision == revision && !editor.modified,
+                    "a run cancelled during an uninterruptible step leaves text, revision and save point untouched")
+                check(
+                    afterCancel < 1,
+                    "F110 Cancel during an uninterruptible step closes the progress panel within a second")
+                check(NSApp.modalWindow == nil, "no modal session is left open after Cancel")
+                // F118: the panel is ended through the run loop, so a run started from a main-queue
+                // block still completes. The main queue is not drained while that block is in a modal.
+                large.workflows[0].steps = slowRules
+                try restarted.persistLibrary(large)
+                _ = load(largeInput)
+                var nestedFinished = false, nestedActed = false, nestedTimedOut = false, nestedError: Error?
+                DispatchQueue.main.async {
+                    let nested = drivingModal(
+                        timeout: 60, { _, views in button("automation.transform.cancel", in: views) != nil }
+                    ) { do { try restarted.runSavedAutomation(id: workflowID) } catch { nestedError = error } }
+                    nestedActed = nested.acted
+                    nestedTimedOut = nested.timedOut
+                    nestedFinished = true
+                }
+                spinUntil(timeout: 120, "the run started from a main-queue block") { nestedFinished }
+                check(
+                    nestedActed && !nestedTimedOut && nestedError == nil,
+                    "F118 a run started from a main-queue block closes its own progress panel")
+                check(editor.text == largeExpected, "F118 the run started from a main-queue block applies its result")
+                // G409: a small input also runs on the worker. This one grows and shrinks for a long
+                // time; before the repair it ran on the main thread with no panel and no Cancel.
+                let grow: [AutomationDefinition.Step] = (0..<12).map {
+                    .init(
+                        kind: .replaceLiteral, find: $0 % 2 == 0 ? "a" : "b", replacement: $0 % 2 == 0 ? "bb" : "aa")
+                }
+                let shrink = AutomationDefinition.Step(
+                    kind: .replaceLiteral, find: String(repeating: "a", count: 4096), replacement: "a")
+                large.workflows[0].steps = Array((0..<7).map { _ in grow + [shrink] }.joined())
+                try restarted.persistLibrary(large)
+                let smallInput = String(repeating: "a", count: 1024)
+                revision = load(smallInput)
+                clickedAt = nil
+                cancelError = nil
+                cancelled = drivingModal(
+                    timeout: 300,
+                    { _, views in
+                        guard let cancel = button("automation.transform.cancel", in: views) else { return false }
+                        clickedAt = ProcessInfo.processInfo.systemUptime
+                        cancel.performClick(nil)
+                        return true
+                    }
+                ) { do { try restarted.runSavedAutomation(id: workflowID) } catch { cancelError = error } }
+                afterCancel = ProcessInfo.processInfo.systemUptime - (clickedAt ?? 0)
+                check(
+                    cancelled.acted && !cancelled.timedOut,
+                    "G409 a long run on a 1 KiB input shows the progress panel with a Cancel button")
+                check(
+                    cancelError?.localizedDescription == "Automation cancelled. Nothing was changed.",
+                    "G409 Cancel on a small-input run reports the cancellation")
+                check(afterCancel < 10, "G409 the cancelled small-input run returns well inside the hang guard")
+                check(
+                    editor.text == smallInput && editor.revision == revision && !editor.modified
+                        && NSApp.modalWindow == nil,
+                    "G409 the cancelled small-input run leaves text, revision and save point untouched")
+                editor.executeCommand("undo")
+                check(editor.text == smallInput, "G409 the cancelled small-input run left nothing to undo")
+                try restarted.persistLibrary(saved)
+            }
+            Checks.section("clipboard input flavours") {
+                // F141: a private pasteboard; the person's general pasteboard is never touched.
+                let board = NSPasteboard.withUniqueName()
+                defer { board.releaseGlobally() }
+                board.clearContents()
+                board.setString("plain ½ cup", forType: .string)
+                check(
+                    AutomationController.plainText(from: board) == "plain ½ cup",
+                    "a plain-text clipboard is read exactly")
+                let attributed = NSAttributedString(string: "2 eggs\n½ cup flour")
+                let rtf = try attributed.data(
+                    from: NSRange(location: 0, length: attributed.length),
+                    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])
+                board.clearContents()
+                board.setData(rtf, forType: .rtf)
+                // The system offers plain text for an RTF-only pasteboard, so RTF arrives through the
+                // plain-text flavour; the local RTF reader is the fallback and gives the same text.
+                check(
+                    AutomationController.plainText(from: board)
+                        == (try NSAttributedString(
+                            data: rtf, options: [.documentType: NSAttributedString.DocumentType.rtf],
+                            documentAttributes: nil
+                        ).string) && AutomationController.plainText(from: board) == "2 eggs\n½ cup flour",
+                    "an RTF-only clipboard still gives the text the local RTF reader gives")
+                let markup =
+                    #"<ul><li>2 eggs</li><li>½ cup flour</li></ul><img src="http://127.0.0.1:1/x.png"><script>document.title="x"</script>"#
+                board.clearContents()
+                board.setData(Data(markup.utf8), forType: .html)
+                try require(
+                    board.string(forType: .string) == nil, "fixture: the HTML-only pasteboard has no plain text")
+                let fromHTML = AutomationController.plainText(from: board)
+                check(
+                    fromHTML == "2 eggs\n½ cup flour\n",
+                    "an HTML-only clipboard gives its rows with no object character and no script text")
+                // The same clipboard through a saved clipboard-input automation.
+                var clipboardLibrary = saved
+                clipboardLibrary.workflows[0].input = .clipboard
+                clipboardLibrary.workflows[0].output = .editor
+                clipboardLibrary.workflows[0].previewBeforeApply = false
+                clipboardLibrary.workflows[0].steps = [.init(kind: .removeBlankLines)]
+                try restarted.persistLibrary(clipboardLibrary)
+                restarted.pasteboard = board
+                defer { restarted.pasteboard = .general }
+                editor.text = "before"
+                editor.resetUndoHistory()
+                _ = editor.setSelectionAnchor(0, caret: 6)
+                try restarted.runSavedAutomation(id: clipboardLibrary.workflows[0].id)
+                check(
+                    editor.text == "2 eggs\n½ cup flour\n",
+                    "a clipboard-input automation runs on the text of an HTML-only clipboard")
+                board.clearContents()
+                check(AutomationController.plainText(from: board) == nil, "an empty clipboard has no text")
+                board.setData(Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), forType: .png)
+                check(AutomationController.plainText(from: board) == nil, "an image-only clipboard has no text")
+                board.clearContents()
+                board.setData(Data(#"<img src="http://127.0.0.1:1/x.png">"#.utf8), forType: .html)
+                editor.text = "kept"
+                let keptRevision = editor.revision
+                rejects(
+                    "a clipboard with no text is reported and nothing is changed",
+                    message: "The clipboard does not contain supported text."
+                ) { try restarted.runSavedAutomation(id: clipboardLibrary.workflows[0].id) }
+                check(
+                    editor.text == "kept" && editor.revision == keptRevision,
+                    "the refused clipboard run left the editor alone")
                 try restarted.persistLibrary(saved)
             }
             Checks.section("oversized transform") {

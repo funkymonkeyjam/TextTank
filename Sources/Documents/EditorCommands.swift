@@ -4,6 +4,8 @@ import AppKit
 enum EditorTransform: String, CaseIterable {
     case sortAscending, sortDescending, sortCaseInsensitive, sortLength, reverseLines, uniqueLines, removeEmptyLines,
         trimLeading, trimBoth, invertCase, titleCase
+    /// Locale-aware order, beside the code-point order of `sortAscending`; see `LineOrder`.
+    case sortLocalized
     var title: String {
         switch self {
         case .sortAscending: return "Sort Lines Ascending"
@@ -17,6 +19,7 @@ enum EditorTransform: String, CaseIterable {
         case .trimBoth: return "Trim Leading and Trailing Whitespace"
         case .invertCase: return "Invert Case"
         case .titleCase: return "Title Case"
+        case .sortLocalized: return "Sort Lines in Locale Order"
         }
     }
     func transform(_ text: String) -> String {
@@ -68,7 +71,11 @@ enum EditorTransform: String, CaseIterable {
                 }
             case .sortLength:
                 sorted = values.sorted { $0.1.count == $1.1.count ? $0.0 < $1.0 : $0.1.count < $1.1.count }
-            default: sorted = values.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 < $1.1 }
+            case .sortLocalized:
+                sorted = values.sorted {
+                    $0.1.utf8.elementsEqual($1.1.utf8) ? $0.0 < $1.0 : LineOrder.localizedAscending($0.1, $1.1)
+                }
+            default: sorted = values.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : LineOrder.codePointAscending($0.1, $1.1) }
             }
             rows = zip(sorted, rows).map { ($0.0.1, $0.1.1) }
         }

@@ -7,14 +7,15 @@ extension AutomationDefinition.Step.Kind {
         case .removeListMarkers: return "Remove bullet markers"
         case .removeBlankLines: return "Remove empty lines"
         case .sortLines: return "Sort lines alphabetically"
+        case .sortLinesLocalized: return "Sort lines in locale order"
         case .deduplicateLines: return "Remove duplicate lines"
         case .replaceLiteral: return "Find and replace text"
-        case .removeLinesEqualTo: return "Clear lines equal to text"
-        case .removeLinesContaining: return "Clear lines containing text"
-        case .removeLinesStartingWith: return "Clear lines starting with text"
+        case .clearLinesEqualTo: return "Clear lines equal to text"
+        case .clearLinesContaining: return "Clear lines containing text"
+        case .clearLinesStartingWith: return "Clear lines starting with text"
         case .trimWhitespace: return "Trim spaces at line edges"
-        case .removeMatchingLines: return "Clear lines matching a pattern (advanced)"
-        case .removeMarkdownHeadings: return "Clear Markdown headings"
+        case .clearLinesMatching: return "Clear lines matching a pattern (advanced)"
+        case .clearMarkdownHeadings: return "Clear Markdown headings"
         case .removeMarkdownFormatting: return "Remove Markdown formatting"
         case .removeCheckboxMarkers: return "Remove checkbox markers"
         case .removeNoteReferences: return "Remove numbered note references"
@@ -22,15 +23,15 @@ extension AutomationDefinition.Step.Kind {
         }
     }
     var acceptsFind: Bool {
-        [.replaceLiteral, .removeMatchingLines, .removeLinesEqualTo, .removeLinesContaining, .removeLinesStartingWith]
+        [.replaceLiteral, .clearLinesMatching, .clearLinesEqualTo, .clearLinesContaining, .clearLinesStartingWith]
             .contains(self)
     }
     var guidance: String {
         switch self {
-        case .removeMatchingLines:
+        case .clearLinesMatching:
             return
                 "Advanced regular expression: only a match covering the entire line clears it. Add Remove empty lines to compact the result."
-        case .removeLinesEqualTo, .removeLinesContaining, .removeLinesStartingWith:
+        case .clearLinesEqualTo, .clearLinesContaining, .clearLinesStartingWith:
             return
                 "Matches literal, case-sensitive text. Matching lines become empty; add Remove empty lines afterward. No regular expression is needed."
         case .replaceLiteral:
@@ -41,6 +42,12 @@ extension AutomationDefinition.Step.Kind {
                 "Requires every non-heading ingredient to have a bullet or checkbox. Mixed marked/unmarked ingredients are rejected without changes."
         case .deduplicateLines:
             return "Explicitly removes repeated rows. Leave this rule out when repeated ingredients should stay."
+        case .sortLines:
+            return
+                "Sorts by character code: capitals come before lowercase and accented letters after z. Use Sort lines in locale order for dictionary order."
+        case .sortLinesLocalized:
+            return
+                "Sorts as Finder does in your language: case and accents are secondary, and numbers inside a line sort by value."
         default: return "Runs on captured text in the listed order. Test with a full example below before saving."
         }
     }
@@ -266,18 +273,18 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         window.makeFirstResponder(nil)
         var sets = savedWorkflows.map { AutomationRuleSet(name: $0.name, steps: $0.steps) }
         let savedCount = sets.count
-        sets += [
-            AutomationRuleSet(
-                name: "Trim and remove empty lines",
-                steps: [.init(kind: .trimWhitespace), .init(kind: .removeBlankLines)]),
-            AutomationRuleSet(
-                name: "Sort unique lines", steps: [.init(kind: .sortLines), .init(kind: .deduplicateLines)]),
-            AutomationRuleSet(name: "Recipe ingredient cleanup", steps: AutomationDefinition.shoppingRecipeSteps)
-        ]
+        // Templates are bundled rule files, read like an imported one.
+        let templates = AutomationTemplates.loadAll()
+        sets += templates.sets
         let picker = TTAlert()
         picker.messageText = "Load Rules"
         picker.informativeText =
             "Copy rules from any saved automation or template, or import a rule file. Only this draft’s processing steps are replaced; its name, input, output and shortcuts stay unchanged."
+        if !templates.problems.isEmpty {
+            picker.informativeText +=
+                " Some built-in templates could not be read and are not listed: "
+                + templates.problems.joined(separator: "; ")
+        }
         picker.addButton(withTitle: "Load Selected")
         picker.addButton(withTitle: "Cancel")
         picker.addButton(withTitle: "Import File…")
@@ -339,7 +346,9 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         status.stringValue = "Testing rules using saved parameter defaults…"
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let outcome: Result<String, Error> = Result { try definition.testSample(input, control: control) }
-            DispatchQueue.main.async { [weak self] in
+            // Delivered through the run loop, so the result also arrives while a modal started from a
+            // main-queue block is open.
+            MainRunLoop.perform { [weak self] in
                 guard let self, self.previewGeneration == generation else { return }
                 self.previewControl = nil
                 switch outcome {
