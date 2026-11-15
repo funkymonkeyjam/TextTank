@@ -1558,11 +1558,19 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         statusDetails.update(fields, keys: keys)
     }
     private func showStatusOptions(_ key: String, at view: NSView) {
-        guard let doc = document as? TextDocument else { return }
+        let editor = activeEditor
+        (NSApp.delegate as? AppDelegate)?.lastDocumentController = self
+        lastEditor = editor
+        guard let menu = statusOptionsMenu(key) else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height), in: view)
+        refreshStatusDetails()
+    }
+    /// The menu a status bar field opens, for the active pane. Building it changes nothing, so
+    /// its wording can be checked without showing it.
+    func statusOptionsMenu(_ key: String) -> NSMenu? {
+        guard let doc = document as? TextDocument else { return nil }
         let editor = activeEditor, info = editor.statusInfo
         let app = NSApp.delegate as? AppDelegate
-        app?.lastDocumentController = self
-        lastEditor = editor
         let menu = NSMenu()
         menu.autoenablesItems = false
         func add(
@@ -1659,8 +1667,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             add("Select All", #selector(statusOption(_:)), self, "selectAll")
             add("Clear Selection", #selector(statusOption(_:)), self, "clearSelection")
         }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height), in: view)
-        refreshStatusDetails()
+        return menu
     }
     @objc private func statusOption(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }

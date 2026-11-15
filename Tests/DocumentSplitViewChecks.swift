@@ -40,14 +40,56 @@ extension DocumentChecks {
             return macro?.steps.isEmpty == false
         }
 
+        /// Runs a command that opens app-modal dialogs and answers them in order. Each answer
+        /// receives the dialog's views and returns the button to press. A dialog that is not
+        /// expected, or not answered within ten seconds, is aborted. True when every answer was used.
+        @MainActor func answeringDialogs(_ answers: [([NSView]) -> NSButton?], _ command: () -> Void) -> Bool {
+            var pending = answers
+            weak var answered: NSWindow?
+            let deadline = Date().addingTimeInterval(10)
+            let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
+                MainActor.assumeIsolated {
+                    guard let modal = NSApp.modalWindow, modal !== answered || Date() > deadline else { return }
+                    guard Date() <= deadline, let answer = pending.first, let content = modal.contentView,
+                        let button = answer(descendants(content))
+                    else {
+                        NSApp.abortModal()
+                        return
+                    }
+                    pending.removeFirst()
+                    answered = modal
+                    button.performClick(nil)
+                }
+            }
+            RunLoop.main.add(timer, forMode: .modalPanel)
+            command()
+            timer.invalidate()
+            return pending.isEmpty
+        }
+        @MainActor func button(_ title: String) -> ([NSView]) -> NSButton? {
+            { views in views.compactMap { $0 as? NSButton }.first { $0.title == title } }
+        }
+
         // F275, F302, F278
         section("one current editor for every controller", #line) {
             let delegate = AppDelegate()
             app.delegate = delegate
             let (document, controller, _) = try opened("current.txt", "- **2 eggs**\n- plain text\n")
+            // The case F275 is about: an auxiliary titled window (Find and Replace, a Run result)
+            // is main. A document window that has just been shown is main whenever the check
+            // process happens to be the active application, so the case is set up here and not
+            // assumed.
+            let auxiliary = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 240, height: 120), styleMask: [.titled, .closable],
+                backing: .buffered, defer: false)
+            auxiliary.isReleasedWhenClosed = false
+            auxiliary.title = "Auxiliary window"
+            defer { auxiliary.close() }
+            auxiliary.makeKeyAndOrderFront(nil)
+            auxiliary.makeMain()
             try require(
                 !(NSApp.mainWindow?.windowController is EditorWindowController),
-                "fixture: no document window is main in the check process")
+                "fixture: no document window is main while the auxiliary window is in front")
             delegate.lastDocumentController = nil
             check(
                 delegate.currentEditor == nil && delegate.currentDocument == nil,
@@ -163,7 +205,23 @@ extension DocumentChecks {
             defer { try? delegate.languages.persist(originalCatalog) }
             let (document, controller, window) = try opened("split.py", "import os\nvalue = 42  # note\n")
             try require(document.languageIdentifier == "python", "fixture: the file opens as Python")
+            // F302: a document window that becomes main is the document window focused last.
+            delegate.lastDocumentController = nil
+            window.becomeMain()
+            check(
+                delegate.lastDocumentController === controller,
+                "a document window that becomes main is recorded as the document window focused last")
+            if NSApp.mainWindow !== window { window.resignMain() }
             delegate.lastDocumentController = controller
+            let indentTitles = controller.statusOptionsMenu("indent")?.items.map(\.title) ?? []
+            let zoomTitles = controller.statusOptionsMenu("font")?.items.map(\.title) ?? []
+            check(
+                indentTitles.first == "Indentation for this document"
+                    && !indentTitles.contains { $0.localizedCaseInsensitiveContains("view") },
+                "the status menu says indentation belongs to the document, not to a view")
+            check(
+                zoomTitles.contains("Text size for this view"),
+                "the status menu still says text size belongs to the view")
             // Choices made for this document and this view after it opened.
             document.editor.configureTabWidth(2, useTabs: true)
             for _ in 0..<3 { document.editor.executeCommand("zoomIn") }
@@ -235,6 +293,7 @@ extension DocumentChecks {
                 palette(document.editor) == palette(clone) && sci(clone, lexer) == sci(document.editor, lexer),
                 "a lexer chosen by name in one pane restyles the other pane as well")
             NSApp.sendAction(cppItem.action!, to: cppItem.target, from: cppItem)
+            let cpp = palette(document.editor)
 
             // A style edit reaches every view of every document on that profile, and no other.
             let (sameLanguage, _, _) = try opened("other.cpp", "int other = 1;\n")
@@ -267,6 +326,82 @@ extension DocumentChecks {
                 !document.isDocumentEdited && !sameLanguage.isDocumentEdited && !otherLanguage.isDocumentEdited
                     && document.editor.revision == revision,
                 "re-applying a profile never edits a document")
+
+            // F83: the dialogs that save a catalog change re-apply it the same way. Each case first
+            // gives the clone and the other C++ document a foreign palette, then saves in the dialog.
+            window.makeKeyAndOrderFront(nil)
+            delegate.lastDocumentController = controller
+            try require(
+                delegate.currentDocument === document && document.languageIdentifier == "cpp",
+                "fixture: the split C++ document is the current document")
+            @MainActor func scramble() throws {
+                clone.adoptSyntaxStyles(from: otherLanguage.editor)
+                sameLanguage.editor.adoptSyntaxStyles(from: otherLanguage.editor)
+                try require(
+                    palette(clone) != palette(document.editor)
+                        && palette(sameLanguage.editor) != palette(document.editor),
+                    "fixture: the clone and the other C++ document show a foreign palette")
+            }
+            @MainActor func restyled() -> Bool {
+                palette(clone) == palette(document.editor) && palette(sameLanguage.editor) == palette(document.editor)
+                    && palette(otherLanguage.editor) == untouched && document.editor.revision == revision
+                    && !document.isDocumentEdited && !sameLanguage.isDocumentEdited
+            }
+            try scramble()
+            let styleSaved = answeringDialogs([
+                button("Edit"),
+                { views in
+                    let fields = views.compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+                    guard fields.count == 2 else { return nil }
+                    fields[0].stringValue = "Menlo"
+                    fields[1].stringValue = "13"
+                    return button("Save")(views)
+                }
+            ]) { delegate.languages.styleSettings() }
+            check(
+                styleSaved && restyled(),
+                "Syntax Style Settings, saved, restyles both panes and the other documents on the profile")
+            try scramble()
+            let profilesSaved = answeringDialogs([button("Save")]) { delegate.languages.configure() }
+            check(
+                profilesSaved && restyled(),
+                "Language Profiles, saved, restyles both panes and the other documents on a changed profile")
+            try scramble()
+            let profilesCancelled = answeringDialogs([button("Cancel")]) { delegate.languages.configure() }
+            check(
+                profilesCancelled && palette(clone) != palette(document.editor),
+                "Language Profiles, cancelled, re-applies nothing")
+            delegate.languages.reapply(["cpp"])
+            try require(restyled(), "fixture: the panes agree again")
+            var withUDL = try requireValue(delegate.languages.catalog, "fixture: the saved catalog")
+            let user = try UserDefinedLanguage(
+                name: "Package 11 UDL", extensions: "p11", version: "2.1",
+                global: ["caseIgnored": "yes", "forcePureLC": "0", "decimalSeparator": "0"], prefix: [:],
+                keywords: ["Keywords1": "int other", "Comments": "00// 01 02 03/* 04*/"],
+                styles: [
+                    .init(name: "DEFAULT", attributes: ["fgColor": "000000", "fontStyle": "0"]),
+                    .init(name: "KEYWORDS1", attributes: ["fgColor": "0000FF", "fontStyle": "1"]),
+                    .init(name: "COMMENTS", attributes: ["fgColor": "008000", "fontStyle": "2"])
+                ]
+            ).profile()
+            withUDL.profiles.append(user)
+            try delegate.languages.persist(withUDL)
+            for target in [document, sameLanguage] {
+                try require(
+                    delegate.languages.applyToDocument(identifier: user.id, through: target.editor),
+                    "fixture: the user-defined language applies")
+                target.languageIdentifier = user.id
+            }
+            try scramble()
+            let editUDL = try requireValue(
+                delegate.languages.menu().items.first { $0.title == "Edit Current UDL…" },
+                "fixture: the Edit Current UDL command")
+            let udlSaved = answeringDialogs([button("Save")]) {
+                _ = NSApp.sendAction(editUDL.action!, to: editUDL.target, from: editUDL)
+            }
+            check(
+                udlSaved && restyled(),
+                "Edit Current UDL, saved, restyles both panes and the other documents on that language")
             sameLanguage.close()
             otherLanguage.close()
 
@@ -279,8 +414,25 @@ extension DocumentChecks {
             rejects("reloading the document discards a recording started in its clone", message: "reloaded") {
                 _ = try delegate.macros.finishRecording()
             }
+            // F21: the reload detected Python again for a document that had been set to another
+            // language; the language found by a reload reaches the clone as well.
+            check(
+                document.languageIdentifier == "python" && palette(document.editor) != cpp
+                    && palette(clone) == palette(document.editor),
+                "a language detected by a reload restyles both panes")
 
+            // G341: recording across views is not supported, so closing the split ends a recording
+            // started in the clone, and the closed clone no longer reports focus.
+            delegate.lastDocumentController = controller
+            _ = window.makeFirstResponder(clone)
+            try require(delegate.currentEditor === clone, "fixture: the clone is the current editor")
+            delegate.macros.startRecording()
+            clone.executeCommand("newLine")
             controller.closeSplit(nil)
+            rejects("closing the split discards a recording started in the clone") {
+                _ = try delegate.macros.finishRecording()
+            }
+            check(clone.onFocus == nil, "a closed clone no longer reports focus")
             check(
                 document.activeEditor === document.editor && delegate.searchController.openEditors().count == 1
                     && delegate.searchController.openEditors().first === document.editor,
