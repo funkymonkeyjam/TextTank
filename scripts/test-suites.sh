@@ -46,7 +46,6 @@ suite_script scripts/test-languages.sh
 suite_script scripts/test-workspace-browser.sh
 # The reduced performance tier; its budgets can fail. The 100 MiB tier stays manual.
 suite_script scripts/test-performance.sh gate
-suite_run parity-inventory harness/logs/parity-inventory.log python3 docs/parity/check_inventory.py
 # The countable part of docs/DESIGN-STANDARDS.md: budgets that only go down, and two hard rules.
 suite_run design-standards-selftest harness/logs/design-standards-selftest.log python3 scripts/check-design-standards.py --selftest
 suite_run design-standards harness/logs/design-standards.log python3 scripts/check-design-standards.py

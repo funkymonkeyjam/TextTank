@@ -12,6 +12,49 @@ import sys
 import re
 from bootstrap import obtain_archive
 
+
+# Review documentation is an explicit product-facing set. Session state, agent
+# prompts, one-off research generators and dated worker notes are not deliveries.
+REVIEW_DOCUMENTS = (
+    'docs/REVIEW-ME.md', 'docs/BUILDING.md', 'docs/product-spec.md',
+    'docs/architecture.md', 'docs/DESIGN-STANDARDS.md', 'docs/design-budget.json',
+    'docs/AUTOMATION-RULES.md', 'docs/EXTENSIONS-AND-RUN.md',
+    'docs/parity/README.md', 'docs/parity/capabilities.json',
+    'docs/parity/user-validation-2026-11-14.json',
+    'docs/research/README.md', 'docs/research/findings.md', 'docs/research/sources.json',
+    'docs/research/utility-audit.md', 'docs/research/workspace-browser.md',
+)
+
+
+def review_at_package_root(text):
+    """Move relative review links from docs/ to the delivery root, not other docs."""
+    import posixpath
+    from urllib.parse import urlsplit
+
+    def replace(match):
+        destination = match.group(2)
+        if destination.startswith('#') or urlsplit(destination).scheme:
+            return match.group(0)
+        path, separator, fragment = destination.partition('#')
+        resolved = posixpath.normpath(posixpath.join('docs', path))
+        if resolved.startswith('../') or resolved.startswith('/'):
+            raise ValueError('Review link leaves package: ' + destination)
+        return match.group(1) + resolved + (separator + fragment if separator else '') + ')'
+
+    return re.sub(r'(\[[^\]]+\]\()([^)]+)\)', replace, text)
+
+
+def copy_documentation(root, package):
+    for name in REVIEW_DOCUMENTS:
+        source = root / name
+        if source.is_symlink() or not source.is_file():
+            raise ValueError('Required review document missing or linked: ' + name)
+        target = package / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    review = review_at_package_root((root / 'docs/REVIEW-ME.md').read_text(encoding='utf-8'))
+    (package / 'REVIEW-ME.md').write_text(review, encoding='utf-8')
+
 def verify_validation(root, source_tree):
     path = root / 'harness/logs/candidate-validation.json'
     if not path.is_file():
@@ -119,17 +162,9 @@ def main():
             shutil.copyfile(cached, sources / name)
         for name in ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'Dependencies.lock.json']:
             shutil.copyfile(root / name, package / name)
-        for raw in subprocess.check_output(['git', 'ls-files', '-z', '--', 'docs', 'harness/reviews']).split(b'\x00'):
-            if not raw:
-                continue
-            relative = pathlib.Path(os.fsdecode(raw))
-            target = package / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(root / relative, target)
+        copy_documentation(root, package)
         shutil.copyfile(root / 'scripts/launch-review.sh', package / 'Launch-TextTank.command')
         (package / 'Launch-TextTank.command').chmod(493)
-        review = (root / 'docs/REVIEW-ME.md').read_text().replace('](parity/', '](docs/parity/').replace('](../harness/', '](harness/')
-        (package / 'REVIEW-ME.md').write_text(review)
         licenses = package / 'Licenses'
         licenses.mkdir()
         for path in [root / 'Resources/scintilla-License.txt', root / 'Resources/lexilla-License.txt', root / 'Resources/boost-License.txt', root / 'Resources/Brand/Inter-OFL.txt', root / 'Resources/Brand/SpaceGrotesk-OFL.txt']:
