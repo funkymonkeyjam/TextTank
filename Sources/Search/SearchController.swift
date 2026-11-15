@@ -645,11 +645,13 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     /// current editor can lag (F48), so the document last navigated to stays the answer while its
     /// selection is still that match and the person has not moved elsewhere. Moving elsewhere
     /// shows as a different listed current editor, or, since only the selected tab's window is
-    /// visible, as the editor navigated from being on screen while the one navigated to is not.
+    /// visible, as the current editor being on screen while the one navigated to is not. That
+    /// test covers the editor navigated from and a current editor outside the open list (a split
+    /// view) alike, so a hidden document is never the answer once the person is back.
     private func allOpenOrigin(in buffers: [Buffer], current: TTEditor?) -> Int? {
         if let last = lastNavigation, let editor = last.editor, editor.revision == last.revision,
-            current == nil || current === editor || !buffers.contains(where: { $0.editor === current })
-                || (current === last.from
+            current == nil || current === editor
+                || ((current === last.from || !buffers.contains(where: { $0.editor === current }))
                     && !(current?.window?.isVisible == true && editor.window?.isVisible != true)),
             let index = buffers.firstIndex(where: { $0.editor === editor && $0.revision == last.revision }),
             SearchCore.utf16Range(

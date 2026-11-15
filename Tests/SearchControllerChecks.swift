@@ -732,6 +732,46 @@ final class OffscreenWindow: NSWindow {
                 editor.text == "b x" && second.text == "a a" && stray.text == "zq zq"
                     && controller.lastOutcome == .replaced(changed: 1, stale: 0),
                 "All open documents Next then Replace from an unlisted editor replaces the selected match")
+            // The same editor outside the list, with Next crossing into another document: while
+            // that document is the visible tab, Replace edits the match Next selected there.
+            load(editor, "a x")
+            load(second, "a a")
+            caretsToStart()
+            strayWindow.shown = false
+            await next()
+            await next()
+            check(
+                place() == "0-1 0-1 0-0" && secondWindow.shown,
+                "fixture: from an unlisted editor, Next selected a match in the first document, then in the second")
+            await replaceOne()
+            check(
+                editor.text == "a x" && second.text == "b a"
+                    && controller.lastOutcome == .replaced(changed: 1, stale: 0),
+                "Replace after a cross-document Next from an unlisted editor replaces the match in the visible document"
+            )
+            // The person goes back to the tab with the split view: the unlisted editor is on screen
+            // and the document navigated to is hidden, so Replace and Next leave the hidden one alone.
+            load(editor, "a x")
+            load(second, "a a")
+            caretsToStart()
+            await next()
+            await next()
+            check(place() == "0-1 0-1 0-0", "fixture: Next moved from the first document into the second again")
+            secondWindow.shown = false
+            strayWindow.shown = true
+            let hiddenSecondRevision = second.revision
+            await replaceOne()
+            check(
+                controller.lastOutcome == .noMatchSelected && second.text == "a a"
+                    && second.revision == hiddenSecondRevision && !second.modified && editor.text == "a x"
+                    && stray.text == "zq zq",
+                "Replace from an unlisted editor after the person returned to its tab leaves the hidden document untouched"
+            )
+            await next()
+            check(
+                place() == "0-1 0-1 0-0" && second.revision == hiddenSecondRevision,
+                "Next from an unlisted editor after the person returned does not continue in the hidden document")
+            strayWindow.shown = false
             _ = (secondWindow, thirdWindow, strayWindow)
             open = [editor]
             focused = editor
