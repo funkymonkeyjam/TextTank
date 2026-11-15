@@ -96,6 +96,8 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
     }
     func transform(_ input: String, control: AutomationRunControl? = nil) throws -> String {
         try validate()
+        try control?.checkCancellation()
+        guard input.utf8.count <= Self.maximumTransformBytes else { throw AutomationError.invalid("Automation input exceeds 32 MiB. Nothing was changed.") }
         var result = input
         var regexTimeRemaining: TimeInterval = 0.1
         for (index,step) in steps.enumerated() {
@@ -136,7 +138,7 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
                     throw AutomationError.invalid("The line-matching pattern exceeded its time limit. Nothing was changed. Simplify the removeMatchingLines regex or use literal replacement steps.")
                 }
             case .replaceLiteral:
-                result = result.replacingOccurrences(of: step.find!, with: step.replacement!)
+                result = try Self.boundedReplacement(result,find:step.find!,replacement:step.replacement!,control:control)
             case .removeListMarkers:
                 result = try Self.mapLines(result, control:control) { line in
                     // No numeric prefixes: "2 eggs" and "1. 5 cups" may be quantities.
@@ -167,7 +169,7 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
                     line.range(of: #"^[ \t]{0,3}#{1,6}(?:[ \t]+|$)"#, options: .regularExpression) == nil ? line : ""
                 }
             case .removeMarkdownFormatting:
-                result = try Self.mapLines(result, control:control, Self.removeInlineMarkdown)
+                result = try Self.mapLines(result, control:control) { try Self.removeInlineMarkdown($0,control:control) }
             case .removeCheckboxMarkers:
                 result = try Self.mapLines(result, control:control) { line in
                     line.replacingOccurrences(of: #"^[ \t]*(?:[▢☐☑☒□][ \t]*|\[[ xX]\](?:[ \t]+|$))"#, with: "", options: .regularExpression)
@@ -184,9 +186,29 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
                 }
                 result = body.joined(separator: parts.eol) + (parts.trailing && !body.isEmpty ? parts.eol : "")
             }
+            guard result.utf8.count <= Self.maximumTransformBytes else { throw AutomationError.invalid("Automation result exceeds 32 MiB. Nothing was changed.") }
         }
         try control?.checkpoint(completed:steps.count,total:steps.count)
         return result
+    }
+    static let maximumTransformBytes = 32 * 1024 * 1024
+    private static func boundedReplacement(_ input:String,find:String,replacement:String,control:AutomationRunControl?) throws -> String {
+        let source=input as NSString
+        var cursor=0, output="", bytes=0
+        func append(_ part:String) throws {
+            try control?.checkCancellation()
+            let count=part.utf8.count
+            guard count <= maximumTransformBytes-bytes else { throw AutomationError.invalid("Automation result exceeds 32 MiB. Nothing was changed.") }
+            bytes += count; output.append(contentsOf:part)
+        }
+        while cursor < source.length {
+            try control?.checkCancellation()
+            let range=source.range(of:find,range:NSRange(location:cursor,length:source.length-cursor))
+            if range.location == NSNotFound { break }
+            try append(source.substring(with:NSRange(location:cursor,length:range.location-cursor)))
+            try append(replacement);cursor=NSMaxRange(range)
+        }
+        try append(source.substring(from:cursor));return output
     }
     /// Draft-only test harness: never resolves inputs/parameters or invokes an output.
     func testSample(_ input:String, control:AutomationRunControl? = nil) throws -> String {
@@ -212,8 +234,8 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         try control?.checkCancellation()
         return text
     }
-    private static func removeInlineMarkdown(_ line: String) -> String {
-        var result = inlineLinksToLabels(line)
+    private static func removeInlineMarkdown(_ line: String, control:AutomationRunControl?) throws -> String {
+        var result = try inlineLinksToLabels(line,control:control)
         // Deliberately bounded inline syntax, not a Markdown renderer. Pair delimiters
         // before unescaping so escaped literal stars/underscores are not mistaken for markup.
         let pairs: [(String,String)] = [
@@ -226,6 +248,7 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         // Two passes handle common nesting while bounding runtime; unmatched markers stay data.
         for _ in 0..<2 {
             for (pattern,replacement) in pairs {
+                try control?.checkCancellation()
                 result = result.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
             }
         }
@@ -236,31 +259,43 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         }
         return result
     }
-    private static func inlineLinksToLabels(_ line: String) -> String {
+    private static func inlineLinksToLabels(_ line: String,control:AutomationRunControl?) throws -> String {
         // Scan balanced labels/destinations instead of greedily deleting ingredient parentheses.
         // Links are never opened or fetched. Malformed/reference-style links remain unchanged.
         let chars = Array(line); var out = ""; var index = 0
+        var nextCheckpoint=0
+        func checkpoint(_ position:Int) throws {
+            if position >= nextCheckpoint {
+                try control?.checkCancellation();nextCheckpoint=position+4096
+            }
+        }
         while index < chars.count {
+            try checkpoint(index)
             if chars[index] == "\\", index + 1 < chars.count {
                 out.append(chars[index]);out.append(chars[index+1]);index += 2;continue
             }
             guard chars[index] == "[" else {out.append(chars[index]);index += 1;continue}
             var close = index + 1, depth = 1
             while close < chars.count && depth > 0 {
+                try checkpoint(close)
                 if chars[close] == "\\", close + 1 < chars.count {close += 2;continue}
                 if chars[close] == "[" {depth += 1}
                 if chars[close] == "]" {depth -= 1}
                 if depth > 0 {close += 1}
             }
-            guard depth == 0, close + 1 < chars.count, chars[close+1] == "(" else {out.append(chars[index]);index += 1;continue}
+            guard depth == 0 else { out += String(chars[index...]);break }
+            guard close + 1 < chars.count, chars[close+1] == "(" else {
+                out += String(chars[index...close]);index=close+1;continue
+            }
             var end = close + 2; depth = 1
             while end < chars.count && depth > 0 {
+                try checkpoint(end)
                 if chars[end] == "\\", end + 1 < chars.count {end += 2;continue}
                 if chars[end] == "(" {depth += 1}
                 if chars[end] == ")" {depth -= 1}
                 if depth > 0 {end += 1}
             }
-            guard depth == 0 else {out.append(chars[index]);index += 1;continue}
+            guard depth == 0 else {out += String(chars[index...]);break}
             out += String(chars[(index+1)..<close]);index = end + 1
         }
         return out
@@ -284,15 +319,15 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         if trailing { lines.removeLast() }
         return (lines, eol, trailing)
     }
-    private static func mapLines(_ text: String, control: AutomationRunControl?, _ transform: (String)->String) throws -> String {
+    private static func mapLines(_ text: String, control: AutomationRunControl?, _ transform: (String)throws->String) throws -> String {
         // Preserve each exact separator, including mixed line endings.
         var output = "", line = ""
         for (index,scalar) in text.unicodeScalars.enumerated() {
             if index % 4096 == 0 { try control?.checkCancellation() }
-            if scalar == "\r" || scalar == "\n" { output += transform(line); output.unicodeScalars.append(scalar); line = "" }
+            if scalar == "\r" || scalar == "\n" { output += try transform(line); output.unicodeScalars.append(scalar); line = "" }
             else { line.unicodeScalars.append(scalar) }
         }
-        return output + transform(line)
+        return output + (try transform(line))
     }
 }
 
@@ -302,6 +337,7 @@ enum AutomationError: LocalizedError {
 }
 
 struct AutomationLibrary: Codable, Equatable {
+    static let maximumBytes = 32 * 1024 * 1024
     var version: Int = 1
     var workflows: [AutomationDefinition]
     func validate() throws {
@@ -317,12 +353,15 @@ struct AutomationLibrary: Codable, Equatable {
         }
     }
     static func decode(_ data: Data) throws -> AutomationLibrary {
+        guard data.count <= maximumBytes else { throw AutomationError.invalid("Automation configuration exceeds 32 MiB.") }
         let result = try JSONDecoder().decode(AutomationLibrary.self, from: data)
         try result.validate(); return result
     }
     func encoded() throws -> Data {
         try validate(); let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(self)
+        let data = try encoder.encode(self)
+        guard data.count <= Self.maximumBytes else { throw AutomationError.invalid("Automation configuration exceeds 32 MiB.") }
+        return data
     }
 }
 
@@ -339,6 +378,11 @@ final class AutomationRunControl: @unchecked Sendable {
 /// Explicit file inputs are bounded regular UTF-8 files, never pipes/devices or followed symlinks.
 enum AutomationFileInput {
     static func read(_ url:URL, limit:Int = 32 * 1024 * 1024) throws -> String {
+        let data = try readData(url,limit:limit)
+        guard let text = String(data:data,encoding:.utf8) else { throw AutomationError.invalid("Automation file input requires valid UTF-8. Open the file with its encoding first.") }
+        return text
+    }
+    static func readData(_ url:URL, limit:Int) throws -> Data {
         guard url.isFileURL else { throw AutomationError.invalid("Choose a local text file.") }
         let descriptor = open(url.path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK)
         guard descriptor >= 0 else { throw CocoaError(.fileReadNoPermission) }
@@ -353,8 +397,7 @@ enum AutomationFileInput {
             guard data.count <= limit - count else { throw AutomationError.invalid("Automation file input exceeds its size limit.") }
             data.append(contentsOf:chunk.prefix(count))
         }
-        guard let text = String(data:data,encoding:.utf8) else { throw AutomationError.invalid("Automation file input requires valid UTF-8. Open the file with its encoding first.") }
-        return text
+        return data
     }
 }
 

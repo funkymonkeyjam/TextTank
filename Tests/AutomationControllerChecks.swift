@@ -266,6 +266,42 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         let beforeModal=try Data(contentsOf:path)
         try modalKeyboardChecks(restarted)
         try check(try Data(contentsOf:path)==beforeModal,"Cancel from keyboard-edited rule draft preserves saved definitions")
+        var growingLibrary=saved
+        growingLibrary.workflows[0].steps=[.init(kind:.replaceLiteral,find:"x",replacement:String(repeating:"y",count:7*1024*1024))]
+        growingLibrary.workflows[0].previewBeforeApply=false
+        try restarted.persistLibrary(growingLibrary)
+        editor.text="xxxxx";editor.resetUndoHistory();editor.setSavePoint()
+        let growthRevision=editor.revision
+        var growthRejected=false
+        do { try restarted.runSavedAutomation(id:growingLibrary.workflows[0].id) } catch { growthRejected=true }
+        try check(growthRejected && editor.text=="xxxxx" && editor.revision==growthRevision && !editor.modified,"production oversized transform leaves native text revision Undo and savepoint unchanged")
+        try restarted.persistLibrary(saved)
+        let unsafeConfigRoot=root.appendingPathComponent("unsafe-config")
+        try FileManager.default.createDirectory(at:unsafeConfigRoot,withIntermediateDirectories:true)
+        let unsafeConfig=unsafeConfigRoot.appendingPathComponent("Automations.json")
+        setenv("TEXTTANK_SUPPORT_DIRECTORY",unsafeConfigRoot.path,1)
+        defer { setenv("TEXTTANK_SUPPORT_DIRECTORY",root.path,1) }
+        precondition(mkfifo(unsafeConfig.path,0o600)==0)
+        let fifoStart=ProcessInfo.processInfo.systemUptime
+        let fifoController=AutomationController(editorProvider:{nil},newDocument:{_ in})
+        var rejectedFIFO=false
+        do { try fifoController.persistLibrary(saved) } catch { rejectedFIFO=true }
+        try check(rejectedFIFO && ProcessInfo.processInfo.systemUptime-fifoStart < 1,"FIFO configuration startup rejects promptly and prevents overwrite")
+        try FileManager.default.removeItem(at:unsafeConfig)
+        let externalConfig=unsafeConfigRoot.appendingPathComponent("external.json")
+        let validConfiguration=try saved.encoded();try validConfiguration.write(to:externalConfig)
+        try FileManager.default.createSymbolicLink(at:unsafeConfig,withDestinationURL:externalConfig)
+        let symlinkController=AutomationController(editorProvider:{nil},newDocument:{_ in})
+        var rejectedSymlink=false
+        do { try symlinkController.persistLibrary(saved) } catch { rejectedSymlink=true }
+        try check(rejectedSymlink && (try Data(contentsOf:externalConfig))==validConfiguration,"configuration startup does not follow symlink or overwrite target")
+        try FileManager.default.removeItem(at:unsafeConfig)
+        let oversizedFD=open(unsafeConfig.path,O_CREAT|O_WRONLY,mode_t(0o600));precondition(oversizedFD>=0)
+        precondition(ftruncate(oversizedFD,off_t(AutomationLibrary.maximumBytes+1))==0);close(oversizedFD)
+        let oversizedController=AutomationController(editorProvider:{nil},newDocument:{_ in})
+        var rejectedOversized=false
+        do { try oversizedController.persistLibrary(saved) } catch { rejectedOversized=true }
+        try check(rejectedOversized,"oversized existing configuration is rejected and preserved")
         withExtendedLifetime(toolbarHost) {}
         print("PASS AutomationControllerChecks: \(checks) native assertions; no Reminders access")
     }

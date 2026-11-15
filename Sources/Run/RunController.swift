@@ -12,7 +12,7 @@ final class RunController:NSObject {
     override init(){
         let support=ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"].map{URL(fileURLWithPath:$0)} ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("TextTank")
         storage=support.appendingPathComponent("RunCommands.json");super.init()
-        do{commands=try JSONDecoder().decode([ConfiguredRun].self,from:WorkspaceStore.readRegularFile(storage,maximumBytes:1024*1024));try ConfiguredRun.validateLibrary(commands)}
+        do{commands=try ConfiguredRun.decodeLibrary(WorkspaceStore.readRegularFile(storage,maximumBytes:ConfiguredRun.maximumLibraryBytes))}
         catch let e as NSError where e.domain==NSPOSIXErrorDomain && e.code==ENOENT{}
         catch{loadError=error;commands=[]}
     }
@@ -23,10 +23,10 @@ final class RunController:NSObject {
         menu.addItem(.separator())
         for command in commands{let item=NSMenuItem(title:command.name,action:#selector(run(_:)),keyEquivalent:"");item.target=self;item.representedObject=command.id.uuidString;menu.addItem(item)}
     }
-    private func persist(_ updated:[ConfiguredRun])throws {
-        try ConfiguredRun.validateLibrary(updated)
+    func persist(_ updated:[ConfiguredRun])throws {
+        let data=try ConfiguredRun.encodeLibrary(updated)
         try FileManager.default.createDirectory(at:storage.deletingLastPathComponent(),withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
-        try WorkspaceStore.writePrivate(JSONEncoder().encode(updated),to:storage);commands=updated;loadError=nil;rebuild()
+        try WorkspaceStore.writePrivate(data,to:storage);commands=updated;loadError=nil;rebuild()
     }
     @objc private func addSample(_ sender:Any?){do{if let error=loadError{throw error};if !commands.contains(where:{$0.extensionMode && $0.executable=="/usr/bin/tr"}){try persist(commands+[.uppercaseSample])}}catch{NSAlert(error:error).runModal()}}
     @objc private func configure(_ sender:Any?){

@@ -16,6 +16,28 @@ struct SearchReport {
     let truncated:Bool
 }
 enum SearchCore {
+    /// One forward UTF-16 pass; CRLF counts once, including offsets between CR and LF.
+    /// Called off-main before any bookmarks are mutated.
+    static func bookmarkLines(in text:String,locations:[Int],cancellation:TTSearchCancellation,timeLimit:TimeInterval=2)throws->[Int] {
+        guard locations.count<=100000,timeLimit>0,timeLimit<=30 else {throw NSError(domain:"TextTank.Search",code:7,userInfo:[NSLocalizedDescriptionKey:"Invalid bookmark work limit."])}
+        let deadline=Date().addingTimeInterval(timeLimit)
+        var index=text.utf16.startIndex,position=0,line=0,priorCR=false,lines:[Int]=[]
+        func check()throws {if cancellation.cancelled || Date()>=deadline {throw NSError(domain:"TextTank.Search",code:8,userInfo:[NSLocalizedDescriptionKey:"Bookmark calculation cancelled or exceeded its time budget; bookmarks were preserved."])}}
+        try check()
+        for target in locations {
+            guard target>=position else {throw NSError(domain:"TextTank.Search",code:7)}
+            while position<target {
+                guard index<text.utf16.endIndex else {throw NSError(domain:"TextTank.Search",code:7)}
+                let unit=text.utf16[index]
+                if unit==13 {line+=1} else if unit==10 && !priorCR {line+=1}
+                priorCR=unit==13;position+=1;index=text.utf16.index(after:index)
+                if position & 4095 == 0 {try check()}
+            }
+            if lines.last != line {lines.append(line)}
+        }
+        try check();return lines
+    }
+
     static func search(_ text:String,options:SearchOptions,cancellation:TTSearchCancellation=TTSearchCancellation(),limit:Int=100000,timeLimit:TimeInterval=2)throws->SearchReport {
         let result=try TTSearchEngine.matches(inText:text,query:options.query,replacement:options.replacement,mode:options.mode.rawValue,matchCase:options.matchCase,wholeWord:options.wholeWord,dotMatchesNewline:options.dotMatchesNewline,cancellation:cancellation,maximumMatches:limit,timeLimit:timeLimit)
         let rows=result["matches"] as? [[String:Any]] ?? []

@@ -22,8 +22,11 @@ final class AutomationController: NSObject, NSMenuDelegate {
         else { base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("TextTank", isDirectory: true) }
         storage = base.appendingPathComponent("Automations.json")
         super.init()
-        if FileManager.default.fileExists(atPath: storage.path) {
-            do { library = try AutomationLibrary.decode(Data(contentsOf: storage)) } catch { loadError = error }
+        var storageInfo=stat()
+        if lstat(storage.path,&storageInfo) == 0 {
+            do { library = try AutomationLibrary.decode(AutomationFileInput.readData(storage,limit:AutomationLibrary.maximumBytes)) } catch { loadError = error }
+        } else if errno != ENOENT {
+            loadError = CocoaError(.fileReadNoPermission)
         } else {
             // Presets are ordinary editable definitions, installed only for a new configuration.
             do { try persistLibrary(AutomationLibrary(workflows: [.example, .remindersExample])) }
@@ -230,7 +233,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
                 if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
                     let panel = NSOpenPanel(); panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
                     if panel.runModal() == .OK, let url = panel.url {
-                        let imported = try AutomationLibrary.decode(Data(contentsOf: url))
+                        let imported = try AutomationLibrary.decode(AutomationFileInput.readData(url,limit:AutomationLibrary.maximumBytes))
                         text.editor.string = String(data: try imported.encoded(), encoding: .utf8)!
                     }
                     continue

@@ -172,6 +172,7 @@ enum ReminderConnectorError: Error, LocalizedError {
             guard values[.type] as? FileAttributeType == .typeDirectory else { throw ReminderConnectorError.invalidBatch }
         }
     }
+    static let maximumJournalBytes = 32 * 1024 * 1024
     private func load(_ id: UUID) throws -> ReminderBatch {
         try checkDirectory()
         let url = path(id)
@@ -179,9 +180,9 @@ enum ReminderConnectorError: Error, LocalizedError {
         guard descriptor >= 0 else { throw ReminderConnectorError.invalidBatch }
         let handle = FileHandle(fileDescriptor:descriptor,closeOnDealloc:true); defer { try? handle.close() }
         var info = stat()
-        guard fstat(descriptor,&info) == 0,info.st_mode & S_IFMT == S_IFREG,info.st_size <= 32 * 1024 * 1024 else { throw ReminderConnectorError.invalidBatch }
-        let data = try handle.read(upToCount:32 * 1024 * 1024 + 1) ?? Data()
-        guard data.count <= 32 * 1024 * 1024 else { throw ReminderConnectorError.invalidBatch }
+        guard fstat(descriptor,&info) == 0,info.st_mode & S_IFMT == S_IFREG,info.st_size <= Self.maximumJournalBytes else { throw ReminderConnectorError.invalidBatch }
+        let data = try handle.read(upToCount:Self.maximumJournalBytes + 1) ?? Data()
+        guard data.count <= Self.maximumJournalBytes else { throw ReminderConnectorError.invalidBatch }
         let batch = try JSONDecoder().decode(ReminderBatch.self, from:data)
         guard batch.schemaVersion == 1, batch.id == id, Set(batch.rows.map(\.id)).count == batch.rows.count,
               batch.rows.allSatisfy({ $0.status != .confirmed || !($0.reminderID ?? "").isEmpty }) else { throw ReminderConnectorError.invalidBatch }
@@ -194,7 +195,20 @@ enum ReminderConnectorError: Error, LocalizedError {
         // Only this dedicated journal directory is changed, never its parents.
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: storageURL.path)
     }
+    static func encodedJournal(_ batch:ReminderBatch) throws -> Data {
+        // Bound aggregate row encoding before allocating a complete journal.
+        let encoder=JSONEncoder();var rowBytes=0
+        for row in batch.rows {
+            let count=try encoder.encode(row).count
+            guard count <= maximumJournalBytes-rowBytes else { throw ReminderConnectorError.invalidBatch }
+            rowBytes += count
+        }
+        let data=try encoder.encode(batch)
+        guard data.count <= maximumJournalBytes else { throw ReminderConnectorError.invalidBatch }
+        return data
+    }
     private func persist(_ batch: ReminderBatch) throws {
+        let data = try Self.encodedJournal(batch)
         try checkDirectory()
         try preparePrivateDirectory()
         let url = path(batch.id)
@@ -204,7 +218,7 @@ enum ReminderConnectorError: Error, LocalizedError {
         guard descriptor >= 0 else { throw CocoaError(.fileWriteNoPermission) }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer { try? handle.close(); try? FileManager.default.removeItem(at: temporary) }
-        try handle.write(contentsOf: JSONEncoder().encode(batch))
+        try handle.write(contentsOf: data)
         try handle.synchronize()
         try handle.close()
         // Atomic rename preserves 0600 from creation; there is no world-readable interval.

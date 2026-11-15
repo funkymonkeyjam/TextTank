@@ -48,6 +48,17 @@ import AppKit
         editor.readOnly=false;controller.mark(nil);editor.text="changed during search";let changedRevision=editor.revision
         for _ in 0..<200 {if !controller.status.stringValue.hasPrefix("Searching"){break};try await Task.sleep(nanoseconds:10_000_000)}
         check(controller.status.stringValue.contains("1 changed/closed") && editor.text=="changed during search" && editor.revision==changedRevision,"stale asynchronous mark preserves new content")
+        editor.text="a\r\na\ra\nend";editor.resetUndoHistory();editor.setSavePoint();_ = editor.setBookmarks([3])
+        controller.queryField.stringValue="a";controller.mode.selectItem(at:0);controller.scope.selectItem(at:0)
+        controller.bookmark(nil)
+        for _ in 0..<200 {if !controller.status.stringValue.hasPrefix("Searching"){break};try await Task.sleep(nanoseconds:10_000_000)}
+        check(editor.bookmarkLines.map{$0.intValue}==[0,1,2,3] && !editor.modified,"background bookmark lines preserve existing bookmarks and save point")
+        _ = editor.setBookmarks([3]);controller.bookmark(nil);controller.cancel(nil)
+        try await Task.sleep(nanoseconds:50_000_000)
+        check(editor.bookmarkLines.map{$0.intValue}==[3],"cancelled bookmark action preserves existing markers")
+        controller.bookmark(nil);editor.text="new content";_ = editor.setBookmarks([0])
+        for _ in 0..<200 {if !controller.status.stringValue.hasPrefix("Searching"){break};try await Task.sleep(nanoseconds:10_000_000)}
+        check(controller.status.stringValue.contains("1 changed") && editor.bookmarkLines.map{$0.intValue}==[0],"stale bookmark completion preserves current markers")
         print("PASS SearchControllerChecks: \(checks) assertions")
     }
 }

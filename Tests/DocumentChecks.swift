@@ -200,6 +200,7 @@ import AppKit
         let snapshot=SessionDocument(id:UUID(),originalURL:saved,text:snapshotText,format:FileFormat(encoding:.utf16LE,bom:true),isDirty:true,selection:SessionSelection(anchorByte:snapshotText.utf8.count,caretByte:3),bookmarks:[1],language:"python",originalSHA256:WorkspaceStore.fingerprint(try Data(contentsOf:saved)))
         let session=WorkspaceSession(id:UUID(),name:"Native session regression",documents:[snapshot],activeDocumentID:snapshot.id)
         let originalBytes=try Data(contentsOf:saved)
+        let sessionDelegate=AppDelegate();app.delegate=sessionDelegate
         let restored=try WorkspaceController().restore(session)
         try check(restored.count == 1 && restored[0].editor.text == snapshotText,"session restores Unicode FEFF NUL snapshot into native editor")
         try check(restored[0].fileURL == nil && restored[0].isDocumentEdited,"session snapshot is unsaved and detached from original")
@@ -229,7 +230,7 @@ import AppKit
         winB.setFrame(NSRect(x:150,y:150,width:900,height:650),display:true)
         winA.makeKeyAndOrderFront(nil)
         try check(winA.isVisible && !winB.isVisible,"switching tabs changes visible document")
-        if !NSScreen.screens.isEmpty {try check(winA.frame == winB.frame,"switching tabs preserves window geometry")} else { print("SKIP window geometry: no screen in native test process") }
+        if !NSScreen.screens.isEmpty {print("TAB_GEOMETRY",winA.frame,winB.frame);fflush(stdout);try check(winA.frame == winB.frame,"switching tabs preserves window geometry")} else { print("SKIP window geometry: no screen in native test process") }
         let tabsController=tabA.windowControllers[0] as! EditorWindowController
         tabsController.refreshStatusDetails()
         let buttons=descendants(winA.contentView!).compactMap{$0 as? NSButton}
@@ -245,6 +246,60 @@ import AppKit
         let remaining=NSDocumentController.shared.documents.count
         closeB.performClick(nil)
         try check(NSDocumentController.shared.documents.count == remaining,"stale tab close cannot retarget another document")
+        // Save baseline must describe our submitted bytes, even if an external
+        // noncooperating writer changes the destination immediately after save.
+        let raceURL=root.appendingPathComponent("post-save-race.txt")
+        try Data("original".utf8).write(to:raceURL)
+        let race=TextDocument();race.fileURL=raceURL
+        try race.read(from:Data("original".utf8),ofType:"Plain Text")
+        race.editor.text="our save"
+        race.afterWriteForTesting={try Data("external edit".utf8).write(to:raceURL)}
+        try race.writeSafely(to:raceURL,ofType:"Plain Text",for:.saveOperation)
+        try check(try race.diskState() == .changed,"post-save external writer cannot become acknowledged baseline")
+        race.afterWriteForTesting=nil;race.editor.text="our second save"
+        rejects("later save rejects post-save external edit") {try race.writeSafely(to:raceURL,ofType:"Plain Text",for:.saveOperation)}
+        try check(try String(contentsOf:raceURL,encoding:.utf8) == "external edit","conflict rejection preserves external bytes")
+        race.close()
+        let changed=TextDocument(),changedURL=root.appendingPathComponent("during-save.txt")
+        changed.fileURL=changedURL;try changed.read(from:Data("old".utf8),ofType:"Plain Text")
+        try Data("old".utf8).write(to:changedURL)
+        changed.editor.text="submitted";changed.format=FileFormat(encoding:.utf16LE,bom:true)
+        changed.afterWriteForTesting={changed.format=FileFormat(encoding:.utf8,bom:false);changed.editor.executeCommand("undo")}
+        try changed.writeSafely(to:changedURL,ofType:"Plain Text",for:.saveOperation)
+        try check(changed.isDocumentEdited && changed.format.encoding == .utf8,"change during Save retains newer format and dirty state")
+        changed.editor.replaceSelection("x");changed.editor.executeCommand("undo")
+        try check(changed.isDocumentEdited,"old engine savepoint cannot clear dirty state after stale save")
+        try check(try FileCodec.decode(Data(contentsOf:changedURL)).text == "submitted","Save writes captured text despite later editor changes")
+        changed.afterWriteForTesting=nil;changed.close()
+
+        let recoveryDoc=TextDocument();recoveryDoc.automaticRecoveryDelay=0.25;recoveryDoc.maximumRecoveryDelay=0.08
+        let deadline=Date().addingTimeInterval(0.24)
+        while Date()<deadline {recoveryDoc.editor.text += "x";RunLoop.current.run(until:Date().addingTimeInterval(0.02))}
+        let liveSnapshot=try TextDocument.recovery.load(id:recoveryDoc.recoveryID)
+        try check(!liveSnapshot.text.isEmpty && liveSnapshot.text.count<=recoveryDoc.editor.text.count,"continuous edits receive bounded recovery before quiet interval")
+        recoveryDoc.close()
+        try check(try !TextDocument.recovery.scan().snapshots.contains{$0.id==recoveryDoc.recoveryID},"close drains queued recovery before removing discarded snapshot")
+
+        let first=TextDocument(),second=TextDocument()
+        for doc in [first,second] {NSDocumentController.shared.addDocument(doc);doc.makeWindowControllers();doc.showWindows()}
+        let firstController=first.windowControllers[0] as! EditorWindowController
+        let secondController=second.windowControllers[0] as! EditorWindowController
+        let hiddenRefreshes=firstController.statusRefreshCount
+        RunLoop.current.run(until:Date().addingTimeInterval(0.45))
+        try check(firstController.statusRefreshCount == hiddenRefreshes,"hidden tabs perform no recurring status refresh")
+        secondController.refreshStatusDetails()
+        let eolBefore=descendants(secondController.window!.contentView!).compactMap{$0 as? NSButton}.first{$0.title == "LF"}!
+        second.editor.text="new text";secondController.refreshStatusDetails()
+        let eolAfter=descendants(secondController.window!.contentView!).compactMap{$0 as? NSButton}.first{$0.title == "LF"}!
+        try check(eolBefore === eolAfter,"unrelated status changes retain existing control identity")
+        let navigation=AppDelegate();navigation.previousDocumentTab(nil)
+        try check(firstController.window!.isVisible && !secondController.window!.isVisible,"previous-tab command selects hidden document")
+        let sameA=NSWindow(),sameB=NSWindow();sameA.title="same.txt";sameB.title="same.txt"
+        let choices=navigation.documentTabChoices([sameA,sameB])
+        try check(choices.numberOfItems == 2 && choices.itemArray.map(\.tag) == [0,1],"document chooser preserves same-title document identities")
+        navigation.nextDocumentTab(nil)
+        try check(secondController.window!.isVisible && !firstController.window!.isVisible,"next-tab command restores document visibility")
+        first.close();second.close()
         let termination = AppDelegate().applicationShouldTerminate(app)
         try check(termination == .terminateNow,"clean application quit does not wait for async reply")
         try check(NSDocumentController.shared.documents.isEmpty,"clean quit leaves no owned documents")

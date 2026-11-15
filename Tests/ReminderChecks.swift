@@ -179,6 +179,15 @@ import Darwin
         await rejects("FIFO journal rejects without read hang") { _ = try fifoConnector.storedBatches() }
         try check(ProcessInfo.processInfo.systemUptime - fifoStart < 1,"journal FIFO rejection below one second")
         _ = fifoURL
+        let oversizedDirectory=root.appendingPathComponent("oversized-batch")
+        let oversizedFake=FakeReminderStore(), oversizedID=UUID()
+        let oversizedConnector=RemindersConnector(storageURL:oversizedDirectory,store:oversizedFake)
+        let oversizedRows=Array(repeating:String(repeating:"x",count:1048576),count:33)
+        await rejects("aggregate journal ceiling rejects before first save") { _ = try await oversizedConnector.export(rows:oversizedRows,destinationID:"a",batchID:oversizedID) }
+        try check(oversizedFake.saves.isEmpty,"oversized batch makes no external writes")
+        try check(try oversizedConnector.storedBatches().isEmpty,"oversized batch leaves no poisoned journal")
+        let afterOversize=try await oversizedConnector.export(rows:["2 eggs"],destinationID:"a",batchID:UUID())
+        try check(afterOversize.rows.first?.status == .confirmed,"ordinary export works after oversized rejection")
         print("PASS ReminderChecks: \(assertions) assertions; injected stores only, no EventKit access")
     }
 }

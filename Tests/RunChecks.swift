@@ -28,6 +28,21 @@ import Foundation
   do{try ConfiguredRun.validateLibrary([config,config]);fatalError("duplicate ids accepted")}catch{count+=1;print("PASS duplicate identities rejected before configuration save")}
   let encoded=try JSONEncoder().encode(config)
   check(try JSONDecoder().decode(ConfiguredRun.self,from:encoded)==config,"configuration roundtrip preserves extension identity without execution")
+  var boundary=ConfiguredRun(name:"Boundary",executable:"/usr/bin/printf",arguments:[""])
+  let overhead=try ConfiguredRun.encodeLibrary([boundary]).count
+  boundary.arguments=[String(repeating:"x",count:ConfiguredRun.maximumLibraryBytes-overhead)]
+  let boundaryData=try ConfiguredRun.encodeLibrary([boundary])
+  check(boundaryData.count==ConfiguredRun.maximumLibraryBytes,"exact aggregate JSON byte boundary accepted")
+  check(try ConfiguredRun.decodeLibrary(boundaryData)==[boundary],"exact-boundary library restart roundtrip")
+  boundary.arguments[0]+="x"
+  do{_ = try ConfiguredRun.encodeLibrary([boundary]);fatalError("over boundary accepted")}catch{check(true,"one byte over aggregate boundary rejected")}
+  let escaped=ConfiguredRun(name:"Escaped",executable:"/usr/bin/printf",arguments:[String(repeating:"\"\n",count:300000)])
+  do{_ = try ConfiguredRun.encodeLibrary([escaped]);fatalError("escaped aggregate accepted")}catch{check(true,"JSON escaping counted in aggregate ceiling")}
+  let large=ConfiguredRun(name:"Large",executable:"/usr/bin/printf",arguments:[String(repeating:"x",count:600000),String(repeating:"y",count:600000)])
+  do{_ = try ConfiguredRun.encodeLibrary([large]);fatalError("oversized aggregate accepted")}catch{check(true,"valid individual arguments cannot exceed aggregate ceiling")}
+  var second=large;second.id=UUID();second.arguments.removeLast();var first=large;first.arguments.removeLast()
+  do{_ = try ConfiguredRun.encodeLibrary([first,second]);fatalError("multi-command aggregate accepted")}catch{check(true,"aggregate ceiling spans multiple commands")}
+  do{_ = try ConfiguredRun.decodeLibrary(Data(repeating:32,count:ConfiguredRun.maximumLibraryBytes+1));fatalError("oversized decode accepted")}catch{check(true,"restart rejects oversized bytes before JSON decoding")}
   print("PASS RunChecks: \(count) assertions")
  }
 }

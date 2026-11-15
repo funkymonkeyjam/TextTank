@@ -224,6 +224,31 @@ import Darwin
         rejects("invalid portable rule rejects loading") { _ = try AutomationRuleSet.decode(JSONEncoder().encode(invalidPortable)) }
         invalidPortable.name=""
         rejects("invalid portable name rejects export") { _ = try invalidPortable.encoded() }
+        var bounded=AutomationDefinition.example
+        bounded.steps=[.init(kind:.replaceLiteral,find:"x",replacement:String(repeating:"y",count:AutomationDefinition.maximumTransformBytes+1))]
+        rejects("production replacement rejects oversized output before appending") { _ = try bounded.transform("x") }
+        bounded.steps=[]
+        rejects("production no-step input remains bounded") { _ = try bounded.transform(String(repeating:"x",count:AutomationDefinition.maximumTransformBytes+1)) }
+        bounded.steps=[.init(kind:.replaceLiteral,find:"x",replacement:"yy")]
+        try check(bounded.transform("x café x")=="yy café yy","bounded replacement preserves unmatched Unicode and order")
+        let cancelledProduction=AutomationRunControl();cancelledProduction.cancel()
+        rejects("production replacement respects cancellation") { _ = try bounded.transform("x",control:cancelledProduction) }
+        rejects("oversized automation configuration rejected at decode") { _ = try AutomationLibrary.decode(Data(repeating:32,count:AutomationLibrary.maximumBytes+1)) }
+        bounded.steps=[.init(kind:.removeMarkdownFormatting)]
+        let malformed=String(repeating:"[",count:20000)
+        let malformedStart=ProcessInfo.processInfo.systemUptime
+        try check(bounded.transform(malformed)==malformed,"malformed nested brackets remain literal data")
+        let balanced=malformed+String(repeating:"]",count:20000)
+        try check(bounded.transform(balanced)==balanced,"balanced nonlink brackets remain literal data")
+        try check(ProcessInfo.processInfo.systemUptime-malformedStart < 2,"nested nonlink scan completes in linear bounded time")
+        let activeCancellation=AutomationRunControl()
+        let activeText=String(repeating:"[",count:2*1024*1024)
+        DispatchQueue.global().asyncAfter(deadline:.now()+0.005) { activeCancellation.cancel() }
+        let cancellationStart=ProcessInfo.processInfo.systemUptime
+        rejects("active Markdown transformation observes cancellation") { _ = try bounded.transform(activeText,control:activeCancellation) }
+        try check(ProcessInfo.processInfo.systemUptime-cancellationStart < 2,"active transformation cancellation returns promptly")
+        let escapedMalformed="["+String(repeating:"\\x",count:20000)
+        try check(bounded.transform(escapedMalformed)==escapedMalformed,"odd-offset escaped malformed link preserves bytes with threshold checkpoints")
         print("PASS AutomationChecks: \(count) assertions (pure core; native UI and external outputs not covered)")
     }
 }

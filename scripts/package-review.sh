@@ -30,6 +30,30 @@ with source_tar.open('wb') as target:
     gzip=subprocess.run(['gzip','-n'],stdin=archive.stdout,stdout=target,check=True)
 archive.stdout.close()
 if archive.wait()!=0:raise SystemExit('git archive failed')
+validation_path=root/'harness/logs/candidate-validation.json'
+if not validation_path.exists():raise SystemExit('Run scripts/test.sh on this clean candidate before packaging; validation evidence missing.')
+validation=json.loads(validation_path.read_text())
+source_tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
+if not validation.get('source_stable') or validation.get('source_tree')!=source_tree or validation.get('dirty') or validation.get('local_acceptance',{}).get('exit_code')!=0:
+    raise SystemExit('Current clean candidate requires a successful exact-tree full acceptance record.')
+# Verify source-file hashes too: never inherit tests from an earlier working tree.
+for relative,digest in validation.get('source_manifest',{}).get('sha256',{}).items():
+    if hashlib.sha256((root/relative).read_bytes()).hexdigest()!=digest:raise SystemExit('Test source changed: '+relative)
+ci_path=root/'harness/logs/candidate-ci.json'
+validation['ci']={'status':'not_observed','source_tree':source_tree}
+if ci_path.exists():
+    ci=json.loads(ci_path.read_text())
+    if ci.get('source_tree')==source_tree:validation['ci']=ci
+validation['packaged_source_commit']=sha
+log=root/'harness/logs/full-acceptance.log'
+if not log.is_file():raise SystemExit('Full acceptance log missing')
+if hashlib.sha256(log.read_bytes()).hexdigest()!=validation.get('local_acceptance',{}).get('log_sha256'):raise SystemExit('Acceptance log changed after validation')
+evidence=package/'Evidence';evidence.mkdir()
+shutil.copyfile(log,evidence/'full-acceptance.log')
+validation['local_acceptance']['log']='Evidence/full-acceptance.log'
+validation['local_acceptance']['log_sha256']=hashlib.sha256(log.read_bytes()).hexdigest()
+validation['local_acceptance']['observed_skips']=[line for line in log.read_text(errors='replace').splitlines() if line.startswith('SKIP ')]
+(package/'validation.json').write_text(json.dumps(validation,indent=2)+'\n')
 lock=json.loads((root/'Dependencies.lock.json').read_text())
 cache=root/'build/downloads';cache.mkdir(parents=True,exist_ok=True)
 for dependency in lock['dependencies']:
@@ -67,7 +91,9 @@ def tree_hash(directory):
         digest.update(kind+b'\0'+relative+b'\0'+value+b'\0')
     return digest.hexdigest()
 def capture(*args):return subprocess.check_output(args,text=True).strip()
-manifest={'schema_version':1,'status':'INCOMPLETE PREVIEW','source_commit':sha,'built_from_clean_commit':True,'created_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'app_tree_sha256':tree_hash(package/'TextTank.app'),'app_tree_hash_algorithm':'Sorted relative paths: SHA256 of type byte F/L, NUL, UTF8 path, NUL, raw SHA256 file bytes or UTF8 symlink target, NUL; directories/xattrs excluded.','architecture':capture('lipo','-archs',str(package/'TextTank.app/Contents/MacOS/TextTank')),'host_macos':capture('sw_vers','-productVersion'),'xcode':capture('xcodebuild','-version'),'deployment_target':lock['deploymentTarget'],'signing':'local ad-hoc; codesign deep/strict verification passed; not notarized','dependencies':lock['dependencies'],'files':{str(p.relative_to(package)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(sources.iterdir())},'ci_status':'Not inferred by packaging. Consult the exact source-commit CI result.','limitations':'Not full Notepad++ parity; see REVIEW-ME.md. No Intel/older-macOS runtime claim; live EventKit happy path is user-confirmed, remaining live failure/retry cases are unverified.'}
+manifest={'schema_version':1,'status':'INCOMPLETE PREVIEW','source_commit':sha,'source_tree':source_tree,'built_from_clean_commit':True,'created_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'app_tree_sha256':tree_hash(package/'TextTank.app'),'app_tree_hash_algorithm':'Sorted relative paths: SHA256 of type byte F/L, NUL, UTF8 path, NUL, raw SHA256 file bytes or UTF8 symlink target, NUL; directories/xattrs excluded.','architecture':capture('lipo','-archs',str(package/'TextTank.app/Contents/MacOS/TextTank')),'host_macos':capture('sw_vers','-productVersion'),'xcode':capture('xcodebuild','-version'),'deployment_target':lock['deploymentTarget'],'signing':'local ad-hoc; codesign deep/strict verification passed; not notarized','dependencies':lock['dependencies'],'files':{str(p.relative_to(package)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(sources.iterdir())},'ci_status':'Not inferred by packaging. Consult the exact source-commit CI result.','limitations':'Not full Notepad++ parity; see REVIEW-ME.md. No Intel/older-macOS runtime claim; live EventKit happy path is user-confirmed, remaining live failure/retry cases are unverified.'}
+validation['app_tree_sha256']=manifest['app_tree_sha256']
+(package/'validation.json').write_text(json.dumps(validation,indent=2)+'\n')
 (package/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 zipfile=stage/'TextTank-review.zip'
 subprocess.run(['ditto','-c','-k','--norsrc','--noextattr','--keepParent',str(package),str(zipfile)],check=True)

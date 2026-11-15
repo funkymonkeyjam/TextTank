@@ -93,10 +93,19 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
         }
         cancellation?.cancel();task?.cancel();let token=UUID();generation=token;let flag=TTSearchCancellation();cancellation=flag
         searchButtons.forEach{$0.isEnabled=false};status.stringValue="Searching snapshots…";rows=[];table.reloadData()
+        let bookmarkSnapshots=buffers.map{($0.text,$0.offset)}
+        let needsBookmarks=action == .bookmark
         let snapshots=zip(buffers,selectionRanges).map{($0.0.text as NSString).substring(with:$0.1)}
         task=Task { @MainActor [weak self] in
             do {
-                let reports=try await Task.detached(priority:.userInitiated){try snapshots.map{try SearchCore.search($0,options:opts,cancellation:flag)}}.value
+                let computed=try await Task.detached(priority:.userInitiated){
+                    let reports=try snapshots.map{try SearchCore.search($0,options:opts,cancellation:flag)}
+                    let lines=needsBookmarks ? try zip(bookmarkSnapshots,reports).map { snapshot,report in
+                        try SearchCore.bookmarkLines(in:snapshot.0,locations:report.hits.map{$0.range.location+snapshot.1},cancellation:flag)
+                    } : []
+                    return (reports,lines)
+                }.value
+                let reports=computed.0
                 guard let self,self.generation==token,!flag.cancelled else{return}
                 defer{self.finish()}
                 self.rows=zip(buffers,reports).flatMap{b,r in r.hits.map{Row(buffer:b,hit:SearchHit(range:NSRange(location:$0.range.location+b.offset,length:$0.range.length),replacement:$0.replacement))}}
@@ -129,10 +138,12 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
                     self.status.stringValue="Marked \(marked) matches; \(stale) changed/closed documents skipped."+(zeroWidth>0 ? " \(zeroWidth) zero-width matches have no visible span.":"")
                 case .bookmark:
                     var stale=0
-                    for b in buffers {
-                        guard b.editor.window != nil,b.editor.revision==b.revision,b.editor.text==b.text else{stale+=1;continue}
+                    guard !truncated else{self.status.stringValue="Result limit reached; bookmarks were preserved. Narrow the scope.";return}
+                    for (index,b) in buffers.enumerated() {
+                        guard b.editor.window != nil,b.editor.revision==b.revision,b.editor.text==b.text,
+                              !selectionScope || (b.editor.selectionAnchor==b.anchor && b.editor.selectionCaret==b.caret) else{stale+=1;continue}
                         var lines=Set(b.editor.bookmarkLines.map{$0.intValue})
-                        for row in self.rows where row.buffer.editor===b.editor {let prefix=(b.text as NSString).substring(to:row.hit.range.location);var line=0,priorCR=false;for u in prefix.utf16{if u==13{line+=1}else if u==10 && !priorCR{line+=1};priorCR=u==13};lines.insert(line)}
+                        lines.formUnion(computed.1[index])
                         _=b.editor.setBookmarks(lines.sorted().map{NSNumber(value:$0)})
                     };self.status.stringValue="Bookmarked matching lines; \(stale) changed documents skipped."
                 }

@@ -8,7 +8,7 @@ clang++ -std=c++17 -fobjc-arc -mmacosx-version-min=14.0 \
   -F build/vendor/Debug -c Sources/EditorBridge/TTEditor.mm -o build/tests/AutomationBridge.o
 swiftc -swift-version 5 -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache \
   -import-objc-header Sources/EditorBridge/TTEditor.h -F build/vendor/Debug \
-  -framework Scintilla -framework Cocoa -framework EventKit -lc++ \
+  -framework Scintilla Sources/UI/*.swift -framework Cocoa -framework EventKit -lc++ \
   -Xlinker -rpath -Xlinker "$PWD/build/vendor/Debug" \
   Sources/Automations/*.swift Sources/Connectors/*.swift \
   Tests/AutomationControllerChecks.swift build/tests/AutomationBridge.o build/tests/UserLexer.o Vendor/lexilla/bin/liblexilla.a \

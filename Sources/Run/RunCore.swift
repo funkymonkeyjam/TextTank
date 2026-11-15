@@ -34,17 +34,42 @@ struct ConfiguredRun:Codable,Equatable {
         guard commands.count<=1000,Set(commands.map(\.id)).count==commands.count else{throw RunFailure.invalid}
         for command in commands{try command.validate()}
     }
+    /// One shared byte ceiling for persistence and restart, including JSON escaping.
+    static let maximumLibraryBytes=1024*1024
+    static func encodeLibrary(_ commands:[Self])throws->Data {
+        try validateLibrary(commands)
+        // Reject obviously oversized inputs before JSONEncoder allocates an expanded
+        // representation. JSON overhead/escaping is checked on the encoded result.
+        var remaining=maximumLibraryBytes
+        for command in commands {
+            for field in [command.name,command.executable]+command.arguments {
+                let bytes=field.utf8.count
+                guard bytes<=remaining else{throw RunFailure.configurationTooLarge}
+                remaining-=bytes
+            }
+        }
+        let data=try JSONEncoder().encode(commands)
+        guard data.count<=maximumLibraryBytes else{throw RunFailure.configurationTooLarge}
+        return data
+    }
+    static func decodeLibrary(_ data:Data)throws->[Self] {
+        guard data.count<=maximumLibraryBytes else{throw RunFailure.configurationTooLarge}
+        let commands=try JSONDecoder().decode([Self].self,from:data)
+        try validateLibrary(commands)
+        return commands
+    }
     /// Version 1 extension contract: UTF-8 document/selection on stdin, UTF-8 result
     /// on stdout, diagnostics on stderr, exit 0 required. No automatic mutation.
     static var uppercaseSample:Self {Self(name:"Uppercase ASCII (sample extension)",executable:"/usr/bin/tr",arguments:["a-z","A-Z"],extensionMode:true)}
 }
 enum RunFailure:Error,LocalizedError {
-    case invalid,fileRequired,busy,tooLarge
+    case invalid,fileRequired,busy,tooLarge,configurationTooLarge
     var errorDescription:String? {
         switch self {
         case .invalid:return "Invalid command configuration. Use an absolute executable path and an argument array."
         case .fileRequired:return "This command needs a saved document path."
         case .busy:return "A command is already running."
+        case .configurationTooLarge:return "Saved Run commands exceed the 1 MiB configuration limit. Shorten arguments or remove commands; the existing configuration was preserved."
         case .tooLarge:return "Process input or output exceeds the 4 MiB limit."
         }
     }

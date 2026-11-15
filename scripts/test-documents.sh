@@ -9,7 +9,7 @@ clang++ -std=c++17 -fobjc-arc -mmacosx-version-min=14.0 \
 clang++ -std=c++17 -fobjc-arc -mmacosx-version-min=14.0 -I Sources/Search/Boost -c Sources/Search/TTSearchEngine.mm -o build/tests/BoostSearch.o
 swiftc -swift-version 5 -D TESTING -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache \
   -import-objc-header Sources/EditorBridge/TTEditor.h -F build/vendor/Debug \
-  -framework Scintilla -framework Cocoa -framework EventKit -lc++ \
+  -framework Scintilla Sources/UI/*.swift -framework Cocoa -framework EventKit -lc++ \
   -Xlinker -rpath -Xlinker "$PWD/build/vendor/Debug" \
   Sources/Languages/*.swift Sources/Run/*.swift Sources/Utilities/*.swift Sources/Search/*.swift Sources/Workspace/*.swift Sources/Macros/*.swift Sources/Documents/*.swift Sources/Automations/*.swift Sources/Connectors/*.swift Sources/TextTankApp/*.swift \
   Tests/DocumentChecks.swift build/tests/DocumentBridge.o build/tests/BoostSearch.o build/tests/UserLexer.o Vendor/lexilla/bin/liblexilla.a \

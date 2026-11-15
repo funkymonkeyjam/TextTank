@@ -50,12 +50,21 @@ final class WorkspaceController: NSObject {
             NSDocumentController.shared.addDocument(document);document.makeWindowControllers()
             document.editor.text=snapshot.text
             document.updateChangeCount(.changeDone)
-            document.languageIdentifier=snapshot.language ?? "null";document.editor.setLanguage(document.languageIdentifier)
+            let requestedLanguage=snapshot.language ?? "null"
+            if let app=NSApp.delegate as? AppDelegate,app.languages.apply(identifier:requestedLanguage,to:document.editor) {
+                document.languageIdentifier=requestedLanguage
+            } else {
+                document.languageIdentifier="null";document.editor.setLanguage("null")
+            }
             _ = document.editor.setBookmarks(snapshot.bookmarks.map { NSNumber(value:$0) })
             _ = document.editor.setSelectionAnchor(snapshot.selection.anchorByte,caret:snapshot.selection.caretByte)
             document.showWindows()
             (document.windowControllers.first as? EditorWindowController)?.status.stringValue="Session snapshot · \(snapshot.originalURL?.lastPathComponent ?? "Untitled") · Save As to keep separately"
-            document.flushRecovery();restored.append(document)
+            document.flushRecovery()
+            if requestedLanguage != document.languageIdentifier {
+                (document.windowControllers.first as? EditorWindowController)?.status.stringValue += " · Language profile unavailable; using Plain Text"
+            }
+            restored.append(document)
             if snapshot.id == session.activeDocumentID { active=document }
         }
         active?.showWindows();return restored

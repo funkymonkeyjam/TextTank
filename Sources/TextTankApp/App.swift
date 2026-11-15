@@ -150,7 +150,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let macroRoot=NSMenuItem();macroRoot.title="Macros";macroRoot.submenu=macros.menu();bar.addItem(macroRoot)
         let automationRoot=NSMenuItem(); automationRoot.title="Automations";automationRoot.submenu=automations.menu();bar.addItem(automationRoot)
         item(search,"Automation Palette…",#selector(palette(_:)),"P")
-        let window = menu("Window"); NSApp.windowsMenu = window; item(window,"Minimize",#selector(NSWindow.performMiniaturize(_:)),"m"); item(window,"Zoom",#selector(NSWindow.performZoom(_:)))
+        let window = menu("Window"); NSApp.windowsMenu = window
+        let nextTab=NSMenuItem(title:"Next Tab",action:#selector(nextDocumentTab(_:)),keyEquivalent:"\t");nextTab.target=self;nextTab.keyEquivalentModifierMask=[.control];window.addItem(nextTab)
+        let previousTab=NSMenuItem(title:"Previous Tab",action:#selector(previousDocumentTab(_:)),keyEquivalent:"\t");previousTab.target=self;previousTab.keyEquivalentModifierMask=[.control,.shift];window.addItem(previousTab)
+        item(window,"Open Documents…",#selector(showDocumentTabs(_:)))
+        window.addItem(.separator()); item(window,"Minimize",#selector(NSWindow.performMiniaturize(_:)),"m"); item(window,"Zoom",#selector(NSWindow.performZoom(_:)))
+    }
+    @objc func nextDocumentTab(_ sender:Any?) {cycleDocumentTab(1)}
+    @objc func previousDocumentTab(_ sender:Any?) {cycleDocumentTab(-1)}
+    private func cycleDocumentTab(_ direction:Int) {
+        let windows=DocumentTabWindow.documents
+        guard !windows.isEmpty else{return}
+        let index=windows.firstIndex(where:{$0.isVisible}) ?? 0
+        windows[(index+direction+windows.count)%windows.count].makeKeyAndOrderFront(nil)
+    }
+    @objc func showDocumentTabs(_ sender:Any?) {
+        let windows=DocumentTabWindow.documents
+        guard !windows.isEmpty else{return}
+        let alert=TTAlert();alert.messageText="Open Documents"
+        let choice=documentTabChoices(windows)
+        choice.selectItem(at:windows.firstIndex(where:{$0.isVisible}) ?? 0)
+        alert.accessoryView=choice;alert.addButton(withTitle:"Switch");alert.addButton(withTitle:"Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn,let index=choice.selectedItem?.tag,windows.indices.contains(index),DocumentTabWindow.documents.contains(where:{$0 === windows[index]}) else{return}
+        windows[index].makeKeyAndOrderFront(nil)
+    }
+    func documentTabChoices(_ windows:[NSWindow]) -> NSPopUpButton {
+        let choice=NSPopUpButton(frame:NSRect(x:0,y:0,width:420,height:30))
+        for (index,window) in windows.enumerated() {
+            let path=(window.windowController?.document as? NSDocument)?.fileURL?.deletingLastPathComponent().path
+            let title=window.title+(window.isDocumentEdited ? " •" : "")+(path.map {" — \($0)"} ?? "")
+            let item=NSMenuItem(title:title,action:nil,keyEquivalent:"");item.tag=index
+            choice.menu?.addItem(item)
+        }
+        return choice
     }
     private func restoreRecovery() {
         do {
@@ -183,12 +215,28 @@ final class TextDocument: NSDocument {
     var recoveryID = UUID()
     var recoveryBase: UInt64 = 0
     private var recoveryTimer: Timer?
+    private var recoveryDeadlineTimer: Timer?
+    private let recoveryWriter=RecoveryWriter()
+    private var recoveryGeneration=0
+    private var recoveryClosed=false
+    #if TESTING
+    var automaticRecoveryDelay: TimeInterval=0.5
+    var maximumRecoveryDelay: TimeInterval=5
+    #else
+    private let automaticRecoveryDelay: TimeInterval=0.5
+    private let maximumRecoveryDelay: TimeInterval=5
+    #endif
     let editor = TTEditor(frame: NSRect(x:0,y:0,width:900,height:600))
     var savedFormat = FileFormat(encoding:.utf8,bom:false)
     var format = FileFormat(encoding: .utf8, bom: false) {
-        didSet { if !loading && format != oldValue { recoveryBase += 1; updateChangeCount(format != savedFormat || editor.modified ? .changeDone : .changeCleared) } }
+        didSet { if !loading && format != oldValue { recoveryBase += 1; updateChangeCount(format != savedFormat || editor.modified || !savepointMatchesDisk ? .changeDone : .changeCleared) } }
     }
     private var diskBytes: Data?
+    private var savePayload: Data?
+    private var savepointMatchesDisk=true
+    #if TESTING
+    var afterWriteForTesting: (() throws -> Void)?
+    #endif
     var originalDiskFingerprint:String? { diskBytes.map(WorkspaceStore.fingerprint) }
     var languageIdentifier="null"
     private var loading = false
@@ -235,29 +283,57 @@ final class TextDocument: NSDocument {
         hasUndoManager = false
         editor.onChange = { [weak self] in
             guard let self, !self.loading else { return }
-            self.updateChangeCount(self.editor.modified || self.format != self.savedFormat ? .changeDone : .changeCleared)
+            self.updateChangeCount(self.editor.modified || self.format != self.savedFormat || !self.savepointMatchesDisk ? .changeDone : .changeCleared)
             self.recoveryTimer?.invalidate()
-            self.recoveryTimer=Timer.scheduledTimer(withTimeInterval:0.5,repeats:false) { [weak self] _ in self?.flushRecovery() }
+            self.recoveryGeneration+=1
+            self.recoveryTimer=Timer.scheduledTimer(withTimeInterval:self.automaticRecoveryDelay,repeats:false) { [weak self] _ in self?.enqueueRecovery() }
+            if self.recoveryDeadlineTimer == nil {
+                self.recoveryDeadlineTimer=Timer.scheduledTimer(withTimeInterval:self.maximumRecoveryDelay,repeats:false) { [weak self] _ in self?.enqueueRecovery() }
+            }
+        }
+    }
+    private func cancelRecoveryTimers() {
+        recoveryTimer?.invalidate();recoveryTimer=nil
+        recoveryDeadlineTimer?.invalidate();recoveryDeadlineTimer=nil
+    }
+    private func recoveryOperation() -> () throws -> Void {
+        let store=Self.recovery,id=recoveryID,revision=recoveryBase+UInt64(editor.revision)
+        if isDocumentEdited || editor.modified || format != savedFormat {
+            let snapshot=RecoverySnapshot(id:id,text:editor.text,format:format,originalURL:fileURL?.absoluteString,revision:revision)
+            return {try store.save(snapshot)}
+        }
+        return {try store.remove(id:id,throughRevision:revision)}
+    }
+    private func reportRecovery(_ error:Error?) {
+        let message=error.map {"Recovery failed: \($0.localizedDescription)"} ?? ((isDocumentEdited ? "Draft saved for session restore" : fileURL == nil ? "Ready" : "Saved")+" · Incomplete preview")
+        windowControllers.compactMap{$0 as? EditorWindowController}.forEach{$0.status.stringValue=message}
+    }
+    private func enqueueRecovery() {
+        guard !recoveryClosed else{return}
+        cancelRecoveryTimers()
+        let generation=recoveryGeneration,operation=recoveryOperation()
+        recoveryWriter.submit { [weak self] in
+            let error:Error?
+            do {try operation();error=nil} catch let failure {error=failure}
+            DispatchQueue.main.async { [weak self] in
+                guard let self,!self.recoveryClosed,self.recoveryGeneration == generation else{return}
+                self.reportRecovery(error)
+            }
         }
     }
     func flushRecovery() {
-        do {
-            if isDocumentEdited || editor.modified || format != savedFormat {
-                try Self.recovery.save(RecoverySnapshot(id:recoveryID,text:editor.text,format:format,originalURL:fileURL?.absoluteString,revision:recoveryBase+UInt64(editor.revision)))
-                windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.status.stringValue="Draft saved for session restore · Incomplete preview" }
-            } else {
-                try Self.recovery.remove(id:recoveryID,throughRevision:recoveryBase+UInt64(editor.revision))
-                windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.status.stringValue=(fileURL == nil ? "Ready" : "Saved")+" · Incomplete preview" }
-            }
-        } catch { windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.status.stringValue="Recovery failed: \(error.localizedDescription)" } }
+        guard !recoveryClosed else{return}
+        cancelRecoveryTimers();recoveryGeneration+=1
+        do {try recoveryWriter.finish(recoveryOperation());reportRecovery(nil)}catch{reportRecovery(error)}
     }
     override func close() {
         (NSApp.delegate as? AppDelegate)?.macros.editorWillReset(editor,reason:"The recording document was closed.")
-        recoveryTimer?.invalidate()
+        cancelRecoveryTimers();recoveryGeneration+=1;recoveryClosed=true
         editor.readOnly=true
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.prepareForClose() }
         // NSDocument only reaches close after the user has chosen Save or Discard.
-        try? Self.recovery.remove(id:recoveryID,throughRevision:recoveryBase+UInt64(editor.revision))
+        let store=Self.recovery,id=recoveryID,revision=recoveryBase+UInt64(editor.revision)
+        try? recoveryWriter.finish {try store.remove(id:id,throughRevision:revision)}
         super.close()
     }
     override class var autosavesInPlace: Bool { false }
@@ -270,7 +346,7 @@ final class TextDocument: NSDocument {
         (NSApp.delegate as? AppDelegate)?.macros.editorWillReset(editor,reason:"The recording document was reloaded.")
         loading=true
         let locked=editor.readOnly;editor.readOnly=false
-        editor.text=decoded.text;editor.resetUndoHistory();format=decoded.format;savedFormat=format;diskBytes=bytes;editor.setSavePoint()
+        editor.text=decoded.text;editor.resetUndoHistory();format=decoded.format;savedFormat=format;diskBytes=bytes;savepointMatchesDisk=true;editor.setSavePoint()
         editor.readOnly=locked;loading=false
         if let app=NSApp.delegate as? AppDelegate,let id=app.languages.detect(filename:fileURL?.lastPathComponent ?? "",text:decoded.text),app.languages.apply(identifier:id,to:editor){languageIdentifier=id}
     }
@@ -312,14 +388,24 @@ final class TextDocument: NSDocument {
         let operation=NSPrintOperation(view:printable,printInfo:settings)
         operation.jobTitle=displayName;return operation
     }
-    override func data(ofType typeName: String) throws -> Data { try FileCodec.encode(editor.text, format: format) }
+    override func data(ofType typeName: String) throws -> Data { if let savePayload {return savePayload};return try FileCodec.encode(editor.text, format: format) }
     override func writeSafely(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType) throws {
         if url == fileURL, let diskBytes {
             let current = try WorkspaceStore.readRegularFile(url,maximumBytes:Int.max)
             guard current == diskBytes else { throw NSError(domain:"TextTank",code:1,userInfo:[NSLocalizedDescriptionKey:"The file changed outside TextTank. Use Save As to preserve your edits, or revert to inspect the disk version."]) }
         }
+        let submitted=try FileCodec.encode(editor.text,format:format),submittedFormat=format,submittedRevision=editor.revision
+        savePayload=submitted;defer {savePayload=nil}
         try super.writeSafely(to:url,ofType:typeName,for:saveOperation)
-        if saveOperation != .saveToOperation { diskBytes = try Data(contentsOf:url); savedFormat=format; editor.setSavePoint(); updateChangeCount(.changeCleared); flushRecovery() }
+        #if TESTING
+        try afterWriteForTesting?()
+        #endif
+        if saveOperation != .saveToOperation {
+            diskBytes=submitted;savedFormat=submittedFormat
+            if editor.revision == submittedRevision && format == submittedFormat {savepointMatchesDisk=true;editor.setSavePoint();updateChangeCount(.changeCleared)}
+            else {savepointMatchesDisk=false;updateChangeCount(.changeDone)}
+            flushRecovery()
+        }
     }
 
 }
@@ -351,16 +437,24 @@ private final class StatusBadgeRow: NSView {
     var onActivate:((String,NSView)->Void)?
     private var values:[String]=[]
     private var badges:[StatusBadge]=[]
+    private var identities:[String]=[]
     private var measuredWidth:CGFloat = -1
     override var isFlipped:Bool {true}
     func update(_ fields:[String],keys:[String]) {
-        guard fields != values else {return}
-        values=fields;badges.forEach{$0.removeFromSuperview()}
-        badges=zip(fields,keys).map { text,key in
-            let badge=StatusBadge(text)
+        var counts:[String:Int]=[:]
+        let ids=keys.map {key -> String in let n=counts[key,default:0];counts[key]=n+1;return "\(key).\(n)"}
+        guard fields != values || ids != identities else{return}
+        let existing=Dictionary(uniqueKeysWithValues:zip(identities,badges))
+        let updated=zip(zip(fields,keys),ids).map { entry,id -> StatusBadge in
+            let (text,key)=entry
+            let badge=existing[id] ?? StatusBadge(text)
+            badge.title=text;badge.toolTip=text+" — click for options"
             badge.activate = { [weak self] button in self?.onActivate?(key,button) }
+            if badge.superview == nil {addSubview(badge)}
             return badge
-        };badges.forEach{addSubview($0)}
+        }
+        for (id,badge) in existing where !ids.contains(id) {badge.removeFromSuperview()}
+        values=fields;identities=ids;badges=updated
         invalidateIntrinsicContentSize();needsLayout=true
     }
     private func rows() -> [[StatusBadge]] {
@@ -393,9 +487,13 @@ private final class DocumentTabWindow: NSWindow {
     }
     override func makeKeyAndOrderFront(_ sender:Any?) {
         let others=Self.documents.filter{$0 !== self}
-        if let visible=others.first(where:{$0.isVisible}) { setFrame(visible.frame,display:false) }
+        let sharedFrame=others.first(where:{$0.isVisible})?.frame
         others.forEach{$0.orderOut(nil)}
         super.makeKeyAndOrderFront(sender)
+        contentView?.layoutSubtreeIfNeeded()
+        if let sharedFrame {setFrame(sharedFrame,display:true)}
+        (windowController as? EditorWindowController)?.refreshStatusDetails()
+        if let controller=windowController as? EditorWindowController {makeFirstResponder(controller.activeEditor)}
     }
     override func close() {
         let wasVisible=isVisible
@@ -482,7 +580,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     private let statusDetails = StatusBadgeRow()
     private let documentTabs = DocumentTabStrip()
     private var statusTimer: Timer?
+    private(set) var statusRefreshCount=0
     private var statusRevision: UInt?
+    private var statusMetricsPending=false
     private var cachedCharacterCount = 0
     private var cachedSelectionKey = ""
     private var cachedSelectedCount = 0
@@ -529,26 +629,39 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         status.font = .systemFont(ofSize:11); status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
         statusDetails.onActivate = { [weak self] key,view in self?.showStatusOptions(key,at:view) }
-        statusTimer=Timer.scheduledTimer(withTimeInterval:0.2,repeats:true) { [weak self] _ in self?.refreshStatusDetails() }
+        statusTimer=Timer.scheduledTimer(withTimeInterval:0.2,repeats:true) { [weak self] _ in
+            guard let self,self.window?.isVisible == true else{return}
+            self.refreshStatusDetails()
+        }
         refreshStatusDetails(for:document)
     }
     func refreshStatusDetails(for suppliedDocument:TextDocument? = nil) {
         guard let doc=suppliedDocument ?? document as? TextDocument else { return }
+        statusRefreshCount+=1
         documentTabs.refresh()
         let editor=activeEditor, info=editor.statusInfo
-        if statusRevision != doc.editor.revision {
-            let text=doc.editor.text
-            cachedCharacterCount=text.unicodeScalars.count
-            var cr=false,lf=false,crlf=false
-            let bytes=Array(text.utf8);var i=0
-            while i < bytes.count {
-                if bytes[i] == 13 { if i+1 < bytes.count && bytes[i+1] == 10 {crlf=true;i+=1} else {cr=true} }
-                else if bytes[i] == 10 {lf=true}
-                i+=1
+        if statusRevision != doc.editor.revision && !statusMetricsPending {
+            // Capture authoritative bytes once on main; scans/temporary allocations
+            // happen off-main. One in-flight task bounds work for rapid edits.
+            let revision=doc.editor.revision,text=doc.editor.text
+            statusMetricsPending=true
+            DispatchQueue.global(qos:.utility).async { [weak self,weak doc] in
+                let count=text.unicodeScalars.count
+                var cr=false,lf=false,crlf=false,priorCR=false
+                for byte in text.utf8 {
+                    if byte == 13 {if priorCR {cr=true};priorCR=true}
+                    else {if byte == 10 {if priorCR {crlf=true}else{lf=true}} else if priorCR {cr=true};priorCR=false}
+                }
+                if priorCR {cr=true}
+                let endings=[crlf ? "CRLF" : nil,lf ? "LF" : nil,cr ? "CR" : nil].compactMap{$0}
+                let eol=endings.count>1 ? "Mixed EOL" : endings.first ?? ""
+                DispatchQueue.main.async { [weak self,weak doc] in
+                    guard let self else{return};self.statusMetricsPending=false
+                    guard let doc,self.document === doc,doc.editor.revision == revision else{return}
+                    self.cachedCharacterCount=count;self.cachedEndings=eol;self.statusRevision=revision
+                    if self.window?.isVisible == true {self.refreshStatusDetails()}
+                }
             }
-            let endings=[crlf ? "CRLF" : nil,lf ? "LF" : nil,cr ? "CR" : nil].compactMap{$0}
-            cachedEndings=endings.count > 1 ? "Mixed EOL" : endings.first ?? ""
-            statusRevision=doc.editor.revision
         }
         let encoding:[FileEncoding:String]=[.utf8:"UTF-8",.utf16LE:"UTF-16 LE",.utf16BE:"UTF-16 BE",.windows1252:"Windows-1252",.latin1:"Latin-1"]
         let language=(NSApp.delegate as? AppDelegate)?.languages.profile(identifier:doc.languageIdentifier)?.title ?? (doc.languageIdentifier == "null" ? "Plain Text" : doc.languageIdentifier)

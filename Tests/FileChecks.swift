@@ -149,6 +149,14 @@ import Darwin
         try check(restored.first(where: { $0.id == crashID })?.text == "named after crash\0😀","named exact recovery after crash")
         try check(restored.first(where: { $0.originalURL == nil })?.text == "untitled after crash","untitled exact recovery after crash")
         try check(Data(contentsOf:original) == originalBytes,"forced crash leaves original unchanged")
+        let writer=RecoveryWriter(),entered=DispatchSemaphore(value:0),release=DispatchSemaphore(value:0)
+        let eventsLock=NSLock();var events:[String]=[]
+        func record(_ event:String) {eventsLock.lock();events.append(event);eventsLock.unlock()}
+        writer.submit {entered.signal();release.wait();record("active")}
+        try check(entered.wait(timeout:.now()+2) == .success,"background recovery starts without blocking caller")
+        writer.submit {record("superseded")};writer.submit {record("latest")}
+        release.signal();writer.finish {record("cleanup")}
+        try check(events == ["active","latest","cleanup"],"recovery coalesces pending work and orders cleanup after writes")
         print("PASS FileChecks: \(checks) assertions; codec and isolated recovery")
     }
 }

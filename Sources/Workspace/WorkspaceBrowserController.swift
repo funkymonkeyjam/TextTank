@@ -116,7 +116,7 @@ final class WorkspaceBrowserController:NSObject,NSOutlineViewDataSource,NSOutlin
     @discardableResult func open(_ url:URL)throws->TextDocument {
         if let existing=NSDocumentController.shared.document(for:url) as? TextDocument {existing.showWindows();return existing}
         let data=try WorkspaceStore.readRegularFile(url)
-        let document=TextDocument();try document.read(from:data,ofType:"public.plain-text");document.fileURL=url
+        let document=TextDocument();document.fileURL=url;try document.read(from:data,ofType:"public.plain-text")
         NSDocumentController.shared.addDocument(document);document.makeWindowControllers();document.showWindows()
         if recordsSystemRecent { NSDocumentController.shared.noteNewRecentDocumentURL(url) }
         do{try store.noteRecent(url)}catch{status.stringValue="Opened file; recent history could not be saved: \(error.localizedDescription)"}

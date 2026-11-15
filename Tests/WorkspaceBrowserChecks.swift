@@ -83,6 +83,23 @@ import Darwin
         try FileManager.default.removeItem(at:fresh);monitor.poll();waitFor(.missing)
         check(watched.editor.text=="changed on disk","missing monitored file preserves text")
         monitor.stop();check(monitor.status == .stopped && monitor.document == nil,"monitor stops explicitly")
+        let app=AppDelegate();let previousDelegate=NSApp.delegate;NSApp.delegate=app
+        defer{NSApp.delegate=previousDelegate}
+        let python=folder.appendingPathComponent("extension-only.py");try Data("value = 1".utf8).write(to:python)
+        let detected=try controller.open(python)
+        check(detected.languageIdentifier=="python","workspace filename assigned before extension language detection")
+        let sessionText="return 42;"
+        let snapshot=SessionDocument(id:UUID(),originalURL:nil,text:sessionText,format:FileFormat(),isDirty:true,selection:SessionSelection(anchorByte:0,caretByte:0),bookmarks:[],language:"javascript",originalSHA256:nil)
+        let restored=try WorkspaceController().restore(WorkspaceSession(id:UUID(),name:"Language restoration",documents:[snapshot],activeDocumentID:snapshot.id))[0]
+        let expected=TTEditor(frame:NSRect(x:0,y:0,width:300,height:200));expected.text=sessionText
+        check(app.languages.apply(identifier:"javascript",to:expected),"expected mapped JavaScript profile applies")
+        let actualColor=restored.editor.attributedText(forSelection:false).attribute(.foregroundColor,at:0,effectiveRange:nil) as? NSColor
+        let expectedColor=expected.attributedText(forSelection:false).attribute(.foregroundColor,at:0,effectiveRange:nil) as? NSColor
+        check(restored.languageIdentifier=="javascript" && actualColor==expectedColor,"session uses mapped lexer and configured keyword styling")
+        check(restored.editor.text==sessionText && restored.isDocumentEdited,"session language restore preserves unsaved text")
+        var missing=snapshot;missing.language="missing-profile"
+        let fallback=try WorkspaceController().restore(WorkspaceSession(id:UUID(),name:"Unavailable language",documents:[missing],activeDocumentID:nil))[0]
+        check(fallback.languageIdentifier=="null" && fallback.editor.text==sessionText,"unknown session language safely falls back to plain text")
         controller.window?.close()
         print("WorkspaceBrowserChecks: \(count) assertions passed")
     }

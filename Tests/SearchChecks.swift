@@ -48,6 +48,11 @@ import Foundation
         options.query=String(repeating:"(",count:10000)+"a"+String(repeating:")",count:10000);failed=false;let compileStart=Date()
         do{_ = try SearchCore.search("a",options:options,timeLimit:0.1)}catch{failed=true}
         check(failed && Date().timeIntervalSince(compileStart)<1,"deeply nested pattern compilation rejects safely")
+        check(try SearchCore.bookmarkLines(in:"a\r\nb\rc\n🥑",locations:[0,1,2,3,4,5,6,7,9],cancellation:TTSearchCancellation()) == [0,1,2,3],"bookmark CRLF CR LF Unicode offsets linear")
+        check(try SearchCore.bookmarkLines(in:"abc",locations:[],cancellation:TTSearchCancellation()).isEmpty,"empty bookmarks")
+        failed=false;do{_ = try SearchCore.bookmarkLines(in:"abc",locations:[0],cancellation:cancelled)}catch{failed=true};check(failed,"bookmark pre-cancellation")
+        failed=false;do{_ = try SearchCore.bookmarkLines(in:"abc",locations:[2,1],cancellation:TTSearchCancellation())}catch{failed=true};check(failed,"bookmark reversed offsets reject")
+        let denseStart=Date();check(try SearchCore.bookmarkLines(in:String(repeating:"x\n",count:100000),locations:Array(stride(from:0,to:200000,by:2)),cancellation:TTSearchCancellation()).count==100000 && Date().timeIntervalSince(denseStart)<2,"dense bookmark offsets bounded linear pass")
         print("PASS SearchChecks: \(checks) assertions")
     }
 }
