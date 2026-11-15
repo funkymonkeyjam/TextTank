@@ -72,11 +72,28 @@ suite_build() {
 suite_run() {
   local name="$1" log="$2" status=0 limit="${TEXTTANK_SUITE_TIMEOUT:-300}"
   local requires_completion="${TEXTTANK_NATIVE_COMPLETION_REQUIRED:-0}"
+  local log_status=0 log_detail
+  local -a pipeline_status
   shift 2
   if [[ "$SUITE_BROKEN" == *" $name "* ]]; then echo "NOT RUN $name: its build failed"; return 0; fi
   if [[ "$1" == build/tests/* || "$1" == "$PWD"/build/tests/* ]]; then requires_completion=1; fi
   # alarm() survives exec, so the suite itself receives SIGALRM when the limit passes.
-  perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or die "cannot run $ARGV[0]: $!\n"' "$limit" "$@" 2>&1 | tee "$log" || status=${PIPESTATUS[0]}
+  # Both branches copy PIPESTATUS before any other command can overwrite it (Bash 3.2).
+  if perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or die "cannot run $ARGV[0]: $!\n"' "$limit" "$@" 2>&1 | tee "$log"; then
+    pipeline_status=("${PIPESTATUS[@]}")
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
+  fi
+  status=${pipeline_status[0]}
+  log_status=${pipeline_status[1]}
+  log_detail="log $log"
+  if [[ "$log_status" != 0 ]]; then
+    log_detail="log unavailable: $log (tee exit $log_status; check exit $status)"
+    echo "FAIL $name: log write failed (tee exit $log_status; check exit $status); stale log contents are not accepted" >&2
+    # Keep the check's failure/timeout when it already failed; a successful check
+    # cannot turn a failed evidence write into acceptance.
+    if [[ "$status" == 0 ]]; then status=1; fi
+  fi
   if [[ "$status" == 0 && "$requires_completion" == 1 ]] && ! grep -Eq '^(PASS )?[A-Za-z][A-Za-z0-9]*Checks: [0-9]+ (native )?assertions' "$log"; then
     echo "FAIL $name: exited zero without its native completion summary; the suite is incomplete" | tee -a "$log"
     status=1
@@ -84,12 +101,12 @@ suite_run() {
   if [[ "$status" == 0 ]]; then
     suite_record "PASS" "$name" "$(tail -n 1 "$log" | cut -c1-110)"
   elif [[ "$status" == 142 ]]; then
-    suite_record "TIMEOUT" "$name" "no result after $limit s; log $log"
-    echo "TIMEOUT $name: stopped after $limit s (TEXTTANK_SUITE_TIMEOUT); log $log"
+    suite_record "TIMEOUT" "$name" "no result after $limit s; $log_detail"
+    echo "TIMEOUT $name: stopped after $limit s (TEXTTANK_SUITE_TIMEOUT); $log_detail"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then echo "::error::$name timed out after $limit s"; fi
   else
-    suite_record "FAILED" "$name" "exit $status; log $log"
-    echo "FAILED $name: exit $status; log $log"
+    suite_record "FAILED" "$name" "exit $status; $log_detail"
+    echo "FAILED $name: exit $status; $log_detail"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then echo "::error::$name failed with exit $status"; fi
   fi
   return 0
