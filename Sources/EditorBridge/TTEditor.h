@@ -51,8 +51,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setSavePoint;
 - (void)resetUndoHistory;
 - (void)setLanguage:(NSString *)language;
-- (void)setKeywordList:(NSInteger)index words:(NSString *)words;
-- (void)setLexerProperty:(NSString *)name value:(NSString *)value;
+/// Installs the lexer, replaces all 32 keyword lists and sets the properties, then lexes the
+/// document once. Lists outside 0...31 and values containing NUL are skipped.
+- (void)setLanguage:(NSString *)language keywordLists:(NSDictionary<NSNumber *, NSString *> *)keywordLists properties:(NSDictionary<NSString *, NSString *> *)properties;
 - (NSAttributedString *)attributedTextForSelection:(BOOL)selection;
 - (void)showCompletions:(NSArray<NSString *> *)words;
 - (void)setSyntaxStyle:(NSInteger)index foreground:(NSColor *)foreground background:(nullable NSColor *)background bold:(BOOL)bold italic:(BOOL)italic;

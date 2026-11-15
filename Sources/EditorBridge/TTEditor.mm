@@ -509,8 +509,8 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     [names addObject:@"user"];
     return [names sortedArrayUsingSelector:@selector(compare:)];
 }
-- (void)setLanguage:(NSString *)language {
-    [self assertThread];
+/// Installs the lexer and its defaults without lexing; every caller colourises exactly once afterwards.
+- (void)installLexer:(NSString *)language {
     [_syntaxStyles removeAllObjects];[_syntaxFonts removeAllObjects];
     auto lexer = [language isEqualToString:@"user"] ? TextTankCreateUserLexer() : CreateLexer(language.UTF8String);
     if (!lexer) lexer = CreateLexer("null");
@@ -518,15 +518,29 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     [_engine message:SCI_SETPROPERTY wParam:(uptr_t)"fold" lParam:(sptr_t)"1"];
     [_engine message:SCI_SETKEYWORDS wParam:0 lParam:(sptr_t)"if else for while return class struct import func let var true false null int void const static public private"];
     [self applyPalette];
+}
+- (void)setLanguage:(NSString *)language {
+    [self assertThread];
+    [self installLexer:language];
     [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
 }
-- (void)setKeywordList:(NSInteger)index words:(NSString *)words {
-    [self assertThread]; if (index<0 || index>31 || [words rangeOfString:@"\0"].location!=NSNotFound) return;
-    [_engine message:SCI_SETKEYWORDS wParam:index lParam:(sptr_t)words.UTF8String]; [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
-}
-- (void)setLexerProperty:(NSString *)name value:(NSString *)value {
-    [self assertThread]; if ([name rangeOfString:@"\0"].location!=NSNotFound || [value rangeOfString:@"\0"].location!=NSNotFound) return;
-    [_engine message:SCI_SETPROPERTY wParam:(uptr_t)name.UTF8String lParam:(sptr_t)value.UTF8String]; [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
+- (void)setLanguage:(NSString *)language keywordLists:(NSDictionary<NSNumber *, NSString *> *)keywordLists properties:(NSDictionary<NSString *, NSString *> *)properties {
+    [self assertThread];
+    [self installLexer:language];
+    // Clear lists left by the defaults before loading explicit source data.
+    for (NSInteger index=0;index<32;++index) [_engine message:SCI_SETKEYWORDS wParam:index lParam:(sptr_t)""];
+    [keywordLists enumerateKeysAndObjectsUsingBlock:^(NSNumber *key, NSString *words, BOOL *stop) {
+        NSInteger index=key.integerValue;
+        if (index<0 || index>31 || [words rangeOfString:@"\0"].location!=NSNotFound) return;
+        [self->_engine message:SCI_SETKEYWORDS wParam:index lParam:(sptr_t)words.UTF8String];
+    }];
+    [properties enumerateKeysAndObjectsUsingBlock:^(NSString *name, NSString *value, BOOL *stop) {
+        if ([name rangeOfString:@"\0"].location!=NSNotFound || [value rangeOfString:@"\0"].location!=NSNotFound) return;
+        [self->_engine message:SCI_SETPROPERTY wParam:(uptr_t)name.UTF8String lParam:(sptr_t)value.UTF8String];
+    }];
+    // Scintilla neither invalidates styling on a lexer swap nor repaints after a list or property
+    // change, so one explicit full pass is what makes the final configuration take effect.
+    [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
 }
 - (NSAttributedString *)attributedTextForSelection:(BOOL)selection {
     [self assertThread]; [_engine message:SCI_COLOURISE wParam:0 lParam:-1];

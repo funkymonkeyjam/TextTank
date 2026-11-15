@@ -70,11 +70,10 @@ final class LanguageController:NSObject,NSMenuDelegate {
     func detect(filename:String,text:String)->String? {catalog?.detect(filename:filename,text:text)}
     @discardableResult func apply(identifier:String,to editor:TTEditor)->Bool {
         guard let profile=catalog?.profiles.first(where:{$0.id==identifier}),TTEditor.availableLanguages().contains(profile.lexer) else{return false}
-        editor.setLanguage(profile.lexer)
-        // Clear lists from the previous profile before loading explicit source data.
-        for index in 0..<32 {editor.setKeywordList(index,words:"")}
-        for (index,words) in profile.keywordLists {if let index=Int(index){editor.setKeywordList(index,words:words)}}
-        for (key,value) in profile.properties {editor.setLexerProperty(key,value:value)}
+        // One bridge call, one lexing pass: lists from the previous profile are cleared inside it.
+        var lists:[NSNumber:String]=[:]
+        for (index,words) in profile.keywordLists {if let index=Int(index){lists[NSNumber(value:index)]=words}}
+        editor.setLanguage(profile.lexer,keywordLists:lists,properties:profile.properties)
         for style in profile.styles {
             editor.setSyntaxStyle(style.id,foreground:Self.color(style),background:nil,bold:style.fontStyle & 1 != 0,italic:style.fontStyle & 2 != 0)
             if style.fontName != nil || style.fontSize != nil {editor.setSyntaxFont(style.id,name:style.fontName ?? NSFont.monospacedSystemFont(ofSize:12,weight:.regular).fontName,size:style.fontSize ?? 12)}

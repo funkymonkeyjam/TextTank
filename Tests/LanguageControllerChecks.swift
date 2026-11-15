@@ -63,6 +63,29 @@ import AppKit
   check(read.fontName==chosenFont && read.fontSize==21.5 && read.foreground=="FF0000","focused shared size field commits independently of font name")
   let styledRestored=LanguageController(editorProvider:{editor},languageProvider:{user.id},setLanguage:{_ in})
   check(styledRestored.catalog==custom,"font and color preferences persist exactly")
+  // F220: applying a profile lexes the document once, with the final lists and properties.
+  typealias ScintillaMessage=@convention(c)(AnyObject,Selector,UInt32,UInt,Int)->Int
+  let lexWindow=NSWindow(contentRect:NSRect(x:0,y:0,width:600,height:400),styleMask:[.titled],backing:.buffered,defer:false),lexEditor=TTEditor(frame:NSRect(x:0,y:0,width:600,height:400));lexWindow.contentView=lexEditor
+  let native=lexEditor.subviews.first!,messageSelector=NSSelectorFromString("message:wParam:lParam:")
+  let send=unsafeBitCast(native.method(for:messageSelector),to:ScintillaMessage.self)
+  func sci(_ message:UInt32,_ w:UInt=0,_ l:Int=0)->Int{send(native,messageSelector,message,w,l)}
+  let SCI_GETLENGTH:UInt32=2006,SCI_GETSTYLEAT:UInt32=2010,SCI_GETENDSTYLED:UInt32=2028,SCI_COLOURISE:UInt32=4003
+  func timed(_ work:()->Void)->Double{let start=ProcessInfo.processInfo.systemUptime;work();return ProcessInfo.processInfo.systemUptime-start}
+  let lexLine="alignas alignof value = 42; // note\n",lexSource=String(repeating:lexLine,count:2*1024*1024/lexLine.utf8.count)
+  lexEditor.text=lexSource;lexEditor.resetUndoHistory();lexEditor.setSavePoint();let lexRevision=lexEditor.revision
+  lexEditor.setLanguage("cpp")
+  let before=(0..<3).map{_ in timed{_ = sci(SCI_COLOURISE,0,-1)}}.min()!
+  var applied=false;let applyTime=timed{applied=controller.apply(identifier:"cpp",to:lexEditor)}
+  check(applied && lexEditor.text==lexSource && lexEditor.revision==lexRevision && !lexEditor.modified,"C++ profile applies to a 2 MiB buffer without editing it")
+  check(sci(SCI_GETLENGTH)==lexSource.utf8.count && sci(SCI_GETENDSTYLED)==lexSource.utf8.count,"document is fully styled when apply returns")
+  let lastLine=lexSource.utf8.count-lexLine.utf8.count
+  check(sci(SCI_GETSTYLEAT,0)==16 && sci(SCI_GETSTYLEAT,8)==5 && sci(SCI_GETSTYLEAT,UInt(lastLine))==16 && sci(SCI_GETSTYLEAT,UInt(lastLine+8))==5,"apply styles with the profile's final keyword lists from first line to last")
+  let sample=min(lexSource.utf8.count,200_000),appliedStyles=(0..<sample).map{sci(SCI_GETSTYLEAT,UInt($0))}
+  let after=(0..<3).map{_ in timed{_ = sci(SCI_COLOURISE,0,-1)}}.min()!
+  check((0..<sample).map{sci(SCI_GETSTYLEAT,UInt($0))}==appliedStyles,"styles after apply equal a fresh full pass with the final configuration")
+  let onePass=max(before,after)
+  check(applyTime<3*onePass,"applying a profile costs about one lexing pass (apply \(String(format:"%.3f",applyTime)) s, one pass \(String(format:"%.3f",onePass)) s)")
+  check(controller.apply(identifier:"python",to:lexEditor) && sci(SCI_GETSTYLEAT,0)==11 && sci(SCI_GETSTYLEAT,UInt(lastLine+8))==11 && sci(SCI_GETENDSTYLED)==lexSource.utf8.count && lexEditor.revision==lexRevision,"switching profile replaces the previous lexer's styles across the whole document")
   print("LEXER CONFIGURATION: \(supported) available; missing \(missing). This proves loading and text integrity, not every lexical semantic.")
   print("PASS LanguageControllerChecks: \(checks) native assertions")
  }
