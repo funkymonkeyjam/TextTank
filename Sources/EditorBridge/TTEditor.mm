@@ -267,7 +267,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     _engine.delegate = nil;
 }
 /// Every undo group of the bridge goes through this pair. `revision` still advances with each
-/// modification step inside a group; only the change callback waits for the outermost end.
+/// modification step inside a group; only the change callback waits, for the outermost end or
+/// the next turn of the main run loop, whichever comes first.
 - (void)openUndoGroup {
     NSNumber *key = @([_engine message:SCI_GETDOCPOINTER]);
     [TTOpenGroups() setObject:@([[TTOpenGroups() objectForKey:key] integerValue] + 1) forKey:key];
@@ -299,13 +300,16 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [TTDeferredEditors() addObject:self];
     if (_deferredFlushScheduled) return;
     _deferredFlushScheduled = YES;
-    // The callback is never lost: if no last undo step delivers it, the next turn of the main
-    // run loop does. A group still open then delivers it when it ends.
+    // The callback is never lost or held for long: if neither the end of the outermost group nor
+    // a last undo step delivers it first, the next turn of the main run loop does, whether or not
+    // a group is still open. Synchronous grouped work never spans a turn, so it stays coalesced;
+    // a group held open across turns (interactive macro playback, under a modal panel) reports
+    // at most once per turn, which keeps the edited mark and recovery snapshots going.
     __weak TTEditor *weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
         TTEditor *editor = weakSelf; if (!editor) return;
         editor.deferredFlushScheduled = NO;
-        if (![editor undoGroupOpen]) [editor deliverDeferredChange];
+        [editor deliverDeferredChange];
     });
 }
 /// One change callback now, replacing any that was held back.
@@ -1037,7 +1041,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     if (code == SCN_MODIFYATTEMPTRO && _onReadOnlyAttempt) _onReadOnlyAttempt();
     // Keep the line-number margin wide enough: zoom rescales its font, and added or removed lines
     // change the digit count. A margin width is view state, so setting it here edits nothing.
-    if (code == SCN_ZOOM) { [self updateLineNumberMargin:NO]; [self scheduleStateNotification]; }
+    // The filler numbers are drawn at the zoomed size, which the compared values need not show.
+    if (code == SCN_ZOOM) { [self updateLineNumberMargin:NO]; _emptyLineNumbers.needsDisplay = YES; [self scheduleStateNotification]; }
     else if (code == SCN_MODIFIED && notification->linesAdded != 0 && [self lineNumberDigits] != _marginDigits) [self updateLineNumberMargin:NO];
     if (code == SCN_UPDATEUI) {
         if (notification->updated & SC_UPDATE_SELECTION) _selectionGeneration++;

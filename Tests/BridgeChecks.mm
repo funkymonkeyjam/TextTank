@@ -716,6 +716,27 @@ int main() {
         check(calls==1, "ending the clone's group delivers the primary view's change callback once");
         calls=0;[ed setSavePoint];
         check(calls==1, "reaching the save point outside a group is reported at once");
+        // A group held open across turns of the run loop (interactive macro playback holds one
+        // for seconds, under a modal panel) must not hold the callback back for its whole life.
+        void (^turns)(NSRunLoopMode) = ^(NSRunLoopMode mode) {
+            NSDate *until=[NSDate dateWithTimeIntervalSinceNow:2];
+            const int start=calls;
+            while (calls==start && [until timeIntervalSinceNow]>0) [NSRunLoop.currentRunLoop runMode:mode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+        };
+        [ed resetUndoHistory];[ed replaceSelection:@"p"];calls=0;dirtyAtCall=NO;NSString *ungrouped=ed.text;
+        [ed beginUndoGroup];
+        for (int i=0;i<5;++i) [ed replaceSelection:@"r"];
+        check(calls==0, "edits in an open group are still coalesced within one turn of the run loop");
+        turns(NSDefaultRunLoopMode);
+        check(calls==1 && dirtyAtCall, "a group still open on the next turn of the run loop delivers the held change callback once");
+        for (int i=0;i<5;++i) [ed replaceSelection:@"s"];
+        check(calls==1, "later edits in the same open group are held until the following turn");
+        turns(NSModalPanelRunLoopMode);
+        check(calls==2, "the held callback is also delivered on a turn of a modal panel's run loop");
+        [ed endUndoGroup];
+        check(calls==2, "ending a group with nothing held back delivers no extra callback");
+        [ed executeCommand:@"undo"];
+        check(calls==3 && [ed.text isEqual:ungrouped], "the whole group is still one Undo step after callbacks were delivered inside it");
         });
         ttchecks::section("line-number overlay invalidation", [&] {
         TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
