@@ -1,0 +1,121 @@
+#!/bin/bash
+# Sourced by scripts/test-*.sh after they change to the repository root.
+#
+# Every build step and every suite is run, its outcome is recorded, and the run
+# carries on, so one failure never hides the suites after it. Each suite runs
+# under a watchdog. The script that started the run prints one summary table and
+# exits non-zero if anything failed, timed out or could not be built.
+#
+#   suite_begin                      start (or join) a run
+#   suite_require_build              stop with a clear message if scripts/build.sh has not run
+#   suite_build "<suites>" cmd...    build step needed by the named suites
+#   suite_run <suite> <log> cmd...   run one suite under the watchdog, tee to <log>
+#   suite_script <script>            run another test script as part of this run
+#   suite_finish                     summary (when this script started the run) and exit status
+#
+# TEXTTANK_SUITE_TIMEOUT sets the per-suite limit in seconds (default 300).
+
+SUITE_BROKEN=" "
+SUITE_OWNER=0
+SUITE_FIRST_RECORD=1
+
+suite_begin() {
+  mkdir -p build/tests harness/logs
+  if [[ -z "${TEXTTANK_SUITE_RESULTS:-}" ]]; then
+    TEXTTANK_SUITE_RESULTS=$(mktemp "${TMPDIR:-/tmp}/texttank-suites.XXXXXX")
+    export TEXTTANK_SUITE_RESULTS
+    SUITE_OWNER=1
+  fi
+  SUITE_FIRST_RECORD=$(( $(wc -l < "$TEXTTANK_SUITE_RESULTS") + 1 ))
+  # The shared harness is passed by absolute path so that #filePath, and with it
+  # the repository root the checks derive, does not depend on the current directory.
+  SUITE_SUPPORT="$PWD/Tests/Support/Checks.swift"
+}
+
+suite_require_build() {
+  if [[ ! -d build/vendor/Debug/Scintilla.framework || ! -f Vendor/lexilla/bin/liblexilla.a ]]; then
+    echo "The native dependencies are not built (build/vendor/Debug/Scintilla.framework and Vendor/lexilla/bin/liblexilla.a are required). Run scripts/build.sh first." >&2
+    if [[ "${GITHUB_ACTIONS:-}" == true ]]; then echo "::error::Native dependencies are not built; run scripts/build.sh first"; fi
+    suite_record "NOT-BUILT" "$(basename "$0")" "run scripts/build.sh first"
+    suite_finish
+  fi
+}
+
+# status <TAB> suite <TAB> detail
+suite_record() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$TEXTTANK_SUITE_RESULTS"; }
+
+suite_build() {
+  local names="$1" name status
+  shift
+  "$@" && return 0
+  status=$?
+  for name in $names; do
+    if [[ "$SUITE_BROKEN" != *" $name "* ]]; then
+      SUITE_BROKEN+="$name "
+      suite_record "BUILD-FAILED" "$name" "exit $status from: $(basename "$1") (output above)"
+      echo "BUILD FAILED for $name: exit $status from $1"
+    fi
+  done
+  return 0
+}
+
+suite_run() {
+  local name="$1" log="$2" status=0 limit="${TEXTTANK_SUITE_TIMEOUT:-300}"
+  shift 2
+  if [[ "$SUITE_BROKEN" == *" $name "* ]]; then echo "NOT RUN $name: its build failed"; return 0; fi
+  # alarm() survives exec, so the suite itself receives SIGALRM when the limit passes.
+  perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or die "cannot run $ARGV[0]: $!\n"' "$limit" "$@" 2>&1 | tee "$log" || status=${PIPESTATUS[0]}
+  if [[ "$status" == 0 ]]; then
+    suite_record "PASS" "$name" "$(tail -n 1 "$log" | cut -c1-110)"
+  elif [[ "$status" == 142 ]]; then
+    suite_record "TIMEOUT" "$name" "no result after $limit s; log $log"
+    echo "TIMEOUT $name: stopped after $limit s (TEXTTANK_SUITE_TIMEOUT); log $log"
+    if [[ "${GITHUB_ACTIONS:-}" == true ]]; then echo "::error::$name timed out after $limit s"; fi
+  else
+    suite_record "FAILED" "$name" "exit $status; log $log"
+    echo "FAILED $name: exit $status; log $log"
+    if [[ "${GITHUB_ACTIONS:-}" == true ]]; then echo "::error::$name failed with exit $status"; fi
+  fi
+  return 0
+}
+
+suite_script() {
+  local before status=0
+  before=$(grep -vc '^PASS' "$TEXTTANK_SUITE_RESULTS" || true)
+  "$@" || status=$?
+  if [[ "$status" != 0 && "$(grep -vc '^PASS' "$TEXTTANK_SUITE_RESULTS" || true)" == "$before" ]]; then
+    suite_record "FAILED" "$(basename "$1")" "exit $status without a recorded failure"
+  fi
+  return 0
+}
+
+suite_summary() {
+  local status name detail log
+  echo
+  echo "Suite summary"
+  while IFS=$'\t' read -r status name detail; do
+    printf '  %-13s %-34s %s\n' "$status" "$name" "$detail"
+  done < "$TEXTTANK_SUITE_RESULTS"
+  while IFS=$'\t' read -r status name detail; do
+    [[ "$status" == FAILED || "$status" == TIMEOUT ]] || continue
+    log="${detail##*log }"
+    [[ -f "$log" ]] || continue
+    echo
+    echo "--- $status $name: failure lines, then the end of $log"
+    grep -E '^(FAIL|FAILED) ' "$log" | head -n 40 || true
+    tail -n 20 "$log"
+  done < "$TEXTTANK_SUITE_RESULTS"
+  echo
+  echo "$(grep -c '^PASS' "$TEXTTANK_SUITE_RESULTS" || true) passed, $(grep -vc '^PASS' "$TEXTTANK_SUITE_RESULTS" || true) not passed"
+}
+
+suite_finish() {
+  local failed
+  failed=$(tail -n "+$SUITE_FIRST_RECORD" "$TEXTTANK_SUITE_RESULTS" | grep -vc '^PASS' || true)
+  if [[ "$SUITE_OWNER" == 1 ]]; then
+    suite_summary
+    rm -f "$TEXTTANK_SUITE_RESULTS"
+  fi
+  if [[ "$failed" != 0 ]]; then exit 1; fi
+  exit 0
+}
