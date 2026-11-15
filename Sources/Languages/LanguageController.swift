@@ -553,7 +553,14 @@ final class LanguageController: NSObject, NSMenuDelegate {
         let bytes = try overrides.encoded()
         try PrivateFileStore.prepareDirectory(storage.deletingLastPathComponent())
         // Re-read an existing entry so a late unsafe substitution cannot be overwritten.
-        do { _ = try Self.readRegular(storage, parent: .strict) } catch  where error.isFileNotFound {}
+        do {
+            let existing = try Self.readRegular(storage, parent: .strict)
+            _ = try LanguageCatalog.load(stored: existing, over: bundled)
+        } catch  where error.isFileNotFound {} catch {
+            loadError = error
+            storageDamaged = true
+            throw error
+        }
         try PrivateFileStore.write(
             bytes, to: storage, maximumBytes: LanguageCatalog.maximumBytes,
             temporaryPrefix: ".languages-")

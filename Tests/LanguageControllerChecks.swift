@@ -854,6 +854,25 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             try damagedCase("file over 16 MiB") {
                 try Data(repeating: 0x20, count: 16 * 1024 * 1024 + 1).write(to: $0)
             }
+            for late in ["future", "corrupt"] {
+                try withIsolatedSupportDirectory("LanguageLate" + late) { support in
+                    let controller = plainController(), stored = support.appendingPathComponent("LanguageProfiles.json")
+                    try controller.persist(customCatalog)
+                    let valid = try Data(contentsOf: stored)
+                    let observed =
+                        late == "future"
+                        ? Data("{\"minimumReaderVersion\":2,".utf8) + valid.dropFirst()
+                        : Data("retain corrupt late rewrite".utf8)
+                    try observed.write(to: stored)
+                    rejects("F198 a deliberate Language reread refuses a newly observed \(late) file") {
+                        try controller.persist(customCatalog)
+                    }
+                    check(
+                        try Data(contentsOf: stored) == observed && controller.loadError != nil
+                            && controller.storageDamaged,
+                        "F198 a newly observed \(late) Language file is retained behind the shared latch")
+                }
+            }
             try withIsolatedSupportDirectory("LanguageSymlink") { support in
                 try withIsolatedSupportDirectory("LanguageSymlinkTarget") { elsewhere in
                     let target = elsewhere.appendingPathComponent("Real.json"),
