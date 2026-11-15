@@ -13,6 +13,17 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) NSArray<NSDictionary<NSString *, NSNumber *> *> *selectionRanges;
 - (BOOL)setSelectionRanges:(NSArray<NSDictionary<NSString *, NSNumber *> *> *)ranges;
 - (BOOL)replaceSelections:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision;
+/// Applies byte-range replacements ({"start","end","text"}, ascending, each start at or after the
+/// previous end) as one undo step without touching the rest of the document, so markers, folds
+/// and the viewport outside the ranges survive. Everything is validated first: revision,
+/// writability, document length, bounds, UTF-8 boundaries, order and encodability. Returns NO
+/// with nothing changed otherwise. Does not move the selection explicitly or scroll.
+- (BOOL)applyEdits:(NSArray<NSDictionary<NSString *, id> *> *)edits expectedRevision:(NSUInteger)revision expectedLength:(NSInteger)length;
+/// Replaces the content of a live document with one minimal-span edit (common prefix and suffix
+/// are kept), preserving bookmarks, the caret line and the first visible line. Identical text
+/// changes nothing, including revision. NO when read-only or unencodable. setText: remains the
+/// unconditional replace for fresh loads.
+- (BOOL)replaceDocumentText:(NSString *)text;
 @property(nonatomic) BOOL readOnly;
 - (void)convertLineEndings:(NSString *)mode;
 /// Sets only the ending inserted by later edits (LF, CRLF or CR). Never rewrites existing
@@ -30,6 +41,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) NSInteger selectedCharacterCount;
 /// Restores one ordinary selection. Rejects out-of-bounds or split UTF-8 code points.
 - (BOOL)setSelectionAnchor:(NSInteger)anchor caret:(NSInteger)caret;
+/// Moves the caret to the start of a one-based line in the engine's own line model, unfolding
+/// it if hidden, and scrolls it into view. NO, changing nothing, when the line does not exist.
+- (BOOL)goToLine:(NSInteger)line;
+- (void)scrollCaretIntoView;
+/// Zero-based display line at the top of this view.
+@property(nonatomic, readonly) NSInteger firstVisibleLine;
 @property(nonatomic, readonly) NSArray<NSNumber *> *bookmarkLines;
 /// Validates all line numbers before replacing marker-1 bookmarks; never changes text.
 - (BOOL)setBookmarks:(NSArray<NSNumber *> *)lines;

@@ -130,6 +130,8 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
         [_engine message:SCI_SETMULTIPLESELECTION wParam:1];
         [_engine message:SCI_SETADDITIONALSELECTIONTYPING wParam:1];
         [_engine message:SCI_SETMULTIPASTE wParam:SC_MULTIPASTE_EACH];
+        // Undo and Redo put back the selection and scroll position of the view that made the edit.
+        [_engine message:SCI_SETUNDOSELECTIONHISTORY wParam:SC_UNDO_SELECTION_HISTORY_ENABLED | SC_UNDO_SELECTION_HISTORY_SCROLL];
         [_engine message:SCI_SETTABWIDTH wParam:4];
         [_engine message:SCI_SETPROPERTY wParam:(uptr_t)"fold" lParam:(sptr_t)"1"];
         for(int marker=SC_MARKNUM_FOLDEREND;marker<=SC_MARKNUM_FOLDEROPEN;++marker) {
@@ -300,6 +302,128 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     }
     [_engine message:SCI_ENDUNDOACTION]; return YES;
 }
+- (BOOL)applyEdits:(NSArray<NSDictionary<NSString *, id> *> *)edits expectedRevision:(NSUInteger)revision expectedLength:(NSInteger)expectedLength {
+    [self assertThread];
+    const sptr_t length = [_engine message:SCI_GETLENGTH];
+    if (revision != self.revision || self.readOnly || length != expectedLength || ![edits isKindOfClass:NSArray.class]) return NO;
+    struct Edit { sptr_t start, end; NSData *bytes; };
+    std::vector<Edit> validated; validated.reserve(edits.count);
+    sptr_t previousEnd = 0;
+    for (id edit in edits) {
+        if (![edit isKindOfClass:NSDictionary.class]) return NO;
+        sptr_t bounds[2];
+        NSString *keys[2] = {@"start", @"end"};
+        for (int i = 0; i < 2; ++i) {
+            id value = edit[keys[i]]; if (![value isKindOfClass:NSNumber.class]) return NO;
+            NSInteger p = [value integerValue]; if ([value doubleValue] != (double)p || p < 0 || p > length) return NO;
+            if (p < length && ([_engine message:SCI_GETCHARAT wParam:p] & 0xC0) == 0x80) return NO;
+            bounds[i] = p;
+        }
+        if (bounds[0] > bounds[1] || bounds[0] < previousEnd) return NO;
+        id text = edit[@"text"]; if (![text isKindOfClass:NSString.class]) return NO;
+        NSData *bytes = TTUTF8(text); if (!bytes) return NO;
+        validated.push_back({bounds[0], bounds[1], bytes});
+        previousEnd = bounds[1];
+    }
+    // The revision is compared once, above: it advances with every replacement below.
+    [_engine message:SCI_BEGINUNDOACTION];
+    for (auto edit = validated.rbegin(); edit != validated.rend(); ++edit) {
+        [_engine message:SCI_SETTARGETRANGE wParam:edit->start lParam:edit->end];
+        [_engine message:SCI_REPLACETARGET wParam:edit->bytes.length lParam:(sptr_t)edit->bytes.bytes];
+    }
+    [_engine message:SCI_ENDUNDOACTION];
+    return YES;
+}
+- (BOOL)replaceDocumentText:(NSString *)text {
+    [self assertThread];
+    NSData *data = TTUTF8(text); if (!data || self.readOnly) return NO;
+    const sptr_t oldLength = [_engine message:SCI_GETLENGTH], newLength = (sptr_t)data.length;
+    // Valid until the next modification; it is not read after the replacement.
+    const unsigned char *before = (const unsigned char *)[_engine message:SCI_GETCHARACTERPOINTER];
+    const unsigned char *after = (const unsigned char *)data.bytes;
+    const sptr_t shorter = MIN(oldLength, newLength);
+    sptr_t prefix = 0, suffix = 0;
+    while (prefix < shorter && before[prefix] == after[prefix]) ++prefix;
+    if (prefix == oldLength && prefix == newLength) return YES;
+    while (suffix < shorter - prefix && before[oldLength - suffix - 1] == after[newLength - suffix - 1]) ++suffix;
+    // Cut only on character boundaries of both texts, and never between CR and LF.
+    auto continuation = [](const unsigned char *bytes, sptr_t length, sptr_t at) { return at < length && (bytes[at] & 0xC0) == 0x80; };
+    while (prefix > 0 && (continuation(before, oldLength, prefix) || continuation(after, newLength, prefix))) --prefix;
+    while (suffix > 0 && continuation(before, oldLength, oldLength - suffix)) --suffix;
+    auto lineFeed = [](const unsigned char *bytes, sptr_t length, sptr_t at) { return at < length && bytes[at] == '\n'; };
+    if (prefix > 0 && before[prefix - 1] == '\r' && (lineFeed(before, oldLength, prefix) || lineFeed(after, newLength, prefix))) --prefix;
+    if (suffix > 0 && before[oldLength - suffix] == '\n' &&
+        ((oldLength - suffix > 0 && before[oldLength - suffix - 1] == '\r') || (newLength - suffix > 0 && after[newLength - suffix - 1] == '\r'))) --suffix;
+    const sptr_t start = prefix, oldEnd = oldLength - suffix, newEnd = newLength - suffix;
+
+    NSArray<NSNumber *> *bookmarks = self.bookmarkLines;
+    const sptr_t firstLine = [_engine message:SCI_LINEFROMPOSITION wParam:start];
+    const sptr_t oldLastLine = [_engine message:SCI_LINEFROMPOSITION wParam:oldEnd];
+    const BOOL lastLineKept = [_engine message:SCI_POSITIONFROMLINE wParam:oldLastLine] == oldEnd;
+    const sptr_t topLine = [_engine message:SCI_GETFIRSTVISIBLELINE];
+    // Each selection end either follows its text (outside the span) or has nothing to follow.
+    BOOL selectionInside = NO;
+    const sptr_t selections = [_engine message:SCI_GETSELECTIONS], mainSelection = [_engine message:SCI_GETMAINSELECTION];
+    std::vector<sptr_t> expected; expected.reserve((size_t)selections * 2);
+    for (sptr_t i = 0; i < selections; ++i) {
+        for (sptr_t p : {(sptr_t)[_engine message:SCI_GETSELECTIONNANCHOR wParam:i], (sptr_t)[_engine message:SCI_GETSELECTIONNCARET wParam:i]}) {
+            if (p > start && p < oldEnd) selectionInside = YES;
+            expected.push_back(p <= start ? p : p + (newEnd - oldEnd));
+        }
+    }
+    const sptr_t caret = [_engine message:SCI_GETCURRENTPOS];
+    const sptr_t caretLine = [_engine message:SCI_LINEFROMPOSITION wParam:caret];
+    const sptr_t caretOffset = caret - [_engine message:SCI_POSITIONFROMLINE wParam:caretLine];
+
+    [_engine message:SCI_BEGINUNDOACTION];
+    [_engine message:SCI_SETTARGETRANGE wParam:start lParam:oldEnd];
+    [_engine message:SCI_REPLACETARGET wParam:newEnd - start lParam:(sptr_t)(after + start)];
+    [_engine message:SCI_ENDUNDOACTION];
+
+    const sptr_t newLastLine = [_engine message:SCI_LINEFROMPOSITION wParam:newEnd];
+    if (bookmarks.count) {
+        // Scintilla folds the markers of deleted lines onto the first line of the span. Put every
+        // bookmark back explicitly: untouched lines keep theirs, lines after the span follow
+        // their text, and lines inside it keep their line number, clamped to the new span.
+        const sptr_t shift = newLastLine - oldLastLine;
+        [_engine message:SCI_MARKERDELETEALL wParam:1];
+        for (NSNumber *bookmark in bookmarks) {
+            sptr_t line = bookmark.integerValue;
+            if (line > oldLastLine || (line == oldLastLine && lastLineKept)) line += shift;
+            else if (line > firstLine) line = line == oldLastLine ? newLastLine : MIN(line, newLastLine);
+            if (!([_engine message:SCI_MARKERGET wParam:line] & (1 << 1))) [_engine message:SCI_MARKERADD wParam:line lParam:1];
+        }
+    }
+    if (selectionInside) {
+        // A selection inside the replaced span has nothing to follow; keep the caret's line and column.
+        const sptr_t line = MIN(caretLine, newLastLine);
+        sptr_t position = MIN([_engine message:SCI_POSITIONFROMLINE wParam:line] + caretOffset, [_engine message:SCI_GETLINEENDPOSITION wParam:line]);
+        while (position > 0 && ([_engine message:SCI_GETCHARAT wParam:position] & 0xC0) == 0x80) --position;
+        [_engine message:SCI_SETEMPTYSELECTION wParam:position];
+    } else {
+        BOOL moved = [_engine message:SCI_GETSELECTIONS] != selections;
+        for (sptr_t i = 0; i < selections && !moved; ++i) {
+            moved = [_engine message:SCI_GETSELECTIONNANCHOR wParam:i] != expected[(size_t)i * 2] || [_engine message:SCI_GETSELECTIONNCARET wParam:i] != expected[(size_t)i * 2 + 1];
+        }
+        if (moved) {
+            [_engine message:SCI_SETSELECTIONMODE wParam:SC_SEL_STREAM];
+            [_engine message:SCI_SETSELECTION wParam:expected[1] lParam:expected[0]];
+            for (sptr_t i = 1; i < selections; ++i) [_engine message:SCI_ADDSELECTION wParam:expected[(size_t)i * 2 + 1] lParam:expected[(size_t)i * 2]];
+            [_engine message:SCI_SETMAINSELECTION wParam:mainSelection];
+        }
+    }
+    if ([_engine message:SCI_GETFIRSTVISIBLELINE] != topLine) [_engine message:SCI_SETFIRSTVISIBLELINE wParam:topLine];
+    return YES;
+}
+- (BOOL)goToLine:(NSInteger)line {
+    [self assertThread];
+    if (line < 1 || line > [_engine message:SCI_GETLINECOUNT]) return NO;
+    [_engine message:SCI_ENSUREVISIBLE wParam:line - 1];
+    [_engine message:SCI_GOTOLINE wParam:line - 1];
+    return YES;
+}
+- (void)scrollCaretIntoView { [self assertThread]; [_engine message:SCI_SCROLLCARET]; }
+- (NSInteger)firstVisibleLine { [self assertThread]; return [_engine message:SCI_GETFIRSTVISIBLELINE]; }
 - (NSInteger)selectionCount { [self assertThread]; return [_engine message:SCI_GETSELECTIONS]; }
 - (NSInteger)selectionStart { [self assertThread]; return [_engine message:SCI_GETSELECTIONSTART]; }
 - (NSInteger)selectionEnd { [self assertThread]; return [_engine message:SCI_GETSELECTIONEND]; }
