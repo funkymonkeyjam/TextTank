@@ -4,6 +4,7 @@
 #include "ILexer.h"
 #include "Lexilla.h"
 #include <vector>
+#include <string>
 #include <cstring>
 #include <cmath>
 extern "C" Scintilla::ILexer5 *TextTankCreateUserLexer();
@@ -100,6 +101,8 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     return map;
 }
 
+NSErrorDomain const TTEditorErrorDomain = @"TextTank.Editor";
+
 @interface TTEditor () <ScintillaNotificationProtocol>
 @property(nonatomic, strong) ScintillaView *engine;
 @property(nonatomic,strong) TTEmptyLineNumbersView *emptyLineNumbers;
@@ -107,6 +110,8 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
 @property(nonatomic) BOOL macroRecording;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxStyles;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxFonts;
+/// Digit count the line-number margin was last sized for; see -updateLineNumberMargin:.
+@property(nonatomic) int marginDigits;
 @end
 @implementation TTEditor
 - (instancetype)initWithFrame:(NSRect)frame {
@@ -121,7 +126,7 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
         [_engine setFontName:@"Menlo" size:14 bold:NO italic:NO];
         [self applyPalette];
         [_engine message:SCI_SETMARGINTYPEN wParam:0 lParam:SC_MARGIN_NUMBER];
-        [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:48];
+        [self updateLineNumberMargin:YES];
         [_engine message:SCI_MARKERDEFINE wParam:1 lParam:SC_MARK_CIRCLE];
         [_engine message:SCI_MARKERSETBACK wParam:1 lParam:0x005B3A];
         [_engine message:SCI_SETMARGINTYPEN wParam:1 lParam:SC_MARGIN_SYMBOL];
@@ -160,6 +165,28 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     _engine.frame = self.bounds;
     _emptyLineNumbers.frame = _engine.scrollView.verticalRulerView.bounds;
     _emptyLineNumbers.needsDisplay = YES;
+    // A taller view draws more filler numbers past the end of the document.
+    if ([self lineNumberDigits] != _marginDigits) [self updateLineNumberMargin:NO];
+}
+/// Digits of the largest number the gutter can show: the filler view numbers the rows past the
+/// end of the document, so that is the line count plus one screen of rows.
+- (int)lineNumberDigits {
+    sptr_t largest = [_engine message:SCI_GETLINECOUNT] + [_engine message:SCI_LINESONSCREEN] + 1;
+    int digits = 1;
+    while (largest >= 10) { largest /= 10; ++digits; }
+    return digits;
+}
+/// Sizes the line-number margin for the largest number drawn in the current font and zoom, and
+/// never below the 48 px every small document has. Width 0 is the hidden state: only `show`
+/// (init and toggle-on) may leave it, so zoom or an edit never brings back a hidden gutter.
+- (void)updateLineNumberMargin:(BOOL)show {
+    const sptr_t current = [_engine message:SCI_GETMARGINWIDTHN wParam:0];
+    if (!show && current == 0) return;
+    _marginDigits = [self lineNumberDigits];
+    const std::string widest((size_t)_marginDigits, '9');
+    // 3 is Scintilla's own padding right of the number; 2 keeps the first digit off the edge.
+    const sptr_t width = MAX((sptr_t)48, [_engine message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER lParam:(sptr_t)widest.c_str()] + 3 + 2);
+    if (width != current) [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:width];
 }
 - (void)viewDidChangeEffectiveAppearance {
     [super viewDidChangeEffectiveAppearance];
@@ -186,6 +213,8 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     NSDictionary *styles=[_syntaxStyles copy];
     for(NSNumber *index in styles) {NSDictionary *s=styles[index];[self setSyntaxStyle:index.integerValue foreground:s[@"foreground"] background:s[@"background"] bold:[s[@"bold"] boolValue] italic:[s[@"italic"] boolValue]];}
     NSDictionary *fonts=[_syntaxFonts copy];for(NSNumber *index in fonts){NSDictionary *f=fonts[index];[self setSyntaxFont:index.integerValue name:f[@"name"] size:[f[@"size"] doubleValue]];}
+    // STYLECLEARALL put the line-number style back on the default font.
+    [self updateLineNumberMargin:NO];
     _engine.needsDisplay = YES;
 }
 - (void)dealloc { _engine.delegate = nil; }
@@ -225,16 +254,25 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
 }
 - (BOOL)readOnly { [self assertThread]; return [_engine message:SCI_GETREADONLY] != 0; }
 - (void)setReadOnly:(BOOL)value { [self assertThread]; [_engine message:SCI_SETREADONLY wParam:value]; }
+- (BOOL)requireWritable:(NSError **)error {
+    [self assertThread];
+    if (!self.readOnly) return YES;
+    if (error) *error = [NSError errorWithDomain:TTEditorErrorDomain code:TTEditorErrorReadOnly userInfo:@{
+        NSLocalizedDescriptionKey:@"This document is read-only. Nothing was changed.",
+        NSLocalizedRecoverySuggestionErrorKey:@"Turn off Read Only to edit this document."}];
+    return NO;
+}
 - (void)configureTabWidth:(NSInteger)width useTabs:(BOOL)useTabs {
     [self assertThread]; if (width < 1 || width > 32) return;
     [_engine message:SCI_SETTABWIDTH wParam:width]; [_engine message:SCI_SETUSETABS wParam:useTabs];
 }
-- (void)convertLineEndings:(NSString *)mode {
-    [self assertThread]; if (self.readOnly) return;
+- (BOOL)convertLineEndings:(NSString *)mode {
+    [self assertThread]; if (self.readOnly) return NO;
     NSDictionary *modes = @{@"LF":@(SC_EOL_LF), @"CRLF":@(SC_EOL_CRLF), @"CR":@(SC_EOL_CR)};
-    NSNumber *value = modes[mode]; if (!value) return;
+    NSNumber *value = modes[mode]; if (!value) return NO;
     [_engine message:SCI_BEGINUNDOACTION]; [_engine message:SCI_CONVERTEOLS wParam:value.integerValue];
     [_engine message:SCI_SETEOLMODE wParam:value.integerValue]; [_engine message:SCI_ENDUNDOACTION];
+    return YES;
 }
 - (void)setLineEndingMode:(NSString *)mode {
     [self assertThread];
@@ -271,9 +309,15 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     }
     return YES;
 }
+/// Stream selection with sticky extend mode off. SCI_SETSELECTIONMODE is not used for this: it
+/// toggles extend mode (plain arrow keys then select) whenever the type is already stream.
+- (void)useStreamSelection {
+    [_engine message:SCI_CHANGESELECTIONMODE wParam:SC_SEL_STREAM];
+    [_engine message:SCI_SETMOVEEXTENDSSELECTION wParam:0];
+}
 - (BOOL)setSelectionRanges:(NSArray<NSDictionary<NSString *,NSNumber *> *> *)ranges {
     [self assertThread]; if (![self validSelectionRanges:ranges]) return NO;
-    [_engine message:SCI_SETSELECTIONMODE wParam:SC_SEL_STREAM];
+    [self useStreamSelection];
     [_engine message:SCI_SETSELECTION wParam:[ranges[0][@"caret"] integerValue] lParam:[ranges[0][@"anchor"] integerValue]];
     for (NSUInteger i=1;i<ranges.count;++i) [_engine message:SCI_ADDSELECTION wParam:[ranges[i][@"caret"] integerValue] lParam:[ranges[i][@"anchor"] integerValue]];
     [_engine message:SCI_SETMAINSELECTION wParam:0]; return YES;
@@ -406,7 +450,7 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
             moved = [_engine message:SCI_GETSELECTIONNANCHOR wParam:i] != expected[(size_t)i * 2] || [_engine message:SCI_GETSELECTIONNCARET wParam:i] != expected[(size_t)i * 2 + 1];
         }
         if (moved) {
-            [_engine message:SCI_SETSELECTIONMODE wParam:SC_SEL_STREAM];
+            [self useStreamSelection];
             [_engine message:SCI_SETSELECTION wParam:expected[1] lParam:expected[0]];
             for (sptr_t i = 1; i < selections; ++i) [_engine message:SCI_ADDSELECTION wParam:expected[(size_t)i * 2 + 1] lParam:expected[(size_t)i * 2]];
             [_engine message:SCI_SETMAINSELECTION wParam:mainSelection];
@@ -497,25 +541,45 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     // Each attached Scintilla view owns a reference, so either view may close first.
     [_engine message:SCI_SETDOCPOINTER wParam:0 lParam:[other.engine message:SCI_GETDOCPOINTER]];
     self.revision = other.revision;
+    // The line count changed with no modification notification.
+    [self updateLineNumberMargin:NO];
 }
 - (BOOL)replaceSelection:(NSString *)text {
     [self assertThread];
-    NSData *data = TTUTF8(text); if (!data) return NO;
-    const BOOL writable = !self.readOnly;
+    NSData *data = TTUTF8(text); if (!data || self.readOnly) return NO;
     [_engine message:SCI_BEGINUNDOACTION];
     [_engine message:SCI_TARGETFROMSELECTION];
     const sptr_t start = [_engine message:SCI_GETTARGETSTART];
     [_engine message:SCI_REPLACETARGET wParam:data.length lParam:(sptr_t)data.bytes];
     [_engine message:SCI_SETSEL wParam:start + data.length lParam:start + data.length];
     [_engine message:SCI_ENDUNDOACTION];
-    return writable;
+    return YES;
+}
++ (BOOL)commandModifiesText:(NSString *)identifier {
+    static NSSet<NSString *> *editing;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ editing = [NSSet setWithArray:@[
+        @"undo", @"redo", @"cut", @"paste", @"duplicateLine", @"deleteLine", @"transposeLine", @"indent", @"unindent",
+        @"upper", @"lower", @"duplicateSelection", @"deleteWordLeft", @"deleteWordRight", @"deleteLineLeft", @"deleteLineRight",
+        @"moveLineUp", @"moveLineDown", @"joinLines", @"trimTrailing", @"deleteBack", @"deleteForward", @"newLine", @"tab", @"backTab"]]; });
+    return [identifier isKindOfClass:NSString.class] && [editing containsObject:identifier];
 }
 - (void)executeCommand:(NSString *)identifier {
     [self assertThread];
-    if ([identifier isEqualToString:@"rectangularSelection"] || [identifier isEqualToString:@"streamSelection"]) {
-        [_engine message:SCI_SETSELECTIONMODE wParam:[identifier isEqualToString:@"rectangularSelection"] ? SC_SEL_RECTANGLE : SC_SEL_STREAM]; return;
+    // Rectangular Selection is the keyboard column mode: its sticky extend mode lets plain arrow
+    // keys grow the rectangle, and choosing it again switches that off.
+    if ([identifier isEqualToString:@"rectangularSelection"]) { [_engine message:SCI_SETSELECTIONMODE wParam:SC_SEL_RECTANGLE]; return; }
+    if ([identifier isEqualToString:@"streamSelection"]) { [self useStreamSelection]; return; }
+    if ([identifier isEqualToString:@"clearAdditionalSelections"]) {
+        // SCI_CLEARSELECTIONS leaves one empty selection at position 0, but it is what resets the
+        // rectangular and extend modes, so clear first and then put the main range back.
+        // SCI_SETSELECTION neither scrolls nor touches those modes.
+        const sptr_t main = [_engine message:SCI_GETMAINSELECTION];
+        const sptr_t anchor = [_engine message:SCI_GETSELECTIONNANCHOR wParam:main], caret = [_engine message:SCI_GETSELECTIONNCARET wParam:main];
+        [_engine message:SCI_CLEARSELECTIONS];
+        [_engine message:SCI_SETSELECTION wParam:caret lParam:anchor];
+        return;
     }
-    if ([identifier isEqualToString:@"clearAdditionalSelections"]) { [_engine message:SCI_CLEARSELECTIONS]; return; }
     if ([identifier isEqualToString:@"addNextOccurrence"] || [identifier isEqualToString:@"selectAllOccurrences"]) {
         [_engine message:[identifier isEqualToString:@"addNextOccurrence"] ? SCI_MULTIPLESELECTADDNEXT : SCI_MULTIPLESELECTADDEACH]; return;
     }
@@ -531,7 +595,9 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
         [_engine message:SCI_SETVIEWEOL wParam:![_engine message:SCI_GETVIEWEOL]]; return;
     }
     if ([identifier isEqualToString:@"toggleLineNumbers"]) {
-        [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:[_engine message:SCI_GETMARGINWIDTHN wParam:0] ? 0 : 48]; return;
+        if ([_engine message:SCI_GETMARGINWIDTHN wParam:0]) [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:0];
+        else [self updateLineNumberMargin:YES];
+        return;
     }
     if ([identifier isEqualToString:@"toggleOvertype"]) {
         [_engine message:SCI_SETOVERTYPE wParam:![_engine message:SCI_GETOVERTYPE]]; return;
@@ -607,7 +673,7 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     if ([kind isEqualToString:@"insertText"]) {
         id text = step[@"text"];
         if (![text isKindOfClass:NSString.class] || self.selectionCount != 1) return NO;
-        [self replaceSelection:text]; return YES;
+        return [self replaceSelection:text];
     }
     if ([kind isEqualToString:@"command"]) {
         id command = step[@"command"];
@@ -715,6 +781,7 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     NSFont *font=[NSFont fontWithName:name size:size];if(!font)return;
     _syntaxFonts[@(index)]=@{@"name":name,@"size":@(size)};
     [_engine message:SCI_STYLESETFONT wParam:index lParam:(sptr_t)name.UTF8String];[_engine message:SCI_STYLESETSIZEFRACTIONAL wParam:index lParam:(sptr_t)lround(size*100)];
+    if (index == STYLE_LINENUMBER || index == STYLE_DEFAULT) [self updateLineNumberMargin:NO];
 }
 - (void)showCallTip:(NSString *)text {
     [self assertThread];if([text rangeOfString:@"\0"].location!=NSNotFound)return;
@@ -770,6 +837,11 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
         _onMacroStep(step ?: @{@"kind":@"unsupported", @"message":@(notification->message)});
     }
     if (notification->nmhdr.code == SCN_FOCUSIN && _onFocus) _onFocus();
+    if (notification->nmhdr.code == SCN_MODIFYATTEMPTRO && _onReadOnlyAttempt) _onReadOnlyAttempt();
+    // Keep the line-number margin wide enough: zoom rescales its font, and added or removed lines
+    // change the digit count. A margin width is view state, so setting it here edits nothing.
+    if (notification->nmhdr.code == SCN_ZOOM) [self updateLineNumberMargin:NO];
+    else if (notification->nmhdr.code == SCN_MODIFIED && notification->linesAdded != 0 && [self lineNumberDigits] != _marginDigits) [self updateLineNumberMargin:NO];
     if (notification->nmhdr.code == SCN_MODIFIED &&
         (notification->modificationType & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))) {
         _revision++;

@@ -2,6 +2,11 @@
 #import <AppKit/AppKit.h>
 #import "../Search/TTSearchEngine.h"
 NS_ASSUME_NONNULL_BEGIN
+extern NSErrorDomain const TTEditorErrorDomain;
+typedef NS_ERROR_ENUM(TTEditorErrorDomain, TTEditorError) {
+    /// The document is read-only; see -requireWritable:.
+    TTEditorErrorReadOnly = 1,
+};
 /// Main-thread-only view. All positions remain inside the UTF-8 Scintilla model.
 @interface TTEditor : NSView
 @property(nonatomic, copy) NSString *text;
@@ -25,7 +30,15 @@ NS_ASSUME_NONNULL_BEGIN
 /// unconditional replace for fresh loads.
 - (BOOL)replaceDocumentText:(NSString *)text;
 @property(nonatomic) BOOL readOnly;
-- (void)convertLineEndings:(NSString *)mode;
+/// The one read-only guard: every command that edits text calls it before anything else,
+/// including before any dialog, so the reason is always the same and always stated first.
+/// NO with a TTEditorErrorReadOnly error when the document is read-only.
+- (BOOL)requireWritable:(NSError **)error;
+/// Called when Scintilla refuses an edit because the document is read-only (typing, a key
+/// command, Undo). Bridge methods that return NO for a read-only document do not call it.
+@property(nonatomic, copy, nullable) void (^onReadOnlyAttempt)(void);
+/// NO, changing nothing, when the document is read-only or the mode is not LF, CRLF or CR.
+- (BOOL)convertLineEndings:(NSString *)mode;
 /// Sets only the ending inserted by later edits (LF, CRLF or CR). Never rewrites existing
 /// bytes and creates no undo step; convertLineEndings: is the only converting operation.
 - (void)setLineEndingMode:(NSString *)mode;
@@ -62,8 +75,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) BOOL wrap;
 - (void)shareDocumentWith:(TTEditor *)other;
 - (void)executeCommand:(NSString *)identifier;
-/// Returns NO, changing nothing, when the text cannot be encoded as UTF-8 (an unpaired
-/// surrogate); also NO when the document is read-only.
+/// YES for executeCommand: identifiers that edit text, which callers guard with requireWritable:.
++ (BOOL)commandModifiesText:(NSString *)identifier;
+/// Returns NO, changing nothing (selection included), when the text cannot be encoded as
+/// UTF-8 (an unpaired surrogate) or the document is read-only.
 - (BOOL)replaceSelection:(NSString *)text;
 - (void)setSavePoint;
 - (void)resetUndoHistory;
