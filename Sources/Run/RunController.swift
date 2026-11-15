@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
-final class RunController: NSObject {
+final class RunController: NSObject, NSMenuItemValidation {
     var editor: () -> TTEditor? = { nil }, file: () -> URL? = { nil }
+    /// Called when a configured command is actually started and again before its result is
+    /// applied to the document. Neither is ever part of a macro recording.
+    var onUnrecordableAction: () -> Void = {}
     private var commands: [ConfiguredRun] = [], loadError: Error?, execution: RunExecution?
     private let menu = NSMenu(title: "Run")
     private var resultWindow: NSWindow?
     private weak var applyButton: NSButton?
     private var pending: (TTEditor, UInt, String, Bool, Int, Int)?
+    private var retirementObserver: NSObjectProtocol?
     let storage: URL
     override init() {
         let support =
@@ -16,6 +20,19 @@ final class RunController: NSObject {
             .appendingPathComponent("TextTank")
         storage = support.appendingPathComponent("RunCommands.json")
         super.init()
+        retirementObserver = NotificationCenter.default.addObserver(
+            forName: .TTEditorWillRetire, object: nil, queue: nil
+        ) { [weak self] note in
+            guard let self, let pending = self.pending, pending.0 === note.object as? TTEditor else { return }
+            if !pending.3, let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor {
+                // A whole-document result does not depend on which view shows the document.
+                self.pending?.0 = successor
+            } else {
+                // A selection result belongs to the closed view's selection and cannot be applied.
+                self.pending = nil
+                self.applyButton?.isEnabled = false
+            }
+        }
         do {
             commands = try ConfiguredRun.decodeLibrary(
                 WorkspaceStore.readRegularFile(storage, maximumBytes: ConfiguredRun.maximumLibraryBytes))
@@ -24,6 +41,7 @@ final class RunController: NSObject {
             commands = []
         }
     }
+    deinit { if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) } }
     func makeMenu() -> NSMenu {
         rebuild()
         return menu
@@ -102,6 +120,12 @@ final class RunController: NSObject {
         } catch { NSAlert(error: error).runModal() }
     }
     @objc private func cancel(_ sender: Any?) { execution?.cancel() }
+    /// True while a configured command is running.
+    var isRunning: Bool { execution != nil }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        // Cancel Running Command is available only while there is something to cancel.
+        item.action == #selector(cancel(_:)) ? isRunning : true
+    }
     @objc private func run(_ sender: NSMenuItem) {
         guard execution == nil, let id = sender.representedObject as? String,
             let configured = commands.first(where: { $0.id.uuidString == id })
@@ -110,6 +134,7 @@ final class RunController: NSObject {
         applyButton?.isEnabled = false
         resultWindow?.close()
         resultWindow = nil
+        onUnrecordableAction()
         let target = editor(), selected = (target?.selectionStart != target?.selectionEnd),
             revision = target?.revision ?? 0
         let anchor = target?.selectionAnchor ?? 0, caret = target?.selectionCaret ?? 0
@@ -173,12 +198,20 @@ final class RunController: NSObject {
             stack.orientation = .vertical
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled, .closable, .resizable],
-                backing: .buffered, defer: false)
+            // A panel, so the document window stays main while the result is key, and one that
+            // stays on screen when the application is deactivated. Escape closes it, except
+            // while it holds a result that has not been applied: that would discard the result.
+            // Apply is deliberately not the default button. This window takes the keyboard when
+            // the command finishes, and a Return typed for the editor must not change the document.
+            let window = ToolPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled, .closable, .resizable])
+            window.allowsEscapeToClose = { [weak self] in self?.pending == nil }
+            window.listedInWindowMenu = true
             window.title = command.name
             window.isReleasedWhenClosed = false
             window.contentView = stack
+            window.initialFirstResponder = view
+            WindowFrames.track(window, as: "TextTank.RunResult")
             resultWindow = window
             window.makeKeyAndOrderFront(nil)
         }
@@ -194,6 +227,7 @@ final class RunController: NSObject {
             NSSound.beep()
             return
         }
+        onUnrecordableAction()
         target.beginUndoGroup()
         defer { target.endUndoGroup() }
         if selection { target.replaceSelection(output) } else { target.text = output }

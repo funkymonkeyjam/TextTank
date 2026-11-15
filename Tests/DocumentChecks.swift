@@ -32,6 +32,8 @@ import AppKit
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             setenv("TEXTTANK_SUPPORT_DIRECTORY", root.appendingPathComponent("support").path, 1)
             defer { try? FileManager.default.removeItem(at: root) }
+            // As in the app: the first document controller created becomes the shared one.
+            let documentController = TextDocumentController()
             let app = NSApplication.shared
             app.setActivationPolicy(.accessory)
             print("SCREENS \(NSScreen.screens.map { $0.frame })")
@@ -484,7 +486,8 @@ import AppKit
                 NotificationCenter.default.post(name: NSWindow.didUpdateNotification, object: window)
                 app.updateWindows()
                 check(
-                    controller.focusObserver == nil && controller.automationObserver == nil,
+                    controller.focusObservation == nil && controller.automationObserver == nil
+                        && document.editor.onFocus == nil,
                     "close removes callbacks before document detaches")
                 check(
                     controller.activeEditor === document.editor,
@@ -1001,6 +1004,13 @@ import AppKit
                 second.close()
             }
             pinning(root: root, app: app, sessionDelegate: sessionDelegate) { name, line, body in
+                section(name, line: line, body)
+            }
+            openSaveRecovery(root: root, documents: documentController) { name, line, body in
+                section(name, line: line, body)
+            }
+            splitViewAndCurrentEditor(root: root, app: app) { name, line, body in section(name, line: line, body) }
+            windowMenuAndKeyboard(root: root, app: app, sessionDelegate: sessionDelegate) { name, line, body in
                 section(name, line: line, body)
             }
             section("clean quit") {

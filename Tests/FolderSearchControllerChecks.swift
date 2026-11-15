@@ -184,6 +184,27 @@ import AppKit
                 "the replacement report counts one replaced and one skipped file and clears the stale results")
             openDocument.close()
             document.close()
+            // Package 21 (F293, G391, G400): Find in Folder is a panel that leaves the document
+            // window main, and a listed result opens from the keyboard.
+            do {
+                let panel = try requireValue(flow.window as? NSPanel, "the Find in Folder window is a panel")
+                check(
+                    !panel.canBecomeMain && panel.canBecomeKey && !panel.hidesOnDeactivate && !panel.isFloatingPanel
+                        && panel.level == .normal && !panel.styleMask.contains(.utilityWindow),
+                    "the Find in Folder panel cannot become main, does not float and stays when the application is deactivated"
+                )
+                check(
+                    panel.defaultButtonCell == nil && panel.initialFirstResponder === flow.queryField
+                        && flow.queryField.action == NSSelectorFromString("startSearch:")
+                        && flow.queryField.target === flow,
+                    "Return in the query field still starts the search, once: there is no default button beside it")
+                check(
+                    flow.table.accessibilityLabel() == "Folder search results", "the result list has a VoiceOver label")
+                // Opening a result from the keyboard, and Escape, are checked in document-checks
+                // (DocumentWindowMenuChecks.swift): they wait for asynchronous work, and waiting on
+                // the top-level run loop of this asynchronous main after the confirmation above is
+                // not safe (see the note left for later units in the package 21 result).
+            }
             Checks.summary { "PASS FolderSearchControllerChecks: \(Checks.count) assertions" }
         }
     }

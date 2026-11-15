@@ -8,6 +8,8 @@ extension Notification.Name {
 
 final class AutomationController: NSObject, NSMenuDelegate {
     private let editorProvider: () -> TTEditor?
+    /// Called once each time a saved automation starts to run, before any prompt or change.
+    var onInvocation: () -> Void = {}
     private let newDocument: (String) -> Void
     private let storage: URL
     private var library = AutomationLibrary(workflows: [])
@@ -160,7 +162,8 @@ final class AutomationController: NSObject, NSMenuDelegate {
         let manage = NSMenuItem(title: "Manage Automations…", action: #selector(manageAction), keyEquivalent: "")
         manage.target = self
         automationMenu.addItem(manage)
-        let palette = NSMenuItem(title: "Choose Automation…", action: #selector(paletteAction), keyEquivalent: "")
+        // The one entry for the palette, with its shortcut (Shift-Command-P).
+        let palette = NSMenuItem(title: "Automation Palette…", action: #selector(paletteAction), keyEquivalent: "P")
         palette.target = self
         automationMenu.addItem(palette)
         let history = NSMenuItem(
@@ -482,6 +485,8 @@ final class AutomationController: NSObject, NSMenuDelegate {
         do { try runSavedAutomation(id: id) } catch { showError(error) }
     }
     private func run(_ original: AutomationDefinition, capturedEditor: TTEditor?) throws {
+        // Invocation, not lookup: opening and cancelling the palette never reaches this.
+        onInvocation()
         let workflow = original
         // Capture once before showing the preview. Never re-query the frontmost editor on Apply.
         let editor = capturedEditor
@@ -628,6 +633,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
         progress.minValue = 0
         progress.maxValue = Double(max(1, workflow.steps.count))
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelTransform))
+        cancel.keyEquivalent = "\u{1b}"
         cancel.frame = NSRect(x: 290, y: 15, width: 110, height: 30)
         cancel.identifier = NSUserInterfaceItemIdentifier("automation.transform.cancel")
         panel.contentView?.addSubview(status)
@@ -747,6 +753,9 @@ final class AutomationController: NSObject, NSMenuDelegate {
         indicator.isIndeterminate = false
         indicator.maxValue = Double(total)
         let cancel = NSButton(title: "Stop Sending", target: self, action: #selector(cancelExport))
+        // The panel has only this button; Escape presses it.
+        cancel.keyEquivalent = "\u{1b}"
+        cancel.identifier = NSUserInterfaceItemIdentifier("automation.export.stop")
         cancel.frame = NSRect(x: 280, y: 15, width: 140, height: 30)
         panel.contentView?.addSubview(label)
         panel.contentView?.addSubview(indicator)

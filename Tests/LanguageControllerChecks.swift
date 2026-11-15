@@ -32,6 +32,54 @@ import AppKit
                 LanguageFunctionController.navigate(symbols[1], text: text, revision: revision, editor: editor)
                     && editor.selectedText == "work",
                 "function navigation selects exact UTF8 symbol after Unicode prefix")
+            // Package 21 (F293, G391): the Function List is a panel and a symbol opens from the keyboard.
+            do {
+                let list = LanguageFunctionController(editor: editor, text: text, revision: revision, symbols: symbols)
+                let panel = try requireValue(list.window as? NSPanel, "the Function List window is a panel")
+                // A panel is not listed in the Window menu by AppKit, and this one has no command that
+                // shows it again, so it lists itself: covered by the document window it stays reachable.
+                if NSApp.windowsMenu == nil { NSApp.windowsMenu = NSMenu(title: "Window") }
+                panel.orderFront(nil)
+                check(
+                    NSApp.windowsMenu?.items.filter { $0.target === panel && $0.title == panel.title }.count == 1,
+                    "the Function List panel is listed once in the Window menu while it is showing")
+                panel.orderOut(nil)
+                check(
+                    !(NSApp.windowsMenu?.items.contains { $0.target === panel } ?? false),
+                    "a hidden Function List panel leaves the Window menu")
+                check(
+                    !panel.canBecomeMain && !panel.hidesOnDeactivate && !panel.isFloatingPanel
+                        && panel.level == .normal && panel.initialFirstResponder === list.table,
+                    "the Function List panel cannot become main, does not float and starts in the list")
+                check(
+                    list.numberOfRows(in: list.table) == symbols.count
+                        && list.table.accessibilityLabel() == "Functions and symbols",
+                    "fixture: the list shows the symbols and has a VoiceOver label")
+                _ = editor.setSelectionAnchor(0, caret: 0)
+                list.table.selectRowIndexes([1], byExtendingSelection: false)
+                check(
+                    list.table.clickedRow == -1
+                        && NSApp.sendAction(NSSelectorFromString("openSelected"), to: list, from: nil)
+                        && editor.selectionCaret == 0,
+                    "a double-click away from the rows navigates nowhere, even with a symbol selected")
+                let returnKey = try requireValue(
+                    NSEvent.keyEvent(
+                        with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                        characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36),
+                    "fixture: a Return key event")
+                list.table.keyDown(with: returnKey)
+                check(editor.selectedText == "work", "Return on a selected symbol navigates to it")
+                let hint = (panel.contentView as? NSStackView)?.views.compactMap { $0 as? NSTextField }.first
+                check(
+                    hint?.stringValue.contains("press Return") == true,
+                    "the Function List says how to open a symbol from the keyboard")
+                editor.replaceSelection("work2")
+                list.table.selectRowIndexes([0], byExtendingSelection: false)
+                list.table.keyDown(with: returnKey)
+                check(
+                    hint?.stringValue == "The document changed or closed. Refresh the function list.",
+                    "Return on a symbol of a changed document reports that the list is stale")
+            }
             editor.text = "changed"
             let selection = editor.selectionCaret
             check(
@@ -124,6 +172,67 @@ import AppKit
             check(
                 editor.revision == beforeStyleRevision && !editor.modified, "font and color changes never edit document"
             )
+            // F21, F83: a saved style change reaches every view of every open document on that
+            // profile, the lexer is installed once per document, and other documents are left alone.
+            do {
+                func look(_ view: TTEditor) -> (size: CGFloat, red: CGFloat) {
+                    let output = view.attributedText(forSelection: false),
+                        font = output.attribute(.font, at: 0, effectiveRange: nil) as! NSFont,
+                        color = (output.attribute(.foregroundColor, at: 0, effectiveRange: nil) as! NSColor)
+                            .usingColorSpace(.sRGB)!
+                    return (font.pointSize, color.redComponent)
+                }
+                let pane = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+                pane.shareDocument(with: editor)
+                let sameProfile = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+                sameProfile.text = editor.text
+                sameProfile.resetUndoHistory()
+                sameProfile.setSavePoint()
+                let otherProfile = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+                otherProfile.text = "import os\n"
+                otherProfile.resetUndoHistory()
+                otherProfile.setSavePoint()
+                check(controller.apply(identifier: "python", to: otherProfile), "fixture: a Python document")
+                let otherBefore = look(otherProfile)
+                var installs: [String] = []
+                let fanout = LanguageController(
+                    editorProvider: { pane }, languageProvider: { user.id }, setLanguage: { installs.append($0) })
+                fanout.siblingViews = { view in
+                    [editor, pane].contains { $0 === view } ? [editor, pane].filter { $0 !== view } : []
+                }
+                fanout.openDocuments = { [(user.id, editor), (user.id, sameProfile), ("python", otherProfile)] }
+                custom.profiles[index].styles[styleIndex].fontSize = 23.5
+                custom.profiles[index].styles[styleIndex].foreground = "AB3456"
+                try fanout.persist(custom)
+                let revisions = [editor, pane, sameProfile, otherProfile].map(\.revision)
+                fanout.reapply([user.id])
+                let expectedRed = CGFloat(0xAB) / 255
+                check(
+                    [editor, pane, sameProfile].allSatisfy {
+                        abs(look($0).size - 23.5) < 0.01 && abs(look($0).red - expectedRed) < 0.005
+                    }, "a saved style change reaches both panes and another document on the profile")
+                check(
+                    look(otherProfile) == otherBefore,
+                    "a document on a different profile keeps its lexer and styles after a re-apply")
+                check(
+                    [editor, pane, sameProfile, otherProfile].map(\.revision) == revisions
+                        && ![editor, sameProfile, otherProfile].contains { $0.modified },
+                    "re-applying a profile to every view never edits a document")
+                // Choosing a language in one pane restyles the other pane from it.
+                let chooser = fanout.menu().items.first { ($0.representedObject as? String) == "python" }!
+                check(
+                    NSApp.sendAction(chooser.action!, to: chooser.target, from: chooser) && installs == ["python"],
+                    "fixture: Python chosen from the Language menu with the second pane current")
+                check(
+                    look(editor) == look(pane) && abs(look(editor).size - 23.5) > 0.01,
+                    "a language chosen in one pane gives both panes the new profile's styles")
+                check(
+                    fanout.applyToDocument(identifier: user.id, through: editor), "fixture: back on the user language")
+                custom.profiles[index].styles[styleIndex].fontSize = 19.25
+                custom.profiles[index].styles[styleIndex].foreground = "123456"
+                try controller.persist(custom)
+                _ = controller.apply(identifier: user.id, to: editor)
+            }
             let settingsWindow = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 400, height: 180), styleMask: [.titled], backing: .buffered,
                 defer: false)

@@ -224,6 +224,23 @@ import Foundation
                 controller.editorDidFocus(clone)
                 clone.executeCommand("newLine")
                 rejects("clone focus switch invalidates incomplete recording") { _ = try controller.finishRecording() }
+                // G337: reload and close announce the document through its primary view; a
+                // recording started in the clone belongs to the same document.
+                let cloneController = MacroController(editorProvider: { clone })
+                cloneController.startRecording()
+                clone.executeCommand("charRight")
+                cloneController.editorWillReset(editor, reason: "Reloaded")
+                rejects("reload through primary invalidates clone recording", message: "Reloaded") {
+                    _ = try cloneController.finishRecording()
+                }
+                let unrelated = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 400))
+                cloneController.startRecording()
+                clone.executeCommand("newLine")
+                cloneController.editorWillReset(unrelated, reason: "Another document reloaded")
+                check(
+                    (try cloneController.finishRecording())?.steps.isEmpty == false,
+                    "a reload of another document leaves the recording saveable")
+                clone.executeCommand("undo")
                 controller.startRecording()
                 editor.executeCommand("charRight")
                 controller.invalidateRecording(reason: "Automation invoked")

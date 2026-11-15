@@ -40,7 +40,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     let recursiveButton = NSButton(checkboxWithTitle: "Include subfolders", target: nil, action: nil)
     let folderLabel = NSTextField(labelWithString: "Choose a folder to search")
     let status = NSTextField(labelWithString: "Normal / Extended / Boost regex · UTF-8/UTF-16 · symlinks skipped")
-    let table = NSTableView(), details = NSTextView()
+    let table = ActivatingTableView(), details = NSTextView()
     private var folder: URL?
     private var searchedFolder: URL?
     private var replaceButton: NSButton!
@@ -59,10 +59,14 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let window = NSWindow(
+        // A panel, so the document window stays main while Find in Folder is key. It stays on
+        // screen when the application is deactivated: a long search keeps its results visible.
+        let window = ToolPanel(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: 620),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+            styleMask: [.titled, .closable, .resizable, .miniaturizable])
         super.init(window: window)
+        // Closing stops running work, so Escape closes this window only while it is idle.
+        window.allowsEscapeToClose = { [weak self] in self?.isSearching != true }
         window.title = "Find in Folder"
         window.delegate = self
         window.isReleasedWhenClosed = false
@@ -107,6 +111,9 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         table.dataSource = self
         table.target = self
         table.doubleAction = #selector(openResult(_:))
+        // Return on the selected row does what a double-click on it does.
+        table.onActivate = { [weak self] row in self?.openResult(at: row) }
+        table.setAccessibilityLabel("Folder search results")
         table.usesAlternatingRowBackgroundColors = true
         let results = NSScrollView()
         results.documentView = table
@@ -153,13 +160,16 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             filterField.stringValue = "*.*"
             status.stringValue = "Saved search settings could not be read; original settings preserved."
         }
-
+        window.initialFirstResponder = queryField
+        WindowFrames.track(window, as: "TextTank.FindInFolder")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
     @objc func showSearch(_ sender: Any?) {
         updateFolderLabel()
         showWindow(sender)
         window?.makeKeyAndOrderFront(sender)
+        // Also on reopening, when the window would otherwise keep whatever had focus last.
+        window?.makeFirstResponder(queryField)
     }
     @objc private func chooseFolder(_ sender: Any?) {
         let panel = NSOpenPanel()
@@ -415,13 +425,13 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         guard let range = validatedRange(match, text: document.editor.text, query: query, matchCase: matchCase) else {
             return false
         }
-        let editor = (document.windowControllers.first as? EditorWindowController)?.activeEditor ?? document.editor
+        let editor = document.activeEditor
         return editor.setSelectionAnchor(range.location, caret: range.location + range.length)
     }
     @discardableResult static func selectResult(
         _ match: FolderSearchMatch, in document: TextDocument, options: SearchOptions
     ) -> Bool {
-        let editor = (document.windowControllers.first as? EditorWindowController)?.activeEditor ?? document.editor
+        let editor = document.activeEditor
         let text = editor.text
         guard let report = try? SearchCore.search(text, options: options),
             report.hits.contains(where: {
@@ -433,8 +443,11 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         else { return false }
         return editor.setSelectionAnchor(bytes.location, caret: NSMaxRange(bytes))
     }
-    @objc private func openResult(_ sender: Any?) {
-        let row = table.clickedRow
+    /// A double-click. `clickedRow` is -1 for a column header and the empty area below the
+    /// rows, which therefore open nothing even while a row is selected.
+    @objc func openResult(_ sender: Any?) { openResult(at: table.clickedRow) }
+    /// What a double-click or Return on a listed result does.
+    func openResult(at row: Int) {
         guard matches.indices.contains(row) else { return }
         let match = matches[row], options = searchedOptions, token = generation
         NSDocumentController.shared.openDocument(withContentsOf: match.url, display: true) {
@@ -451,8 +464,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                     self.lastOutcome = .failed("This result could not be opened as a text document.")
                     return
                 }
-                let editor =
-                    (document.windowControllers.first as? EditorWindowController)?.activeEditor ?? document.editor
+                let editor = document.activeEditor
                 let snapshot = editor.text, revision = editor.revision
                 let report = try? await Task.detached(priority: .userInitiated) {
                     try SearchCore.search(snapshot, options: options)

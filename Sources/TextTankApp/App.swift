@@ -4,11 +4,15 @@ import AppKit
     @main
     struct TextTankMain {
         static func main() {
+            // The first document controller created becomes the shared one, so this comes first.
+            let documents = TextDocumentController()
             let app = NSApplication.shared
             app.setActivationPolicy(.regular)
             let delegate = AppDelegate()
             app.delegate = delegate
-            _ = NSDocumentController.shared
+            if NSDocumentController.shared !== documents {
+                NSLog("TextTank: the document controller was created early; encoding choice on open is unavailable")
+            }
             app.run()
             withExtendedLifetime(delegate) {}
         }
@@ -17,67 +21,102 @@ import AppKit
 #endif
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let workspace = WorkspaceController()
-    let workspaceBrowser = WorkspaceBrowserController()
+    lazy var workspace: WorkspaceController = {
+        let controller = WorkspaceController()
+        controller.activeDocument = { [weak self] in self?.currentDocument }
+        return controller
+    }()
+    lazy var workspaceBrowser: WorkspaceBrowserController = {
+        let controller = WorkspaceBrowserController()
+        controller.currentDocument = { [weak self] in self?.currentDocument }
+        return controller
+    }()
     let settings = SettingsController()
     lazy var folderSearch: FolderSearchController = {
         let controller = FolderSearchController()
         controller.workspaceRoots = { [weak self] in self?.workspaceBrowser.store.state.folders ?? [] }
         return controller
     }()
+    /// The document window focused last. Written where focus changes (a view's onFocus, a
+    /// document window becoming main, the status menu); never by a getter.
     weak var lastDocumentController: EditorWindowController?
-    var currentEditor: TTEditor? {
-        if let controller = NSApp.mainWindow?.windowController as? EditorWindowController {
-            lastDocumentController = controller
-        }
-        guard let controller = lastDocumentController, controller.document != nil else { return nil }
-        return controller.activeEditor
+    /// The one definition of "current" for every controller: the main window when it is a
+    /// document window, otherwise the document window focused last, because Find and Replace,
+    /// a Run result or another auxiliary window may be main. Nil once that document has closed.
+    var currentDocumentController: EditorWindowController? {
+        let controller = (NSApp.mainWindow?.windowController as? EditorWindowController) ?? lastDocumentController
+        return controller?.document == nil ? nil : controller
     }
-    lazy var languages = LanguageController(
-        editorProvider: { [weak self] in self?.currentEditor },
-        languageProvider: { [weak self] in
-            (self?.lastDocumentController?.document as? TextDocument)?.languageIdentifier ?? "normal"
-        },
-        setLanguage: { [weak self] id in
-            (self?.lastDocumentController?.document as? TextDocument)?.languageIdentifier = id
-        })
-    lazy var runner: RunController = {
-        let controller = RunController()
-        controller.editor = { [weak self] in
-            self?.macros.invalidateRecording(reason: "External execution is never recorded in macros.")
-            return self?.currentEditor
+    var currentDocument: TextDocument? { currentDocumentController?.document as? TextDocument }
+    var currentEditor: TTEditor? { currentDocumentController?.activeEditor }
+    lazy var languages: LanguageController = {
+        let controller = LanguageController(
+            editorProvider: { [weak self] in self?.currentEditor },
+            languageProvider: { [weak self] in self?.currentDocument?.languageIdentifier ?? "normal" },
+            setLanguage: { [weak self] id in self?.currentDocument?.languageIdentifier = id })
+        controller.siblingViews = { editor in
+            for document in NSDocumentController.shared.documents {
+                for case let window as EditorWindowController in document.windowControllers
+                where window.views.contains(where: { $0 === editor }) {
+                    return window.views.filter { $0 !== editor }
+                }
+            }
+            return []
         }
-        controller.file = { [weak self] in (self?.lastDocumentController?.document as? TextDocument)?.fileURL }
+        controller.openDocuments = {
+            NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }.map {
+                ($0.languageIdentifier, $0.editor)
+            }
+        }
         return controller
     }()
-    lazy var utilities = UtilityController(activeEditor: { [weak self] in
-        self?.macros.invalidateRecording(reason: "Text utilities are not recorded in macros yet.")
-        return self?.currentEditor
-    })
+    // The providers below only answer "which editor". A macro recording is invalidated where
+    // an action is committed, through each controller's hook, never by asking for the editor.
+    lazy var runner: RunController = {
+        let controller = RunController()
+        controller.editor = { [weak self] in self?.currentEditor }
+        controller.onUnrecordableAction = { [weak self] in
+            self?.macros.invalidateRecording(reason: "External execution is never recorded in macros.")
+        }
+        controller.file = { [weak self] in self?.currentDocument?.fileURL }
+        return controller
+    }()
+    lazy var utilities: UtilityController = {
+        let controller = UtilityController(activeEditor: { [weak self] in self?.currentEditor })
+        controller.onUnrecordableEdit = { [weak self] in
+            self?.macros.invalidateRecording(reason: "Text utilities are not recorded in macros yet.")
+        }
+        return controller
+    }()
     lazy var searchController: SearchController = {
         let controller = SearchController()
         controller.currentEditor = { [weak self] in self?.currentEditor }
-        controller.openEditors = { NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.editor } }
+        // One view per document, and the one the person last worked in: Find Next compares
+        // these with the current editor, and a replace reads that view's selection.
+        controller.openEditors = {
+            NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.activeEditor }
+        }
         return controller
     }()
-    lazy var macros = MacroController(editorProvider: {
-        (NSApp.mainWindow?.windowController as? EditorWindowController)?.activeEditor
-    })
-    lazy var automations = AutomationController(
-        editorProvider: { [weak self] in
+    lazy var macros = MacroController(editorProvider: { [weak self] in self?.currentEditor })
+    lazy var automations: AutomationController = {
+        let controller = AutomationController(
+            editorProvider: { [weak self] in self?.currentEditor }, newDocument: AppDelegate.openAutomationOutput)
+        controller.onInvocation = { [weak self] in
             self?.macros.invalidateRecording(
                 reason: "An automation was invoked during macro recording. Automation side effects are not recorded.")
-            return (NSApp.mainWindow?.windowController as? EditorWindowController)?.activeEditor
-        },
-        newDocument: { text in
-            let doc = TextDocument()
-            NSDocumentController.shared.addDocument(doc)
-            doc.makeWindowControllers()
-            doc.editor.text = text
-            doc.editor.setLineEndingMode(LineEnding.detect(in: text).rawValue)
-            doc.showWindows()
-            doc.windowControllers.first?.window?.makeFirstResponder(doc.editor)
-        })
+        }
+        return controller
+    }()
+    private static func openAutomationOutput(_ text: String) {
+        let doc = TextDocument()
+        NSDocumentController.shared.addDocument(doc)
+        doc.makeWindowControllers()
+        doc.editor.text = text
+        doc.editor.setLineEndingMode(LineEnding.detect(in: text).rawValue)
+        doc.showWindows()
+        doc.windowControllers.first?.window?.makeFirstResponder(doc.editor)
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenus()
         settings.apply()
@@ -110,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = message
             _ = alert.runModal()
         }
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         if NSDocumentController.shared.documents.isEmpty {
             newDocument(nil)
         } else {
@@ -129,10 +168,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         doc.windowControllers.first?.window?.makeFirstResponder(doc.editor)
     }
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    /// Saved window state is decoded with secure coding only.
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+    /// Closes every document once quitting is certain, never while the review can still be
+    /// cancelled. The tab windows are taken off screen first: closing a visible tab shows the
+    /// tab that takes its place, and at quit that would show and lay out each remaining document.
+    func closeAllForTermination() {
         let documents = NSDocumentController.shared.documents
-        if documents.allSatisfy({ !$0.isDocumentEdited }) {
-            for document in documents { document.close() }
+        DocumentTabWindow.documents.forEach { $0.orderOut(nil) }
+        for document in documents { document.close() }
+    }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if NSDocumentController.shared.documents.allSatisfy({ !$0.isDocumentEdited }) {
+            closeAllForTermination()
             return .terminateNow
         }
         DispatchQueue.main.async { self.requestUnsavedReview(self) }
@@ -147,7 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     var replyToTerminate: (Bool) -> Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
     @objc func reviewed(_ controller: NSDocumentController, didReviewAll: Bool, contextInfo: UnsafeMutableRawPointer?) {
-        if didReviewAll { for document in NSDocumentController.shared.documents { document.close() } }
+        if didReviewAll { closeAllForTermination() }
         replyToTerminate(didReviewAll)
     }
     func buildMenus() {
@@ -172,6 +220,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "Settings…", action: #selector(SettingsController.showSettings(_:)), keyEquivalent: ",")
         preferences.target = settings
         app.addItem(preferences)
+        app.addItem(.separator())
+        // The standard application items. AppKit fills the Services menu.
+        let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+        let services = NSMenu(title: "Services")
+        servicesItem.submenu = services
+        NSApp.servicesMenu = services
+        app.addItem(servicesItem)
+        app.addItem(.separator())
+        item(app, "Hide TextTank", #selector(NSApplication.hide(_:)), "h")
+        let hideOthers = NSMenuItem(
+            title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        app.addItem(hideOthers)
+        item(app, "Show All", #selector(NSApplication.unhideAllApplications(_:)))
         app.addItem(.separator())
         item(app, "Quit TextTank", #selector(NSApplication.terminate(_:)), "q")
         let file = menu("File")
@@ -263,6 +325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "Find in Folder…", action: #selector(FolderSearchController.showSearch(_:)), keyEquivalent: "F")
         folderSearchItem.target = folderSearch
         search.addItem(folderSearchItem)
+        item(search, "Go to Line…", #selector(EditorWindowController.goToLine(_:)), "l")
         let view = menu("View")
         item(view, "Clone in Split View", #selector(EditorWindowController.clone(_:)))
         item(view, "Close Split View", #selector(EditorWindowController.closeSplit(_:)))
@@ -297,7 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         automationRoot.title = "Automations"
         automationRoot.submenu = automations.menu()
         bar.addItem(automationRoot)
-        item(search, "Automation Palette…", #selector(palette(_:)), "P")
+        // The palette's one menu entry, with Shift-Command-P, is in the Automations menu.
         let window = menu("Window")
         NSApp.windowsMenu = window
         let nextTab = NSMenuItem(title: "Next Tab", action: #selector(nextDocumentTab(_:)), keyEquivalent: "\t")
@@ -313,6 +376,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.addItem(.separator())
         item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")
         item(window, "Zoom", #selector(NSWindow.performZoom(_:)))
+        window.addItem(.separator())
+        item(window, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:)))
+        // AppKit puts its search field in the Help menu; it finds any command in the menus above.
+        NSApp.helpMenu = menu("Help")
     }
     @objc func nextDocumentTab(_ sender: Any?) { cycleDocumentTab(1) }
     @objc func previousDocumentTab(_ sender: Any?) { cycleDocumentTab(-1) }
@@ -353,6 +420,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         "These files were left untouched and are not recovered automatically.\n\n"
             + issues.map { $0.url.path + "\n" + $0.message }.joined(separator: "\n\n")
     }
+    /// The launch prompt's text: what each snapshot is a draft of and when it was written, so the
+    /// person can tell the drafts apart before recovering or discarding them. Display only.
+    static func recoveryPromptText(_ snapshots: [RecoverySnapshot], limit: Int = 12) -> String {
+        let listed = snapshots.prefix(limit).map { "• " + SnapshotLabel.line(for: $0) }
+        let more = snapshots.count > limit ? ["…and \(snapshots.count - limit) more"] : []
+        return
+            "Found \(snapshots.count) recovery snapshot\(snapshots.count == 1 ? "" : "s"). Recovered content opens as new unsaved documents; original files are not changed. Later keeps the snapshots and asks again at the next launch.\n\n"
+            + (listed + more).joined(separator: "\n")
+    }
     /// The Recover branch of the launch prompt. Documents are opened one at a time, so the
     /// snapshots before one that fails stay open when the error is shown.
     @discardableResult func openRecovered(_ snapshots: [RecoverySnapshot]) throws -> [TextDocument] {
@@ -377,8 +453,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard !snapshots.isEmpty else { return }
             let alert = TTAlert()
             alert.messageText = "Recover unsaved documents?"
-            alert.informativeText =
-                "Found \(snapshots.count) recovery snapshots. Recovered content opens as new unsaved documents; original files are not changed. Later keeps the snapshots and asks again at the next launch."
+            alert.informativeText = Self.recoveryPromptText(snapshots)
             alert.addButton(withTitle: "Recover")
             alert.addButton(withTitle: "Later")
             alert.addButton(withTitle: "Discard…")
@@ -411,19 +486,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } catch { NSAlert(error: error).runModal() }
     }
-    @objc func palette(_ sender: Any?) { automations.showPalette() }
+    /// The About panel's options. The name, version, build and copyright come from the bundle,
+    /// so they cannot disagree with Finder's Get Info; only the preview notice is added to the
+    /// version. The credits are the bundled Credits.rtf, in the label colour so that they stay
+    /// readable in dark mode. Without that file the panel shows its standard contents.
+    static func aboutOptions(info: [String: Any]?, credits: URL?) -> [NSApplication.AboutPanelOptionKey: Any] {
+        var options: [NSApplication.AboutPanelOptionKey: Any] = [:]
+        if let version = info?["CFBundleShortVersionString"] as? String, !version.isEmpty {
+            options[.applicationVersion] = version + " — INCOMPLETE PREVIEW"
+        }
+        if let credits, let data = try? Data(contentsOf: credits),
+            let text = NSMutableAttributedString(rtf: data, documentAttributes: nil)
+        {
+            text.addAttribute(
+                .foregroundColor, value: NSColor.labelColor, range: NSRange(location: 0, length: text.length))
+            options[.credits] = text
+        }
+        return options
+    }
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options: [
-            .applicationName: "TextTank", .applicationVersion: "0.1 — INCOMPLETE PREVIEW",
-            .credits: NSAttributedString(
-                string:
-                    "Plain text. Sharp tools.\nNative Mac editor · Carbon Caret\nFull Notepad++ parity remains in development.\nGPL-3.0-or-later · Scintilla and Lexilla notices included."
-            )
-        ])
+        NSApp.orderFrontStandardAboutPanel(
+            options: Self.aboutOptions(
+                info: Bundle.main.infoDictionary,
+                credits: Bundle.main.url(forResource: "Credits", withExtension: "rtf")))
     }
 }
 
-final class TextDocument: NSDocument {
+/// The Objective-C name is fixed, so `NSDocumentClass` in Info.plist does not depend on the
+/// name of the Swift module.
+@objc(TextDocument) final class TextDocument: NSDocument {
+    /// The type name used where a document has none of its own. Reading ignores the type.
+    static let plainTextType = "public.plain-text"
+    /// No File Format pop-up in the Save panel. Every content type in Info.plist is a writable
+    /// type and nearly all are named "Plain Text"; choosing one would only switch the type name
+    /// and, for some, add that type's extension. The text is written the same way for all.
+    override var shouldRunSavePanelWithAccessoryView: Bool { false }
     static let recovery: RecoveryStore = {
         let env = ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]
         let root =
@@ -470,38 +567,109 @@ final class TextDocument: NSDocument {
     private var savepointMatchesDisk = true
     #if TESTING
         var afterWriteForTesting: (() throws -> Void)?
+        /// Runs while NSDocument is inside an in-progress write, as the bytes are produced.
+        var duringWriteForTesting: (() -> Void)?
     #endif
     var originalDiskFingerprint: String? { diskBytes.map(WorkspaceStore.fingerprint) }
     var languageIdentifier = "null"
+    /// Status-line text for a recovered draft: what it is a draft of and when it was written.
+    /// Cleared when the draft is saved under a name of its own.
+    private(set) var recoveredOrigin: String?
     private var loading = false
     /// Set only while an explicit open-with-encoding is reading the file.
     private var openEncoding: FileEncoding?
     private var readingURL: URL?
     /// A snapshot records the file it belongs to. A moved or renamed file is new snapshot
     /// metadata at the same text revision, so it needs a later recovery revision.
+    ///
+    /// While an in-place save is inside NSDocument, the getter answers with the resolved
+    /// location being written. NSDocument's safe save replaces the item at `fileURL`, not at the
+    /// URL it is handed: with a link as `fileURL` it fails, and with the two differing it can
+    /// remove the original and then fail. Answering with the destination keeps them equal.
+    /// Only the main thread, which does the write, is answered that way: NSDocument also reads
+    /// `fileURL` from its file-presenter queue, and every other thread keeps the opened path.
+    /// `inPlaceWriteURL` is therefore read and written on the main thread alone.
     override var fileURL: URL? {
-        didSet {
-            guard fileURL != oldValue else { return }
+        get {
+            if Thread.isMainThread, let inPlaceWriteURL { return inPlaceWriteURL }
+            return super.fileURL
+        }
+        set {
+            let oldValue = super.fileURL
+            super.fileURL = newValue
+            guard newValue != oldValue else { return }
+            diskURL = newValue.map(Self.canonicalDiskURL)
             if Thread.isMainThread {
                 recoveryBase += 1
+                // Saved under a name of its own: no longer a recovered draft. Setting the URL has
+                // already replaced the "Recovered …" display name with the file's name.
+                recoveredOrigin = nil
             } else {
                 DispatchQueue.main.async { [weak self] in self?.recoveryBase += 1 }
             }
         }
     }
+    /// Where the file really is: `fileURL` with symbolic links resolved once, when `fileURL` is
+    /// set. The no-follow reads and the in-place write use it, so a document reached through a
+    /// link can be checked and saved, and a link swapped in later is still refused because this
+    /// is not resolved again. `fileURL` itself keeps the path the person opened.
+    private(set) var diskURL: URL?
+    private var inPlaceWriteURL: URL?
+    /// realpath(3) of the file; for a name that does not exist yet, of its folder. Falls back
+    /// to the URL as given.
+    static func canonicalDiskURL(_ url: URL) -> URL {
+        guard url.isFileURL else { return url }
+        func resolved(_ path: String) -> String? {
+            guard let pointer = realpath(path, nil) else { return nil }
+            defer { free(pointer) }
+            return String(cString: pointer)
+        }
+        if let path = resolved(url.path) { return URL(fileURLWithPath: path, isDirectory: false) }
+        if let folder = resolved(url.deletingLastPathComponent().path) {
+            return URL(fileURLWithPath: folder, isDirectory: true).appendingPathComponent(
+                url.lastPathComponent, isDirectory: false)
+        }
+        return url
+    }
+    /// The document's own file through the no-follow reader. ELOOP and ENOTDIR mean the
+    /// resolved path has since become a link, or its folder is no longer a real folder.
+    private func readDiskBytes() throws -> Data {
+        guard let url = diskURL else {
+            throw NSError(
+                domain: "TextTank", code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Save the document before reloading its disk bytes."])
+        }
+        do { return try WorkspaceStore.readRegularFile(url, maximumBytes: Int.max) } catch let error as POSIXError
+            where error.code == .ELOOP || error.code == .ENOTDIR
+        {
+            throw NSError(
+                domain: "TextTank", code: 5,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "“\(url.path)” is now a symbolic link or its folder was replaced, so TextTank will not read or overwrite it in place. Your editor contents are preserved; use Save As to keep them.",
+                    NSUnderlyingErrorKey: error as NSError
+                ])
+        }
+    }
     enum DiskState: Equatable { case unchanged, changed, missing }
     func diskState() throws -> DiskState {
-        guard let url = fileURL, let diskBytes else { return .unchanged }
-        do {
-            return try WorkspaceStore.readRegularFile(url, maximumBytes: Int.max) == diskBytes ? .unchanged : .changed
-        } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == 2 { return .missing }
+        guard fileURL != nil, let diskBytes else { return .unchanged }
+        do { return try readDiskBytes() == diskBytes ? .unchanged : .changed } catch let error as NSError
+            where error.domain == NSPOSIXErrorDomain && error.code == 2
+        { return .missing }
     }
     @objc func toggleReadOnly(_ sender: NSMenuItem) {
+        // Read-only belongs to the Scintilla document, so this covers a split view's other pane.
+        // The checkmark is set when a menu is validated, for the document that menu acts on.
         editor.readOnly.toggle()
-        windowControllers.compactMap { $0 as? EditorWindowController }.forEach {
-            $0.secondary?.readOnly = editor.readOnly
+    }
+    /// Everything NSDocument validates itself (Save, Revert to Saved and the rest) is left to it.
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(toggleReadOnly(_:)) {
+            (item as? NSMenuItem)?.state = editor.readOnly ? .on : .off
+            return true
         }
-        sender.state = editor.readOnly ? .on : .off
+        return super.validateUserInterfaceItem(item)
     }
     @objc func checkExternalChanges(_ sender: Any?) {
         do {
@@ -520,7 +688,7 @@ final class TextDocument: NSDocument {
     /// Explicit reinterpretation is a reload, not encoding conversion. Unsaved edits
     /// require a native confirmation before this method is called with discard=true.
     func reload(using encoding: FileEncoding, discard: Bool = false) throws {
-        guard let url = fileURL else {
+        guard fileURL != nil else {
             throw NSError(
                 domain: "TextTank", code: 2,
                 userInfo: [NSLocalizedDescriptionKey: "Save the document before reloading its disk bytes."])
@@ -530,7 +698,7 @@ final class TextDocument: NSDocument {
                 domain: "TextTank", code: 3,
                 userInfo: [NSLocalizedDescriptionKey: "Reload would discard unsaved changes."])
         }
-        let bytes = try WorkspaceStore.readRegularFile(url, maximumBytes: Int.max)
+        let bytes = try readDiskBytes()
         let decoded = try FileCodec.decode(bytes, encoding: encoding)
         loadDecoded(decoded, bytes: bytes)
         updateChangeCount(.changeCleared)
@@ -594,8 +762,9 @@ final class TextDocument: NSDocument {
         guard let error else {
             recoveryFailures.recordSuccess()
             let message =
-                (isDocumentEdited ? "Draft saved for session restore" : fileURL == nil ? "Ready" : "Saved")
-                + " · Incomplete preview"
+                recoveredOrigin
+                ?? ((isDocumentEdited ? "Draft saved for session restore" : fileURL == nil ? "Ready" : "Saved")
+                    + " · Incomplete preview")
             controllers.forEach { $0.showRecoveryStatus(message, failed: false) }
             return
         }
@@ -697,10 +866,18 @@ final class TextDocument: NSDocument {
         }
         loadDecoded(decoded, bytes: data)
     }
+    /// The same strict decode with an encoding the person chose, for callers that already hold
+    /// the bytes. A failure throws the codec's error and loads nothing.
+    func read(from data: Data, ofType typeName: String, as encoding: FileEncoding) throws {
+        openEncoding = encoding
+        defer { openEncoding = nil }
+        try read(from: data, ofType: typeName)
+    }
     /// Explicit open-with-encoding. An already open document is reloaded from disk instead;
     /// that only happens from Revert to Saved, where discarding edits was already confirmed.
     @discardableResult static func open(
-        _ url: URL, as encoding: FileEncoding, ofType typeName: String = "Plain Text", display: Bool = true
+        _ url: URL, as encoding: FileEncoding, ofType typeName: String = TextDocument.plainTextType,
+        display: Bool = true
     ) throws -> TextDocument {
         if let existing = NSDocumentController.shared.document(for: url) as? TextDocument {
             try existing.reload(using: encoding, discard: true)
@@ -751,6 +928,9 @@ final class TextDocument: NSDocument {
         NSDocumentController.shared.addDocument(doc)
         doc.makeWindowControllers()
         doc.loadUnsavedSnapshot(text: snapshot.text, format: snapshot.format)
+        // Display only: the original path is never opened, read or written by recovery.
+        doc.recoveredOrigin = SnapshotLabel.status(for: snapshot)
+        if let name = SnapshotLabel.originName(of: snapshot) { doc.displayName = "Recovered " + name }
         doc.showWindows()
         doc.flushRecovery()
         return doc
@@ -772,18 +952,38 @@ final class TextDocument: NSDocument {
         loading = false
         if let app = NSApp.delegate as? AppDelegate,
             let id = app.languages.detect(filename: fileURL?.lastPathComponent ?? "", text: decoded.text),
-            app.languages.apply(identifier: id, to: editor)
+            app.languages.applyToDocument(identifier: id, through: editor)
         {
             languageIdentifier = id
         }
     }
+    /// The source's own extension; ".txt" only for an untitled document, nothing for a name without one.
+    var suggestedCopyName: String {
+        guard let fileURL else { return "Untitled-copy.txt" }
+        let type = fileURL.pathExtension
+        return fileURL.deletingPathExtension().lastPathComponent + "-copy" + (type.isEmpty ? "" : "." + type)
+    }
+    /// Save Copy to a chosen location. Choosing the document's own file (the panel has already
+    /// asked to replace it) is an ordinary Save, with its conflict check and bookkeeping, so
+    /// the external-change baseline cannot fall behind what TextTank itself wrote.
+    func writeCopy(to url: URL, completion: @escaping (Error?) -> Void) {
+        if let fileURL, let diskURL, Self.canonicalDiskURL(url) == diskURL {
+            save(to: fileURL, ofType: fileType ?? Self.plainTextType, for: .saveOperation) { error in
+                // NSDocument wraps the failure in a bare "could not be saved"; report the reason itself.
+                completion(error.map { ($0 as NSError).userInfo[NSUnderlyingErrorKey] as? Error ?? $0 })
+            }
+            return
+        }
+        do {
+            try writeSafely(to: url, ofType: fileType ?? Self.plainTextType, for: .saveToOperation)
+            completion(nil)
+        } catch { completion(error) }
+    }
     @objc func saveCopy(_ sender: Any?) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = (fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled") + "-copy.txt"
+        panel.nameFieldStringValue = suggestedCopyName
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try writeSafely(to: url, ofType: fileType ?? "Plain Text", for: .saveToOperation) } catch {
-            presentError(error)
-        }
+        writeCopy(to: url) { [weak self] error in if let error { self?.presentError(error) } }
     }
     @objc func convertEncoding(_ sender: NSMenuItem) {
         guard let code = sender.representedObject as? String else { return }
@@ -833,28 +1033,39 @@ final class TextDocument: NSDocument {
         return operation
     }
     override func data(ofType typeName: String) throws -> Data {
+        #if TESTING
+            duringWriteForTesting?()
+        #endif
         if let savePayload { return savePayload }
         return try FileCodec.encode(editor.text, format: format)
     }
     override func writeSafely(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType)
         throws
     {
-        if url == fileURL, let diskBytes {
-            let current = try WorkspaceStore.readRegularFile(url, maximumBytes: Int.max)
-            guard current == diskBytes else {
-                throw NSError(
-                    domain: "TextTank", code: 1,
-                    userInfo: [
-                        NSLocalizedDescriptionKey:
-                            "The file changed outside TextTank. Use Save As to preserve your edits, or revert to inspect the disk version."
-                    ])
-            }
+        // A write to the document's own file goes to its resolved location, so the bytes checked
+        // and the bytes replaced are the same file and a link in the path stays a link.
+        let inPlace = fileURL != nil && url == fileURL
+        let destination = inPlace ? diskURL ?? url : url
+        // A missing file is simply written again. A changed one is refused, except for Save As:
+        // there the save panel has already asked the person to replace that file. Any other
+        // failure (the path became a link, a folder or unreadable) still stops the save.
+        if inPlace, diskBytes != nil, try diskState() == .changed, saveOperation != .saveAsOperation {
+            throw NSError(
+                domain: "TextTank", code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "The file changed outside TextTank. Use Save As to preserve your edits, or revert to inspect the disk version."
+                ])
         }
         let submitted = try FileCodec.encode(editor.text, format: format), submittedFormat = format,
             submittedRevision = editor.revision
         savePayload = submitted
         defer { savePayload = nil }
-        try super.writeSafely(to: url, ofType: typeName, for: saveOperation)
+        do {
+            inPlaceWriteURL = inPlace && Thread.isMainThread ? destination : nil
+            defer { inPlaceWriteURL = nil }
+            try super.writeSafely(to: destination, ofType: typeName, for: saveOperation)
+        }
         #if TESTING
             try afterWriteForTesting?()
         #endif
@@ -1036,7 +1247,18 @@ private final class DocumentTabWindow: NSWindow {
             $0 is DocumentTabWindow
         }
     }
+    override func becomeMain() {
+        super.becomeMain()
+        if let controller = windowController as? EditorWindowController {
+            (NSApp.delegate as? AppDelegate)?.lastDocumentController = controller
+        }
+    }
+    /// The tab to show again when this one closes: set when a background tab is brought forward
+    /// only to be closed from its close button, so closing it returns to the tab that was active.
+    weak var returnTo: NSWindow?
     override func makeKeyAndOrderFront(_ sender: Any?) {
+        // Selecting this tab for any reason ends an earlier, cancelled close-from-background.
+        returnTo = nil
         let others = Self.documents.filter { $0 !== self }
         let sharedFrame = others.first(where: { $0.isVisible })?.frame
         others.forEach { $0.orderOut(nil) }
@@ -1046,10 +1268,30 @@ private final class DocumentTabWindow: NSWindow {
         (windowController as? EditorWindowController)?.refreshStatusDetails()
         if let controller = windowController as? EditorWindowController { makeFirstResponder(controller.activeEditor) }
     }
+    override func sendEvent(_ event: NSEvent) {
+        // A cancelled close-from-background leaves this tab showing. Once the person works in it
+        // (a key or a click that reaches the tab itself, not its review sheet) it is simply the
+        // active tab, and closing it later goes to its neighbour.
+        if returnTo != nil, attachedSheet == nil,
+            [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type)
+        {
+            returnTo = nil
+        }
+        super.sendEvent(event)
+    }
     override func close() {
         let wasVisible = isVisible
         let closingFrame = frame
-        let next = Self.documents.first { $0 !== self }
+        // The tab that was active before a close-from-background, otherwise the neighbour: the
+        // next tab, or the previous one when this is the last.
+        let all = Self.documents
+        var next = all.first { $0 !== self }
+        if let returnTo, returnTo !== self, all.contains(where: { $0 === returnTo }) {
+            next = returnTo
+        } else if let index = all.firstIndex(where: { $0 === self }) {
+            next = index + 1 < all.count ? all[index + 1] : index > 0 ? all[index - 1] : nil
+        }
+        returnTo = nil
         super.close()
         if wasVisible {
             next?.makeKeyAndOrderFront(nil)
@@ -1164,13 +1406,23 @@ private final class DocumentTabStrip: NSView {
         guard let target = (sender as? DocumentTabActionButton)?.documentWindow,
             windows.contains(where: { $0 === target })
         else { return }
+        // A background tab is brought forward first, so that unsaved changes are reviewed on a
+        // visible window; once it has closed, the tab that was active is shown again.
+        let active = target === owner ? nil : owner
         target.makeKeyAndOrderFront(nil)
+        (target as? DocumentTabWindow)?.returnTo = active
         target.performClose(sender)
     }
     @objc private func newTab(_ sender: Any?) { (NSApp.delegate as? AppDelegate)?.newDocument(sender) }
 }
 
-final class EditorWindowController: NSWindowController, NSToolbarDelegate {
+extension TextDocument {
+    /// The view of this document the person last worked in: the focused pane of a split view,
+    /// otherwise the primary view. Exactly one view per document.
+    var activeEditor: TTEditor { (windowControllers.first as? EditorWindowController)?.activeEditor ?? editor }
+}
+
+final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMenuItemValidation {
     let split = NSSplitView()
     let findField = NSSearchField()
     let replaceField = NSTextField()
@@ -1187,19 +1439,41 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     private var cachedSelectedCount = 0
     private var cachedEndings = "LF"
     var secondary: TTEditor?
+    /// The pane focused last. Written when the window's first responder moves into a pane, by
+    /// each view's onFocus (see `wire`) and by closeSplit.
     weak var lastEditor: TTEditor?
-    var focusObserver: NSObjectProtocol?
+    /// Scintilla reports focus only while the window is key and the application active, so the
+    /// first responder is observed as well: a pane chosen in a background window still counts.
+    var focusObservation: NSKeyValueObservation?
     var automationObserver: NSObjectProtocol?
     let primaryEditor: TTEditor
+    /// The primary view and, while the window is split, the clone.
+    var views: [TTEditor] { [primaryEditor] + (secondary.map { [$0] } ?? []) }
+    /// The pane that holds the first responder, otherwise the pane focused last (focus may be
+    /// in the find field or another window). A pure read.
     var activeEditor: TTEditor {
-        if let secondary, let responder = window?.firstResponder as? NSView, responder.isDescendant(of: secondary) {
-            lastEditor = secondary
-            return secondary
-        }
-        if let responder = window?.firstResponder as? NSView, responder.isDescendant(of: primaryEditor) {
-            lastEditor = primaryEditor
+        if let responder = window?.firstResponder as? NSView,
+            let focused = views.last(where: { responder.isDescendant(of: $0) })
+        {
+            return focused
         }
         return lastEditor ?? primaryEditor
+    }
+    /// Per-view wiring shared by the primary view and a clone.
+    private func wire(_ editor: TTEditor) {
+        editor.onFocus = { [weak self, weak editor] in
+            guard let self, let editor else { return }
+            self.lastEditor = editor
+            let app = NSApp.delegate as? AppDelegate
+            app?.lastDocumentController = self
+            app?.macros.editorDidFocus(editor)
+        }
+        editor.menu = (NSApp.delegate as? AppDelegate)?.automations.contextMenu()
+    }
+    /// Copies the active pane's syntax styles to the other pane after a language or style
+    /// change. The lexer itself belongs to the shared document and is never applied twice.
+    func syncPaneStyles(from source: TTEditor) {
+        for view in views where view !== source { view.adoptSyntaxStyles(from: source) }
     }
     init(document: TextDocument) {
         primaryEditor = document.editor
@@ -1208,15 +1482,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
         lastEditor = document.editor
-        document.editor.onFocus = { [weak self, weak document] in
-            guard let editor = document?.editor else { return }
-            self?.lastEditor = editor
-            (NSApp.delegate as? AppDelegate)?.lastDocumentController = self
-            (NSApp.delegate as? AppDelegate)?.macros.editorDidFocus(editor)
+        wire(document.editor)
+        focusObservation = window.observe(\.firstResponder) { [weak self] window, _ in
+            guard let self, let responder = window.firstResponder as? NSView,
+                let pane = self.views.last(where: { responder.isDescendant(of: $0) })
+            else { return }
+            self.lastEditor = pane
         }
         if let app = NSApp.delegate as? AppDelegate {
             app.settings.apply(to: document.editor)
-            document.editor.menu = app.automations.contextMenu()
             let toolbar = NSToolbar(identifier: "TextTankToolbar")
             toolbar.delegate = self
             toolbar.displayMode = .iconOnly
@@ -1225,12 +1499,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
                 forName: .textTankAutomationsDidChange, object: app.automations, queue: .main
             ) { [weak self] _ in self?.refreshAutomationToolbar() }
         }
-        focusObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didUpdateNotification, object: window, queue: .main
-        ) { [weak self] _ in _ = self?.activeEditor }
         window.title = "TextTank"
         window.center()
         window.tabbingMode = .disallowed
+        // Tabs are separate windows of which one is shown. A full-screen window cannot be
+        // swapped for another that way, so the tab windows do not enter full screen.
+        window.collectionBehavior.insert(.fullScreenNone)
         window.titleVisibility = .visible
         window.titlebarAppearsTransparent = false
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
@@ -1284,6 +1558,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             self.refreshStatusDetails()
         }
         refreshStatusDetails(for: document)
+        // The first document window opens where the last one was left. A later tab takes the
+        // frame of the visible tab when it is shown, which replaces whatever is applied here.
+        // This comes last: the title bar and toolbar set up above change the window's height.
+        WindowFrames.track(window, as: "TextTank.Document")
     }
     /// A failed recovery write is shown in red with a tooltip as well as in words, and stays
     /// until the document reports a successful write.
@@ -1375,10 +1653,19 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         statusDetails.update(fields, keys: keys)
     }
     private func showStatusOptions(_ key: String, at view: NSView) {
-        guard let doc = document as? TextDocument else { return }
+        let editor = activeEditor
+        (NSApp.delegate as? AppDelegate)?.lastDocumentController = self
+        lastEditor = editor
+        guard let menu = statusOptionsMenu(key) else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height), in: view)
+        refreshStatusDetails()
+    }
+    /// The menu a status bar field opens, for the active pane. Building it changes nothing, so
+    /// its wording can be checked without showing it.
+    func statusOptionsMenu(_ key: String) -> NSMenu? {
+        guard let doc = document as? TextDocument else { return nil }
         let editor = activeEditor, info = editor.statusInfo
         let app = NSApp.delegate as? AppDelegate
-        app?.lastDocumentController = self
         let menu = NSMenu()
         menu.autoenablesItems = false
         func add(
@@ -1419,7 +1706,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
                 add(name, #selector(TextDocument.convertEncoding(_:)), doc, code, current == code, !editor.readOnly)
             }
         case "indent":
-            heading("Indentation for this view")
+            heading("Indentation for this document")
             add("Tabs", #selector(statusOption(_:)), self, "tabs", info["useTabs"]?.boolValue == true)
             add("Spaces", #selector(statusOption(_:)), self, "spaces", info["useTabs"]?.boolValue == false)
             menu.addItem(.separator())
@@ -1475,8 +1762,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             add("Select All", #selector(statusOption(_:)), self, "selectAll")
             add("Clear Selection", #selector(statusOption(_:)), self, "clearSelection")
         }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height), in: view)
-        refreshStatusDetails()
+        return menu
     }
     @objc private func statusOption(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
@@ -1485,32 +1771,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         case "tabs", "spaces": editor.configureTabWidth(info["tabWidth"]?.intValue ?? 4, useTabs: id == "tabs")
         case "wrap.on", "wrap.off": editor.wrap = id == "wrap.on"
         case "clearSelection": _ = editor.setSelectionAnchor(editor.selectionCaret, caret: editor.selectionCaret)
-        case "goToLine":
-            let alert = TTAlert()
-            alert.messageText = "Go to Line"
-            let input = NSTextField(string: String(info["line"]?.intValue ?? 1))
-            input.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
-            alert.accessoryView = input
-            alert.addButton(withTitle: "Go")
-            alert.addButton(withTitle: "Cancel")
-            alert.window.initialFirstResponder = input
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-            guard editor.window != nil, let line = Int(input.stringValue), line >= 1,
-                line <= (editor.statusInfo["lines"]?.intValue ?? 1)
-            else {
-                NSSound.beep()
-                return
-            }
-            let text = editor.text, ns = text as NSString
-            let breaks = try! NSRegularExpression(pattern: "\\r\\n|\\r|\\n")
-            let matches = breaks.matches(in: text, range: NSRange(location: 0, length: ns.length))
-            guard line == 1 || matches.indices.contains(line - 2) else {
-                NSSound.beep()
-                return
-            }
-            let offset = line == 1 ? 0 : ns.substring(to: NSMaxRange(matches[line - 2].range)).utf8.count
-            _ = editor.setSelectionAnchor(offset, caret: offset)
-            window?.makeFirstResponder(editor)
+        case "goToLine": goToLine(sender)
         default:
             if id.hasPrefix("width."), let width = Int(id.dropFirst(6)) {
                 editor.configureTabWidth(width, useTabs: info["useTabs"]?.boolValue ?? true)
@@ -1520,6 +1781,39 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             }
         }
         refreshStatusDetails()
+    }
+    /// Search > Go to Line… and the position field of the status bar.
+    @objc func goToLine(_ sender: Any?) {
+        let editor = activeEditor
+        let alert = TTAlert()
+        alert.messageText = "Go to Line"
+        let input = NSTextField(string: String(editor.statusInfo["line"]?.intValue ?? 1))
+        input.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        input.setAccessibilityLabel("Line number")
+        alert.accessoryView = input
+        alert.addButton(withTitle: "Go")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = input
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard let line = Int(input.stringValue), Self.goToLine(line, in: editor) else {
+            NSSound.beep()
+            return
+        }
+        window?.makeFirstResponder(editor)
+        refreshStatusDetails()
+    }
+    /// Puts the caret at the start of a line, counted from 1. False, with nothing changed, for a
+    /// line the document does not have or a view that has left its window.
+    static func goToLine(_ line: Int, in editor: TTEditor) -> Bool {
+        guard editor.window != nil, line >= 1, line <= (editor.statusInfo["lines"]?.intValue ?? 1) else {
+            return false
+        }
+        let text = editor.text, ns = text as NSString
+        let breaks = try! NSRegularExpression(pattern: "\\r\\n|\\r|\\n")
+        let matches = breaks.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        guard line == 1 || matches.indices.contains(line - 2) else { return false }
+        let offset = line == 1 ? 0 : ns.substring(to: NSMaxRange(matches[line - 2].range)).utf8.count
+        return editor.setSelectionAnchor(offset, caret: offset)
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         toolbarDefaultItemIdentifiers(toolbar)
@@ -1560,17 +1854,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     func prepareForClose() {
         statusTimer?.invalidate()
         statusTimer = nil
-        if let focusObserver {
-            NotificationCenter.default.removeObserver(focusObserver)
-            self.focusObserver = nil
-        }
         if let automationObserver {
             NotificationCenter.default.removeObserver(automationObserver)
             self.automationObserver = nil
         }
+        focusObservation?.invalidate()
+        focusObservation = nil
+        // TextDocument.close has already made the shared document read-only for both panes.
         primaryEditor.onFocus = nil
         secondary?.onFocus = nil
-        secondary?.readOnly = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
     override func windowDidLoad() { super.windowDidLoad() }
@@ -1600,18 +1892,21 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     }
     deinit {
         statusTimer?.invalidate()
-        if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }
+        focusObservation?.invalidate()
         if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
     }
     @objc func language(_ sender: NSMenuItem) {
         if let id = sender.representedObject as? String {
-            activeEditor.setLanguage(id)
+            let editor = activeEditor
+            editor.setLanguage(id)
+            syncPaneStyles(from: editor)
             (document as? TextDocument)?.languageIdentifier = id
             refreshStatusDetails()
         }
     }
     @objc func showFind(_ sender: Any?) {
-        _ = activeEditor
+        // Remember the pane the find bar acts on before focus leaves it.
+        lastEditor = activeEditor
         window?.makeFirstResponder(findField)
     }
     @objc func findNext(_ sender: Any?) { performFind(backwards: false) }
@@ -1634,21 +1929,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     }
     @objc func clone(_ sender: Any?) {
         guard secondary == nil else { return }
+        let source = primaryEditor
         let clone = TTEditor(frame: split.bounds)
-        clone.shareDocument(with: primaryEditor)
-        clone.readOnly = primaryEditor.readOnly
-        if let app = NSApp.delegate as? AppDelegate, let doc = document as? TextDocument {
-            app.settings.apply(to: clone)
-            clone.menu = app.automations.contextMenu()
-            _ = app.languages.apply(identifier: doc.languageIdentifier, to: clone)
-        }
+        // Everything document-level (text, read-only, tab settings, lexer and keyword lists,
+        // undo) arrives with the shared document and is not written again here. The new pane
+        // copies only what a view owns, from the pane it was cloned from.
+        clone.shareDocument(with: source)
+        clone.adoptViewState(from: source)
+        wire(clone)
         secondary = clone
-        clone.onFocus = { [weak self, weak clone] in
-            guard let clone else { return }
-            self?.lastEditor = clone
-            (NSApp.delegate as? AppDelegate)?.lastDocumentController = self
-            (NSApp.delegate as? AppDelegate)?.macros.editorDidFocus(clone)
-        }
         split.addArrangedSubview(clone)
         split.adjustSubviews()
         split.layoutSubtreeIfNeeded()
@@ -1656,10 +1945,27 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         window?.makeFirstResponder(clone)
     }
     @objc func closeSplit(_ sender: Any?) {
+        guard let clone = secondary else { return }
+        clone.onFocus = nil
         lastEditor = primaryEditor
         window?.makeFirstResponder(primaryEditor)
-        secondary?.removeFromSuperview()
+        // Recording across views is not supported; say so even if no focus event was sent.
+        (NSApp.delegate as? AppDelegate)?.macros.editorDidFocus(primaryEditor)
+        // Deferred results that do not depend on the clone's selection move to the primary view.
+        clone.retire(inFavorOf: primaryEditor)
+        clone.removeFromSuperview()
         secondary = nil
+    }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(clone(_:)): return secondary == nil
+        case #selector(closeSplit(_:)): return secondary != nil
+        case #selector(toggleWrap(_:)):
+            // Wrapping belongs to the view, as the status bar's Wrap field shows it.
+            item.state = activeEditor.wrap ? .on : .off
+            return true
+        default: return true
+        }
     }
     @objc func toggleWrap(_ sender: Any?) { activeEditor.wrap.toggle() }
     @objc func comment(_ sender: NSMenuItem) {

@@ -559,7 +559,12 @@ extension DocumentChecks {
             }
             // A bare TTEditor, one sharing this document and one removed from a split view in a
             // plain window are all released (probed while writing this check); the clone made by
-            // EditorWindowController.clone is not. What still holds it has not been identified.
+            // EditorWindowController.clone is not. Package 11 traced it: the first view removed
+            // from a document window, a bare NSView included, keeps one retain made inside
+            // -[NSView _setWindow:] until the window itself is deallocated, and later clones in
+            // the same window are released at once. No TextTank object refers to the view. See
+            // "results captured through a clone survive Close Split View" for the checks on
+            // TextTank's own references and on release when the document closes.
             weak var bare: TTEditor?
             autoreleasepool {
                 let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
@@ -858,7 +863,7 @@ extension DocumentChecks {
             check(
                 bar.items.map(\.title) == [
                     "TextTank", "File", "Workspace", "Encoding", "Edit", "Search", "Run", "Text Utilities", "View",
-                    "Language", "Macros", "Automations", "Window"
+                    "Language", "Macros", "Automations", "Window", "Help"
                 ], "the menu bar has the expected top-level menus in order")
             // Items without a target go to the first responder. The chain is walked here from the
             // editor that would be focused, so the check does not depend on the test process

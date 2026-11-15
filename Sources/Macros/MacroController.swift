@@ -89,8 +89,11 @@ final class MacroController: NSObject, NSMenuDelegate {
                 reason: "The active editor changed during recording. Recording across views is not supported.")
         }
     }
+    /// `editor` is any view of the document being reloaded or closed. The recording may have been
+    /// started in another view of that document, so this compares documents, unlike the focus
+    /// rule in editorDidFocus, which is deliberately per view.
     func editorWillReset(_ editor: TTEditor, reason: String) {
-        if recordingEditor === editor { invalidateRecording(reason: reason) }
+        if let recordingEditor, recordingEditor.sharesDocument(with: editor) { invalidateRecording(reason: reason) }
     }
     func willExecuteCommand(_ command: String, on editor: TTEditor) {
         guard recordingEditor != nil else { return }
@@ -208,6 +211,8 @@ final class MacroController: NSObject, NSMenuDelegate {
         let status = NSTextField(labelWithString: "Playing recorded editing steps…")
         status.frame = NSRect(x: 20, y: 70, width: 400, height: 24)
         let stop = NSButton(title: "Stop", target: self, action: #selector(cancelPlayback))
+        // The panel has only this button; Escape presses it.
+        stop.keyEquivalent = "\u{1b}"
         stop.frame = NSRect(x: 310, y: 20, width: 110, height: 30)
         panel.contentView?.addSubview(status)
         panel.contentView?.addSubview(stop)

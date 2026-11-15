@@ -64,7 +64,9 @@ final class DocumentMonitor {
             if timer != nil { stop() }
             return
         }
-        guard let url = document.fileURL, document.editor.window != nil else {
+        // The location resolved when the document's URL was set, never resolved again here:
+        // a link swapped in afterwards is reported, not followed.
+        guard let url = document.diskURL, document.editor.window != nil else {
             stop()
             return
         }
@@ -75,7 +77,7 @@ final class DocumentMonitor {
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.generation == token else { return }
                 self.inFlight = false
-                guard let current = self.document, current === document, current.fileURL == url,
+                guard let current = self.document, current === document, current.diskURL == url,
                     current.editor.window != nil
                 else {
                     self.stop()

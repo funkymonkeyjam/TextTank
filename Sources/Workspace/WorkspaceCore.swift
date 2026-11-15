@@ -71,9 +71,9 @@ struct WorkspaceSession: Codable, Equatable, Identifiable {
         guard schemaVersion == 1 else {
             throw WorkspaceError.invalid("Unsupported session schema version. The session has not been changed.")
         }
-        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 200, !name.contains("\0"),
-            savedAt.timeIntervalSince1970.isFinite
-        else { throw WorkspaceError.invalid("Invalid session name or timestamp.") }
+        // JSONEncoder and JSONDecoder already refuse a non-finite savedAt, so it needs no check here.
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 200, !name.contains("\0")
+        else { throw WorkspaceError.invalid("Invalid session name.") }
         guard documents.count <= 1000, Set(documents.map(\.id)).count == documents.count else {
             throw WorkspaceError.invalid("Session document count or IDs are invalid.")
         }
@@ -160,6 +160,9 @@ enum WorkspaceError: LocalizedError {
 /// not a claim of power-loss durability for the containing filesystem/directory.
 enum WorkspaceStore {
     static let maximumSessionBytes = 512 * 1024 * 1024
+    /// The one extension TextTank proposes for session snapshots and declares in Info.plist as
+    /// `app.texttank.session`. Reading never depends on it: a snapshot loads under any name.
+    static let sessionFileExtension = "texttanksession"
     static func fingerprint(_ bytes: Data) -> String {
         SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     }

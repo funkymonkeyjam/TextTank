@@ -17,7 +17,7 @@ struct EditorSettings: Codable, Equatable {
     ]
     static let reserved: Set<String> = [
         "a", "c", "v", "x", "z", "Z", "s", "S", "n", "o", "w", "q", "p", "f", "F", "g", "G", "P", "m", "[", "]", "+",
-        "-", ","
+        "-", ",", "h", "l"
     ]
     func validate() throws {
         guard version == 1, (1...32).contains(tabWidth), ["system", "light", "dark"].contains(appearance) else {

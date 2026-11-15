@@ -6,6 +6,11 @@ final class LanguageController: NSObject, NSMenuDelegate {
     private let editorProvider: () -> TTEditor?
     private let languageProvider: () -> String
     private let setLanguage: (String) -> Void
+    /// The other views of the document `editor` shows: the other pane of a split view. Injected,
+    /// like `openDocuments`, so this file needs no application types.
+    var siblingViews: (TTEditor) -> [TTEditor] = { _ in [] }
+    /// One view of every open document, with that document's language identifier.
+    var openDocuments: () -> [(language: String, editor: TTEditor)] = { [] }
     private(set) var catalog: LanguageCatalog?
     private var loadError: Error?
     private let storage: URL
@@ -93,9 +98,11 @@ final class LanguageController: NSObject, NSMenuDelegate {
                 }
             }
             try persist(proposed)
+            // An import can replace a profile that open documents already use.
+            reapply(Set(try imported.map { try $0.profile().id }))
             if let first = imported.first, let editor = editorProvider() {
                 let id = try first.profile().id
-                if apply(identifier: id, to: editor) { setLanguage(id) }
+                if applyToDocument(identifier: id, through: editor) { setLanguage(id) }
             }
         } catch { NSAlert(error: error).runModal() }
     }
@@ -133,7 +140,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
                     profile.id = id
                     proposed.profiles[index] = profile
                     try persist(proposed)
-                    if let editor = editorProvider() { _ = apply(identifier: id, to: editor) }
+                    reapply([id])
                     return
                 } catch { NSAlert(error: error).runModal() }
             }
@@ -151,6 +158,27 @@ final class LanguageController: NSObject, NSMenuDelegate {
         } catch { NSAlert(error: error).runModal() }
     }
     func detect(filename: String, text: String) -> String? { catalog?.detect(filename: filename, text: text) }
+    /// Applies a profile to a whole document. The lexer, keyword lists and properties belong to
+    /// the document and are installed once, through `editor`; styles and fonts belong to a view,
+    /// so every other view of the document then copies them. Applying the profile to a second
+    /// view instead would install the lexer and lex the document a second time.
+    @discardableResult func applyToDocument(identifier: String, through editor: TTEditor) -> Bool {
+        guard apply(identifier: identifier, to: editor) else { return false }
+        for view in siblingViews(editor) { view.adoptSyntaxStyles(from: editor) }
+        return true
+    }
+    /// After the catalog changed: re-applies the named profiles (nil for every profile) to each
+    /// open document that uses one, in all of its views. Documents on other profiles are left
+    /// alone. A profile that no longer exists or has no lexer is skipped, as `apply` reports.
+    func reapply(_ identifiers: Set<String>?) {
+        var targets = openDocuments()
+        if let editor = editorProvider(), !targets.contains(where: { $0.editor.sharesDocument(with: editor) }) {
+            targets.append((languageProvider(), editor))
+        }
+        for target in targets where identifiers?.contains(target.language) ?? true {
+            applyToDocument(identifier: target.language, through: target.editor)
+        }
+    }
     @discardableResult func apply(identifier: String, to editor: TTEditor) -> Bool {
         guard let profile = catalog?.profiles.first(where: { $0.id == identifier }),
             TTEditor.availableLanguages().contains(profile.lexer)
@@ -303,9 +331,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
                         proposed.profiles[profileIndex].udl = udl
                     }
                     try persist(proposed)
-                    if let editor = editorProvider() {
-                        _ = apply(identifier: proposed.profiles[profileIndex].id, to: editor)
-                    }
+                    reapply([proposed.profiles[profileIndex].id])
                     return
                 } catch { NSAlert(error: error).runModal() }
             }
@@ -313,7 +339,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
     }
     @objc private func selectLanguage(_ item: NSMenuItem) {
         guard let id = item.representedObject as? String, let editor = editorProvider(),
-            apply(identifier: id, to: editor)
+            applyToDocument(identifier: id, through: editor)
         else { return }
         setLanguage(id)
     }
@@ -390,7 +416,8 @@ final class LanguageController: NSObject, NSMenuDelegate {
                         continue
                     }
                     try persist(proposed)
-                    if let editor = editorProvider() { _ = apply(identifier: languageProvider(), to: editor) }
+                    // The whole catalog may have changed.
+                    reapply(nil)
                     return
                 } catch { NSAlert(error: error).runModal() }
             }
@@ -436,21 +463,29 @@ final class LanguageController: NSObject, NSMenuDelegate {
 }
 
 final class LanguageFunctionController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
-    private weak var editor: TTEditor?
+    private(set) weak var editor: TTEditor?
+    private var retirementObserver: NSObjectProtocol?
     private let text: String, revision: UInt, symbols: [LanguageSymbol]
-    private let table = NSTableView(),
+    let table = ActivatingTableView(),
         status = NSTextField(
-            labelWithString: "Double-click a symbol to navigate. Basic pattern-based navigation; not a compiler index.")
+            labelWithString:
+                "Double-click a symbol, or select it and press Return, to navigate. Basic pattern-based navigation; not a compiler index."
+        )
     init(editor: TTEditor, text: String, revision: UInt, symbols: [LanguageSymbol]) {
         self.editor = editor
         self.text = text
         self.revision = revision
         self.symbols = symbols
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 420), styleMask: [.titled, .closable, .resizable],
-            backing: .buffered, defer: false)
+        // A panel, so the document window stays main while the list is key. Escape closes it.
+        let window = ToolPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 420), styleMask: [.titled, .closable, .resizable])
         super.init(window: window)
+        // The list is about the document; when its split pane closes it follows the remaining view.
+        retirementObserver = NotificationCenter.default.addObserver(
+            forName: .TTEditorWillRetire, object: editor, queue: nil
+        ) { [weak self] note in self?.editor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor }
         window.title = "Function List"
+        window.listedInWindowMenu = true
         window.isReleasedWhenClosed = false
         let col = NSTableColumn(identifier: .init("symbol"))
         col.title = "Line · Symbol"
@@ -460,6 +495,9 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
         table.delegate = self
         table.target = self
         table.doubleAction = #selector(openSelected)
+        // Return on the selected row does what a double-click on it does.
+        table.onActivate = { [weak self] row in self?.open(row: row) }
+        table.setAccessibilityLabel("Functions and symbols")
         let scroll = NSScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
@@ -470,15 +508,21 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
         window.contentView = stack
         scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20).isActive = true
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
+        window.initialFirstResponder = table
+        WindowFrames.track(window, as: "TextTank.FunctionList")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
+    deinit { if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) } }
     func numberOfRows(in tableView: NSTableView) -> Int { symbols.count }
     func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?, row: Int) -> Any? {
         symbols.indices.contains(row) ? "\(symbols[row].line) · \(symbols[row].name)" : nil
     }
-    @objc private func openSelected() {
-        guard symbols.indices.contains(table.clickedRow), let editor else { return }
-        if !Self.navigate(symbols[table.clickedRow], text: text, revision: revision, editor: editor) {
+    /// A double-click. `clickedRow` is -1 for the header and the empty area below the rows.
+    @objc func openSelected() { open(row: table.clickedRow) }
+    /// What a double-click or Return on a listed symbol does.
+    func open(row: Int) {
+        guard symbols.indices.contains(row), let editor else { return }
+        if !Self.navigate(symbols[row], text: text, revision: revision, editor: editor) {
             status.stringValue = "The document changed or closed. Refresh the function list."
         }
     }

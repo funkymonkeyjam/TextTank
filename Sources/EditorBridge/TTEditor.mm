@@ -37,6 +37,49 @@ static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
     if (!self.window) return NSZeroRect;
     return [self.window convertRectToScreen:[self convertRect:self.visibleRect toView:nil]];
 }
+// A right-click in the text lands here, and the engine always answers with its own Undo, Cut,
+// Copy, Paste menu, so AppKit never asks the views above for theirs. The menu assigned to the
+// TTEditor that wraps this view is therefore added below the engine's items. The engine builds
+// a new menu for every request; its items are kept as they are and the extra items are copies,
+// because a menu item belongs to one menu. The margin keeps the engine's menu unchanged.
+- (NSMenu *)menuForEvent:(NSEvent *)event {
+    NSMenu *menu = [super menuForEvent:event];
+    if (!menu) return nil;
+    NSMenu *extra = nil;
+    for (NSView *view = self.superview; view; view = view.superview) {
+        if ([view isKindOfClass:TTEditor.class]) { extra = view.menu; break; }
+    }
+    if (!extra) return menu;
+    // The extra menu fills itself in when it is about to open; ask for that now.
+    id<NSMenuDelegate> delegate = extra.delegate;
+    if ([delegate respondsToSelector:@selector(menuNeedsUpdate:)]) [delegate menuNeedsUpdate:extra];
+    if (extra.numberOfItems == 0) return menu;
+    [menu addItem:NSMenuItem.separatorItem];
+    for (NSMenuItem *item in extra.itemArray) {
+        NSMenuItem *copy = [item copy];
+        // The engine's menu does not validate its items, so a heading must be disabled here.
+        if (!copy.isSeparatorItem && !copy.action && !copy.hasSubmenu) copy.enabled = NO;
+        [menu addItem:copy];
+    }
+    return menu;
+}
+// VoiceOver's "show menu" action opens the same menu as a right-click, at the caret.
+- (BOOL)accessibilityPerformShowMenu {
+    ScintillaView *engine = nil;
+    for (NSView *view = self.superview; view; view = view.superview) {
+        if ([view isKindOfClass:ScintillaView.class]) { engine = (ScintillaView *)view; break; }
+    }
+    if (!engine || !self.window) return NO;
+    const sptr_t caret = [engine message:SCI_GETCURRENTPOS];
+    // As the engine does it: the caret's point is in the scroll view's coordinates.
+    NSPoint point = NSMakePoint([engine message:SCI_POINTXFROMPOSITION wParam:0 lParam:caret],
+                                [engine message:SCI_POINTYFROMPOSITION wParam:0 lParam:caret] + [engine message:SCI_TEXTHEIGHT wParam:0 lParam:0]);
+    NSEvent *event = [NSEvent mouseEventWithType:NSEventTypeRightMouseDown location:[self.superview.superview convertPoint:point toView:nil] modifierFlags:0 timestamp:0 windowNumber:self.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:0];
+    NSMenu *menu = [self menuForEvent:event];
+    if (!menu) return NO;
+    [NSMenu popUpContextMenu:menu withEvent:event forView:self];
+    return YES;
+}
 @end
 @interface TTScintillaView : ScintillaView
 @end
@@ -99,6 +142,9 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     }; });
     return map;
 }
+
+NSNotificationName const TTEditorWillRetireNotification = @"TTEditorWillRetireNotification";
+NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
 
 @interface TTEditor () <ScintillaNotificationProtocol>
 @property(nonatomic, strong) ScintillaView *engine;
@@ -373,6 +419,33 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     // Each attached Scintilla view owns a reference, so either view may close first.
     [_engine message:SCI_SETDOCPOINTER wParam:0 lParam:[other.engine message:SCI_GETDOCPOINTER]];
     self.revision = other.revision;
+}
+- (BOOL)sharesDocumentWith:(TTEditor *)other {
+    [self assertThread];
+    return other != nil && [_engine message:SCI_GETDOCPOINTER] == [other.engine message:SCI_GETDOCPOINTER];
+}
+- (void)adoptSyntaxStylesFrom:(TTEditor *)other {
+    [self assertThread]; if (!other || other == self) return;
+    // The stored NSColor objects are copied as they are: dynamic colours must keep resolving
+    // against this view's own appearance in applyPalette. applyPalette starts from
+    // SCI_STYLECLEARALL, so a style the other view no longer defines is dropped here too.
+    _syntaxStyles = [[NSMutableDictionary alloc] initWithDictionary:other.syntaxStyles copyItems:YES];
+    _syntaxFonts = [[NSMutableDictionary alloc] initWithDictionary:other.syntaxFonts copyItems:YES];
+    [self applyPalette];
+}
+- (void)adoptViewStateFrom:(TTEditor *)other {
+    [self assertThread]; if (!other || other == self) return;
+    [self adoptSyntaxStylesFrom:other];
+    [_engine message:SCI_SETZOOM wParam:(uptr_t)[other.engine message:SCI_GETZOOM]];
+    [_engine message:SCI_SETWRAPMODE wParam:(uptr_t)[other.engine message:SCI_GETWRAPMODE]];
+    [_engine message:SCI_SETVIEWWS wParam:(uptr_t)[other.engine message:SCI_GETVIEWWS]];
+    [_engine message:SCI_SETVIEWEOL wParam:(uptr_t)[other.engine message:SCI_GETVIEWEOL]];
+    for (int margin = 0; margin < 3; ++margin) [_engine message:SCI_SETMARGINWIDTHN wParam:margin lParam:[other.engine message:SCI_GETMARGINWIDTHN wParam:margin]];
+}
+- (void)retireInFavorOf:(TTEditor *)successor {
+    [self assertThread];
+    if (!successor || successor == self || ![self sharesDocumentWith:successor]) return;
+    [NSNotificationCenter.defaultCenter postNotificationName:TTEditorWillRetireNotification object:self userInfo:@{TTEditorSuccessorKey: successor}];
 }
 - (BOOL)replaceSelection:(NSString *)text {
     [self assertThread];

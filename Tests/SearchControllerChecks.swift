@@ -1,6 +1,13 @@
 import AppKit
 /// Find-window navigation fronts the document window; checks must never put one on screen.
 final class OffscreenWindow: NSWindow { override func makeKeyAndOrderFront(_ sender: Any?) {} }
+/// Counts how often navigation asks for the document window to be brought forward. It reports
+/// itself as showing, like the selected document tab, without being put on screen.
+final class CountingWindow: NSWindow {
+    var fronted = 0, showing = true
+    override var isVisible: Bool { showing }
+    override func makeKeyAndOrderFront(_ sender: Any?) { fronted += 1 }
+}
 @main struct SearchControllerChecks {
     @MainActor static func main() async {
         await Checks.run("SearchControllerChecks") {
@@ -334,6 +341,156 @@ final class OffscreenWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                     "an invalid expression is reported as a failure carrying the shown reason")
             } else {
                 check(false, "an invalid expression is reported as a failure carrying the shown reason")
+            }
+            // G336, G338: a split view. All-open-documents search is given the focused pane, and
+            // listed results outlive the pane they were found through.
+            do {
+                let primary = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 400)),
+                    pane = TTEditor(frame: NSRect(x: 300, y: 0, width: 300, height: 400))
+                let splitWindow = OffscreenWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: .titled, backing: .buffered,
+                    defer: false)
+                let host = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+                splitWindow.contentView = host
+                host.addSubview(primary)
+                primary.text = "one TODO two TODO three"
+                primary.resetUndoHistory()
+                primary.setSavePoint()
+                pane.shareDocument(with: primary)
+                host.addSubview(pane)
+                let split = SearchController(defaults: isolated)
+                split.currentEditor = { pane }
+                split.openEditors = { [pane] }
+                split.queryField.stringValue = "TODO"
+                split.replacementField.stringValue = "DONE"
+                split.mode.selectItem(at: 0)
+                split.scope.selectItem(at: 2)
+                split.wrapButton.state = .off
+                _ = primary.setSelectionAnchor(20, caret: 20)
+                _ = pane.setSelectionAnchor(0, caret: 0)
+                split.next(nil)
+                await waitUntil("the split-view search to finish") { !split.isSearching }
+                check(
+                    split.lastOutcome != .noFurtherMatches && pane.selectionStart == 4 && pane.selectedText == "TODO"
+                        && primary.selectionCaret == 20,
+                    "All-open-documents Find Next moves the focused pane's selection and leaves the other pane's alone")
+                split.replaceOne(nil)
+                await waitUntil("the split-view replace to finish") { !split.isSearching }
+                check(
+                    split.lastOutcome == .replaced(changed: 1, stale: 0) && primary.text == "one DONE two TODO three",
+                    "Replace acts on the match selected in the focused pane, once")
+                pane.executeCommand("undo")
+                check(primary.text == "one TODO two TODO three" && !primary.modified, "that replacement is one Undo")
+                split.scope.selectItem(at: 0)
+                split.findAll(nil)
+                await waitUntil("the split-view Find All to finish") { !split.isSearching }
+                try require(
+                    split.lastOutcome == .found(matches: 2, documents: 1, truncated: false),
+                    "fixture: two results listed through the pane")
+                pane.retire(inFavorOf: primary)
+                pane.removeFromSuperview()
+                check(
+                    split.activateResult(at: 1) && split.lastOutcome != .staleResult && primary.selectionStart == 13
+                        && primary.selectedText == "TODO",
+                    "a result listed through a closed pane still selects its match in the remaining view")
+                primary.executeCommand("selectAll")
+                primary.replaceSelection("edited since")
+                check(
+                    !split.activateResult(at: 0) && split.lastOutcome == .staleResult,
+                    "a result retargeted to the remaining view still goes stale when the document changes")
+            }
+            // Package 21 (F293, G391, G400): the Find window is a panel that leaves the document
+            // window main, Find Next stays in it, and a listed result opens from the keyboard.
+            do {
+                let text = TTEditor(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+                let host = CountingWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: .titled, backing: .buffered,
+                    defer: false)
+                host.contentView = text
+                text.text = "alpha beta alpha beta alpha"
+                let find = SearchController(defaults: isolated)
+                find.currentEditor = { text }
+                find.openEditors = { [text] }
+                @MainActor func done() async { await waitUntil("the panel search to finish") { !find.isSearching } }
+                let panel = try requireValue(find.window as? NSPanel, "the Find window is a panel")
+                check(
+                    !panel.canBecomeMain && panel.canBecomeKey && !panel.hidesOnDeactivate && !panel.isFloatingPanel
+                        && panel.level == .normal && panel.styleMask.contains([.titled, .closable, .resizable])
+                        && !panel.styleMask.contains(.utilityWindow),
+                    "the Find panel cannot become main, does not float and stays when the application is deactivated")
+                check(
+                    panel.defaultButtonCell == nil && panel.initialFirstResponder === find.queryField,
+                    "the Find panel has no default button and starts in the query field")
+                find.queryField.stringValue = "alpha"
+                find.replacementField.stringValue = ""
+                find.mode.selectItem(at: 0)
+                find.scope.selectItem(at: 0)
+                find.wrapButton.state = .off
+                _ = text.setSelectionAnchor(0, caret: 0)
+                find.next(nil)
+                await done()
+                check(
+                    text.selectionStart == 0 && text.selectedText == "alpha" && host.fronted == 0,
+                    "Find Next selects the match without bringing the document window over the Find panel")
+                let action = try requireValue(find.queryField.action, "the query field sends an action on Return")
+                check(
+                    NSApp.sendAction(action, to: find.queryField.target, from: find.queryField),
+                    "fixture: Return in the query field dispatched")
+                await done()
+                check(
+                    text.selectionStart == 11 && text.selectedText == "alpha" && host.fronted == 0,
+                    "Return in the query field is Find Next and stays in the Find panel")
+                check(find.replacementField.action == nil, "Return in the replacement field does nothing")
+                host.showing = false
+                find.next(nil)
+                await done()
+                check(
+                    text.selectionStart == 22 && host.fronted == 1,
+                    "Find Next brings the document window forward when it is not showing at all")
+                host.showing = true
+                host.fronted = 0
+                find.findAll(nil)
+                try require(find.isSearching, "fixture: Find All is running")
+                _ = NSApp.sendAction(action, to: find.queryField.target, from: find.queryField)
+                await done()
+                check(
+                    find.lastOutcome == .found(matches: 3, documents: 1, truncated: false)
+                        && find.numberOfRows(in: find.table) == 3,
+                    "Return in the query field does not cancel a search that is running")
+                find.table.selectRowIndexes([2], byExtendingSelection: false)
+                let held = text.selectionRanges
+                check(
+                    find.table.clickedRow == -1
+                        && NSApp.sendAction(#selector(SearchController.openResult(_:)), to: find, from: find.table)
+                        && text.selectionRanges == held && host.fronted == 0,
+                    "a double-click away from the rows does nothing, even with a row selected")
+                let returnKey = try requireValue(
+                    NSEvent.keyEvent(
+                        with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                        characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36),
+                    "fixture: a Return key event")
+                find.table.keyDown(with: returnKey)
+                check(
+                    text.selectionStart == 22 && text.selectedText == "alpha" && host.fronted == 1
+                        && (host.firstResponder as? NSView)?.isDescendant(of: text) == true,
+                    "Return on a selected result selects its match and brings the document forward, focused")
+                let enterKey = try requireValue(
+                    NSEvent.keyEvent(
+                        with: .keyDown, location: .zero, modifierFlags: [.numericPad], timestamp: 0, windowNumber: 0,
+                        context: nil, characters: "\u{3}", charactersIgnoringModifiers: "\u{3}", isARepeat: false,
+                        keyCode: 76), "fixture: an Enter key event")
+                find.table.selectRowIndexes([0], byExtendingSelection: false)
+                find.table.keyDown(with: enterKey)
+                check(
+                    text.selectionStart == 0 && text.selectedText == "alpha" && host.fronted == 2,
+                    "keypad Enter on a selected result does the same")
+                check(find.table.accessibilityLabel() == "Search results", "the result list has a VoiceOver label")
+                find.findAll(nil)
+                try require(find.isSearching, "fixture: a search is running before Escape")
+                panel.cancelOperation(nil)
+                check(
+                    !find.isSearching && find.lastOutcome == .cancelled,
+                    "Escape closes the Find panel, which cancels a running search as closing does")
             }
             Checks.summary { "PASS SearchControllerChecks: \(Checks.count) assertions" }
         }
