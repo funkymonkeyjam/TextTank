@@ -1637,10 +1637,6 @@ private final class DocumentTabWindow: NSWindow {
         }
     }
 }
-private final class DocumentTabActionButton: NSButton {
-    weak var documentWindow: NSWindow?
-}
-
 private final class DocumentTabButton: NSButton {
     weak var documentWindow: NSWindow?
 }
@@ -1708,7 +1704,7 @@ private final class DocumentTabStrip: NSView {
                 row.addSubview(cell)
             }
             row.addSubview(button)
-            let close = DocumentTabActionButton(
+            let close = DocumentTabButton(
                 image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close \(window.title)")!,
                 target: self, action: #selector(closeTab(_:)))
             close.isBordered = false
@@ -1740,7 +1736,7 @@ private final class DocumentTabStrip: NSView {
     @objc private func closeTab(_ sender: NSButton) {
         guard owner != nil else { return }
         let windows = DocumentTabWindow.documents
-        guard let target = (sender as? DocumentTabActionButton)?.documentWindow,
+        guard let target = (sender as? DocumentTabButton)?.documentWindow,
             windows.contains(where: { $0 === target })
         else { return }
         // A background tab is brought forward first, so that unsaved changes are reviewed on a

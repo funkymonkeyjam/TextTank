@@ -29,6 +29,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     private var installError: Error?
     private var installErrorReported = false
     private var busy = false
+    private var runControl: AutomationRunControl?
     /// The pasteboard used for clipboard input and output. Checks substitute a private one.
     var pasteboard = NSPasteboard.general
     /// Internal, not private, so that a check can hold an export open without EventKit.
@@ -606,12 +607,10 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         }
         do { try runSavedAutomation(id: id) } catch { showError(error) }
     }
-    private func run(_ original: AutomationDefinition, capturedEditor: TTEditor?) throws {
+    private func run(_ workflow: AutomationDefinition, capturedEditor editor: TTEditor?) throws {
         // Invocation, not lookup: opening and cancelling the palette never reaches this.
         onInvocation()
-        let workflow = original
-        // Capture once before showing the preview. Never re-query the frontmost editor on Apply.
-        let editor = capturedEditor
+        // The editor was captured before preview. Never re-query the frontmost editor on Apply.
         let revision = editor?.revision
         let start = editor?.selectionStart
         let end = editor?.selectionEnd
@@ -741,7 +740,6 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             try Data(output.utf8).write(to: url, options: .atomic)
         }
     }
-    private var runControl: AutomationRunControl?
     private var runPanel: NSPanel?
     /// Cancel ends the modal itself. The worker is only asked to stop, because sorting, splitting
     /// and joining cannot be interrupted; it holds a copy of the text and nothing of the editor.

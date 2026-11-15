@@ -293,8 +293,9 @@ struct LanguageOverrides: Codable, Equatable {
 enum LanguageError: LocalizedError {
     case invalid(String)
     var errorDescription: String? {
-        if case .invalid(let text) = self { return text }
-        return nil
+        switch self {
+        case .invalid(let text): return text
+        }
     }
 }
 struct LanguageSymbol: Equatable { let name: String, range: NSRange, line: Int }

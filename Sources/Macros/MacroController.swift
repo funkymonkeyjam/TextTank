@@ -12,6 +12,7 @@ final class MacroController: NSObject, NSMenuDelegate {
     private var lastRecording: RecordedMacro?
     private var captureError: Error?
     private var playing = false
+    private var playbackCancelled = false
     /// Called once, at the moment a recording becomes unsaveable, with the reason (F67).
     var onInvalidated: ((String) -> Void)?
     /// Why the recording in progress can no longer be saved; nil while it is still good.
@@ -246,7 +247,6 @@ final class MacroController: NSObject, NSMenuDelegate {
             try playInteractively(macro, on: editor, repeats: repeats, untilEnd: untilEnd.state == .on)
         } catch { showError(error) }
     }
-    private var playbackCancelled = false
     @objc private func cancelPlayback() { playbackCancelled = true }
     private func playInteractively(_ macro: RecordedMacro, on editor: TTEditor, repeats: Int, untilEnd: Bool) throws {
         guard !playing, recordingEditor == nil else { throw MacroError.invalid("Macro playback is unavailable.") }
