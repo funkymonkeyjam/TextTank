@@ -146,6 +146,20 @@ int main() {
         [second executeCommand:@"unfoldAll"];
         check([native message:SCI_GETLINEVISIBLE wParam:1] == 1, "Unfold all restores body visibility");
         check([[TTEditor availableLanguages] containsObject:@"cpp"] && [[TTEditor availableLanguages] containsObject:@"python"], "Language inventory enumerates linked lexer factories");
+        // F22: the built-in keyword list and palette belong to the bare cpp lexer only.
+        check([native message:SCI_STYLEGETFORE wParam:5] != [native message:SCI_STYLEGETFORE wParam:STYLE_DEFAULT], "Bare cpp lexer keeps its built-in keyword colour");
+        for (NSString *other in @[@"hypertext", @"sql", @"null"]) {
+            [second setLanguage:other];
+            BOOL neutral = YES;
+            for (int style : {1, 2, 3, 5, 6, 7, 11, 13, 17}) neutral = neutral && [native message:SCI_STYLEGETFORE wParam:style] == [native message:SCI_STYLEGETFORE wParam:STYLE_DEFAULT];
+            check(neutral, [NSString stringWithFormat:@"Lexer %@ gets no C style colours without a profile", other].UTF8String);
+        }
+        second.text = @"int value = 42;\n";
+        [second setLanguage:@"python"];
+        check([native message:SCI_GETSTYLEAT wParam:0] != 5 && [native message:SCI_GETSTYLEAT wParam:0] == [native message:SCI_GETSTYLEAT wParam:4], "Other lexers get no built-in C keyword list");
+        check([TTEditor availableLanguages] == [TTEditor availableLanguages] && [[TTEditor availableLanguages] containsObject:@"user"], "Language inventory is built once");
+        [second setLanguage:@"cpp"];
+        check([native message:SCI_GETSTYLEAT wParam:0] == 5, "Returning to the bare cpp lexer restores its keyword list");
         });
         ttchecks::section("split view, appearance, macros and session restore", [&] {
         NSWindow *testWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,900,500) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
