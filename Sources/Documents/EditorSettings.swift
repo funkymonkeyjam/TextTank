@@ -24,8 +24,14 @@ struct EditorSettings: Codable, Equatable {
     }
 }
 enum SettingsError: Error,LocalizedError {
-    case invalid,conflict
-    var errorDescription:String? { self == .invalid ? "Unsupported settings version or value. Existing settings have not been replaced." : "Shortcut conflicts with another action, uses a reserved key, or is not a single printable ASCII character." }
+    case invalid,conflict,unreadable
+    var errorDescription:String? {
+        switch self {
+        case .invalid:return "Unsupported settings version or value. Existing settings have not been replaced."
+        case .conflict:return "Shortcut conflicts with another action, uses a reserved key, or is not a single printable ASCII character."
+        case .unreadable:return "The saved settings could not be read. The original file is preserved."
+        }
+    }
 }
 final class SettingsController:NSObject {
     private(set) var value=EditorSettings()
@@ -39,11 +45,39 @@ final class SettingsController:NSObject {
         catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == ENOENT { }
         catch { loadError=error }
     }
-    func save(_ settings:EditorSettings)throws {
+    /// What the user is told at launch when the settings file could not be read. Every load
+    /// failure (unsupported value, shortcut conflict, malformed JSON, unreadable file) gets the
+    /// same two facts: defaults are in use, and the file on disk has not been changed.
+    var loadFailureMessage:String? {
+        loadError.map { "The saved settings could not be read, so default settings are in use. The settings file has not been changed.\n\nReason: \($0.localizedDescription)\n\nFile: \(url.path)" }
+    }
+    /// Never overwrites a settings file that failed to load unless the caller has the user's
+    /// explicit confirmation. With confirmation the unread file is first moved aside, intact,
+    /// under a unique sibling name; it is renamed rather than copied because the load may have
+    /// failed on size or permissions. Returns the backup location when one was made.
+    @discardableResult func save(_ settings:EditorSettings,replacingUnreadable:Bool=false)throws->URL? {
         try settings.validate()
+        if loadError != nil && !replacingUnreadable { throw SettingsError.unreadable }
         try FileManager.default.createDirectory(at:url.deletingLastPathComponent(),withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
-        try WorkspaceStore.writePrivate(JSONEncoder().encode(settings),to:url)
-        value=settings;loadError=nil;apply()
+        let data=try JSONEncoder().encode(settings)
+        var backup:URL?
+        if loadError != nil {
+            var info=stat()
+            // A symlink or other non-regular entry is never moved: writePrivate refuses it below.
+            if lstat(url.path,&info) == 0,info.st_mode&S_IFMT == S_IFREG {
+                let aside=url.deletingLastPathComponent().appendingPathComponent(url.deletingPathExtension().lastPathComponent+".unreadable-"+UUID().uuidString+".json")
+                // RENAME_EXCL: never replace an existing entry, even one created concurrently.
+                guard renamex_np(url.path,aside.path,UInt32(RENAME_EXCL)) == 0 else { throw NSError(domain:NSPOSIXErrorDomain,code:Int(errno)) }
+                backup=aside
+            }
+        }
+        do { try WorkspaceStore.writePrivate(data,to:url) }
+        catch {
+            // Put the original back so a failed replacement leaves the folder as it was.
+            if let backup { _ = renamex_np(backup.path,url.path,UInt32(RENAME_EXCL)) }
+            throw error
+        }
+        value=settings;loadError=nil;apply();return backup
     }
     func apply(to editor:TTEditor) { editor.configureTabWidth(value.tabWidth,useTabs:value.useTabs);editor.wrap=value.wrap }
     func apply() {
@@ -78,7 +112,18 @@ final class SettingsController:NSObject {
                 updated.tabWidth=Int(width.stringValue) ?? 0;updated.useTabs=tabs.state == .on;updated.wrap=wrap.state == .on;updated.appearance=appearance.titleOfSelectedItem ?? "system"
                 if !key.stringValue.isEmpty,let id=shortcut.titleOfSelectedItem { updated.shortcuts[id]=key.stringValue }
             }
-            try save(updated)
+            var replacing=false
+            if loadError != nil {
+                // Save and Reset Defaults both arrive here; neither may silently replace the unread file.
+                let confirm=TTAlert();confirm.alertStyle = .warning;confirm.messageText="Replace unreadable settings?"
+                confirm.informativeText="The saved settings file could not be read, so this window started from defaults. Saving now replaces that file. A backup copy of the original will be kept next to it.\n\n\(url.path)"
+                confirm.addButton(withTitle:"Cancel");confirm.addButton(withTitle:"Replace and Keep Backup")
+                guard confirm.runModal() == .alertSecondButtonReturn else { return }
+                replacing=true
+            }
+            if let backup=try save(updated,replacingUnreadable:replacing) {
+                let done=TTAlert();done.messageText="Settings replaced";done.informativeText="The previous settings file was kept as:\n\(backup.path)";_ = done.runModal()
+            }
         } catch { NSAlert(error:error).runModal() }
     }
 }

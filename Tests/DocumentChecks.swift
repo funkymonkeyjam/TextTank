@@ -65,6 +65,41 @@ import AppKit
         try check(SettingsController(url:settings.url).value == configured,"rejected settings retain prior on-disk configuration")
         conflict.version=99
         rejects("future settings version rejected") {try settings.save(conflict)}
+        // F199: a settings file that failed to load is never overwritten without explicit confirmation.
+        var futureSettings=configured;futureSettings.version=2
+        var reservedSettings=configured;reservedSettings.shortcuts=["upper":"s"]
+        let futureJSON=String(decoding:try JSONEncoder().encode(futureSettings),as:UTF8.self),reservedJSON=String(decoding:try JSONEncoder().encode(reservedSettings),as:UTF8.self)
+        for (label,contents) in [("future version",futureJSON),("reserved shortcut",reservedJSON),("malformed JSON","{not json")] {
+            let folder=root.appendingPathComponent("unreadable-settings-"+UUID().uuidString)
+            try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+            let unreadableURL=folder.appendingPathComponent("Settings.json"),unreadableBytes=Data(contents.utf8)
+            try unreadableBytes.write(to:unreadableURL)
+            let unreadable=SettingsController(url:unreadableURL)
+            try check(unreadable.loadError != nil && unreadable.value == EditorSettings(),"\(label): unreadable settings load as defaults with an error")
+            try check(unreadable.loadFailureMessage?.contains("default settings are in use") == true && unreadable.loadFailureMessage?.contains("has not been changed") == true && unreadable.loadFailureMessage?.contains(unreadableURL.path) == true,"\(label): launch message says defaults are in use and the file is unchanged")
+            rejects("\(label): unconfirmed save over unreadable settings refused") {try unreadable.save(configured)}
+            try check(try Data(contentsOf:unreadableURL) == unreadableBytes && FileManager.default.contentsOfDirectory(atPath:folder.path) == ["Settings.json"],"\(label): refused save leaves the unreadable file byte-identical")
+            try check(unreadable.loadError != nil && unreadable.value == EditorSettings(),"\(label): refused save keeps the load failure")
+            var invalid=configured;invalid.tabWidth=99
+            rejects("\(label): confirmed save still validates") {try unreadable.save(invalid,replacingUnreadable:true)}
+            try check(try FileManager.default.contentsOfDirectory(atPath:folder.path) == ["Settings.json"],"\(label): invalid confirmed save moves nothing aside")
+            let backupURL=try unreadable.save(configured,replacingUnreadable:true)
+            let siblings=try FileManager.default.contentsOfDirectory(atPath:folder.path).filter{$0 != "Settings.json"}
+            try check(siblings.count == 1 && siblings[0].hasPrefix("Settings.unreadable-") && backupURL?.lastPathComponent == siblings[0],"\(label): confirmed replacement keeps exactly one backup sibling")
+            try check(try Data(contentsOf:folder.appendingPathComponent(siblings[0])) == unreadableBytes,"\(label): backup holds the original bytes")
+            try check(unreadable.loadError == nil && unreadable.loadFailureMessage == nil && SettingsController(url:unreadableURL).value == configured,"\(label): confirmed replacement persists and clears the load failure")
+            try check(try unreadable.save(EditorSettings()) == nil && FileManager.default.contentsOfDirectory(atPath:folder.path).count == 2,"\(label): later saves need no confirmation and make no further backups")
+        }
+        let linkFolder=root.appendingPathComponent("linked-settings");try FileManager.default.createDirectory(at:linkFolder,withIntermediateDirectories:true)
+        let linkTarget=linkFolder.appendingPathComponent("elsewhere.json"),linkBytes=Data("{\"version\":2}".utf8);try linkBytes.write(to:linkTarget)
+        let linkedURL=linkFolder.appendingPathComponent("Settings.json");try FileManager.default.createSymbolicLink(at:linkedURL,withDestinationURL:linkTarget)
+        let linked=SettingsController(url:linkedURL)
+        try check(linked.loadError != nil,"symlinked settings are not read")
+        rejects("confirmed save refuses a symlinked settings entry") {try linked.save(configured,replacingUnreadable:true)}
+        try check(try Data(contentsOf:linkTarget) == linkBytes && FileManager.default.contentsOfDirectory(atPath:linkFolder.path).sorted() == ["Settings.json","elsewhere.json"] && FileManager.default.destinationOfSymbolicLink(atPath:linkedURL.path) == linkTarget.path,"symlinked settings entry and its target are left untouched")
+        let missing=SettingsController(url:root.appendingPathComponent("missing-settings").appendingPathComponent("Settings.json"))
+        try check(missing.loadError == nil && missing.loadFailureMessage == nil,"missing settings file is not a load failure")
+        try check(try missing.save(configured) == nil && SettingsController(url:missing.url).value == configured,"missing settings file saves without confirmation or backup")
         try check(EditorTransform.sortAscending.transform("b\r\na\n") == "a\r\nb\n","line sorting retains mixed separator positions")
         try check(EditorTransform.reverseLines.transform("a\nb") == "b\na","reverse retains absence of final EOL")
         try check(EditorTransform.uniqueLines.transform("a\na\nb\n") == "a\nb\n","duplicate removal preserves kept row separators")
@@ -89,6 +124,21 @@ import AppKit
         NSDocumentController.shared.addDocument(document)
         try document.read(from:initial,ofType:"Plain Text")
         try check(document.data(ofType:"Plain Text") == initial,"native document exact bytes roundtrip")
+        // F126: the insertion ending follows the file's first line break; loading never edits.
+        try check(document.editor.statusInfo["eol"]?.intValue == 0,"mixed file inserts its first line ending (CRLF)")
+        try check(document.editor.text.utf8.elementsEqual(String(decoding:initial,as:UTF8.self).utf8) && !document.editor.modified && !document.isDocumentEdited,"setting the line-ending mode on load leaves text and dirty state untouched")
+        let eolDocument=TextDocument()
+        try eolDocument.read(from:Data("a\r\nb".utf8),ofType:"Plain Text")
+        _ = eolDocument.editor.setSelectionAnchor(4,caret:4);eolDocument.editor.executeCommand("newLine")
+        try check(eolDocument.editor.text.utf8.elementsEqual("a\r\nb\r\n".utf8),"Return in a CRLF file inserts CRLF, not a bare LF")
+        eolDocument.editor.convertLineEndings("LF")
+        try check(eolDocument.editor.statusInfo["eol"]?.intValue == 2,"explicit conversion switches the insertion ending")
+        for (bytes,mode,label) in [("x\ry\n",1,"CR"),("p\nq\r\n",2,"LF"),("a\r\nb\n",0,"CRLF"),("no line break",2,"LF fallback")] {
+            try eolDocument.read(from:Data(bytes.utf8),ofType:"Plain Text")
+            try check(eolDocument.editor.statusInfo["eol"]?.intValue == mode && !eolDocument.editor.modified,"reload into the same document follows the loaded file: \(label)")
+            try check(try eolDocument.data(ofType:"Plain Text") == Data(bytes.utf8),"untouched \(label) file saves byte-identically")
+        }
+        eolDocument.close()
         document.makeWindowControllers()
         print("OBSERVED controllers=\(document.windowControllers.count) windows=\(NSApp.windows.count)"); fflush(stdout)
         try check(document.windowControllers.count == 1,"NSDocument owns one window controller")
@@ -166,8 +216,16 @@ import AppKit
         document.editor.executeCommand("undo")
         try check(document.editor.text == "reloaded" && !document.editor.modified,"read resets undo history and engine dirty state")
         document.editor.executeCommand("selectAll"); document.editor.replaceSelection("unsaved before actual revert")
+        // F7: the discarded draft's snapshot must not outlive Revert to Saved.
+        document.flushRecovery()
+        try check(try TextDocument.recovery.loadAll().contains { $0.id == document.recoveryID && $0.text == "unsaved before actual revert" },"dirty draft has a recovery snapshot before revert")
+        try Data([0xC3]).write(to:saved)
+        rejects("revert of undecodable disk bytes fails") { try document.revert(toContentsOf:saved,ofType:"Plain Text") }
+        try check(document.editor.text == "unsaved before actual revert" && document.isDocumentEdited,"failed revert keeps the dirty buffer")
+        try check(try TextDocument.recovery.loadAll().contains { $0.id == document.recoveryID },"failed revert keeps the recovery snapshot")
         try Data("reverted from disk".utf8).write(to:saved)
         try document.revert(toContentsOf:saved,ofType:"Plain Text")
+        try check(try !TextDocument.recovery.loadAll().contains { $0.id == document.recoveryID },"revert removes discarded recovery snapshot")
         document.editor.executeCommand("undo")
         try check(document.editor.text == "reverted from disk","actual NSDocument revert replaces text and clears undo")
         try check(!document.editor.modified && !document.isDocumentEdited,"actual NSDocument revert clears both dirty states")
@@ -221,7 +279,42 @@ import AppKit
         let emptyRestored=try WorkspaceController().restore(emptySession)
         let emptyRecovery=try TextDocument.recovery.loadAll().first { $0.id == emptyRestored[0].recoveryID }
         try check(emptyRestored[0].isDocumentEdited && emptyRecovery?.text == "","empty dirty session restoration retains a recovery snapshot")
+        emptyRestored[0].editor.replaceSelection("x");emptyRestored[0].editor.executeCommand("undo")
+        try check(emptyRestored[0].editor.text.isEmpty && emptyRestored[0].isDocumentEdited,"type-then-undo cannot make an empty restored document clean")
         emptyRestored.forEach { $0.close() }
+        // F125: default-format UTF-8 is the case the UTF-16 fixture above cannot expose.
+        let plainText="first line\nsecond 😀"
+        let plainSnapshot=SessionDocument(id:UUID(),text:plainText,format:FileFormat(encoding:.utf8,bom:false),isDirty:true,selection:SessionSelection(anchorByte:0,caretByte:0))
+        let plain=try WorkspaceController().restore(WorkspaceSession(id:UUID(),name:"Plain UTF-8 restored document",documents:[plainSnapshot]))[0]
+        plain.editor.executeCommand("undo");plain.flushRecovery()
+        try check(plain.editor.text == plainText && plain.isDocumentEdited,"Undo cannot empty a restored session document or mark it clean")
+        try check(TextDocument.recovery.load(id:plain.recoveryID).text == plainText,"Undo after session restore keeps the recovery snapshot")
+        plain.editor.replaceSelection("x");plain.editor.executeCommand("undo");plain.flushRecovery()
+        try check(plain.editor.text == plainText && !plain.editor.modified && plain.isDocumentEdited,"restored document stays edited at the engine save point")
+        try check(TextDocument.recovery.load(id:plain.recoveryID).text == plainText,"edit-then-undo keeps the restored document's recovery snapshot")
+        let plainURL=root.appendingPathComponent("restored-then-saved.txt")
+        try plain.writeSafely(to:plainURL,ofType:"Plain Text",for:.saveAsOperation)
+        try check(try Data(contentsOf:plainURL) == Data(plainText.utf8) && !plain.isDocumentEdited,"real Save clears a restored document's edited state")
+        try check(try !TextDocument.recovery.loadAll().contains { $0.id == plain.recoveryID },"real Save removes the restored document's recovery snapshot")
+        plain.close()
+        let crashedID=UUID(),crashedText="recovered\r\nwork 😀"
+        try TextDocument.recovery.save(RecoverySnapshot(id:crashedID,text:crashedText,format:FileFormat(),originalURL:saved.absoluteString,revision:7))
+        let recovered=try TextDocument.openRecovered(try TextDocument.recovery.load(id:crashedID))
+        try check(recovered.recoveryID == crashedID && recovered.editor.text == crashedText && recovered.fileURL == nil && recovered.isDocumentEdited,"crash recovery opens the snapshot as a new unsaved document")
+        try check(recovered.editor.statusInfo["eol"]?.intValue == 0,"recovered document inserts its own line ending")
+        recovered.automaticRecoveryDelay=0.02;recovered.maximumRecoveryDelay=0.02
+        recovered.editor.executeCommand("undo")
+        RunLoop.current.run(until:Date().addingTimeInterval(0.2));recovered.flushRecovery()
+        try check(recovered.editor.text == crashedText && recovered.isDocumentEdited,"one Undo cannot empty a recovered document or mark it clean")
+        let rewritten=try TextDocument.recovery.load(id:crashedID)
+        try check(rewritten.text == crashedText && rewritten.revision > 7,"Undo after recovery keeps the only on-disk copy")
+        recovered.editor.replaceSelection("x");recovered.editor.executeCommand("undo")
+        RunLoop.current.run(until:Date().addingTimeInterval(0.2));recovered.flushRecovery()
+        try check(recovered.isDocumentEdited && TextDocument.recovery.load(id:crashedID).text == crashedText,"edit-then-undo keeps the recovered document edited and its snapshot on disk")
+        try check(try Data(contentsOf:saved) == originalBytes,"recovery never writes the original file")
+        recovered.close()
+        try check(try !TextDocument.recovery.loadAll().contains { $0.id == crashedID },"closing a recovered document discards its snapshot")
+        rejects("recovery revision overflow rejected before opening") { _ = try TextDocument.openRecovered(RecoverySnapshot(id:UUID(),text:"x",format:FileFormat(),originalURL:nil,revision:UInt64.max)) }
         restored.forEach { $0.close() }
         let tabA=TextDocument(), tabB=TextDocument()
         for doc in [tabA,tabB] { NSDocumentController.shared.addDocument(doc);doc.makeWindowControllers();doc.showWindows() }
@@ -279,6 +372,97 @@ import AppKit
         try check(!liveSnapshot.text.isEmpty && liveSnapshot.text.count<=recoveryDoc.editor.text.count,"continuous edits receive bounded recovery before quiet interval")
         recoveryDoc.close()
         try check(try !TextDocument.recovery.scan().snapshots.contains{$0.id==recoveryDoc.recoveryID},"close drains queued recovery before removing discarded snapshot")
+        // F119: the recovery timers must fire while only a modal or tracking run-loop mode is serviced.
+        for (mode,label) in [(RunLoop.Mode.modalPanel,"modal"),(RunLoop.Mode.eventTracking,"event-tracking")] {
+            let modalDoc=TextDocument();modalDoc.automaticRecoveryDelay=0.05;modalDoc.maximumRecoveryDelay=0.05
+            modalDoc.editor.text="typed just before a \(label) loop"
+            let modalDeadline=Date().addingTimeInterval(1);var modalSnapshot:RecoverySnapshot?
+            while Date()<modalDeadline && modalSnapshot == nil {
+                _ = RunLoop.current.run(mode:mode,before:Date().addingTimeInterval(0.02));usleep(5000)
+                modalSnapshot=try? TextDocument.recovery.load(id:modalDoc.recoveryID)
+            }
+            try check(modalSnapshot?.text == "typed just before a \(label) loop","recovery snapshot is written while a \(label) run-loop mode is active")
+            modalDoc.close()
+            try check(try !TextDocument.recovery.scan().snapshots.contains{$0.id==modalDoc.recoveryID},"closing after a \(label)-mode snapshot removes it")
+        }
+        // F202: a metadata-only change is a new snapshot revision, not a spurious failure.
+        let meta=TextDocument();meta.editor.text="metadata";meta.flushRecovery()
+        try check(TextDocument.recovery.load(id:meta.recoveryID).format == FileFormat(encoding:.utf8,bom:false) && meta.lastRecoveryError == nil,"fixture: dirty document has a flushed snapshot")
+        meta.format=FileFormat(encoding:.utf16BE,bom:true);meta.flushRecovery()
+        try check(TextDocument.recovery.load(id:meta.recoveryID).format == meta.format && meta.lastRecoveryError == nil,"format change without a text edit rewrites the snapshot without a failure")
+        let movedURL=root.appendingPathComponent("moved-while-dirty.txt");meta.fileURL=movedURL;meta.flushRecovery()
+        try check(TextDocument.recovery.load(id:meta.recoveryID).originalURL == movedURL.absoluteString && meta.lastRecoveryError == nil,"file location change without a text edit rewrites the snapshot without a failure")
+        meta.close()
+        // F202: failures are sticky and distinct in the status line, escalate once, and reset on success.
+        var notices=0
+        TextDocument.recoveryFailureNoticeShown=false;TextDocument.recoveryFailureNoticeForTesting={ _,_ in notices += 1 }
+        let failing=TextDocument();NSDocumentController.shared.addDocument(failing);failing.makeWindowControllers()
+        let failingStatus=(failing.windowControllers[0] as! EditorWindowController).status
+        let failingFile=TextDocument.recovery.fileURL(for:failing.recoveryID),corruptSnapshot=Data("{corrupt".utf8)
+        failing.editor.text="a";failing.flushRecovery()
+        try check(failing.lastRecoveryError == nil && failingStatus.textColor == .secondaryLabelColor && failingStatus.toolTip == nil,"successful recovery write shows the ordinary status")
+        try corruptSnapshot.write(to:failingFile)
+        failing.editor.text="ab";failing.flushRecovery()
+        try check(failing.lastRecoveryError != nil && failingStatus.stringValue.hasPrefix("Recovery failed:") && failingStatus.textColor == .systemRed && failingStatus.toolTip?.isEmpty == false,"failed recovery write is visibly distinct in the status line")
+        try check(notices == 0,"one recovery failure does not raise a notice")
+        failing.editor.text="abc";failing.flushRecovery()
+        try check(notices == 1,"second consecutive recovery failure raises one notice")
+        failing.editor.text="abcd";failing.flushRecovery()
+        try check(notices == 1 && failingStatus.textColor == .systemRed,"further failures stay in the status line without another notice")
+        try check(try Data(contentsOf:failingFile) == corruptSnapshot,"failed recovery writes never overwrite the unreadable snapshot")
+        try FileManager.default.removeItem(at:failingFile)
+        failing.editor.text="abcde";failing.flushRecovery()
+        try check(failing.lastRecoveryError == nil && failingStatus.textColor == .secondaryLabelColor && failingStatus.toolTip == nil && TextDocument.recovery.load(id:failing.recoveryID).text == "abcde","next successful recovery write clears the failure state")
+        // F202: a failed cleanup at close is recorded, never blocks, and leaves the file for the next launch's review.
+        try corruptSnapshot.write(to:failingFile)
+        failing.close()
+        try check(!NSDocumentController.shared.documents.contains(failing) && failing.lastRecoveryError != nil,"close returns and releases the document when snapshot cleanup fails")
+        try check(try Data(contentsOf:failingFile) == corruptSnapshot && TextDocument.recovery.scan().issues.contains { $0.url.lastPathComponent == failingFile.lastPathComponent },"snapshot that could not be removed stays listed for review")
+        try check(AppDelegate.recoveryIssueText(try TextDocument.recovery.scan().issues).contains(failingFile.path),"recovery review lists the full path of each file")
+        try FileManager.default.removeItem(at:failingFile)
+        TextDocument.recoveryFailureNoticeForTesting=nil;TextDocument.recoveryFailureNoticeShown=false
+        // G353: a UTF-16 LE file TextTank wrote with a leading NUL can be reopened by explicit choice.
+        let nulURL=root.appendingPathComponent("leading-nul-utf16.txt"),nulFormat=FileFormat(encoding:.utf16LE,bom:true)
+        let nulDoc=TextDocument();nulDoc.editor.text="\0hello";nulDoc.format=nulFormat
+        try nulDoc.writeSafely(to:nulURL,ofType:"Plain Text",for:.saveAsOperation)
+        let nulBytes=try Data(contentsOf:nulURL)
+        try check(nulBytes == (try FileCodec.encode("\0hello",format:nulFormat)) && nulBytes.starts(with:[0xFF,0xFE,0,0]),"leading-NUL UTF-16 LE save is neither refused nor altered")
+        nulDoc.close()
+        let plainRead=TextDocument()
+        rejects("automatic detection still rejects an apparent UTF-32 signature") { try plainRead.read(from:nulBytes,ofType:"Plain Text") }
+        var openFailure:NSError?
+        do { try plainRead.read(from:nulURL,ofType:"Plain Text") } catch { openFailure=error as NSError }
+        plainRead.close()
+        guard let opener=openFailure?.recoveryAttempter as? ExplicitEncodingOpener else { fatalError("FAILED: opening the file offers an explicit UTF-16 LE choice (got \(String(describing:openFailure)))") }
+        try check(openFailure?.localizedRecoveryOptions == ["Open as UTF-16 LE","Cancel"] && opener.encoding == .utf16LE && opener.url == nulURL,"open failure offers an explicit UTF-16 LE choice")
+        try check(!opener.attemptRecovery(fromError:openFailure!,optionIndex:1) && NSDocumentController.shared.document(for:nulURL) == nil,"declining the explicit encoding opens nothing")
+        let reopened=try opener.open(display:false)
+        try check(reopened.editor.text == "\0hello" && reopened.format == nulFormat && reopened.fileURL == nulURL && !reopened.isDocumentEdited,"explicit UTF-16 LE open restores the exact text and format")
+        try check(try reopened.diskState() == .unchanged && reopened.data(ofType:"Plain Text") == nulBytes,"explicitly opened file has an exact save baseline")
+        reopened.editor.text="\0hello again"
+        try reopened.writeSafely(to:nulURL,ofType:"Plain Text",for:.saveOperation)
+        try check(try Data(contentsOf:nulURL) == (try FileCodec.encode("\0hello again",format:nulFormat)) && !reopened.isDocumentEdited,"explicitly opened file saves back byte-exactly")
+        reopened.editor.replaceSelection("unsaved")
+        var revertFailure:NSError?
+        do { try reopened.revert(toContentsOf:nulURL,ofType:"Plain Text") } catch { revertFailure=error as NSError }
+        guard let reverter=revertFailure?.recoveryAttempter as? ExplicitEncodingOpener else { fatalError("FAILED: revert offers the explicit UTF-16 LE choice") }
+        try check(reopened.isDocumentEdited,"failed automatic revert keeps the edited buffer")
+        try check(try reverter.open(display:false) === reopened && reopened.editor.text == "\0hello again" && !reopened.isDocumentEdited,"explicit choice completes the revert on the open document")
+        reopened.close()
+        let bigEndianURL=root.appendingPathComponent("utf32-be-signature.bin");try Data([0,0,0xFE,0xFF,0,0,0,0x41]).write(to:bigEndianURL)
+        let bigEndian=TextDocument();var bigEndianFailure:NSError?
+        do { try bigEndian.read(from:bigEndianURL,ofType:"Plain Text") } catch { bigEndianFailure=error as NSError }
+        try check(bigEndianFailure != nil && bigEndianFailure?.recoveryAttempter == nil,"UTF-32 BE signature is rejected without an encoding offer")
+        bigEndian.close()
+        // G353 (b): a BOM-less UTF-16 reload keeps the file BOM-less on save, by the exact-bytes contract.
+        let bomlessURL=root.appendingPathComponent("bomless-utf16.txt"),bomlessFormat=FileFormat(encoding:.utf16LE,bom:false)
+        let bomlessBytes=try FileCodec.encode("hi",format:bomlessFormat);try bomlessBytes.write(to:bomlessURL)
+        let bomless=TextDocument();bomless.fileURL=bomlessURL;try bomless.read(from:bomlessBytes,ofType:"Plain Text")
+        try bomless.reload(using:.utf16LE)
+        try check(bomless.editor.text == "hi" && bomless.format == bomlessFormat,"BOM-less UTF-16 LE reload keeps the format BOM-less")
+        bomless.editor.text="hi!";try bomless.writeSafely(to:bomlessURL,ofType:"Plain Text",for:.saveOperation)
+        try check(try Data(contentsOf:bomlessURL) == (try FileCodec.encode("hi!",format:bomlessFormat)),"saving after a BOM-less UTF-16 reload adds no BOM")
+        bomless.close()
 
         let first=TextDocument(),second=TextDocument()
         for doc in [first,second] {NSDocumentController.shared.addDocument(doc);doc.makeWindowControllers();doc.showWindows()}

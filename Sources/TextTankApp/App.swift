@@ -54,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self?.macros.invalidateRecording(reason:"An automation was invoked during macro recording. Automation side effects are not recorded.")
         return (NSApp.mainWindow?.windowController as? EditorWindowController)?.activeEditor
     }, newDocument: { text in
-        let doc = TextDocument(); NSDocumentController.shared.addDocument(doc); doc.makeWindowControllers(); doc.editor.text=text; doc.showWindows(); doc.windowControllers.first?.window?.makeFirstResponder(doc.editor)
+        let doc = TextDocument(); NSDocumentController.shared.addDocument(doc); doc.makeWindowControllers(); doc.editor.text=text; doc.editor.setLineEndingMode(LineEnding.detect(in:text).rawValue); doc.showWindows(); doc.windowControllers.first?.window?.makeFirstResponder(doc.editor)
     })
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenus()
@@ -69,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             options.matchCase=search.matchCase;options.wholeWord=search.wholeWord;options.dotMatchesNewline=search.dotMatchesNewline;options.wrap=search.wrap
             try self.searchController.playRecorded(options:options,action:search.action,on:editor)
         }
-        if let error=settings.loadError { NSAlert(error:error).runModal() }
+        if let message=settings.loadFailureMessage { let alert=TTAlert();alert.alertStyle = .warning;alert.messageText="Settings could not be read";alert.informativeText=message;_ = alert.runModal() }
         NSApp.activate(ignoringOtherApps: true)
         if NSDocumentController.shared.documents.isEmpty { newDocument(nil) }
         else { for document in NSDocumentController.shared.documents { if document.windowControllers.isEmpty { document.makeWindowControllers() }; document.showWindows() } }
@@ -184,19 +184,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         return choice
     }
+    /// Full paths, because the Recovery folder is inside the hidden Library folder.
+    static func recoveryIssueText(_ issues:[RecoveryIssue]) -> String {
+        "These files were left untouched and are not recovered automatically.\n\n"+issues.map { $0.url.path+"\n"+$0.message }.joined(separator:"\n\n")
+    }
     private func restoreRecovery() {
         do {
             let scan = try TextDocument.recovery.scan()
             let snapshots = scan.snapshots
-            if !scan.issues.isEmpty { let warning=TTAlert();warning.messageText="Some recovery files need review";warning.informativeText=scan.issues.map { $0.url.lastPathComponent+": "+$0.message }.joined(separator:"\n");warning.runModal() }
+            if !scan.issues.isEmpty {
+                let warning=TTAlert();warning.messageText="Some recovery files need review";warning.informativeText=Self.recoveryIssueText(scan.issues)
+                warning.addButton(withTitle:"OK");warning.addButton(withTitle:"Reveal in Finder")
+                if warning.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.activateFileViewerSelecting(scan.issues.map(\.url)) }
+            }
             guard !snapshots.isEmpty else { return }
-            let alert=TTAlert(); alert.messageText="Recover unsaved documents?"; alert.informativeText="Found \(snapshots.count) recovery snapshots. Recovered content opens as new unsaved documents; original files are not changed.";alert.addButton(withTitle:"Recover");alert.addButton(withTitle:"Later")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-            for snapshot in snapshots {
-                let (base,overflow)=snapshot.revision.addingReportingOverflow(1)
-                guard !overflow else { throw RecoveryError.invalidSnapshot }
-                let doc=TextDocument(); doc.recoveryID=snapshot.id; doc.recoveryBase=base; doc.format=snapshot.format
-                NSDocumentController.shared.addDocument(doc);doc.makeWindowControllers();doc.editor.text=snapshot.text;doc.updateChangeCount(.changeDone);doc.showWindows()
+            let alert=TTAlert(); alert.messageText="Recover unsaved documents?"; alert.informativeText="Found \(snapshots.count) recovery snapshots. Recovered content opens as new unsaved documents; original files are not changed. Later keeps the snapshots and asks again at the next launch."
+            alert.addButton(withTitle:"Recover");alert.addButton(withTitle:"Later");alert.addButton(withTitle:"Discard…")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                for snapshot in snapshots { try TextDocument.openRecovered(snapshot) }
+            case .alertThirdButtonReturn:
+                let confirm=TTAlert();confirm.alertStyle = .warning;confirm.messageText="Discard \(snapshots.count) recovery snapshots?"
+                confirm.informativeText="The unsaved text in these snapshots will be permanently deleted. Original files are not changed. This cannot be undone."
+                confirm.addButton(withTitle:"Cancel");confirm.addButton(withTitle:"Discard");confirm.buttons.last?.hasDestructiveAction=true
+                guard confirm.runModal() == .alertSecondButtonReturn else { return }
+                // Only the snapshots listed above, at the revision that was scanned.
+                let kept=TextDocument.recovery.discard(snapshots)
+                if !kept.isEmpty {
+                    let summary=TTAlert();summary.messageText="\(kept.count) recovery snapshots were not discarded";summary.informativeText=Self.recoveryIssueText(kept)
+                    summary.addButton(withTitle:"OK");summary.addButton(withTitle:"Reveal in Finder")
+                    if summary.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.activateFileViewerSelecting(kept.map(\.url)) }
+                }
+            default: return
             }
         } catch { NSAlert(error:error).runModal() }
     }
@@ -214,6 +233,14 @@ final class TextDocument: NSDocument {
     }()
     var recoveryID = UUID()
     var recoveryBase: UInt64 = 0
+    /// One notice per app session about repeated recovery-write failures.
+    static var recoveryFailureNoticeShown=false
+    #if TESTING
+    static var recoveryFailureNoticeForTesting:((TextDocument,Error)->Void)?
+    #endif
+    private var recoveryFailures=RecoveryFailureTracker()
+    /// The failure of the most recent recovery write or cleanup; nil after a success.
+    private(set) var lastRecoveryError:Error?
     private var recoveryTimer: Timer?
     private var recoveryDeadlineTimer: Timer?
     private let recoveryWriter=RecoveryWriter()
@@ -240,6 +267,17 @@ final class TextDocument: NSDocument {
     var originalDiskFingerprint:String? { diskBytes.map(WorkspaceStore.fingerprint) }
     var languageIdentifier="null"
     private var loading = false
+    /// Set only while an explicit open-with-encoding is reading the file.
+    private var openEncoding:FileEncoding?
+    private var readingURL:URL?
+    /// A snapshot records the file it belongs to. A moved or renamed file is new snapshot
+    /// metadata at the same text revision, so it needs a later recovery revision.
+    override var fileURL:URL? {
+        didSet {
+            guard fileURL != oldValue else { return }
+            if Thread.isMainThread { recoveryBase += 1 } else { DispatchQueue.main.async { [weak self] in self?.recoveryBase += 1 } }
+        }
+    }
     enum DiskState: Equatable { case unchanged, changed, missing }
     func diskState() throws -> DiskState {
         guard let url=fileURL,let diskBytes else { return .unchanged }
@@ -286,11 +324,19 @@ final class TextDocument: NSDocument {
             self.updateChangeCount(self.editor.modified || self.format != self.savedFormat || !self.savepointMatchesDisk ? .changeDone : .changeCleared)
             self.recoveryTimer?.invalidate()
             self.recoveryGeneration+=1
-            self.recoveryTimer=Timer.scheduledTimer(withTimeInterval:self.automaticRecoveryDelay,repeats:false) { [weak self] _ in self?.enqueueRecovery() }
+            self.recoveryTimer=self.scheduleRecoveryTimer(after:self.automaticRecoveryDelay)
             if self.recoveryDeadlineTimer == nil {
-                self.recoveryDeadlineTimer=Timer.scheduledTimer(withTimeInterval:self.maximumRecoveryDelay,repeats:false) { [weak self] _ in self?.enqueueRecovery() }
+                self.recoveryDeadlineTimer=self.scheduleRecoveryTimer(after:self.maximumRecoveryDelay)
             }
         }
+    }
+    /// Common modes include modal panels and event tracking, so the idle and deadline
+    /// snapshots still happen while an alert, a menu or interactive macro playback is up.
+    /// The timer only captures an immutable snapshot; it never edits the document.
+    private func scheduleRecoveryTimer(after delay:TimeInterval) -> Timer {
+        let timer=Timer(timeInterval:delay,repeats:false) { [weak self] _ in self?.enqueueRecovery() }
+        RunLoop.main.add(timer,forMode:.common)
+        return timer
     }
     private func cancelRecoveryTimers() {
         recoveryTimer?.invalidate();recoveryTimer=nil
@@ -305,8 +351,32 @@ final class TextDocument: NSDocument {
         return {try store.remove(id:id,throughRevision:revision)}
     }
     private func reportRecovery(_ error:Error?) {
-        let message=error.map {"Recovery failed: \($0.localizedDescription)"} ?? ((isDocumentEdited ? "Draft saved for session restore" : fileURL == nil ? "Ready" : "Saved")+" · Incomplete preview")
-        windowControllers.compactMap{$0 as? EditorWindowController}.forEach{$0.status.stringValue=message}
+        lastRecoveryError=error
+        let controllers=windowControllers.compactMap{$0 as? EditorWindowController}
+        guard let error else {
+            recoveryFailures.recordSuccess()
+            let message=(isDocumentEdited ? "Draft saved for session restore" : fileURL == nil ? "Ready" : "Saved")+" · Incomplete preview"
+            controllers.forEach{$0.showRecoveryStatus(message,failed:false)};return
+        }
+        // The status line stays in its failure state until a later recovery write succeeds.
+        controllers.forEach{$0.showRecoveryStatus("Recovery failed: \(error.localizedDescription)",failed:true)}
+        let escalate=recoveryFailures.recordFailure(sessionAlreadyNotified:Self.recoveryFailureNoticeShown)
+        if recoveryFailures.consecutiveFailures == 1 { NSLog("TextTank: recovery snapshot %@ could not be written: %@",recoveryID.uuidString,error.localizedDescription) }
+        if escalate { Self.recoveryFailureNoticeShown=presentRecoveryFailureNotice(error) }
+    }
+    /// A sheet, never an app-modal alert: this runs from the recovery timer and must not
+    /// interrupt typing. Returns false when there was nowhere to show it, so a later failure retries.
+    private func presentRecoveryFailureNotice(_ error:Error) -> Bool {
+        #if TESTING
+        Self.recoveryFailureNoticeForTesting?(self,error);return Self.recoveryFailureNoticeForTesting != nil
+        #else
+        guard let window=windowControllers.compactMap({$0.window}).first(where:{$0.isVisible}) else { return false }
+        let alert=TTAlert();alert.alertStyle = .warning;alert.messageText="Unsaved changes are not being backed up"
+        alert.informativeText="TextTank could not write the crash-recovery copy of “\(displayName ?? "this document")” more than once in a row. If the app quit unexpectedly now, recent edits could be lost. The document itself is unchanged; save it to keep your work.\n\nReason: \(error.localizedDescription)\n\nThis notice appears once per session. The status line keeps showing the failure until a recovery copy is written again."
+        alert.addButton(withTitle:"OK")
+        alert.beginSheetModal(for:window)
+        return true
+        #endif
     }
     private func enqueueRecovery() {
         guard !recoveryClosed else{return}
@@ -333,20 +403,78 @@ final class TextDocument: NSDocument {
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.prepareForClose() }
         // NSDocument only reaches close after the user has chosen Save or Discard.
         let store=Self.recovery,id=recoveryID,revision=recoveryBase+UInt64(editor.revision)
-        try? recoveryWriter.finish {try store.remove(id:id,throughRevision:revision)}
+        // Never block or prompt here: close runs once per document on the quit path. A snapshot
+        // that could not be removed is found by the next launch's scan and offered or listed there.
+        do { try recoveryWriter.finish {try store.remove(id:id,throughRevision:revision)} }
+        catch { lastRecoveryError=error;NSLog("TextTank: recovery snapshot %@ could not be removed at close: %@",id.uuidString,error.localizedDescription) }
         super.close()
     }
     override class var autosavesInPlace: Bool { false }
     override func makeWindowControllers() { addWindowController(EditorWindowController(document:self)) }
+    override func read(from url:URL,ofType typeName:String) throws {
+        readingURL=url;defer{readingURL=nil}
+        try super.read(from:url,ofType:typeName)
+    }
     override func read(from data: Data, ofType typeName: String) throws {
-        let decoded = try FileCodec.decode(data)
+        let decoded:DecodedFile
+        if let openEncoding { decoded=try FileCodec.decode(data,encoding:openEncoding) }
+        else {
+            do { decoded=try FileCodec.decode(data) }
+            catch FileCodecError.unsupportedUTF32 {
+                // FF FE 00 00 is also what UTF-16 LE with a BOM looks like when the text starts
+                // with NUL, which TextTank itself can save. Detection stays strict; the user is
+                // offered the explicit choice the codec's message asks for.
+                guard let readingURL,data.starts(with:[0xFF,0xFE,0,0]) else { throw FileCodecError.unsupportedUTF32 }
+                throw ExplicitEncodingOpener(url:readingURL,typeName:typeName,encoding:.utf16LE).error()
+            }
+        }
         loadDecoded(decoded,bytes:data)
+    }
+    /// Explicit open-with-encoding. An already open document is reloaded from disk instead;
+    /// that only happens from Revert to Saved, where discarding edits was already confirmed.
+    @discardableResult static func open(_ url:URL,as encoding:FileEncoding,ofType typeName:String="Plain Text",display:Bool=true) throws -> TextDocument {
+        if let existing=NSDocumentController.shared.document(for:url) as? TextDocument { try existing.reload(using:encoding,discard:true);return existing }
+        let doc=TextDocument();doc.fileURL=url;doc.fileType=typeName
+        doc.openEncoding=encoding;defer{doc.openEncoding=nil}
+        try doc.read(from:url,ofType:typeName)
+        doc.fileModificationDate=(try? url.resourceValues(forKeys:[.contentModificationDateKey]))?.contentModificationDate
+        NSDocumentController.shared.addDocument(doc)
+        if display { doc.makeWindowControllers();doc.showWindows() }
+        return doc
+    }
+    /// NSDocument's revert discards the edits but schedules no recovery work, because loading
+    /// suppresses change handling. Remove the discarded draft's snapshot now. If the revert
+    /// throws, the buffer is still dirty and its snapshot must survive.
+    override func revert(toContentsOf url:URL,ofType typeName:String) throws {
+        try super.revert(toContentsOf:url,ofType:typeName)
+        flushRecovery()
+    }
+    /// Loads recovered or session text as a new unsaved document. Undo cannot cross this
+    /// boundary (as for open and revert), and the document stays edited until a real save:
+    /// the engine's save point is this text, which is not a disk state.
+    func loadUnsavedSnapshot(text:String,format snapshotFormat:FileFormat) {
+        loading=true
+        format=snapshotFormat
+        editor.text=text;editor.setLineEndingMode(LineEnding.detect(in:text).rawValue);editor.resetUndoHistory()
+        savepointMatchesDisk=false
+        loading=false
+        updateChangeCount(.changeDone)
+    }
+    /// Opens one recovery snapshot as a new unsaved document that keeps the snapshot's identity.
+    @discardableResult static func openRecovered(_ snapshot:RecoverySnapshot) throws -> TextDocument {
+        let (base,overflow)=snapshot.revision.addingReportingOverflow(1)
+        guard !overflow else { throw RecoveryError.invalidSnapshot }
+        let doc=TextDocument();doc.recoveryID=snapshot.id;doc.recoveryBase=base
+        NSDocumentController.shared.addDocument(doc);doc.makeWindowControllers()
+        doc.loadUnsavedSnapshot(text:snapshot.text,format:snapshot.format)
+        doc.showWindows();doc.flushRecovery()
+        return doc
     }
     private func loadDecoded(_ decoded:DecodedFile,bytes:Data) {
         (NSApp.delegate as? AppDelegate)?.macros.editorWillReset(editor,reason:"The recording document was reloaded.")
         loading=true
         let locked=editor.readOnly;editor.readOnly=false
-        editor.text=decoded.text;editor.resetUndoHistory();format=decoded.format;savedFormat=format;diskBytes=bytes;savepointMatchesDisk=true;editor.setSavePoint()
+        editor.text=decoded.text;editor.setLineEndingMode(LineEnding.detect(in:decoded.text).rawValue);editor.resetUndoHistory();format=decoded.format;savedFormat=format;diskBytes=bytes;savepointMatchesDisk=true;editor.setSavePoint()
         editor.readOnly=locked;loading=false
         if let app=NSApp.delegate as? AppDelegate,let id=app.languages.detect(filename:fileURL?.lastPathComponent ?? "",text:decoded.text),app.languages.apply(identifier:id,to:editor){languageIdentifier=id}
     }
@@ -408,6 +536,36 @@ final class TextDocument: NSDocument {
         }
     }
 
+}
+
+/// Recovery attempter for a file whose bytes need an explicit encoding choice. It only
+/// decodes and opens; nothing on disk is changed.
+final class ExplicitEncodingOpener: NSObject {
+    let url:URL,typeName:String,encoding:FileEncoding
+    init(url:URL,typeName:String,encoding:FileEncoding) { self.url=url;self.typeName=typeName;self.encoding=encoding }
+    func error() -> NSError {
+        NSError(domain:"TextTank",code:4,userInfo:[
+            NSLocalizedDescriptionKey:"“\(url.lastPathComponent)” begins with bytes that are either a UTF-32 signature or UTF-16 LE text whose first character is NUL.",
+            NSLocalizedRecoverySuggestionErrorKey:"UTF-32 is not supported. If this is a UTF-16 LE file, for example one saved by TextTank, open it as UTF-16 LE. Opening does not change the file.",
+            NSLocalizedRecoveryOptionsErrorKey:["Open as UTF-16 LE","Cancel"],
+            NSRecoveryAttempterErrorKey:self,
+            NSURLErrorKey:url])
+    }
+    @discardableResult func open(display:Bool=true) throws -> TextDocument {
+        try TextDocument.open(url,as:encoding,ofType:typeName,display:display)
+    }
+    override func attemptRecovery(fromError error:Error,optionIndex recoveryOptionIndex:Int) -> Bool {
+        guard recoveryOptionIndex == 0 else { return false }
+        do { try open();NSDocumentController.shared.noteNewRecentDocumentURL(url);return true }
+        catch { NSAlert(error:error).runModal();return false }
+    }
+    override func attemptRecovery(fromError error:Error,optionIndex recoveryOptionIndex:Int,delegate:Any?,didRecoverSelector:Selector?,contextInfo:UnsafeMutableRawPointer?) {
+        let recovered=attemptRecovery(fromError:error,optionIndex:recoveryOptionIndex)
+        guard let target=delegate as AnyObject?,let didRecoverSelector,let method=class_getInstanceMethod(type(of:target),didRecoverSelector) else { return }
+        // - (void)didPresentErrorWithRecovery:(BOOL)didRecover contextInfo:(void *)contextInfo
+        typealias Callback=@convention(c)(AnyObject,Selector,Bool,UnsafeMutableRawPointer?)->Void
+        unsafeBitCast(method_getImplementation(method),to:Callback.self)(target,didRecoverSelector,recovered,contextInfo)
+    }
 }
 
 /// Borderless native buttons preserve keyboard and accessibility activation.
@@ -640,6 +798,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             self.refreshStatusDetails()
         }
         refreshStatusDetails(for:document)
+    }
+    /// A failed recovery write is shown in red with a tooltip as well as in words, and stays
+    /// until the document reports a successful write.
+    func showRecoveryStatus(_ message:String,failed:Bool) {
+        status.stringValue=message
+        status.textColor=failed ? .systemRed : .secondaryLabelColor
+        status.toolTip=failed ? "Crash-recovery copies of this document are not being written. Save the document to keep your work. This message clears when a recovery copy is written again." : nil
     }
     func refreshStatusDetails(for suppliedDocument:TextDocument? = nil) {
         guard let doc=suppliedDocument ?? document as? TextDocument else { return }

@@ -46,10 +46,9 @@ final class WorkspaceController: NSObject {
         try session.validate()
         var restored=[TextDocument]();var active:TextDocument?
         for snapshot in session.documents {
-            let document=TextDocument();document.format=snapshot.format
+            let document=TextDocument()
             NSDocumentController.shared.addDocument(document);document.makeWindowControllers()
-            document.editor.text=snapshot.text
-            document.updateChangeCount(.changeDone)
+            document.loadUnsavedSnapshot(text:snapshot.text,format:snapshot.format)
             let requestedLanguage=snapshot.language ?? "null"
             if let app=NSApp.delegate as? AppDelegate,app.languages.apply(identifier:requestedLanguage,to:document.editor) {
                 document.languageIdentifier=requestedLanguage
