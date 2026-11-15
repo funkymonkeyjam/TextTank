@@ -84,7 +84,75 @@ import AppKit
                 editor.text == "bad %GG" && editor.revision == revision && !editor.modified,
                 "failure preserves native bytes revision dirty")
             _ = editor.setSelectionAnchor(0, caret: 0)
-            rejects("empty selection is rejected by the native command") { try controller.apply(.hexEncode) }
+            rejects("empty selection is rejected by the native command", expecting: UtilityFailure.selectionRequired) {
+                try controller.apply(.hexEncode)
+            }
+            // G397: each refusal names the precondition that actually failed, and changes nothing.
+            editor.text = "one two"
+            editor.resetUndoHistory()
+            editor.setSavePoint()
+            try require(
+                editor.setSelectionRanges([["anchor": 0, "caret": 3], ["anchor": 4, "caret": 7]]),
+                "fixture: two selections")
+            let multiRevision = editor.revision
+            rejects(
+                "several selections are named as the reason a utility refuses",
+                expecting: UtilityFailure.multipleSelections
+            ) { try controller.apply(.hexEncode) }
+            rejects(
+                "several selections are named as the reason styled export refuses",
+                expecting: UtilityFailure.multipleSelections
+            ) { _ = try controller.exportData(format: "rtf") }
+            check(
+                editor.text == "one two" && editor.revision == multiRevision && !editor.modified
+                    && editor.selectionCount == 2,
+                "refusals for several selections leave text, revision and selections unchanged")
+            // The recheck after a dialog reports what changed while it was open.
+            _ = editor.setSelectionAnchor(0, caret: 3)
+            let captured = editor.selectionRanges, capturedRevision = editor.revision
+            check(
+                try UtilityController.recheck(editor, captured: editor, revision: capturedRevision, selection: captured)
+                    === editor, "an unchanged editor passes the recheck after a dialog")
+            _ = editor.setSelectionAnchor(4, caret: 4)
+            let caretOnly = editor.selectionRanges
+            check(
+                try UtilityController.recheck(
+                    editor, captured: editor, revision: capturedRevision, selection: caretOnly)
+                    === editor, "the recheck allows an empty single selection, for insertion at the caret")
+            rejects("a moved selection is reported as a changed document", expecting: UtilityFailure.documentChanged) {
+                _ = try UtilityController.recheck(
+                    editor, captured: editor, revision: capturedRevision, selection: captured)
+            }
+            let other = TTEditor(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+            rejects(
+                "a different active editor is reported as a changed document", expecting: UtilityFailure.documentChanged
+            ) {
+                _ = try UtilityController.recheck(
+                    editor, captured: other, revision: capturedRevision, selection: caretOnly)
+            }
+            rejects("a detached editor is reported as no open document", expecting: UtilityFailure.noDocument) {
+                _ = try UtilityController.recheck(other, captured: other, revision: other.revision, selection: nil)
+            }
+            rejects("no editor at all is reported as no open document", expecting: UtilityFailure.noDocument) {
+                _ = try UtilityController.recheck(
+                    nil, captured: editor, revision: capturedRevision, selection: captured)
+            }
+            editor.readOnly = true
+            rejects(
+                "Read Only switched on during a dialog is reported as read-only", message: "This document is read-only"
+            ) {
+                _ = try UtilityController.recheck(
+                    editor, captured: editor, revision: capturedRevision, selection: caretOnly)
+            }
+            editor.readOnly = false
+            editor.replaceSelection("x")
+            rejects(
+                "an edit made during a dialog is reported as a changed document",
+                expecting: UtilityFailure.documentChanged
+            ) {
+                _ = try UtilityController.recheck(
+                    editor, captured: editor, revision: capturedRevision, selection: editor.selectionRanges)
+            }
             editor.text = "int café = 42; // <script>&\n"
             editor.setLanguage("cpp")
             editor.resetUndoHistory()
@@ -105,11 +173,28 @@ import AppKit
             let (_, selectionPlain) = try controller.exportData(format: "rtf")
             check(selectionPlain == "café", "styled export selection boundary")
             editor.readOnly = true
-            rejects("read-only editor rejects the native command") { try controller.apply(.hexEncode) }
+            let lockedRevision = editor.revision
+            rejects("read-only editor rejects the native command as read-only", message: "This document is read-only") {
+                try controller.apply(.hexEncode)
+            }
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            rejects("read-only is reported before an empty selection", message: "This document is read-only") {
+                try controller.apply(.hexEncode)
+            }
+            check(
+                editor.revision == lockedRevision && !editor.modified,
+                "a utility refused as read-only leaves revision and save point unchanged")
+            check(
+                (try? controller.exportData(format: "rtf")) != nil,
+                "styled export of a read-only document still works, as it changes nothing")
             editor.readOnly = false
             window.contentView = nil
-            rejects("detached editor rejects the native command") { try controller.apply(.hexEncode) }
-            rejects("detached editor rejects styled export") { _ = try controller.exportData(format: "rtf") }
+            rejects(
+                "detached editor rejects the native command as no open document", expecting: UtilityFailure.noDocument
+            ) { try controller.apply(.hexEncode) }
+            rejects("detached editor rejects styled export as no open document", expecting: UtilityFailure.noDocument) {
+                _ = try controller.exportData(format: "rtf")
+            }
             Checks.summary { "UtilityChecks: \(Checks.count) assertions passed" }
         }
     }

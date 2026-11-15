@@ -246,14 +246,19 @@ enum TextUtility: String, CaseIterable {
         return text
     }
 }
-enum UtilityFailure: LocalizedError {
-    case malformed(String), binaryResult, tooLarge, selectionRequired
+enum UtilityFailure: LocalizedError, Equatable {
+    case malformed(String), binaryResult, tooLarge, selectionRequired, multipleSelections, documentChanged, noDocument
     var errorDescription: String? {
         switch self {
         case .malformed(let format): return "Invalid \(format) input. The selection was not changed."
         case .binaryResult: return "The decoded bytes are not valid UTF-8 text. The selection was not changed."
         case .tooLarge: return "Select at most 16 MiB for this utility. The selection was not changed."
         case .selectionRequired: return "Select one nonempty text range before running a utility."
+        case .multipleSelections:
+            return "This command works on a single selection. Collapse multiple selections and try again."
+        case .documentChanged:
+            return "The document or selection changed while the dialog was open. Nothing was changed."
+        case .noDocument: return "There is no open document to use."
         }
     }
 }

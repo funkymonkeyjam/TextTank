@@ -38,11 +38,35 @@ final class UtilityController: NSObject {
         guard let raw = sender.representedObject as? String, let utility = TextUtility(rawValue: raw) else { return }
         do { try apply(utility) } catch { NSAlert(error: error).runModal() }
     }
+    /// The editor a utility may change, or the first precondition that fails, in a fixed order
+    /// that names the cause the person can least see first: no document, read-only (the shared
+    /// requireWritable error), several selections, then an empty selection.
+    func editableEditor(requireNonEmpty: Bool) throws -> TTEditor {
+        guard let editor = activeEditor(), editor.window != nil else { throw UtilityFailure.noDocument }
+        try editor.requireWritable()
+        guard editor.selectionCount == 1 else { throw UtilityFailure.multipleSelections }
+        guard !requireNonEmpty || editor.selectionStart != editor.selectionEnd else {
+            throw UtilityFailure.selectionRequired
+        }
+        return editor
+    }
+    /// Recheck after a dialog: `editor` must still be the captured editor in the captured state.
+    /// Reports what actually changed rather than asking for a selection.
+    static func recheck(
+        _ editor: TTEditor?, captured: TTEditor?, revision: UInt?, selection: [[String: NSNumber]]?
+    ) throws -> TTEditor {
+        guard let editor, editor.window != nil else { throw UtilityFailure.noDocument }
+        try editor.requireWritable()
+        guard editor === captured, editor.revision == revision, editor.selectionRanges == selection else {
+            throw UtilityFailure.documentChanged
+        }
+        guard editor.selectionCount == 1 else { throw UtilityFailure.multipleSelections }
+        return editor
+    }
     @objc private func hexOptions(_ sender: Any?) {
-        guard let editor = activeEditor(), editor.window != nil, !editor.readOnly, editor.selectionCount == 1,
-            editor.selectionStart != editor.selectionEnd
-        else {
-            NSAlert(error: UtilityFailure.selectionRequired).runModal()
+        let editor: TTEditor
+        do { editor = try editableEditor(requireNonEmpty: true) } catch {
+            NSAlert(error: error).runModal()
             return
         }
         let revision = editor.revision
@@ -68,9 +92,7 @@ final class UtilityController: NSObject {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
-            guard editor.window != nil, editor.revision == revision, editor.selectionRanges == selection,
-                !editor.readOnly
-            else { throw UtilityFailure.selectionRequired }
+            _ = try Self.recheck(editor, captured: editor, revision: revision, selection: selection)
             let output = try HexEncodingOptions(
                 insertSpaces: spaces.state == .on, uppercase: uppercase.state == .on,
                 bytesPerLine: Int(width.stringValue) ?? -1, lineEnding: ["\n", "\r\n", "\r"][eol.indexOfSelectedItem]
@@ -121,10 +143,9 @@ final class UtilityController: NSObject {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(output, forType: .string)
             } else if action == .alertThirdButtonReturn {
-                guard let editor = activeEditor(), editor.window != nil, editor === captured,
-                    editor.revision == revision, editor.selectionRanges == selection, !editor.readOnly,
-                    editor.selectionCount == 1
-                else { throw UtilityFailure.selectionRequired }
+                // An empty single selection is allowed here: the result is inserted at the caret.
+                let editor = try Self.recheck(
+                    activeEditor(), captured: captured, revision: revision, selection: selection)
                 editor.beginUndoGroup()
                 editor.replaceSelection(output)
                 editor.endUndoGroup()
@@ -135,9 +156,8 @@ final class UtilityController: NSObject {
     /// selection is exported; no selection exports the complete document.
     func exportData(format: String) throws -> (Data, String) {
         precondition(Thread.isMainThread)
-        guard let editor = activeEditor(), editor.window != nil, editor.selectionCount == 1 else {
-            throw UtilityFailure.selectionRequired
-        }
+        guard let editor = activeEditor(), editor.window != nil else { throw UtilityFailure.noDocument }
+        guard editor.selectionCount == 1 else { throw UtilityFailure.multipleSelections }
         let selected = editor.selectionStart != editor.selectionEnd
         let bytes = selected ? editor.selectionEnd - editor.selectionStart : editor.text.utf8.count
         guard bytes <= 16 * 1024 * 1024 else { throw UtilityFailure.tooLarge }
@@ -168,9 +188,7 @@ final class UtilityController: NSObject {
     }
     func apply(_ utility: TextUtility) throws {
         precondition(Thread.isMainThread)
-        guard let editor = activeEditor(), editor.window != nil, editor.selectionCount == 1,
-            !editor.readOnly, editor.selectionStart != editor.selectionEnd
-        else { throw UtilityFailure.selectionRequired }
+        let editor = try editableEditor(requireNonEmpty: true)
         let transformed = try utility.apply(editor.selectedText)
         editor.beginUndoGroup()
         defer { editor.endUndoGroup() }
