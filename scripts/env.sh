@@ -3,9 +3,10 @@
 TEXTTANK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-Debug}"
 case "$CONFIGURATION" in Debug|Release) ;; *) echo 'CONFIGURATION must be Debug or Release.' >&2; return 2 ;; esac
-ARCH="${ARCH:-arm64}"
-if [[ "$ARCH" != arm64 ]]; then echo 'Only arm64 is currently built and verified.' >&2; return 2; fi
-DEPLOYMENT_TARGET="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["deploymentTarget"])' "$TEXTTANK_ROOT/Dependencies.lock.json")"
+TEXTTANK_BUILD_IDENTITY="$(python3 "$TEXTTANK_ROOT/scripts/build_config.py")" || return $?
+read -r DEPLOYMENT_TARGET TEXTTANK_ARCHITECTURE <<< "$TEXTTANK_BUILD_IDENTITY"
+ARCH="${ARCH:-$TEXTTANK_ARCHITECTURE}"
+if [[ "$ARCH" != "$TEXTTANK_ARCHITECTURE" ]]; then echo 'Only arm64 is currently built and verified.' >&2; return 2; fi
 VENDOR_BUILD="$TEXTTANK_ROOT/build/vendor/$CONFIGURATION"
 APP_PATH="$TEXTTANK_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/TextTank.app"
 LEXILLA_LIBRARY="$VENDOR_BUILD/liblexilla.a"

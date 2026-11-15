@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -25,6 +26,76 @@ def module(name, filename):
 
 
 class BuildPipelineChecks(unittest.TestCase):
+    def test_canonical_build_identity_is_shared_and_rejects_unsupported_arch(self):
+        config = module('build_config', 'build_config.py')
+        identity = config.load_identity(ROOT)
+        lock = json.loads((ROOT / 'Dependencies.lock.json').read_text())
+        self.assertEqual(identity['architecture'], lock['architecture'])
+        with tempfile.TemporaryDirectory() as work:
+            fixture = Path(work)
+            (fixture / 'Dependencies.lock.json').write_text(json.dumps({**lock, 'architecture': 'x86_64'}))
+            with self.assertRaisesRegex(ValueError, 'arm64'):
+                config.load_identity(fixture)
+            (fixture / 'Dependencies.lock.json').write_text(json.dumps({**lock, 'deploymentTarget': '15.0'}))
+            self.assertEqual(config.load_identity(fixture)['deploymentTarget'], '15.0')
+            for relative in ['scripts/env.sh', 'scripts/build_config.py', 'scripts/generate-project.py', 'scripts/user-lexer-flags.txt']:
+                destination = fixture / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes((ROOT / relative).read_bytes())
+            generator = module('generate_project', 'generate-project.py')
+            for relative in generator.resource_paths(ROOT):
+                destination = fixture / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / relative, destination)
+            (fixture / 'TextTank.xcodeproj/xcshareddata/xcschemes').mkdir(parents=True)
+            environment = dict(os.environ)
+            environment.pop('ARCH', None)
+            shell = subprocess.run(['bash', '-c', 'source scripts/env.sh; printf "%s %s" "$DEPLOYMENT_TARGET" "$ARCH"'],
+                                   cwd=fixture, env=environment, capture_output=True, text=True)
+            self.assertEqual(shell.returncode, 0, shell.stderr)
+            self.assertEqual(shell.stdout, '15.0 arm64')
+            generated = subprocess.run([sys.executable, 'scripts/generate-project.py'], cwd=fixture,
+                                       env=environment, capture_output=True, text=True)
+            self.assertEqual(generated.returncode, 0, generated.stderr)
+            project = (fixture / 'TextTank.xcodeproj/project.pbxproj').read_text()
+            self.assertIn('"MACOSX_DEPLOYMENT_TARGET" = "15.0"', project)
+            self.assertIn('"ARCHS" = "arm64"', project)
+            (fixture / 'Dependencies.lock.json').write_text(json.dumps({**lock, 'architecture': 'x86_64'}))
+            for command in [['bash', '-c', 'source scripts/env.sh'], [sys.executable, 'scripts/generate-project.py']]:
+                rejected = subprocess.run(command, cwd=fixture, env=environment, capture_output=True, text=True)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn('arm64', rejected.stderr)
+
+
+    def test_public_derived_diagnostics_are_curated_without_mutating_raw_evidence(self):
+        package = module('package_review', 'package_review.py')
+        skip = f'SKIP fixture at {ROOT}/private-session/fixture.txt'
+        original = {'local_acceptance': {'observed_skips': [skip]},
+                    'limitations': ['Observed skip: ' + skip[5:]], 'source_tree': 'exact-tree-hash'}
+        public = package.public_diagnostics(original, ROOT)
+        self.assertNotIn(str(ROOT), json.dumps(public))
+        self.assertIn('<repository>/private-session/fixture.txt', public['limitations'][0])
+        self.assertEqual(public['source_tree'], 'exact-tree-hash')
+        self.assertEqual(original['local_acceptance']['observed_skips'], [skip])
+
+    def test_private_lexilla_preparation_never_reuses_prior_objects(self):
+        lexilla = module('build_lexilla', 'build-lexilla.py')
+        with tempfile.TemporaryDirectory() as work:
+            fixture = Path(work)
+            original = fixture / 'Vendor/lexilla/src/main.cxx'
+            original.parent.mkdir(parents=True)
+            original.write_bytes(b'pinned source')
+            manifest = {'src/main.cxx': hashlib.sha256(original.read_bytes()).hexdigest()}
+            output = fixture / 'build/vendor/Debug'
+            copied = lexilla.prepare_sources(fixture, output, manifest)
+            (copied / 'src/main.o').write_bytes(b'old flags object')
+            (copied / 'bin').mkdir(exist_ok=True)
+            (copied / 'bin/liblexilla.a').write_bytes(b'old library')
+            lexilla.prepare_sources(fixture, output, manifest)
+            self.assertFalse((copied / 'src/main.o').exists())
+            self.assertFalse((copied / 'bin/liblexilla.a').exists())
+            self.assertEqual(original.read_bytes(), b'pinned source')
+
     def test_every_native_check_keeps_an_explicit_script_source_reference(self):
         scripts = '\n'.join(path.read_text() for path in (ROOT / 'scripts').glob('*.sh'))
         native_checks = [path for path in (ROOT / 'Tests').glob('*Checks.*') if path.suffix in ('.swift', '.mm')]
@@ -137,7 +208,7 @@ class BuildPipelineChecks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             fixture = Path(work)
             for relative in ['scripts/build-user-lexer.sh', 'scripts/env.sh', 'scripts/lib/test-common.sh',
-                             'scripts/user-lexer-flags.txt', 'Dependencies.lock.json']:
+                             'scripts/user-lexer-flags.txt', 'scripts/build_config.py', 'Dependencies.lock.json']:
                 destination = fixture / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes((ROOT / relative).read_bytes())

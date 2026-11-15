@@ -16,5 +16,6 @@
       "folder": "lexilla"
     }
   ],
-  "patches": []
+  "patches": [],
+  "architecture": "arm64"
 }

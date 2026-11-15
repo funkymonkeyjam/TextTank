@@ -39,6 +39,16 @@ def public_acceptance_log(text, root):
     return text
 
 
+def public_diagnostics(value, root):
+    if isinstance(value, str):
+        return public_acceptance_log(value, root)
+    if isinstance(value, list):
+        return [public_diagnostics(item, root) for item in value]
+    if isinstance(value, dict):
+        return {key: public_diagnostics(item, root) for key, item in value.items()}
+    return value
+
+
 def prune_previous(output):
     previous = sorted(path for path in output.iterdir()
                       if re.fullmatch(r'review-previous-\d{8}-\d{6}-\d{6}', path.name)
@@ -58,7 +68,9 @@ def main():
         package.mkdir()
         sources = package / 'Source'
         sources.mkdir()
-        app = pathlib.Path(os.environ.get('APP_PATH', str(root / 'build/DerivedData/Build/Products/Debug/TextTank.app')))
+        if not os.environ.get('APP_PATH'):
+            raise ValueError('Use scripts/package-review.sh to select the canonical application path.')
+        app = pathlib.Path(os.environ['APP_PATH'])
         if not app.is_dir():
             raise SystemExit('Built application is missing')
         subprocess.run(['ditto', '--norsrc', '--noextattr', '--noqtn', str(app), str(package / 'TextTank.app')], check=True)
@@ -156,6 +168,7 @@ def main():
             'limitations': 'Not full Notepad++ parity; see REVIEW-ME.md. No Intel/older-macOS runtime claim; live EventKit happy path is user-confirmed, remaining live failure/retry cases are unverified.',
         }
         validation['app_tree_sha256'] = manifest['app_tree_sha256']
+        validation = public_diagnostics(validation, root)
         (package / 'validation.json').write_text(json.dumps(validation, indent=2) + '\n')
         (package / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         zipfile = stage / 'TextTank-review.zip'

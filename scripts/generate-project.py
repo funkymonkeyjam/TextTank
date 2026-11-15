@@ -4,6 +4,7 @@ from pathlib import Path
 import hashlib
 import json
 import os
+from build_config import load_identity
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,6 +35,7 @@ def q(x):
 def main():
     objects.clear()
     os.chdir(ROOT)
+    identity = load_identity(ROOT)
     files = []
     builds = []
     cxx_flags = ' '.join(Path('scripts/user-lexer-flags.txt').read_text().split())
@@ -62,7 +64,7 @@ def main():
     settings = {'PRODUCT_NAME': 'TextTank',
      'PRODUCT_BUNDLE_IDENTIFIER': 'app.texttank.editor',
      'INFOPLIST_FILE': 'Resources/Info.plist',
-     'MACOSX_DEPLOYMENT_TARGET': json.loads((ROOT / 'Dependencies.lock.json').read_text())['deploymentTarget'],
+     'MACOSX_DEPLOYMENT_TARGET': identity['deploymentTarget'],
      'SWIFT_VERSION': '5.0',
      'SWIFT_OBJC_BRIDGING_HEADER': 'Sources/EditorBridge/TTEditor.h',
      'CLANG_CXX_LANGUAGE_STANDARD': 'c++17',
@@ -101,7 +103,7 @@ def main():
     pconfigs = []
     for name in ['Debug', 'Release']:
         configs.append(add('config' + name, 'XCBuildConfiguration', name=name, buildSettings={**settings, **({'SWIFT_OPTIMIZATION_LEVEL': '-O', 'GCC_OPTIMIZATION_LEVEL': '3', 'DEBUG_INFORMATION_FORMAT': 'dwarf-with-dsym', 'ENABLE_TESTABILITY': 'NO'} if name == 'Release' else {'SWIFT_OPTIMIZATION_LEVEL': '-Onone', 'GCC_OPTIMIZATION_LEVEL': '0', 'GCC_PREPROCESSOR_DEFINITIONS': ['$(inherited)', 'DEBUG=1'], 'SWIFT_ACTIVE_COMPILATION_CONDITIONS': 'DEBUG', 'ONLY_ACTIVE_ARCH': 'YES', 'ENABLE_TESTABILITY': 'YES'})}))
-        pconfigs.append(add('pconfig' + name, 'XCBuildConfiguration', name=name, buildSettings={'SDKROOT': 'macosx', 'ARCHS': 'arm64'}))
+        pconfigs.append(add('pconfig' + name, 'XCBuildConfiguration', name=name, buildSettings={'SDKROOT': 'macosx', 'ARCHS': identity['architecture']}))
     cl = add('configs', 'XCConfigurationList', buildConfigurations=configs, defaultConfigurationIsVisible='0', defaultConfigurationName='Debug')
     pcl = add('pconfigs', 'XCConfigurationList', buildConfigurations=pconfigs, defaultConfigurationIsVisible='0', defaultConfigurationName='Debug')
     target = add('target', 'PBXNativeTarget', buildConfigurationList=cl, buildPhases=[sources, link, res, embed], buildRules=[], dependencies=[], name='TextTank', productName='TextTank', productReference=product, productType='com.apple.product-type.application')
@@ -111,4 +113,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except (OSError, ValueError) as error:
+        raise SystemExit(f'Project generation stopped: {error}')
