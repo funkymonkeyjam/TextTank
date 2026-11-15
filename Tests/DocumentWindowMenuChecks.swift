@@ -643,5 +643,157 @@ extension DocumentChecks {
                 document.close()
             }
         }
+
+        // Apple design review of 15 November 2026, actions N2 and N4 to N8.
+        section("design review: one Find, grouped menus, safe defaults, kept document choices", #line) {
+            let (document, controller, _) = try tab("n-fixes")
+            let (plain, _, _) = try tab("n-fixes-default")
+            defer {
+                document.close()
+                plain.close()
+            }
+            // The red close button quits the app; closing one tab stays with performClose.
+            let red = controller.window?.standardWindowButton(.closeButton)
+            check(
+                red?.target === controller.window
+                    && red?.action.map { NSStringFromSelector($0) } == "closeButtonPressed:"
+                    && red?.toolTip?.hasPrefix("Quit TextTank") == true,
+                "the window's red close button is routed to Quit, not to closing one tab")
+            let (spare, _, spareWindow) = try tab("n-fixes-spare")
+            spareWindow.performClose(nil)
+            check(
+                !isOpen(spare) && isOpen(document) && isOpen(plain),
+                "File > Close still closes only the current tab and leaves the others open")
+            // N6: the find bar is out of the way until asked for, and works from the keyboard path.
+            check(!controller.findBarVisible, "the find bar is hidden until Find is chosen")
+            document.editor.text = "alpha beta alpha\n"
+            EditorWindowController.findPasteboardText = ""
+            controller.findFromMenu(backwards: false)
+            check(controller.findBarVisible, "Find Next with nothing to find opens the find bar")
+            controller.findField.stringValue = "alpha"
+            controller.findFromMenu(backwards: false)
+            let firstMatch = document.editor.selectionStart
+            check(document.editor.selectedText == "alpha", "Find Next selects a match of the find bar's text")
+            controller.findFromMenu(backwards: false)
+            check(
+                document.editor.selectedText == "alpha" && document.editor.selectionStart != firstMatch,
+                "Find Next again moves to the following match")
+            check(
+                EditorWindowController.findPasteboardText == "alpha",
+                "the text searched for is shared through the find pasteboard")
+            let field = controller.findField
+            check(
+                controller.control(
+                    field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:))),
+                "Return in the find field is handled as Find Next")
+            // N4: a failed find is put into words and announced, not only beeped.
+            Announce.spoken.removeAll()
+            controller.findField.stringValue = "zebra"
+            controller.findFromMenu(backwards: false)
+            check(
+                controller.status.stringValue == "No matches for “zebra”."
+                    && Announce.spoken.contains("No matches for “zebra”."),
+                "a failed find says No matches in the status line and to assistive technology")
+            check(
+                controller.control(
+                    field, textView: NSTextView(), doCommandBy: #selector(NSResponder.cancelOperation(_:)))
+                    && !controller.findBarVisible, "Escape in the find field closes the find bar")
+            document.editor.text = "pick me\n"
+            document.editor.executeCommand("selectAll")
+            controller.useSelectionForFind(nil)
+            check(
+                controller.findField.stringValue == "zebra" && controller.status.stringValue.contains("one line"),
+                "Use Selection for Find refuses a selection that spans lines, in words")
+            Announce.spoken.removeAll()
+            document.editor.readOnly = true
+            document.noteReadOnlyAttempt()
+            check(
+                Announce.spoken.contains { $0.hasPrefix("Read Only is on") },
+                "typing in a read-only document is explained, not only beeped")
+            document.editor.readOnly = false
+            controller.refreshStatusDetails()
+            check(
+                document.editor.accessibilityDocumentName == "n-fixes",
+                "VoiceOver's name for the text area is the document's name")
+            // N7 and N5: grouped Edit menu, readable encoding names, Open Recent, one Find entry.
+            let bar = try requireValue(NSApp.mainMenu, "fixture: the main menu")
+            let all = walk(bar)
+            func has(_ path: String) -> Bool { all.contains { $0.path == path } }
+            let edit = try requireValue(bar.items.first { $0.title == "Edit" }?.submenu, "fixture: the Edit menu")
+            check(
+                edit.items.count <= 20 && edit.items.contains { $0.isSeparatorItem }
+                    && edit.items.allSatisfy { ($0.submenu?.items.count ?? 0) <= 20 },
+                "the Edit menu is grouped: no level lists more than twenty items")
+            check(
+                has("Edit > Lines > Sort Lines Ascending") && has("Edit > Convert Case > Title Case")
+                    && has("Edit > Line Endings > Convert to CRLF") && has("Edit > Comment > Toggle Line Comment"),
+                "Edit commands sit in named groups")
+            check(
+                EditorTransform.allCases.allSatisfy { transform in
+                    all.contains { ($0.item.representedObject as? String) == "transform." + transform.rawValue }
+                }, "every text transform still has a menu item")
+            check(
+                has("Encoding > Reload as UTF-8…") && !all.contains { $0.path.contains("utf8") },
+                "Reload items use encoding names, not stored identifiers")
+            check(has("File > Open Recent"), "File has Open Recent")
+            let recent = NSMenu(title: "Open Recent")
+            sessionDelegate.recentDocumentsMenu.menuNeedsUpdate(recent)
+            check(recent.items.last?.title == "Clear Menu", "Open Recent ends with Clear Menu")
+            let find = all.first { $0.path == "Search > Find…" }?.item
+            let panel = all.first { $0.path == "Search > Find and Replace…" }?.item
+            check(
+                find?.keyEquivalent == "f" && find?.keyEquivalentModifierMask == [.command]
+                    && panel?.keyEquivalentModifierMask == [.command, .option]
+                    && has("Search > Use Selection for Find"),
+                "Command-F is the find bar; Find and Replace has its own shortcut")
+            check(all.contains { $0.path.hasPrefix("Help > ") }, "the Help menu has an item of its own")
+            // N2: Return never destroys; Escape always has a button.
+            func roles(_ titles: [String], destructive: Int? = nil) -> [Int?] {
+                let alert = TTAlert()
+                for (index, title) in titles.enumerated() {
+                    alert.addButton(withTitle: title).hasDestructiveAction = index == destructive
+                }
+                let keys = alert.keyRoles()
+                return [keys.returnIndex, keys.escapeIndex]
+            }
+            check(roles(["Save", "Cancel"]) == [0, 1], "an ordinary alert: Return confirms, Escape cancels")
+            check(
+                roles(["Delete", "Cancel"], destructive: 0) == [1, 1],
+                "a destructive first button: Return and Escape both cancel")
+            check(roles(["Cancel", "Discard"], destructive: 1) == [nil, 0], "Cancel first: Return presses nothing")
+            let explanation = FolderSearchController.replacementExplanation(
+                query: "colour", replacement: "", matches: 3, files: 2, folders: 1)
+            check(
+                explanation.hasPrefix("Delete every match of “colour”: 3 matches in 2 files.")
+                    && explanation.contains(".texttank-backup") && explanation.contains("Undo in the editor does not")
+                    && !explanation.contains("root"),
+                "the disk-replace prompt states the change, its size and that editor Undo does not reverse it")
+            // N8: saving Settings carries a changed default only to views that still had the old one.
+            let settings = sessionDelegate.settings
+            let original = settings.value
+            defer { try? settings.save(original) }
+            var base = original
+            base.tabWidth = 4
+            base.useTabs = true
+            base.wrap = false
+            try settings.save(base)
+            for editor in [document.editor, plain.editor] {
+                editor.configureTabWidth(4, useTabs: true)
+                editor.wrap = false
+            }
+            document.editor.configureTabWidth(2, useTabs: false)
+            document.editor.wrap = true
+            var changed = base
+            changed.tabWidth = 8
+            changed.wrap = false
+            try settings.save(changed)
+            check(
+                document.editor.statusInfo["tabWidth"]?.intValue == 2
+                    && document.editor.statusInfo["useTabs"]?.boolValue == false && document.editor.wrap,
+                "a document's own indentation and wrapping survive a Settings save")
+            check(
+                plain.editor.statusInfo["tabWidth"]?.intValue == 8,
+                "a document still on the old default takes the new one")
+        }
     }
 }

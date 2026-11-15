@@ -16,6 +16,16 @@ final class TTAlert: NSAlert {
         explain(error.localizedDescription, detail: (error as NSError).localizedRecoverySuggestion ?? "")
     }
     private var sizeConstraints: [NSLayoutConstraint] = []
+    /// The button Escape presses. By default the one titled "Cancel"; set it for an alert whose
+    /// way out has another title.
+    var escapeButton: NSButton?
+    /// Return never presses a destructive button: when the first button is marked destructive,
+    /// Return belongs to the way out instead and the destructive action needs a deliberate click.
+    func keyRoles() -> (returnIndex: Int?, escapeIndex: Int?) {
+        let escapeIndex = buttons.firstIndex { $0 === escapeButton } ?? buttons.firstIndex { $0.title == "Cancel" }
+        if buttons.first?.hasDestructiveAction == true { return (escapeIndex, escapeIndex) }
+        return (escapeIndex == 0 ? nil : 0, escapeIndex)
+    }
     @objc private func finishHorizontalAction(_ sender: NSButton) {
         window.makeFirstResponder(nil)
         NSApp.stopModal(
@@ -44,6 +54,7 @@ final class TTAlert: NSAlert {
         actions.spacing = actionSpacing
         actions.detachesHiddenViews = false
         var actionWidth: CGFloat = 0
+        let roles = keyRoles()
         for (index, button) in buttons.enumerated().reversed() {
             button.removeFromSuperview()
             button.translatesAutoresizingMaskIntoConstraints = false
@@ -52,7 +63,9 @@ final class TTAlert: NSAlert {
             button.tag = index
             button.bezelStyle = .rounded
             button.controlSize = .regular
-            button.keyEquivalent = button.title == "Cancel" ? "\u{1b}" : (index == 0 ? "\r" : "")
+            // A button has one key equivalent. Where the way out also takes Return, Escape reaches
+            // it through the key monitor below.
+            button.keyEquivalent = index == roles.returnIndex ? "\r" : (index == roles.escapeIndex ? "\u{1b}" : "")
             let width = max(
                 84,
                 ceil((button.title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13)]).width) + 30
@@ -108,6 +121,16 @@ final class TTAlert: NSAlert {
         modal.makeKeyAndOrderFront(nil)
         if let initialFocus { modal.makeFirstResponder(initialFocus) }
         defer { modal.orderOut(nil) }
+        var monitor: Any?
+        if let escapeIndex = roles.escapeIndex, escapeIndex == roles.returnIndex {
+            let escape = buttons[escapeIndex]
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak modal] event in
+                guard event.window === modal, event.keyCode == 53 else { return event }
+                escape.performClick(nil)
+                return nil
+            }
+        }
+        defer { if let monitor { NSEvent.removeMonitor(monitor) } }
         return NSApp.runModal(for: modal)
     }
 }

@@ -193,9 +193,34 @@ int main() {
         right.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
         [right viewDidChangeEffectiveAppearance];
         check([rightNative message:SCI_STYLEGETBACK wParam:STYLE_DEFAULT] == 0x171810 && [right.text isEqual:left.text], "Dark palette updates native editor without changing text");
+        // Design review N3: search marks and the bookmark dot are at least 3:1 against the surface
+        // they are drawn on, in both appearances. Colours are 0xBBGGRR.
+        auto contrast = [](sptr_t one, sptr_t two) {
+            auto luminance = [](sptr_t colour) {
+                double sum = 0; const double weight[3] = {0.2126, 0.7152, 0.0722};
+                for (int channel = 0; channel < 3; ++channel) {
+                    const double c = ((colour >> (8 * channel)) & 0xFF) / 255.0;
+                    sum += weight[channel] * (c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4));
+                }
+                return sum;
+            };
+            const double a = luminance(one), b = luminance(two);
+            return (MAX(a, b) + 0.05) / (MIN(a, b) + 0.05);
+        };
+        auto marksAreVisible = [&](ScintillaView *engine, TTEditor *editor) {
+            return [engine message:SCI_INDICGETOUTLINEALPHA wParam:20] == 255
+                && contrast([engine message:SCI_INDICGETFORE wParam:20], [engine message:SCI_STYLEGETBACK wParam:STYLE_DEFAULT]) >= 3.0
+                && contrast(editor.bookmarkColour, [engine message:SCI_STYLEGETBACK wParam:STYLE_LINENUMBER]) >= 3.0;
+        };
+        check(marksAreVisible(rightNative, right), "Dark palette: search mark outline and bookmark dot are at least 3:1");
+        check([right setSearchHighlights:@[]] && marksAreVisible(rightNative, right), "Dark palette: applying search marks keeps the visible mark style");
         right.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
         [right viewDidChangeEffectiveAppearance];
         check([rightNative message:SCI_STYLEGETBACK wParam:STYLE_DEFAULT] == 0xF0F6F4, "Light palette restores paper background");
+        check(marksAreVisible(rightNative, right), "Light palette: search mark outline and bookmark dot are at least 3:1");
+        check([rightNative.content.accessibilityLabel isEqual:@"Document"] && [rightNative.content.accessibilityRoleDescription isEqual:@"text editor"], "The text area is not named after the engine");
+        right.accessibilityDocumentName = @"notes.txt, second pane";
+        check([rightNative.content.accessibilityLabel isEqual:@"notes.txt, second pane"], "The text area takes the document name it is given");
         right.text = @""; [right resetUndoHistory];
         NSMutableArray<NSDictionary *> *recorded = [NSMutableArray array];
         right.onMacroStep = ^(NSDictionary *step) { [recorded addObject:step]; };

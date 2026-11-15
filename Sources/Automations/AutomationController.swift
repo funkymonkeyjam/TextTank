@@ -296,7 +296,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 confirm.messageText = "Delete this automation?"
                 confirm.informativeText =
                     "Its saved definition and trigger bindings will be removed. Documents and exported reminders are unchanged."
-                confirm.addButton(withTitle: "Delete")
+                confirm.addButton(withTitle: "Delete").hasDestructiveAction = true
                 confirm.addButton(withTitle: "Cancel")
                 if confirm.runModal() == .alertFirstButtonReturn {
                     do {
@@ -860,12 +860,20 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 let alert = TTAlert()
                 alert.messageText = "Send \(rows.count) Reminder Items"
                 alert.informativeText =
-                    "Choose the destination list and account. List identifiers distinguish duplicate names. The batch is recorded before external writes; uncertain results will not be silently retried."
+                    "Choose the Reminders list to add these items to. Nothing is sent until you choose Send. Each item's result is recorded, and an item whose result is uncertain is never sent again automatically."
                 alert.addButton(withTitle: "Send \(rows.count) Items")
                 alert.addButton(withTitle: "Cancel")
                 let choice = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 650, height: 28), pullsDown: false)
+                // A list is named as Reminders names it. Only two lists with the same name in the same
+                // account need telling apart, and then by position rather than by an identifier.
+                let sameName = Dictionary(grouping: writable, by: { "\($0.title)\u{0}\($0.source)" })
                 for destination in writable {
-                    choice.addItem(withTitle: "\(destination.title) — \(destination.source) [\(destination.id)]")
+                    let twins = sameName["\(destination.title)\u{0}\(destination.source)"] ?? []
+                    let ordinal =
+                        twins.count > 1
+                        ? " (\((twins.firstIndex { $0.id == destination.id } ?? 0) + 1) of \(twins.count) with this name)"
+                        : ""
+                    choice.addItem(withTitle: "\(destination.title) — \(destination.source)\(ordinal)")
                     choice.lastItem?.representedObject = destination.id
                 }
                 if let saved = workflow.destinationID, let index = writable.firstIndex(where: { $0.id == saved }) {
@@ -924,7 +932,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 defer { progress.panel.orderOut(nil) }
                 let batch = try await connector.export(
                     rows: rows, destinationID: destinationID, batchID: UUID(), progress: progress.update)
-                self.showReminderResults(batch)
+                self.showReminderResults(batch, quietOnSuccess: true)
             } catch ReminderConnectorError.journalFailed(let batch, let underlying) {
                 self.showReminderResults(batch, header: Self.journalFailureHeader(underlying))
             } catch { self.showError(error) }
@@ -994,16 +1002,30 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     static func journalFailureHeader(_ underlying: Error) -> String {
         "The export journal could not be updated (\(underlying.localizedDescription)), so sending stopped. The list below is the outcome held in memory. Export History will show the last attempted item as uncertain, possibly although it was saved, and may be unavailable until the journal folder can be written again. Check Reminders before sending any of these items again."
     }
-    @MainActor private func showReminderResults(_ batch: ReminderBatch, header: String? = nil) {
+    /// Told about an export in which every item was confirmed. The app shows it in the document
+    /// window's status line; it is always announced.
+    var onQuietExportResult: (String) -> Void = { _ in }
+    @MainActor private func showReminderResults(
+        _ batch: ReminderBatch, header: String? = nil, quietOnSuccess: Bool = false
+    ) {
+        // Routine success is not an alert: the items are in Reminders and there is nothing to decide.
+        if quietOnSuccess, header == nil, !batch.rows.isEmpty, batch.rows.allSatisfy({ $0.status == .confirmed }) {
+            let count = batch.rows.count
+            let message =
+                "Added \(count) \(count == 1 ? "item" : "items") to “\(batch.destinationTitle)” in Reminders. Editor Undo does not remove them."
+            Announce.say(message)
+            onQuietExportResult(message)
+            return
+        }
         let alert = TTAlert()
         alert.messageText = header == nil ? "Reminder Export Results" : "Reminder Export Results (journal not updated)"
         alert.informativeText =
             (header.map { $0 + "\n\n" } ?? "")
-            + "Batch \(batch.id). Confirmed items are not resent. Uncertain items require inspection in Reminders and are never automatically retried. Failed and unsent pending items remain available in Export History. Resume retries those items only. Editor Undo does not affect reminders."
+            + "Confirmed items are not resent. Uncertain items require inspection in Reminders and are never automatically retried. Failed and unsent pending items remain available in Export History. Resume retries those items only. Editor Undo does not affect reminders."
         let text = makeTextView(height: 300)
         text.editor.isEditable = false
         text.editor.string =
-            "Destination: \(batch.destinationTitle) — \(batch.destinationSource) [\(batch.destinationID)]\n\n"
+            "List: \(batch.destinationTitle) — \(batch.destinationSource)\n\n"
             + batch.rows.map { row in "[\(row.status.rawValue)] \(row.title)\(row.message.map { " — " + $0 } ?? "")" }
             .joined(separator: "\n")
         alert.accessoryView = text.scroll
@@ -1074,7 +1096,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                             ? "\(batches.count - clearable.count) exports with unsent, failed or uncertain items are kept."
                             : "No export has unsent, failed or uncertain items.")
                     confirm.addButton(withTitle: "Cancel")
-                    confirm.addButton(withTitle: "Remove Records")
+                    confirm.addButton(withTitle: "Remove Records").hasDestructiveAction = true
                     guard confirm.runModal() == .alertSecondButtonReturn else { return }
                     let removed = try connector.deleteConfirmedBatches(ids: clearable.map(\.id))
                     let report = TTAlert()
@@ -1138,6 +1160,20 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         return (scroll, editor)
     }
     private func showError(_ error: Error) {
+        // A declined or restricted permission is an ordinary state with a way forward, not a dead end.
+        if case ReminderConnectorError.permissionRequired = error {
+            let alert = TTAlert()
+            alert.messageText = "TextTank cannot use Reminders"
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: "Open Privacy Settings")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn,
+                let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders")
+            {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
         let alert = NSAlert(error: error)
         alert.runModal()
     }

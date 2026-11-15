@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return controller
     }()
     let settings = SettingsController()
+    let recentDocumentsMenu = RecentDocumentsMenu()
     lazy var folderSearch: FolderSearchController = {
         let controller = FolderSearchController()
         controller.workspaceRoots = { [weak self] in self?.workspaceBrowser.store.state.folders ?? [] }
@@ -104,6 +105,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     lazy var automations: AutomationController = {
         let controller = AutomationController(
             editorProvider: { [weak self] in self?.currentEditor }, newDocument: AppDelegate.openAutomationOutput)
+        controller.onQuietExportResult = { [weak self] message in
+            let window = (NSApp.mainWindow?.windowController as? EditorWindowController) ?? self?.lastDocumentController
+            window?.showTransientStatus(message, seconds: 8, announce: false)
+        }
         controller.onInvocation = { [weak self] in
             self?.macros.invalidateRecording(
                 reason: "An automation was invoked during macro recording. Automation side effects are not recorded.")
@@ -278,6 +283,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let file = menu("File")
         item(file, "New", #selector(newDocument(_:)), "n")
         item(file, "Open…", #selector(NSDocumentController.openDocument(_:)), "o")
+        let recentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        let recentMenu = NSMenu(title: "Open Recent")
+        recentMenu.delegate = recentDocumentsMenu
+        recentItem.submenu = recentMenu
+        file.addItem(recentItem)
         item(file, "Save", #selector(NSDocument.save(_:)), "s")
         item(file, "Save As…", #selector(NSDocument.saveAs(_:)), "S")
         item(file, "Save Copy…", #selector(TextDocument.saveCopy(_:)))
@@ -307,51 +317,112 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ("UTF-16 BE with BOM", "utf16BE"), ("Windows-1252", "windows1252"), ("ISO-8859-1", "latin1")
         ] { item(encoding, "Convert to \(title)", #selector(TextDocument.convertEncoding(_:)), "", code) }
         encoding.addItem(.separator())
+        // The same names as the Convert items above, never the stored identifier.
+        let encodingNames: [FileEncoding: String] = [
+            .utf8: "UTF-8", .utf16LE: "UTF-16 LE", .utf16BE: "UTF-16 BE", .windows1252: "Windows-1252",
+            .latin1: "ISO-8859-1"
+        ]
         for value in FileEncoding.allCases {
             item(
-                encoding, "Reload as \(value.rawValue)…", #selector(TextDocument.reloadEncoding(_:)), "", value.rawValue
-            )
+                encoding, "Reload as \(encodingNames[value] ?? value.rawValue)…",
+                #selector(TextDocument.reloadEncoding(_:)), "", value.rawValue)
         }
         let edit = menu("Edit")
-        for (label, id, key) in [
-            ("Undo", "undo", "z"), ("Redo", "redo", "Z"), ("Cut", "cut", "x"), ("Copy", "copy", "c"),
-            ("Paste", "paste", "v"), ("Select All", "selectAll", "a"), ("Duplicate Line", "duplicateLine", "d"),
-            ("Delete Line", "deleteLine", ""), ("Transpose Lines", "transposeLine", ""), ("Indent", "indent", "]"),
-            ("Unindent", "unindent", "["), ("Uppercase", "upper", ""), ("Lowercase", "lower", "")
-        ] {
-            let nativeActions: [String: Selector] = [
-                "undo": NSSelectorFromString("undo:"), "redo": NSSelectorFromString("redo:"),
-                "cut": #selector(NSText.cut(_:)), "copy": #selector(NSText.copy(_:)),
-                "paste": #selector(NSText.paste(_:)), "selectAll": #selector(NSText.selectAll(_:))
-            ]
-            item(edit, label, nativeActions[id] ?? #selector(EditorWindowController.command(_:)), key, id)
+        // Grouped by what the command acts on. Every item keeps its command identifier as its
+        // represented object, so shortcuts, macros and validation find it wherever it sits.
+        func group(_ title: String) -> NSMenu {
+            let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let child = NSMenu(title: title)
+            parent.submenu = child
+            edit.addItem(parent)
+            return child
         }
+        func command(_ m: NSMenu, _ title: String, _ id: String, _ key: String = "") {
+            item(m, title, #selector(EditorWindowController.command(_:)), key, id)
+        }
+        func transform(_ m: NSMenu, _ value: EditorTransform) {
+            command(m, value.title, "transform." + value.rawValue)
+        }
+        item(edit, "Undo", NSSelectorFromString("undo:"), "z", "undo")
+        item(edit, "Redo", NSSelectorFromString("redo:"), "Z", "redo")
+        edit.addItem(.separator())
+        item(edit, "Cut", #selector(NSText.cut(_:)), "x", "cut")
+        item(edit, "Copy", #selector(NSText.copy(_:)), "c", "copy")
+        item(edit, "Paste", #selector(NSText.paste(_:)), "v", "paste")
+        item(edit, "Select All", #selector(NSText.selectAll(_:)), "a", "selectAll")
+        edit.addItem(.separator())
+        let lines = group("Lines")
+        command(lines, "Duplicate Line", "duplicateLine", "d")
+        command(lines, "Delete Line", "deleteLine")
+        command(lines, "Transpose Lines", "transposeLine")
+        command(lines, "Move Line Up", "moveLineUp")
+        command(lines, "Move Line Down", "moveLineDown")
+        command(lines, "Join Selected Lines", "joinLines")
+        lines.addItem(.separator())
+        for value: EditorTransform in [
+            .sortAscending, .sortDescending, .sortCaseInsensitive, .sortLocalized, .sortLength
+        ] { transform(lines, value) }
+        lines.addItem(.separator())
+        for value: EditorTransform in [.reverseLines, .uniqueLines, .removeEmptyLines] { transform(lines, value) }
+        let whitespace = group("Indentation and Whitespace")
+        command(whitespace, "Indent", "indent", "]")
+        command(whitespace, "Unindent", "unindent", "[")
+        whitespace.addItem(.separator())
+        transform(whitespace, .trimLeading)
+        command(whitespace, "Trim Trailing Whitespace", "trimTrailing")
+        transform(whitespace, .trimBoth)
+        let letterCase = group("Convert Case")
+        command(letterCase, "Uppercase", "upper")
+        command(letterCase, "Lowercase", "lower")
+        transform(letterCase, .titleCase)
+        transform(letterCase, .invertCase)
+        let comments = group("Comment")
         for comment in CommentCommand.allCases {
-            item(edit, comment.title, #selector(EditorWindowController.comment(_:)), "", comment.rawValue)
+            item(comments, comment.title, #selector(EditorWindowController.comment(_:)), "", comment.rawValue)
         }
-        for transform in EditorTransform.allCases {
-            item(
-                edit, transform.title, #selector(EditorWindowController.command(_:)), "",
-                "transform." + transform.rawValue)
-        }
+        let selection = group("Selection")
         for (title, id) in [
             ("Rectangular Selection", "rectangularSelection"), ("Stream Selection", "streamSelection"),
             ("Add Next Occurrence", "addNextOccurrence"), ("Select All Occurrences", "selectAllOccurrences"),
-            ("Clear Additional Selections", "clearAdditionalSelections"), ("Duplicate Selection", "duplicateSelection"),
+            ("Clear Additional Selections", "clearAdditionalSelections"), ("Duplicate Selection", "duplicateSelection")
+        ] { command(selection, title, id) }
+        selection.addItem(.separator())
+        item(selection, "Column Insert / Number…", #selector(EditorWindowController.columnInsert(_:)))
+        let deletion = group("Delete")
+        for (title, id) in [
             ("Delete Word Left", "deleteWordLeft"), ("Delete Word Right", "deleteWordRight"),
             ("Delete to Line Start", "deleteLineLeft"), ("Delete to Line End", "deleteLineRight")
-        ] { item(edit, title, #selector(EditorWindowController.command(_:)), "", id) }
-        item(edit, "Column Insert / Number…", #selector(EditorWindowController.columnInsert(_:)))
+        ] { command(deletion, title, id) }
+        let endings = group("Line Endings")
+        for mode in ["LF", "CRLF", "CR"] {
+            item(endings, "Convert to \(mode)", #selector(EditorWindowController.convertEOL(_:)), "", mode)
+        }
+        edit.addItem(.separator())
+        command(edit, "Toggle Overtype", "toggleOvertype")
+        // Every transform has a place above; a new case must be given one.
+        assert(
+            Set(EditorTransform.allCases).isSubset(of: [
+                .sortAscending, .sortDescending, .sortCaseInsensitive, .sortLocalized, .sortLength, .reverseLines,
+                .uniqueLines, .removeEmptyLines, .trimLeading, .trimBoth, .titleCase, .invertCase
+            ]), "an EditorTransform has no Edit menu item")
         let search = menu("Search")
+        // One Find. Command-F opens the find bar in the document window; Find Next, Find Previous
+        // and Use Selection for Find share its text with the system find pasteboard. Find and
+        // Replace is the window with scopes, regular expressions and results.
+        item(search, "Find…", #selector(EditorWindowController.showFind(_:)), "f")
+        let findAndReplace = NSMenuItem(
+            title: "Find and Replace…", action: #selector(SearchController.showSearch(_:)), keyEquivalent: "f")
+        findAndReplace.keyEquivalentModifierMask = [.command, .option]
+        findAndReplace.target = searchController
+        search.addItem(findAndReplace)
         for (title, action, key) in [
-            ("Find and Replace…", #selector(SearchController.showSearch(_:)), "f"),
-            ("Find Next", #selector(SearchController.next(_:)), "g"),
-            ("Find Previous", #selector(SearchController.previous(_:)), "G")
+            ("Find Next", #selector(findNextShared(_:)), "g"), ("Find Previous", #selector(findPreviousShared(_:)), "G")
         ] {
             let entry = NSMenuItem(title: title, action: action, keyEquivalent: key)
-            entry.target = searchController
+            entry.target = self
             search.addItem(entry)
         }
+        item(search, "Use Selection for Find", #selector(EditorWindowController.useSelectionForFind(_:)), "e")
         let runRoot = NSMenuItem()
         runRoot.title = "Run"
         runRoot.submenu = runner.makeMenu()
@@ -372,10 +443,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item(view, "Zoom In", #selector(EditorWindowController.command(_:)), "+", "zoomIn")
         item(view, "Zoom Out", #selector(EditorWindowController.command(_:)), "-", "zoomOut")
         for (label, id) in [
-            ("Move Line Up", "moveLineUp"), ("Move Line Down", "moveLineDown"), ("Join Selected Lines", "joinLines"),
-            ("Trim Trailing Whitespace", "trimTrailing"), ("Toggle Overtype", "toggleOvertype")
-        ] { item(edit, label, #selector(EditorWindowController.command(_:)), "", id) }
-        for (label, id) in [
             ("Fold All", "foldAll"), ("Unfold All", "unfoldAll"), ("Show Whitespace", "showWhitespace"),
             ("Show Line Endings", "toggleEOL"), ("Show Line Numbers", "toggleLineNumbers")
         ] { item(view, label, #selector(EditorWindowController.command(_:)), "", id) }
@@ -384,9 +451,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ("Toggle Bookmark", "bookmarkToggle"), ("Next Bookmark", "bookmarkNext"),
             ("Previous Bookmark", "bookmarkPrevious")
         ] { item(search, label, #selector(EditorWindowController.command(_:)), "", id) }
-        for mode in ["LF", "CRLF", "CR"] {
-            item(edit, "Convert Line Endings to \(mode)", #selector(EditorWindowController.convertEOL(_:)), "", mode)
-        }
         let languageRoot = NSMenuItem()
         languageRoot.title = "Language"
         languageRoot.submenu = languages.menu()
@@ -418,7 +482,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.addItem(.separator())
         item(window, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:)))
         // AppKit puts its search field in the Help menu; it finds any command in the menus above.
-        NSApp.helpMenu = menu("Help")
+        let help = menu("Help")
+        NSApp.helpMenu = help
+        item(help, "TextTank Help (Online)", #selector(openOnlineHelp(_:)), "?")
+    }
+    /// The project page, which carries the review guide and where each command lives. There is no
+    /// bundled help book yet.
+    @objc func openOnlineHelp(_ sender: Any?) {
+        if let url = URL(string: "https://github.com/funkymonkeyjam/TextTank#readme") { NSWorkspace.shared.open(url) }
+    }
+    /// Find Next and Find Previous act on whichever Find the person is using: the Find and Replace
+    /// window while it is open, otherwise the find bar of the current document window.
+    @objc func findNextShared(_ sender: Any?) { findShared(backwards: false) }
+    @objc func findPreviousShared(_ sender: Any?) { findShared(backwards: true) }
+    private func findShared(backwards: Bool) {
+        if searchController.isWindowLoaded, searchController.window?.isVisible == true {
+            if backwards { searchController.previous(nil) } else { searchController.next(nil) }
+        } else {
+            let controller =
+                (NSApp.mainWindow?.windowController as? EditorWindowController) ?? lastDocumentController
+            controller?.findFromMenu(backwards: backwards)
+        }
     }
     @objc func nextDocumentTab(_ sender: Any?) { cycleDocumentTab(1) }
     @objc func previousDocumentTab(_ sender: Any?) { cycleDocumentTab(-1) }
@@ -779,7 +863,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText =
                 "The disk bytes will be interpreted as \(raw). Use Convert to change the save encoding while keeping your text."
             alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Discard and Reload")
+            alert.addButton(withTitle: "Discard and Reload").hasDestructiveAction = true
             guard alert.runModal() == .alertSecondButtonReturn else { return }
         }
         do { try reload(using: encoding, discard: true) } catch { presentError(error) }
@@ -789,12 +873,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hasUndoManager = false
         // Typing or a key command that Scintilla refuses in a read-only document; the status bar
         // shows Read Only. Menu commands state the reason in words before they reach the engine.
-        editor.onReadOnlyAttempt = { NSSound.beep() }
+        editor.onReadOnlyAttempt = { [weak self] in self?.noteReadOnlyAttempt() }
         editor.onChange = { [weak self] in
             guard let self, !self.loading else { return }
             self.updateChangeCount(
                 self.editor.modified || self.format != self.savedFormat || !self.savepointMatchesDisk
                     ? .changeDone : .changeCleared)
+            self.showSaveState(recoveryCopyKept: false)
             self.recoveryTimer?.invalidate()
             self.recoveryGeneration += 1
             self.recoveryTimer = self.scheduleRecoveryTimer(after: self.automaticRecoveryDelay)
@@ -826,20 +911,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         return { try store.remove(id: id, throughRevision: revision) }
     }
+    /// The words for this document's save state. An edited document never reads "Saved": it reads
+    /// "Edited" from the moment of the change, and says so about the recovery copy only once that
+    /// copy has been written.
+    func saveStateStatus(recoveryCopyKept: Bool) -> String {
+        recoveredOrigin
+            ?? ((isDocumentEdited
+                ? (recoveryCopyKept ? "Edited — recovery copy kept" : "Edited") : fileURL == nil ? "Ready" : "Saved")
+                + " · Incomplete preview")
+    }
+    /// Whether the last recovery write since the latest edit succeeded.
+    private var recoveryCopyKept = false
+    /// The save-state words as they stand now, for a view that showed something else for a moment.
+    var currentSaveStateStatus: String { saveStateStatus(recoveryCopyKept: recoveryCopyKept) }
+    /// Typing or a key command that the engine refused because the document is read-only: the
+    /// alert sound alone says nothing to someone who cannot hear it or does not know why.
+    func noteReadOnlyAttempt() {
+        NSSound.beep()
+        windowControllers.compactMap { $0 as? EditorWindowController }.forEach {
+            $0.showTransientStatus(
+                "Read Only is on, so this document cannot be edited. Choose File > Read Only to turn it off.")
+        }
+    }
+    /// Shows the save state now. A recovery failure stays on screen until a later write succeeds.
+    private func showSaveState(recoveryCopyKept: Bool) {
+        self.recoveryCopyKept = recoveryCopyKept
+        guard lastRecoveryError == nil else { return }
+        let message = saveStateStatus(recoveryCopyKept: recoveryCopyKept)
+        windowControllers.compactMap { $0 as? EditorWindowController }.forEach {
+            $0.showRecoveryStatus(message, failed: false)
+        }
+    }
     private func reportRecovery(_ error: Error?) {
         lastRecoveryError = error
         let controllers = windowControllers.compactMap { $0 as? EditorWindowController }
         guard let error else {
             recoveryFailures.recordSuccess()
-            let message =
-                recoveredOrigin
-                ?? ((isDocumentEdited ? "Draft saved for session restore" : fileURL == nil ? "Ready" : "Saved")
-                    + " · Incomplete preview")
-            controllers.forEach { $0.showRecoveryStatus(message, failed: false) }
+            showSaveState(recoveryCopyKept: true)
             return
         }
         // The status line stays in its failure state until a later recovery write succeeds.
-        controllers.forEach { $0.showRecoveryStatus("Recovery failed: \(error.localizedDescription)", failed: true) }
+        controllers.forEach {
+            $0.showRecoveryStatus("⚠︎ Recovery copy not written: \(error.localizedDescription)", failed: true)
+        }
         let escalate = recoveryFailures.recordFailure(sessionAlreadyNotified: Self.recoveryFailureNoticeShown)
         if recoveryFailures.consecutiveFailures == 1 {
             NSLog(
@@ -1424,6 +1538,36 @@ private final class DocumentTabWindow: NSWindow {
             (NSApp.delegate as? AppDelegate)?.lastDocumentController = controller
         }
     }
+    // The tabs look like one window, so its red close button closes that whole window: it quits
+    // the app, with the usual review of unsaved documents. Closing one tab is the tab's own close
+    // button, File > Close and Command-W, which all arrive through performClose.
+    private var closingTab = false
+    private weak var standardCloseTarget: AnyObject?
+    private var standardCloseAction: Selector?
+    /// Takes over the red close button once; the button's own behaviour is kept for closing a tab.
+    func routeCloseButtonToQuit() {
+        guard standardCloseAction == nil, let button = standardWindowButton(.closeButton) else { return }
+        standardCloseTarget = button.target
+        standardCloseAction = button.action
+        button.target = self
+        button.action = #selector(closeButtonPressed(_:))
+        button.toolTip = "Quit TextTank. Documents with unsaved changes are reviewed first."
+    }
+    /// True when a press of the red close button quits; false while one tab is being closed.
+    var closeButtonQuits: Bool { standardCloseAction != nil && !closingTab }
+    @objc private func closeButtonPressed(_ sender: Any?) {
+        if closingTab {
+            // performClose presses this button on the window's behalf: close just this tab.
+            if let action = standardCloseAction { NSApp.sendAction(action, to: standardCloseTarget, from: sender) }
+        } else {
+            NSApp.terminate(sender)
+        }
+    }
+    override func performClose(_ sender: Any?) {
+        closingTab = true
+        defer { closingTab = false }
+        super.performClose(sender)
+    }
     /// The tab to show again when this one closes: set when a background tab is brought forward
     /// only to be closed from its close button, so closing it returns to the tab that was active.
     weak var returnTo: NSWindow?
@@ -1550,7 +1694,9 @@ private final class DocumentTabStrip: NSView {
             button.imagePosition = .imageLeading
             button.lineBreakMode = .byTruncatingTail
             button.toolTip = window.title
-            button.setAccessibilityLabel(window.title + (window === owner ? ", active tab" : ", tab"))
+            button.setAccessibilityLabel(
+                window.title + (window.isDocumentEdited ? ", edited" : "")
+                    + (window === owner ? ", active tab" : ", tab"))
             button.documentWindow = window
             button.frame = NSRect(x: x + 8, y: 0, width: width - 34, height: 36)
             // The highlighted area includes the close control.
@@ -1611,11 +1757,53 @@ extension TextDocument {
     var activeEditor: TTEditor { (windowControllers.first as? EditorWindowController)?.activeEditor ?? editor }
 }
 
-final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMenuItemValidation {
+/// File > Open Recent, filled from the system's recent-documents list each time it opens.
+final class RecentDocumentsMenu: NSObject, NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let urls = NSDocumentController.shared.recentDocumentURLs
+        // Two files with the same name are told apart by their folder.
+        let names = Dictionary(grouping: urls, by: \.lastPathComponent)
+        for url in urls {
+            let duplicate = (names[url.lastPathComponent]?.count ?? 0) > 1
+            let item = NSMenuItem(
+                title: url.lastPathComponent
+                    + (duplicate ? " — \(url.deletingLastPathComponent().lastPathComponent)" : ""),
+                action: #selector(open(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = url
+            item.toolTip = url.path
+            menu.addItem(item)
+        }
+        if !urls.isEmpty { menu.addItem(.separator()) }
+        let clear = NSMenuItem(
+            title: "Clear Menu", action: #selector(NSDocumentController.clearRecentDocuments(_:)), keyEquivalent: "")
+        clear.target = NSDocumentController.shared
+        clear.isEnabled = !urls.isEmpty
+        menu.addItem(clear)
+    }
+    /// No item here has a key equivalent, so a key press never needs the list rebuilt.
+    func menuHasKeyEquivalent(
+        _ menu: NSMenu, for event: NSEvent, target: AutoreleasingUnsafeMutablePointer<AnyObject?>,
+        action: UnsafeMutablePointer<Selector?>
+    ) -> Bool { false }
+    @objc func open(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, error in
+            if let error, (error as NSError).code != NSUserCancelledError { NSApp.presentError(error) }
+        }
+    }
+}
+
+final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMenuItemValidation, NSSearchFieldDelegate {
     let split = NSSplitView()
     let findField = NSSearchField()
     let replaceField = NSTextField()
     let caseBox = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
+    private(set) var findBar: NSView?
+    private var splitBelowFindBar: NSLayoutConstraint?
+    private var splitBelowTabs: NSLayoutConstraint?
+    var findBarVisible: Bool { findBar?.isHidden == false }
     let status = NSTextField(labelWithString: "Ready · Incomplete preview")
     private let statusDetails = StatusBadgeRow()
     private let documentTabs = DocumentTabStrip()
@@ -1721,6 +1909,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             window.standardWindowButton(button)?.isHidden = false
         }
+        window.routeCloseButtonToQuit()
         window.contentMinSize = NSSize(width: 800, height: 500)
         let root = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
         window.contentView = root
@@ -1731,8 +1920,19 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         replaceField.placeholderString = "Replace with"
         let findButton = NSButton(title: "Next", target: self, action: #selector(findNext(_:)))
         let replaceButton = NSButton(title: "Replace Selection", target: self, action: #selector(replaceSelection(_:)))
-        let search = NSStackView(views: [findField, replaceField, caseBox, findButton, replaceButton])
+        let doneButton = NSButton(title: "Done", target: self, action: #selector(hideFind(_:)))
+        let search = NSStackView(views: [findField, replaceField, caseBox, findButton, replaceButton, doneButton])
         search.spacing = 8
+        // Return in the field finds the next match, Shift-Return the previous one, Escape closes.
+        findField.delegate = self
+        findField.target = self
+        findField.action = #selector(findFieldAction(_:))
+        findField.sendsWholeSearchString = true
+        findField.setAccessibilityLabel("Find in document")
+        replaceField.setAccessibilityLabel("Replace selection with")
+        // The bar is out of the way until Find is chosen, so the text is the window's main surface.
+        search.isHidden = true
+        findBar = search
         documentTabs.owner = window
         [documentTabs, search, split, status, statusDetails].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
@@ -1749,7 +1949,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             search.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             findField.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
             replaceField.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
-            split.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 10),
             split.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             split.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             split.bottomAnchor.constraint(equalTo: statusDetails.topAnchor, constant: -5),
@@ -1760,6 +1959,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             status.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             status.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6)
         ])
+        splitBelowFindBar = split.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 10)
+        splitBelowTabs = split.topAnchor.constraint(equalTo: documentTabs.bottomAnchor)
+        splitBelowTabs?.isActive = true
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
@@ -1824,9 +2026,30 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     }
     /// A failed recovery write is shown in red with a tooltip as well as in words, and stays
     /// until the document reports a successful write.
-    func showRecoveryStatus(_ message: String, failed: Bool) {
+    private var transientStatus: String?
+    /// Says why something the person just did had no effect, in the status line for a few seconds
+    /// and to assistive technology, then shows the save state again. A standing recovery failure
+    /// is never replaced.
+    func showTransientStatus(_ message: String, seconds: TimeInterval = 4, announce: Bool = true) {
+        guard transientStatus != message else { return }
+        if announce { Announce.say(message, from: window) }
+        guard let doc = document as? TextDocument, doc.lastRecoveryError == nil else { return }
+        transientStatus = message
         status.stringValue = message
-        status.textColor = failed ? .systemRed : .secondaryLabelColor
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self, weak doc] in
+            guard let self, self.transientStatus == message else { return }
+            self.transientStatus = nil
+            if let doc, doc.lastRecoveryError == nil { self.status.stringValue = doc.currentSaveStateStatus }
+        }
+    }
+    func showRecoveryStatus(_ message: String, failed: Bool) {
+        transientStatus = nil
+        if failed, status.stringValue != message { Announce.say(message, from: window) }
+        status.stringValue = message
+        // The failure is carried by the words and the symbol; full-strength label colour keeps it
+        // readable in both appearances, where small red text was not.
+        status.textColor = failed ? .labelColor : .secondaryLabelColor
+        status.font = failed ? .boldSystemFont(ofSize: 11) : .systemFont(ofSize: 11)
         status.toolTip =
             failed
             ? "Crash-recovery copies of this document are not being written. Save the document to keep your work. This message clears when a recovery copy is written again."
@@ -1873,6 +2096,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             cachedEndings.isEmpty ? ([0: "CRLF", 1: "CR", 2: "LF"][info["eol"]?.intValue ?? 2] ?? "LF") : cachedEndings
         let indentation =
             (info["useTabs"]?.boolValue == true ? "Tabs" : "Spaces") + ": \(info["tabWidth"]?.intValue ?? 4)"
+        // VoiceOver names each text area after its document, and after its pane in a split view.
+        for (index, pane) in views.enumerated() {
+            let name =
+                (doc.displayName ?? "Untitled")
+                + (views.count > 1 ? (index == 0 ? ", first pane" : ", second pane") : "")
+            if pane.accessibilityDocumentName != name { pane.accessibilityDocumentName = name }
+        }
         var fields = [
             doc.displayName + (doc.isDocumentEdited ? " *" : ""), "\(doc.editor.bookmarkCount) Bookmarks",
             language,
@@ -2087,26 +2317,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         toolbarDefaultItemIdentifiers(toolbar)
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, .init("TextTank.Automations"), .init("TextTank.CloseTab")]
+        // No Close Tab item: every tab has its own close button, and Command-W closes the current one.
+        [.flexibleSpace, .init("TextTank.Automations")]
     }
     func toolbar(
         _ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar: Bool
     ) -> NSToolbarItem? {
-        if identifier.rawValue == "TextTank.CloseTab" {
-            let item = NSToolbarItem(itemIdentifier: identifier)
-            item.label = "Close Tab"
-            item.paletteLabel = "Close Tab"
-            let button = NSButton(
-                title: "Close Tab", image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Tab")!,
-                target: self, action: #selector(closeTab(_:)))
-            button.bezelStyle = .rounded
-            button.imagePosition = .imageLeading
-            button.identifier = NSUserInterfaceItemIdentifier("tab.close")
-            button.toolTip = "Close this tab (⌘W). Unsaved changes will be reviewed."
-            item.view = button
-            return item
-        }
         guard let automations = (NSApp.delegate as? AppDelegate)?.automations else { return nil }
         return identifier.rawValue == "TextTank.Automations"
             ? automations.makeToolbarItem() : automations.makeToolbarItem(identifier: identifier)
@@ -2118,7 +2335,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             toolbar.insertItem(withItemIdentifier: id, at: index)
         }
     }
-    @objc func closeTab(_ sender: Any?) { window?.performClose(sender) }
     func prepareForClose() {
         statusClosed = true
         statusTimer?.invalidate()
@@ -2189,20 +2405,89 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             refreshStatusDetails()
         }
     }
+    private func setFindBar(visible: Bool) {
+        guard let findBar, findBar.isHidden == visible else { return }
+        splitBelowTabs?.isActive = !visible
+        findBar.isHidden = !visible
+        splitBelowFindBar?.isActive = visible
+    }
+    /// The text other apps and the Find and Replace window last searched for.
+    #if TESTING
+        /// Checks never read or write the Mac's shared find pasteboard.
+        static var findPasteboardText = ""
+    #else
+        private static var findPasteboardText: String {
+            get { NSPasteboard(name: .find).string(forType: .string) ?? "" }
+            set {
+                let board = NSPasteboard(name: .find)
+                board.clearContents()
+                board.setString(newValue, forType: .string)
+            }
+        }
+    #endif
     @objc func showFind(_ sender: Any?) {
         // Remember the pane the find bar acts on before focus leaves it.
         lastEditor = activeEditor
+        setFindBar(visible: true)
+        if findField.stringValue.isEmpty { findField.stringValue = Self.findPasteboardText }
         window?.makeFirstResponder(findField)
+        findField.selectText(nil)
+    }
+    @objc func hideFind(_ sender: Any?) {
+        let editor = activeEditor
+        setFindBar(visible: false)
+        window?.makeFirstResponder(editor)
+    }
+    /// Command-E: the selected text becomes the text to find, here and in other apps.
+    @objc func useSelectionForFind(_ sender: Any?) {
+        let selected = activeEditor.selectedText
+        guard !selected.isEmpty, !selected.contains(where: \.isNewline) else {
+            NSSound.beep()
+            showTransientStatus("Select text on one line to use it for Find.")
+            return
+        }
+        findField.stringValue = selected
+        Self.findPasteboardText = selected
+    }
+    /// Find Next and Find Previous from the menu. With nothing to find yet, the bar opens instead.
+    func findFromMenu(backwards: Bool) {
+        if findField.stringValue.isEmpty { findField.stringValue = Self.findPasteboardText }
+        guard !findField.stringValue.isEmpty else {
+            showFind(nil)
+            return
+        }
+        performFind(backwards: backwards)
+    }
+    @objc func findFieldAction(_ sender: Any?) {
+        // The search field also sends its action when its text is cleared.
+        guard !findField.stringValue.isEmpty else { return }
+        performFind(backwards: NSApp.currentEvent?.modifierFlags.contains(.shift) == true)
+    }
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === findField else { return false }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            hideFind(nil)
+            return true
+        }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            findFieldAction(nil)
+            return true
+        }
+        return false
     }
     @objc func findNext(_ sender: Any?) { performFind(backwards: false) }
     @objc func findPrevious(_ sender: Any?) { performFind(backwards: true) }
     func performFind(backwards: Bool) {
         let editor = activeEditor
-        window?.makeFirstResponder(nil)
+        // Focus stays where it is: in the find field, Return can be pressed again for the next match.
         let query = findField.stringValue
         guard !query.isEmpty else { return }
+        Self.findPasteboardText = query
         let matched = editor.find(query, matchCase: caseBox.state == .on, backwards: backwards)
-        if !matched { NSSound.beep() }
+        if !matched {
+            NSSound.beep()
+            showTransientStatus("No matches for “\(query.count > 60 ? String(query.prefix(60)) + "…" : query)”.")
+        }
         (NSApp.delegate as? AppDelegate)?.macros.recordFind(
             text: query, matchCase: caseBox.state == .on, backwards: backwards, matched: matched, editor: editor)
     }
@@ -2233,7 +2518,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         clone.shareDocument(with: source)
         clone.adoptViewState(from: source)
         wire(clone)
-        clone.onReadOnlyAttempt = { NSSound.beep() }
+        clone.onReadOnlyAttempt = { [weak self] in (self?.document as? TextDocument)?.noteReadOnlyAttempt() }
         secondary = clone
         split.addArrangedSubview(clone)
         split.adjustSubviews()

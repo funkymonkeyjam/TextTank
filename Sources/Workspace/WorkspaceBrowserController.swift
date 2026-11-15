@@ -16,7 +16,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     let outline = NSOutlineView()
     private let mode = NSSegmentedControl(
         labels: ["Open Documents", "Folders", "Recent Files"], trackingMode: .selectOne, target: nil, action: nil)
-    private let status = NSTextField(labelWithString: "")
+    private let status = AnnouncingLabel(labelWithString: "")
     /// The monitor reports here, so it never replaces a listing, error or refresh message.
     private let monitorStatus = NSTextField(labelWithString: "")
     var statusText: String { status.stringValue }

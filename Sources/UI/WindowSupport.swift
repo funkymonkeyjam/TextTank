@@ -115,3 +115,36 @@ private final class FrameTracker: NSObject {
         defaults.set(WindowFrames.description(of: window), forKey: WindowFrames.defaultsKey(name))
     }
 }
+
+/// Speaks a result to assistive technology. A status label that only changes its text is silent
+/// to VoiceOver unless the person moves to it; a finished search, a failed find or a refused
+/// edit is announced so that they keep their place.
+enum Announce {
+    #if TESTING
+        /// Every announcement made, newest last, for checks.
+        static var spoken: [String] = []
+    #endif
+    static func say(_ text: String, from element: Any? = nil) {
+        guard !text.isEmpty else { return }
+        #if TESTING
+            spoken.append(text)
+        #endif
+        guard let source = element ?? NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        NSAccessibility.post(
+            element: source, notification: .announcementRequested,
+            userInfo: [
+                .announcement: text, .priority: NSAccessibilityPriorityLevel.medium.rawValue
+            ])
+    }
+}
+
+/// A status label for a tool window. Each new message is announced, except a progress message
+/// (one that ends with an ellipsis): the outcome that follows it is what matters.
+final class AnnouncingLabel: NSTextField {
+    override var stringValue: String {
+        didSet {
+            guard stringValue != oldValue, !stringValue.hasSuffix("…"), window != nil else { return }
+            Announce.say(stringValue, from: window)
+        }
+    }
+}

@@ -121,7 +121,30 @@ static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
 - (void)mouseUp:(NSEvent *)event {
     TTAroundUnrecordedInteraction(^{ [super mouseUp:event]; });
 }
+// A file dragged from Finder opens as a document, as it does when dropped on the Dock icon. The
+// engine would accept the drop and then do nothing with it. Dragged text is still the engine's.
+- (NSArray<NSURL *> *)droppedFileURLs:(id<NSDraggingInfo>)sender {
+    return [sender.draggingPasteboard readObjectsForClasses:@[NSURL.class] options:@{NSPasteboardURLReadingFileURLsOnlyKey:@YES}] ?: @[];
+}
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    return [self droppedFileURLs:sender].count ? NSDragOperationCopy : [super draggingEntered:sender];
+}
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    return [self droppedFileURLs:sender].count ? NSDragOperationCopy : [super draggingUpdated:sender];
+}
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSArray<NSURL *> *files = [self droppedFileURLs:sender];
+    if (files.count) {
+        // After the drag session ends, so an encoding question or an error is not shown mid-drag.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            for (NSURL *file in files) {
+                [NSDocumentController.sharedDocumentController openDocumentWithContentsOfURL:file display:YES completionHandler:^(NSDocument *document, BOOL alreadyOpen, NSError *error) {
+                    if (error && !([error.domain isEqualToString:NSCocoaErrorDomain] && error.code == NSUserCancelledError)) [NSApp presentError:error];
+                }];
+            }
+        });
+        return YES;
+    }
     __block BOOL accepted = NO;
     TTAroundUnrecordedInteraction(^{ accepted = [super performDragOperation:sender]; });
     return accepted;
@@ -296,10 +319,10 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         [_engine message:SCI_SETCODEPAGE wParam:SC_CP_UTF8];
         [_engine setFontName:@"Menlo" size:14 bold:NO italic:NO];
         [self applyPalette];
+        self.accessibilityDocumentName = nil;
         [_engine message:SCI_SETMARGINTYPEN wParam:0 lParam:SC_MARGIN_NUMBER];
         [self updateLineNumberMargin:YES];
         [_engine message:SCI_MARKERDEFINE wParam:1 lParam:SC_MARK_CIRCLE];
-        [_engine message:SCI_MARKERSETBACK wParam:1 lParam:0x005B3A];
         [_engine message:SCI_SETMARGINTYPEN wParam:1 lParam:SC_MARGIN_SYMBOL];
         [_engine message:SCI_SETMARGINMASKN wParam:1 lParam:(1 << 1)];
         [_engine message:SCI_SETMARGINWIDTHN wParam:1 lParam:14];
@@ -363,8 +386,23 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [super viewDidChangeEffectiveAppearance];
     if (_engine) [self applyPalette];
 }
+- (BOOL)usesDarkPalette {
+    return [[self.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua,NSAppearanceNameDarkAqua]] isEqualToString:NSAppearanceNameDarkAqua];
+}
+// Search marks (indicator 20). One colour cannot serve both appearances: citrus on the light paper
+// background was about 1.05:1. The outline is drawn at full strength in a colour that is at least
+// 3:1 against the editor background (olive on paper about 5.6:1, citrus on carbon about 15:1); the
+// fill stays light enough for the text inside to keep its own contrast. Increase Contrast darkens
+// the light outline and strengthens the fill.
+- (void)applySearchIndicatorStyle {
+    const BOOL dark = [self usesDarkPalette], highContrast = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
+    [_engine message:SCI_INDICSETSTYLE wParam:20 lParam:INDIC_ROUNDBOX];
+    [_engine message:SCI_INDICSETFORE wParam:20 lParam:dark ? 0x5BF4C7 : (highContrast ? 0x00402E : 0x006B4D)];
+    [_engine message:SCI_INDICSETALPHA wParam:20 lParam:highContrast ? 110 : 70];
+    [_engine message:SCI_INDICSETOUTLINEALPHA wParam:20 lParam:255];
+}
 - (void)applyPalette {
-    BOOL dark = [[self.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua,NSAppearanceNameDarkAqua]] isEqualToString:NSAppearanceNameDarkAqua];
+    const BOOL dark = [self usesDarkPalette], highContrast = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
     const sptr_t foreground = dark ? 0xF0F6F4 : 0x1F2015;
     const sptr_t background = dark ? 0x171810 : 0xF0F6F4;
     [_engine message:SCI_STYLESETFORE wParam:STYLE_DEFAULT lParam:foreground];
@@ -374,10 +412,24 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [_engine message:SCI_STYLESETBACK wParam:STYLE_LINENUMBER lParam:dark ? 0x222A25 : 0xE3E9E5];
     [_engine message:SCI_SETFOLDMARGINCOLOUR wParam:1 lParam:background];[_engine message:SCI_SETFOLDMARGINHICOLOUR wParam:1 lParam:background];
     for(int marker=SC_MARKNUM_FOLDEREND;marker<=SC_MARKNUM_FOLDEROPEN;++marker){[_engine message:SCI_MARKERSETFORE wParam:marker lParam:background];[_engine message:SCI_MARKERSETBACK wParam:marker lParam:foreground];}
-    [_engine message:SCI_INDICSETSTYLE wParam:20 lParam:INDIC_ROUNDBOX];[_engine message:SCI_INDICSETFORE wParam:20 lParam:0x5BF4C7];[_engine message:SCI_INDICSETALPHA wParam:20 lParam:70];[_engine message:SCI_INDICSETOUTLINEALPHA wParam:20 lParam:160];
+    [self applySearchIndicatorStyle];
+    // The bookmark dot: brand green on the light margin, citrus on the dark one, each at least 3:1.
+    _bookmarkColour = dark ? 0x5BF4C7 : (highContrast ? 0x002E1C : 0x005B3A);
+    [_engine message:SCI_MARKERSETBACK wParam:1 lParam:_bookmarkColour];
+    [_engine message:SCI_MARKERSETFORE wParam:1 lParam:_bookmarkColour];
     [_engine message:SCI_SETCARETFORE wParam:foreground];
-    [_engine message:SCI_SETSELFORE wParam:1 lParam:dark ? 0xFFFFFF : 0x101010];
-    [_engine message:SCI_SETSELBACK wParam:1 lParam:dark ? 0x725038 : 0xF1D4AF];
+    // Selection uses the system's colours, so it follows the accent colour, the appearance and
+    // Increase Contrast, and an unfocused pane shows the system's unemphasised selection.
+    __block NSColor *selectionBack = nil, *selectionText = nil, *inactiveBack = nil;
+    [self.effectiveAppearance performAsCurrentDrawingAppearance:^{
+        selectionBack = [NSColor.selectedTextBackgroundColor colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+        selectionText = [NSColor.selectedTextColor colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+        inactiveBack = [NSColor.unemphasizedSelectedTextBackgroundColor colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    }];
+    auto bgr=[](NSColor *c)->sptr_t {return ((NSInteger)lround(c.redComponent*255))|((NSInteger)lround(c.greenComponent*255)<<8)|((NSInteger)lround(c.blueComponent*255)<<16);};
+    [_engine message:SCI_SETSELFORE wParam:1 lParam:selectionText ? bgr(selectionText) : (dark ? 0xFFFFFF : 0x101010)];
+    [_engine message:SCI_SETSELBACK wParam:1 lParam:selectionBack ? bgr(selectionBack) : (dark ? 0x725038 : 0xF1D4AF)];
+    if (inactiveBack) [_engine message:SCI_SETELEMENTCOLOUR wParam:SC_ELEMENT_SELECTION_INACTIVE_BACK lParam:(sptr_t)(0xFF000000 | (NSUInteger)bgr(inactiveBack))];
     // These style numbers mean comment, keyword and string in the cpp lexer only. Every other
     // lexer keeps the default colour until a language profile supplies its own styles.
     if (_cppDefaults) {
@@ -872,6 +924,12 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (BOOL)modified { [self assertThread]; return [_engine message:SCI_GETMODIFY] != 0; }
 - (void)setSavePoint { [self assertThread]; [_engine message:SCI_SETSAVEPOINT]; }
 - (void)resetUndoHistory { [self assertThread]; [_engine message:SCI_EMPTYUNDOBUFFER]; }
+- (NSString *)accessibilityDocumentName { return _engine.content.accessibilityLabel; }
+- (void)setAccessibilityDocumentName:(NSString *)name {
+    [self assertThread];
+    _engine.content.accessibilityLabel = name.length ? name : @"Document";
+    _engine.content.accessibilityRoleDescription = @"text editor";
+}
 - (BOOL)wrap { [self assertThread]; return [_engine message:SCI_GETWRAPMODE] != SC_WRAP_NONE; }
 - (void)setWrap:(BOOL)wrap {
     [self assertThread]; [_engine message:SCI_SETWRAPMODE wParam:wrap ? SC_WRAP_WORD : SC_WRAP_NONE];
@@ -1246,7 +1304,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         if(r.location>length || r.length>length-r.location)return NO;
         for(NSUInteger p : {r.location,NSMaxRange(r)})if(p<length && ([_engine message:SCI_GETCHARAT wParam:p]&0xC0)==0x80)return NO;
     }
-    [self clearSearchHighlights];[_engine message:SCI_INDICSETSTYLE wParam:20 lParam:INDIC_ROUNDBOX];[_engine message:SCI_INDICSETFORE wParam:20 lParam:0x5BF4C7];[_engine message:SCI_INDICSETALPHA wParam:20 lParam:70];[_engine message:SCI_INDICSETOUTLINEALPHA wParam:20 lParam:160];
+    [self clearSearchHighlights];[self applySearchIndicatorStyle];
     for(NSValue *value in ranges){NSRange r=value.rangeValue;[_engine message:SCI_INDICATORFILLRANGE wParam:r.location lParam:r.length];}return YES;
 }
 - (void)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size {

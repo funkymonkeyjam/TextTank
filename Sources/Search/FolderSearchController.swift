@@ -39,7 +39,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     let caseButton = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
     let recursiveButton = NSButton(checkboxWithTitle: "Include subfolders", target: nil, action: nil)
     let folderLabel = NSTextField(labelWithString: "Choose a folder to search")
-    let status = NSTextField(labelWithString: "Normal / Extended / Boost regex · UTF-8/UTF-16 · symlinks skipped")
+    let status = AnnouncingLabel(labelWithString: "Normal / Extended / Boost regex · UTF-8/UTF-16 · symlinks skipped")
     let table = ActivatingTableView(), details = NSTextView()
     private var folder: URL?
     private var searchedFolder: URL?
@@ -55,7 +55,10 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         let alert = TTAlert()
         alert.messageText = "Replace Matched Files?"
         alert.informativeText = explanation
-        alert.addButton(withTitle: "Replace Files").identifier = NSUserInterfaceItemIdentifier("folder.replace.confirm")
+        let replace = alert.addButton(withTitle: "Replace Files")
+        replace.identifier = NSUserInterfaceItemIdentifier("folder.replace.confirm")
+        // Files on disk change and editor Undo does not reach them, so Return is Cancel here.
+        replace.hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
     }
@@ -333,13 +336,32 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             }
         }
     }
+    /// What Replace Matched Files is about to do, in the person's own terms: the text, the
+    /// replacement, how much changes, and what protects them.
+    static func replacementExplanation(query: String, replacement: String, matches: Int, files: Int, folders: Int)
+        -> String
+    {
+        func plural(_ count: Int, _ noun: String) -> String {
+            "\(count) \(noun)\(count == 1 ? "" : noun.hasSuffix("ch") ? "es" : "s")"
+        }
+        func quoted(_ text: String) -> String {
+            let line = text.replacingOccurrences(of: "\n", with: "⏎")
+            return "“\(line.count > 80 ? String(line.prefix(80)) + "…" : line)”"
+        }
+        let change =
+            replacement.isEmpty
+            ? "Delete every match of \(quoted(query))" : "Replace \(quoted(query)) with \(quoted(replacement))"
+        return
+            "\(change): \(plural(matches, "match")) in \(plural(files, "file"))\(folders > 1 ? " across \(plural(folders, "folder"))" : "").\n\nThe files on disk are changed. Undo in the editor does not reverse this; each changed file gets a backup copy named .texttank-backup beside it.\n\nFiles that are open in TextTank, changed since the search, read-only or reached through a symbolic link are skipped. Files are changed one at a time, so if replacing stops part-way, the files already done stay changed. A report lists every file afterwards."
+    }
     @objc private func replaceMatchedFiles(_ sender: Any?) {
         guard cancellation == nil, let fallbackDirectory = searchedFolder, !matches.isEmpty else { return }
         let grouped = Dictionary(grouping: matches, by: { $0.sourceRoot ?? fallbackDirectory })
         guard
             confirmReplacement(
-                "Replace matches in \(Set(matches.map(\.url)).count) files across \(grouped.count) root(s) from the completed search. Each changed file gets a byte-exact .texttank-backup copy beside it. Files open in TextTank, changed since search, read-only, symlinked are skipped. Changes commit per file, not as one transaction."
-            )
+                Self.replacementExplanation(
+                    query: searchedOptions.query, replacement: replacementField.stringValue, matches: matches.count,
+                    files: Set(matches.map(\.url)).count, folders: grouped.count))
         else { return }
         // The confirmation is modal; nothing may have started meanwhile.
         guard cancellation == nil, !matches.isEmpty else { return }

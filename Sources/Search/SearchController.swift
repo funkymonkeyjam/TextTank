@@ -40,7 +40,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     let wordButton = NSButton(checkboxWithTitle: "Whole word", target: nil, action: nil)
     let dotButton = NSButton(checkboxWithTitle: "Dot matches newline", target: nil, action: nil)
     let wrapButton = NSButton(checkboxWithTitle: "Wrap", target: nil, action: nil)
-    let status = NSTextField(labelWithString: "Search current document, selection or open documents")
+    let status = AnnouncingLabel(labelWithString: "Search current document, selection or open documents")
     let table = ActivatingTableView()
     private var options = SearchOptions(), generation = UUID(), cancellation: TTSearchCancellation?
     private var task: Task<Void, Never>?

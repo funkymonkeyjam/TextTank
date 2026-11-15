@@ -38,7 +38,8 @@ enum ReminderConnectorError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .permissionRequired:
-            return "Reminders access is unavailable. Grant access explicitly or review system privacy settings."
+            return
+                "TextTank does not have access to Reminders, so nothing was sent. Access may have been declined earlier, or it may be restricted on this Mac. To allow it, open System Settings > Privacy & Security > Reminders and turn on TextTank, then send again. The rest of TextTank works without it."
         case .destinationUnavailable:
             return "The selected Reminders list is missing or no longer writable. No items were sent."
         case .invalidBatch:

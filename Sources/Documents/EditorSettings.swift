@@ -106,22 +106,36 @@ final class SettingsController: NSObject {
             if let backup { _ = renamex_np(backup.path, url.path, UInt32(RENAME_EXCL)) }
             throw error
         }
+        let previous = value
         value = settings
         loadError = nil
-        apply()
+        apply(replacing: previous)
         return backup
     }
     func apply(to editor: TTEditor) {
         editor.configureTabWidth(value.tabWidth, useTabs: value.useTabs)
         editor.wrap = value.wrap
     }
-    func apply() {
+    /// Carries a changed default to an open view only where that view still had the old default.
+    /// Indentation chosen for one document, or wrapping chosen for one view, in the status bar is
+    /// the person's own choice and a later Settings save leaves it alone.
+    private func carry(from previous: EditorSettings, to editor: TTEditor) {
+        let info = editor.statusInfo
+        if previous.tabWidth != value.tabWidth || previous.useTabs != value.useTabs,
+            info["tabWidth"]?.intValue == previous.tabWidth, info["useTabs"]?.boolValue == previous.useTabs
+        {
+            editor.configureTabWidth(value.tabWidth, useTabs: value.useTabs)
+        }
+        if previous.wrap != value.wrap, editor.wrap == previous.wrap { editor.wrap = value.wrap }
+    }
+    /// `previous` is the settings a save replaced; nil at launch, when every view takes the defaults.
+    func apply(replacing previous: EditorSettings? = nil) {
         NSApp.appearance =
             value.appearance == "system" ? nil : NSAppearance(named: value.appearance == "dark" ? .darkAqua : .aqua)
         for doc in NSDocumentController.shared.documents.compactMap({ $0 as? TextDocument }) {
-            apply(to: doc.editor)
-            for controller in doc.windowControllers.compactMap({ $0 as? EditorWindowController }) {
-                if let clone = controller.secondary { apply(to: clone) }
+            let clones = doc.windowControllers.compactMap { ($0 as? EditorWindowController)?.secondary }
+            for editor in [doc.editor] + clones {
+                if let previous { carry(from: previous, to: editor) } else { apply(to: editor) }
             }
         }
         func update(_ menu: NSMenu) {
@@ -137,7 +151,8 @@ final class SettingsController: NSObject {
     @objc func showSettings(_ sender: Any?) {
         let alert = TTAlert()
         alert.messageText = "Editor Settings"
-        alert.informativeText = "Applies to open and new views. Shortcut keys use Command; uppercase adds Shift."
+        alert.informativeText =
+            "Applies to new views, and to open views that still use the previous defaults. Indentation or wrapping you chose for one document in the status bar is kept. Shortcut keys use Command; uppercase adds Shift."
         let width = NSTextField(string: String(value.tabWidth))
         let tabs = NSButton(checkboxWithTitle: "Indent with tabs", target: nil, action: nil)
         tabs.state = value.useTabs ? .on : .off
@@ -167,6 +182,13 @@ final class SettingsController: NSObject {
         do {
             var updated = value
             if result == .alertThirdButtonReturn {
+                let confirm = TTAlert()
+                confirm.messageText = "Reset all editor settings to their defaults?"
+                confirm.informativeText =
+                    "Tab width, indentation, wrapping, appearance and every assigned shortcut return to their defaults. Documents are not changed."
+                confirm.addButton(withTitle: "Cancel")
+                confirm.addButton(withTitle: "Reset Defaults").hasDestructiveAction = true
+                guard confirm.runModal() == .alertSecondButtonReturn else { return }
                 updated = EditorSettings()
             } else {
                 updated.tabWidth = Int(width.stringValue) ?? 0

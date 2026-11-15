@@ -693,15 +693,11 @@ import AppKit
                     controller.activeEditor === document.editor,
                     "late retained controller access does not force-cast detached document")
                 check(window.standardWindowButton(.closeButton)?.isHidden == false, "native close control is visible")
-                let closeControl = controller.toolbar(
-                    NSToolbar(identifier: "test"), itemForItemIdentifier: .init("TextTank.CloseTab"),
-                    willBeInsertedIntoToolbar: true)
+                // The toolbar no longer repeats the tab's own close button.
                 check(
-                    (closeControl?.view as? NSButton)?.title == "Close Tab",
-                    "explicit close button remains accessible outside titlebar")
-                check(
-                    (closeControl?.view as? NSButton)?.identifier?.rawValue == "tab.close",
-                    "close-tab control carries a stable identifier")
+                    !controller.toolbarDefaultItemIdentifiers(NSToolbar(identifier: "test")).contains {
+                        $0.rawValue == "TextTank.CloseTab"
+                    }, "the toolbar has no Close Tab item; each tab closes from its own button or Command-W")
             }
             // The delegate installed here is deliberately left in place for every later section:
             // NSApp.delegate is weak, and the tab, status and navigation paths checked below reach
@@ -1092,25 +1088,36 @@ import AppKit
                 let failingFile = TextDocument.recovery.fileURL(for: failing.recoveryID),
                     corruptSnapshot = Data("{corrupt".utf8)
                 failing.editor.text = "a"
+                // N1: the save state is truthful at once, before any recovery write.
+                check(
+                    failing.isDocumentEdited && failingStatus.stringValue.hasPrefix("Edited ·")
+                        && !failingStatus.stringValue.contains("Saved"),
+                    "an edit reads Edited in the status line immediately, never Saved")
                 failing.flushRecovery()
                 check(
                     failing.lastRecoveryError == nil && failingStatus.textColor == .secondaryLabelColor
-                        && failingStatus.toolTip == nil, "successful recovery write shows the ordinary status")
+                        && failingStatus.toolTip == nil
+                        && failingStatus.stringValue.hasPrefix("Edited — recovery copy kept"),
+                    "successful recovery write shows the ordinary status and names the recovery copy")
                 try corruptSnapshot.write(to: failingFile)
                 failing.editor.text = "ab"
                 failing.flushRecovery()
                 check(
-                    failing.lastRecoveryError != nil && failingStatus.stringValue.hasPrefix("Recovery failed:")
-                        && failingStatus.textColor == .systemRed && failingStatus.toolTip?.isEmpty == false,
+                    failing.lastRecoveryError != nil
+                        && failingStatus.stringValue.hasPrefix("⚠︎ Recovery copy not written:")
+                        && failingStatus.textColor == .labelColor && failingStatus.toolTip?.isEmpty == false,
                     "failed recovery write is visibly distinct in the status line")
                 check(notices == 0, "one recovery failure does not raise a notice")
                 failing.editor.text = "abc"
+                check(
+                    failingStatus.stringValue.hasPrefix("⚠︎ Recovery copy not written:"),
+                    "a later edit does not hide a standing recovery failure")
                 failing.flushRecovery()
                 check(notices == 1, "second consecutive recovery failure raises one notice")
                 failing.editor.text = "abcd"
                 failing.flushRecovery()
                 check(
-                    notices == 1 && failingStatus.textColor == .systemRed,
+                    notices == 1 && failingStatus.textColor == .labelColor,
                     "further failures stay in the status line without another notice")
                 check(
                     try Data(contentsOf: failingFile) == corruptSnapshot,

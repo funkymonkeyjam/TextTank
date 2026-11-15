@@ -124,6 +124,11 @@ extern NSNotificationName const TTEditorStateDidChangeNotification;
 - (void)beginUndoGroup;
 - (void)endUndoGroup;
 @property(nonatomic) BOOL wrap;
+/// The bookmark dot's colour for the current appearance, as 0xBBGGRR. The engine has no query for it.
+@property(nonatomic, readonly) NSInteger bookmarkColour;
+/// What VoiceOver calls this text area: the document's name (and pane, in a split view) instead
+/// of the engine's own name. Nil restores a generic "Document".
+@property(nonatomic, copy, nullable) NSString *accessibilityDocumentName;
 - (void)shareDocumentWith:(TTEditor *)other;
 /// YES when both views show the same Scintilla document. A view shares with itself.
 - (BOOL)sharesDocumentWith:(nullable TTEditor *)other;

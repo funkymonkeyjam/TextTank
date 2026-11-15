@@ -70,7 +70,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         backing: .buffered, defer: false)
     private let table = NSTableView()
     private let sample = NSTextView(), result = NSTextView()
-    private let status = NSTextField(wrappingLabelWithString: AutomationStepEditor.openingInstruction)
+    private let status = AnnouncingLabel(wrappingLabelWithString: AutomationStepEditor.openingInstruction)
     private lazy var addButton = button("Add Rule…", #selector(addRule), "add")
     private lazy var editButton = button("Edit…", #selector(editRule), "edit")
     private lazy var duplicateButton = button("Duplicate", #selector(duplicateRule), "duplicate")
