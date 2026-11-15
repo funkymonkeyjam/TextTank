@@ -70,12 +70,14 @@ final class DocumentMonitor {
         }
         let baseline = document.originalDiskFingerprint, revision = document.editor.revision, token = generation
         inFlight = true
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        // The document is main-thread only, so the worker's block holds it weakly: its last
+        // reference must never be dropped on the worker.
+        DispatchQueue.global(qos: .utility).async { [weak self, weak document] in
             let result = Self.inspect(url, expected: baseline)
-            DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async { [weak self, weak document] in
                 guard let self, self.generation == token else { return }
                 self.inFlight = false
-                guard let current = self.document, current === document, current.fileURL == url,
+                guard let document, let current = self.document, current === document, current.fileURL == url,
                     current.editor.window != nil
                 else {
                     self.stop()

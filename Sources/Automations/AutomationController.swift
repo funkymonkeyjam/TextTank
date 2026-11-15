@@ -736,10 +736,12 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         }
     }
     /// Progress controls, created only when a run outlasts the short wait. Main thread only.
+    /// The worker's blocks hold this box and can outlive the run, so the references are weak:
+    /// the panel and its views are owned by the run and released on the main thread.
     private final class TransformProgress {
-        var panel: NSPanel?
-        var bar: NSProgressIndicator?
-        var status: NSTextField?
+        weak var panel: NSPanel?
+        weak var bar: NSProgressIndicator?
+        weak var status: NSTextField?
     }
     /// Every run goes to a worker with a run control, whatever the size of its input. The main
     /// thread waits briefly, so an ordinary cleanup still completes in the same event with no

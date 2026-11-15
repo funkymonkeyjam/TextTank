@@ -117,6 +117,45 @@ import Darwin
             check(watched.editor.text == "changed on disk", "missing monitored file preserves text")
             monitor.stop()
             check(monitor.status == .stopped && monitor.document == nil, "monitor stops explicitly")
+            // F117: a poll in flight must not own the document, or its last reference could be
+            // dropped on the worker thread. AppKit lets go of a closed document only after a turn
+            // of the main run loop, so the file is large: the read is then still going on, and
+            // the poll's completion still to come, when the document is looked for. A poll that
+            // owned its document could never be seen in that state; one that does not might, under
+            // load, finish first, so a few attempts are allowed.
+            let polled = folder.appendingPathComponent("polled.bin")
+            try Data(repeating: 0x61, count: 30 * 1024 * 1024).write(to: polled)
+            let host = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled], backing: .buffered,
+                defer: true)
+            host.isReleasedWhenClosed = false
+            var releasedDuringPoll = false, stoppedAfterRelease = true
+            for _ in 0..<5 where !releasedDuringPoll {
+                weak var polledDocument: TextDocument?
+                let dropped = DocumentMonitor()
+                try autoreleasepool {
+                    let document = TextDocument()
+                    document.fileURL = polled
+                    host.contentView = document.editor
+                    polledDocument = document
+                    try dropped.start(document)
+                    try require(dropped.status == .checking && dropped.document === document, "the monitor is polling")
+                    // Setting fileURL registers the document as a file presenter; close() ends that.
+                    document.close()
+                }
+                let turns = Date().addingTimeInterval(10)
+                while polledDocument != nil && dropped.status == .checking && Date() < turns {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.001))
+                }
+                releasedDuringPoll = polledDocument == nil && dropped.status == .checking
+                spinUntil("the monitor of a released document to stop") { dropped.status == .stopped }
+                stoppedAfterRelease = stoppedAfterRelease && dropped.status == .stopped && dropped.document == nil
+                host.contentView = nil
+            }
+            check(releasedDuringPoll, "F117 a poll in flight does not keep its document alive")
+            check(stoppedAfterRelease, "F117 a monitor whose document was released stops at the next result")
+            host.contentView = nil
+            host.close()
             let app = AppDelegate()
             let previousDelegate = NSApp.delegate
             NSApp.delegate = app

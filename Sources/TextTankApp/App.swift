@@ -138,6 +138,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { self.requestUnsavedReview(self) }
         return .terminateLater
     }
+    /// Runs once the quit is committed, never while the unsaved-documents review can still be
+    /// cancelled. A running Run command is a scoped job: its process group is stopped here, with
+    /// a bounded wait, instead of being left to run on after TextTank has gone.
+    func applicationWillTerminate(_ notification: Notification) { _ = runner.cancelAndWait(timeout: 1.0) }
     /// The two AppKit calls of the dirty-quit path. They are properties only so that a check
     /// can observe the request and the reply without presenting the review or ending the process.
     var requestUnsavedReview: (AppDelegate) -> Void = { delegate in

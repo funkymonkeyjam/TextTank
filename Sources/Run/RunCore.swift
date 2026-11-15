@@ -36,7 +36,14 @@ struct ConfiguredRun: Codable, Equatable {
                     guard let file else { throw RunFailure.fileRequired }
                     return file.deletingLastPathComponent().path
                 }
-                if arg == "{selection}" { return selection }
+                if arg == "{selection}" {
+                    // Checked here, not left to validate(), so the error names the selection and not
+                    // the saved command. The limits are the ones validate() applies to an argument.
+                    guard !selection.contains("\0"), selection.utf8.count <= 1024 * 1024 else {
+                        throw RunFailure.selectionUnsuitable
+                    }
+                    return selection
+                }
                 return arg
             }
         }
@@ -71,6 +78,17 @@ struct ConfiguredRun: Codable, Equatable {
         try validateLibrary(commands)
         return commands
     }
+    /// What selecting this command executes, for the menu tooltip: the mode, the executable and
+    /// the arguments as stored. Bounded, because one argument may be up to 1 MiB.
+    func summary(limit: Int = 300) -> String {
+        var text = (shellMode ? "shell: " : extensionMode ? "text extension: " : "") + executable
+        for argument in arguments where text.count <= limit {
+            let shown = String(argument.prefix(limit + 1)).map { $0.isNewline || $0 == "\t" ? " " : $0 }
+            let quoted = argument.isEmpty || argument.contains(where: { $0.isWhitespace || $0 == "\"" })
+            text += " " + (quoted ? "\"" + String(shown) + "\"" : String(shown))
+        }
+        return text.count > limit ? String(text.prefix(limit)) + "…" : text
+    }
     /// Version 1 extension contract: UTF-8 document/selection on stdin, UTF-8 result
     /// on stdout, diagnostics on stderr, exit 0 required. No automatic mutation.
     static var uppercaseSample: Self {
@@ -80,7 +98,7 @@ struct ConfiguredRun: Codable, Equatable {
     }
 }
 enum RunFailure: Error, LocalizedError {
-    case invalid, fileRequired, busy, tooLarge, configurationTooLarge
+    case invalid, fileRequired, busy, tooLarge, configurationTooLarge, selectionUnsuitable
     var errorDescription: String? {
         switch self {
         case .invalid: return "Invalid command configuration. Use an absolute executable path and an argument array."
@@ -90,17 +108,50 @@ enum RunFailure: Error, LocalizedError {
             return
                 "Saved Run commands exceed the 1 MiB configuration limit. Shorten arguments or remove commands; the existing configuration was preserved."
         case .tooLarge: return "Process input or output exceeds the 4 MiB limit."
+        case .selectionUnsuitable:
+            return
+                "The selection cannot be passed as an argument: it contains a NUL character or exceeds 1 MiB. Shorten the selection, or use a text extension, which receives the selection on standard input."
+        }
+    }
+}
+/// Why a run ended. Exactly one applies; only `finished` leaves complete output.
+enum RunTermination: Equatable, CaseIterable {
+    /// The command exited by itself and all of its output was read.
+    case finished
+    /// The user cancelled it, or TextTank was quitting.
+    case cancelled
+    /// It was still running at the time limit.
+    case timedOut
+    /// It wrote more than the 4 MiB output limit.
+    case outputLimit
+    /// It exited, but a process it started still held its output open and was stopped.
+    case lingeringDescendants
+    var summary: String {
+        switch self {
+        case .finished: return "finished"
+        case .cancelled: return "cancelled"
+        case .timedOut: return "stopped at the time limit"
+        case .outputLimit: return "stopped at the 4 MiB output limit; output is incomplete"
+        case .lingeringDescendants:
+            return
+                "finished, but a background process it started kept the output open and was stopped; output may be incomplete"
         }
     }
 }
 struct RunResult {
-    let stdout: Data, stderr: Data, status: Int32
-    let cancelled: Bool, truncated: Bool
+    let stdout: Data, stderr: Data
+    /// The exit status, 128 + signal for a signalled leader, or -1 when no status is known
+    /// (nothing was launched, or the exit status could not be collected).
+    let status: Int32
+    let reason: RunTermination
+    var statusLine: String { (status < 0 ? "No exit status" : "Exit \(status)") + " · " + reason.summary }
 }
 /// Explicit process group with bounded nonblocking pipes. Imports are inert.
 final class RunExecution: @unchecked Sendable {
     private let lock = NSLock()
     private var active = false, cancelRequested = false
+    private let running = DispatchGroup()
+    static let defaultTimeout: TimeInterval = 30
     func cancel() {
         lock.lock()
         cancelRequested = true
@@ -111,7 +162,19 @@ final class RunExecution: @unchecked Sendable {
         defer { lock.unlock() }
         return cancelRequested
     }
-    func execute(_ command: ConfiguredRun, input: Data = Data(), timeout: TimeInterval = 30) throws -> RunResult {
+    /// Cancels and waits until `execute` has returned on its own thread, so the child and its
+    /// process group are gone. The wait is signalled by the worker, never by the main queue, so
+    /// this may be called from the main thread. True when nothing is running any more.
+    func cancelAndWait(timeout: TimeInterval) -> Bool {
+        cancel()
+        return running.wait(timeout: .now() + timeout) == .success
+    }
+    /// `workingDirectory` nil inherits the caller's working directory. The environment is always
+    /// inherited as it is.
+    func execute(
+        _ command: ConfiguredRun, input: Data = Data(), timeout: TimeInterval = RunExecution.defaultTimeout,
+        workingDirectory: URL? = nil
+    ) throws -> RunResult {
         try command.validate()
         guard input.count <= 4 * 1024 * 1024 else { throw RunFailure.tooLarge }
         lock.lock()
@@ -120,13 +183,15 @@ final class RunExecution: @unchecked Sendable {
             throw RunFailure.busy
         }
         active = true
+        running.enter()
         lock.unlock()
         defer {
             lock.lock()
             active = false
             lock.unlock()
+            running.leave()
         }
-        if cancelled { return RunResult(stdout: Data(), stderr: Data(), status: -1, cancelled: true, truncated: false) }
+        if cancelled { return RunResult(stdout: Data(), stderr: Data(), status: -1, reason: .cancelled) }
         func failure() -> POSIXError { POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         // Anonymous temporary input avoids SIGPIPE and a blocked writer when a child
         // deliberately never reads stdin. tmpfile is private and unlinked by libc.
@@ -162,6 +227,9 @@ final class RunExecution: @unchecked Sendable {
         posix_spawn_file_actions_adddup2(&actions, stderrPipe[1], STDERR_FILENO)
         for fd in descriptors { posix_spawn_file_actions_addclose(&actions, fd) }
         posix_spawn_file_actions_addclose(&actions, fileno(file))
+        // Per-child only. The process-wide working directory is never changed: this runs on a
+        // worker thread and the working directory is shared by the whole app.
+        if let workingDirectory { posix_spawn_file_actions_addchdir_np(&actions, workingDirectory.path) }
         posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT))
         posix_spawnattr_setpgroup(&attributes, 0)
         var argv = ([command.executable] + command.arguments).map { strdup($0) } + [nil]
@@ -177,8 +245,8 @@ final class RunExecution: @unchecked Sendable {
         descriptors[1] = -1
         close(stderrPipe[1])
         descriptors[3] = -1
-        var output = Data(), errors = Data(), eof = [false, false], status: Int32 = 0, exited = false, limited = false,
-            stopped = false
+        var output = Data(), errors = Data(), eof = [false, false], exited = false, limited = false
+        var waitFailed = false, reason = RunTermination.finished
         let deadline = Date().addingTimeInterval(max(0.05, min(timeout, 300)))
         var exitDate: Date?
         func drain(_ fd: Int32, _ destination: inout Data, _ ended: inout Bool) {
@@ -201,6 +269,22 @@ final class RunExecution: @unchecked Sendable {
                 }
             }
         }
+        // The leader is observed without being reaped (WNOWAIT) and reaped only as the last step.
+        // Until then its zombie keeps the pid, and so the process-group id, from being reused, so
+        // every kill(-pid, ...) below can only reach this run's own group. Darwin also reports a
+        // stopped child here although only WEXITED is asked for, hence the si_code test.
+        func leaderExited(wait: Bool) -> Bool {
+            var info = siginfo_t()
+            let options = WEXITED | WNOWAIT | (wait ? 0 : WNOHANG)
+            if waitid(P_PID, id_t(pid), &info, options) == 0 {
+                return info.si_pid == pid && [CLD_EXITED, CLD_KILLED, CLD_DUMPED].contains(info.si_code)
+            }
+            if errno == EINTR { return false }
+            // The child cannot be waited for (for example SIGCHLD is ignored, so it was reaped by
+            // the system). Its status is unknown and is reported as -1, never as a clean exit.
+            waitFailed = true
+            return true
+        }
         while true {
             // Separate temporary buffers avoid overlapping inout access to output.
             var chunk = Data()
@@ -209,34 +293,29 @@ final class RunExecution: @unchecked Sendable {
             chunk = Data()
             drain(stderrPipe[0], &chunk, &eof[1])
             errors.append(chunk)
-            if !exited {
-                let waited = waitpid(pid, &status, WNOHANG)
-                if waited == pid {
-                    exited = true
-                    exitDate = Date()
-                } else if waited < 0 && errno != EINTR {
-                    exited = true
-                    exitDate = Date()
-                }
+            if !exited, leaderExited(wait: false) {
+                exited = true
+                exitDate = Date()
             }
             if exited && eof.allSatisfy({ $0 }) { break }
-            if cancelled || Date() >= deadline || limited {
-                stopped = true
+            let timedOut = Date() >= deadline
+            if cancelled || limited || timedOut {
+                reason = cancelled ? .cancelled : limited ? .outputLimit : .timedOut
                 kill(-pid, SIGTERM)
                 break
             }
             if let exitDate, Date().timeIntervalSince(exitDate) > 0.5 {
                 // A descendant holding output open belongs to this configured run.
-                limited = true
+                reason = .lingeringDescendants
                 kill(-pid, SIGTERM)
                 break
             }
             Thread.sleep(forTimeInterval: 0.005)
         }
-        if stopped || limited {
+        if reason != .finished {
             let grace = Date().addingTimeInterval(0.1)
             while !exited && Date() < grace {
-                if waitpid(pid, &status, WNOHANG) == pid {
+                if leaderExited(wait: false) {
                     exited = true
                     break
                 }
@@ -244,15 +323,24 @@ final class RunExecution: @unchecked Sendable {
             }
             kill(-pid, SIGKILL)
         }
-        if !exited { while waitpid(pid, &status, 0) < 0 && errno == EINTR {} }
+        while !exited {
+            if leaderExited(wait: true) { exited = true } else { Thread.sleep(forTimeInterval: 0.001) }
+        }
         // Runs are scoped jobs, never implicit daemon launchers. Clean up remaining
         // group members even if the leader exited and descendants closed output.
+        // A zombie leader alone does not answer this probe, so an ordinary run does not wait here.
         if kill(-pid, 0) == 0 {
             kill(-pid, SIGTERM)
             Thread.sleep(forTimeInterval: 0.1)
             kill(-pid, SIGKILL)
         }
+        var status: Int32 = 0, reaped = false
+        while !waitFailed {
+            let waited = waitpid(pid, &status, 0)
+            if waited == pid { reaped = true }
+            if waited == pid || errno != EINTR { break }
+        }
         let exitStatus = (status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)
-        return RunResult(stdout: output, stderr: errors, status: exitStatus, cancelled: stopped, truncated: limited)
+        return RunResult(stdout: output, stderr: errors, status: reaped ? exitStatus : -1, reason: reason)
     }
 }
