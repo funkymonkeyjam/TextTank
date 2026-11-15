@@ -54,5 +54,7 @@ suite_script scripts/test-utilities.sh
 suite_script scripts/test-run.sh
 suite_script scripts/test-languages.sh
 suite_script scripts/test-workspace-browser.sh
+# The reduced performance tier; its budgets can fail. The 100 MiB tier stays manual.
+suite_script scripts/test-performance.sh gate
 suite_run parity-inventory harness/logs/parity-inventory.log python3 docs/parity/check_inventory.py
 suite_finish
