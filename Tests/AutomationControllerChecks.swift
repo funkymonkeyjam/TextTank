@@ -25,8 +25,35 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             window.sendEvent(event)
         }
     }
+    static func ruleKeyboardCheck() -> (Bool,Bool,AutomationDefinition.Step?) {
+        var actionSent=false, fieldsEnabled=false, acted=false
+        let deadline=Date().addingTimeInterval(5)
+        let timer=Timer(timeInterval:0.1,repeats:true) { _ in
+            guard let modal=NSApp.modalWindow,let content=modal.contentView else{return}
+            if Date()>deadline { NSApp.abortModal();return }
+            guard !acted else{return}
+            let views=descendants(content)
+            guard let popup=views.compactMap({$0 as? NSPopUpButton}).first,
+                  let save=views.compactMap({$0 as? NSButton}).first(where:{$0.title=="Save Rule"}) else{return}
+            acted=true
+            popup.selectItem(at:AutomationDefinition.Step.Kind.allCases.firstIndex(of:.replaceLiteral)!)
+            if let action=popup.action { actionSent=NSApp.sendAction(action,to:popup.target,from:popup) }
+            let fields=views.compactMap{$0 as? NSTextField}.filter{$0.isEditable}
+            guard fields.count==2 else { NSApp.abortModal();return }
+            fieldsEnabled=fields.allSatisfy{$0.isEnabled}
+            guard fieldsEnabled else { NSApp.abortModal();return }
+            fields[0].selectText(nil);typeKeys("[salt]",in:modal)
+            fields[1].selectText(nil);typeKeys("2 eggs",in:modal)
+            save.performClick(nil)
+        }
+        RunLoop.main.add(timer,forMode:.modalPanel)
+        let result=AutomationStepEditor.editStep(.init(kind:.removeBlankLines))
+        timer.invalidate()
+        return (actionSent,fieldsEnabled,result)
+    }
     static func modalKeyboardChecks(_ controller:AutomationController) throws {
         var stage=0, nameAccepted=false, sampleAccepted=false, reentryBlocked=false, timedOut=false
+        var nestedRule:(Bool,Bool,AutomationDefinition.Step?) = (false,false,nil)
         let deadline=Date().addingTimeInterval(8)
         let timer=Timer(timeInterval:0.1,repeats:true) { _ in
             guard let modal=NSApp.modalWindow,let content=modal.contentView else{return}
@@ -55,6 +82,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 modal.makeFirstResponder(sample)
                 typeKeys("2 eggs",in:modal)
                 sampleAccepted=sample.string=="2 eggs" && modal.firstResponder === sample
+                nestedRule=ruleKeyboardCheck()
                 cancel.performClick(nil)
             }
         }
@@ -65,6 +93,9 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         try check(nameAccepted,"Create Automation name accepts dispatched keyboard events")
         try check(sampleAccepted,"Sample Input accepts dispatched keyboard events")
         try check(reentryBlocked,"management cannot open another dialog during Create Automation")
+        try check(nestedRule.0,"nested rule popup dispatch reaches retained controller target")
+        try check(nestedRule.1,"changing rule kind enables find and replacement fields")
+        try check(nestedRule.2?.kind == .replaceLiteral && nestedRule.2?.find == "[salt]" && nestedRule.2?.replacement == "2 eggs","nested Save Rule commits keyboard-entered find and replacement")
     }
     static func main() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("TextTankAutomationControllerChecks-" + UUID().uuidString)

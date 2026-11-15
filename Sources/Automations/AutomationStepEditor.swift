@@ -186,7 +186,8 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
     @objc private func cancel() { invalidatePreview(); NSApp.stopModal() }
     func windowShouldClose(_ sender:NSWindow) -> Bool { cancel(); return false }
     static func editStep(_ initial:AutomationDefinition.Step) -> AutomationDefinition.Step? {
-        RuleFields(initial).run()
+        let fields = RuleFields(initial)
+        return withExtendedLifetime(fields) { fields.run() }
     }
 }
 
