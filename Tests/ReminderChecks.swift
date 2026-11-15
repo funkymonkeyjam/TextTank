@@ -637,6 +637,25 @@ import Darwin
                         && a.rows.map(\.message) == b.rows.map(\.message)
                 }
                 let layout = try ReminderJournal.layout(batch)
+                let restrictiveDirectory = root.appendingPathComponent("restrictive-journal-mode")
+                try FileManager.default.createDirectory(
+                    at: restrictiveDirectory, withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700])
+                let restrictiveWriter = ReminderJournalFile(directory: restrictiveDirectory, id: batch.id)
+                do {
+                    // Only this isolated check executable's process, never its parent shell.
+                    let previous = umask(0o777)
+                    defer { umask(previous) }
+                    try await restrictiveWriter.record(batch)
+                }
+                let restrictiveURL = restrictiveDirectory.appendingPathComponent(batch.id.uuidString + ".json")
+                check(
+                    (try FileManager.default.attributesOfItem(atPath: restrictiveURL.path)[.posixPermissions]
+                        as? NSNumber)?.intValue == 0o600,
+                    "F149 journal replacement restores exact 0600 even under a restrictive process umask")
+                check(
+                    (try? ReminderJournal.read(restrictiveURL, id: batch.id))?.batch.id == batch.id,
+                    "F149 a committed journal remains readable under the restored process umask")
                 check(
                     same(try JSONDecoder().decode(ReminderBatch.self, from: layout.data), batch),
                     "slotted journal decodes to the same batch as the synthesized decoder expects")

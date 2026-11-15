@@ -157,23 +157,17 @@ enum ReminderJournal {
     /// Strict read of one journal: a regular file within the size limit that decodes to schema
     /// version 1 under the expected identifier. Never blocks on a FIFO and never follows a link.
     static func read(_ url: URL, id: UUID) throws -> (batch: ReminderBatch, identity: Identity) {
-        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-        guard descriptor >= 0 else {
-            throw FileOperationFailure(errno, operation: "read export record", path: url.path)
-        }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer { try? handle.close() }
-        var info = stat()
-        guard fstat(descriptor, &info) == 0 else {
-            throw FileOperationFailure(errno, operation: "inspect export record", path: url.path)
-        }
-        guard info.st_mode & S_IFMT == S_IFREG, info.st_size <= maximumBytes else {
+        let sample: (data: Data, before: stat, after: stat?)
+        do { sample = try PrivateFileStore.readSample(url, maximumBytes: maximumBytes) } catch PrivateFileError
+            .unsafeLocation
+        { throw ReminderConnectorError.invalidBatch } catch PrivateFileError.tooLarge {
             throw ReminderConnectorError.invalidBatch
         }
-        let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
-        guard data.count <= maximumBytes else { throw ReminderConnectorError.invalidBatch }
-        try PersistedFormat.check(data, context: "Reminders export record")
+        let data = sample.data, info = sample.before
         let batch = try JSONDecoder().decode(ReminderBatch.self, from: data)
+        // Preserve the reader's concrete DecodingError for malformed journals; the envelope
+        // gate still runs before a decoded batch can be accepted or used.
+        try PersistedFormat.check(data, context: "Reminders export record")
         guard batch.schemaVersion == 1, batch.id == id, Set(batch.rows.map(\.id)).count == batch.rows.count,
             batch.rows.allSatisfy({ $0.status != .confirmed || !($0.reminderID ?? "").isEmpty })
         else { throw ReminderConnectorError.invalidBatch }
@@ -249,7 +243,6 @@ enum ReminderJournal {
 /// every write the journal path must still name the file that was validated or written here, so a
 /// journal directory that was moved or replaced is reported instead of written elsewhere.
 actor ReminderJournalFile {
-    private let directory: URL
     private let url: URL
     private let id: UUID
     private var descriptor: Int32 = -1
@@ -258,7 +251,6 @@ actor ReminderJournalFile {
     private let encoder = JSONEncoder()
 
     init(directory: URL, id: UUID) {
-        self.directory = directory
         self.id = id
         url = directory.appendingPathComponent(id.uuidString).appendingPathExtension("json")
     }
@@ -293,29 +285,19 @@ actor ReminderJournalFile {
             // A batch too close to the size limit for padded slots keeps the compact layout.
             layout = try ReminderJournal.layout(batch, slotWidth: 0)
         }
-        let temporary = directory.appendingPathComponent(UUID().uuidString + ".pending")
-        let created = open(temporary.path, O_CREAT | O_EXCL | O_RDWR | O_NOFOLLOW, mode_t(0o600))
-        guard created >= 0 else {
-            throw FileOperationFailure(errno, operation: "create export record beside", path: url.path)
-        }
-        var keep = false
-        defer {
-            if !keep {
-                close(created)
-                unlink(temporary.path)
-            }
-        }
-        try Self.write(layout.data, to: created, at: 0)
-        guard fsync(created) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        // Only the file validated by `load` or written here is replaced; a new batch replaces nothing.
-        guard try ReminderJournal.identity(atPath: url.path) == identity else {
-            throw ReminderConnectorError.invalidBatch
-        }
-        // Atomic rename preserves 0600 from creation; there is no world-readable interval.
-        guard rename(temporary.path, url.path) == 0 else {
-            throw FileOperationFailure(errno, operation: "replace export record", path: url.path)
-        }
-        keep = true
+        // Keep the live descriptor for slotted pwrite/fsync updates after the atomic replace.
+        // The journal's own identity guard remains immediately before commit.
+        let expectedIdentity = identity
+        guard
+            let created = try PrivateFileStore.write(
+                layout.data, to: url, maximumBytes: ReminderJournal.maximumBytes,
+                temporaryPrefix: "", temporarySuffix: ".pending",
+                beforeCommit: {
+                    guard try ReminderJournal.identity(atPath: self.url.path) == expectedIdentity else {
+                        throw ReminderConnectorError.invalidBatch
+                    }
+                }, retainingDescriptor: true)
+        else { throw FileOperationFailure(EIO, operation: "retain export record", path: url.path) }
         if descriptor >= 0 { close(descriptor) }
         descriptor = created
         identity = ReminderJournal.identity(of: created)
@@ -550,11 +532,10 @@ actor ReminderJournalFile {
     }
     private func preparePrivateDirectory() throws {
         try checkDirectory()
-        try FileManager.default.createDirectory(
-            at: storageURL, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        do { try PrivateFileStore.prepareDirectory(storageURL) } catch PrivateFileError.unsafeLocation {
+            throw ReminderConnectorError.invalidBatch
+        }
         try checkDirectory()
-        // Only this dedicated journal directory is changed, never its parents.
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: storageURL.path)
     }
     /// The compact encoding of a journal, as written before slotted journals. It is the same
     /// version 1 format; persistence fixtures pin it so that old files keep loading.
