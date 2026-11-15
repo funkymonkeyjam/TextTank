@@ -389,7 +389,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
         panel.title = workflow.name
         let status = NSTextField(labelWithString:"Processing captured text…"); status.frame = NSRect(x:20,y:85,width:380,height:24)
         let progress = NSProgressIndicator(frame:NSRect(x:20,y:60,width:380,height:18)); progress.isIndeterminate = false; progress.minValue = 0; progress.maxValue = Double(max(1,workflow.steps.count))
-        let cancel = NSButton(title:"Cancel",target:self,action:#selector(cancelTransform)); cancel.frame = NSRect(x:290,y:15,width:110,height:30)
+        let cancel = NSButton(title:"Cancel",target:self,action:#selector(cancelTransform)); cancel.frame = NSRect(x:290,y:15,width:110,height:30); cancel.identifier = NSUserInterfaceItemIdentifier("automation.transform.cancel")
         panel.contentView?.addSubview(status); panel.contentView?.addSubview(progress); panel.contentView?.addSubview(cancel)
         var outcome: Result<String,Error>?
         control.onProgress = { completed,total in DispatchQueue.main.async { progress.doubleValue = Double(completed); status.stringValue = "Processing step \(min(completed+1,total)) of \(total)…" } }

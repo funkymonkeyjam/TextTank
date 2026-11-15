@@ -92,6 +92,70 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         check(nestedRule.1,"changing rule kind enables find and replacement fields")
         check(nestedRule.2?.kind == .replaceLiteral && nestedRule.2?.find == "[salt]" && nestedRule.2?.replacement == "2 eggs","nested Save Rule commits keyboard-entered find and replacement")
     }
+    /// Runs `body`, which presents a modal, with a timer in modal mode. `act` is called on every tick
+    /// until it returns true; a modal still open at the deadline is aborted and reported.
+    static func drivingModal<T>(timeout:TimeInterval,_ act:@escaping (NSWindow,[NSView]) -> Bool,_ body:() throws -> T) rethrows -> (value:T,acted:Bool,timedOut:Bool) {
+        var acted=false, timedOut=false
+        let deadline=Date().addingTimeInterval(timeout)
+        let timer=Timer(timeInterval:0.005,repeats:true) { _ in
+            guard let modal=NSApp.modalWindow,let content=modal.contentView else{return}
+            if Date()>deadline { timedOut=true;NSApp.abortModal();return }
+            if !acted { acted=act(modal,descendants(content)) }
+        }
+        RunLoop.main.add(timer,forMode:.modalPanel)
+        defer { timer.invalidate() }
+        let value=try body()
+        return (value,acted,timedOut)
+    }
+    static func button(_ identifier:String,in views:[NSView]) -> NSButton? {
+        views.compactMap{$0 as? NSButton}.first{$0.identifier?.rawValue==identifier}
+    }
+    struct RuleListState:Equatable { var rows:Int, selected:Int, up:Bool, down:Bool }
+    /// F253: the rule list of the rule builder, driven through its real buttons.
+    static func ruleListChecks() {
+        func literal(_ find:String) -> AutomationDefinition.Step { .init(kind:.replaceLiteral,find:find,replacement:find.uppercased()) }
+        var definition=AutomationDefinition.example
+        definition.steps=[literal("a"),literal("b"),literal("c")]
+        var trail:[RuleListState]=[], nestedSaved=false
+        let edited=drivingModal(timeout:10,{ _,views in
+            guard let table=views.compactMap({$0 as? NSTableView}).first,let use=button("rules.use",in:views),
+                  let add=button("rules.add",in:views),let duplicate=button("rules.duplicate",in:views),let up=button("rules.up",in:views),
+                  let down=button("rules.down",in:views),let remove=button("rules.remove",in:views) else{return false}
+            func note() { trail.append(RuleListState(rows:table.numberOfRows,selected:table.selectedRow,up:up.isEnabled,down:down.isEnabled)) }
+            note()
+            duplicate.performClick(nil);note()
+            down.performClick(nil);note()
+            down.performClick(nil);note()
+            down.performClick(nil);note() // already last: the disabled button does nothing
+            up.performClick(nil);note()
+            table.selectRowIndexes(IndexSet(integer:1),byExtendingSelection:false);note()
+            remove.performClick(nil);note()
+            // Add Rule opens the nested Configure Rule dialog; accept its default rule.
+            let nested=Timer(timeInterval:0.1,repeats:false) { _ in
+                guard let alert=NSApp.modalWindow?.contentView,let save=button("rule.save",in:descendants(alert)) else { NSApp.abortModal();return }
+                nestedSaved=true;save.performClick(nil)
+            }
+            RunLoop.main.add(nested,forMode:.modalPanel)
+            add.performClick(nil);nested.invalidate();note()
+            up.performClick(nil);note()
+            use.performClick(nil)
+            return true
+        }) { AutomationStepEditor.edit(definition) }
+        check(edited.acted && !edited.timedOut && nestedSaved,"rule builder buttons were driven and Add Rule accepted the nested default rule")
+        let expectedTrail=[RuleListState(rows:3,selected:0,up:false,down:true),RuleListState(rows:4,selected:1,up:true,down:true),
+            RuleListState(rows:4,selected:2,up:true,down:true),RuleListState(rows:4,selected:3,up:true,down:false),RuleListState(rows:4,selected:3,up:true,down:false),
+            RuleListState(rows:4,selected:2,up:true,down:true),RuleListState(rows:4,selected:1,up:true,down:true),RuleListState(rows:3,selected:1,up:true,down:true),
+            RuleListState(rows:4,selected:3,up:true,down:false),RuleListState(rows:4,selected:2,up:true,down:true)]
+        check(trail==expectedTrail,"duplicate, move, remove and add keep the row count, the selection and the Move buttons in step")
+        // The Configure Rule dialog writes both ask flags as false on the rule it returns.
+        check(edited.value?.steps==[literal("a"),literal("a"),.init(kind:.removeBlankLines,askForFind:false,askForReplacement:false),literal("c")],"Use These Rules returns the rules in the edited order")
+        check(edited.value?.id==definition.id && edited.value?.name==definition.name && edited.value?.input==definition.input && edited.value?.output==definition.output,"rule-list editing leaves identity, name, input and output alone")
+        let cancelled=drivingModal(timeout:10,{ _,views in
+            guard let remove=button("rules.remove",in:views),let cancel=button("rules.cancel",in:views) else{return false}
+            remove.performClick(nil);cancel.performClick(nil);return true
+        }) { AutomationStepEditor.edit(definition) }
+        check(cancelled.acted && !cancelled.timedOut && cancelled.value==nil,"Cancel after removing a rule returns no draft")
+    }
     static func horizontalDialogChecks() throws {
         let alert = TTAlert()
         alert.messageText = "Horizontal action regression"
@@ -272,6 +336,55 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         let beforeModal=try Data(contentsOf:path)
         try modalKeyboardChecks(restarted)
         check(try Data(contentsOf:path)==beforeModal,"Cancel from keyboard-edited rule draft preserves saved definitions")
+        }
+        Checks.section("rule list editing") { ruleListChecks() }
+        Checks.section("large-input worker path") {
+        // F124: over 256 KiB the transform runs on a worker behind a modal progress panel.
+        let workflowID=saved.workflows[0].id
+        var large=saved
+        large.workflows[0].input = .document; large.workflows[0].output = .editor; large.workflows[0].previewBeforeApply=false
+        large.workflows[0].steps=[.init(kind:.trimWhitespace),.init(kind:.removeBlankLines)]
+        try restarted.persistLibrary(large)
+        let rows=(0..<100000).map{ "row \($0)" }
+        let largeInput=rows.map{ "  \($0)  " }.joined(separator:"\n\n")+"\n", largeExpected=rows.joined(separator:"\n")+"\n"
+        try require(largeInput.utf8.count > 4*262144,"fixture: the input is well over the 256 KiB worker threshold")
+        func load(_ text:String) -> UInt { editor.text=text;editor.resetUndoHistory();editor.setSavePoint();_ = editor.setSelectionAnchor(0,caret:0);return editor.revision }
+        _ = load(largeInput)
+        let applied=try drivingModal(timeout:60,{ _,views in button("automation.transform.cancel",in:views) != nil }) { try restarted.runSavedAutomation(id:workflowID) }
+        check(applied.acted && !applied.timedOut,"an input over 256 KiB runs behind the modal progress panel, which closes itself")
+        check(editor.text==largeExpected,"the worker result replaces the large document exactly")
+        editor.executeCommand("undo")
+        check(editor.text==largeInput && !editor.modified,"a large-input automation is one Undo back to the save point")
+        // Cancel while a step that checks for cancellation is running.
+        large.workflows[0].steps=Array(repeating:.init(kind:.trimWhitespace),count:100)
+        try restarted.persistLibrary(large)
+        var revision=load(largeInput)
+        var clickedAt:TimeInterval?, cancelError:Error?
+        var cancelled=drivingModal(timeout:60,{ _,views in
+            guard let cancel=button("automation.transform.cancel",in:views) else{return false}
+            clickedAt=ProcessInfo.processInfo.systemUptime;cancel.performClick(nil);return true
+        }) { do { try restarted.runSavedAutomation(id:workflowID) } catch { cancelError=error } }
+        var afterCancel=ProcessInfo.processInfo.systemUptime-(clickedAt ?? 0)
+        check(cancelled.acted && !cancelled.timedOut && cancelError != nil,"Cancel in the progress panel ends a large run with an error")
+        check(afterCancel < 1,"Cancel during a line-by-line step returns within a second")
+        check(editor.text==largeInput && editor.revision==revision && !editor.modified,"a cancelled large run leaves text, revision and save point untouched")
+        // F110: Keep marked list rows never checks for cancellation and Cancel cannot end the
+        // modal itself, so the panel stays up until the step finishes (seconds here).
+        let marker="- "+String(repeating:"x",count:40)
+        let markedInput=(0..<12000).map{ marker+String($0) }.joined(separator:"\n")+"\n"
+        try require(markedInput.utf8.count > 262144,"fixture: the marked list is over the worker threshold")
+        large.workflows[0].steps=[.init(kind:.keepMarkedListRows)]
+        try restarted.persistLibrary(large)
+        revision=load(markedInput);clickedAt=nil;cancelError=nil
+        cancelled=drivingModal(timeout:120,{ _,views in
+            guard let cancel=button("automation.transform.cancel",in:views) else{return false}
+            clickedAt=ProcessInfo.processInfo.systemUptime;cancel.performClick(nil);return true
+        }) { do { try restarted.runSavedAutomation(id:workflowID) } catch { cancelError=error } }
+        afterCancel=ProcessInfo.processInfo.systemUptime-(clickedAt ?? 0)
+        check(cancelled.acted && !cancelled.timedOut && cancelError != nil,"Cancel during Keep marked list rows still ends in an error, not a result")
+        check(editor.text==markedInput && editor.revision==revision && !editor.modified,"a late cancellation still leaves text, revision and save point untouched")
+        knownDefect("F110","Cancel during Keep marked list rows closes the progress panel within a second",fixed:afterCancel < 1)
+        try restarted.persistLibrary(saved)
         }
         Checks.section("oversized transform") {
         var growingLibrary=saved

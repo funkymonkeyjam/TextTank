@@ -74,6 +74,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         addButton = button("Add Rule…",#selector(addRule))
         let edit = button("Edit…",#selector(editRule)), duplicate = button("Duplicate",#selector(duplicateRule)), up = button("Move Up",#selector(moveUp)), down = button("Move Down",#selector(moveDown)), remove = button("Remove",#selector(removeRule))
         selectionButtons = [edit,duplicate,up,down,remove]
+        for (control,name) in zip([addButton!,edit,duplicate,up,down,remove],["add","edit","duplicate","up","down","remove"]) { control.identifier = NSUserInterfaceItemIdentifier("rules."+name) }
         let actions = NSStackView(views:[addButton,edit,duplicate,up,down,remove]); actions.spacing = 8; actions.frame = NSRect(x:20,y:342,width:670,height:32); content.addSubview(actions)
         let load = button("Load Rules…",#selector(loadRules)); load.frame = NSRect(x:680,y:342,width:120,height:32); content.addSubview(load)
         let export = button("Export Rules…",#selector(exportRules)); export.frame = NSRect(x:800,y:342,width:120,height:32); content.addSubview(export)
@@ -91,8 +92,8 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         sample.delegate = self
         let test = button("Test Rules",#selector(testRules)); test.frame = NSRect(x:20,y:70,width:120,height:32); content.addSubview(test)
         status.frame = NSRect(x:150,y:62,width:760,height:44); content.addSubview(status)
-        let cancel = button("Cancel",#selector(cancel)); cancel.keyEquivalent = "\u{1b}"; cancel.frame = NSRect(x:680,y:18,width:100,height:32); content.addSubview(cancel)
-        let save = button("Use These Rules",#selector(save)); save.keyEquivalent = "\r"; save.frame = NSRect(x:785,y:18,width:135,height:32); content.addSubview(save)
+        let cancel = button("Cancel",#selector(cancel)); cancel.keyEquivalent = "\u{1b}"; cancel.identifier = NSUserInterfaceItemIdentifier("rules.cancel"); cancel.frame = NSRect(x:680,y:18,width:100,height:32); content.addSubview(cancel)
+        let save = button("Use These Rules",#selector(save)); save.keyEquivalent = "\r"; save.identifier = NSUserInterfaceItemIdentifier("rules.use"); save.frame = NSRect(x:785,y:18,width:135,height:32); content.addSubview(save)
         reload(0); window.center(); window.initialFirstResponder = nameField; window.makeKeyAndOrderFront(nil); window.makeFirstResponder(nameField); nameField.selectText(nil)
     }
     func numberOfRows(in tableView:NSTableView) -> Int { draft.steps.count }
