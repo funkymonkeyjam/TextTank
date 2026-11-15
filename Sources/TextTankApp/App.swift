@@ -1268,6 +1268,17 @@ private final class DocumentTabWindow: NSWindow {
         (windowController as? EditorWindowController)?.refreshStatusDetails()
         if let controller = windowController as? EditorWindowController { makeFirstResponder(controller.activeEditor) }
     }
+    override func sendEvent(_ event: NSEvent) {
+        // A cancelled close-from-background leaves this tab showing. Once the person works in it
+        // (a key or a click that reaches the tab itself, not its review sheet) it is simply the
+        // active tab, and closing it later goes to its neighbour.
+        if returnTo != nil, attachedSheet == nil,
+            [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type)
+        {
+            returnTo = nil
+        }
+        super.sendEvent(event)
+    }
     override func close() {
         let wasVisible = isVisible
         let closingFrame = frame

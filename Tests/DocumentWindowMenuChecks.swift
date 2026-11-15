@@ -322,50 +322,76 @@ extension DocumentChecks {
             if !NSScreen.screens.isEmpty {
                 check(winE.frame == middleFrame, "the tab shown after a close takes the closed tab's frame")
             }
-            // A background tab with unsaved changes is brought forward for its review.
-            a.updateChangeCount(.changeDone)
-            try closeButton(for: winA, in: controlE).performClick(nil)
-            check(
-                winA.isVisible && !winE.isVisible && isOpen(a),
-                "closing a background tab with unsaved changes shows that tab and keeps its document open")
-            let sheet = winA.attachedSheet
-            check(sheet != nil, "the unsaved-changes review is presented on the tab that is now showing")
-            if let sheet {
-                let cancel = (sheet.contentView.map { descendants($0) } ?? []).compactMap { $0 as? NSButton }.first {
-                    $0.title == "Cancel"
+            // A background tab with unsaved changes is brought forward for its review. Each time
+            // the tab that was active is not the closed tab's neighbour, so the two can be told apart.
+            let leftArrow = try requireValue(
+                NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                    characters: "\u{F702}", charactersIgnoringModifiers: "\u{F702}", isARepeat: false, keyCode: 123),
+                "fixture: a Left Arrow key event")
+            @MainActor func cancelledClose(
+                _ document: TextDocument, _ window: NSWindow, from control: EditorWindowController,
+                keyDuringReview: Bool = false
+            ) throws {
+                document.updateChangeCount(.changeDone)
+                try closeButton(for: window, in: control).performClick(nil)
+                check(
+                    window.isVisible && control.window?.isVisible == false && isOpen(document),
+                    "closing a background tab with unsaved changes shows that tab and keeps its document open")
+                let sheet = window.attachedSheet
+                check(sheet != nil, "the unsaved-changes review is presented on the tab that is now showing")
+                if keyDuringReview { window.sendEvent(leftArrow) }
+                if let sheet {
+                    let cancel = (sheet.contentView.map { descendants($0) } ?? []).compactMap { $0 as? NSButton }
+                        .first { $0.title == "Cancel" }
+                    if let cancel { cancel.performClick(nil) } else { window.endSheet(sheet, returnCode: .cancel) }
+                    spinUntil("the cancelled review to leave") { window.attachedSheet == nil }
                 }
-                if let cancel { cancel.performClick(nil) } else { winA.endSheet(sheet, returnCode: .cancel) }
-                spinUntil("the cancelled review to leave") { winA.attachedSheet == nil }
+                check(isOpen(document) && window.isVisible, "cancelling the review keeps the tab open and showing")
+                document.updateChangeCount(.changeCleared)
             }
-            check(isOpen(a) && winA.isVisible, "cancelling the review keeps the tab open and showing")
-            // The cancelled close must not decide where a later close goes.
-            let (g, _, winG) = try tab("p21-G")
+            // The cancelled close must not decide where a later close goes: after a tab switch.
+            let (g, controlG, winG) = try tab("p21-G")
+            try cancelledClose(a, winA, from: controlG)
             winE.makeKeyAndOrderFront(nil)
             winA.makeKeyAndOrderFront(nil)
-            a.updateChangeCount(.changeCleared)
             a.close()
             check(
                 winE.isVisible && !winG.isVisible,
                 "after a cancelled close and a tab switch, closing the tab shows its neighbour again")
+            // And after the person has gone on working in the tab without switching.
+            let (h, controlH, winH) = try tab("p21-H")
+            try cancelledClose(e, winE, from: controlH)
+            winE.sendEvent(leftArrow)
+            e.close()
+            check(
+                winG.isVisible && !winH.isVisible,
+                "after a cancelled close and a key typed in the tab, closing the tab shows its neighbour again")
+            // Closed straight after the cancel, it still returns to the tab that was active; a key
+            // pressed while the review was up is not work in the tab.
+            let (i, controlI, winI) = try tab("p21-I")
+            try cancelledClose(g, winG, from: controlI, keyDuringReview: true)
+            g.close()
+            check(
+                winI.isVisible && !winH.isVisible,
+                "closed straight after a cancelled review, the tab returns to the tab that was active")
             // Quit: nothing is shown or laid out while the documents close.
-            winE.makeKeyAndOrderFront(nil)
-            let controllers = [
-                controlE, try requireValue(g.windowControllers.first as? EditorWindowController, "fixture")
-            ]
+            winH.makeKeyAndOrderFront(nil)
+            let controllers = [controlH, controlI]
             let before = controllers.map(\.statusRefreshCount)
             var shownDuringQuit = 0
             let observer = NotificationCenter.default.addObserver(
                 forName: NSWindow.didBecomeKeyNotification, object: nil, queue: nil
             ) { note in
-                if note.object as AnyObject? === winE || note.object as AnyObject? === winG { shownDuringQuit += 1 }
+                if note.object as AnyObject? === winH || note.object as AnyObject? === winI { shownDuringQuit += 1 }
             }
             sessionDelegate.closeAllForTermination()
             NotificationCenter.default.removeObserver(observer)
             check(
-                controllers.map(\.statusRefreshCount) == before && shownDuringQuit == 0 && !winE.isVisible
-                    && !winG.isVisible && NSDocumentController.shared.documents.isEmpty,
+                controllers.map(\.statusRefreshCount) == before && shownDuringQuit == 0 && !winH.isVisible
+                    && !winI.isVisible && NSDocumentController.shared.documents.isEmpty,
                 "closing every document for quit shows and refreshes no remaining tab")
-            withExtendedLifetime((controlA, e)) {}
+            withExtendedLifetime((controlA, controlE, h, i)) {}
         }
         section("a cancelled quit leaves the windows alone", #line) {
             let (document, _, window) = try tab("p21-quit-cancel")
