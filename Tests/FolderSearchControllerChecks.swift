@@ -285,6 +285,35 @@ import AppKit
             check(
                 openedResults.map(\.lastPathComponent) == ["a.txt", "c.txt"],
                 "results open again after the replacement")
+            // F111: closing the window during a replacement cancels it, but the controller stays busy
+            // until the file being committed is done, so nothing can search or open underneath it.
+            let closeGate = CommitGate()
+            busy.replacementBeforeCommit = { _ in closeGate.holdFirst() }
+            busy.replacementField.stringValue = "tack"
+            try require(
+                NSApp.sendAction(NSSelectorFromString("replaceMatchedFiles:"), to: busy, from: nil),
+                "fixture: second replacement dispatched")
+            await waitUntil("the second replacement to reach its first commit") { closeGate.isHolding }
+            busy.windowWillClose(Notification(name: NSWindow.willCloseNotification))
+            let pressedAfterClose = pressReturn()
+            busy.activateResult(row: 0)
+            check(
+                pressedAfterClose && busy.isSearching
+                    && busy.status.stringValue == "Replacement in progress; open results after it finishes."
+                    && openedResults.count == 2,
+                "closing the window during a replacement does not let a search or a result through")
+            closeGate.open()
+            await waitUntil("the replacement interrupted by closing to end") { !busy.isSearching }
+            check(
+                try busy.lastReplacementOutcomes.count == 3 && busy.numberOfRows(in: busy.table) == 0
+                    && busyFiles.allSatisfy {
+                        let bytes = try Data(contentsOf: $0)
+                        return bytes == Data("pin here\n".utf8) || bytes == Data("tack here\n".utf8)
+                    },
+                "the interrupted replacement keeps its outcomes, drops its stale results and leaves whole files")
+            let searchedAgain = pressReturn()
+            check(searchedAgain && busy.isSearching, "searching works again once the interrupted replacement ended")
+            await waitUntil("the search after the interrupted replacement to finish") { !busy.isSearching }
             // Keep the confirmation-alert flow below last. Once its modal session has ended, the next
             // wait of a second or so ends the process with status 0 and no summary line.
             // F253: Replace Matched Files through the controller, which is the only place that works

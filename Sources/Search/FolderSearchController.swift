@@ -366,10 +366,11 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             }.value
             guard let self else { return }
             self.retainReplacementOutcomes(outcomes)
-            guard self.generation == token else { return }
+            // The results are spent either way. A window closed meanwhile changed the generation
+            // and left this replacement in charge of ending the busy state.
             self.matches = []
             self.table.reloadData()
-            self.showReplacementReport(nil)
+            if self.generation == token { self.showReplacementReport(nil) }
             self.finish()
         }
     }
@@ -428,7 +429,9 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         try? saveSettings()
         cancelSearch(nil)
         generation = UUID()
-        finish()
+        // A cancelled replacement may still be committing its current file off the main thread.
+        // It stays busy, refusing a search or an opened result, until that task returns.
+        if !replacing { finish() }
     }
     func numberOfRows(in tableView: NSTableView) -> Int { matches.count }
     func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?, row: Int) -> Any? {
