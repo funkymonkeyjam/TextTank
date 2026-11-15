@@ -80,52 +80,16 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
             }
         }
         for (index, step) in steps.enumerated() {
-            if step.askForFind == true
-                && ![
-                    Step.Kind.replaceLiteral, .clearLinesMatching, .clearLinesEqualTo, .clearLinesContaining,
-                    .clearLinesStartingWith
-                ].contains(step.kind)
-            {
-                throw AutomationError.invalid("This step does not accept a find parameter.")
-            }
-            if step.askForReplacement == true && step.kind != .replaceLiteral {
-                throw AutomationError.invalid("This step does not accept a replacement parameter.")
-            }
-            // The text may be left empty only when the rule asks for it at run time.
-            let awaitsValue = step.askForFind == true && (step.find ?? "").isEmpty
-            if awaitsValue && requiringValues {
-                throw AutomationError.invalid(
-                    "Rule \(index + 1) needs a value: it asks for its text when running and none was supplied. Nothing was changed."
-                )
-            }
-            switch step.kind {
-            case .clearLinesEqualTo, .clearLinesContaining, .clearLinesStartingWith:
-                guard awaitsValue || !(step.find ?? "").isEmpty, step.replacement == nil else {
-                    throw AutomationError.invalid("This line rule needs nonempty text and no replacement.")
-                }
-            case .clearLinesMatching:
-                let pattern = step.find ?? ""
-                guard awaitsValue || !pattern.isEmpty, pattern.count <= 500, step.replacement == nil else {
-                    throw AutomationError.invalid(
-                        "removeMatchingLines requires a nonempty regex find (up to 500 characters) and no replacement.")
-                }
-                if !pattern.isEmpty {
-                    do { _ = try Self.wholeLineRegex(pattern) } catch {
-                        throw AutomationError.invalid(
-                            "Invalid removeMatchingLines regex: \(error.localizedDescription)")
-                    }
-                }
-            case .replaceLiteral:
-                guard awaitsValue || !(step.find ?? "").isEmpty, step.replacement != nil else {
-                    throw AutomationError.invalid("replaceLiteral requires a nonempty find and a replacement string.")
-                }
-            default:
-                guard step.find == nil, step.replacement == nil else {
-                    throw AutomationError.invalid(
-                        "Only replaceLiteral accepts find/replacement; removeMatchingLines accepts find only.")
-                }
-            }
+            try step.validate(requiringValues: requiringValues, position: index + 1)
         }
+    }
+    /// The first-run automations, in menu order. Restore Default Automations appends fresh copies.
+    static var firstRunPresets: [AutomationDefinition] { [.example, .remindersExample] }
+    /// Test Rules: the rules alone against a sample. The automation's name, shortcut, input and
+    /// output play no part, so an unfinished name in the builder cannot fail a test.
+    static func testRules(_ steps: [Step], sample: String, control: AutomationRunControl? = nil) throws -> String {
+        try AutomationDefinition(id: UUID(), name: "Rule test", input: .document, steps: steps, output: .editor)
+            .testSample(sample, control: control)
     }
     /// Resolves only explicitly configured prompts. Cancelling any prompt cancels the whole run.
     func resolvingParameters(_ ask: (Int, String, String) throws -> String?) throws -> AutomationDefinition? {
@@ -552,6 +516,247 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
     }
 }
 
+extension AutomationDefinition.Step.Kind {
+    /// The name the rule builder shows. Advanced JSON and rule files use `rawValue`.
+    var label: String {
+        switch self {
+        case .removeListMarkers: return "Remove bullet markers"
+        case .removeBlankLines: return "Remove empty lines"
+        case .sortLines: return "Sort lines (case-sensitive)"
+        case .sortLinesLocalized: return "Sort lines in locale order"
+        case .deduplicateLines: return "Remove duplicate lines"
+        case .replaceLiteral: return "Find and replace text"
+        case .clearLinesEqualTo: return "Clear lines equal to text"
+        case .clearLinesContaining: return "Clear lines containing text"
+        case .clearLinesStartingWith: return "Clear lines starting with text"
+        case .trimWhitespace: return "Trim spaces at line edges"
+        case .clearLinesMatching: return "Clear lines matching a pattern (advanced)"
+        case .clearMarkdownHeadings: return "Clear Markdown headings"
+        case .removeMarkdownFormatting: return "Remove Markdown formatting"
+        case .removeCheckboxMarkers: return "Remove checkbox markers"
+        case .removeNoteReferences: return "Remove numbered note references"
+        case .keepMarkedListRows: return "Keep marked list rows (strict)"
+        }
+    }
+    /// The one list of kinds that take text to match. Validation, the rule dialog and the JSON
+    /// reference all read it here.
+    var acceptsFind: Bool {
+        switch self {
+        case .replaceLiteral, .clearLinesMatching, .clearLinesEqualTo, .clearLinesContaining,
+            .clearLinesStartingWith:
+            return true
+        default: return false
+        }
+    }
+    var acceptsReplacement: Bool { self == .replaceLiteral }
+    /// The kind whose text to match is a regular expression.
+    var findIsPattern: Bool { self == .clearLinesMatching }
+    /// What the rule dialog calls the text to match for this kind.
+    var findTitle: String { findIsPattern ? "Pattern" : "Text to match" }
+    /// Both names, for a message that the rule builder and the JSON editor each show.
+    var described: String { "“\(label)” (\(rawValue) in JSON)" }
+    /// The JSON fields this kind takes, for the reference.
+    var parameters: String {
+        guard acceptsFind else { return "no parameters" }
+        let find = findIsPattern ? "find (whole-line regular expression)" : "find (literal text)"
+        return acceptsReplacement
+            ? find + ", replacement, askForFind, askForReplacement" : find + ", askForFind"
+    }
+}
+
+extension AutomationDefinition.Step {
+    /// One rule on its own, as `AutomationDefinition.validate` applies it to every rule. `position`
+    /// is the rule's 1-based place in its list, when it has one.
+    func validate(requiringValues: Bool = false, position: Int? = nil) throws {
+        if askForFind == true && !kind.acceptsFind {
+            throw AutomationError.invalid(
+                "\(kind.described) takes no text to match, so it cannot ask for one when running.")
+        }
+        if askForReplacement == true && !kind.acceptsReplacement {
+            throw AutomationError.invalid(
+                "\(kind.described) takes no replacement, so it cannot ask for one when running.")
+        }
+        // The text may be left empty only when the rule asks for it at run time.
+        let awaitsValue = askForFind == true && (find ?? "").isEmpty
+        if awaitsValue && requiringValues {
+            throw AutomationError.invalid(
+                "\(position.map { "Rule \($0)" } ?? "This rule") needs a value: it asks for its text when running and none was supplied. Nothing was changed."
+            )
+        }
+        guard kind.acceptsFind else {
+            guard find == nil, replacement == nil else {
+                throw AutomationError.invalid("\(kind.described) takes no text to match and no replacement.")
+            }
+            return
+        }
+        if kind.findIsPattern {
+            let pattern = find ?? ""
+            guard awaitsValue || !pattern.isEmpty, pattern.count <= 500, replacement == nil else {
+                throw AutomationError.invalid(
+                    "\(kind.described) needs a pattern of 1–500 characters and takes no replacement.")
+            }
+            if !pattern.isEmpty {
+                do { _ = try AutomationDefinition.wholeLineRegex(pattern) } catch {
+                    throw AutomationError.invalid(
+                        "The pattern for \(kind.described) is not a valid regular expression: \(error.localizedDescription)"
+                    )
+                }
+            }
+        } else if kind.acceptsReplacement {
+            guard awaitsValue || !(find ?? "").isEmpty, replacement != nil else {
+                throw AutomationError.invalid(
+                    "\(kind.described) needs text to match and a replacement, which may be empty.")
+            }
+        } else {
+            guard awaitsValue || !(find ?? "").isEmpty, replacement == nil else {
+                throw AutomationError.invalid("\(kind.described) needs text to match and takes no replacement.")
+            }
+        }
+    }
+    /// The rule the Configure Rule dialog returns for its controls. A field the kind does not take
+    /// is left out, and a prompt flag that is off is left out too, so a rule opened and saved
+    /// unchanged compares equal to the one that was opened and adds no keys to an exported file.
+    /// A flag stored as an explicit `false` stays `false` while the kind is unchanged.
+    static func configured(
+        kind: Kind, find: String, replacement: String, askForFind: Bool, askForReplacement: Bool,
+        from initial: AutomationDefinition.Step
+    ) -> AutomationDefinition.Step {
+        func flag(_ on: Bool, accepted: Bool, stored: Bool?) -> Bool? {
+            guard accepted else { return nil }
+            if on { return true }
+            return kind == initial.kind && stored == false ? false : nil
+        }
+        return AutomationDefinition.Step(
+            kind: kind, find: kind.acceptsFind ? find : nil, replacement: kind.acceptsReplacement ? replacement : nil,
+            askForFind: flag(askForFind, accepted: kind.acceptsFind, stored: initial.askForFind),
+            askForReplacement: flag(
+                askForReplacement, accepted: kind.acceptsReplacement, stored: initial.askForReplacement))
+    }
+    /// One line for the rule list: the kind, its text, its replacement and whether it asks when run.
+    var summary: String {
+        func quoted(_ text: String) -> String { "“\(text.replacingOccurrences(of: "\n", with: "↵").prefix(70))”" }
+        var text = kind.label
+        if let find { text += "  ·  " + quoted(find) }
+        if let replacement { text += " → " + quoted(replacement) }
+        switch (askForFind == true, askForReplacement == true) {
+        case (true, true): text += "  ·  asks for both when run"
+        case (true, false): text += "  ·  asks for the text when run"
+        case (false, true): text += "  ·  asks for the replacement when run"
+        case (false, false): break
+        }
+        return text
+    }
+}
+
+extension AutomationDefinition {
+    /// The rule kinds as Advanced JSON spells them, one line each, generated from `Kind.allCases`
+    /// so that a new kind cannot be left out.
+    static var ruleKindReference: String {
+        Step.Kind.allCases.map { "\($0.rawValue) — \($0.label). Takes \($0.parameters)." }.joined(separator: "\n")
+    }
+    /// The help shown above the Advanced JSON editor.
+    static var advancedHelp: String {
+        "Edit the JSON below. Rename by changing name and keeping id unchanged. "
+            + "Input: selection, document, clipboard, file. Output: editor, clipboard, newDocument, file, reminders. "
+            + "Each entry of steps has a kind from the list below and only the fields that kind takes. "
+            + "Set askForFind or askForReplacement true to be asked for that text on every run. "
+            + "Optional shortcut: one lowercase letter, bound to Command-Option. "
+            + "Set previewBeforeApply true for a preview before the result is applied. "
+            + "Set pinToToolbar true to list the automation first, as a favorite, in the Automations menus. "
+            + "No automation runs when saved or imported."
+    }
+}
+
+/// The rule builder's ordered list and its selected row. Every change keeps the selection on a
+/// row that exists and refuses to pass the rule limit; a method returns false when it did nothing.
+struct RuleListDraft: Equatable {
+    static let maximumRules = 100
+    private(set) var steps: [AutomationDefinition.Step]
+    private(set) var selected: Int?
+    init(_ steps: [AutomationDefinition.Step]) {
+        self.steps = steps
+        selected = steps.isEmpty ? nil : 0
+    }
+    var canAdd: Bool { steps.count < Self.maximumRules }
+    var canDuplicate: Bool { selected != nil && canAdd }
+    var canMoveUp: Bool { (selected ?? 0) > 0 }
+    var canMoveDown: Bool { selected.map { $0 + 1 < steps.count } ?? false }
+    /// Follows the list's own selection: a row that does not exist means no selection.
+    mutating func select(_ row: Int) { selected = steps.indices.contains(row) ? row : nil }
+    private mutating func settle(on row: Int) { selected = steps.isEmpty ? nil : max(0, min(row, steps.count - 1)) }
+    mutating func add(_ step: AutomationDefinition.Step) -> Bool {
+        guard canAdd else { return false }
+        steps.append(step)
+        settle(on: steps.count - 1)
+        return true
+    }
+    mutating func replaceSelected(with step: AutomationDefinition.Step) -> Bool {
+        guard let selected else { return false }
+        steps[selected] = step
+        return true
+    }
+    mutating func duplicateSelected() -> Bool {
+        guard let selected, canAdd else { return false }
+        steps.insert(steps[selected], at: selected + 1)
+        settle(on: selected + 1)
+        return true
+    }
+    mutating func removeSelected() -> Bool {
+        guard let selected else { return false }
+        steps.remove(at: selected)
+        settle(on: selected)
+        return true
+    }
+    mutating func moveSelectedUp() -> Bool {
+        guard let selected, canMoveUp else { return false }
+        steps.swapAt(selected, selected - 1)
+        settle(on: selected - 1)
+        return true
+    }
+    mutating func moveSelectedDown() -> Bool {
+        guard let selected, canMoveDown else { return false }
+        steps.swapAt(selected, selected + 1)
+        settle(on: selected + 1)
+        return true
+    }
+    /// Load Rules: the whole list is replaced and the first rule selected.
+    mutating func replaceAll(with replacement: [AutomationDefinition.Step]) {
+        steps = replacement
+        settle(on: 0)
+    }
+}
+
+/// Which test outcome the rule builder may show. A test presents the token it was started with;
+/// every later test, edit or close moves the generation on, so a late result is refused.
+struct RulePreviewState: Equatable {
+    private(set) var generation = 0
+    private(set) var isRunning = false
+    private(set) var showsOutcome = false
+    /// Starts a test and returns the token its outcome must present.
+    mutating func begin() -> Int {
+        generation += 1
+        isRunning = true
+        showsOutcome = false
+        return generation
+    }
+    /// True when the outcome belongs to the test that is still current and may be shown.
+    mutating func finish(_ token: Int) -> Bool {
+        guard isRunning, token == generation else { return false }
+        isRunning = false
+        showsOutcome = true
+        return true
+    }
+    /// An edit, or the builder closing. Returns whether an outcome was on show or a test under way,
+    /// which is when the builder has something stale to say so about.
+    mutating func invalidate() -> Bool {
+        let hadSomething = isRunning || showsOutcome
+        generation += 1
+        isRunning = false
+        showsOutcome = false
+        return hadSomething
+    }
+}
+
 enum AutomationError: LocalizedError {
     case invalid(String)
     var errorDescription: String? {
@@ -634,25 +839,39 @@ enum AutomationFileInput {
         }
         return text
     }
+    /// A byte limit as a person reads it: "32 MiB", "64 KiB" or "2 bytes".
+    static func describe(limit: Int) -> String {
+        if limit >= 1_048_576, limit % 1_048_576 == 0 { return "\(limit / 1_048_576) MiB" }
+        if limit >= 1024, limit % 1024 == 0 { return "\(limit / 1024) KiB" }
+        return "\(limit) bytes"
+    }
     static func readData(_ url: URL, limit: Int) throws -> Data {
         guard url.isFileURL else { throw AutomationError.invalid("Choose a local text file.") }
         let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-        guard descriptor >= 0 else { throw CocoaError(.fileReadNoPermission) }
+        // The system's own reason: a missing file, a symbolic link (not followed) and a permission
+        // problem are different things to fix.
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { close(descriptor) }
         var info = stat()
-        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= limit else {
-            throw AutomationError.invalid("Automation input must be a regular file no larger than 32 MiB.")
+        guard fstat(descriptor, &info) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard info.st_mode & S_IFMT == S_IFREG else {
+            throw AutomationError.invalid("Automation input must be a regular file, not a folder, pipe or device.")
+        }
+        guard info.st_size <= limit else {
+            throw AutomationError.invalid(
+                "This file is larger than the \(describe(limit: limit)) limit for this input.")
         }
         var data = Data(), chunk = [UInt8](repeating: 0, count: 65536)
         while true {
             let count = Darwin.read(descriptor, &chunk, chunk.count)
             if count < 0 {
                 if errno == EINTR { continue }
-                throw CocoaError(.fileReadUnknown)
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             }
             if count == 0 { break }
             guard data.count <= limit - count else {
-                throw AutomationError.invalid("Automation file input exceeds its size limit.")
+                throw AutomationError.invalid(
+                    "This file is larger than the \(describe(limit: limit)) limit for this input.")
             }
             data.append(contentsOf: chunk.prefix(count))
         }
@@ -683,6 +902,39 @@ struct AutomationRuleSet: Codable {
         let data = try encoder.encode(self)
         guard data.count <= 1_048_576 else { throw AutomationError.invalid("Rule files must be at most 1 MiB.") }
         return data
+    }
+}
+
+/// What Load Rules → Import File finds in a file: the rules of a rule file, or the rules of each
+/// automation in a library export. Only steps are ever taken from either.
+enum AutomationRuleImport {
+    static let fallbackName = "Imported rules"
+    static func ruleSets(from data: Data) throws -> (sets: [AutomationRuleSet], fromLibrary: Bool) {
+        guard data.count <= 1_048_576 else { throw AutomationError.invalid("Rule files must be at most 1 MiB.") }
+        let decoder = JSONDecoder()
+        let ruleSet: AutomationRuleSet
+        do { ruleSet = try decoder.decode(AutomationRuleSet.self, from: data) } catch is DecodingError {
+            let library: AutomationLibrary
+            do { library = try decoder.decode(AutomationLibrary.self, from: data) } catch is DecodingError {
+                throw AutomationError.invalid(
+                    "This is not a rule file that this version of TextTank can read. Choose a file written by Export Rules, or an automation library exported from Advanced JSON."
+                )
+            }
+            try library.validate()
+            guard !library.workflows.isEmpty else {
+                throw AutomationError.invalid(
+                    "This automation library holds no automations, so it has no rules to load.")
+            }
+            return (library.workflows.map { AutomationRuleSet(name: $0.name, steps: $0.steps) }, true)
+        }
+        // Only the steps are applied, so a missing or over-long name does not refuse the file; the
+        // name is a label in the confirmation and nothing more.
+        guard ruleSet.version == 1 else { throw AutomationError.invalid("Unsupported rule-set version.") }
+        let name = ruleSet.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let imported = AutomationRuleSet(
+            name: name.isEmpty || name.count > 120 ? fallbackName : name, steps: ruleSet.steps)
+        try imported.validate()
+        return ([imported], false)
     }
 }
 

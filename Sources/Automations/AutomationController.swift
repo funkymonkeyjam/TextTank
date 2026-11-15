@@ -16,12 +16,16 @@ extension Notification.Name {
     static let textTankAutomationsDidChange = Notification.Name("TextTankAutomationsDidChange")
 }
 
-final class AutomationController: NSObject, NSMenuDelegate {
+final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation {
     private let editorProvider: () -> TTEditor?
     private let newDocument: (String) -> Void
     private let storage: URL
     private var library = AutomationLibrary(workflows: [])
+    /// An existing library that could not be read. It is never overwritten; see `persistLibrary`.
     private var loadError: Error?
+    /// No library existed and the first write of the presets failed. This does not block saving.
+    private var installError: Error?
+    private var installErrorReported = false
     private var busy = false
     /// The pasteboard used for clipboard input and output. Checks substitute a private one.
     var pasteboard = NSPasteboard.general
@@ -52,12 +56,27 @@ final class AutomationController: NSObject, NSMenuDelegate {
                     AutomationFileInput.readData(storage, limit: AutomationLibrary.maximumBytes))
             } catch { loadError = error }
         } else if errno != ENOENT {
-            loadError = CocoaError(.fileReadNoPermission)
+            loadError = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         } else {
             // Presets are ordinary editable definitions, installed only for a new configuration.
-            do { try persistLibrary(AutomationLibrary(workflows: [.example, .remindersExample])) } catch {
-                loadError = error
-            }
+            // There is no library to protect here, so a failed first write does not block the
+            // session: the presets stay in memory and the next save writes them.
+            library = AutomationLibrary(workflows: AutomationDefinition.firstRunPresets)
+            do { try persistLibrary(library) } catch { installError = error }
+        }
+    }
+    /// The first write of the starting automations failed. Tries again; if it still fails, says so
+    /// once and lets the session carry on with the automations held in memory.
+    private func retryInstall() {
+        guard installError != nil else { return }
+        do { try persistLibrary(library) } catch {
+            installError = error
+            guard !installErrorReported else { return }
+            installErrorReported = true
+            showError(
+                AutomationError.invalid(
+                    "The starting automations could not be saved yet: \(error.localizedDescription)\nThey stay available until you quit, and the next change you save is written again."
+                ))
         }
     }
     func menu() -> NSMenu {
@@ -179,6 +198,10 @@ final class AutomationController: NSObject, NSMenuDelegate {
             title: "Review Reminder Export History…", action: #selector(reminderHistory), keyEquivalent: "")
         history.target = self
         automationMenu.addItem(history)
+        let restore = NSMenuItem(
+            title: "Restore Default Automations…", action: #selector(restoreDefaultsAction), keyEquivalent: "")
+        restore.target = self
+        automationMenu.addItem(restore)
         if !library.workflows.isEmpty { automationMenu.addItem(.separator()) }
         for workflow in library.workflows {
             let item = NSMenuItem(
@@ -191,18 +214,38 @@ final class AutomationController: NSObject, NSMenuDelegate {
     }
     @objc private func manageAction() { manage() }
     @objc private func paletteAction() { showPalette() }
+    @objc private func restoreDefaultsAction() { restoreDefaultAutomations() }
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(restoreDefaultsAction) { return !busy && !exportInProgress }
+        return true
+    }
+    /// A picker with one item for every automation, in order. Items are built as menu items,
+    /// because `addItem(withTitle:)` removes an earlier item with the same title and two
+    /// automations may share a name. Each item carries its automation's UUID.
+    static func workflowPopup(for workflows: [AutomationDefinition], width: CGFloat = 550) -> NSPopUpButton {
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: width, height: 28), pullsDown: false)
+        for workflow in workflows {
+            let item = NSMenuItem(title: workflow.name, action: nil, keyEquivalent: "")
+            item.representedObject = workflow.id.uuidString
+            popup.menu?.addItem(item)
+        }
+        popup.setAccessibilityLabel("Automation")
+        return popup
+    }
     func manage() {
         guard !busy, !exportInProgress else { return }
         if let loadError {
             showError(loadError)
             return
         }
+        busy = true
+        defer { busy = false }
+        retryInstall()
         guard !library.workflows.isEmpty else {
+            busy = false
             createAutomation()
             return
         }
-        busy = true
-        defer { busy = false }
         let choose = TTAlert()
         choose.messageText = "Manage Automations"
         choose.informativeText =
@@ -211,11 +254,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
             ("Edit", "automation.edit"), ("Cancel", "automation.cancel"), ("Advanced JSON…", "automation.json"),
             ("Create Automation…", "automation.create"), ("Delete Automation", "automation.delete")
         ] { choose.addButton(withTitle: title).identifier = NSUserInterfaceItemIdentifier(id) }
-        let selection = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 550, height: 28), pullsDown: false)
-        for workflow in library.workflows {
-            selection.addItem(withTitle: workflow.name)
-            selection.lastItem?.representedObject = workflow.id.uuidString
-        }
+        let selection = Self.workflowPopup(for: library.workflows)
         choose.accessoryView = selection
         let response = choose.runModal()
         if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
@@ -248,18 +287,32 @@ final class AutomationController: NSObject, NSMenuDelegate {
         }
         guard response == .alertFirstButtonReturn,
             let id = selection.selectedItem?.representedObject as? String,
-            let index = library.workflows.firstIndex(where: { $0.id.uuidString == id })
+            let workflow = library.workflows.first(where: { $0.id.uuidString == id })
         else { return }
-        var workflow = library.workflows[index]
+        editSettings(of: workflow, creating: false)
+    }
+    /// The settings dialog that Edit and Create Automation share. It stays open until a Save has
+    /// been written or the user cancels, so an error on Save (a taken shortcut, an empty name, a
+    /// failed write) costs neither the settings typed here nor the rule edits made behind it.
+    /// `busy` is held by the caller for the whole dialog.
+    private func editSettings(of initial: AutomationDefinition, creating: Bool) {
+        // Carries the rules, and the name, across Edit Rules round trips. The controls are the
+        // only source for every other field, and a failed Save never writes into this.
+        var workflow = initial
         let edit = TTAlert()
-        edit.messageText = "Edit Automation"
+        edit.messageText = creating ? "New Automation" : "Edit Automation"
         edit.informativeText =
-            "The name changes its labels, not its behavior. Editor changes can be undone. Reminders always requires an explicit destination and Send."
-        edit.addButton(withTitle: "Save")
-        edit.addButton(withTitle: "Cancel")
-        edit.addButton(withTitle: "Edit Rules & Test…")
+            (creating
+                ? "Nothing is saved until you press Save; Cancel discards the new automation and its rules. " : "")
+            + "The name changes its labels, not its behavior. Editor changes can be undone. Reminders always requires an explicit destination and Send."
+        for (title, id) in [
+            ("Save", "automation.settings.save"), ("Cancel", "automation.settings.cancel"),
+            ("Edit Rules & Test…", "automation.settings.rules")
+        ] { edit.addButton(withTitle: title).identifier = NSUserInterfaceItemIdentifier(id) }
         let name = NSTextField(string: workflow.name)
+        name.identifier = NSUserInterfaceItemIdentifier("automation.settings.name")
         let shortcut = NSTextField(string: workflow.shortcut ?? "")
+        shortcut.identifier = NSUserInterfaceItemIdentifier("automation.settings.shortcut")
         shortcut.placeholderString = "Lowercase letter for Command-Option; blank for none"
         let input = NSPopUpButton()
         let output = NSPopUpButton()
@@ -287,40 +340,58 @@ final class AutomationController: NSObject, NSMenuDelegate {
                 continue
             }
             guard response == .alertFirstButtonReturn else { return }
-            break
-        }
-        do {
             edit.window.makeFirstResponder(nil)
-            workflow.name = name.stringValue
-            workflow.shortcut = shortcut.stringValue
+            var candidate = workflow
+            candidate.name = name.stringValue
+            // No shortcut is stored as no value, not as an empty string.
+            candidate.shortcut = shortcut.stringValue.isEmpty ? nil : shortcut.stringValue
             if let value = input.titleOfSelectedItem, let typed = AutomationDefinition.Input(rawValue: value) {
-                workflow.input = typed
+                candidate.input = typed
             }
             if let value = output.titleOfSelectedItem, let typed = AutomationDefinition.Output(rawValue: value) {
-                workflow.output = typed
+                candidate.output = typed
             }
-            workflow.previewBeforeApply = preview.state == .on
-            workflow.pinToToolbar = pinned.state == .on
-            var proposed = library
-            proposed.workflows[index] = workflow
-            try checkShortcutCollisions(proposed)
-            try persistLibrary(proposed)
-        } catch { showError(error) }
+            candidate.previewBeforeApply = preview.state == .on
+            candidate.pinToToolbar = pinned.state == .on
+            if creating && candidate.steps.isEmpty {
+                let confirm = TTAlert()
+                confirm.messageText = "Save an automation with no rules?"
+                confirm.informativeText =
+                    "It will pass its text through unchanged until you add rules with Edit Rules & Test."
+                confirm.addButton(withTitle: "Save Without Rules").identifier = NSUserInterfaceItemIdentifier(
+                    "automation.settings.saveEmpty")
+                confirm.addButton(withTitle: "Cancel")
+                guard confirm.runModal() == .alertFirstButtonReturn else { continue }
+            }
+            do {
+                var proposed = library
+                if let index = proposed.workflows.firstIndex(where: { $0.id == candidate.id }) {
+                    proposed.workflows[index] = candidate
+                } else if creating {
+                    proposed.workflows.append(candidate)
+                } else {
+                    throw AutomationError.invalid("This automation no longer exists.")
+                }
+                try checkShortcutCollisions(proposed)
+                try persistLibrary(proposed)
+                return
+            } catch { showError(error) }
+        }
     }
+    /// Create Automation: the rule builder first, then the same settings dialog as Edit. Nothing
+    /// is saved until that dialog's Save.
     private func createAutomation() {
         guard !busy, !exportInProgress else { return }
         busy = true
         defer { busy = false }
         let definition = AutomationDefinition(
             id: UUID(), name: "My Automation", input: .document, steps: [], output: .editor, pinToToolbar: false)
-        do {
-            guard let edited = AutomationStepEditor.edit(definition, savedWorkflows: library.workflows) else { return }
-            var proposed = library
-            proposed.workflows.append(edited)
-            try persistLibrary(proposed)
-        } catch { showError(error) }
+        guard let edited = AutomationStepEditor.edit(definition, savedWorkflows: library.workflows) else { return }
+        editSettings(of: edited, creating: true)
     }
-    @objc func addRecipeButtons() {
+    /// Adds fresh copies of the automations a new installation starts with, under new identifiers.
+    /// Nothing already saved is replaced, including edited copies of the same presets.
+    func restoreDefaultAutomations() {
         guard !busy, !exportInProgress else { return }
         if let loadError {
             showError(loadError)
@@ -328,32 +399,24 @@ final class AutomationController: NSObject, NSMenuDelegate {
         }
         busy = true
         defer { busy = false }
-        let alert = TTAlert()
-        alert.messageText = "Add Recipe Buttons"
-        alert.informativeText =
-            "The first button cleans the current document in place, with Undo. The second sends its nonblank rows to a Reminders list you choose. Name them however you like. Existing automations are kept."
-        alert.addButton(withTitle: "Add Buttons")
-        alert.addButton(withTitle: "Cancel")
-        let cleanName = NSTextField(string: AutomationDefinition.example.name)
-        let sendName = NSTextField(string: AutomationDefinition.remindersExample.name)
-        let preview = NSButton(
-            checkboxWithTitle: "Preview cleanup before applying (optional)", target: nil, action: nil)
-        alert.accessoryView = settingsView(
-            rows: [("Cleanup name", cleanName), ("Send name", sendName)], options: [preview])
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let presets = AutomationDefinition.firstRunPresets
+        let confirm = TTAlert()
+        confirm.messageText = "Add the default automations?"
+        confirm.informativeText =
+            "This adds new copies of \(presets.map { "‘\($0.name)’" }.joined(separator: " and ")) as they ship with this version. Your saved automations are kept as they are, including any you edited or renamed."
+        confirm.addButton(withTitle: "Add Defaults").identifier = NSUserInterfaceItemIdentifier(
+            "automation.restore.confirm")
+        confirm.addButton(withTitle: "Cancel")
+        guard confirm.runModal() == .alertFirstButtonReturn else { return }
         do {
-            alert.window.makeFirstResponder(nil)
-            var clean = AutomationDefinition.example
-            clean.id = UUID()
-            clean.name = cleanName.stringValue
-            clean.previewBeforeApply = preview.state == .on
-            clean.pinToToolbar = true
-            var send = AutomationDefinition.remindersExample
-            send.id = UUID()
-            send.name = sendName.stringValue
-            send.pinToToolbar = true
             var proposed = library
-            proposed.workflows.append(contentsOf: [clean, send])
+            proposed.workflows += presets.map { preset in
+                var copy = preset
+                copy.id = UUID()
+                copy.shortcut = nil
+                copy.destinationID = nil
+                return copy
+            }
             try checkShortcutCollisions(proposed)
             try persistLibrary(proposed)
         } catch { showError(error) }
@@ -388,15 +451,29 @@ final class AutomationController: NSObject, NSMenuDelegate {
         }
         busy = true
         defer { busy = false }
+        retryInstall()
         let alert = TTAlert()
         alert.messageText = "Advanced Automation Configuration"
-        alert.informativeText =
-            "Edit the JSON below. Rename by changing name, keeping id unchanged. Input: selection, document, clipboard, file. Output: editor, clipboard, newDocument, file, reminders. Steps: removeListMarkers, removeCheckboxMarkers, removeMarkdownFormatting, removeNoteReferences, trimWhitespace, keepMarkedListRows, removeBlankLines, sortLines (character-code order), sortLinesLocalized (locale order), deduplicateLines, replaceLiteral (find/replacement), removeLinesEqualTo, removeLinesContaining and removeLinesStartingWith (literal find), removeMatchingLines (whole-line regex find), removeMarkdownHeadings. The removeLines…, removeMatchingLines and removeMarkdownHeadings steps empty a matching line and keep its line ending; add removeBlankLines after them to drop the empty lines. Optional shortcut: a lowercase letter, bound to Command-Option. Set previewBeforeApply true for a preview, false or omit to apply directly. Set pinToToolbar true for a named toolbar button. Mixed line endings are retained unless a line-reordering step requires a uniform format. No automation runs when saved or imported."
-        for title in ["Save", "Cancel", "Import…", "Export…"] { alert.addButton(withTitle: title) }
-        let text = makeTextView(height: 400)
-        let initial = library.workflows.isEmpty ? AutomationLibrary(workflows: [.example]) : library
-        text.editor.string = String(data: (try? initial.encoded()) ?? Data(), encoding: .utf8) ?? ""
-        alert.accessoryView = text.scroll
+        alert.informativeText = AutomationDefinition.advancedHelp
+        for (title, id) in [
+            ("Save", "automation.json.save"), ("Cancel", "automation.json.cancel"),
+            ("Import…", "automation.json.import"),
+            ("Export…", "automation.json.export"), ("Insert Example", "automation.json.example")
+        ] { alert.addButton(withTitle: title).identifier = NSUserInterfaceItemIdentifier(id) }
+        // The rule kinds, generated from the kinds themselves, above the editable JSON.
+        let reference = makeTextView(height: 96)
+        reference.editor.isEditable = false
+        reference.editor.string = AutomationDefinition.ruleKindReference
+        reference.editor.setAccessibilityLabel("Rule kinds reference")
+        let text = makeTextView(height: 330)
+        text.editor.setAccessibilityLabel("Automation library JSON")
+        // An empty library is shown as an empty library; Insert Example adds the example on request.
+        text.editor.string = String(data: (try? library.encoded()) ?? Data(), encoding: .utf8) ?? ""
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 650, height: 434))
+        reference.scroll.frame.origin = NSPoint(x: 0, y: 338)
+        accessory.addSubview(reference.scroll)
+        accessory.addSubview(text.scroll)
+        alert.accessoryView = accessory
         while true {
             let response = alert.runModal()
             if response == .alertSecondButtonReturn { return }
@@ -412,13 +489,22 @@ final class AutomationController: NSObject, NSMenuDelegate {
                     }
                     continue
                 }
-                let proposed = try AutomationLibrary.decode(Data(text.editor.string.utf8))
+                var proposed = try AutomationLibrary.decode(Data(text.editor.string.utf8))
                 if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
                     let panel = NSSavePanel()
                     panel.nameFieldStringValue = "TextTank-Automations.json"
                     if panel.runModal() == .OK, let url = panel.url {
                         try proposed.encoded().write(to: url, options: .atomic)
                     }
+                    continue
+                }
+                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 4 {
+                    // The example shows the shape of an automation. It joins the JSON in the editor
+                    // only; nothing is saved until Save.
+                    var example = AutomationDefinition.example
+                    if proposed.workflows.contains(where: { $0.id == example.id }) { example.id = UUID() }
+                    proposed.workflows.append(example)
+                    text.editor.string = String(data: try proposed.encoded(), encoding: .utf8)!
                     continue
                 }
                 try checkShortcutCollisions(proposed)
@@ -451,7 +537,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
         }
         let temporary = directory.appendingPathComponent(".automations-" + UUID().uuidString)
         let descriptor = open(temporary.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-        guard descriptor >= 0 else { throw CocoaError(.fileWriteNoPermission) }
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer {
             try? handle.close()
@@ -460,7 +546,10 @@ final class AutomationController: NSObject, NSMenuDelegate {
         try handle.write(contentsOf: data)
         try handle.synchronize()
         try handle.close()
-        guard rename(temporary.path, storage.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        guard rename(temporary.path, storage.path) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        installError = nil
         library = proposed
         rebuild()
         NotificationCenter.default.post(name: .textTankAutomationsDidChange, object: self)
@@ -481,7 +570,8 @@ final class AutomationController: NSObject, NSMenuDelegate {
         }
         let keys = NSApp.mainMenu.map(existing) ?? []
         for workflow in proposed.workflows {
-            if let key = workflow.shortcut, keys.contains(key) {
+            // No shortcut, however it is stored, collides with nothing.
+            if let key = workflow.shortcut, !key.isEmpty, keys.contains(key) {
                 throw AutomationError.invalid(
                     "Command-Option-\(key.uppercased()) is already assigned to an application command.")
             }

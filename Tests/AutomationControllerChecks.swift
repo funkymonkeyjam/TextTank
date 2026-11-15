@@ -236,12 +236,10 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         check(
             trail == expectedTrail,
             "duplicate, move, remove and add keep the row count, the selection and the Move buttons in step")
-        // The Configure Rule dialog writes both ask flags as false on the rule it returns.
+        // G387: a prompt flag that is off is left out of the rule the Configure Rule dialog returns.
         check(
-            edited.value?.steps == [
-                literal("a"), literal("a"), .init(kind: .removeBlankLines, askForFind: false, askForReplacement: false),
-                literal("c")
-            ], "Use These Rules returns the rules in the edited order")
+            edited.value?.steps == [literal("a"), literal("a"), .init(kind: .removeBlankLines), literal("c")],
+            "Use These Rules returns the rules in the edited order")
         check(
             edited.value?.id == definition.id && edited.value?.name == definition.name
                 && edited.value?.input == definition.input && edited.value?.output == definition.output,
@@ -259,6 +257,609 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         check(
             cancelled.acted && !cancelled.timedOut && cancelled.value == nil,
             "Cancel after removing a rule returns no draft")
+    }
+    /// Runs `trigger`, which opens a modal from inside a modal timer callback, and calls `act` once
+    /// with that nested modal. A repeating timer cannot fire again while its own callback is still
+    /// running, so the nested modal needs a timer of its own. Returns whether `act` ran.
+    @discardableResult
+    static func nestedModal(_ act: @escaping (NSWindow, [NSView]) -> Void, _ trigger: () -> Void) -> Bool {
+        let outer = NSApp.modalWindow, deadline = Date().addingTimeInterval(8)
+        var acted = false
+        let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+            guard let modal = NSApp.modalWindow, modal !== outer, let content = modal.contentView else {
+                return
+            }
+            if acted || Date() > deadline {
+                if Date() > deadline { NSApp.abortModal() }
+                return
+            }
+            acted = true
+            act(modal, descendants(content))
+        }
+        RunLoop.main.add(timer, forMode: .modalPanel)
+        trigger()
+        timer.invalidate()
+        return acted
+    }
+    static func field(_ identifier: String, in views: [NSView]) -> NSTextField? {
+        views.compactMap { $0 as? NSTextField }.first { $0.identifier?.rawValue == identifier }
+    }
+    static func shows(_ text: String, in views: [NSView]) -> Bool {
+        views.contains { ($0 as? NSTextField)?.stringValue == text }
+    }
+    static func textView(_ label: String, in views: [NSView]) -> NSTextView? {
+        views.compactMap { $0 as? NSTextView }.first { $0.accessibilityLabel() == label }
+    }
+    /// The OK button of a plain error alert, which has none of the app's own button identifiers.
+    static func errorAlertButton(in views: [NSView]) -> NSButton? {
+        let buttons = views.compactMap { $0 as? NSButton }
+        let ours = buttons.contains {
+            guard let identifier = $0.identifier?.rawValue else { return false }
+            return identifier.hasPrefix("automation") || identifier.hasPrefix("rule")
+        }
+        return ours ? nil : buttons.first { $0.title == "OK" && !$0.isHidden }
+    }
+    static func errorAlertText(in views: [NSView]) -> String {
+        views.compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: "\n")
+    }
+    /// Audit package 15: the automation editor and library dialogs, on their own support directory.
+    static func package15Checks(root: URL) throws {
+        typealias Step = AutomationDefinition.Step
+        let support = root.appendingPathComponent("package15", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        setenv("TEXTTANK_SUPPORT_DIRECTORY", support.path, 1)
+        defer { setenv("TEXTTANK_SUPPORT_DIRECTORY", root.path, 1) }
+        let path = support.appendingPathComponent("Automations.json")
+        func stored() throws -> AutomationLibrary { try AutomationLibrary.decode(Data(contentsOf: path)) }
+        let controller = AutomationController(editorProvider: { nil }, newDocument: { _ in })
+
+        Checks.section("G375 pickers keep automations that share a name") {
+            var first = AutomationDefinition.example, second = AutomationDefinition.example
+            first.id = UUID()
+            second.id = UUID()
+            second.steps = [Step(kind: .trimWhitespace)]
+            let third = AutomationDefinition.remindersExample
+            let popup = AutomationController.workflowPopup(for: [first, second, third])
+            check(popup.numberOfItems == 3, "G375 Manage Automations lists both automations that share a name")
+            check(
+                popup.itemArray.map { $0.representedObject as? String }
+                    == [first.id.uuidString, second.id.uuidString, third.id.uuidString],
+                "G375 each Manage Automations item carries its own automation's identifier, in order")
+            let saved = [first, second, third].map { AutomationRuleSet(name: $0.name, steps: $0.steps) }
+            let templates = AutomationTemplates.loadAll().sets
+            try require(templates.count == 3, "fixture: the three bundled templates load")
+            let sets = saved + templates
+            let choices = AutomationStepEditor.ruleSetPopup(saved: saved, templates: templates)
+            check(choices.numberOfItems == sets.count, "G375 Load Rules lists every saved automation and template")
+            var mapped = true
+            for index in sets.indices {
+                choices.selectItem(at: index)
+                let chosen = AutomationStepEditor.selectedRuleSet(in: choices, from: sets)
+                if chosen?.steps != sets[index].steps || chosen?.name != sets[index].name { mapped = false }
+            }
+            check(mapped, "G375 every Load Rules item resolves to its own rule set")
+            choices.selectItem(withTitle: "Template: Recipe ingredient cleanup")
+            check(
+                AutomationStepEditor.selectedRuleSet(in: choices, from: sets)?.steps
+                    == (try AutomationTemplates.load("recipe-ingredient-cleanup")).steps,
+                "G375 the last template is reachable when two saved automations share a name")
+            check(
+                choices.itemArray.prefix(3).allSatisfy { $0.title.hasPrefix("Saved: ") }
+                    && choices.itemArray.dropFirst(3).allSatisfy { $0.title.hasPrefix("Template: ") },
+                "G375 saved automations and templates keep their prefixes")
+        }
+
+        Checks.section("G386 rule guidance") {
+            let kinds = Step.Kind.allCases
+            check(
+                kinds.allSatisfy { !$0.guidance.isEmpty && !$0.guidance.contains("below") },
+                "G386 every rule kind has guidance and none points below the dialog")
+            check(
+                Set(kinds.map(\.guidance)).count == kinds.count - 2,
+                "G386 guidance is specific to the kind (the three literal line rules share one)")
+            check(
+                [Step.Kind.removeBlankLines, .sortLines, .sortLinesLocalized, .deduplicateLines].allSatisfy {
+                    $0.guidance.contains("line ending")
+                }, "G386 the rules that refuse mixed line endings say so")
+            check(
+                Step.Kind.clearMarkdownHeadings.guidance.contains("stays in place"),
+                "G386 the heading rule says the emptied line stays")
+            var patternTitle = false, literalTitle = false, patternGuidance = false
+            let configured = drivingModal(
+                timeout: 8,
+                { _, views in
+                    guard let popup = views.compactMap({ $0 as? NSPopUpButton }).first,
+                        let cancel = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
+                    else { return false }
+                    literalTitle = shows("Text to match", in: views) && !shows("Pattern", in: views)
+                    popup.selectItem(at: kinds.firstIndex(of: .clearLinesMatching)!)
+                    if let action = popup.action { NSApp.sendAction(action, to: popup.target, from: popup) }
+                    patternTitle = shows("Pattern", in: views) && !shows("Text to match", in: views)
+                    patternGuidance = shows(Step.Kind.clearLinesMatching.guidance, in: views)
+                    cancel.performClick(nil)
+                    return true
+                }
+            ) { AutomationStepEditor.editStep(Step(kind: .clearLinesEqualTo, find: "x")) }
+            check(
+                configured.acted && !configured.timedOut && configured.value == nil,
+                "the Configure Rule dialog was driven and cancelled")
+            check(
+                literalTitle && patternTitle, "G386 the text field is titled Pattern only for the pattern rule")
+            check(patternGuidance, "G386 the dialog shows the selected kind's own guidance")
+        }
+
+        Checks.section("rule builder: opening, layout, test and accept") {
+            var definition = AutomationDefinition.example
+            definition.name = ""
+            definition.steps = [
+                Step(kind: .replaceLiteral, find: "x", replacement: "y", askForReplacement: true),
+                Step(kind: .trimWhitespace)
+            ]
+            var stage = 0, openingStatus = "", openingResult = "x", title = "", rowText = ""
+            var resizable = false, grew = false, unambiguous = false, clear = false
+            var testedStatus = "", testedResult = "", staleStatus = "", staleResult = "x", untouchedStatus = ""
+            var nameError = "", addedNested = false, rowCountAfterAdd = 0
+            let edited = drivingModal(
+                timeout: 20,
+                { modal, views in
+                    guard let table = views.compactMap({ $0 as? NSTableView }).first,
+                        let status = field("rules.status", in: views), let sample = textView("Sample input", in: views),
+                        let result = textView("Test result", in: views), let test = button("rules.test", in: views),
+                        let use = button("rules.use", in: views), let add = button("rules.add", in: views),
+                        let remove = button("rules.remove", in: views), let load = button("rules.load", in: views),
+                        let name = views.compactMap({ $0 as? NSTextField }).first(where: {
+                            $0.accessibilityLabel() == "Automation name" && $0.isEditable
+                        })
+                    else { return false }
+                    switch stage {
+                    case 0:
+                        openingStatus = status.stringValue
+                        openingResult = result.string
+                        title = modal.title
+                        rowText =
+                            (table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSTextField)?.stringValue ?? ""
+                        resizable = modal.styleMask.contains(.resizable)
+                        let rules = table.enclosingScrollView!, pane = sample.enclosingScrollView!
+                        modal.layoutIfNeeded()
+                        let before = (rules.frame.size, pane.frame.size, result.enclosingScrollView!.frame.size)
+                        clear =
+                            !remove.convert(remove.bounds, to: nil).intersects(load.convert(load.bounds, to: nil))
+                            && before.1.width == before.2.width
+                        modal.setContentSize(NSSize(width: 1300, height: 980))
+                        modal.layoutIfNeeded()
+                        grew =
+                            rules.frame.width > before.0.width + 200 && rules.frame.height > before.0.height + 50
+                            && pane.frame.width > before.1.width + 100 && pane.frame.height > before.1.height + 50
+                            && sample.frame.width > before.1.width
+                        unambiguous = !(modal.contentView?.hasAmbiguousLayout ?? true)
+                        // A rule edit with nothing tested yet leaves the opening instruction alone.
+                        remove.performClick(nil)
+                        untouchedStatus = status.stringValue
+                        sample.insertText("  xx  \n", replacementRange: NSRange(location: 0, length: 0))
+                        test.performClick(nil)
+                        stage = 1
+                    case 1:
+                        guard !result.string.isEmpty else { return false }
+                        testedStatus = status.stringValue
+                        testedResult = result.string
+                        sample.insertText("more", replacementRange: NSRange(location: 0, length: 0))
+                        staleStatus = status.stringValue
+                        staleResult = result.string
+                        addedNested = nestedModal({ _, nested in button("rule.save", in: nested)?.performClick(nil) }) {
+                            add.performClick(nil)
+                        }
+                        rowCountAfterAdd = table.numberOfRows
+                        // The name is still blank: Use These Rules reports it and the builder stays.
+                        nestedModal({ _, nested in
+                            nameError = errorAlertText(in: nested)
+                            errorAlertButton(in: nested)?.performClick(nil)
+                        }) { use.performClick(nil) }
+                        stage = 2
+                    case 2:
+                        name.selectText(nil)
+                        typeKeys("Named in the builder", in: modal)
+                        use.performClick(nil)
+                        return true
+                    default: break
+                    }
+                    return false
+                }
+            ) { AutomationStepEditor.edit(definition) }
+            check(
+                edited.acted && !edited.timedOut && stage == 2, "the rule builder was driven through to Use These Rules"
+            )
+            check(
+                openingStatus == AutomationStepEditor.openingInstruction && openingResult.isEmpty,
+                "G385 a freshly opened builder shows the opening instruction, not a stale-result message")
+            check(
+                untouchedStatus == AutomationStepEditor.openingInstruction,
+                "G385 editing rules before any test leaves the opening instruction in place")
+            check(title == "Edit Rules", "G383 the builder's title does not repeat a name that may be stale")
+            check(
+                rowText == "1. Find and replace text  ·  “x” → “y”  ·  asks for the replacement when run",
+                "G386 a rule row shows the replacement and the prompt flag")
+            check(resizable, "F313 the rule builder window is resizable")
+            check(clear, "F313 the rule buttons do not overlap Load Rules and the two text panes are equally wide")
+            check(grew, "F313 the rule list and the text panes grow with the window")
+            check(unambiguous, "F313 the rule builder layout is not ambiguous")
+            check(
+                testedResult == "xx\n" && testedStatus.hasPrefix("Test passed"),
+                "G383 Test Rules runs the rules although the automation name is blank")
+            check(
+                staleStatus == AutomationStepEditor.staleInstruction && staleResult.isEmpty,
+                "G385 editing the sample after a test clears the result and says it is stale")
+            check(addedNested && rowCountAfterAdd == 2, "G379 Add Rule appended the nested default rule")
+            check(nameError.contains("needs a name"), "Use These Rules still refuses a blank name")
+            check(
+                edited.value?.name == "Named in the builder"
+                    && edited.value?.steps == [Step(kind: .trimWhitespace), Step(kind: .removeBlankLines)]
+                    && edited.value?.id == definition.id && edited.value?.input == definition.input
+                    && edited.value?.output == definition.output,
+                "G379 Use These Rules returns the edited name and rules and nothing else changed")
+        }
+
+        Checks.section("F203 and F70: a failed Save keeps the edit dialog and its work") {
+            var library = try stored()
+            try require(library.workflows.count == 2, "fixture: the two first-run automations")
+            library.workflows[0].steps = [Step(kind: .trimWhitespace), Step(kind: .removeBlankLines)]
+            // An older file may hold an empty string for "no shortcut".
+            library.workflows[1].shortcut = ""
+            try controller.persistLibrary(library)
+            let seeded = try Data(contentsOf: path)
+            let previousMenu = NSApp.mainMenu
+            defer { NSApp.mainMenu = previousMenu }
+            let menu = NSMenu(title: "Main"), host = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+            let submenu = NSMenu(title: "Edit")
+            let taken = NSMenuItem(title: "Taken", action: nil, keyEquivalent: "j")
+            taken.keyEquivalentModifierMask = [.command, .option]
+            // F70: a Command-Option item with no key must not collide with "no shortcut".
+            let keyless = NSMenuItem(title: "Keyless", action: nil, keyEquivalent: "")
+            keyless.keyEquivalentModifierMask = [.command, .option]
+            submenu.addItem(taken)
+            submenu.addItem(keyless)
+            host.submenu = submenu
+            menu.addItem(host)
+            NSApp.mainMenu = menu
+            var stage = 0, errorText = "", reopened = false, keptName = "", keptShortcut = "",
+                unchangedOnFailure = false
+            let managed = drivingModal(
+                timeout: 20,
+                { modal, views in
+                    switch stage {
+                    case 0:
+                        guard let edit = button("automation.edit", in: views) else { return false }
+                        stage = 1
+                        edit.performClick(nil)
+                    case 1:
+                        guard let rules = button("automation.settings.rules", in: views) else { return false }
+                        stage = 2
+                        rules.performClick(nil)
+                    case 2:
+                        guard let remove = button("rules.remove", in: views), let use = button("rules.use", in: views)
+                        else { return false }
+                        stage = 3
+                        remove.performClick(nil)
+                        use.performClick(nil)
+                    case 3:
+                        guard let save = button("automation.settings.save", in: views),
+                            let name = field("automation.settings.name", in: views),
+                            let shortcut = field("automation.settings.shortcut", in: views)
+                        else { return false }
+                        stage = 4
+                        name.selectText(nil)
+                        typeKeys("Renamed after rule edits", in: modal)
+                        shortcut.selectText(nil)
+                        typeKeys("j", in: modal)
+                        save.performClick(nil)
+                    case 4:
+                        guard let ok = errorAlertButton(in: views) else { return false }
+                        stage = 5
+                        errorText = errorAlertText(in: views)
+                        ok.performClick(nil)
+                    case 5:
+                        guard let save = button("automation.settings.save", in: views),
+                            let name = field("automation.settings.name", in: views),
+                            let shortcut = field("automation.settings.shortcut", in: views)
+                        else { return false }
+                        stage = 6
+                        reopened = shows("Edit Automation", in: views)
+                        keptName = name.stringValue
+                        keptShortcut = shortcut.stringValue
+                        unchangedOnFailure = (try? Data(contentsOf: path)) == seeded
+                        modal.makeFirstResponder(nil)
+                        shortcut.stringValue = ""
+                        save.performClick(nil)
+                        return true
+                    default: break
+                    }
+                    return false
+                }
+            ) { controller.manage() }
+            check(
+                managed.acted && !managed.timedOut && stage == 6,
+                "the Edit Automation chain was driven to its second Save")
+            check(
+                errorText.contains("Command-Option-J is already assigned"),
+                "a shortcut taken by an application command is refused on Save")
+            check(reopened, "F203 after the error the Edit Automation dialog is open again")
+            check(
+                keptName == "Renamed after rule edits" && keptShortcut == "j",
+                "F203 the typed name and shortcut are still in the fields")
+            check(unchangedOnFailure, "F203 the failed Save left the stored library untouched")
+            let after = try stored()
+            check(
+                after.workflows[0].name == "Renamed after rule edits"
+                    && after.workflows[0].steps == [Step(kind: .removeBlankLines)]
+                    && after.workflows[0].id == library.workflows[0].id,
+                "F203 the second Save stores the new name together with the rule edits made before the error")
+            check(after.workflows[0].shortcut == nil, "F70 a blank shortcut field is stored as no shortcut")
+            let object = try JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any]
+            let first = (object?["workflows"] as? [[String: Any]])?.first
+            check(
+                first?["name"] as? String == "Renamed after rule edits" && first?["shortcut"] == nil,
+                "F70 the stored automation has no shortcut key at all")
+            check(
+                after.workflows[1] == library.workflows[1],
+                "F70 an empty-string shortcut on another automation does not collide with a keyless menu command")
+            check(NSApp.modalWindow == nil, "no modal session is left open after Edit Automation")
+        }
+
+        Checks.section("G384 Create Automation goes through the settings step") {
+            let before = try Data(contentsOf: path), countBefore = try stored().workflows.count
+            var stage = 0, settingsShown = false, unsavedAtSettings = false, unsavedAfterDeclining = false
+            let created = drivingModal(
+                timeout: 20,
+                { modal, views in
+                    switch stage {
+                    case 0:
+                        guard let create = button("automation.create", in: views) else { return false }
+                        stage = 1
+                        create.performClick(nil)
+                    case 1:
+                        guard let use = button("rules.use", in: views),
+                            let name = views.compactMap({ $0 as? NSTextField }).first(where: {
+                                $0.stringValue == "My Automation" && $0.isEditable
+                            })
+                        else { return false }
+                        stage = 2
+                        name.selectText(nil)
+                        typeKeys("Created through settings", in: modal)
+                        use.performClick(nil)
+                    case 2:
+                        guard let save = button("automation.settings.save", in: views),
+                            let shortcut = field("automation.settings.shortcut", in: views)
+                        else { return false }
+                        stage = 3
+                        settingsShown =
+                            shows("New Automation", in: views)
+                            && field("automation.settings.name", in: views)?.stringValue == "Created through settings"
+                        unsavedAtSettings = (try? Data(contentsOf: path)) == before
+                        shortcut.selectText(nil)
+                        typeKeys("q", in: modal)
+                        save.performClick(nil)
+                    case 3:
+                        // No rules: the first answer is Cancel, which returns to the settings.
+                        guard button("automation.settings.saveEmpty", in: views) != nil,
+                            let cancel = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
+                        else { return false }
+                        stage = 4
+                        cancel.performClick(nil)
+                    case 4:
+                        guard let save = button("automation.settings.save", in: views) else { return false }
+                        stage = 5
+                        unsavedAfterDeclining = (try? Data(contentsOf: path)) == before
+                        save.performClick(nil)
+                    case 5:
+                        guard let confirm = button("automation.settings.saveEmpty", in: views) else { return false }
+                        stage = 6
+                        confirm.performClick(nil)
+                        return true
+                    default: break
+                    }
+                    return false
+                }
+            ) { controller.manage() }
+            check(created.acted && !created.timedOut && stage == 6, "the Create Automation chain was driven to Save")
+            check(
+                settingsShown,
+                "G384 Use These Rules in a new automation opens the settings dialog with the draft's name")
+            check(unsavedAtSettings, "G384 nothing is saved when the rule builder returns")
+            check(unsavedAfterDeclining, "G384 declining to save an automation with no rules saves nothing")
+            let after = try stored()
+            check(
+                after.workflows.count == countBefore + 1 && after.workflows.last?.name == "Created through settings"
+                    && after.workflows.last?.shortcut == "q" && after.workflows.last?.steps == []
+                    && after.workflows.last?.input == .document && after.workflows.last?.output == .editor,
+                "G384 Save in the settings dialog stores the new automation with its chosen settings")
+            let saved = try Data(contentsOf: path)
+            stage = 0
+            let abandoned = drivingModal(
+                timeout: 20,
+                { _, views in
+                    switch stage {
+                    case 0:
+                        guard let create = button("automation.create", in: views) else { return false }
+                        stage = 1
+                        create.performClick(nil)
+                    case 1:
+                        guard let use = button("rules.use", in: views) else { return false }
+                        stage = 2
+                        use.performClick(nil)
+                    case 2:
+                        guard let cancel = button("automation.settings.cancel", in: views) else { return false }
+                        stage = 3
+                        cancel.performClick(nil)
+                        return true
+                    default: break
+                    }
+                    return false
+                }
+            ) { controller.manage() }
+            check(
+                try abandoned.acted && !abandoned.timedOut && Data(contentsOf: path) == saved,
+                "G384 Cancel in the settings dialog of a new automation saves nothing")
+        }
+
+        Checks.section("G364 and G381: Advanced JSON, Insert Example and Restore Default Automations") {
+            try controller.persistLibrary(AutomationLibrary(workflows: []))
+            let empty = try Data(contentsOf: path)
+            var stage = 0, initialJSON = "", referenceText = "", helpShown = false
+            var afterFirst: AutomationLibrary?, afterSecond: AutomationLibrary?
+            let advanced = drivingModal(
+                timeout: 20,
+                { _, views in
+                    guard let json = textView("Automation library JSON", in: views),
+                        let example = button("automation.json.example", in: views),
+                        let cancel = button("automation.json.cancel", in: views)
+                    else { return false }
+                    switch stage {
+                    case 0:
+                        stage = 1
+                        initialJSON = json.string
+                        referenceText = textView("Rule kinds reference", in: views)?.string ?? ""
+                        helpShown = shows(AutomationDefinition.advancedHelp, in: views)
+                        example.performClick(nil)
+                    case 1:
+                        stage = 2
+                        afterFirst = try? AutomationLibrary.decode(Data(json.string.utf8))
+                        example.performClick(nil)
+                    case 2:
+                        stage = 3
+                        afterSecond = try? AutomationLibrary.decode(Data(json.string.utf8))
+                        cancel.performClick(nil)
+                        return true
+                    default: break
+                    }
+                    return false
+                }
+            ) { controller.manageAdvanced() }
+            check(advanced.acted && !advanced.timedOut && stage == 3, "the Advanced JSON dialog was driven")
+            check(
+                (try? AutomationLibrary.decode(Data(initialJSON.utf8)))?.workflows.isEmpty == true,
+                "G364 an empty library is shown as an empty library, not pre-filled with the example")
+            check(
+                afterFirst?.workflows == [AutomationDefinition.example],
+                "G364 Insert Example adds the example automation to the JSON in the editor")
+            check(
+                afterSecond?.workflows.count == 2 && afterSecond?.workflows[1].id != AutomationDefinition.example.id
+                    && afterSecond?.workflows[1].steps == AutomationDefinition.example.steps,
+                "G364 a second Insert Example gets its own identifier")
+            check(
+                (try Data(contentsOf: path)) == empty, "G364 Insert Example followed by Cancel saves nothing")
+            check(
+                helpShown && referenceText == AutomationDefinition.ruleKindReference
+                    && Step.Kind.allCases.allSatisfy { referenceText.contains($0.rawValue) },
+                "G381 the Advanced JSON dialog shows the generated help and every rule kind")
+            let restoreItem = controller.menu().items.first { $0.title == "Restore Default Automations…" }
+            check(
+                restoreItem != nil && restoreItem?.target === controller
+                    && restoreItem.map(controller.validateMenuItem) == true,
+                "G364 the Automations menu has an enabled Restore Default Automations command")
+            // Keep one edited automation, then restore twice.
+            var mine = AutomationDefinition.example
+            mine.name = "My edited cleanup"
+            mine.steps = [Step(kind: .trimWhitespace)]
+            try controller.persistLibrary(AutomationLibrary(workflows: [mine]))
+            func restore(confirming: Bool) -> Bool {
+                let run = drivingModal(
+                    timeout: 10,
+                    { _, views in
+                        guard let confirm = button("automation.restore.confirm", in: views),
+                            let cancel = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
+                        else { return false }
+                        (confirming ? confirm : cancel).performClick(nil)
+                        return true
+                    }
+                ) { controller.restoreDefaultAutomations() }
+                return run.acted && !run.timedOut
+            }
+            check(
+                try restore(confirming: false) && stored().workflows == [mine],
+                "G364 cancelling Restore Default Automations changes nothing")
+            check(restore(confirming: true), "Restore Default Automations was confirmed")
+            let restored = try stored()
+            let presets = AutomationDefinition.firstRunPresets
+            check(
+                restored.workflows.count == 3 && restored.workflows[0] == mine
+                    && restored.workflows.dropFirst().map(\.name) == presets.map(\.name)
+                    && restored.workflows.dropFirst().map(\.steps) == presets.map(\.steps)
+                    && restored.workflows.dropFirst().map(\.output) == presets.map(\.output),
+                "G364 restoring appends the current presets and keeps the edited automation as it was")
+            check(
+                Set(restored.workflows.map(\.id)).count == 3
+                    && restored.workflows.dropFirst().allSatisfy { copy in !presets.contains { $0.id == copy.id } },
+                "G364 restored presets get new identifiers")
+            check(
+                try restore(confirming: true) && stored().workflows.count == 5
+                    && Array(stored().workflows.prefix(3)) == restored.workflows,
+                "G364 restoring again appends again and overwrites nothing")
+        }
+
+        Checks.section("F75 a failed first write does not block the session") {
+            let locked = root.appendingPathComponent("package15-locked", isDirectory: true)
+            let lockedSupport = locked.appendingPathComponent("support", isDirectory: true)
+            let lockedPath = lockedSupport.appendingPathComponent("Automations.json")
+            try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+            try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: locked.path)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path) }
+            setenv("TEXTTANK_SUPPORT_DIRECTORY", lockedSupport.path, 1)
+            let blocked = AutomationController(editorProvider: { nil }, newDocument: { _ in })
+            setenv("TEXTTANK_SUPPORT_DIRECTORY", support.path, 1)
+            try require(
+                !FileManager.default.fileExists(atPath: lockedPath.path),
+                "fixture: the first write of the presets failed")
+            check(
+                blocked.toolbarIdentifiers().count == 2
+                    && blocked.menu().items.contains { $0.title == AutomationDefinition.example.name },
+                "F75 the presets are available in memory after a failed first write")
+            // Manage reports the failure once, then opens as usual.
+            var reports: [String] = [], manageOpened = 0
+            func manageAndCancel() -> Bool {
+                var stage = 0
+                let run = drivingModal(
+                    timeout: 10,
+                    { _, views in
+                        if stage == 0, let ok = errorAlertButton(in: views) {
+                            stage = 1
+                            reports.append(errorAlertText(in: views))
+                            ok.performClick(nil)
+                            return false
+                        }
+                        guard let cancel = button("automation.cancel", in: views) else { return false }
+                        manageOpened += 1
+                        cancel.performClick(nil)
+                        return true
+                    }
+                ) { blocked.manage() }
+                return run.acted && !run.timedOut
+            }
+            check(manageAndCancel() && manageAndCancel(), "Manage Automations opened twice while the folder was locked")
+            check(
+                reports.count == 1 && reports[0].contains("could not be saved yet") && manageOpened == 2,
+                "F75 the failed first write is reported once and Manage Automations still opens")
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path)
+            var renamed = AutomationLibrary(workflows: AutomationDefinition.firstRunPresets)
+            renamed.workflows[0].name = "Saved after the folder was unlocked"
+            try blocked.persistLibrary(renamed)
+            check(
+                (try AutomationLibrary.decode(Data(contentsOf: lockedPath))) == renamed,
+                "F75 once the folder is writable the next save succeeds")
+            // The other branch: an existing library that cannot be read still blocks every write.
+            let unreadable = root.appendingPathComponent("package15-unreadable", isDirectory: true)
+            try FileManager.default.createDirectory(at: unreadable, withIntermediateDirectories: true)
+            let unreadablePath = unreadable.appendingPathComponent("Automations.json")
+            let damaged = Data("{ not a library".utf8)
+            try damaged.write(to: unreadablePath)
+            setenv("TEXTTANK_SUPPORT_DIRECTORY", unreadable.path, 1)
+            let refusing = AutomationController(editorProvider: { nil }, newDocument: { _ in })
+            setenv("TEXTTANK_SUPPORT_DIRECTORY", support.path, 1)
+            rejects("F75 an existing unreadable library still refuses every save") {
+                try refusing.persistLibrary(renamed)
+            }
+            check(
+                (try Data(contentsOf: unreadablePath)) == damaged && refusing.toolbarIdentifiers().isEmpty,
+                "F75 an existing unreadable library is never overwritten and no presets are substituted")
+        }
     }
     static func horizontalDialogChecks() throws {
         let alert = TTAlert()
@@ -578,6 +1179,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     "Cancel from keyboard-edited rule draft preserves saved definitions")
             }
             Checks.section("rule list editing") { ruleListChecks() }
+            Checks.section("audit package 15") { try package15Checks(root: root) }
             Checks.section("large-input worker path") {
                 // F124 and G409: every run is on a worker; one that outlasts the short wait gets the
                 // modal progress panel, whatever the size of its input.

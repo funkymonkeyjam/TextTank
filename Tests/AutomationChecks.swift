@@ -239,9 +239,24 @@ import Darwin
             rejects("file bound") { _ = try AutomationFileInput.read(utf8, limit: 2) }
             let link = root.appendingPathComponent("link")
             try FileManager.default.createSymbolicLink(at: link, withDestinationURL: utf8)
-            rejects("symlink input", where: { ($0 as? CocoaError)?.code == .fileReadNoPermission }) {
+            // F72: the error is the system's own reason, and a size message names the limit in force.
+            rejects("symlink input is refused as a symbolic link", where: { ($0 as? POSIXError)?.code == .ELOOP }) {
                 _ = try AutomationFileInput.read(link)
             }
+            rejects("F72 a missing input file is reported as missing", where: { ($0 as? POSIXError)?.code == .ENOENT })
+            { _ = try AutomationFileInput.read(root.appendingPathComponent("absent.txt")) }
+            rejects("F72 an oversized input names the limit that applies", message: "larger than the 2 bytes limit") {
+                _ = try AutomationFileInput.read(utf8, limit: 2)
+            }
+            rejects("F72 a folder is refused as not a regular file", message: "must be a regular file") {
+                _ = try AutomationFileInput.readData(root, limit: 1_048_576)
+            }
+            check(
+                AutomationFileInput.describe(limit: 1_048_576) == "1 MiB"
+                    && AutomationFileInput.describe(limit: 32 * 1024 * 1024) == "32 MiB"
+                    && AutomationFileInput.describe(limit: 65536) == "64 KiB"
+                    && AutomationFileInput.describe(limit: 1500) == "1500 bytes",
+                "F72 a limit is described in the unit it was given in")
             let fifo = root.appendingPathComponent("fifo")
             try require(mkfifo(fifo.path, 0o600) == 0, "fixture: FIFO created")
             let started = ProcessInfo.processInfo.systemUptime
@@ -817,6 +832,285 @@ import Darwin
             check(
                 html("<SCRIPT type='x'>var a = '</p>';</SCRIPT><P>ok</P>") == "ok\n",
                 "F141 tag names are matched without regard to case")
+            Checks.section("audit package 15: rule editor support") {
+                typealias Step = AutomationDefinition.Step
+                let kinds = Step.Kind.allCases
+                // G383: Test Rules is independent of the automation's name; Save is not.
+                check(
+                    try AutomationDefinition.testRules(
+                        friendly.steps, sample: "Serves: 4\n Ingredients \n ½ cup flour \n2 eggs\n2 eggs\n")
+                        == "½ cup flour\n2 eggs\n2 eggs\n", "G383 rule preview is independent of the workflow name")
+                var blankName = friendly
+                blankName.name = ""
+                rejects("G383 definition with blank name still fails validate", message: "needs a name") {
+                    try blankName.validate()
+                }
+                rejects("G383 a sample test of a blank-named definition still fails", message: "needs a name") {
+                    _ = try blankName.testSample("x")
+                }
+                rejects("G383 the rule preview keeps the 64 KiB sample limit", message: "64 KiB") {
+                    _ = try AutomationDefinition.testRules([], sample: String(repeating: "a", count: 65537))
+                }
+                let cancelledPreview = AutomationRunControl()
+                cancelledPreview.cancel()
+                rejects("G383 the rule preview honours cancellation", message: "Automation cancelled") {
+                    _ = try AutomationDefinition.testRules([], sample: "x", control: cancelledPreview)
+                }
+                // G387: one list of find-accepting kinds, used by validation.
+                check(
+                    Set(kinds.filter(\.acceptsFind)) == [
+                        .replaceLiteral, .clearLinesMatching, .clearLinesEqualTo, .clearLinesContaining,
+                        .clearLinesStartingWith
+                    ] && kinds.filter(\.acceptsReplacement) == [.replaceLiteral],
+                    "G387 the kinds that take text to match and a replacement are listed once on the kind")
+                for kind in kinds {
+                    let withFind = Step(kind: kind, find: "x", replacement: kind.acceptsReplacement ? "y" : nil)
+                    check(
+                        ((try? withFind.validate()) != nil) == kind.acceptsFind,
+                        "G387 \(kind.rawValue): validation accepts text to match exactly when the kind does")
+                    let asking = Step(kind: kind, find: kind.acceptsFind ? "x" : nil, askForReplacement: true)
+                    check(
+                        (try? asking.validate()) == nil || kind.acceptsReplacement,
+                        "G387 \(kind.rawValue): a replacement prompt is refused unless the kind takes a replacement")
+                }
+                check(
+                    Step.configured(
+                        kind: .trimWhitespace, find: "", replacement: "", askForFind: false, askForReplacement: false,
+                        from: Step(kind: .trimWhitespace)) == Step(kind: .trimWhitespace),
+                    "G387 a rule saved unchanged equals the rule that was opened")
+                for step in AutomationDefinition.example.steps + [
+                    Step(kind: .replaceLiteral, find: "a", replacement: ""),
+                    Step(kind: .clearLinesEqualTo, find: "", askForFind: true),
+                    Step(kind: .replaceLiteral, find: "a", replacement: "b", askForFind: false, askForReplacement: true)
+                ] {
+                    check(
+                        Step.configured(
+                            kind: step.kind, find: step.find ?? "", replacement: step.replacement ?? "",
+                            askForFind: step.askForFind == true, askForReplacement: step.askForReplacement == true,
+                            from: step) == step, "G387 \(step.summary) round-trips unchanged through the rule dialog")
+                }
+                let offFlags = Step.configured(
+                    kind: .replaceLiteral, find: "a", replacement: "b", askForFind: false, askForReplacement: false,
+                    from: Step(kind: .removeBlankLines))
+                check(
+                    offFlags.askForFind == nil && offFlags.askForReplacement == nil,
+                    "G387 a prompt flag that is off is left out, not written as false")
+                let exportedOff = String(
+                    data: try AutomationRuleSet(name: "n", steps: [offFlags]).encoded(), encoding: .utf8)!
+                check(
+                    !exportedOff.contains("askFor"), "G387 an exported rule with no prompts carries no prompt keys")
+                let changedKind = Step.configured(
+                    kind: .trimWhitespace, find: "left over", replacement: "left over", askForFind: true,
+                    askForReplacement: true, from: Step(kind: .replaceLiteral, find: "a", replacement: "b"))
+                check(
+                    changedKind == Step(kind: .trimWhitespace),
+                    "G387 fields and prompts the chosen kind does not take are dropped")
+                let explicitFalse = Data(
+                    #"{"version":1,"name":"old","steps":[{"kind":"trimWhitespace","askForFind":false,"askForReplacement":false}]}"#
+                        .utf8)
+                check(
+                    try AutomationRuleSet.decode(explicitFalse).steps
+                        == [Step(kind: .trimWhitespace, askForFind: false, askForReplacement: false)],
+                    "G387 an old file with explicit false prompt flags still decodes")
+                rejects("G387 a single rule validates without a probe definition", message: "needs text to match") {
+                    try Step(kind: .clearLinesContaining, find: "").validate()
+                }
+                rejects("G387 a rule that asks with no value is named as this rule when it has no position") {
+                    try Step(kind: .clearLinesContaining, find: "", askForFind: true).validate(requiringValues: true)
+                }
+                // G381: the JSON reference and the messages are generated from the kinds.
+                let reference = AutomationDefinition.ruleKindReference
+                check(
+                    kinds.allSatisfy { reference.contains($0.rawValue + " — " + $0.label) },
+                    "G381 the Advanced JSON reference lists every rule kind with its label")
+                check(
+                    reference.components(separatedBy: "\n").count == kinds.count,
+                    "G381 the reference has one line for each kind")
+                check(
+                    Set(kinds.map(\.label)).count == kinds.count && Set(kinds.map(\.rawValue)).count == kinds.count,
+                    "G381 every rule kind has its own label")
+                let help = AutomationDefinition.advancedHelp
+                check(
+                    help.contains("askForFind") && help.contains("askForReplacement") && help.contains("favorite")
+                        && !help.contains("toolbar button"),
+                    "G381 the Advanced JSON help names the prompt fields and describes pins as favorites")
+                rejects(
+                    "G381 a stray find on a kind that takes none is reported with the kind's label",
+                    message: "“Trim spaces at line edges” (trimWhitespace in JSON) takes no text to match"
+                ) { try Step(kind: .trimWhitespace, find: "x").validate() }
+                rejects(
+                    "G381 a pattern error names the rule by its label and JSON kind",
+                    message: "“Clear lines matching a pattern (advanced)” (removeMatchingLines in JSON)"
+                ) { try Step(kind: .clearLinesMatching, find: "[").validate() }
+                rejects(
+                    "G381 a literal line rule with a replacement is reported for that kind",
+                    message: "“Clear lines equal to text” (removeLinesEqualTo in JSON) needs text to match"
+                ) { try Step(kind: .clearLinesEqualTo, find: "x", replacement: "y").validate() }
+                // G389: the reference document's table cannot drift from the kinds.
+                let rulesDocument = try String(
+                    contentsOf: TestPaths.repoRoot.appendingPathComponent("docs/AUTOMATION-RULES.md"), encoding: .utf8)
+                check(
+                    kinds.allSatisfy { rulesDocument.contains("| \($0.label) | `\($0.rawValue)` |") },
+                    "G389 the rules reference lists every kind with its builder label and JSON name")
+                for kind in kinds {
+                    let row = rulesDocument.components(separatedBy: "\n").first {
+                        $0.contains("| `\(kind.rawValue)` |")
+                    }
+                    check(
+                        (row?.contains("`find`") == true) == kind.acceptsFind
+                            && (row?.contains("`replacement`") == true) == kind.acceptsReplacement,
+                        "G389 \(kind.rawValue): the reference names exactly the parameters the kind takes")
+                }
+                // G386: a row shows the replacement and the prompt flags.
+                check(
+                    Step(kind: .replaceLiteral, find: "x", replacement: "y").summary
+                        == "Find and replace text  ·  “x” → “y”", "G386 a replace rule's row shows its replacement")
+                check(
+                    Step(kind: .replaceLiteral, find: "x", replacement: "").summary
+                        != Step(kind: .replaceLiteral, find: "x", replacement: "z").summary,
+                    "G386 replace rules with the same text to match are told apart by their rows")
+                check(
+                    Step(kind: .clearLinesEqualTo, find: "a\nb", askForFind: true).summary
+                        == "Clear lines equal to text  ·  “a↵b”  ·  asks for the text when run"
+                        && Step(
+                            kind: .replaceLiteral, find: "x", replacement: "y", askForFind: true,
+                            askForReplacement: true
+                        ).summary.hasSuffix("asks for both when run")
+                        && Step(kind: .replaceLiteral, find: "x", replacement: "y", askForReplacement: true).summary
+                            .hasSuffix("asks for the replacement when run"),
+                    "G386 a row marks a rule that asks for its values when run")
+                check(
+                    Step(kind: .removeBlankLines).summary == "Remove empty lines"
+                        && Step.Kind.sortLines.label == "Sort lines (case-sensitive)"
+                        && Step.Kind.clearLinesMatching.findTitle == "Pattern"
+                        && Step.Kind.replaceLiteral.findTitle == "Text to match",
+                    "G386 the sort rule says it is case-sensitive and the pattern rule calls its field Pattern")
+                // G379: the rule list as a value.
+                func rule(_ text: String) -> Step { Step(kind: .clearLinesEqualTo, find: text) }
+                var list = RuleListDraft([rule("a"), rule("b"), rule("c")])
+                check(list.selected == 0 && !list.canMoveUp && list.canMoveDown, "G379 a list opens on its first rule")
+                check(
+                    list.duplicateSelected() && list.steps.map(\.find) == ["a", "a", "b", "c"] && list.selected == 1,
+                    "G379 duplicate inserts after the selected rule and selects the copy")
+                check(
+                    list.moveSelectedDown() && list.moveSelectedDown() && list.steps.map(\.find) == ["a", "b", "c", "a"]
+                        && list.selected == 3, "G379 move down carries the selection with the rule")
+                check(
+                    !list.moveSelectedDown() && !list.canMoveDown && list.selected == 3,
+                    "G379 the last rule cannot move down")
+                check(
+                    list.moveSelectedUp() && list.selected == 2 && list.steps.map(\.find) == ["a", "b", "a", "c"],
+                    "G379 move up carries the selection with the rule")
+                list.select(3)
+                check(
+                    list.removeSelected() && list.steps.map(\.find) == ["a", "b", "a"] && list.selected == 2,
+                    "G379 removing the last rule clamps the selection to the new last rule")
+                list.select(0)
+                check(
+                    list.removeSelected() && list.selected == 0 && list.steps.map(\.find) == ["b", "a"]
+                        && !list.moveSelectedUp(),
+                    "G379 removing the first rule keeps the selection on the first row")
+                list.select(-1)
+                check(
+                    list.selected == nil && !list.removeSelected() && !list.duplicateSelected()
+                        && !list.moveSelectedUp()
+                        && !list.moveSelectedDown() && !list.replaceSelected(with: rule("z"))
+                        && list.steps.map(\.find) == ["b", "a"], "G379 with no selection nothing is changed")
+                list.select(7)
+                check(list.selected == nil, "G379 a row that does not exist is no selection")
+                check(
+                    list.add(rule("new")) && list.selected == 2 && list.steps.last == rule("new"),
+                    "G379 a new rule goes last and is selected")
+                check(
+                    list.replaceSelected(with: rule("edited")) && list.steps.map(\.find) == ["b", "a", "edited"]
+                        && list.selected == 2, "G379 an edited rule replaces the selected one in place")
+                check(
+                    list.removeSelected() && list.removeSelected() && list.removeSelected() && list.steps.isEmpty
+                        && list.selected == nil && !list.removeSelected(),
+                    "G379 removing every rule leaves an empty list with no selection")
+                var full = RuleListDraft(Array(repeating: rule("r"), count: RuleListDraft.maximumRules - 1))
+                check(full.canAdd && full.canDuplicate, "G379 one below the limit a rule can still be added")
+                check(
+                    full.duplicateSelected() && full.steps.count == 100 && !full.canAdd && !full.canDuplicate,
+                    "G379 the hundredth rule closes Add and Duplicate")
+                check(
+                    !full.add(rule("x")) && !full.duplicateSelected() && full.steps.count == 100,
+                    "G379 the 100-rule limit refuses a further rule")
+                check(
+                    (try? AutomationDefinition(
+                        id: UUID(), name: "n", input: .document, steps: full.steps, output: .editor
+                    ).validate()) != nil, "G379 a list at the limit is a valid automation")
+                full.replaceAll(with: [])
+                check(full.steps.isEmpty && full.selected == nil, "G379 loading an empty rule set clears the selection")
+                full.replaceAll(with: [rule("a"), rule("b")])
+                check(full.selected == 0, "G379 loaded rules select the first rule")
+                check(RuleListDraft([]).selected == nil, "G379 an empty list has no selection")
+                // G379 and G385: which test outcome may be shown.
+                var preview = RulePreviewState()
+                check(!preview.invalidate(), "G385 with nothing shown and nothing running there is nothing stale")
+                let first = preview.begin()
+                check(preview.isRunning && !preview.showsOutcome, "G379 a started test is running")
+                check(preview.invalidate(), "G379 an edit during a test is something to report as stale")
+                check(!preview.finish(first), "G379 a result that arrives after an edit is refused")
+                check(!preview.invalidate(), "G385 a refused result leaves nothing stale")
+                let second = preview.begin(), third = preview.begin()
+                check(second != third && !preview.finish(second), "G379 an earlier test's result is refused")
+                check(
+                    preview.finish(third) && preview.showsOutcome && !preview.isRunning,
+                    "G379 the current test's result is accepted")
+                check(!preview.finish(third), "G379 a result is accepted once")
+                check(
+                    preview.invalidate() && !preview.showsOutcome,
+                    "G379 an edit after a shown result makes it stale")
+                // G388: what Load Rules → Import File makes of a file.
+                let ruleFile = try AutomationRuleSet(name: "Heading cleanup", steps: [rule("Ingredients")]).encoded()
+                let importedRules = try AutomationRuleImport.ruleSets(from: ruleFile)
+                check(
+                    !importedRules.fromLibrary && importedRules.sets.count == 1
+                        && importedRules.sets[0].name == "Heading cleanup"
+                        && importedRules.sets[0].steps == [rule("Ingredients")], "G388 a rule file imports as its rules"
+                )
+                var twoAutomations = AutomationLibrary(workflows: AutomationDefinition.firstRunPresets)
+                twoAutomations.workflows[1].destinationID = "list-identifier"
+                let importedLibrary = try AutomationRuleImport.ruleSets(from: twoAutomations.encoded())
+                check(
+                    importedLibrary.fromLibrary
+                        && importedLibrary.sets.map(\.name) == twoAutomations.workflows.map(\.name)
+                        && importedLibrary.sets.map(\.steps) == twoAutomations.workflows.map(\.steps),
+                    "G388 a library export is recognised and offers each automation's rules")
+                rejects("G388 an empty library export has no rules to load", message: "holds no automations") {
+                    _ = try AutomationRuleImport.ruleSets(from: AutomationLibrary(workflows: []).encoded())
+                }
+                for (text, what) in [("{bad", "malformed JSON"), ("[1,2]", "other JSON"), ("plain text", "plain text")]
+                {
+                    rejects("G388 \(what) is reported as not a rule file", message: "not a rule file") {
+                        _ = try AutomationRuleImport.ruleSets(from: Data(text.utf8))
+                    }
+                }
+                let blankNamed = Data(#"{"version":1,"name":"  ","steps":[{"kind":"removeBlankLines"}]}"#.utf8)
+                check(
+                    try AutomationRuleImport.ruleSets(from: blankNamed).sets.first?.name
+                        == AutomationRuleImport.fallbackName, "G388 a rule file with a blank name still imports")
+                rejects("G388 a blank name still refuses the strict rule-file decode", message: "needs a name") {
+                    _ = try AutomationRuleSet.decode(blankNamed)
+                }
+                rejects("G388 an invalid rule in an imported file is still refused", message: "needs text to match") {
+                    _ = try AutomationRuleImport.ruleSets(
+                        from: Data(
+                            #"{"version":1,"name":"n","steps":[{"kind":"removeLinesContaining","find":""}]}"#.utf8))
+                }
+                rejects("G388 a future rule-set version is still refused on import", message: "Unsupported rule-set") {
+                    _ = try AutomationRuleImport.ruleSets(from: Data(#"{"version":2,"name":"n","steps":[]}"#.utf8))
+                }
+                rejects("G388 an oversized file is refused before decoding", message: "at most 1 MiB") {
+                    _ = try AutomationRuleImport.ruleSets(from: Data(repeating: 32, count: 1_048_577))
+                }
+                // G364: the presets a new installation starts with, for the explicit restore.
+                check(
+                    AutomationDefinition.firstRunPresets.map(\.id)
+                        == [AutomationDefinition.example.id, AutomationDefinition.remindersExample.id],
+                    "G364 the first-run presets are the cleanup and the reminders automation, in that order")
+            }
             Checks.summary {
                 "PASS AutomationChecks: \(Checks.count) assertions (pure core; native UI and external outputs not covered)"
             }
