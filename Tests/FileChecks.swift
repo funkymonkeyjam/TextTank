@@ -292,10 +292,132 @@ import Darwin
             writer.submit { record("superseded") }
             writer.submit { record("latest") }
             release.signal()
+            // F114: finish now drops a snapshot that has not started, so wait for the coalesced
+            // write before the cleanup. The order asserted is the one this check always pinned.
+            func recorded() -> [String] {
+                eventsLock.lock()
+                defer { eventsLock.unlock() }
+                return events
+            }
+            spinUntil("the coalesced recovery write") { recorded().count == 2 }
             writer.finish { record("cleanup") }
             check(
-                events == ["active", "latest", "cleanup"],
+                recorded() == ["active", "latest", "cleanup"],
                 "recovery coalesces pending work and orders cleanup after writes")
+            // F114: a write that is running is still awaited; one that is only queued is superseded.
+            writer.submit {
+                entered.signal()
+                release.wait()
+                record("running")
+            }
+            check(entered.wait(timeout: .now() + 2) == .success, "fixture: a recovery write is in flight")
+            writer.submit { record("queued") }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { release.signal() }
+            writer.finish { record("finish") }
+            check(
+                Array(recorded().suffix(2)) == ["running", "finish"],
+                "finish waits for the running recovery write before the cleanup")
+            let settled = DispatchSemaphore(value: 0)
+            writer.submit { settled.signal() }
+            check(settled.wait(timeout: .now() + 2) == .success, "the writer accepts work after a finish")
+            check(!recorded().contains("queued"), "a queued recovery snapshot is not written after finish")
+            // F114/F135: this store's own previous snapshot is compared by revision from memory.
+            let cacheURL = root.appendingPathComponent("revision-cache"),
+                cacheStore = RecoveryStore(directory: cacheURL)
+            let cacheID = UUID(), cacheFile = cacheStore.fileURL(for: cacheID)
+            func cached(_ revision: UInt64, _ text: String = "cached") -> RecoverySnapshot {
+                RecoverySnapshot(id: cacheID, text: text, format: FileFormat(), originalURL: nil, revision: revision)
+            }
+            try cacheStore.save(cached(1))
+            let readsBefore = cacheStore.snapshotReads
+            try cacheStore.save(cached(2, "second"))
+            try cacheStore.save(cached(3, "third"))
+            try cacheStore.remove(id: cacheID, throughRevision: 3)
+            check(
+                cacheStore.snapshotReads == readsBefore && !FileManager.default.fileExists(atPath: cacheFile.path),
+                "newer saves and the cleanup do not re-read the snapshot this store wrote")
+            try cacheStore.save(cached(1))
+            try cacheStore.save(cached(2, "second"))
+            check(try cacheStore.load(id: cacheID).text == "second", "remembered revisions write the newest text")
+            rejects("remembered revision still rejects a stale write", expecting: RecoveryError.staleRevision) {
+                try cacheStore.save(cached(1))
+            }
+            rejects("remembered revision still rejects a stale cleanup", expecting: RecoveryError.staleRevision) {
+                try cacheStore.remove(id: cacheID, throughRevision: 1)
+            }
+            rejects(
+                "equal revision with different text is still compared on disk", expecting: RecoveryError.staleRevision
+            ) { try cacheStore.save(cached(2, "different")) }
+            // Another writer replaces the file: the remembered revision must not be trusted.
+            try RecoveryStore(directory: cacheURL).save(cached(9, "other writer"))
+            rejects("a snapshot advanced by another writer is not overwritten", expecting: RecoveryError.staleRevision)
+            {
+                try cacheStore.save(cached(3, "third"))
+            }
+            rejects("a snapshot advanced by another writer is not removed", expecting: RecoveryError.staleRevision) {
+                try cacheStore.remove(id: cacheID, throughRevision: 3)
+            }
+            check(try cacheStore.load(id: cacheID).text == "other writer", "the other writer's snapshot survives")
+            try cacheStore.save(cached(10, "tenth"))
+            // Same length, same modification time: only the content differs from what was written.
+            let cacheWritten = try Data(contentsOf: cacheFile),
+                cacheStamp =
+                    try FileManager.default.attributesOfItem(atPath: cacheFile.path)[.modificationDate] as! Date
+            let cacheCorrupt = Data(repeating: 0x7B, count: cacheWritten.count)
+            let tamper = try FileHandle(forWritingTo: cacheFile)
+            try tamper.write(contentsOf: cacheCorrupt)
+            try tamper.close()
+            try FileManager.default.setAttributes([.modificationDate: cacheStamp], ofItemAtPath: cacheFile.path)
+            rejects(
+                "a snapshot corrupted after this store wrote it is not overwritten",
+                expecting: RecoveryError.invalidSnapshot
+            ) { try cacheStore.save(cached(11)) }
+            rejects(
+                "a snapshot corrupted after this store wrote it is not removed",
+                expecting: RecoveryError.invalidSnapshot
+            ) { try cacheStore.remove(id: cacheID, throughRevision: 11) }
+            check(try Data(contentsOf: cacheFile) == cacheCorrupt, "the corrupted snapshot stays byte-identical")
+            try FileManager.default.removeItem(at: cacheFile)
+            try cacheStore.save(cached(1, "fresh"))
+            try cacheStore.remove(id: cacheID, throughRevision: 1)
+            check(
+                !FileManager.default.fileExists(atPath: cacheFile.path),
+                "cleanup from the remembered revision removes the snapshot")
+            try cacheStore.save(cached(1, "after removal"))
+            check(
+                try cacheStore.load(id: cacheID).text == "after removal",
+                "a removed snapshot's remembered revision does not block a new document revision")
+            // F135: temporary files orphaned by a crash during a write are removed by the next scan.
+            let orphan = cacheURL.appendingPathComponent(UUID().uuidString + ".pending"),
+                inFlight = cacheURL.appendingPathComponent(UUID().uuidString + ".pending"),
+                foreign = cacheURL.appendingPathComponent("notes.pending"),
+                oldCorrupt = cacheURL.appendingPathComponent(UUID().uuidString + ".json")
+            let longAgo = Date(timeIntervalSinceNow: -3600)
+            for file in [orphan, inFlight, foreign, oldCorrupt] { try Data("partial text".utf8).write(to: file) }
+            for file in [orphan, foreign, oldCorrupt] {
+                try FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: file.path)
+            }
+            check(RecoveryStore.processStart > longAgo, "fixture: the orphan is older than this process")
+            let hygiene = try cacheStore.scan()
+            check(
+                !FileManager.default.fileExists(atPath: orphan.path),
+                "scan removes a temporary file orphaned by a crash")
+            check(
+                FileManager.default.fileExists(atPath: inFlight.path),
+                "scan keeps a temporary file written since this process started")
+            check(
+                try FileManager.default.fileExists(atPath: foreign.path)
+                    && Data(contentsOf: oldCorrupt) == Data("partial text".utf8),
+                "scan deletes nothing but orphaned UUID.pending files")
+            check(
+                hygiene.snapshots.map(\.id) == [cacheID]
+                    && hygiene.issues.map(\.url.lastPathComponent) == [oldCorrupt.lastPathComponent],
+                "scan still lists the valid snapshot and reports the corrupt entry")
+            rejects("loadAll is scan with issues made fatal", expecting: RecoveryError.invalidSnapshot) {
+                _ = try cacheStore.loadAll()
+            }
+            try FileManager.default.removeItem(at: oldCorrupt)
+            check(try cacheStore.loadAll().map(\.id) == [cacheID], "loadAll returns what scan lists")
             Checks.summary { "PASS FileChecks: \(Checks.count) assertions; codec and isolated recovery" }
         }
     }
