@@ -433,12 +433,33 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             editor.selectionCount == 1, !hits.isEmpty
         else { return false }
         guard let ranges = SearchCore.byteRanges(hits.map(\.range), in: text) else { return false }
-        editor.beginUndoGroup()
-        defer { editor.endUndoGroup() }
-        for (hit, range) in zip(hits, ranges).reversed() {
-            guard editor.setSelectionAnchor(range.location, caret: NSMaxRange(range)) else { return false }
-            editor.replaceSelection(hit.replacement)
+        // The matches are replaced as byte ranges, validated together and applied as one undo step.
+        // The selection is not the edit cursor, so Undo returns to the selection the command began with.
+        let anchor = editor.selectionAnchor, caret = editor.selectionCaret
+        let edits = zip(hits, ranges).map { hit, range in
+            [
+                "start": NSNumber(value: range.location), "end": NSNumber(value: NSMaxRange(range)),
+                "text": hit.replacement
+            ] as [String: Any]
         }
+        guard editor.applyEdits(edits, expectedRevision: revision, expectedLength: text.utf8.count) else {
+            return false
+        }
+        // Carry the selection through the replacements: its start stays before a replacement that
+        // begins at or covers it, its end stays after one that ends at or covers it.
+        func carried(_ position: Int, upper: Bool) -> Int {
+            var delta = 0
+            for (hit, range) in zip(hits, ranges) {
+                let start = range.location, end = NSMaxRange(range), length = hit.replacement.utf8.count
+                if position < start || (position == start && (!upper || end > start)) { break }
+                if position < end { return start + delta + (upper ? length : 0) }
+                delta += length - range.length
+            }
+            return position + delta
+        }
+        let low = carried(min(anchor, caret), upper: false)
+        let high = anchor == caret ? low : carried(max(anchor, caret), upper: true)
+        _ = editor.setSelectionAnchor(anchor <= caret ? low : high, caret: anchor <= caret ? high : low)
         return true
     }
     /// True only when the selection moved to a match.

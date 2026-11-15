@@ -44,6 +44,48 @@ final class OffscreenWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             check(editor.text == "🥑 one:12 two:34" && editor.modified, "exact captures and dirty state")
             editor.executeCommand("undo")
             check(editor.text == original && !editor.modified, "one Undo restores full original and save point")
+            // G374: the matches are replaced without using the selection as the edit cursor.
+            editor.text = "a1 b22 c333"
+            editor.resetUndoHistory()
+            editor.setSavePoint()
+            var digits = SearchOptions()
+            digits.query = "[0-9]+"
+            digits.replacement = "#"
+            digits.mode = .regularExpression
+            let numbered = editor.text, numberedRevision = editor.revision
+            let digitHits = try SearchCore.search(numbered, options: digits).hits
+            _ = editor.setSelectionAnchor(11, caret: 3)
+            check(
+                SearchController.apply(digitHits, text: numbered, revision: numberedRevision, to: editor)
+                    && editor.text == "a# b# c#" && editor.selectionAnchor == 8 && editor.selectionCaret == 3,
+                "replace all keeps the reversed selection around the text it covered")
+            editor.executeCommand("undo")
+            check(
+                editor.text == numbered && !editor.modified && editor.selectionAnchor == 11
+                    && editor.selectionCaret == 3, "one Undo of replace all restores the text and the selection")
+            _ = editor.setSelectionAnchor(9, caret: 9)
+            check(
+                SearchController.apply(digitHits, text: numbered, revision: editor.revision, to: editor)
+                    && editor.selectionAnchor == 7 && editor.selectionCaret == 7,
+                "a caret inside a replaced match moves to the start of its replacement")
+            editor.executeCommand("undo")
+            check(
+                editor.text == numbered && editor.selectionAnchor == 9 && editor.selectionCaret == 9,
+                "Undo returns the caret to where it was inside the match")
+            _ = editor.setSelectionAnchor(4, caret: 6)
+            check(
+                SearchController.apply([digitHits[1]], text: numbered, revision: editor.revision, to: editor)
+                    && editor.text == "a1 b# c333" && editor.selectionAnchor == 4 && editor.selectionCaret == 5,
+                "replacing the selected match leaves its replacement selected")
+            editor.executeCommand("undo")
+            check(
+                editor.text == numbered && editor.selectionAnchor == 4 && editor.selectionCaret == 6,
+                "Undo of a single replacement reselects the match")
+            let unordered = [digitHits[1], digitHits[0]], unorderedRevision = editor.revision
+            check(
+                !SearchController.apply(unordered, text: numbered, revision: unorderedRevision, to: editor)
+                    && editor.text == numbered && editor.revision == unorderedRevision && editor.selectionAnchor == 4
+                    && editor.selectionCaret == 6, "out-of-order matches are refused before any edit")
             editor.text = "changed"
             let changed = editor.text, current = editor.revision
             _ = editor.setSelectionAnchor(1, caret: 2)
