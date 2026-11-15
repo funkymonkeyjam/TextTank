@@ -218,6 +218,20 @@ final class CancelAfterPolls: TTSearchCancellation {
             check(
                 try SearchCore.bookmarkLines(in: "abc", locations: [], cancellation: TTSearchCancellation()).isEmpty,
                 "empty bookmarks")
+            // F46: an offset between CR and LF belongs to the line that owns the CRLF, as in Scintilla.
+            func bookmarkLine(_ text: String, _ location: Int) throws -> [Int] {
+                try SearchCore.bookmarkLines(in: text, locations: [location], cancellation: TTSearchCancellation())
+            }
+            check(try bookmarkLine("a\r\nb", 2) == [0], "bookmark offset on the LF of a CRLF stays on the CRLF's line")
+            check(try bookmarkLine("a\r\n", 2) == [0], "bookmark offset on the LF of a final CRLF stays on its line")
+            check(try bookmarkLine("a\rb", 2) == [1], "bookmark offset after a lone CR is on the next line")
+            check(
+                try bookmarkLine("a\r", 2) == [1], "bookmark offset after a lone CR ending the text is on the next line"
+            )
+            check(
+                try SearchCore.bookmarkLines(
+                    in: "a\r\nb\r\n\r\rc", locations: [1, 2, 3, 5, 6, 7, 8], cancellation: TTSearchCancellation())
+                    == [0, 1, 2, 3, 4], "bookmark lines across CRLF, an empty CRLF line and consecutive lone CRs")
             failed = false
             do { _ = try SearchCore.bookmarkLines(in: "abc", locations: [0], cancellation: cancelled) } catch {
                 failed = true

@@ -18,7 +18,9 @@ struct SearchReport {
     let truncated: Bool
 }
 enum SearchCore {
-    /// One forward UTF-16 pass; CRLF counts once, including offsets between CR and LF.
+    /// One forward UTF-16 pass over zero-based lines. A break is counted once its terminator has
+    /// been passed in full, so an offset between CR and LF is still on the line that owns the
+    /// CRLF, as in Scintilla.
     /// Called off-main before any bookmarks are mutated.
     static func bookmarkLines(
         in text: String, locations: [Int], cancellation: TTSearchCancellation, timeLimit: TimeInterval = 2
@@ -29,7 +31,7 @@ enum SearchCore {
                 userInfo: [NSLocalizedDescriptionKey: "Invalid bookmark work limit."])
         }
         let deadline = Date().addingTimeInterval(timeLimit)
-        var index = text.utf16.startIndex, position = 0, line = 0, priorCR = false, lines: [Int] = []
+        var index = text.utf16.startIndex, position = 0, line = 0, lines: [Int] = []
         func check() throws {
             if cancellation.cancelled || Date() >= deadline {
                 throw NSError(
@@ -59,11 +61,10 @@ enum SearchCore {
                                 "A bookmark offset is past the end of the text; bookmarks were preserved."
                         ])
                 }
-                let unit = text.utf16[index]
-                if unit == 13 { line += 1 } else if unit == 10 && !priorCR { line += 1 }
-                priorCR = unit == 13
+                let unit = text.utf16[index], next = text.utf16.index(after: index)
+                if unit == 10 || (unit == 13 && (next == text.utf16.endIndex || text.utf16[next] != 10)) { line += 1 }
                 position += 1
-                index = text.utf16.index(after: index)
+                index = next
                 if position & 4095 == 0 { try check() }
             }
             if lines.last != line { lines.append(line) }
