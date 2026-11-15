@@ -322,6 +322,426 @@ import Darwin
                     rows: ["2 eggs"], destinationID: "a", batchID: UUID())
                 check(afterOversize.rows.first?.status == .confirmed, "ordinary export works after oversized rejection")
             }
+            let journalFailed: (Error) -> ReminderBatch? = {
+                if case ReminderConnectorError.journalFailed(let batch, _) = $0 { return batch }
+                return nil
+            }
+            func failure(_ work: () async throws -> Void) async -> Error? {
+                do {
+                    try await work()
+                    return nil
+                } catch { return error }
+            }
+            func journalBytes(_ directory: URL, _ id: UUID) throws -> Data {
+                try Data(contentsOf: directory.appendingPathComponent(id.uuidString + ".json"))
+            }
+            await Checks.section("journal failure carries the per-item results") {
+                // The journal directory is swapped for a plain file, then put back.
+                func scenario(_ name: String) -> (directory: URL, block: () -> Void, restore: () throws -> Void) {
+                    let directory = root.appendingPathComponent(name),
+                        retained = root.appendingPathComponent(name + "-retained")
+                    return (
+                        directory,
+                        {
+                            try! FileManager.default.moveItem(at: directory, to: retained)
+                            try! Data("blocked path".utf8).write(to: directory)
+                        },
+                        {
+                            try FileManager.default.removeItem(at: directory)
+                            try FileManager.default.moveItem(at: retained, to: directory)
+                        }
+                    )
+                }
+                let single = scenario("carried-single"), singleFake = FakeReminderStore(), singleID = UUID()
+                let singleConnector = RemindersConnector(storageURL: single.directory, store: singleFake)
+                singleFake.beforeSave = { _ in single.block() }
+                let singleError = await failure {
+                    _ = try await singleConnector.export(rows: ["sent item"], destinationID: "a", batchID: singleID)
+                }
+                let singleBatch = singleError.flatMap(journalFailed)
+                check(
+                    singleBatch?.id == singleID && singleBatch?.rows.map(\.status) == [.confirmed]
+                        && !(singleBatch?.rows[0].reminderID ?? "").isEmpty && singleFake.saves.count == 1,
+                    "post-save journal failure carries the confirmed row and its reminder identifier")
+                check(
+                    (singleError?.localizedDescription ?? "").contains("1 of 1 items were confirmed"),
+                    "journal failure has a description of its own for callers that only show the error")
+                try single.restore()
+
+                let multi = scenario("carried-multi"), multiFake = FakeReminderStore(), multiID = UUID()
+                let multiConnector = RemindersConnector(storageURL: multi.directory, store: multiFake)
+                multiFake.beforeSave = { index in if index == 1 { multi.block() } }
+                let multiError = await failure {
+                    _ = try await multiConnector.export(
+                        rows: ["one", "two", "three"], destinationID: "a", batchID: multiID)
+                }
+                check(
+                    multiError.flatMap(journalFailed)?.rows.map(\.status) == [.confirmed, .confirmed, .pending]
+                        && multiFake.saves.count == 2,
+                    "journal failure on the second of three rows carries confirmed, confirmed, pending")
+                try multi.restore()
+                multiFake.beforeSave = nil
+                check(
+                    try multiConnector.storedBatches().first?.rows.map(\.status) == [.confirmed, .uncertain, .pending],
+                    "disk keeps the row whose outcome could not be written as uncertain")
+                let multiResumed = try await multiConnector.export(
+                    rows: ["one", "two", "three"], destinationID: "a", batchID: multiID)
+                check(
+                    multiFake.saves.count == 3 && multiFake.saves.last?.0 == "three"
+                        && multiResumed.rows.map(\.status) == [.confirmed, .uncertain, .confirmed],
+                    "resume after a journal failure sends only the row that was never attempted")
+
+                let barrier = scenario("carried-barrier"), barrierFake = FakeReminderStore(), barrierID = UUID()
+                let barrierConnector = RemindersConnector(storageURL: barrier.directory, store: barrierFake)
+                let barrierError = await failure {
+                    _ = try await barrierConnector.export(
+                        rows: ["one", "two", "three"], destinationID: "a", batchID: barrierID,
+                        progress: { done, _ in if done == 1 { barrier.block() } })
+                }
+                check(
+                    barrierError.flatMap(journalFailed)?.rows.map(\.status) == [.confirmed, .pending, .pending]
+                        && barrierError.flatMap(journalFailed)?.rows[1].message == nil && barrierFake.saves.count == 1,
+                    "barrier write failure carries the unsent row as pending and makes no save for it")
+                try barrier.restore()
+                check(
+                    try barrierConnector.storedBatches().first?.rows.map(\.status) == [.confirmed, .pending, .pending],
+                    "disk agrees after a barrier write failure")
+                _ = try await barrierConnector.export(
+                    rows: ["one", "two", "three"], destinationID: "a", batchID: barrierID)
+                check(barrierFake.saves.count == 3, "rows after a barrier write failure remain resumable")
+
+                let early = scenario("carried-early"), earlyFake = FakeReminderStore()
+                let earlyConnector = RemindersConnector(storageURL: early.directory, store: earlyFake)
+                let earlyError = await failure {
+                    _ = try await earlyConnector.export(
+                        rows: ["one", "two"], destinationID: "a", batchID: UUID(),
+                        progress: { done, _ in if done == 0 { early.block() } })
+                }
+                check(
+                    earlyError != nil && earlyError.flatMap(journalFailed) == nil && earlyFake.saves.isEmpty,
+                    "a journal failure before anything was sent is a plain error with no save")
+                try early.restore()
+            }
+            await Checks.section("tolerant journal listing") {
+                let directory = root.appendingPathComponent("scan"), scanFake = FakeReminderStore()
+                let scanConnector = RemindersConnector(storageURL: directory, store: scanFake)
+                let validID = UUID()
+                _ = try await scanConnector.export(rows: ["milk", "tea"], destinationID: "a", batchID: validID)
+                let partialURL = directory.appendingPathComponent(UUID().uuidString + ".json"), futureID = UUID()
+                let futureURL = directory.appendingPathComponent(futureID.uuidString + ".json"),
+                    notesURL = directory.appendingPathComponent("notes.json")
+                try Data("{partial".utf8).write(to: partialURL)
+                var future = ReminderBatch(
+                    id: futureID, destinationID: "a", destinationTitle: "Shopping", destinationSource: "Local",
+                    rows: [ReminderRow(id: UUID(), title: "milk")], createdAt: Date())
+                future.schemaVersion = 999
+                try JSONEncoder().encode(future).write(to: futureURL)
+                try Data("{\"note\":\"not a journal\"}".utf8).write(to: notesURL)
+                let bad = [partialURL, futureURL, notesURL]
+                let before = try bad.map { try Data(contentsOf: $0) }
+                let scan = try scanConnector.scanBatches()
+                check(
+                    scan.batches.map(\.id) == [validID] && scan.batches.first?.rows.map(\.title) == ["milk", "tea"],
+                    "scan returns exactly the one readable batch")
+                check(
+                    scan.issues.count == 3
+                        && Set(scan.issues.map(\.url.lastPathComponent)) == Set(bad.map(\.lastPathComponent))
+                        && scan.issues.allSatisfy { !$0.message.isEmpty },
+                    "scan reports the three unreadable files by name")
+                rejects("strict listing still fails on a directory with an unreadable journal") {
+                    _ = try scanConnector.storedBatches()
+                }
+                let savesBefore = scanFake.saves.count
+                let fresh = try await scanConnector.export(
+                    rows: ["bread", "jam", "salt"], destinationID: "a", batchID: UUID())
+                check(
+                    fresh.rows.allSatisfy { $0.status == .confirmed } && scanFake.saves.count == savesBefore + 3,
+                    "a new export succeeds beside unreadable journals")
+                check(try scanConnector.scanBatches().batches.count == 2, "scan lists the new batch as well")
+                check(
+                    try bad.map { try Data(contentsOf: $0) } == before,
+                    "unreadable journals are byte-identical after scan and export")
+                let fifoDirectory = root.appendingPathComponent("scan-fifo")
+                try FileManager.default.createDirectory(at: fifoDirectory, withIntermediateDirectories: true)
+                let fifo = fifoDirectory.appendingPathComponent(UUID().uuidString + ".json")
+                try require(mkfifo(fifo.path, 0o600) == 0, "fixture: scan FIFO created")
+                let fifoConnector = RemindersConnector(storageURL: fifoDirectory, store: FakeReminderStore())
+                let start = ProcessInfo.processInfo.systemUptime
+                let fifoScan = try fifoConnector.scanBatches()
+                check(
+                    fifoScan.batches.isEmpty && fifoScan.issues.map(\.url.lastPathComponent) == [fifo.lastPathComponent]
+                        && ProcessInfo.processInfo.systemUptime - start < 1,
+                    "a FIFO journal becomes a scan issue in under one second")
+                let file = root.appendingPathComponent("scan-not-a-directory")
+                try Data("file".utf8).write(to: file)
+                rejects("a journal path that is not a directory still fails the scan", where: invalidBatch) {
+                    _ = try RemindersConnector(storageURL: file, store: FakeReminderStore()).scanBatches()
+                }
+                let missing = try RemindersConnector(
+                    storageURL: root.appendingPathComponent("scan-missing"), store: FakeReminderStore()
+                ).scanBatches()
+                check(
+                    missing.batches.isEmpty && missing.issues.isEmpty
+                        && !FileManager.default.fileExists(atPath: root.appendingPathComponent("scan-missing").path),
+                    "scanning a missing journal directory is empty and creates nothing")
+            }
+            await Checks.section("clearing confirmed history") {
+                let directory = root.appendingPathComponent("clear"), clearFake = FakeReminderStore()
+                let clearConnector = RemindersConnector(storageURL: directory, store: clearFake)
+                let confirmedID = UUID(), keptID = UUID(), uncertainID = UUID(), failedID = UUID(), pendingID = UUID()
+                _ = try await clearConnector.export(rows: ["a1", "a2"], destinationID: "a", batchID: confirmedID)
+                _ = try await clearConnector.export(rows: ["k1"], destinationID: "a", batchID: keptID)
+                clearFake.failAt = [clearFake.saves.count + 1: ReminderConnectorError.uncertain("outcome unknown")]
+                _ = try await clearConnector.export(rows: ["u1", "u2"], destinationID: "a", batchID: uncertainID)
+                clearFake.failAt = [clearFake.saves.count: ReminderConnectorError.knownFailure("offline")]
+                _ = try await clearConnector.export(rows: ["f1", "f2"], destinationID: "a", batchID: failedID)
+                clearFake.failAt = [:]
+                var pendingTask: Task<ReminderBatch, Error>!
+                clearFake.beforeSave = { _ in pendingTask.cancel() }
+                pendingTask = Task { @MainActor in
+                    try await clearConnector.export(rows: ["p1", "p2"], destinationID: "a", batchID: pendingID)
+                }
+                let pendingRun = try await pendingTask.value
+                try require(pendingRun.rows.map(\.status) == [.confirmed, .pending], "fixture: pending batch")
+                clearFake.beforeSave = nil
+                let unresolved = [uncertainID, failedID, pendingID]
+                let unresolvedBytes = try unresolved.map { try journalBytes(directory, $0) }
+                let all = [confirmedID, keptID] + unresolved
+                let saves = clearFake.saves.count
+
+                let lockDescriptor = open(directory.appendingPathComponent(".export.lock").path, O_RDWR)
+                try require(lockDescriptor >= 0 && flock(lockDescriptor, LOCK_EX | LOCK_NB) == 0, "fixture: lock held")
+                rejects(
+                    "clearing while the export lock is held is refused as busy",
+                    where: {
+                        if case ReminderConnectorError.busy = $0 { return true }
+                        return false
+                    }
+                ) { _ = try clearConnector.deleteConfirmedBatches(ids: all) }
+                check(try clearConnector.storedBatches().count == 5, "a refused clear deletes nothing")
+                flock(lockDescriptor, LOCK_UN)
+                close(lockDescriptor)
+
+                let removed = try clearConnector.deleteConfirmedBatches(ids: [confirmedID] + unresolved)
+                check(
+                    removed == [confirmedID]
+                        && !FileManager.default.fileExists(
+                            atPath: directory.appendingPathComponent(confirmedID.uuidString + ".json").path),
+                    "clearing removes the fully confirmed batch that was named")
+                check(
+                    try Set(clearConnector.storedBatches().map(\.id)) == Set([keptID] + unresolved),
+                    "the cleared batch is no longer listed; a confirmed batch that was not named stays")
+                check(
+                    try unresolved.map { try journalBytes(directory, $0) } == unresolvedBytes,
+                    "batches with a pending, failed or uncertain row survive the clear byte for byte")
+                check(clearFake.saves.count == saves, "clearing makes no external writes")
+                let resumed = try await clearConnector.export(
+                    rows: ["p1", "p2"], destinationID: "a", batchID: pendingID)
+                check(
+                    resumed.rows.map(\.status) == [.confirmed, .confirmed] && clearFake.saves.count == saves + 1,
+                    "a retained pending batch resumes under the same batch ID without duplicate saves")
+
+                let brokenID = UUID(), brokenURL = directory.appendingPathComponent(brokenID.uuidString + ".json"),
+                    notesURL = directory.appendingPathComponent("notes.json")
+                try Data("{partial".utf8).write(to: brokenURL)
+                try Data("[]".utf8).write(to: notesURL)
+                let linkedID = UUID(), linkURL = directory.appendingPathComponent(linkedID.uuidString + ".json"),
+                    target = root.appendingPathComponent("clear-link-target.json")
+                try FileManager.default.copyItem(
+                    at: directory.appendingPathComponent(keptID.uuidString + ".json"), to: target)
+                try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: target)
+                let second = try clearConnector.deleteConfirmedBatches(ids: [brokenID, linkedID, UUID(), keptID])
+                check(second == [keptID], "an unreadable, linked or unknown batch is skipped; the confirmed one goes")
+                check(
+                    try Data(contentsOf: brokenURL) == Data("{partial".utf8)
+                        && (try Data(contentsOf: notesURL)) == Data("[]".utf8)
+                        && FileManager.default.fileExists(atPath: target.path)
+                        && (try? FileManager.default.destinationOfSymbolicLink(atPath: linkURL.path)) != nil,
+                    "an undecodable journal, a stray file and a symbolic link are left untouched by the clear")
+                let none = try RemindersConnector(
+                    storageURL: root.appendingPathComponent("clear-missing"), store: FakeReminderStore()
+                ).deleteConfirmedBatches(ids: [UUID()])
+                check(
+                    none.isEmpty
+                        && !FileManager.default.fileExists(atPath: root.appendingPathComponent("clear-missing").path),
+                    "clearing with no journal directory removes nothing and creates nothing")
+            }
+            await Checks.section("journal layout") {
+                let titles = [
+                    "say \"hi\" \\ there", "line one\nline two\ttabbed", "½ cup – crème fraîche 🍋", "a\u{2028}b\u{0}c",
+                    "</script>", String(repeating: "long ", count: 2000)
+                ]
+                var batch = ReminderBatch(
+                    id: UUID(), destinationID: "list \"a\"", destinationTitle: "Shop\\ping",
+                    destinationSource: "Lo\ncal",
+                    rows: titles.map { ReminderRow(id: UUID(), title: $0) },
+                    createdAt: Date(timeIntervalSinceReferenceDate: 784_000_000.123456))
+                batch.rows[1].status = .confirmed
+                batch.rows[1].reminderID = "id \"1\""
+                batch.rows[2].status = .failed
+                batch.rows[2].message = String(repeating: "m\"", count: 400)
+                batch.rows[3].status = .uncertain
+                batch.rows[3].message = "check\nit"
+                func same(_ a: ReminderBatch, _ b: ReminderBatch) -> Bool {
+                    a.schemaVersion == b.schemaVersion && a.id == b.id && a.destinationID == b.destinationID
+                        && a.destinationTitle == b.destinationTitle && a.destinationSource == b.destinationSource
+                        && a.createdAt == b.createdAt && a.rows.map(\.id) == b.rows.map(\.id)
+                        && a.rows.map(\.title) == b.rows.map(\.title) && a.rows.map(\.status) == b.rows.map(\.status)
+                        && a.rows.map(\.reminderID) == b.rows.map(\.reminderID)
+                        && a.rows.map(\.message) == b.rows.map(\.message)
+                }
+                let layout = try ReminderJournal.layout(batch)
+                check(
+                    same(try JSONDecoder().decode(ReminderBatch.self, from: layout.data), batch),
+                    "slotted journal decodes to the same batch as the synthesized decoder expects")
+                check(
+                    same(
+                        try JSONDecoder().decode(
+                            ReminderBatch.self, from: try ReminderJournal.layout(batch, slotWidth: 0).data), batch),
+                    "unpadded journal layout decodes to the same batch")
+                check(
+                    same(
+                        try JSONDecoder().decode(
+                            ReminderBatch.self, from: try RemindersConnector.encodedJournal(batch)), batch),
+                    "compact journal of earlier builds still decodes to the same batch")
+                let many = ReminderBatch(
+                    id: UUID(), destinationID: "a", destinationTitle: "Shopping", destinationSource: "Local",
+                    rows: (0..<500).map { ReminderRow(id: UUID(), title: String(repeating: "x", count: $0 % 97 + 1)) },
+                    createdAt: Date())
+                let manyLayout = try ReminderJournal.layout(many)
+                let block = ReminderJournal.blockSize
+                let manyDecoded = try JSONDecoder().decode(ReminderBatch.self, from: manyLayout.data)
+                check(
+                    manyLayout.slots.count == 500
+                        && manyLayout.slots.allSatisfy {
+                            $0.count == ReminderJournal.slotWidth
+                                && $0.lowerBound / block == ($0.upperBound - 1) / block
+                        }
+                        && same(manyDecoded, many),
+                    "every row slot has the reserved width and lies inside one storage block")
+
+                // Outcomes that do not fit a slot fall back to a whole-file replacement mid-export.
+                let directory = root.appendingPathComponent("layout"), layoutFake = FakeReminderStore(), id = UUID()
+                let longUncertain = String(repeating: "u\"\n", count: 2000),
+                    longFailure = String(repeating: "f\\", count: 1500)
+                layoutFake.failAt = [
+                    1: ReminderConnectorError.uncertain(longUncertain),
+                    2: ReminderConnectorError.knownFailure(longFailure)
+                ]
+                let layoutConnector = RemindersConnector(storageURL: directory, store: layoutFake)
+                let run = try await layoutConnector.export(rows: titles, destinationID: "a", batchID: id)
+                let stored = try requireValue(try layoutConnector.storedBatches().first, "fixture: stored layout batch")
+                check(
+                    run.rows.map(\.status) == [.confirmed, .uncertain, .failed, .confirmed, .confirmed, .confirmed]
+                        && run.rows[1].message == longUncertain && run.rows[2].message == longFailure
+                        && same(stored, run),
+                    "awkward titles and oversized outcome messages are journalled exactly")
+                let mode =
+                    (try FileManager.default.attributesOfItem(
+                        atPath: directory.appendingPathComponent(id.uuidString + ".json").path)[.posixPermissions]
+                    as! NSNumber).intValue
+                let leftovers = try FileManager.default.contentsOfDirectory(atPath: directory.path).filter {
+                    $0.hasSuffix(".pending")
+                }
+                check(mode == 0o600 && leftovers.isEmpty, "journal stays private and leaves no temporary file")
+
+                // A journal in the compact form earlier builds wrote resumes without resending.
+                let oldDirectory = root.appendingPathComponent("layout-compact"), oldFake = FakeReminderStore()
+                try FileManager.default.createDirectory(at: oldDirectory, withIntermediateDirectories: true)
+                var old = ReminderBatch(
+                    id: UUID(), destinationID: "a", destinationTitle: "Shopping", destinationSource: "Local",
+                    rows: ["done", "unknown", "unsent"].map { ReminderRow(id: UUID(), title: $0) }, createdAt: Date())
+                old.rows[0].status = .confirmed
+                old.rows[0].reminderID = "earlier-1"
+                old.rows[1].status = .uncertain
+                try RemindersConnector.encodedJournal(old).write(
+                    to: oldDirectory.appendingPathComponent(old.id.uuidString + ".json"))
+                let oldConnector = RemindersConnector(storageURL: oldDirectory, store: oldFake)
+                let oldRun = try await oldConnector.export(
+                    rows: ["done", "unknown", "unsent"], destinationID: "a", batchID: old.id)
+                let oldStored = try requireValue(
+                    try oldConnector.storedBatches().first, "fixture: stored compact batch")
+                check(
+                    oldFake.saves.map(\.0) == ["unsent"]
+                        && oldRun.rows.map(\.status) == [.confirmed, .uncertain, .confirmed]
+                        && oldRun.rows[0].reminderID == "earlier-1" && same(oldStored, oldRun),
+                    "a compact journal of an earlier build resumes: only the unsent row is sent and recorded")
+            }
+            await Checks.section("row cost does not grow with the batch") {
+                func inode(_ url: URL) -> UInt64 {
+                    var info = stat()
+                    return lstat(url.path, &info) == 0 ? UInt64(info.st_ino) : 0
+                }
+                let directory = root.appendingPathComponent("row-cost"), costFake = FakeReminderStore(), id = UUID()
+                let url = directory.appendingPathComponent(id.uuidString + ".json")
+                var inodes: [UInt64] = [], sizes: [Int] = [], uncertainSeen = 0
+                costFake.beforeSave = { index in
+                    inodes.append(inode(url))
+                    let bytes = try! Data(contentsOf: url)
+                    sizes.append(bytes.count)
+                    let batch = try! JSONDecoder().decode(ReminderBatch.self, from: bytes)
+                    if batch.rows[index].status == .uncertain
+                        && batch.rows[..<index].allSatisfy({ $0.status == .confirmed })
+                        && batch.rows[(index + 1)...].allSatisfy({ $0.status == .pending })
+                    {
+                        uncertainSeen += 1
+                    }
+                }
+                let rows = (0..<60).map { "row \($0)" }
+                _ = try await RemindersConnector(storageURL: directory, store: costFake).export(
+                    rows: rows, destinationID: "a", batchID: id)
+                check(
+                    uncertainSeen == 60,
+                    "before every save the journal on disk shows that row uncertain, earlier rows confirmed, later pending"
+                )
+                check(
+                    Set(inodes).count == 1 && inodes.first != 0 && Set(sizes).count == 1,
+                    "rows are recorded in place: the journal file is not rewritten per row")
+
+                // 10,000 rows, the most one export accepts. Budget scales with TEXTTANK_PERF_BUDGET_SCALE.
+                let scale = max(1, Double(ProcessInfo.processInfo.environment["TEXTTANK_PERF_BUDGET_SCALE"] ?? "") ?? 1)
+                let bigDirectory = root.appendingPathComponent("row-cost-10k"), bigFake = FakeReminderStore()
+                let bigConnector = RemindersConnector(storageURL: bigDirectory, store: bigFake)
+                let bigRows = (0..<10000).map { "item \($0) of the largest batch" }, bigID = UUID()
+                let start = ProcessInfo.processInfo.systemUptime
+                let big = try await bigConnector.export(rows: bigRows, destinationID: "a", batchID: bigID)
+                let elapsed = ProcessInfo.processInfo.systemUptime - start
+                print(String(format: "NOTE 10,000-row export took %.2f s", elapsed))
+                check(
+                    big.rows.count == 10000 && big.rows.allSatisfy { $0.status == .confirmed }
+                        && bigFake.saves.count == 10000,
+                    "10,000-row export confirms every row once")
+                check(elapsed < 30 * scale, "10,000-row export finishes inside its time budget")
+                let bigStored = try requireValue(try bigConnector.storedBatches().first, "fixture: stored 10k batch")
+                check(
+                    bigStored.rows.map(\.title) == bigRows
+                        && bigStored.rows.map(\.reminderID) == big.rows.map(\.reminderID)
+                        && bigStored.rows.allSatisfy { $0.status == .confirmed },
+                    "10,000-row journal on disk matches the returned batch")
+
+                // Stop Sending is another main-actor task; it must get a turn between rows.
+                let stopFake = FakeReminderStore(), stopID = UUID()
+                let stopConnector = RemindersConnector(
+                    storageURL: root.appendingPathComponent("row-cost-stop"), store: stopFake)
+                var done = 0
+                let exportTask = Task { @MainActor in
+                    try await stopConnector.export(
+                        rows: bigRows, destinationID: "a", batchID: stopID,
+                        progress: { completed, _ in done = completed })
+                }
+                let stopper = Task { @MainActor in
+                    while done < 100 { await Task.yield() }
+                    exportTask.cancel()
+                    return done
+                }
+                let stoppedAt = await stopper.value
+                let stopped = try await exportTask.value
+                check(
+                    stopFake.saves.count <= stoppedAt + 2
+                        && stopped.rows.filter({ $0.status == .confirmed }).count == stopFake.saves.count
+                        && stopped.rows.filter({ $0.status == .pending }).count == 10000 - stopFake.saves.count,
+                    "a stop requested from another main-actor task takes effect within two rows of a 10,000-row export")
+            }
             Checks.summary {
                 "PASS ReminderChecks: \(Checks.count) assertions; injected stores only, no EventKit access"
             }

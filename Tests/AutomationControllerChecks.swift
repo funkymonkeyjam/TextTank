@@ -1170,6 +1170,88 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     AutomationController.matchingExport(
                         rows: ["2 eggs", "2 eggs"], destinationID: "list-a", batches: [confirmed]) == nil,
                     "intentional duplicate rows retain identity")
+
+                // What a new export does about the recorded history, without the modal dialogs.
+                func precheck(_ rows: [String], _ batches: [ReminderBatch], _ issues: [ReminderJournalIssue]) -> String
+                {
+                    switch AutomationController.exportPrecheck(
+                        rows: rows, destinationID: "list-a", batches: batches, issues: issues)
+                    {
+                    case .match(let batch): return "match \(batch.id)"
+                    case .needsConfirmation(let found): return "confirm \(found.map(\.url.lastPathComponent))"
+                    case .clear: return "clear"
+                    }
+                }
+                let issue = ReminderJournalIssue(url: URL(fileURLWithPath: "/tmp/notes.json"), message: "unreadable")
+                check(
+                    precheck(["3 eggs"], [confirmed], [issue]) == "confirm [\"notes.json\"]",
+                    "an unreadable journal and no matching export needs confirmation before sending")
+                check(
+                    precheck(["2 eggs"], [confirmed, uncertain], [issue]) == "match \(uncertain.id)",
+                    "a readable matching export is offered for review even beside an unreadable journal")
+                check(
+                    precheck(["3 eggs"], [confirmed], []) == "clear" && precheck(["3 eggs"], [], []) == "clear",
+                    "a readable history without a match lets the export proceed")
+                check(precheck(["2 eggs"], [], [issue]) == "confirm [\"notes.json\"]", "only unreadable history asks")
+                let older = ReminderBatch(
+                    id: UUID(), destinationID: "list-a", destinationTitle: "Shopping", destinationSource: "Local",
+                    rows: [
+                        ReminderRow(id: UUID(), title: "tea", status: .confirmed, reminderID: "fake-2"),
+                        ReminderRow(id: UUID(), title: "jam", status: .failed)
+                    ], createdAt: now.addingTimeInterval(-60))
+                check(
+                    AutomationController.clearableBatches([confirmed, uncertain, older]).map(\.id) == [confirmed.id],
+                    "only batches whose every row is confirmed are offered for clearing")
+                check(
+                    AutomationController.historyOrder([older, uncertain, confirmed]).map(\.id)
+                        == [uncertain.id, confirmed.id, older.id], "export history lists the newest batch first")
+                let manyIssues = (0..<12).map {
+                    ReminderJournalIssue(url: URL(fileURLWithPath: "/tmp/bad-\($0).json"), message: "unreadable")
+                }
+                let summary = AutomationController.issueSummary(manyIssues)
+                check(
+                    summary.contains("bad-0.json: unreadable") && summary.contains("bad-9.json")
+                        && !summary.contains("bad-10.json") && summary.hasSuffix("and 2 more"),
+                    "unreadable journals are named, ten at most, with a count of the rest")
+                check(
+                    AutomationController.journalFailureHeader(CocoaError(.fileWriteNoPermission)).contains("uncertain")
+                        && AutomationController.journalFailureHeader(CocoaError(.fileWriteNoPermission)).contains(
+                            CocoaError(.fileWriteNoPermission).localizedDescription),
+                    "the journal failure header names the cause and the uncertain item in Export History")
+
+                // Clearing through the connector, with an injected store: no EventKit access.
+                let exportsFolder = FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "TextTankReminderClear-" + UUID().uuidString)
+                defer { try? FileManager.default.removeItem(at: exportsFolder) }
+                let store = ClearCheckStore()
+                let connector = RemindersConnector(storageURL: exportsFolder, store: store)
+                var exported: ReminderBatch?, retained: ReminderBatch?, failure: Error?
+                let work = Task { @MainActor in
+                    do {
+                        exported = try await connector.export(
+                            rows: ["2 eggs"], destinationID: "list-a", batchID: UUID())
+                        store.uncertain = true
+                        retained = try await connector.export(
+                            rows: ["2 eggs"], destinationID: "list-a", batchID: UUID())
+                    } catch { failure = error }
+                }
+                spinUntil("reminder fixture exports finish") { exported != nil && retained != nil || failure != nil }
+                _ = work
+                let first = try requireValue(exported, "fixture: confirmed export \(String(describing: failure))")
+                let kept = try requireValue(retained, "fixture: uncertain export")
+                let removed = try connector.deleteConfirmedBatches(ids: [first.id, kept.id])
+                check(removed == [first.id] && store.saves == 2, "clear removes the confirmed batch and sends nothing")
+                check(
+                    AutomationController.matchingExport(
+                        rows: ["2 eggs"], destinationID: "list-a", batches: try connector.scanBatches().batches)?.id
+                        == kept.id,
+                    "after a clear the retained uncertain batch with the same rows is still matched")
+                check(
+                    try connector.deleteConfirmedBatches(ids: [kept.id]).isEmpty
+                        && AutomationController.matchingExport(
+                            rows: ["2 eggs"], destinationID: "list-a",
+                            batches: try connector.scanBatches().batches.filter { $0.id != kept.id }) == nil,
+                    "an uncertain batch cannot be cleared; without it the cleared rows no longer match")
             }
             Checks.section("modal keyboard chain") {
                 let beforeModal = try Data(contentsOf: path)
@@ -1454,5 +1536,21 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             withExtendedLifetime(toolbarHost) {}
             Checks.summary { "PASS AutomationControllerChecks: \(Checks.count) native assertions; no Reminders access" }
         }
+    }
+}
+
+/// Injected store for the reminder clearing check; nothing here reaches EventKit.
+@MainActor final class ClearCheckStore: ReminderStore {
+    var permission: ReminderPermission = .authorized
+    var saves = 0
+    var uncertain = false
+    func requestAccess() async throws {}
+    func destinations() throws -> [ReminderDestination] {
+        [ReminderDestination(id: "list-a", title: "Shopping", source: "Local", writable: true)]
+    }
+    func save(title: String, destinationID: String) throws -> String {
+        saves += 1
+        if uncertain { throw ReminderConnectorError.uncertain("outcome unknown") }
+        return "fake-\(saves)"
     }
 }

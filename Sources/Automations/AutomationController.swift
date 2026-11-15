@@ -847,15 +847,30 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 guard let destinationID = choice.selectedItem?.representedObject as? String else {
                     throw AutomationError.invalid("Choose a writable list before sending.")
                 }
+                // Read the history first: if the journal folder itself cannot be read, nothing is saved or sent.
+                let history = try connector.scanBatches()
                 // Persist chosen default only after explicit Send intent. Failure prevents send.
                 if let index = self.library.workflows.firstIndex(where: { $0.id == workflow.id }) {
                     var proposed = self.library
                     proposed.workflows[index].destinationID = destinationID
                     try self.persistLibrary(proposed)
                 }
-                let existing = Self.matchingExport(
-                    rows: rows, destinationID: destinationID, batches: try connector.storedBatches())
-                if let existing {
+                switch Self.exportPrecheck(
+                    rows: rows, destinationID: destinationID, batches: history.batches, issues: history.issues)
+                {
+                case .clear: break
+                case .needsConfirmation(let issues):
+                    // An unreadable record may be an earlier export of these very items, so the
+                    // duplicate check cannot vouch for this send. Cancel is the default.
+                    let unreadable = TTAlert()
+                    unreadable.messageText = "Some export records could not be read"
+                    unreadable.informativeText =
+                        "A previous export of these items may be recorded in a file that cannot be read, so TextTank cannot tell whether they were already sent. Check Reminders before sending. The files are left unchanged in the ReminderExports folder:\n\n"
+                        + Self.issueSummary(issues)
+                    unreadable.addButton(withTitle: "Cancel")
+                    unreadable.addButton(withTitle: "Send Anyway")
+                    guard unreadable.runModal() == .alertSecondButtonReturn else { return }
+                case .match(let existing):
                     let repeated = TTAlert()
                     repeated.messageText = "These items have already been sent or attempted"
                     repeated.informativeText =
@@ -877,6 +892,8 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 let batch = try await connector.export(
                     rows: rows, destinationID: destinationID, batchID: UUID(), progress: progress.update)
                 self.showReminderResults(batch)
+            } catch ReminderConnectorError.journalFailed(let batch, let underlying) {
+                self.showReminderResults(batch, header: Self.journalFailureHeader(underlying))
             } catch { self.showError(error) }
         }
     }
@@ -910,11 +927,43 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         batches.filter { $0.destinationID == destinationID && $0.rows.map(\.title) == rows }
             .max { $0.createdAt < $1.createdAt }
     }
-    @MainActor private func showReminderResults(_ batch: ReminderBatch) {
+    /// What a new export must do about the recorded history: review a readable batch with the same
+    /// rows and destination, ask before sending because part of the history is unreadable, or proceed.
+    enum ReminderExportPrecheck {
+        case match(ReminderBatch)
+        case needsConfirmation([ReminderJournalIssue])
+        case clear
+    }
+    static func exportPrecheck(
+        rows: [String], destinationID: String, batches: [ReminderBatch], issues: [ReminderJournalIssue]
+    ) -> ReminderExportPrecheck {
+        if let existing = matchingExport(rows: rows, destinationID: destinationID, batches: batches) {
+            return .match(existing)
+        }
+        return issues.isEmpty ? .clear : .needsConfirmation(issues)
+    }
+    /// The batches Clear Confirmed History removes: those with nothing left to resume or reconcile.
+    static func clearableBatches(_ batches: [ReminderBatch]) -> [ReminderBatch] {
+        batches.filter { !$0.rows.isEmpty && $0.rows.allSatisfy { $0.status == .confirmed } }
+    }
+    /// Export History rows, newest first.
+    static func historyOrder(_ batches: [ReminderBatch]) -> [ReminderBatch] {
+        batches.sorted { ($0.createdAt, $0.id.uuidString) > ($1.createdAt, $1.id.uuidString) }
+    }
+    /// File names of unreadable journals with the reason for each, at most ten, then a count.
+    static func issueSummary(_ issues: [ReminderJournalIssue]) -> String {
+        let lines = issues.prefix(10).map { "\($0.url.lastPathComponent): \($0.message)" }
+        return (lines + (issues.count > 10 ? ["and \(issues.count - 10) more"] : [])).joined(separator: "\n")
+    }
+    static func journalFailureHeader(_ underlying: Error) -> String {
+        "The export journal could not be updated (\(underlying.localizedDescription)), so sending stopped. The list below is the outcome held in memory. Export History will show the last attempted item as uncertain, possibly although it was saved, and may be unavailable until the journal folder can be written again. Check Reminders before sending any of these items again."
+    }
+    @MainActor private func showReminderResults(_ batch: ReminderBatch, header: String? = nil) {
         let alert = TTAlert()
-        alert.messageText = "Reminder Export Results"
+        alert.messageText = header == nil ? "Reminder Export Results" : "Reminder Export Results (journal not updated)"
         alert.informativeText =
-            "Batch \(batch.id). Confirmed items are not resent. Uncertain items require inspection in Reminders and are never automatically retried. Failed and unsent pending items remain available in Export History. Resume retries those items only. Editor Undo does not affect reminders."
+            (header.map { $0 + "\n\n" } ?? "")
+            + "Batch \(batch.id). Confirmed items are not resent. Uncertain items require inspection in Reminders and are never automatically retried. Failed and unsent pending items remain available in Export History. Resume retries those items only. Editor Undo does not affect reminders."
         let text = makeTextView(height: 300)
         text.editor.isEditable = false
         text.editor.string =
@@ -937,25 +986,72 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 let connector = RemindersConnector(
                     storageURL: self.storage.deletingLastPathComponent().appendingPathComponent(
                         "ReminderExports", isDirectory: true))
-                let batches = try connector.storedBatches()
-                guard !batches.isEmpty else { throw AutomationError.invalid("There are no recorded reminder exports.") }
+                let history = try connector.scanBatches()
+                let batches = Self.historyOrder(history.batches)
+                guard !batches.isEmpty || !history.issues.isEmpty else {
+                    throw AutomationError.invalid("There are no recorded reminder exports.")
+                }
+                let unreadable =
+                    history.issues.isEmpty
+                    ? ""
+                    : "\n\nThese files in the ReminderExports folder could not be read and are left unchanged:\n"
+                        + Self.issueSummary(history.issues)
                 let alert = TTAlert()
                 alert.messageText = "Reminder Export History"
+                guard !batches.isEmpty else {
+                    alert.informativeText = "No recorded export could be read." + unreadable
+                    alert.addButton(withTitle: "OK")
+                    _ = alert.runModal()
+                    return
+                }
                 alert.informativeText =
                     "Choose a recorded batch to inspect its durable per-item results. Reading this history does not request system access."
+                    + unreadable
                 alert.addButton(withTitle: "Review")
                 alert.addButton(withTitle: "Cancel")
                 alert.addButton(withTitle: "Request Access and Resume Unsent")
+                let clearable = Self.clearableBatches(batches)
+                if !clearable.isEmpty { alert.addButton(withTitle: "Clear Confirmed History…") }
                 let choice = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 650, height: 28), pullsDown: false)
+                choice.setAccessibilityLabel("Recorded export")
+                let stamp = DateFormatter()
+                stamp.dateStyle = .medium
+                stamp.timeStyle = .short
                 for batch in batches {
                     choice.addItem(
                         withTitle:
-                            "\(batch.destinationTitle) — \(batch.destinationSource) · \(batch.rows.count) rows · \(batch.id)"
+                            "\(stamp.string(from: batch.createdAt)) · \(batch.destinationTitle) — \(batch.destinationSource) · \(batch.rows.count) rows · \(batch.id)"
                     )
                     choice.lastItem?.representedObject = batch.id.uuidString
                 }
                 alert.accessoryView = choice
                 let response = alert.runModal()
+                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
+                    let confirm = TTAlert()
+                    confirm.messageText =
+                        clearable.count == 1
+                        ? "Remove 1 fully confirmed export record?"
+                        : "Remove \(clearable.count) fully confirmed export records?"
+                    confirm.informativeText =
+                        "Only TextTank's own record of these exports is removed, which cannot be undone. Reminders already in Reminders are not changed. Sending one of these lists again will no longer warn that it was already sent. "
+                        + (batches.count > clearable.count
+                            ? "\(batches.count - clearable.count) exports with unsent, failed or uncertain items are kept."
+                            : "No export has unsent, failed or uncertain items.")
+                    confirm.addButton(withTitle: "Cancel")
+                    confirm.addButton(withTitle: "Remove Records")
+                    guard confirm.runModal() == .alertSecondButtonReturn else { return }
+                    let removed = try connector.deleteConfirmedBatches(ids: clearable.map(\.id))
+                    let report = TTAlert()
+                    report.messageText =
+                        removed.count == 1 ? "Removed 1 export record" : "Removed \(removed.count) export records"
+                    report.informativeText =
+                        removed.count == clearable.count
+                        ? "Reminders was not changed."
+                        : "Reminders was not changed. \(clearable.count - removed.count) records changed meanwhile and were kept."
+                    report.addButton(withTitle: "OK")
+                    _ = report.runModal()
+                    return
+                }
                 guard response != .alertSecondButtonReturn, let id = choice.selectedItem?.representedObject as? String,
                     let batch = batches.first(where: { $0.id.uuidString == id })
                 else { return }
@@ -971,6 +1067,8 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 } else {
                     self.showReminderResults(batch)
                 }
+            } catch ReminderConnectorError.journalFailed(let batch, let underlying) {
+                self.showReminderResults(batch, header: Self.journalFailureHeader(underlying))
             } catch { self.showError(error) }
         }
     }
