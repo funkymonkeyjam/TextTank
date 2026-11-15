@@ -36,6 +36,17 @@ import AppKit
             do {
                 let list = LanguageFunctionController(editor: editor, text: text, revision: revision, symbols: symbols)
                 let panel = try requireValue(list.window as? NSPanel, "the Function List window is a panel")
+                // A panel is not listed in the Window menu by AppKit, and this one has no command that
+                // shows it again, so it lists itself: covered by the document window it stays reachable.
+                if NSApp.windowsMenu == nil { NSApp.windowsMenu = NSMenu(title: "Window") }
+                panel.orderFront(nil)
+                check(
+                    NSApp.windowsMenu?.items.filter { $0.target === panel && $0.title == panel.title }.count == 1,
+                    "the Function List panel is listed once in the Window menu while it is showing")
+                panel.orderOut(nil)
+                check(
+                    !(NSApp.windowsMenu?.items.contains { $0.target === panel } ?? false),
+                    "a hidden Function List panel leaves the Window menu")
                 check(
                     !panel.canBecomeMain && !panel.hidesOnDeactivate && !panel.isFloatingPanel
                         && panel.level == .normal && panel.initialFirstResponder === list.table,

@@ -206,6 +206,7 @@ final class RunController: NSObject, NSMenuItemValidation {
             let window = ToolPanel(
                 contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled, .closable, .resizable])
             window.allowsEscapeToClose = { [weak self] in self?.pending == nil }
+            window.listedInWindowMenu = true
             window.title = command.name
             window.isReleasedWhenClosed = false
             window.contentView = stack

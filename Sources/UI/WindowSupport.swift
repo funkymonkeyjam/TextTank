@@ -11,10 +11,26 @@ final class ToolPanel: NSPanel {
     /// Asked when Escape is pressed. Returning false keeps the panel open, for a window whose
     /// closing would stop running work or discard a result that has not been applied.
     var allowsEscapeToClose: () -> Bool = { true }
+    /// AppKit leaves panels out of the Window menu. A panel with no command that shows it again
+    /// (the Function List, a Run result) sets this, so that it can still be reached when the
+    /// document window covers it. AppKit removes the item when the panel is hidden or closed.
+    var listedInWindowMenu = false
     init(contentRect: NSRect, styleMask: NSWindow.StyleMask) {
         super.init(contentRect: contentRect, styleMask: styleMask, backing: .buffered, defer: false)
         hidesOnDeactivate = false
         isFloatingPanel = false
+    }
+    override func orderFront(_ sender: Any?) {
+        super.orderFront(sender)
+        listInWindowMenu()
+    }
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        super.makeKeyAndOrderFront(sender)
+        listInWindowMenu()
+    }
+    private func listInWindowMenu() {
+        // Adds the item, or only renames it when the panel already has one.
+        if listedInWindowMenu, isVisible { NSApp.changeWindowsItem(self, title: title, filename: false) }
     }
     override func cancelOperation(_ sender: Any?) {
         guard allowsEscapeToClose() else {

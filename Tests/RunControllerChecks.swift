@@ -84,6 +84,14 @@ import AppKit
             let resultPanel = try requireValue(
                 NSApp.windows.last { $0.title == sample.name && $0.isVisible } as? NSPanel,
                 "the Run result window is a panel")
+            // A panel is not listed in the Window menu by AppKit, and this one has no command that
+            // shows it again, so it lists itself: covered by the document window it stays reachable.
+            if NSApp.windowsMenu == nil { NSApp.windowsMenu = NSMenu(title: "Window") }
+            resultPanel.orderFront(nil)
+            check(
+                NSApp.windowsMenu?.items.filter { $0.target === resultPanel && $0.title == resultPanel.title }.count
+                    == 1,
+                "the Run result panel is listed once in the Window menu while it is showing")
             check(
                 !resultPanel.canBecomeMain && !resultPanel.hidesOnDeactivate && !resultPanel.isFloatingPanel
                     && resultPanel.level == .normal && resultPanel.defaultButtonCell == nil,

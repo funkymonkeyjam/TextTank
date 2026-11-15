@@ -485,6 +485,7 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
             forName: .TTEditorWillRetire, object: editor, queue: nil
         ) { [weak self] note in self?.editor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor }
         window.title = "Function List"
+        window.listedInWindowMenu = true
         window.isReleasedWhenClosed = false
         let col = NSTableColumn(identifier: .init("symbol"))
         col.title = "Line · Symbol"
