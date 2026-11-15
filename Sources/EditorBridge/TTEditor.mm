@@ -300,6 +300,39 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     }
     [_engine message:SCI_ENDUNDOACTION]; return YES;
 }
+- (BOOL)replaceRanges:(NSArray<NSValue *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision {
+    [self assertThread];
+    if (revision!=self.revision || self.readOnly || ![ranges isKindOfClass:NSArray.class] || ![texts isKindOfClass:NSArray.class] || ranges.count==0 || texts.count!=ranges.count) return NO;
+    const NSUInteger length=(NSUInteger)[_engine message:SCI_GETLENGTH]; NSUInteger previousEnd=0;
+    for (id value in ranges) {
+        if (![value isKindOfClass:NSValue.class] || std::strcmp([value objCType], @encode(NSRange))!=0) return NO;
+        const NSRange range=[value rangeValue];
+        if (range.location>length || range.length>length-range.location || range.location<previousEnd) return NO;
+        for (NSUInteger position : {range.location, NSMaxRange(range)}) {
+            if (position<length && ([_engine message:SCI_GETCHARAT wParam:position] & 0xC0)==0x80) return NO;
+        }
+        previousEnd=NSMaxRange(range);
+    }
+    // Encode everything before the first edit so an unencodable text rejects the whole batch.
+    NSMutableArray<NSData *> *encoded=[NSMutableArray arrayWithCapacity:texts.count];
+    for (id text in texts) {
+        if (![text isKindOfClass:NSString.class]) return NO;
+        NSData *bytes=TTUTF8(text); if (!bytes) return NO;
+        [encoded addObject:bytes];
+    }
+    // Last range first, so the offsets of the ranges still to be replaced stay valid.
+    [_engine message:SCI_BEGINUNDOACTION];
+    for (NSUInteger i=ranges.count;i-->0;) {
+        const NSRange range=[ranges[i] rangeValue];
+        [_engine message:SCI_SETTARGETRANGE wParam:range.location lParam:NSMaxRange(range)];
+        [_engine message:SCI_REPLACETARGET wParam:encoded[i].length lParam:(sptr_t)encoded[i].bytes];
+    }
+    [_engine message:SCI_ENDUNDOACTION];
+    const sptr_t caret=(sptr_t)([ranges[0] rangeValue].location+encoded[0].length);
+    [_engine message:SCI_SETSEL wParam:caret lParam:caret];
+    [_engine message:SCI_SCROLLCARET];
+    return YES;
+}
 - (NSInteger)selectionCount { [self assertThread]; return [_engine message:SCI_GETSELECTIONS]; }
 - (NSInteger)selectionStart { [self assertThread]; return [_engine message:SCI_GETSELECTIONSTART]; }
 - (NSInteger)selectionEnd { [self assertThread]; return [_engine message:SCI_GETSELECTIONEND]; }
