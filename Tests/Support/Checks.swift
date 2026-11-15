@@ -16,6 +16,9 @@ enum Checks {
     static var count = 0
     /// Fixture-integrity checks that passed; reported apart from behaviour checks.
     static var fixtureCount = 0
+    /// Confirmed defects that are still present, as `finding: label`. Reported apart
+    /// from behaviour checks; see `knownDefect`.
+    static var knownDefects: [String] = []
     static var failures: [String] = []
     /// `TEXTTANK_FORCE_FAIL=<label>` forces the check with exactly that label to
     /// fail. It exists to prove that a failure is reported and later checks still run.
@@ -71,6 +74,7 @@ enum Checks {
     static func finish(_ name: String) -> Never {
         if failures.isEmpty {
             if fixtureCount > 0 { print("FIXTURES \(name): \(fixtureCount) fixture integrity checks, not counted below") }
+            if !knownDefects.isEmpty { print("KNOWN-DEFECTS \(name): \(knownDefects.count) expected failures, not counted below (\(Set(knownDefects.map { String($0.prefix(while: { $0 != ":" })) }).sorted().joined(separator: ", ")))") }
             print(summary?() ?? "PASS \(name): \(count) assertions")
             fflush(stdout); exit(0)
         }
@@ -112,6 +116,21 @@ func fixtureCheck(_ condition: @autoclosure () throws -> Bool, _ label: String, 
         guard try condition() else { Checks.fail("fixture integrity: \(label)", file: file, line: line); return false }
         Checks.fixtureCount += 1; print("FIXTURE \(label)"); fflush(stdout); return true
     } catch { Checks.fail("fixture integrity: \(label) (threw \(Checks.describe(error)))", file: file, line: line); return false }
+}
+
+/// An expected failure: `fixed` states the behaviour that will hold once the audit
+/// finding `finding` is repaired, and it does not hold today. While the defect is
+/// present this prints `KNOWN-DEFECT <finding> <label>` and the suite stays green. When
+/// `fixed` starts to hold the check fails, so the package that repairs the finding
+/// has to turn it into an ordinary `check` and nothing stays pinned wrong.
+@discardableResult
+func knownDefect(_ finding: String, _ label: String, file: StaticString = #filePath, line: UInt = #line, fixed: @autoclosure () throws -> Bool) -> Bool {
+    do {
+        guard try !fixed() else {
+            Checks.fail("known defect \(finding) no longer reproduces; make this an ordinary check: \(label)", file: file, line: line); return false
+        }
+        Checks.knownDefects.append("\(finding): \(label)"); print("KNOWN-DEFECT \(finding) \(label)"); fflush(stdout); return true
+    } catch { Checks.fail("known defect \(finding): \(label) (threw \(Checks.describe(error)))", file: file, line: line); return false }
 }
 
 /// For a precondition the following code cannot run without. A failure is

@@ -15,8 +15,10 @@ enum DemoError: Error, Equatable { case intended, other }
                 check(true, "demo second check")
                 check(true, "demo third check")
                 rejects("demo typed rejection", expecting: DemoError.intended) { throw DemoError.intended }
+                knownDefect("F000", "demo known defect", fixed: false)
                 if ProcessInfo.processInfo.environment["HARNESS_DEMO_FAULTS"] != nil {
                     rejects("demo wrong error", expecting: DemoError.intended) { throw DemoError.other }
+                    knownDefect("F000", "demo repaired defect", fixed: true)
                     rejects("demo nothing thrown") {}
                     rejects("demo wrong message", message: "expected words") { throw DemoError.other }
                     check(try { throw DemoError.other }(), "demo throwing condition")
@@ -67,6 +69,7 @@ enum DemoError: Error, Equatable { case intended, other }
             check(cleanLines.contains("PASS HarnessDemo: 5 assertions"), "summary line reports the number of passed checks")
             check(cleanLines.contains("FIXTURE demo fixture") && cleanLines.contains("FIXTURES HarnessDemo: 1 fixture integrity checks, not counted below"), "fixture integrity checks are reported apart from behaviour checks")
             check(!clean.output.contains("FAIL"), "clean run prints no failure line")
+            check(cleanLines.contains("KNOWN-DEFECT F000 demo known defect") && cleanLines.contains("KNOWN-DEFECTS HarnessDemo: 1 expected failures, not counted below (F000)"), "a known defect that still reproduces is reported apart and does not fail the suite")
 
             let forced = try child(["TEXTTANK_FORCE_FAIL": "demo second check"])
             let forcedLines = forced.output.split(separator: "\n").map(String.init)
@@ -83,6 +86,7 @@ enum DemoError: Error, Equatable { case intended, other }
             check(faults.status == 1, "faulty suite exits non-zero")
             check(failed("demo wrong error (expected DemoError.intended, got DemoError"), "rejects(expecting:) fails on a different error and says which was expected")
             check(failed("demo nothing thrown (expected rejection, nothing was thrown)"), "rejects fails when nothing is thrown")
+            check(failed("known defect F000 no longer reproduces; make this an ordinary check: demo repaired defect"), "a known defect that stops reproducing fails until it is made an ordinary check")
             check(failed("demo wrong message (expected an error mentioning 'expected words'"), "rejects(message:) fails when the message does not match")
             check(failed("demo throwing condition (threw DemoError"), "a condition that throws is a recorded failure, not a crash")
             check(failed("timed out after 0.05 s waiting for demo condition that never holds"), "an expired wait fails with a timeout message")

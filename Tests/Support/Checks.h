@@ -34,6 +34,16 @@ inline bool record(bool condition, const char *label, const char *file, int line
     printf("PASS %s\n", label); fflush(stdout);
     return true;
 }
+inline int &knownDefects() { static int value = 0; return value; }
+/// An expected failure: `fixed` is what will hold once the audit finding is repaired.
+/// While it does not hold this prints `KNOWN-DEFECT <finding> <label>`; once it holds the
+/// check fails, so the repairing package has to turn it into an ordinary check.
+inline bool known(const char *finding, bool fixed, const char *label, const char *file, int line) {
+    if (fixed) { fail(std::string("known defect ") + finding + " no longer reproduces; make this an ordinary check: " + label, file, line); return false; }
+    knownDefects() += 1;
+    printf("KNOWN-DEFECT %s %s\n", finding, label); fflush(stdout);
+    return true;
+}
 /// For a precondition the following code cannot run without; success is not counted.
 inline void need(bool condition, const char *label, const char *file, int line) {
     if (!condition) { fail(label, file, line); throw Stop(); }
@@ -52,6 +62,7 @@ inline void section(const char *name, const std::function<void()> &body) {
 }
 /// Prints the summary or the failures and returns the process exit status.
 inline int finish(const char *name, const char *detail) {
+    if (failures().empty() && knownDefects() > 0) printf("KNOWN-DEFECTS %s: %d expected failures, not counted below\n", name, knownDefects());
     if (failures().empty()) { printf("PASS %s: %d assertions%s%s\n", name, count(), detail[0] ? "; " : "", detail); fflush(stdout); return 0; }
     printf("FAILED %s: %zu failed, %d passed\n", name, failures().size(), count());
     for (const std::string &entry : failures()) printf("  %s\n", entry.c_str());
@@ -61,4 +72,5 @@ inline int finish(const char *name, const char *detail) {
 }
 // Variadic so that Objective-C literals containing commas need no extra parentheses.
 #define check(...) ttchecks::record(__VA_ARGS__, __FILE__, __LINE__)
+#define knownDefect(finding, fixed, label) ttchecks::known(finding, fixed, label, __FILE__, __LINE__)
 #define require(...) ttchecks::need(__VA_ARGS__, __FILE__, __LINE__)
