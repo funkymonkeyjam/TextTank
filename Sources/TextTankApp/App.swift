@@ -324,39 +324,43 @@ final class TextDocument: NSDocument {
 
 }
 
-/// Informational badges retain native appearance colors and wrap at narrow widths.
-private final class StatusBadge: NSView {
-    let label: NSTextField
+/// Borderless native buttons preserve keyboard and accessibility activation.
+private final class StatusBadge: NSButton {
+    var activate:((StatusBadge)->Void)?
     init(_ text:String) {
-        label=NSTextField(labelWithString:text)
         super.init(frame:.zero)
-        label.font = .monospacedDigitSystemFont(ofSize:11,weight:.regular)
-        label.textColor = .secondaryLabelColor
-        label.lineBreakMode = .byTruncatingMiddle
-        label.toolTip=text
-        addSubview(label)
-        toolTip=text
+        title=text;isBordered=false;bezelStyle = .regularSquare
+        font = .monospacedDigitSystemFont(ofSize:11,weight:.regular)
+        contentTintColor = .secondaryLabelColor
+        toolTip=text+" — click for options"
+        setButtonType(.momentaryChange)
+        target=self;action=#selector(showOptions)
     }
-    required init?(coder:NSCoder) { fatalError("init(coder:) not used") }
-    var preferredWidth:CGFloat { ceil((label.stringValue as NSString).size(withAttributes:[.font:label.font!]).width)+24 }
-    override func layout() {super.layout();label.frame=NSRect(x:7,y:4,width:max(0,bounds.width-14),height:14)}
+    @objc private func showOptions() {activate?(self)}
+    required init?(coder:NSCoder) {fatalError("init(coder:) not used")}
+    var preferredWidth:CGFloat {ceil((title as NSString).size(withAttributes:[.font:font!]).width)+20}
     override func draw(_ dirtyRect:NSRect) {
-        let shape=NSBezierPath(roundedRect:bounds.insetBy(dx:0.5,dy:0.5),xRadius:4,yRadius:4)
-        NSColor.quaternaryLabelColor.withAlphaComponent(0.12).setFill();shape.fill()
-        NSColor.separatorColor.withAlphaComponent(0.25).setStroke();shape.lineWidth=1;shape.stroke()
+        NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.10 : 0.035).setFill()
+        NSBezierPath(roundedRect:bounds,xRadius:3,yRadius:3).fill()
+        super.draw(dirtyRect)
     }
     override func viewDidChangeEffectiveAppearance() {super.viewDidChangeEffectiveAppearance();needsDisplay=true}
 }
 
 private final class StatusBadgeRow: NSView {
+    var onActivate:((String,NSView)->Void)?
     private var values:[String]=[]
     private var badges:[StatusBadge]=[]
     private var measuredWidth:CGFloat = -1
     override var isFlipped:Bool {true}
-    func update(_ fields:[String]) {
+    func update(_ fields:[String],keys:[String]) {
         guard fields != values else {return}
         values=fields;badges.forEach{$0.removeFromSuperview()}
-        badges=fields.map{StatusBadge($0)};badges.forEach{addSubview($0)}
+        badges=zip(fields,keys).map { text,key in
+            let badge=StatusBadge(text)
+            badge.activate = { [weak self] button in self?.onActivate?(key,button) }
+            return badge
+        };badges.forEach{addSubview($0)}
         invalidateIntrinsicContentSize();needsLayout=true
     }
     private func rows() -> [[StatusBadge]] {
@@ -435,6 +439,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         NSLayoutConstraint.activate([split.heightAnchor.constraint(greaterThanOrEqualToConstant:200),search.topAnchor.constraint(equalTo:root.topAnchor,constant:10),search.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),search.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),findField.widthAnchor.constraint(greaterThanOrEqualToConstant:200),replaceField.widthAnchor.constraint(greaterThanOrEqualToConstant:160),split.topAnchor.constraint(equalTo:search.bottomAnchor,constant:10),split.leadingAnchor.constraint(equalTo:root.leadingAnchor),split.trailingAnchor.constraint(equalTo:root.trailingAnchor),split.bottomAnchor.constraint(equalTo:statusDetails.topAnchor,constant:-5),statusDetails.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),statusDetails.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),statusDetails.bottomAnchor.constraint(equalTo:status.topAnchor,constant:-2),status.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),status.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),status.bottomAnchor.constraint(equalTo:root.bottomAnchor,constant:-6)])
         status.font = .systemFont(ofSize:11); status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
+        statusDetails.onActivate = { [weak self] key,view in self?.showStatusOptions(key,at:view) }
         statusTimer=Timer.scheduledTimer(withTimeInterval:0.2,repeats:true) { [weak self] _ in self?.refreshStatusDetails() }
         refreshStatusDetails(for:document)
     }
@@ -463,11 +468,104 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
                     "Ln \(info["line"]?.intValue ?? 1), Col \(info["column"]?.intValue ?? 1)","\(cachedCharacterCount) chars","\(info["lines"]?.intValue ?? 1) lines"]
         let selectionKey="\(ObjectIdentifier(editor))-\(doc.editor.revision)-\(editor.selectionRanges)"
         if cachedSelectionKey != selectionKey {cachedSelectedCount=editor.selectedCharacterCount;cachedSelectionKey=selectionKey}
-        if cachedSelectedCount > 0 { fields.append("\(cachedSelectedCount) selected") }
-        if editor.selectionCount > 1 {fields.append("\(editor.selectionCount) selections")}
+        var keys=["document","bookmarks","language","position","count","count"]
+        if cachedSelectedCount > 0 { fields.append("\(cachedSelectedCount) selected");keys.append("selection") }
+        if editor.selectionCount > 1 {fields.append("\(editor.selectionCount) selections");keys.append("selection")}
         fields += [String(format:"Base %g pt",info["fontSize"]?.doubleValue ?? 14),indentation,(encoding[doc.format.encoding] ?? "UTF-8")+(doc.format.bom ? " BOM" : ""),eol,editor.wrap ? "Wrap" : "No Wrap"]
-        if editor.readOnly {fields.append("Read Only")}
-        statusDetails.update(fields)
+        keys += ["font","indent","encoding","eol","wrap"]
+        if editor.readOnly {fields.append("Read Only");keys.append("document")}
+        statusDetails.update(fields,keys:keys)
+    }
+    private func showStatusOptions(_ key:String,at view:NSView) {
+        guard let doc=document as? TextDocument else{return}
+        let editor=activeEditor, info=editor.statusInfo
+        let app=NSApp.delegate as? AppDelegate
+        app?.lastDocumentController=self
+        let menu=NSMenu();menu.autoenablesItems=false
+        func add(_ title:String,_ action:Selector,_ target:AnyObject,_ value:String?=nil,_ checked:Bool=false,_ enabled:Bool=true) {
+            let item=NSMenuItem(title:title,action:action,keyEquivalent:"");item.target=target;item.representedObject=value
+            item.state=checked ? .on : .off;item.isEnabled=enabled;menu.addItem(item)
+        }
+        func heading(_ title:String) {let item=NSMenuItem(title:title,action:nil,keyEquivalent:"");item.isEnabled=false;menu.addItem(item)}
+        switch key {
+        case "encoding":
+            heading("Re-read using encoding…")
+            let options:[(String,String)]=[("UTF-8","utf8"),("UTF-16 LE","utf16LE"),("UTF-16 BE","utf16BE"),("Latin-1","latin1"),("Windows-1252","windows1252")]
+            for (name,code) in options {add(name,#selector(TextDocument.reloadEncoding(_:)),doc,code,doc.format.encoding.rawValue==code,doc.fileURL != nil)}
+            menu.addItem(.separator());heading("Convert document encoding (save separately)")
+            for (name,code) in [("UTF-8","utf8"),("UTF-8 with BOM","utf8bom"),("UTF-16 LE with BOM","utf16LE"),("UTF-16 BE with BOM","utf16BE"),("Latin-1","latin1"),("Windows-1252","windows1252")] {
+                let current=doc.format.encoding == .utf8 && doc.format.bom ? "utf8bom" : doc.format.encoding.rawValue
+                add(name,#selector(TextDocument.convertEncoding(_:)),doc,code,current==code,!editor.readOnly)
+            }
+        case "indent":
+            heading("Indentation for this view")
+            add("Tabs",#selector(statusOption(_:)),self,"tabs",info["useTabs"]?.boolValue == true)
+            add("Spaces",#selector(statusOption(_:)),self,"spaces",info["useTabs"]?.boolValue == false)
+            menu.addItem(.separator())
+            for n in [2,3,4,8] {add("Width: \(n)",#selector(statusOption(_:)),self,"width.\(n)",info["tabWidth"]?.intValue == n)}
+            if let settings=app?.settings {menu.addItem(.separator());add("Default Editor Settings…",#selector(SettingsController.showSettings(_:)),settings)}
+        case "eol":
+            heading("Convert document line endings")
+            for (name,code) in [("LF — Unix / macOS","LF"),("CRLF — Windows","CRLF"),("CR — Classic Mac","CR")] {
+                let current=cachedEndings.isEmpty ? [0:"CRLF",1:"CR",2:"LF"][info["eol"]?.intValue ?? 2] : cachedEndings
+                add(name,#selector(convertEOL(_:)),self,code,current==code,!editor.readOnly)
+            }
+        case "wrap":
+            add("Wrap Lines",#selector(statusOption(_:)),self,"wrap.on",editor.wrap)
+            add("No Wrap",#selector(statusOption(_:)),self,"wrap.off",!editor.wrap)
+        case "font":
+            heading("Text size for this view")
+            add("Larger",#selector(statusOption(_:)),self,"zoomIn")
+            add("Smaller",#selector(statusOption(_:)),self,"zoomOut")
+            if let languages=app?.languages {menu.addItem(.separator());let languageMenu=languages.menu();if let style=languageMenu.items.first(where:{$0.title == "Syntax Style Settings…"}) {menu.addItem(style.copy() as! NSMenuItem)}}
+        case "language":
+            if let languages=app?.languages {
+                let source=languages.menu()
+                for item in source.items where item.representedObject is String {
+                    let copy=item.copy() as! NSMenuItem;copy.state=(copy.representedObject as? String)==doc.languageIdentifier ? .on : .off;menu.addItem(copy)
+                }
+            }
+        case "bookmarks":
+            for (name,code) in [("Toggle Bookmark on Current Line","bookmarkToggle"),("Next Bookmark","bookmarkNext"),("Previous Bookmark","bookmarkPrevious")] {add(name,#selector(statusOption(_:)),self,code)}
+        case "position":
+            add("Go to Line…",#selector(statusOption(_:)),self,"goToLine")
+        case "document":
+            add("Save…",#selector(NSDocument.save(_:)),doc)
+            add("Save As…",#selector(NSDocument.saveAs(_:)),doc)
+            add("Read Only",#selector(TextDocument.toggleReadOnly(_:)),doc,nil,editor.readOnly)
+        default:
+            add("Select All",#selector(statusOption(_:)),self,"selectAll")
+            add("Clear Selection",#selector(statusOption(_:)),self,"clearSelection")
+        }
+        menu.popUp(positioning:nil,at:NSPoint(x:0,y:view.bounds.height),in:view)
+        refreshStatusDetails()
+    }
+    @objc private func statusOption(_ sender:NSMenuItem) {
+        guard let id=sender.representedObject as? String else{return}
+        let editor=activeEditor,info=editor.statusInfo
+        switch id {
+        case "tabs","spaces":editor.configureTabWidth(info["tabWidth"]?.intValue ?? 4,useTabs:id == "tabs")
+        case "wrap.on","wrap.off":editor.wrap=id == "wrap.on"
+        case "clearSelection":_ = editor.setSelectionAnchor(editor.selectionCaret,caret:editor.selectionCaret)
+        case "goToLine":
+            let alert=NSAlert();alert.messageText="Go to Line"
+            let input=NSTextField(string:String(info["line"]?.intValue ?? 1));input.frame=NSRect(x:0,y:0,width:240,height:24)
+            alert.accessoryView=input;alert.addButton(withTitle:"Go");alert.addButton(withTitle:"Cancel")
+            alert.window.initialFirstResponder=input
+            guard alert.runModal() == .alertFirstButtonReturn else{return}
+            guard editor.window != nil,let line=Int(input.stringValue),line>=1,line<=(editor.statusInfo["lines"]?.intValue ?? 1) else{NSSound.beep();return}
+            let text=editor.text,ns=text as NSString
+            let breaks=try! NSRegularExpression(pattern:"\\r\\n|\\r|\\n")
+            let matches=breaks.matches(in:text,range:NSRange(location:0,length:ns.length))
+            guard line == 1 || matches.indices.contains(line-2) else{NSSound.beep();return}
+            let offset=line == 1 ? 0 : ns.substring(to:NSMaxRange(matches[line-2].range)).utf8.count
+            _ = editor.setSelectionAnchor(offset,caret:offset)
+            window?.makeFirstResponder(editor)
+        default:
+            if id.hasPrefix("width."),let width=Int(id.dropFirst(6)) {editor.configureTabWidth(width,useTabs:info["useTabs"]?.boolValue ?? true)}
+            else {(NSApp.delegate as? AppDelegate)?.macros.willExecuteCommand(id,on:editor);editor.executeCommand(id)}
+        }
+        refreshStatusDetails()
     }
     func toolbarAllowedItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     func toolbarDefaultItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier] {
