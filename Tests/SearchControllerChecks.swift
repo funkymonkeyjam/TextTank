@@ -19,6 +19,9 @@ final class OffscreenWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             let controller = SearchController(defaults: isolated)
             controller.currentEditor = { editor }
             controller.openEditors = { [editor] }
+            // F308: failures of Find Next and Find Previous are counted here instead of sounding.
+            var signals = 0
+            controller.onFailureSignal = { signals += 1 }
             @MainActor func finished() async { await waitUntil("the search to finish") { !controller.isSearching } }
             let fresh0 = SearchOptions()
             check(
@@ -288,7 +291,8 @@ final class OffscreenWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 + String(repeating: hitLine, count: hitCount - chosenHit - 1)
             check(
                 controller.lastOutcome == .replaced(changed: 1, stale: 0) && editor.text == expectedBig
-                    && recorded == ["replaceOne"],
+                    && recorded == ["replaceOne", "next"]
+                    && editor.selectionStart == (chosenHit + 1) * hitBytes && editor.selectedText == "needle",
                 "single Replace on a \(hitCount)-hit buffer replaces exactly the selected hit")
             check(
                 replaceElapsed < 10,
@@ -300,10 +304,12 @@ final class OffscreenWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             recorded = []
             controller.replaceOne(nil)
             await waitUntil(timeout: 120, "the many-hit single Replace to finish") { !controller.isSearching }
+            // F45: this used to be a silent no-op; Replace now behaves as Next when no match is selected.
             check(
-                controller.lastOutcome == .replaced(changed: 0, stale: 0) && editor.text == big && !editor.modified
-                    && recorded.isEmpty,
-                "single Replace with a selection that is not exactly a hit changes and records nothing")
+                controller.lastOutcome == .selectedNextMatch && editor.text == big && !editor.modified
+                    && recorded == ["next"] && editor.selectionStart == (chosenHit + 1) * hitBytes + 3
+                    && editor.selectedText == "needle",
+                "single Replace with a selection that is not exactly a hit edits nothing and selects the next match")
             // G404: the typed state is set with the status text, and the wording is the product's.
             controller.queryField.stringValue = ""
             controller.findAll(nil)
@@ -387,6 +393,560 @@ final class OffscreenWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 "Selection scope bookmarks the line of the selected hit, not a shifted one")
             _ = editor.setBookmarks([])
             controller.scope.selectItem(at: 0)
+            controller.wordButton.state = .off
+            controller.caseButton.state = .off
+            // ---- Package 10: Find and Replace controller behaviour ----
+            @MainActor func load(_ target: TTEditor, _ text: String) {
+                target.text = text
+                target.resetUndoHistory()
+                target.setSavePoint()
+            }
+            @MainActor func offscreenEditor(_ text: String) -> (TTEditor, OffscreenWindow) {
+                let made = TTEditor(frame: NSRect(x: 0, y: 0, width: 600, height: 400)),
+                    host = OffscreenWindow(
+                        contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: .titled,
+                        backing: .buffered, defer: false)
+                host.contentView = made
+                load(made, text)
+                return (made, host)
+            }
+            @MainActor func next() async {
+                controller.next(nil)
+                await finished()
+            }
+            @MainActor func previous() async {
+                controller.previous(nil)
+                await finished()
+            }
+            @MainActor func replaceOne() async {
+                controller.replaceOne(nil)
+                await finished()
+            }
+            @MainActor func replaceAll() async {
+                controller.replaceAll(nil)
+                await finished()
+            }
+            @MainActor func literal(_ query: String, _ replacement: String, scope: Int, wrap: Bool) {
+                controller.mode.selectItem(at: 0)
+                controller.scope.selectItem(at: scope)
+                controller.caseButton.state = .on
+                controller.wordButton.state = .off
+                controller.wrapButton.state = wrap ? .on : .off
+                controller.queryField.stringValue = query
+                controller.replacementField.stringValue = replacement
+            }
+            var recordedOptions: [SearchOptions] = []
+            controller.onCommand = { options, action, _ in
+                recorded.append(action)
+                recordedOptions.append(options)
+            }
+
+            // F35: Next and Previous in Selection scope walk the hits of the scope and keep it.
+            literal("a", "b", scope: 1, wrap: false)
+            load(editor, "xa a a ax")
+            _ = editor.setSelectionAnchor(1, caret: 6)
+            recorded = []
+            var visited: [Int] = []
+            let reusedBeforeScope = controller.reusedResults
+            for _ in 0..<3 {
+                await next()
+                visited.append(editor.selectionStart)
+            }
+            check(
+                visited == [1, 3, 5] && editor.selectionEnd == 6 && recorded.isEmpty,
+                "Selection scope Next visits each hit inside the selection in order")
+            var signalsBefore = signals
+            await next()
+            check(
+                editor.selectionStart == 5 && editor.selectionEnd == 6 && controller.lastOutcome == .noFurtherMatches
+                    && controller.status.stringValue == "No further matches." && signals == signalsBefore + 1,
+                "Selection scope Next past the last hit in scope stops and never leaves the scope")
+            check(
+                controller.reusedResults == reusedBeforeScope + 3,
+                "Selection scope Next reuses the results of the first press while nothing changed")
+            controller.wrapButton.state = .on
+            _ = editor.setSelectionAnchor(1, caret: 6)
+            visited = []
+            for _ in 0..<4 {
+                await next()
+                visited.append(editor.selectionStart)
+            }
+            check(visited == [1, 3, 5, 1], "Selection scope Next with Wrap on wraps inside the scope")
+            _ = editor.setSelectionAnchor(1, caret: 6)
+            visited = []
+            for _ in 0..<4 {
+                await previous()
+                visited.append(editor.selectionStart)
+            }
+            check(
+                visited == [5, 3, 1, 5], "Selection scope Previous starts at the last hit in scope and wraps inside it")
+            _ = editor.setSelectionAnchor(6, caret: 9)
+            await next()
+            check(
+                editor.selectionStart == 7 && editor.selectionEnd == 8,
+                "a manual selection change after navigating starts a new scope from the live selection")
+            load(editor, "xa a a ax")
+            _ = editor.setSelectionAnchor(2, caret: 2)
+            signalsBefore = signals
+            await next()
+            check(
+                controller.lastOutcome == .needsInput
+                    && controller.status.stringValue == "Select one nonempty range first."
+                    && editor.selectionCaret == 2 && signals == signalsBefore + 1,
+                "Selection scope Next after an edit with nothing selected asks for a selection")
+            _ = editor.setSelectionAnchor(1, caret: 6)
+            controller.wrapButton.state = .off
+            await next()
+            await replaceOne()
+            check(
+                editor.text == "xb a a ax" && controller.lastOutcome == .replaced(changed: 1, stale: 0)
+                    && recorded.isEmpty,
+                "Selection scope Replace right after a Selection scope Next replaces the selected match")
+            editor.executeCommand("undo")
+            check(editor.text == "xa a a ax" && !editor.modified, "that Selection scope Replace is one Undo")
+            literal("a", "b", scope: 0, wrap: false)
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            visited = []
+            for _ in 0..<4 {
+                await next()
+                visited.append(editor.selectionStart)
+            }
+            signalsBefore = signals
+            await next()
+            check(
+                visited == [1, 3, 5, 7] && editor.selectionStart == 7 && controller.lastOutcome == .noFurtherMatches
+                    && signals == signalsBefore + 1 && recorded == ["next", "next", "next", "next"],
+                "Current document Next visits every hit, then stops with Wrap off")
+            controller.wrapButton.state = .on
+            await next()
+            check(editor.selectionStart == 1, "Current document Next with Wrap on returns to the first hit")
+            await previous()
+            check(editor.selectionStart == 7, "Current document Previous with Wrap on returns to the last hit")
+
+            // F36: single Replace with All open documents edits only the document it was pressed in.
+            let (second, secondWindow) = offscreenEditor("x=1 x=2")
+            load(editor, "x=1 x=2")
+            var open: [TTEditor] = [editor, second]
+            var focused: TTEditor? = second
+            controller.openEditors = { open }
+            controller.currentEditor = { focused }
+            literal("x", "y", scope: 2, wrap: false)
+            _ = editor.setSelectionAnchor(0, caret: 1)
+            _ = second.setSelectionAnchor(0, caret: 1)
+            let backgroundRevision = editor.revision
+            recorded = []
+            await replaceOne()
+            check(
+                editor.text == "x=1 x=2" && editor.revision == backgroundRevision && !editor.modified,
+                "All open documents Replace leaves a background document with a selected match untouched")
+            check(
+                second.text == "y=1 x=2" && controller.lastOutcome == .replaced(changed: 1, stale: 0)
+                    && controller.status.stringValue.hasPrefix("Replaced 1 matches") && recorded.isEmpty,
+                "All open documents Replace replaces the selected match of the current document")
+            second.executeCommand("undo")
+            check(second.text == "x=1 x=2" && !second.modified, "that Replace is one Undo in the current document")
+            await replaceAll()
+            check(
+                editor.text == "y=1 y=2" && second.text == "y=1 y=2"
+                    && controller.lastOutcome == .replaced(changed: 4, stale: 0),
+                "All open documents Replace All still replaces in every open document")
+            editor.executeCommand("undo")
+            second.executeCommand("undo")
+            check(
+                editor.text == "x=1 x=2" && second.text == "x=1 x=2" && !editor.modified && !second.modified,
+                "All open documents Replace All is one Undo in each document")
+
+            // F48: All open documents navigation moves between documents, in open order.
+            let (third, thirdWindow) = offscreenEditor("zq")
+            let (stray, strayWindow) = offscreenEditor("zq zq")
+            @MainActor func caretsToStart() {
+                for target in [editor, second, third] { _ = target.setSelectionAnchor(0, caret: 0) }
+            }
+            @MainActor func place() -> String {
+                @MainActor func one(_ target: TTEditor) -> String { "\(target.selectionStart)-\(target.selectionEnd)" }
+                return [editor, second, third].map(one).joined(separator: " ")
+            }
+            literal("zq", "", scope: 2, wrap: false)
+            load(editor, "none here")
+            load(second, "zq zq")
+            load(third, "none")
+            open = [editor, second, third]
+            focused = editor
+            caretsToStart()
+            await next()
+            check(
+                place() == "0-0 0-2 0-0"
+                    && controller.lastOutcome == .found(matches: 2, documents: 3, truncated: false),
+                "All open documents Next moves to the first hit of a later document")
+            await next()
+            check(
+                place() == "0-0 3-5 0-0",
+                "a repeated Next continues in that document although the current editor was not updated")
+            signalsBefore = signals
+            await next()
+            check(
+                place() == "0-0 3-5 0-0" && controller.lastOutcome == .noFurtherMatches && signals == signalsBefore + 1,
+                "All open documents Next after the last hit of the last document stops with Wrap off")
+            load(editor, "zq a")
+            load(second, "zq zq")
+            load(third, "zq")
+            caretsToStart()
+            controller.wrapButton.state = .on
+            var places: [String] = []
+            for _ in 0..<5 {
+                await next()
+                places.append(place())
+            }
+            check(
+                places == ["0-2 0-0 0-0", "0-2 0-2 0-0", "0-2 3-5 0-0", "0-2 3-5 0-2", "0-2 3-5 0-2"]
+                    && editor.selectionStart == 0,
+                "All open documents Next with Wrap on goes through every document and returns to the first")
+            places = []
+            for _ in 0..<4 {
+                await previous()
+                places.append(place())
+            }
+            check(
+                places == ["0-2 3-5 0-2", "0-2 3-5 0-2", "0-2 0-2 0-2", "0-2 0-2 0-2"],
+                "All open documents Previous with Wrap on walks the documents backwards")
+            load(editor, "zq a")
+            load(second, "zq zq")
+            load(third, "zq")
+            caretsToStart()
+            controller.wrapButton.state = .off
+            signalsBefore = signals
+            await previous()
+            check(
+                place() == "0-0 0-0 0-0" && controller.lastOutcome == .noFurtherMatches && signals == signalsBefore + 1,
+                "All open documents Previous before the first hit of the first document stops with Wrap off")
+            await next()
+            await next()
+            check(place() == "0-2 0-2 0-0", "fixture: navigated from the first document into the second")
+            focused = third
+            await next()
+            check(
+                place() == "0-2 0-2 0-2",
+                "after the person moves to a third document, Next continues from that document")
+            load(editor, "zq a")
+            load(second, "zq zq")
+            load(third, "zq")
+            caretsToStart()
+            focused = stray
+            await next()
+            check(
+                place() == "0-2 0-0 0-0" && stray.selectionEnd == 0,
+                "a current editor outside the open list counts as before the first document for Next")
+            load(editor, "zq a")
+            caretsToStart()
+            await previous()
+            check(
+                place() == "0-0 0-0 0-2",
+                "a current editor outside the open list counts as after the last document for Previous")
+            _ = (secondWindow, thirdWindow, strayWindow)
+            open = [editor]
+            focused = editor
+
+            // F45: Replace finds the next match when none is selected, and moves on after replacing.
+            controller.mode.selectItem(at: 2)
+            controller.scope.selectItem(at: 0)
+            controller.wrapButton.state = .off
+            controller.queryField.stringValue = "([a-z]+)=(\\d+)"
+            controller.replacementField.stringValue = "$1:$2"
+            load(editor, "one=12 two=34")
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            recorded = []
+            recordedOptions = []
+            await replaceOne()
+            check(
+                editor.text == "one=12 two=34" && !editor.modified && editor.selectedText == "one=12"
+                    && controller.lastOutcome == .selectedNextMatch
+                    && !controller.status.stringValue.hasPrefix("Replaced 0 matches") && recorded == ["next"],
+                "Replace with no match selected selects the next match and edits nothing")
+            await replaceOne()
+            check(
+                editor.text == "one:12 two=34" && editor.selectedText == "two=34"
+                    && controller.lastOutcome == .replaced(changed: 1, stale: 0)
+                    && controller.status.stringValue.hasPrefix("Replaced 1 matches")
+                    && controller.status.stringValue.hasSuffix("Selected the next match.")
+                    && recorded == ["next", "replaceOne", "next"],
+                "Replace on a selected match replaces it, selects the following match and records both steps")
+            let (replay, replayWindow) = offscreenEditor("one=12 two=34")
+            _ = replay.setSelectionAnchor(0, caret: 0)
+            for (options, action) in zip(recordedOptions, recorded) {
+                try controller.playRecorded(options: options, action: action, on: replay)
+            }
+            check(
+                replay.text == editor.text && replay.selectionStart == editor.selectionStart
+                    && replay.selectionEnd == editor.selectionEnd,
+                "the steps recorded by Replace play back to the same text and selection")
+            _ = replayWindow
+            editor.executeCommand("undo")
+            check(editor.text == "one=12 two=34" && !editor.modified, "a Replace that moved on is one Undo")
+            editor.executeCommand("redo")
+            _ = editor.setSelectionAnchor(7, caret: 13)
+            recorded = []
+            await replaceOne()
+            check(
+                editor.text == "one:12 two:34" && controller.lastOutcome == .replaced(changed: 1, stale: 0)
+                    && controller.status.stringValue.hasSuffix("No further matches.") && editor.selectionCaret == 13
+                    && recorded == ["replaceOne"],
+                "Replace of the last match reports that no further match follows")
+            load(editor, "one=12 two=34")
+            _ = editor.setSelectionAnchor(0, caret: 3)
+            recorded = []
+            controller.scope.selectItem(at: 1)
+            await replaceOne()
+            check(
+                editor.text == "one=12 two=34" && controller.lastOutcome == .noMatchSelected
+                    && controller.status.stringValue == "No match is selected; use Next first." && recorded.isEmpty
+                    && editor.selectionStart == 0 && editor.selectionEnd == 3,
+                "Selection scope Replace with no match selected says so and changes nothing")
+            controller.scope.selectItem(at: 2)
+            await replaceOne()
+            check(
+                editor.text == "one=12 two=34" && controller.lastOutcome == .noMatchSelected && recorded.isEmpty
+                    && editor.selectionEnd == 3,
+                "All open documents Replace with no match selected says so and changes nothing")
+            controller.scope.selectItem(at: 0)
+            _ = editor.setSelectionAnchor(0, caret: 6)
+            controller.replaceOne(nil)
+            editor.text = "changed meanwhile"
+            await finished()
+            check(
+                editor.text == "changed meanwhile" && controller.lastOutcome == .replaced(changed: 0, stale: 1)
+                    && controller.status.stringValue.contains("1 changed documents skipped") && recorded.isEmpty,
+                "Replace on a document edited during the search preserves it and reports the skip")
+
+            // F46: a match that starts on the LF of a CRLF bookmarks the line that owns the CRLF.
+            load(editor, "a\r\nb\r\n")
+            _ = editor.setBookmarks([])
+            controller.mode.selectItem(at: 1)
+            controller.queryField.stringValue = "\\n"
+            controller.bookmark(nil)
+            await finished()
+            check(
+                editor.bookmarkLines.map(\.intValue) == [0, 1] && controller.lastOutcome == .bookmarked(stale: 0),
+                "Bookmark Matches for an extended \\n in a CRLF document marks the lines that end, not the next ones")
+            _ = editor.setBookmarks([])
+
+            // F308: Find Next and Find Previous give an audible signal when they select nothing,
+            // with the Find window never shown.
+            @MainActor func button(_ title: String) -> NSButton? {
+                @MainActor func walk(_ view: NSView) -> NSButton? {
+                    if let found = view as? NSButton, found.title == title { return found }
+                    for child in view.subviews { if let found = walk(child) { return found } }
+                    return nil
+                }
+                return controller.window?.contentView.flatMap(walk)
+            }
+            literal("zzz", "", scope: 0, wrap: false)
+            load(editor, "plain text here")
+            _ = editor.setSelectionAnchor(2, caret: 4)
+            let quietRevision = editor.revision
+            signalsBefore = signals
+            await next()
+            check(
+                controller.status.stringValue == "No further matches." && signals == signalsBefore + 1
+                    && editor.selectionAnchor == 2 && editor.selectionCaret == 4 && editor.revision == quietRevision,
+                "Find Next that finds nothing signals once and leaves selection and text alone")
+            controller.queryField.stringValue = "text"
+            await next()
+            check(
+                editor.selectedText == "text" && signals == signalsBefore + 1 && controller.window?.isVisible == false
+                    && (editor.window?.firstResponder as? NSView)?.isDescendant(of: editor) == true,
+                "Find Next that finds a match is silent, keeps the Find window closed and focuses the editor")
+            controller.queryField.stringValue = ""
+            controller.previous(nil)
+            check(
+                controller.status.stringValue == "Enter a search expression." && signals == signalsBefore + 2
+                    && controller.window?.isVisible == false,
+                "Find Previous with no search expression signals")
+            controller.findAll(nil)
+            check(signals == signalsBefore + 2, "Find All with no search expression stays silent")
+            controller.queryField.stringValue = "("
+            controller.mode.selectItem(at: 2)
+            await next()
+            var failedAsExpected = false
+            if case .failed? = controller.lastOutcome { failedAsExpected = true }
+            check(
+                failedAsExpected && signals == signalsBefore + 3 && button("Next")?.isEnabled == true
+                    && button("Replace All")?.isEnabled == true,
+                "Find Next with an invalid expression signals and leaves the buttons enabled")
+            controller.findAll(nil)
+            await finished()
+            check(signals == signalsBefore + 3, "Find All with an invalid expression stays silent")
+            controller.mode.selectItem(at: 0)
+            controller.queryField.stringValue = "text"
+            focused = nil
+            controller.next(nil)
+            check(
+                controller.status.stringValue == "Open a document first." && signals == signalsBefore + 4,
+                "Find Next with no document signals")
+            focused = editor
+            controller.next(nil)
+            editor.text = "zz"
+            await finished()
+            check(
+                controller.lastOutcome == .staleResult && signals == signalsBefore + 5 && editor.text == "zz",
+                "Find Next whose document changed during the search signals and selects nothing")
+
+            // F44, F224: a typed replacement outcome, and one batch edit under one undo action.
+            var typed = SearchOptions()
+            typed.query = "aa"
+            typed.replacement = "c"
+            typed.matchCase = true
+            load(editor, "aa bb aa")
+            let typedText = editor.text, typedRevision = editor.revision
+            let typedHits = try SearchCore.search(typedText, options: typed).hits
+            @MainActor func unedited() -> Bool { editor.text == typedText && !editor.modified }
+            @MainActor func untouched() -> Bool { unedited() && editor.revision == typedRevision }
+            editor.readOnly = true
+            check(
+                SearchController.replace(typedHits, text: typedText, revision: typedRevision, in: editor) == .readOnly
+                    && untouched(), "a read-only document is reported as read-only and not edited")
+            editor.readOnly = false
+            check(
+                SearchController.replace(typedHits, text: typedText, revision: typedRevision + 1, in: editor) == .stale
+                    && untouched(), "a document at another revision is reported as changed and not edited")
+            _ = editor.setSelectionRanges([["anchor": 0, "caret": 0], ["anchor": 3, "caret": 3]])
+            check(
+                SearchController.replace(typedHits, text: typedText, revision: typedRevision, in: editor)
+                    == .multipleSelections && untouched() && editor.selectionCount == 2,
+                "a document with multiple selections is reported as such and not edited")
+            _ = editor.setSelectionAnchor(4, caret: 4)
+            offscreen.contentView = nil
+            check(
+                SearchController.replace(typedHits, text: typedText, revision: typedRevision, in: editor) == .closed
+                    && untouched(), "a document that is no longer in a window is reported as closed and not edited")
+            offscreen.contentView = editor
+            let shifted = [SearchHit(range: NSRange(location: 7, length: 5), replacement: "c")]
+            check(
+                SearchController.replace(typedHits + shifted, text: typedText, revision: typedRevision, in: editor)
+                    == .stale && untouched() && editor.selectionCaret == 4,
+                "one invalid range rejects the whole batch before any edit")
+            check(
+                SearchController.replace(typedHits, text: typedText, revision: typedRevision, in: editor) == .applied(2)
+                    && editor.text == "c bb c" && editor.selectionCount == 1 && editor.selectionAnchor == 1
+                    && editor.selectionCaret == 1,
+                "a batch replacement reports its count and leaves the caret after the first replacement")
+            editor.executeCommand("undo")
+            check(unedited(), "a batch replacement is one Undo back to the save point")
+            literal("aa", "c", scope: 0, wrap: false)
+            editor.readOnly = true
+            recorded = []
+            await replaceAll()
+            check(
+                controller.lastOutcome == .replaced(changed: 0, stale: 1)
+                    && controller.lastReplaceSkips == ReplaceSkips(readOnly: 1)
+                    && controller.status.stringValue.contains("1 read-only") && unedited() && recorded.isEmpty,
+                "Replace All on a read-only document says read-only, not changed")
+            editor.readOnly = false
+            _ = editor.setSelectionRanges([["anchor": 0, "caret": 0], ["anchor": 3, "caret": 3]])
+            await replaceAll()
+            check(
+                controller.lastOutcome == .replaced(changed: 0, stale: 1)
+                    && controller.lastReplaceSkips == ReplaceSkips(multipleSelections: 1)
+                    && controller.status.stringValue.contains("1 with multiple selections") && unedited(),
+                "Replace All with multiple selections says so and edits nothing")
+            _ = editor.setSelectionAnchor(8, caret: 8)
+            var changeCallbacks = 0
+            editor.onChange = { changeCallbacks += 1 }
+            await replaceAll()
+            editor.onChange = nil
+            check(
+                editor.text == "c bb c" && controller.lastOutcome == .replaced(changed: 2, stale: 0)
+                    && controller.lastReplaceSkips == ReplaceSkips() && editor.selectionAnchor == 1
+                    && editor.selectionCaret == 1 && recorded == ["replaceAll"]
+                    && controller.status.stringValue
+                        == "Replaced 2 matches; 0 changed documents skipped. Undo is per document.",
+                "Replace All replaces every match, records once and leaves the caret after the first replacement")
+            check(
+                changeCallbacks >= 2 && changeCallbacks <= 5,
+                "Replace All of two matches reports only its own inserts and deletes (\(changeCallbacks) callbacks)")
+            editor.executeCommand("undo")
+            check(unedited(), "Replace All is one Undo back to the save point")
+
+            // F223: unchanged editors, revisions and options reuse the held results; revision
+            // alone decides staleness.
+            literal("aa", "", scope: 0, wrap: true)
+            load(editor, "aa bb aa aa")
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            var reused = controller.reusedResults
+            await next()
+            check(
+                editor.selectionStart == 0 && editor.selectionEnd == 2 && controller.reusedResults == reused,
+                "the first Next searches the document")
+            controller.next(nil)
+            check(
+                !controller.isSearching && editor.selectionStart == 6 && controller.reusedResults == reused + 1
+                    && controller.lastOutcome == .found(matches: 3, documents: 1, truncated: false),
+                "a repeated Next walks the held results without searching again")
+            controller.previous(nil)
+            check(
+                !controller.isSearching && editor.selectionStart == 0 && controller.reusedResults == reused + 2,
+                "Previous walks the same held results")
+            reused = controller.reusedResults
+            controller.caseButton.state = .off
+            await next()
+            check(
+                controller.reusedResults == reused && editor.selectionStart == 6,
+                "changing an option searches again instead of reusing results")
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            _ = editor.replaceSelection("aa ")
+            await next()
+            check(
+                controller.reusedResults == reused && editor.selectionStart == 3 && editor.selectionEnd == 5
+                    && controller.lastOutcome == .found(matches: 4, documents: 1, truncated: false),
+                "an edit moves the revision, so Next searches the new text")
+            controller.findAll(nil)
+            await finished()
+            let heldRevision = editor.revision
+            _ = editor.setSelectionAnchor(0, caret: 2)
+            _ = editor.replaceSelection("aa")
+            check(
+                editor.text == "aa aa bb aa aa" && editor.revision != heldRevision,
+                "fixture: an edit that restores the same text still moves the revision")
+            let heldHits = try SearchCore.search(editor.text, options: SearchOptions(query: "aa")).hits
+            check(
+                !SearchController.apply(heldHits, text: editor.text, revision: heldRevision, to: editor)
+                    && !SearchController.highlight(heldHits, text: editor.text, revision: heldRevision, in: editor)
+                    && editor.text == "aa aa bb aa aa",
+                "results from an earlier revision are rejected even when the text reads the same")
+
+            // F122: results hold editors weakly and are dropped when the Find window closes.
+            weak var released: TTEditor?
+            do {
+                let (extra, extraWindow) = offscreenEditor("aa in a document that will close")
+                released = extra
+                open = [editor, extra]
+                controller.scope.selectItem(at: 2)
+                controller.findAll(nil)
+                await finished()
+                check(
+                    controller.lastOutcome == .found(matches: 5, documents: 2, truncated: false)
+                        && controller.numberOfRows(in: controller.table) == 5,
+                    "fixture: All open documents results include the document that will close")
+                let lastRow = controller.tableView(controller.table, objectValueFor: nil, row: 4) as? String
+                check(lastRow?.hasSuffix(" · 0 · aa") == true, "a result row shows its document, offset and match")
+                open = [editor]
+                extraWindow.contentView = nil
+            }
+            await waitUntil("the closed document's editor to be released") { released == nil }
+            check(released == nil, "Find results do not keep a closed document's editor alive")
+            check(
+                controller.numberOfRows(in: controller.table) == 5
+                    && controller.tableView(controller.table, objectValueFor: nil, row: 4) as? String
+                        == "Document · 0 · aa",
+                "rows of a closed document stay listed from the one retained snapshot")
+            controller.window?.close()
+            check(
+                controller.numberOfRows(in: controller.table) == 0 && controller.lastOutcome == .cancelled,
+                "closing the Find window drops the results and their text snapshots")
+            controller.scope.selectItem(at: 0)
+            await next()
+            check(
+                editor.selectedText == "aa" && controller.numberOfRows(in: controller.table) == 4,
+                "Find Next still works after the Find window was closed")
             controller.wordButton.state = .off
             controller.caseButton.state = .off
             Checks.summary { "PASS SearchControllerChecks: \(Checks.count) assertions" }

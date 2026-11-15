@@ -15,6 +15,17 @@ enum SearchOutcome: Equatable {
     case clearedHighlights(documents: Int)
     case cancelled
     case failed(String)
+    /// Replace found no selected match and selected the next one instead (current document).
+    case selectedNextMatch
+    /// Replace found no selected match in Selection or All open documents scope.
+    case noMatchSelected
+}
+/// What a replacement did to one document; nothing is changed unless it is `applied`.
+enum ReplaceOutcome: Equatable { case applied(Int), readOnly, multipleSelections, closed, stale }
+/// Documents the last Replace or Replace All left untouched, by reason.
+struct ReplaceSkips: Equatable {
+    var readOnly = 0, multipleSelections = 0, closed = 0, stale = 0
+    var total: Int { readOnly + multipleSelections + closed + stale }
 }
 
 /// Native snapshot search. Workers never access TTEditor; results are revision checked.
@@ -33,11 +44,37 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     let table = NSTableView()
     private var options = SearchOptions(), generation = UUID(), cancellation: TTSearchCancellation?
     private var task: Task<Void, Never>?
-    private struct Buffer { let editor: TTEditor, text: String, revision: UInt, anchor: Int, caret: Int }
-    private struct Row { let buffer: Buffer, hit: SearchHit }
-    private var rows: [Row] = []
+    /// One searched document: the editor is held weakly, so results never keep a closed document
+    /// alive, and `text` is the one snapshot shared by all of its rows (F122). `range` is the
+    /// UTF-16 scope in Selection scope and nil for the whole text.
+    private struct Buffer {
+        weak var editor: TTEditor?
+        let text: String, revision: UInt, anchor: Int, caret: Int, range: NSRange?
+    }
+    private struct Row { let buffer: Int, hit: SearchHit }
+    private struct Navigation {
+        weak var editor: TTEditor?
+        let revision: UInt, range: NSRange
+        /// The application's current editor when the match was selected.
+        weak var from: TTEditor?
+    }
+    /// What the held rows are the result of. Revisions make it the staleness authority.
+    private struct ResultKey: Equatable {
+        struct Document: Equatable {
+            let editor: ObjectIdentifier?, revision: UInt, range: NSRange?
+        }
+        let options: SearchOptions, scope: Int, documents: [Document]
+    }
+    private var resultBuffers: [Buffer] = [], rows: [Row] = []
+    private var resultKey: ResultKey?, resultTruncated = false
     private var searchButtons: [NSButton] = []
-    private var lastNavigation: (TTEditor, UInt, NSRange)?
+    private var lastNavigation: Navigation?, navigationScope: Navigation?
+    /// Called when Find Next or Find Previous selects nothing; the default is the system alert sound.
+    var onFailureSignal: () -> Void = { NSSound.beep() }
+    /// How many Next and Previous presses walked the held results without searching again.
+    private(set) var reusedResults = 0
+    /// Why the last Replace or Replace All skipped documents; `lastOutcome` carries their total.
+    private(set) var lastReplaceSkips = ReplaceSkips()
     private let defaults: UserDefaults
     /// True from the moment a search is started until its result, failure or cancellation is shown.
     private(set) var isSearching = false
@@ -160,58 +197,105 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         status.stringValue = "Cancelled; no pending replacements applied."
         lastOutcome = .cancelled
     }
-    func windowWillClose(_ notification: Notification) { cancel(nil) }
+    func windowWillClose(_ notification: Notification) {
+        cancel(nil)
+        // F122: a closed Find window keeps no text snapshot of any document.
+        rows = []
+        resultBuffers = []
+        resultKey = nil
+        table.reloadData()
+    }
     private func finish() {
         searchButtons.forEach { $0.isEnabled = true }
         cancellation = nil
         task = nil
         isSearching = false
     }
+    /// Every exit that selects and changes nothing reports here. Find Next and Find Previous also
+    /// work from the menu while this window is closed, so their failures are audible too (F308).
+    private func fail(_ message: String, _ outcome: SearchOutcome, audible: Bool) {
+        status.stringValue = message
+        lastOutcome = outcome
+        if audible { onFailureSignal() }
+    }
     private enum Action { case next, previous, all, replaceAll, replaceOne, bookmark, mark }
     private func run(_ action: Action) {
-        let opts = readOptions()
+        let opts = readOptions(), navigating = action == .next || action == .previous
         guard !opts.query.isEmpty else {
-            status.stringValue = "Enter a search expression."
-            lastOutcome = .needsInput
+            fail("Enter a search expression.", .needsInput, audible: navigating)
             return
         }
-        var editors = scope.indexOfSelectedItem == 2 ? openEditors() : currentEditor().map { [$0] } ?? []
+        let scopeIndex = scope.indexOfSelectedItem
+        // Captured before the search: focus may have moved by the time the results arrive (F36).
+        let active = currentEditor()
+        var editors = scopeIndex == 2 ? openEditors() : active.map { [$0] } ?? []
         var identities = Set<ObjectIdentifier>()
         editors = editors.filter { identities.insert(ObjectIdentifier($0)).inserted }
         guard !editors.isEmpty else {
-            status.stringValue = "Open a document first."
-            lastOutcome = .needsInput
+            fail("Open a document first.", .needsInput, audible: navigating)
             return
         }
-        if scope.indexOfSelectedItem != 0 {
+        if scopeIndex != 0 {
             onUnrecordableCommand?("Selection and all-open search operations are not recorded in macros.")
         }
-        let currentDocumentScope = scope.indexOfSelectedItem == 0, selectionScope = scope.indexOfSelectedItem == 1
-        var buffers: [Buffer] = []
+        let currentDocumentScope = scopeIndex == 0, selectionScope = scopeIndex == 1
+        var buffers: [Buffer] = [], freshScope = false
         for e in editors {
-            let text = e.text
-            if scope.indexOfSelectedItem == 1 {
+            let revision = e.revision
+            // A snapshot already held for this revision is this text; do not copy the document again (F223).
+            let text = resultBuffers.first { $0.editor === e && $0.revision == revision }?.text ?? e.text
+            var range: NSRange?
+            if selectionScope {
                 guard e.selectionCount == 1,
-                    let r = SearchCore.utf16Range(
-                        NSRange(location: e.selectionStart, length: e.selectionEnd - e.selectionStart), in: text),
-                    r.length > 0
+                    let live = SearchCore.utf16Range(
+                        NSRange(location: e.selectionStart, length: e.selectionEnd - e.selectionStart), in: text)
                 else {
-                    status.stringValue = "Select one nonempty range first."
-                    lastOutcome = .needsInput
+                    fail("Select one nonempty range first.", .needsInput, audible: navigating)
                     return
+                }
+                // F35: once Next or Previous has moved the selection onto a hit, the scope is the
+                // range remembered from the first press, until an edit or a manual selection change.
+                if navigating, let last = lastNavigation, last.editor === e, last.revision == revision,
+                    last.range == live, let kept = navigationScope, kept.editor === e, kept.revision == revision
+                {
+                    range = kept.range
+                } else {
+                    guard live.length > 0 else {
+                        fail("Select one nonempty range first.", .needsInput, audible: navigating)
+                        return
+                    }
+                    range = live
+                    if navigating {
+                        navigationScope = Navigation(editor: e, revision: revision, range: live, from: nil)
+                        freshScope = true
+                    }
                 }
             }
             buffers.append(
                 Buffer(
-                    editor: e, text: text, revision: e.revision, anchor: e.selectionAnchor, caret: e.selectionCaret))
+                    editor: e, text: text, revision: revision, anchor: e.selectionAnchor, caret: e.selectionCaret,
+                    range: range))
         }
-        let selectionRanges = buffers.map { b -> NSRange in
-            if scope.indexOfSelectedItem == 1 {
-                return SearchCore.utf16Range(
-                    NSRange(location: b.editor.selectionStart, length: b.editor.selectionEnd - b.editor.selectionStart),
-                    in: b.text)!
+        var keyOptions = opts
+        keyOptions.wrap = false
+        let key = ResultKey(
+            options: keyOptions, scope: scopeIndex,
+            documents: buffers.map { b in
+                ResultKey.Document(editor: b.editor.map { ObjectIdentifier($0) }, revision: b.revision, range: b.range)
+            })
+        // F223: the same editors at the same revisions with the same options have the same hits,
+        // so Next and Previous walk the rows already held instead of searching again.
+        if navigating, key == resultKey, resultBuffers.allSatisfy({ $0.editor != nil }) {
+            status.stringValue = Self.foundStatus(rows.count, resultBuffers.count, resultTruncated)
+            lastOutcome = .found(matches: rows.count, documents: resultBuffers.count, truncated: resultTruncated)
+            reusedResults += 1
+            let moved = navigate(
+                backwards: action == .previous, wrap: opts.wrap, freshScope: freshScope, allOpen: scopeIndex == 2,
+                audible: true)
+            if moved, currentDocumentScope, let editor = resultBuffers.first?.editor {
+                onCommand?(opts, action == .previous ? "previous" : "next", editor)
             }
-            return NSRange(location: 0, length: (b.text as NSString).length)
+            return
         }
         cancellation?.cancel()
         task?.cancel()
@@ -224,12 +308,16 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         isSearching = true
         lastOutcome = nil
         rows = []
+        resultBuffers = []
+        resultKey = nil
         table.reloadData()
         let needsBookmarks = action == .bookmark
         // Selection scope searches a range of the whole text, not an extracted substring, so word
         // boundaries, anchors and lookbehind see the document around the selection (F37). Hits are
         // already at document offsets.
-        let snapshots = zip(buffers, selectionRanges).map { ($0.0.text, $0.1) }
+        let snapshots = buffers.map {
+            ($0.text, $0.range ?? NSRange(location: 0, length: ($0.text as NSString).length))
+        }
         task = Task { @MainActor [weak self] in
             do {
                 let computed = try await Task.detached(priority: .userInitiated) {
@@ -244,123 +332,210 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                         } : []
                     return (reports, lines)
                 }.value
-                let reports = computed.0
                 guard let self, self.generation == token, !flag.cancelled else { return }
-                defer { self.finish() }
-                self.rows = zip(buffers, reports).flatMap { b, r in
-                    r.hits.map { Row(buffer: b, hit: $0) }
+                let replaced = self.complete(
+                    action, options: opts, key: key, buffers: buffers, reports: computed.0, bookmarkLines: computed.1,
+                    scopeIndex: scopeIndex, active: active, freshScope: freshScope)
+                if let editor = replaced {
+                    // F45: a single Replace then moves to the next match. The text has changed, so
+                    // that needs a search of the new text; it is recorded as an ordinary Next.
+                    let text = editor.text, revision = editor.revision
+                    let report = try? await Task.detached(priority: .userInitiated) {
+                        try SearchCore.search(text, options: opts, cancellation: flag)
+                    }.value
+                    guard self.generation == token, !flag.cancelled else { return }
+                    if let report {
+                        self.advance(
+                            in: editor, text: text, revision: revision, report: report, options: opts, key: key)
+                    }
                 }
-                self.table.reloadData()
-                let truncated = reports.contains { $0.truncated }
-                self.status.stringValue =
-                    "\(self.rows.count) matches in \(buffers.count) document(s)"
-                    + (truncated ? " · result limit reached" : "")
-                self.lastOutcome = .found(matches: self.rows.count, documents: buffers.count, truncated: truncated)
-                switch action {
-                case .all: break
-                case .next, .previous:
-                    // A miss is not recorded: playback stops on a recorded search that finds nothing.
-                    let moved = self.navigate(backwards: action == .previous, wrap: opts.wrap)
-                    if moved, currentDocumentScope, let editor = buffers.first?.editor {
-                        self.onCommand?(opts, action == .previous ? "previous" : "next", editor)
-                    }
-                case .replaceAll, .replaceOne:
-                    guard !truncated else {
-                        self.status.stringValue =
-                            "Result limit reached; replacements were not applied. Narrow the scope."
-                        self.lastOutcome = .limitReached
-                        return
-                    }
-                    var changed = 0, stale = 0
-                    for buffer in buffers {
-                        let hits = self.rows.filter { $0.buffer.editor === buffer.editor }.map { $0.hit }
-                        let chosen =
-                            action == .replaceOne
-                            ? SearchCore.hits(
-                                hits,
-                                selectedBy: NSRange(
-                                    location: min(buffer.anchor, buffer.caret),
-                                    length: abs(buffer.anchor - buffer.caret)), in: buffer.text) : hits
-                        if chosen.isEmpty { continue }
-                        if (selectionScope || action == .replaceOne)
-                            && (buffer.editor.selectionAnchor != buffer.anchor
-                                || buffer.editor.selectionCaret != buffer.caret)
-                        {
-                            stale += 1
-                            continue
-                        }
-                        if Self.apply(chosen, text: buffer.text, revision: buffer.revision, to: buffer.editor) {
-                            changed += chosen.count
-                        } else {
-                            stale += 1
-                        }
-                    }
-                    self.status.stringValue =
-                        "Replaced \(changed) matches; \(stale) changed documents skipped. Undo is per document."
-                    self.lastOutcome = .replaced(changed: changed, stale: stale)
-                    if changed > 0, stale == 0, currentDocumentScope, let editor = buffers.first?.editor {
-                        self.onCommand?(opts, action == .replaceOne ? "replaceOne" : "replaceAll", editor)
-                    }
-                case .mark:
-                    guard !truncated else {
-                        self.status.stringValue =
-                            "Result limit reached; previous highlights were preserved. Narrow the scope."
-                        self.lastOutcome = .limitReached
-                        return
-                    }
-                    var marked = 0, stale = 0, zeroWidth = 0
-                    for b in buffers {
-                        let hits = self.rows.filter { $0.buffer.editor === b.editor }.map { $0.hit }
-                        if selectionScope
-                            && (b.editor.selectionAnchor != b.anchor || b.editor.selectionCaret != b.caret)
-                        {
-                            stale += 1
-                            continue
-                        }
-                        if Self.highlight(hits, text: b.text, revision: b.revision, in: b.editor) {
-                            marked += hits.filter { $0.range.length > 0 }.count
-                            zeroWidth += hits.filter { $0.range.length == 0 }.count
-                        } else {
-                            stale += 1
-                        }
-                    }
-                    self.status.stringValue =
-                        "Marked \(marked) matches; \(stale) changed/closed documents skipped."
-                        + (zeroWidth > 0 ? " \(zeroWidth) zero-width matches have no visible span." : "")
-                    self.lastOutcome = .marked(matches: marked, stale: stale, zeroWidth: zeroWidth)
-                case .bookmark:
-                    var stale = 0
-                    guard !truncated else {
-                        self.status.stringValue = "Result limit reached; bookmarks were preserved. Narrow the scope."
-                        self.lastOutcome = .limitReached
-                        return
-                    }
-                    for (index, b) in buffers.enumerated() {
-                        guard b.editor.window != nil, b.editor.revision == b.revision, b.editor.text == b.text,
-                            !selectionScope
-                                || (b.editor.selectionAnchor == b.anchor && b.editor.selectionCaret == b.caret)
-                        else {
-                            stale += 1
-                            continue
-                        }
-                        var lines = Set(b.editor.bookmarkLines.map { $0.intValue })
-                        lines.formUnion(computed.1[index])
-                        _ = b.editor.setBookmarks(lines.sorted().map { NSNumber(value: $0) })
-                    }
-                    self.status.stringValue = "Bookmarked matching lines; \(stale) changed documents skipped."
-                    self.lastOutcome = .bookmarked(stale: stale)
-                }
+                self.finish()
             } catch {
                 guard let self, self.generation == token else { return }
-                self.status.stringValue = error.localizedDescription
-                self.lastOutcome = .failed(error.localizedDescription)
+                self.fail(error.localizedDescription, .failed(error.localizedDescription), audible: navigating)
                 self.finish()
             }
         }
     }
+    private static func foundStatus(_ matches: Int, _ documents: Int, _ truncated: Bool) -> String {
+        "\(matches) matches in \(documents) document(s)" + (truncated ? " · result limit reached" : "")
+    }
+    private static func replacedStatus(changed: Int, skips: ReplaceSkips) -> String {
+        var kinds: [String] = []
+        if skips.readOnly > 0 { kinds.append("\(skips.readOnly) read-only") }
+        if skips.multipleSelections > 0 { kinds.append("\(skips.multipleSelections) with multiple selections") }
+        if skips.closed > 0 { kinds.append("\(skips.closed) closed") }
+        guard !kinds.isEmpty else {
+            return "Replaced \(changed) matches; \(skips.stale) changed documents skipped. Undo is per document."
+        }
+        if skips.stale > 0 { kinds.append("\(skips.stale) changed") }
+        return "Replaced \(changed) matches; documents skipped: \(kinds.joined(separator: ", ")). Undo is per document."
+    }
+    /// Shows the results of a finished search and performs `action` on them. Returns the editor
+    /// in which a single Replace was applied when the next match should then be selected.
+    private func complete(
+        _ action: Action, options opts: SearchOptions, key: ResultKey, buffers: [Buffer], reports: [SearchReport],
+        bookmarkLines: [[Int]], scopeIndex: Int, active: TTEditor?, freshScope: Bool
+    ) -> TTEditor? {
+        let currentDocumentScope = scopeIndex == 0, selectionScope = scopeIndex == 1
+        resultBuffers = buffers
+        rows = reports.enumerated().flatMap { index, report in report.hits.map { Row(buffer: index, hit: $0) } }
+        let truncated = reports.contains { $0.truncated }
+        resultKey = key
+        resultTruncated = truncated
+        table.reloadData()
+        status.stringValue = Self.foundStatus(rows.count, buffers.count, truncated)
+        lastOutcome = .found(matches: rows.count, documents: buffers.count, truncated: truncated)
+        switch action {
+        case .all: break
+        case .next, .previous:
+            // A miss is not recorded: playback stops on a recorded search that finds nothing.
+            let moved = navigate(
+                backwards: action == .previous, wrap: opts.wrap, freshScope: freshScope, allOpen: scopeIndex == 2,
+                audible: true)
+            if moved, currentDocumentScope, let editor = buffers.first?.editor {
+                onCommand?(opts, action == .previous ? "previous" : "next", editor)
+            }
+        case .replaceAll, .replaceOne:
+            guard !truncated else {
+                fail(
+                    "Result limit reached; replacements were not applied. Narrow the scope.", .limitReached,
+                    audible: false)
+                return nil
+            }
+            var changed = 0, skips = ReplaceSkips()
+            for (index, buffer) in buffers.enumerated() {
+                // F36: a single Replace edits the document it was pressed in, never a background one.
+                if action == .replaceOne && (active == nil || buffer.editor !== active) { continue }
+                let hits = reports[index].hits
+                let chosen =
+                    action == .replaceOne
+                    ? SearchCore.hits(
+                        hits,
+                        selectedBy: NSRange(
+                            location: min(buffer.anchor, buffer.caret),
+                            length: abs(buffer.anchor - buffer.caret)), in: buffer.text) : hits
+                if chosen.isEmpty { continue }
+                guard let editor = buffer.editor else {
+                    skips.closed += 1
+                    continue
+                }
+                if (selectionScope || action == .replaceOne)
+                    && (editor.selectionAnchor != buffer.anchor || editor.selectionCaret != buffer.caret)
+                {
+                    skips.stale += 1
+                    continue
+                }
+                switch Self.replace(chosen, text: buffer.text, revision: buffer.revision, in: editor) {
+                case .applied(let count): changed += count
+                case .readOnly: skips.readOnly += 1
+                case .multipleSelections: skips.multipleSelections += 1
+                case .closed: skips.closed += 1
+                case .stale: skips.stale += 1
+                }
+            }
+            lastReplaceSkips = skips
+            if action == .replaceOne, changed == 0, skips.total == 0 {
+                // F45: nothing is selected that is a match. In the current document Replace finds
+                // the next one, exactly as Next does; the edit itself still needs a selected match.
+                guard currentDocumentScope else {
+                    fail("No match is selected; use Next first.", .noMatchSelected, audible: false)
+                    return nil
+                }
+                if navigate(backwards: false, wrap: opts.wrap, freshScope: false, allOpen: false, audible: false),
+                    let editor = buffers.first?.editor
+                {
+                    status.stringValue = "Selected the next match; press Replace again to replace it."
+                    lastOutcome = .selectedNextMatch
+                    onCommand?(opts, "next", editor)
+                }
+                return nil
+            }
+            status.stringValue = Self.replacedStatus(changed: changed, skips: skips)
+            lastOutcome = .replaced(changed: changed, stale: skips.total)
+            if changed > 0, skips.total == 0, currentDocumentScope, let editor = buffers.first?.editor {
+                onCommand?(opts, action == .replaceOne ? "replaceOne" : "replaceAll", editor)
+                if action == .replaceOne { return editor }
+            }
+        case .mark:
+            guard !truncated else {
+                fail(
+                    "Result limit reached; previous highlights were preserved. Narrow the scope.", .limitReached,
+                    audible: false)
+                return nil
+            }
+            var marked = 0, stale = 0, zeroWidth = 0
+            for (index, b) in buffers.enumerated() {
+                let hits = reports[index].hits
+                guard let editor = b.editor,
+                    !selectionScope || (editor.selectionAnchor == b.anchor && editor.selectionCaret == b.caret),
+                    Self.highlight(hits, text: b.text, revision: b.revision, in: editor)
+                else {
+                    stale += 1
+                    continue
+                }
+                marked += hits.filter { $0.range.length > 0 }.count
+                zeroWidth += hits.filter { $0.range.length == 0 }.count
+            }
+            status.stringValue =
+                "Marked \(marked) matches; \(stale) changed/closed documents skipped."
+                + (zeroWidth > 0 ? " \(zeroWidth) zero-width matches have no visible span." : "")
+            lastOutcome = .marked(matches: marked, stale: stale, zeroWidth: zeroWidth)
+        case .bookmark:
+            var stale = 0
+            guard !truncated else {
+                fail("Result limit reached; bookmarks were preserved. Narrow the scope.", .limitReached, audible: false)
+                return nil
+            }
+            for (index, b) in buffers.enumerated() {
+                guard let editor = b.editor, editor.window != nil, editor.revision == b.revision,
+                    !selectionScope || (editor.selectionAnchor == b.anchor && editor.selectionCaret == b.caret)
+                else {
+                    stale += 1
+                    continue
+                }
+                var lines = Set(editor.bookmarkLines.map { $0.intValue })
+                lines.formUnion(bookmarkLines[index])
+                _ = editor.setBookmarks(lines.sorted().map { NSNumber(value: $0) })
+            }
+            status.stringValue = "Bookmarked matching lines; \(stale) changed documents skipped."
+            lastOutcome = .bookmarked(stale: stale)
+        }
+        return nil
+    }
+    /// After a single Replace: the hits of the new text become the results, and the next one is
+    /// selected. The status keeps the replacement count and says where the selection went.
+    private func advance(
+        in editor: TTEditor, text: String, revision: UInt, report: SearchReport, options opts: SearchOptions,
+        key: ResultKey
+    ) {
+        let replaced = status.stringValue, outcome = lastOutcome
+        resultBuffers = [
+            Buffer(
+                editor: editor, text: text, revision: revision, anchor: editor.selectionAnchor,
+                caret: editor.selectionCaret, range: nil)
+        ]
+        rows = report.hits.map { Row(buffer: 0, hit: $0) }
+        resultKey = ResultKey(
+            options: key.options, scope: key.scope,
+            documents: [ResultKey.Document(editor: ObjectIdentifier(editor), revision: revision, range: nil)])
+        resultTruncated = report.truncated
+        table.reloadData()
+        let moved = navigate(backwards: false, wrap: opts.wrap, freshScope: false, allOpen: false, audible: false)
+        let changedMeanwhile = lastOutcome == .staleResult
+        status.stringValue =
+            replaced
+            + (moved
+                ? " Selected the next match."
+                : changedMeanwhile
+                    ? " The document changed before the next match was selected." : " No further matches.")
+        lastOutcome = outcome
+        if moved { onCommand?(opts, "next", editor) }
+    }
     /// Macro playback is bounded and has no disk or connector side effects. Next and Previous throw
     /// when they do not land on a match, so the steps after them never run at a stale caret;
-    /// Replace All with no match is a deliberate no-op.
+    /// Replace All with no match is a deliberate no-op. Replace stays strict here: it replaces only
+    /// a selected match and never moves on, because saved macros carry their own Next steps.
     func playRecorded(options: SearchOptions, action: String, on editor: TTEditor) throws {
         let text = editor.text, revision = editor.revision
         let report = try SearchCore.search(text, options: options, timeLimit: 0.1)
@@ -375,17 +550,23 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         else { throw Self.recordedSearchStopped("the selection is not on a character boundary") }
         if action == "replaceAll" || action == "replaceOne" {
             let hits = action == "replaceAll" ? report.hits : report.hits.filter { $0.range == selection }
-            if !hits.isEmpty && !Self.apply(hits, text: text, revision: revision, to: editor) {
+            if !hits.isEmpty {
+                let reason: String
+                switch Self.replace(hits, text: text, revision: revision, in: editor) {
+                case .applied: return
+                case .readOnly: reason = "the document is read-only"
+                case .multipleSelections: reason = "multiple selections are not supported"
+                case .closed: reason = "the document is not in a window"
+                case .stale: reason = "the document changed during the step"
+                }
                 throw NSError(
                     domain: "TextTank.Search", code: 5,
-                    userInfo: [
-                        NSLocalizedDescriptionKey:
-                            "Macro replacement encountered a stale buffer or unsupported multiple selection."
-                    ])
+                    userInfo: [NSLocalizedDescriptionKey: "Macro replacement was not applied: \(reason)."])
             }
         } else if action == "next" || action == "previous" {
             let backwards = action == "previous"
-            let continuing = lastNavigation.map { $0.0 === editor && $0.1 == revision && $0.2 == selection } ?? false
+            let continuing =
+                lastNavigation.map { $0.editor === editor && $0.revision == revision && $0.range == selection } ?? false
             let candidates = report.hits.filter { h in
                 backwards
                     ? NSMaxRange(h.range) <= selection.location && !(continuing && h.range == selection)
@@ -398,7 +579,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             guard let bytes = SearchCore.byteRange(hit.range, in: text),
                 editor.setSelectionAnchor(bytes.location, caret: NSMaxRange(bytes))
             else { throw Self.recordedSearchStopped("the match could not be selected") }
-            lastNavigation = (editor, revision, hit.range)
+            lastNavigation = Navigation(editor: editor, revision: revision, range: hit.range, from: nil)
         } else {
             throw NSError(
                 domain: "TextTank.Search", code: 6,
@@ -410,75 +591,140 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             domain: "TextTank.Search", code: 7,
             userInfo: [NSLocalizedDescriptionKey: "Macro stopped: \(reason). Prior edits remain undoable."])
     }
+    /// `revision` is the staleness authority: every insert and delete moves it, in every view of a
+    /// shared document, so an equal revision means `text` is still the editor's text (F223).
     @discardableResult static func highlight(_ hits: [SearchHit], text: String, revision: UInt, in editor: TTEditor)
         -> Bool
     {
-        guard editor.window != nil, editor.revision == revision, editor.text == text,
+        guard editor.window != nil, editor.revision == revision,
             let ranges = SearchCore.byteRanges(hits.map(\.range), in: text)
         else { return false }
         return editor.setSearchHighlights(ranges.filter { $0.length > 0 }.map { NSValue(range: $0) })
     }
     @discardableResult static func apply(_ hits: [SearchHit], text: String, revision: UInt, to editor: TTEditor) -> Bool
     {
-        guard editor.window != nil, !editor.readOnly, editor.revision == revision, editor.text == text,
-            editor.selectionCount == 1, !hits.isEmpty
-        else { return false }
-        guard let ranges = SearchCore.byteRanges(hits.map(\.range), in: text) else { return false }
-        editor.beginUndoGroup()
-        defer { editor.endUndoGroup() }
-        for (hit, range) in zip(hits, ranges).reversed() {
-            guard editor.setSelectionAnchor(range.location, caret: NSMaxRange(range)) else { return false }
-            editor.replaceSelection(hit.replacement)
-        }
-        return true
-    }
-    /// True only when the selection moved to a match.
-    private func navigate(backwards: Bool, wrap: Bool) -> Bool {
-        guard let e = currentEditor(),
-            let selection = SearchCore.utf16Range(
-                NSRange(location: e.selectionStart, length: e.selectionEnd - e.selectionStart), in: e.text)
-        else { return false }
-        let available = rows.filter { $0.buffer.editor === e }
-        let continuing = lastNavigation.map { $0.0 === e && $0.1 == e.revision && $0.2 == selection } ?? false
-        let candidates = available.filter { r in
-            backwards
-                ? NSMaxRange(r.hit.range) <= selection.location && !(continuing && r.hit.range == selection)
-                : r.hit.range.location >= NSMaxRange(selection) && !(continuing && r.hit.range == selection)
-        }
-        if let row = backwards ? candidates.last : candidates.first {
-            return select(row)
-        } else if wrap, let row = backwards ? available.last : available.first {
-            return select(row)
-        }
-        status.stringValue = "No further matches."
-        lastOutcome = .noFurtherMatches
+        if case .applied(let count) = replace(hits, text: text, revision: revision, in: editor) { return count > 0 }
         return false
     }
-    @discardableResult private func select(_ row: Row) -> Bool {
-        let b = row.buffer
-        guard b.editor.window != nil, b.editor.revision == b.revision, b.editor.text == b.text,
-            let range = SearchCore.byteRange(row.hit.range, in: b.text),
-            b.editor.setSelectionAnchor(range.location, caret: NSMaxRange(range))
-        else {
-            status.stringValue = "Result is stale; search again. Selection unchanged."
-            lastOutcome = .staleResult
+    /// Replaces `hits` (ascending, found in `text` at `revision`) in one bridge call under one undo
+    /// action, or changes nothing and says why. The caret ends just after the first replacement.
+    static func replace(_ hits: [SearchHit], text: String, revision: UInt, in editor: TTEditor) -> ReplaceOutcome {
+        guard editor.window != nil else { return .closed }
+        guard !editor.readOnly else { return .readOnly }
+        guard editor.revision == revision else { return .stale }
+        guard editor.selectionCount == 1 else { return .multipleSelections }
+        guard !hits.isEmpty else { return .applied(0) }
+        guard let ranges = SearchCore.byteRanges(hits.map(\.range), in: text),
+            editor.replaceRanges(
+                ranges.map { NSValue(range: $0) }, withTexts: hits.map(\.replacement), expectedRevision: revision)
+        else { return .stale }
+        return .applied(hits.count)
+    }
+    /// True only when the selection moved to a match. `freshScope` is the first press in Selection
+    /// scope: the selection is then the scope itself, not a place to continue from.
+    private func navigate(backwards: Bool, wrap: Bool, freshScope: Bool, allOpen: Bool, audible: Bool) -> Bool {
+        let buffers = resultBuffers
+        var origin: Int?
+        if allOpen {
+            // F48: after a move into another document the application's idea of the current editor
+            // can lag, so the document last navigated to stays the origin while its selection is
+            // still that match and the person has not moved to a third document.
+            let current = currentEditor()
+            if let last = lastNavigation, let editor = last.editor, editor.revision == last.revision,
+                current == nil || current === editor || current === last.from
+                    || !buffers.contains(where: { $0.editor === current }),
+                let index = buffers.firstIndex(where: { $0.editor === editor && $0.revision == last.revision }),
+                SearchCore.utf16Range(
+                    NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart),
+                    in: buffers[index].text) == last.range
+            {
+                origin = index
+            } else if let current {
+                origin = buffers.firstIndex { $0.editor === current }
+            }
+        } else if !buffers.isEmpty {
+            origin = 0
+        }
+        var available: [Row] = [], row: Row?
+        if let origin {
+            let b = buffers[origin]
+            guard let e = b.editor, e.revision == b.revision,
+                let selection = SearchCore.utf16Range(
+                    NSRange(location: e.selectionStart, length: e.selectionEnd - e.selectionStart), in: b.text)
+            else {
+                fail("Result is stale; search again. Selection unchanged.", .staleResult, audible: audible)
+                return false
+            }
+            available = rows.filter { $0.buffer == origin }
+            if freshScope {
+                row = backwards ? available.last : available.first
+            } else {
+                let continuing =
+                    lastNavigation.map { $0.editor === e && $0.revision == e.revision && $0.range == selection }
+                    ?? false
+                let candidates = available.filter { r in
+                    backwards
+                        ? NSMaxRange(r.hit.range) <= selection.location && !(continuing && r.hit.range == selection)
+                        : r.hit.range.location >= NSMaxRange(selection) && !(continuing && r.hit.range == selection)
+                }
+                row = backwards ? candidates.last : candidates.first
+            }
+        }
+        if row == nil, buffers.count > 1 {
+            // The other documents in open order; an editor outside the list counts as before the
+            // first document going forwards and after the last going backwards.
+            let count = buffers.count
+            var order: [Int] = []
+            if backwards {
+                let start = origin ?? count
+                order = Array((0..<start).reversed())
+                if wrap, start < count { order += Array(((start + 1)..<count).reversed()) }
+            } else {
+                let start = origin ?? -1
+                order = Array((start + 1)..<count)
+                if wrap, start > 0 { order += Array(0..<start) }
+            }
+            for index in order {
+                if let found = backwards
+                    ? rows.last(where: { $0.buffer == index }) : rows.first(where: { $0.buffer == index })
+                {
+                    row = found
+                    break
+                }
+            }
+        }
+        if row == nil, wrap { row = backwards ? available.last : available.first }
+        guard let row else {
+            fail("No further matches.", .noFurtherMatches, audible: audible)
             return false
         }
-        lastNavigation = (b.editor, b.revision, row.hit.range)
-        b.editor.window?.makeKeyAndOrderFront(nil)
-        b.editor.window?.makeFirstResponder(b.editor)
+        return select(row, audible: audible)
+    }
+    @discardableResult private func select(_ row: Row, audible: Bool) -> Bool {
+        guard resultBuffers.indices.contains(row.buffer), let editor = resultBuffers[row.buffer].editor,
+            editor.window != nil, editor.revision == resultBuffers[row.buffer].revision,
+            let range = SearchCore.byteRange(row.hit.range, in: resultBuffers[row.buffer].text),
+            editor.setSelectionAnchor(range.location, caret: NSMaxRange(range))
+        else {
+            fail("Result is stale; search again. Selection unchanged.", .staleResult, audible: audible)
+            return false
+        }
+        lastNavigation = Navigation(
+            editor: editor, revision: editor.revision, range: row.hit.range, from: currentEditor())
+        editor.window?.makeKeyAndOrderFront(nil)
+        editor.window?.makeFirstResponder(editor)
         return true
     }
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
     func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?, row: Int) -> Any? {
-        guard rows.indices.contains(row) else { return nil }
-        let r = rows[row]
-        let match = (r.buffer.text as NSString).substring(with: r.hit.range)
+        guard rows.indices.contains(row), resultBuffers.indices.contains(rows[row].buffer) else { return nil }
+        let r = rows[row], buffer = resultBuffers[r.buffer]
+        let match = (buffer.text as NSString).substring(with: r.hit.range)
         return
-            "\(r.buffer.editor.window?.title ?? "Document") · \(r.hit.range.location) · \(String(match.prefix(160)).replacingOccurrences(of:"\n",with:" ↵ "))"
+            "\(buffer.editor?.window?.title ?? "Document") · \(r.hit.range.location) · \(String(match.prefix(160)).replacingOccurrences(of:"\n",with:" ↵ "))"
     }
     @objc private func openResult(_ sender: Any?) {
         guard rows.indices.contains(table.clickedRow) else { return }
-        select(rows[table.clickedRow])
+        select(rows[table.clickedRow], audible: false)
     }
 }

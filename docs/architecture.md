@@ -10,6 +10,18 @@ Pinned clean engines precede explicit audit/port of Notepad++ UDL and Boost rege
 
 Selection scope searches a range of the whole document rather than an extracted substring. Whole word, `^`, `\b`, `\A` and lookbehind see the text before the range, and `$` matches at the range end only where a line really ends. Known limit: Boost cannot read past the range end, so lookahead, `\b` and `\z` there are relative to the range, and a match is cut off at the range end. Whole word in regex mode filters finished matches and does not retry a rejected one. A regex search decodes the document up to the end of the range, so its memory follows the document, not the selection.
 
+## Find and Replace window
+
+`SearchController` searches text snapshots off the main thread and applies results only after re-checking them. The editor's `revision` is the staleness authority: every insert and delete moves it, in every view of a shared document (bridge-checks proves each path), so the controller compares revisions and does not re-copy and compare the whole text. A split clone takes its revision from the primary when it is created and before it can be searched; a new way of changing text must move the revision too.
+
+- Results hold each searched editor weakly, keep one text snapshot per document with rows that refer to it by index, and are dropped when the Find window closes. Find Next from the menu with the window closed holds results again until the next search.
+- Next and Previous reuse the held results while the editors, their revisions, the options and the scope are unchanged; anything else searches again.
+- Selection scope: the first Next or Previous takes the selection as the scope and later presses keep that scope, until an edit or a manual selection change. Every other action reads the live selection.
+- All open documents: Next and Previous first look in the document they are in, then move through the other documents in open order (the order of `openEditors`), wrapping across documents when Wrap is on. The document last navigated to stays the starting point while its selection is still that match, because the application's current editor can lag behind a cross-document move.
+- Replace edits only the document it was pressed in. In the current document, Replace with no match selected selects the next one (recorded as `next`), and a successful Replace then selects the following match (recorded as `replaceOne` then `next`). Macro playback of `replaceOne` stays strict: it replaces a selected match and never moves, so saved macros play as before. A habit of Replace, Next, Replace now skips a match.
+- Replace and Replace All apply one `replaceRanges:withTexts:expectedRevision:` call per document: all ranges are validated before the first edit, the edit is one undo action, and the caret ends just after the first replacement. `ReplaceOutcome` says why a document was skipped (read-only, multiple selections, closed or changed).
+- Find Next and Find Previous call `onFailureSignal` (the system alert sound) whenever they select nothing, since both work from the menu while the window and its status line are closed.
+
 ## Persisted formats
 
 Every file and defaults value the app writes is a versioned Codable value type: editor settings, Find options, Find-in-Folder settings, the workspace browser state, the Run library, session snapshots, recovery snapshots, the Reminders journal, the macro library, the language catalog and the automation library. Their decoders are the synthesized ones, so every non-optional property is a required key, including properties that have a default value.
