@@ -5,6 +5,74 @@ import AppKit
 #endif
 
 @main struct MacroChecks {
+    #if TEXTTANK_NATIVE_MACRO_TEST
+    static func descendants(_ view:NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    static func control<T:NSView>(_ identifier:String,_ type:T.Type,in views:[NSView]) -> T? {
+        views.compactMap{$0 as? T}.first{$0.identifier?.rawValue==identifier}
+    }
+    /// Sends a Macros menu item's own action while a timer in modal mode answers the dialog it opens.
+    /// `act` is called on every tick until it returns true; a modal still open at the deadline is aborted.
+    static func choosing(_ item:NSMenuItem,_ act:@escaping ([NSView]) -> Bool) -> Bool {
+        var acted=false, timedOut=false
+        let deadline=Date().addingTimeInterval(10)
+        let timer=Timer(timeInterval:0.02,repeats:true) { _ in
+            guard let content=NSApp.modalWindow?.contentView else{return}
+            if Date()>deadline { timedOut=true;NSApp.abortModal();return }
+            if !acted { acted=act(descendants(content)) }
+        }
+        RunLoop.main.add(timer,forMode:.modalPanel)
+        defer { timer.invalidate() }
+        guard let action=item.action,NSApp.sendAction(action,to:item.target,from:item) else { return false }
+        return acted && !timedOut
+    }
+    static func item(_ selector:String,in controller:MacroController,id:UUID?=nil) -> NSMenuItem? {
+        controller.menu().items.first{ $0.action==NSSelectorFromString(selector) && (id == nil || ($0.representedObject as? String)==id?.uuidString) }
+    }
+    /// F253: Save Last Recording, a restart, then playback from the Macros menu.
+    static func menuFlowChecks(editor:TTEditor,support:URL) throws {
+        let storage=support.appendingPathComponent("Macros.json")
+        let controller=MacroController(editorProvider:{editor})
+        editor.text="ab";editor.resetUndoHistory();editor.setSavePoint();_ = editor.setSelectionAnchor(1,caret:1)
+        controller.startRecording();editor.executeCommand("newLine")
+        let recording=try requireValue(try controller.finishRecording(),"fixture: a one-step recording")
+        editor.executeCommand("undo")
+        try require(editor.text=="ab","fixture: the recorded edit is undone")
+        func answer(_ field:String,_ value:String?,_ button:String) -> ([NSView]) -> Bool {
+            { views in
+                guard let press=control(button,NSButton.self,in:views),let input=control(field,NSTextField.self,in:views) else{return false}
+                if let value { input.stringValue=value }
+                press.performClick(nil);return true
+            }
+        }
+        let saveItem=try requireValue(item("saveLast",in:controller),"fixture: the Save Last Recording item")
+        check(saveItem.isEnabled,"Save Last Recording is enabled after a finished recording")
+        check(choosing(saveItem,answer("macro.save.name","Never saved","macro.save.cancel")) && !FileManager.default.fileExists(atPath:storage.path),"Cancel in Name Recorded Macro writes nothing")
+        check(choosing(saveItem,answer("macro.save.name","Blank line","macro.save.confirm")),"Name Recorded Macro accepts a name and Save")
+        var stored=try MacroLibrary.decode(Data(contentsOf:storage))
+        check(stored.macros.count==1 && stored.macros[0].id==recording.id && stored.macros[0].name=="Blank line" && stored.macros[0].steps==recording.steps,"Save Last Recording persists the recorded steps under the chosen name")
+        check((try FileManager.default.attributesOfItem(atPath:storage.path)[.posixPermissions] as? NSNumber)?.intValue==0o600,"the saved macro file is private to the user")
+        check(choosing(saveItem,answer("macro.save.name","Blank line twice","macro.save.confirm")),"saving the same recording again is accepted")
+        stored=try MacroLibrary.decode(Data(contentsOf:storage))
+        check(stored.macros.count==1 && stored.macros[0].id==recording.id && stored.macros[0].name=="Blank line twice","saving the same recording again renames it and keeps one entry and its ID")
+        // A new controller reads the file, as the next launch does.
+        let restarted=MacroController(editorProvider:{editor})
+        let savedItem=try requireValue(item("playSaved:",in:restarted,id:recording.id),"fixture: the saved macro has a menu item after restart")
+        check(savedItem.title=="Blank line twice" && savedItem.isEnabled,"the saved macro is listed by its saved name after restart")
+        var revision=editor.revision
+        check(choosing(savedItem,answer("macro.play.count",nil,"macro.play.cancel")) && editor.text=="ab" && editor.revision==revision && !editor.modified,"Cancel in the playback dialog changes nothing")
+        check(choosing(savedItem,answer("macro.play.count","3","macro.play.confirm")),"a saved macro plays from its menu item with a repeat count")
+        check(editor.text=="a\n\n\nb","saved macro playback repeats the recorded edit at the caret")
+        editor.executeCommand("undo")
+        check(editor.text=="ab" && !editor.modified,"menu playback of a saved macro is one Undo")
+        _ = editor.setSelectionAnchor(1,caret:1);revision=editor.revision
+        check(choosing(savedItem,answer("macro.play.count","0","macro.play.cancel")) && editor.text=="ab" && editor.revision==revision,"Cancel after typing a count changes nothing")
+        let lastItem=try requireValue(item("playLast",in:controller),"fixture: the Play Last Recording item")
+        check(choosing(lastItem,answer("macro.play.count","2","macro.play.confirm")) && editor.text=="a\n\nb","Play Last Recording replays the unsaved recording through the same dialog")
+        editor.executeCommand("undo")
+        check(editor.text=="ab" && !editor.modified,"Play Last Recording is one Undo")
+        check(item("playLast",in:restarted)?.isEnabled==false && item("saveLast",in:restarted)?.isEnabled==false,"a restarted controller has no last recording to play or save")
+    }
+    #endif
     static func main() {
         Checks.run("MacroChecks") {
         let id=UUID()
@@ -108,6 +176,7 @@ import AppKit
             check(editor.text=="keep\ntail one\ntail two\n","\(label) playback removes exactly the matching lines and leaves the rest")
             editor.executeCommand("undo");check(editor.text==todoSource && !editor.modified,"\(label) stopped playback is one Undo")
         }
+        Checks.section("Macros menu save and playback") { try menuFlowChecks(editor:editor,support:isolatedSupport.url) }
         #endif
         Checks.summary { "PASS MacroChecks: \(Checks.count) assertions; persistence/security checks; native integration only when TEXTTANK_NATIVE_MACRO_TEST is defined" }
     }

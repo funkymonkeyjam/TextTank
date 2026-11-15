@@ -109,8 +109,8 @@ final class MacroController: NSObject, NSMenuDelegate {
         let revision=editor.revision;let selectionStart=editor.selectionStart;let selectionEnd=editor.selectionEnd
         let alert=TTAlert();alert.messageText="Play \(macro.name)"
         alert.informativeText="Repeat count (1–10000). Playback changes the captured editor as one Undo group. Find steps (literal find and Find-window Next or Previous) stop the macro on no match; earlier edits remain undoable. Replace All with no matches is skipped. Clipboard commands operate on the current clipboard. No shell or external workflow runs."
-        alert.addButton(withTitle:"Play");alert.addButton(withTitle:"Cancel")
-        let count=NSTextField(string:"1");count.frame=NSRect(x:0,y:0,width:200,height:24)
+        alert.addButton(withTitle:"Play").identifier=NSUserInterfaceItemIdentifier("macro.play.confirm");alert.addButton(withTitle:"Cancel").identifier=NSUserInterfaceItemIdentifier("macro.play.cancel")
+        let count=NSTextField(string:"1");count.frame=NSRect(x:0,y:0,width:200,height:24);count.identifier=NSUserInterfaceItemIdentifier("macro.play.count")
         let untilEnd = NSButton(checkboxWithTitle:"Repeat until end of document",target:nil,action:nil)
         let controls = NSStackView(views:[count,untilEnd]); controls.orientation = .vertical; controls.frame = NSRect(x:0,y:0,width:400,height:60); alert.accessoryView=controls
         guard alert.runModal() == .alertFirstButtonReturn else{return}
@@ -147,8 +147,8 @@ final class MacroController: NSObject, NSMenuDelegate {
     }
     @objc private func saveLast() {
         guard var macro=lastRecording,loadingError == nil else {if let loadingError {showError(loadingError)};return}
-        let alert=TTAlert();alert.messageText="Name Recorded Macro";alert.addButton(withTitle:"Save");alert.addButton(withTitle:"Cancel")
-        let name=NSTextField(string:macro.name);name.frame=NSRect(x:0,y:0,width:400,height:24);alert.accessoryView=name
+        let alert=TTAlert();alert.messageText="Name Recorded Macro";alert.addButton(withTitle:"Save").identifier=NSUserInterfaceItemIdentifier("macro.save.confirm");alert.addButton(withTitle:"Cancel").identifier=NSUserInterfaceItemIdentifier("macro.save.cancel")
+        let name=NSTextField(string:macro.name);name.frame=NSRect(x:0,y:0,width:400,height:24);name.identifier=NSUserInterfaceItemIdentifier("macro.save.name");alert.accessoryView=name
         guard alert.runModal() == .alertFirstButtonReturn else{return}
         do {macro.name=name.stringValue;var proposed=library
             if let i=proposed.macros.firstIndex(where:{$0.id==macro.id}) {proposed.macros[i]=macro}else{proposed.macros.append(macro)}
