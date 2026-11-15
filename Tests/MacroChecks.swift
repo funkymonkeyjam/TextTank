@@ -119,6 +119,13 @@ import Foundation
         }
         /// Navigation from the Find window fronts the document window; checks never put one on screen.
         final class QuietWindow: NSWindow { override func makeKeyAndOrderFront(_ sender: Any?) {} }
+        /// Stands in for the system's drag information, so a real drop runs through a content view.
+        final class FakeDrop: NSObject {
+            @objc let draggingPasteboard = NSPasteboard.withUniqueName()
+            @objc var draggingLocation = NSPoint.zero
+            @objc let draggingSourceOperationMask = NSDragOperation.copy
+            @objc let draggingSource: Any? = nil
+        }
         /// Package 12: a recording either reproduces what was done or is discarded with a named reason.
         static func fidelityChecks(editor: TTEditor, window: NSWindow) throws {
             let controller = MacroController(editorProvider: { editor })
@@ -345,6 +352,42 @@ import Foundation
             rejects("a margin selection cannot silently save a partial recording", message: "mouse") {
                 _ = try controller.finishRecording()
             }
+            // A split view shares the recorded document. Text dropped into it edits that document
+            // through another view, and a drop moves no focus, so nothing else would notice.
+            reasons = []
+            load("alpha beta\n  gamma delta\nlast line\n", caret: 0)
+            let split = TTEditor(frame: NSRect(x: 0, y: 0, width: 500, height: 300))
+            let splitWindow = QuietWindow(
+                contentRect: split.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            splitWindow.isReleasedWhenClosed = false
+            splitWindow.contentView = split
+            split.shareDocument(with: editor)
+            split.onFocus = { controller.editorDidFocus(split) }
+            let splitContent = try requireValue(
+                descendants(split).first { $0.className == "TTContentView" }, "fixture: the split view's content view")
+            let drop = FakeDrop()
+            drop.draggingPasteboard.declareTypes([.string], owner: nil)
+            drop.draggingPasteboard.setString("DROP", forType: .string)
+            defer { drop.draggingPasteboard.releaseGlobally() }
+            drop.draggingLocation = splitContent.convert(near, to: nil)
+            let dropInfo = unsafeBitCast(drop, to: NSDraggingInfo.self)
+            controller.startRecording()
+            editor.executeCommand("charRight")
+            let beforeDrop = editor.revision
+            _ = splitContent.draggingEntered(dropInfo)
+            _ = splitContent.draggingUpdated(dropInfo)
+            try require(
+                splitContent.performDragOperation(dropInfo) && editor.text.contains("DROP")
+                    && editor.revision != beforeDrop,
+                "fixture: the drop into the split view edited the recorded document")
+            check(
+                reasons.count == 1 && reasons[0].contains("drag and drop"),
+                "text dropped into a split view of the recorded document discards the recording at once")
+            rejects("a drop into a split view cannot silently save a partial recording", message: "drag and drop") {
+                _ = try controller.finishRecording()
+            }
+            split.onFocus = nil
+            splitWindow.contentView = nil
             reasons = []
             // Application-layer find and replace change the selection and the text outside Scintilla's
             // recording and are recorded by the caller afterwards; they must stay recordable.
@@ -432,6 +475,14 @@ import Foundation
                         editor.setSelectionAnchor(caret, caret: caret)
                     } && reasons.isEmpty && controller.finishRecording()?.steps.count == 1,
                 "a refused jump and a jump to where the caret already is leave the recording saveable")
+            load("one\ntwo\nthree", caret: 4)
+            controller.startRecording()
+            editor.executeCommand("newLine")
+            check(
+                try controller.unrecordedJump(in: editor, reason: "unused") { editor.goToLine(3) }
+                    && editor.selectionCaret == caret && reasons.isEmpty
+                    && controller.finishRecording()?.steps.count == 1,
+                "Go to Line to the line start the caret is already on leaves the recording saveable")
 
             // The recorded Find-window path changes the selection outside Scintilla's recording too.
             let suite = "TextTankMacroFidelity-" + UUID().uuidString

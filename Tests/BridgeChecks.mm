@@ -1048,6 +1048,69 @@ int main() {
         [ed stopRecording]; [steps removeAllObjects];
         [(id<NSDraggingDestination>)content draggingUpdated:info]; [(id<NSDraggingDestination>)content performDragOperation:info];
         check(steps.count==0, "a drop outside a recording reports nothing");
+        // F59 (repair): a split view shares the recorded document. A drop into it, or the removal that
+        // ends a drag out of it, edits that document through another view and moves no focus.
+        reset();
+        TTEditor *clone=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *cloneHost=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,600,400) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+        cloneHost.contentView=clone;
+        [clone shareDocumentWith:ed];
+        NSView *cloneContent=((ScintillaView *)clone.subviews.firstObject).content;
+        __block NSUInteger cloneFocus=0, cloneSteps=0;
+        clone.onFocus=^{ cloneFocus++; };
+        clone.onMacroStep=^(NSDictionary *step){ cloneSteps++; };
+        drop.draggingLocation=[cloneContent convertPoint:far toView:nil];
+        [(id<NSDraggingDestination>)cloneContent draggingEntered:info]; [(id<NSDraggingDestination>)cloneContent draggingUpdated:info]; [(id<NSDraggingDestination>)cloneContent performDragOperation:info];
+        check([ed.text containsString:@"DROP"] && steps.count==0, "Fixture: a drop into a shared view edits the document and reports nothing outside a recording");
+        reset(); [ed startRecording];
+        const NSUInteger sharedRevision=ed.revision;
+        [(id<NSDraggingDestination>)cloneContent draggingEntered:info]; [(id<NSDraggingDestination>)cloneContent draggingUpdated:info];
+        const BOOL sharedAccepted=[(id<NSDraggingDestination>)cloneContent performDragOperation:info];
+        check(sharedAccepted && [ed.text containsString:@"DROP"] && ed.revision!=sharedRevision && cloneFocus==0, "Fixture: the drop into the shared view edited the recorded document without moving focus");
+        check(steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"] && [steps[0][@"name"] containsString:@"drag and drop"] && cloneSteps==0, "text dropped into another view of the recorded document is reported to the recording editor as unrecordable");
+        [ed stopRecording];
+        NSDraggingSession *noSession=nil;
+        reset(); [clone setSelectionAnchor:0 caret:5]; [ed startRecording];
+        [(id<NSDraggingSource>)cloneContent draggingSession:noSession endedAtPoint:NSZeroPoint operation:NSDragOperationDelete];
+        check([ed.text hasPrefix:@" beta"] && steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"] && cloneSteps==0, "text dragged out of another view of the recorded document and removed there is reported as unrecordable");
+        [ed stopRecording];
+        reset(); [ed setSelectionAnchor:0 caret:5]; [ed startRecording];
+        [(id<NSDraggingSource>)content draggingSession:noSession endedAtPoint:NSZeroPoint operation:NSDragOperationDelete];
+        check([ed.text hasPrefix:@" beta"] && steps.count>=1 && [steps.lastObject[@"kind"] isEqual:@"unsupported"], "text dragged out of the recording editor and removed is not left as a saveable recording");
+        [ed stopRecording];
+        // An unrelated editor is never the recorded document: a drop there leaves the recording alone.
+        reset();
+        TTEditor *other=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *otherHost=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,600,400) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+        otherHost.contentView=other; other.text=doc;
+        NSView *otherContent=((ScintillaView *)other.subviews.firstObject).content;
+        drop.draggingLocation=[otherContent convertPoint:far toView:nil];
+        [ed startRecording];
+        [(id<NSDraggingDestination>)otherContent draggingEntered:info]; [(id<NSDraggingDestination>)otherContent draggingUpdated:info]; [(id<NSDraggingDestination>)otherContent performDragOperation:info];
+        check([other.text containsString:@"DROP"] && steps.count==0, "a drop into an unrelated editor does not disturb a recording");
+        [ed stopRecording];
+        // A step handler may clear itself while it runs (MacroController's discard does); what it
+        // captured must stay alive until it returns.
+        reset();
+        __weak NSObject *weakToken=nil; __block BOOL ran=NO, alive=NO;
+        @autoreleasepool {
+            NSObject *token=[NSObject new]; weakToken=token;
+            __weak TTEditor *weakEd=ed;
+            ed.onMacroStep=^(NSDictionary *step){ (void)token; weakEd.onMacroStep=nil; ran=YES; alive=weakToken!=nil; };
+        }
+        [ed startRecording]; [sv message:SCI_CHARRIGHT]; [ed stopRecording];
+        check(ran && alive, "a step handler that clears itself is kept alive until it returns");
+        // F277: Go to Line to where the caret already is moves nothing, so it reports nothing.
+        ed.onMacroStep=^(NSDictionary *step){ [steps addObject:step]; };
+        reset(); [ed goToLine:2]; [steps removeAllObjects];
+        const NSInteger lineStart=ed.selectionCaret;
+        [ed startRecording];
+        check([ed goToLine:2] && ed.selectionCaret==lineStart && ed.selectionAnchor==lineStart && steps.count==0, "Go to Line to the caret's own place reports nothing while recording");
+        check([ed goToLine:3] && ed.selectionCaret!=lineStart && steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"], "Go to Line that moves the caret is still reported as unrecordable");
+        [ed stopRecording];
+        [ed setSelectionAnchor:lineStart caret:lineStart+2]; [steps removeAllObjects]; [ed startRecording];
+        check([ed goToLine:2] && ed.selectionAnchor==lineStart && ed.selectionCaret==lineStart && steps.count==1, "Go to Line that only clears a selection on its own line is still reported");
+        [ed stopRecording];
         [drop.draggingPasteboard releaseGlobally];
         ed.onMacroStep=nil;
         });

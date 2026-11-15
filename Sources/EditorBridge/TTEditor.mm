@@ -39,8 +39,27 @@ static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
 struct TTInteractionState { NSUInteger revision; sptr_t selections, anchor, caret; };
 @interface TTEditor (MacroInteraction)
 - (TTInteractionState)interactionState;
+- (void)reportMacroStep:(NSDictionary<NSString *, id> *)step;
 - (void)noteUnrecordedInteractionSince:(TTInteractionState)before;
 @end
+// Every editor that is recording. A split view shares the recorded document, and a drop into it
+// (or the removal that ends a drag out of it) edits that document with no focus change, so the
+// comparison covers each recording editor, whichever view handled the event. Main thread only.
+static NSHashTable<TTEditor *> *TTRecordingEditors() {
+    static NSHashTable *table;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ table = [NSHashTable weakObjectsHashTable]; });
+    return table;
+}
+static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
+    NSArray<TTEditor *> *recording = TTRecordingEditors().allObjects;
+    if (!recording.count) { handle(); return; }
+    std::vector<TTInteractionState> before;
+    for (TTEditor *editor in recording) before.push_back([editor interactionState]);
+    handle();
+    NSUInteger index = 0;
+    for (TTEditor *editor in recording) [editor noteUnrecordedInteractionSince:before[index++]];
+}
 @interface TTContentView : SCIContentView
 @end
 @implementation TTContentView
@@ -48,32 +67,26 @@ struct TTInteractionState { NSUInteger revision; sptr_t selections, anchor, care
     if (!self.window) return NSZeroRect;
     return [self.window convertRectToScreen:[self convertRect:self.visibleRect toView:nil]];
 }
-- (TTEditor *)recordingEditor {
-    for (NSView *view = self.superview; view; view = view.superview) if ([view isKindOfClass:TTEditor.class]) return (TTEditor *)view;
-    return nil;
-}
 // super always runs, so every Scintilla mouse behaviour is kept; a click that changes nothing
 // (the caret's own position, a window-activating click) leaves a recording alone.
 - (void)mouseDown:(NSEvent *)event {
-    TTEditor *editor = [self recordingEditor]; const TTInteractionState before = [editor interactionState];
-    [super mouseDown:event];
-    [editor noteUnrecordedInteractionSince:before];
+    TTAroundUnrecordedInteraction(^{ [super mouseDown:event]; });
 }
 - (void)mouseDragged:(NSEvent *)event {
-    TTEditor *editor = [self recordingEditor]; const TTInteractionState before = [editor interactionState];
-    [super mouseDragged:event];
-    [editor noteUnrecordedInteractionSince:before];
+    TTAroundUnrecordedInteraction(^{ [super mouseDragged:event]; });
 }
 - (void)mouseUp:(NSEvent *)event {
-    TTEditor *editor = [self recordingEditor]; const TTInteractionState before = [editor interactionState];
-    [super mouseUp:event];
-    [editor noteUnrecordedInteractionSince:before];
+    TTAroundUnrecordedInteraction(^{ [super mouseUp:event]; });
 }
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
-    TTEditor *editor = [self recordingEditor]; const TTInteractionState before = [editor interactionState];
-    const BOOL accepted = [super performDragOperation:sender];
-    [editor noteUnrecordedInteractionSince:before];
+    __block BOOL accepted = NO;
+    TTAroundUnrecordedInteraction(^{ accepted = [super performDragOperation:sender]; });
     return accepted;
+}
+// A drag out that the destination asks to be removed deletes the dragged text here, after the mouse
+// events have ended.
+- (void)draggingSession:(NSDraggingSession *)session endedAtPoint:(NSPoint)screenPoint operation:(NSDragOperation)operation {
+    TTAroundUnrecordedInteraction(^{ [super draggingSession:session endedAtPoint:screenPoint operation:operation]; });
 }
 @end
 @interface TTScintillaView : ScintillaView
@@ -692,7 +705,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self assertThread];
     if (line < 1 || line > [_engine message:SCI_GETLINECOUNT]) return NO;
     [_engine message:SCI_ENSUREVISIBLE wParam:line - 1];
-    [_engine message:SCI_GOTOLINE wParam:line - 1];
+    // Scintilla reports SCI_GOTOLINE for macro recording before it runs. When the caret is already
+    // there the jump moves nothing, so only the scroll is done and a recording is left alone (F277).
+    const sptr_t target = [_engine message:SCI_POSITIONFROMLINE wParam:line - 1];
+    if ([_engine message:SCI_GETSELECTIONS] == 1 && [_engine message:SCI_GETANCHOR] == target && [_engine message:SCI_GETCURRENTPOS] == target) [_engine message:SCI_SCROLLCARET];
+    else [_engine message:SCI_GOTOLINE wParam:line - 1];
     [self noteStateChange];
     return YES;
 }
@@ -919,7 +936,12 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     if (!_macroRecording || !_onMacroStep) return;
     const TTInteractionState now = [self interactionState];
     if (now.revision == before.revision && now.selections == before.selections && now.anchor == before.anchor && now.caret == before.caret) return;
-    _onMacroStep(@{@"kind":@"unsupported", @"message":@0, @"name":@"A mouse click, mouse selection or drag and drop"});
+    [self reportMacroStep:@{@"kind":@"unsupported", @"message":@0, @"name":@"A mouse click, mouse selection or drag and drop"}];
+}
+/// The handler may clear itself while it runs (a discard does), so it is held for the call.
+- (void)reportMacroStep:(NSDictionary<NSString *, id> *)step {
+    void (^handler)(NSDictionary<NSString *, id> *) = _onMacroStep;
+    if (handler) handler(step);
 }
 - (void)settlePendingInteraction {
     if (!_interactionPending) return;
@@ -944,6 +966,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (void)startRecording {
     [self assertThread]; _macroRecording = YES; _interactionPending = NO; _marginMouseDown = NO;
+    [TTRecordingEditors() addObject:self];
     if (!_macroMouseMonitor) {
         __weak TTEditor *weakSelf = self;
         _macroMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp | NSEventMaskRightMouseDown handler:^NSEvent *(NSEvent *event) {
@@ -958,6 +981,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     // A margin click still waiting for its comparison is settled before the recording can be saved.
     [self settlePendingInteraction];
     _macroRecording = NO;
+    [TTRecordingEditors() removeObject:self];
     if (_macroMouseMonitor) { [NSEvent removeMonitor:_macroMouseMonitor]; _macroMouseMonitor = nil; }
     [_engine message:SCI_STOPRECORD];
 }
@@ -1110,7 +1134,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     if(!list.length)return;
     // G371: once the list is open Scintilla records Tab, Return and the arrow keys as caret
     // commands although they drive the list, and accepting an entry edits with no notification.
-    if (_macroRecording && _onMacroStep) _onMacroStep(TTUnrecordableStep(SCI_AUTOCSHOW));
+    if (_macroRecording && _onMacroStep) [self reportMacroStep:TTUnrecordableStep(SCI_AUTOCSHOW)];
     [_engine message:SCI_AUTOCSHOW wParam:caret-start lParam:(sptr_t)list.UTF8String];
 }
 - (BOOL)find:(NSString *)text matchCase:(BOOL)matchCase backwards:(BOOL)backwards {
@@ -1144,7 +1168,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     // that silently omits their changes.
     if (_macroRecording && _onMacroStep && code == SCN_MODIFIED &&
         (type & (SC_PERFORMED_UNDO | SC_PERFORMED_REDO))) {
-        _onMacroStep(TTUnrecordableStep(type & SC_PERFORMED_UNDO ? SCI_UNDO : SCI_REDO));
+        [self reportMacroStep:TTUnrecordableStep(type & SC_PERFORMED_UNDO ? SCI_UNDO : SCI_REDO)];
     }
     // Scrolling by a line edits nothing and moves no caret; like zoom it is neither recorded nor a
     // reason to discard.
@@ -1165,7 +1189,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
                 }
             }
         }
-        _onMacroStep(step ?: TTUnrecordableStep(notification->message));
+        [self reportMacroStep:step ?: TTUnrecordableStep(notification->message)];
     }
     if (code == SCN_FOCUSIN) { if (_onFocus) _onFocus(); [self scheduleStateNotification]; }
     if (code == SCN_MODIFYATTEMPTRO && _onReadOnlyAttempt) _onReadOnlyAttempt();
