@@ -482,6 +482,8 @@ final class TextDocument: NSDocument {
     private var savepointMatchesDisk = true
     #if TESTING
         var afterWriteForTesting: (() throws -> Void)?
+        /// Runs while NSDocument is inside an in-progress write, as the bytes are produced.
+        var duringWriteForTesting: (() -> Void)?
     #endif
     var originalDiskFingerprint: String? { diskBytes.map(WorkspaceStore.fingerprint) }
     var languageIdentifier = "null"
@@ -499,8 +501,14 @@ final class TextDocument: NSDocument {
     /// location being written. NSDocument's safe save replaces the item at `fileURL`, not at the
     /// URL it is handed: with a link as `fileURL` it fails, and with the two differing it can
     /// remove the original and then fail. Answering with the destination keeps them equal.
+    /// Only the main thread, which does the write, is answered that way: NSDocument also reads
+    /// `fileURL` from its file-presenter queue, and every other thread keeps the opened path.
+    /// `inPlaceWriteURL` is therefore read and written on the main thread alone.
     override var fileURL: URL? {
-        get { inPlaceWriteURL ?? super.fileURL }
+        get {
+            if Thread.isMainThread, let inPlaceWriteURL { return inPlaceWriteURL }
+            return super.fileURL
+        }
         set {
             let oldValue = super.fileURL
             super.fileURL = newValue
@@ -933,6 +941,9 @@ final class TextDocument: NSDocument {
         return operation
     }
     override func data(ofType typeName: String) throws -> Data {
+        #if TESTING
+            duringWriteForTesting?()
+        #endif
         if let savePayload { return savePayload }
         return try FileCodec.encode(editor.text, format: format)
     }
@@ -959,7 +970,7 @@ final class TextDocument: NSDocument {
         savePayload = submitted
         defer { savePayload = nil }
         do {
-            inPlaceWriteURL = inPlace ? destination : nil
+            inPlaceWriteURL = inPlace && Thread.isMainThread ? destination : nil
             defer { inPlaceWriteURL = nil }
             try super.writeSafely(to: destination, ofType: typeName, for: saveOperation)
         }

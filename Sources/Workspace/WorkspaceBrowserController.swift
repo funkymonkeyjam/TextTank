@@ -227,8 +227,16 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         do { _ = try openOfferingEncoding(url) } catch { NSAlert(error: error).runModal() }
     }
     /// Row activation and Reopen Recent: a file that cannot be decoded automatically is answered
-    /// with the encoding chooser. Returns nil when the person cancels. `open(_:)` itself never asks.
+    /// with the encoding chooser. Returns nil when the person cancels or the file was a session
+    /// snapshot handed to its restore prompt. `open(_:)` itself never asks.
     @discardableResult func openOfferingEncoding(_ url: URL) throws -> TextDocument? {
+        // A session snapshot goes to its restore prompt here too, never to an editable JSON tab.
+        if url.pathExtension.lowercased() == WorkspaceStore.sessionFileExtension,
+            let controller = NSDocumentController.shared as? TextDocumentController
+        {
+            controller.openSessionFile(url)
+            return nil
+        }
         do { return try open(url) } catch {
             return try EncodingChoice.retry(url, after: error, choose: chooseEncoding) { try open(url, as: $0) }
         }

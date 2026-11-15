@@ -104,22 +104,35 @@ final class TextDocumentController: NSDocumentController {
             return
         }
         super.openDocument(withContentsOf: url, display: displayDocument) { [weak self] document, alreadyOpen, error in
-            guard let self, displayDocument, document == nil, let error, EncodingChoice.codecError(in: error) != nil
-            else {
+            guard let self else {
                 completionHandler(document, alreadyOpen, error)
                 return
             }
-            let resolve = {
-                do {
-                    if let opened = try self.openChoosingEncoding(url, after: error) {
-                        completionHandler(opened, false, nil)
-                    } else {
-                        completionHandler(nil, false, CocoaError(.userCancelled))
-                    }
-                } catch { completionHandler(nil, false, error) }
+            let finish = {
+                self.finishOpen(
+                    url, display: displayDocument, document, alreadyOpen, error, completionHandler: completionHandler)
             }
-            if Thread.isMainThread { resolve() } else { DispatchQueue.main.async(execute: resolve) }
+            if Thread.isMainThread { finish() } else { DispatchQueue.main.async(execute: finish) }
         }
+    }
+    /// What happens to the stock open's answer. Only a displayed open that failed to decode is
+    /// answered with the chooser; everything else is passed on as it came. `presenting` false
+    /// opens the chosen document without showing its window.
+    func finishOpen(
+        _ url: URL, display displayDocument: Bool, presenting: Bool = true, _ document: NSDocument?,
+        _ alreadyOpen: Bool, _ error: Error?, completionHandler: (NSDocument?, Bool, Error?) -> Void
+    ) {
+        guard displayDocument, document == nil, let error, EncodingChoice.codecError(in: error) != nil else {
+            completionHandler(document, alreadyOpen, error)
+            return
+        }
+        do {
+            if let opened = try openChoosingEncoding(url, after: error, display: presenting) {
+                completionHandler(opened, false, nil)
+            } else {
+                completionHandler(nil, false, CocoaError(.userCancelled))
+            }
+        } catch { completionHandler(nil, false, error) }
     }
     /// The interactive answer to a decode failure on open. Cancel creates no document.
     func openChoosingEncoding(_ url: URL, after failure: Error, display: Bool = true) throws -> TextDocument? {

@@ -132,9 +132,63 @@ extension DocumentChecks {
                 "Cancel in the encoding chooser creates no document")
             asked = []
             rejects("an open failure that is not a decode failure is passed through without asking") {
-                _ = try documents.openChoosingEncoding(latinURL, after: CocoaError(.fileReadNoPermission), display: false)
+                _ = try documents.openChoosingEncoding(
+                    latinURL, after: CocoaError(.fileReadNoPermission), display: false)
             }
             check(asked.isEmpty, "the chooser is not shown for an unrelated open failure")
+
+            // What File > Open does with the answer of the stock open. AppKit hands the read
+            // error back wrapped, with the codec error under NSUnderlyingErrorKey.
+            let fromAppKit = NSError(
+                domain: NSCocoaErrorDomain, code: NSFileReadUnknownError,
+                userInfo: [NSUnderlyingErrorKey: FileCodecError.invalidBytes(.utf8)])
+            var answered: (NSDocument?, Bool, Error?)?
+            answers = [.latin1]
+            asked = []
+            documents.finishOpen(latinURL, display: false, presenting: false, nil, false, fromAppKit) {
+                answered = ($0, $1, $2)
+            }
+            check(
+                asked.isEmpty && answered?.0 == nil && (answered?.2 as NSError?) === fromAppKit
+                    && NSDocumentController.shared.documents.count == before,
+                "an open that is not displayed passes the decode error on and never asks")
+            answered = nil
+            documents.finishOpen(latinURL, display: true, presenting: false, nil, false, fromAppKit) {
+                answered = ($0, $1, $2)
+            }
+            let viaOpen = try requireValue(
+                answered?.0 as? TextDocument, "a displayed open answers a wrapped decode error with the chooser")
+            check(
+                asked == [.invalidBytes(.utf8)] && viaOpen.editor.text == "café" && viaOpen.format.encoding == .latin1
+                    && answered?.2 == nil && NSDocumentController.shared.document(for: latinURL) === viaOpen,
+                "the displayed open completes with the document opened in the chosen encoding")
+            answered = nil
+            asked = []
+            documents.finishOpen(latinURL, display: true, presenting: false, viaOpen, true, nil) {
+                answered = ($0, $1, $2)
+            }
+            check(
+                asked.isEmpty && answered?.0 === viaOpen && answered?.1 == true && answered?.2 == nil,
+                "a successful open is passed through untouched")
+            viaOpen.close()
+            answers = [nil]
+            asked = []
+            answered = nil
+            documents.finishOpen(latinURL, display: true, presenting: false, nil, false, fromAppKit) {
+                answered = ($0, $1, $2)
+            }
+            check(
+                asked.count == 1 && answered?.0 == nil && (answered?.2 as? CocoaError)?.code == .userCancelled
+                    && NSDocumentController.shared.documents.count == before,
+                "Cancel in a displayed open completes as cancelled, with no document and nothing to present")
+            answered = nil
+            let denied = CocoaError(.fileReadNoPermission)
+            documents.finishOpen(latinURL, display: true, presenting: false, nil, false, denied) {
+                answered = ($0, $1, $2)
+            }
+            check(
+                asked.count == 1 && answered?.0 == nil && (answered?.2 as? CocoaError)?.code == .fileReadNoPermission,
+                "a displayed open passes an unrelated failure on without asking")
 
             // BOM-less UTF-16 with non-ASCII content.
             let wideFormat = FileFormat(encoding: .utf16LE, bom: false),
@@ -218,7 +272,8 @@ extension DocumentChecks {
             let inside = alias.appendingPathComponent("inside.txt")
             try Data("inside a linked folder\n".utf8).write(to: real.appendingPathComponent("inside.txt"))
             for (label, url, actual) in [
-                ("symlink leaf", leaf, target), ("symlinked parent folder", inside, real.appendingPathComponent("inside.txt"))
+                ("symlink leaf", leaf, target),
+                ("symlinked parent folder", inside, real.appendingPathComponent("inside.txt"))
             ] {
                 let bytes = try Data(contentsOf: actual)
                 let document = try loaded(url, bytes)
@@ -229,9 +284,27 @@ extension DocumentChecks {
                 check(
                     DocumentMonitor.inspect(url, expected: document.originalDiskFingerprint) != .unchanged
                         && DocumentMonitor.inspect(document.diskURL!, expected: document.originalDiskFingerprint)
-                            == .unchanged, "\(label): monitoring the resolved location reports unchanged")
+                            == .unchanged,
+                    "\(label): monitoring the resolved location reports unchanged")
                 edit(document, "saved \(label)\n")
+                // NSDocument reads fileURL from its file-presenter queue. Only the thread doing
+                // the write may see the resolved destination; any other keeps the opened path.
+                var seenElsewhere: URL?, seenByWriter: URL?
+                document.duringWriteForTesting = {
+                    seenByWriter = document.fileURL
+                    let done = DispatchSemaphore(value: 0)
+                    let other = Thread {
+                        seenElsewhere = document.fileURL
+                        done.signal()
+                    }
+                    other.start()
+                    _ = done.wait(timeout: .now() + 5)
+                }
                 try document.writeSafely(to: url, ofType: "Plain Text", for: .saveOperation)
+                document.duringWriteForTesting = nil
+                check(
+                    seenByWriter == document.diskURL && seenElsewhere == url && document.fileURL == url,
+                    "\(label): only the writing thread sees the resolved location during an in-place Save")
                 check(
                     try Data(contentsOf: actual) == Data("saved \(label)\n".utf8) && !document.isDocumentEdited
                         && document.diskState() == .unchanged, "\(label): Save writes the real file in place")
@@ -240,8 +313,9 @@ extension DocumentChecks {
                     "\(label): the link is still a link after Save")
                 try Data("changed elsewhere\n".utf8).write(to: actual)
                 check(try document.diskState() == .changed, "\(label): an external change is still detected")
-                rejects("\(label): a changed file is still not overwritten", message: "The file changed outside TextTank")
-                { try document.writeSafely(to: url, ofType: "Plain Text", for: .saveOperation) }
+                rejects(
+                    "\(label): a changed file is still not overwritten", message: "The file changed outside TextTank"
+                ) { try document.writeSafely(to: url, ofType: "Plain Text", for: .saveOperation) }
                 try document.reload(using: .utf8, discard: true)
                 check(
                     document.editor.text == "changed elsewhere\n" && !document.isDocumentEdited,
@@ -265,7 +339,8 @@ extension DocumentChecks {
             fresh.close()
 
             // A link swapped in after open is refused, never followed.
-            let swapped = real.appendingPathComponent("swapped.txt"), elsewhere = real.appendingPathComponent("other.txt")
+            let swapped = real.appendingPathComponent("swapped.txt"),
+                elsewhere = real.appendingPathComponent("other.txt")
             let victim = try loaded(swapped, Data("mine".utf8))
             try Data("someone else's".utf8).write(to: elsewhere)
             try files.removeItem(at: swapped)
@@ -296,7 +371,9 @@ extension DocumentChecks {
             try files.moveItem(at: folder, to: home.appendingPathComponent("folder-moved", isDirectory: true))
             try files.createSymbolicLink(at: folder, withDestinationURL: home.appendingPathComponent("folder-moved"))
             edit(moved, "edited")
-            rejects("Save refuses when the document's folder was replaced by a link", message: "its folder was replaced") {
+            rejects(
+                "Save refuses when the document's folder was replaced by a link", message: "its folder was replaced"
+            ) {
                 try moved.writeSafely(to: moved.fileURL!, ofType: "Plain Text", for: .saveOperation)
             }
             check(
@@ -326,18 +403,23 @@ extension DocumentChecks {
             let changed = try loaded(changedURL, Data("before".utf8))
             edit(changed, "mine")
             try Data("external".utf8).write(to: changedURL)
-            rejects("plain Save still refuses to overwrite a changed file", message: "The file changed outside TextTank") {
+            rejects(
+                "plain Save still refuses to overwrite a changed file", message: "The file changed outside TextTank"
+            ) {
                 try changed.writeSafely(to: changedURL, ofType: "Plain Text", for: .saveOperation)
             }
-            rejects("Save Copy onto the document's own changed file is still refused", message: "The file changed outside TextTank")
-            { try changed.writeSafely(to: changedURL, ofType: "Plain Text", for: .saveToOperation) }
+            rejects(
+                "Save Copy onto the document's own changed file is still refused",
+                message: "The file changed outside TextTank"
+            ) { try changed.writeSafely(to: changedURL, ofType: "Plain Text", for: .saveToOperation) }
             check(
                 try Data(contentsOf: changedURL) == Data("external".utf8) && changed.isDocumentEdited,
                 "the refused saves leave the external bytes and the edits in place")
             try changed.writeSafely(to: changedURL, ofType: "Plain Text", for: .saveAsOperation)
             check(
                 try Data(contentsOf: changedURL) == Data("mine".utf8) && changed.diskState() == .unchanged
-                    && !changed.isDocumentEdited, "Save As onto the document's own changed file is the deliberate overwrite")
+                    && !changed.isDocumentEdited,
+                "Save As onto the document's own changed file is the deliberate overwrite")
             edit(changed, "mine again")
             try changed.writeSafely(to: changedURL, ofType: "Plain Text", for: .saveOperation)
             check(try Data(contentsOf: changedURL) == Data("mine again".utf8), "the Save after that overwrite succeeds")
@@ -436,7 +518,9 @@ extension DocumentChecks {
             check(
                 prompt.contains("shopping list.txt in \(folder.path), saved \(stampText)"),
                 "the recovery prompt names each draft's original file, folder and time")
-            check(prompt.contains("Untitled, saved \(stampText)"), "the recovery prompt lists an untitled draft with its time")
+            check(
+                prompt.contains("Untitled, saved \(stampText)"),
+                "the recovery prompt lists an untitled draft with its time")
             let many = AppDelegate.recoveryPromptText(Array(repeating: named, count: 15), limit: 12)
             check(
                 many.components(separatedBy: "\n").filter { $0.hasPrefix("• ") }.count == 12
@@ -448,7 +532,8 @@ extension DocumentChecks {
             let recovered = try TextDocument.openRecovered(named)
             let status = (recovered.windowControllers[0] as! EditorWindowController).status
             check(
-                recovered.fileURL == nil && recovered.isDocumentEdited && recovered.displayName == "Recovered shopping list.txt",
+                recovered.fileURL == nil && recovered.isDocumentEdited
+                    && recovered.displayName == "Recovered shopping list.txt",
                 "a recovered document is unsaved and titled after the file it is a draft of")
             check(
                 status.stringValue.contains("Recovered draft of shopping list.txt")
@@ -457,9 +542,12 @@ extension DocumentChecks {
             edit(recovered, "draft text, edited")
             recovered.flushRecovery()
             check(
-                status.stringValue.contains("Recovered draft of shopping list.txt") && recovered.lastRecoveryError == nil,
+                status.stringValue.contains("Recovered draft of shopping list.txt")
+                    && recovered.lastRecoveryError == nil,
                 "the origin stays in the status line while the draft is edited")
-            check(try Data(contentsOf: original) == originalBytes, "recovery shows the origin without touching the original file")
+            check(
+                try Data(contentsOf: original) == originalBytes,
+                "recovery shows the origin without touching the original file")
             let keptURL = folder.appendingPathComponent("kept.txt")
             try recovered.writeSafely(to: keptURL, ofType: "Plain Text", for: .saveAsOperation)
             recovered.fileURL = keptURL
@@ -468,7 +556,9 @@ extension DocumentChecks {
                 recovered.recoveredOrigin == nil && recovered.displayName == files.displayName(atPath: keptURL.path)
                     && !status.stringValue.contains("Recovered draft"),
                 "once saved under its own name the document is no longer labelled as a recovered draft")
-            check(try Data(contentsOf: original) == originalBytes, "saving the recovered draft elsewhere leaves the original file alone")
+            check(
+                try Data(contentsOf: original) == originalBytes,
+                "saving the recovered draft elsewhere leaves the original file alone")
             recovered.close()
             let anonymous = try TextDocument.openRecovered(nameless)
             check(
@@ -491,7 +581,8 @@ extension DocumentChecks {
             session.savedAt = stamp
             let text = WorkspaceController.restorePromptText(session, session.inspectReferencedFiles())
             check(
-                text.contains("Saved \(SnapshotLabel.savedAt(stamp))") && text.contains("open as new unsaved documents"),
+                text.contains("Saved \(SnapshotLabel.savedAt(stamp))")
+                    && text.contains("open as new unsaved documents"),
                 "the session restore prompt shows when the snapshot was saved")
             check(
                 text.contains("absent.txt: \(SessionFileStatus.missing.description) · had unsaved edits")
@@ -502,7 +593,9 @@ extension DocumentChecks {
                 NSDictionary(contentsOf: TestPaths.resources.appendingPathComponent("Info.plist")) as? [String: Any],
                 "fixture: Info.plist is readable")
             let exported = (plist["UTExportedTypeDeclarations"] as? [[String: Any]]) ?? []
-            let tags = exported.first { $0["UTTypeIdentifier"] as? String == "app.texttank.session" }?["UTTypeTagSpecification"]
+            let tags =
+                exported.first { $0["UTTypeIdentifier"] as? String == "app.texttank.session" }?[
+                    "UTTypeTagSpecification"]
                 as? [String: Any]
             check(
                 WorkspaceStore.sessionFileExtension == "texttanksession"
@@ -528,6 +621,15 @@ extension DocumentChecks {
             check(
                 completion != nil && completion?.0 == nil && (completion?.2 as? CocoaError)?.code == .userCancelled,
                 "the routed open completes without a document and without an error to present")
+            // The workspace browser's interactive open takes the same route.
+            let browser = WorkspaceBrowserController(
+                storeURL: area.appendingPathComponent("browser-session-state.json"), recordsSystemRecent: false)
+            routed = []
+            check(
+                try browser.openOfferingEncoding(sessionURL) == nil && routed == [sessionURL]
+                    && NSDocumentController.shared.documents.isEmpty,
+                "a session snapshot activated in the workspace browser is routed to the restore prompt")
+            browser.window?.close()
             // Reading never depends on the extension.
             let renamed = area.appendingPathComponent("older-snapshot.json")
             try WorkspaceStore.save(session, to: renamed)
