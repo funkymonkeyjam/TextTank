@@ -1346,6 +1346,34 @@ import AppKit
                 check(
                     badges().contains("\(7 + typed) chars") && controller.statusMetricsCaptureCount == captures + 1,
                     "one capture after typing stops brings the character count up to date")
+                // Minimising takes the window off screen without any order call, and restoring it
+                // brings it back the same way.
+                controller.window!.miniaturize(nil)
+                spinUntil("the minimised window to leave the screen") { !controller.window!.isVisible }
+                spinUntil("the minimised tab's timer to stop") { !controller.statusTimerActive }
+                check(!controller.statusTimerActive, "a minimised window has no recurring status timer")
+                controller.window!.deminiaturize(nil)
+                spinUntil("the restored window to be on screen") { controller.window!.isVisible }
+                spinUntil(timeout: 3, "the restored tab's timer") { controller.statusTimerActive }
+                check(controller.statusTimerActive, "restoring a minimised window restarts its recurring status timer")
+                let restoredRefreshes = controller.statusRefreshCount
+                spinUntil(timeout: 3, "recurring refreshes after the restore") {
+                    controller.statusRefreshCount >= restoredRefreshes + 2
+                }
+                _ = visible.editor.replaceSelection("mm")
+                spinUntil(timeout: 3, "the count after typing in the restored window") {
+                    badges().contains("\(9 + typed) chars")
+                }
+                check(
+                    badges().contains("\(9 + typed) chars"),
+                    "typing after minimise and restore updates the character count \(badges())")
+                // The editor-event path alone also restarts a timer that was lost while on screen.
+                controller.stopStatusTimerForChecks()
+                _ = visible.editor.replaceSelection("n")
+                spinUntil(timeout: 3, "the timer after an editor event") { controller.statusTimerActive }
+                check(
+                    controller.statusTimerActive,
+                    "an editor event in a window on screen restarts a missing status timer")
                 hiddenController.window!.makeKeyAndOrderFront(nil)
                 check(
                     hiddenController.statusTimerActive && !controller.statusTimerActive,
@@ -1356,6 +1384,41 @@ import AppKit
                     "closing a tab stops its timer and the tab shown next gets one")
                 visible.close()
                 check(!controller.statusTimerActive, "a closed tab has no status timer")
+            }
+            section("recovery while an undo group stays open across run-loop turns") {
+                // Interactive macro playback holds one undo group open under a modal panel for
+                // the whole playback; the document must still be marked edited and snapshotted.
+                let doc = TextDocument()
+                doc.automaticRecoveryDelay = 0.05
+                doc.maximumRecoveryDelay = 0.2
+                try require(!doc.isDocumentEdited, "fixture: the document starts clean")
+                doc.editor.beginUndoGroup()
+                let playbackUntil = Date().addingTimeInterval(1.0)
+                var steps = 0
+                // Steps keep arriving faster than the idle delay, as in playback, so only the
+                // deadline timer can fire; the loop runs in the modal-panel mode playback uses.
+                while Date() < playbackUntil {
+                    _ = doc.editor.replaceSelection("step \(steps)\n")
+                    steps += 1
+                    RunLoop.current.run(mode: .modalPanel, before: Date().addingTimeInterval(0.01))
+                }
+                let groupOpenText = doc.editor.text
+                check(
+                    steps >= 5 && doc.isDocumentEdited,
+                    "a document edited inside a group held open across run-loop turns is marked edited before the group ends"
+                )
+                var midGroup: RecoverySnapshot?
+                spinUntil(timeout: 3, "the recovery snapshot written during the open group") {
+                    midGroup = try? TextDocument.recovery.load(id: doc.recoveryID)
+                    return midGroup != nil
+                }
+                check(
+                    midGroup.map { !$0.text.isEmpty && groupOpenText.hasPrefix($0.text) } == true,
+                    "the deadline recovery snapshot is written while the group is still open")
+                doc.editor.endUndoGroup()
+                doc.editor.executeCommand("undo")
+                check(doc.editor.text.isEmpty, "the group held open across turns is still one Undo step")
+                doc.close()
             }
             section("large-document print warning and pagination") {
                 let doc = TextDocument()

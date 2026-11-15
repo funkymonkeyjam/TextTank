@@ -1267,8 +1267,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     private var statusTimer: Timer?
     /// True while the recurring refresh is scheduled, which is only while the window is on screen.
     var statusTimerActive: Bool { statusTimer != nil }
+    #if TESTING
+        /// Drops the timer without any visibility change, as a lost timer would look.
+        func stopStatusTimerForChecks() {
+            statusTimer?.invalidate()
+            statusTimer = nil
+        }
+    #endif
     private var statusClosed = false
     private var stateObserver: NSObjectProtocol?
+    private var visibilityObservers: [NSObjectProtocol] = []
     private(set) var statusRefreshCount = 0
     /// Whole-document captures started for the character count and line-ending badges.
     private(set) var statusMetricsCaptureCount = 0
@@ -1394,8 +1402,21 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
                 self.documentTabs.refresh()
             }
         }
+        // Minimising and restoring a window changes isVisible without any order call.
+        visibilityObservers = [
+            NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification,
+            NSWindow.didBecomeKeyNotification, NSWindow.didChangeOcclusionStateNotification
+        ].map {
+            NotificationCenter.default.addObserver(forName: $0, object: window, queue: nil) { [weak self] _ in
+                self?.visibilityChanged()
+            }
+        }
         visibilityChanged()
         refreshStatusDetails(for: document)
+    }
+    private func removeVisibilityObservers() {
+        visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        visibilityObservers = []
     }
     /// Starts the recurring status refresh when the window comes on screen and stops it when the
     /// window leaves, so a hidden tab has no timer at all.
@@ -1436,7 +1457,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     func refreshStatusDetails(for suppliedDocument: TextDocument? = nil, recurring: Bool = false) {
         guard let doc = suppliedDocument ?? document as? TextDocument else { return }
         statusRefreshCount += 1
-        if !recurring && statusTimer == nil { visibilityChanged() }
+        // Any refresh in a window on screen restarts a missing timer, the editor-event path included.
+        if statusTimer == nil { visibilityChanged() }
         documentTabs.refresh()
         let editor = activeEditor, info = editor.statusInfo
         let revision = doc.editor.revision
@@ -1692,6 +1714,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             NotificationCenter.default.removeObserver(stateObserver)
             self.stateObserver = nil
         }
+        removeVisibilityObservers()
         if let focusObserver {
             NotificationCenter.default.removeObserver(focusObserver)
             self.focusObserver = nil
@@ -1742,6 +1765,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     deinit {
         statusTimer?.invalidate()
         if let stateObserver { NotificationCenter.default.removeObserver(stateObserver) }
+        visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
         if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }
         if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
     }
