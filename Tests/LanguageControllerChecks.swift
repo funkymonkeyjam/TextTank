@@ -212,6 +212,10 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 }
                 let pane = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
                 pane.shareDocument(with: editor)
+                // Earlier checks deliberately put the source in Dark Aqua. Compare identical
+                // appearances for propagation, then test independent appearance resolution below.
+                pane.appearance = editor.effectiveAppearance
+                pane.viewDidChangeEffectiveAppearance()
                 let sameProfile = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
                 sameProfile.text = editor.text
                 sameProfile.resetUndoHistory()
@@ -255,6 +259,22 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 check(
                     look(editor) == look(pane) && abs(look(editor).size - 23.5) > 0.01,
                     "a language chosen in one pane gives both panes the new profile's styles")
+                for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                    editor.appearance = NSAppearance(named: appearance)
+                    pane.appearance = NSAppearance(named: appearance)
+                    editor.viewDidChangeEffectiveAppearance()
+                    pane.viewDidChangeEffectiveAppearance()
+                    check(
+                        look(editor) == look(pane) && abs(look(editor).size - 23.5) > 0.01,
+                        "profile propagation keeps both panes' styles in \(appearance.rawValue)")
+                }
+                pane.appearance = NSAppearance(named: .aqua)
+                pane.viewDidChangeEffectiveAppearance()
+                check(
+                    look(editor).size == look(pane).size && look(editor).red > look(pane).red + 0.5,
+                    "a copied dynamic profile resolves its colour for each pane's own appearance")
+                pane.appearance = editor.effectiveAppearance
+                pane.viewDidChangeEffectiveAppearance()
                 check(
                     fanout.applyToDocument(identifier: user.id, through: editor), "fixture: back on the user language")
                 custom.profiles[index].styles[styleIndex].fontSize = 19.25

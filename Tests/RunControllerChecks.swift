@@ -315,9 +315,63 @@ import AppKit
             try ConfiguredRun.decodeLibrary(Data(text.utf8)) == [sample, other],
             "F137 the managed text is the version-1 library")
         let before = try Data(contentsOf: controller.storage)
+        let beforeIdentity =
+            try FileManager.default.attributesOfItem(atPath: controller.storage.path)[.systemFileNumber] as? NSNumber
         try controller.replaceLibrary(json: Data(text.utf8))
         check(
+            try FileManager.default.attributesOfItem(atPath: controller.storage.path)[.systemFileNumber] as? NSNumber
+                == beforeIdentity,
+            "F137 saving an unchanged library preserves the file identity instead of rewriting it")
+        check(
             try Data(contentsOf: controller.storage) == before, "F137 saving the managed text unchanged keeps the file")
+
+        // V32-02: Swift String equality treats NFC and NFD as equal; persisted command
+        // strings still have exact bytes. Exercise the actual controller, file and restart.
+        for startsDecomposed in [false, true] {
+            let initial = startsDecomposed ? "e\u{0301}" : "\u{00E9}"
+            let replacement = startsDecomposed ? "\u{00E9}" : "e\u{0301}"
+            for field in ["name", "executable", "argument"] {
+                var original = other
+                original.name = "Caf" + initial
+                original.executable = "/tmp/caf" + initial
+                original.arguments = [initial]
+                try controller.persist([sample, original])
+                var updated = original
+                switch field {
+                case "name": updated.name = "Caf" + replacement
+                case "executable": updated.executable = "/tmp/caf" + replacement
+                default: updated.arguments[0] = replacement
+                }
+                func bytes(_ command: ConfiguredRun) -> [UInt8] {
+                    switch field {
+                    case "name": return Array(command.name.utf8)
+                    case "executable": return Array(command.executable.utf8)
+                    default: return Array(command.arguments[0].utf8)
+                    }
+                }
+                check(
+                    original == updated && bytes(original) != bytes(updated),
+                    "fixture: canonically equal \(field) values carry distinct UTF-8 bytes")
+                try controller.replaceLibrary(json: try JSONEncoder().encode([sample, updated]))
+                let savedBytes = try Data(contentsOf: controller.storage)
+                let stored = try ConfiguredRun.decodeLibrary(savedBytes)[1]
+                let restarted = try ConfiguredRun.decodeLibrary(Data(RunController().libraryText().utf8))[1]
+                check(
+                    bytes(stored) == bytes(updated) && bytes(restarted) == bytes(updated),
+                    "F137 a byte-only Unicode \(field) edit is stored and reloaded exactly")
+                let identity = try requireValue(
+                    FileManager.default.attributesOfItem(atPath: controller.storage.path)[.systemFileNumber]
+                        as? NSNumber, "fixture: the Run library has a file identity")
+                let formatted = JSONEncoder()
+                formatted.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+                try controller.replaceLibrary(json: try formatted.encode([sample, updated]))
+                check(
+                    try FileManager.default.attributesOfItem(atPath: controller.storage.path)[.systemFileNumber]
+                        as? NSNumber == identity && Data(contentsOf: controller.storage) == savedBytes,
+                    "F137 reformatting a Unicode \(field) library preserves its bytes and file identity")
+            }
+        }
+        try controller.persist([sample, other])
 
         // Edit: same id, new name and arguments.
         var edited = other
