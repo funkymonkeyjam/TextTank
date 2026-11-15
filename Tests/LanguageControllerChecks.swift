@@ -743,6 +743,17 @@ import AppKit
                     && close(monoColors(.aqua).keyword, monoColors(.aqua).ordinary)
                     && close(monoColors(.darkAqua).keyword, monoColors(.darkAqua).ordinary),
                 "and it is still text after Edit Current UDL regenerates the profile")
+            // F22: the embedded-JavaScript profile runs the cpp lexer, so its styles must be numbered
+            // for that lexer. Its keyword style is bold italic; the editor's bare C defaults are not.
+            let embedded = hostedEditor()
+            embedded.text = "return zzzplain\n"
+            let SCI_STYLEGETBOLD: UInt32 = 2483, SCI_STYLEGETITALIC: UInt32 = 2484
+            check(
+                controller.apply(identifier: "javascript", to: embedded) && message(embedded, SCI_GETSTYLEAT, 0) == 5
+                    && message(embedded, SCI_STYLEGETBOLD, 5) == 1 && message(embedded, SCI_STYLEGETITALIC, 5) == 1
+                    && message(embedded, SCI_STYLEGETBOLD, 11) == 0
+                    && colors(embedded, at: 0).text != colors(embedded, at: 7).text,
+                "javascript: the profile's own keyword style reaches the cpp lexer")
             // F84: a blank font or size field means "follow the editor", and can be saved and restored.
             let inherit = LanguageProfile.Style(id: 4, name: "KEYWORDS1", foreground: "0000FF", fontStyle: 0)
             func entered(_ original: LanguageProfile.Style, font: String, size: String, bold: Bool = false) throws

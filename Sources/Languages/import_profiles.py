@@ -21,6 +21,12 @@ for lang in ET.parse(root/paths[0]).findall('.//Language'):
  if style is not None:
   for e in style.findall('WordsStyle'):
    rows.append({'id':int(e.get('styleID','0')),'name':e.get('name',''),'foreground':e.get('fgColor','000000'),'fontStyle':int(e.get('fontStyle','0') or '0')})
+ # Upstream numbers this language's styles for JavaScript embedded in HTML (the hypertext lexer).
+ # Here it runs the cpp lexer, so each style moves to the cpp style with the same meaning. The
+ # embedded identifier style (46) and the server-side template style (68) have no cpp counterpart.
+ if name=='javascript' and lexer=='cpp':
+  moved={41:11,42:1,43:2,44:3,45:4,47:5,48:6,49:7,50:10,52:14,53:20,**{200+i:128+i for i in range(8)}}
+  rows=[{**r,'id':moved[r['id']]} for r in rows if r['id'] in moved]
  # These three share a lexer with another language and have no styles of their own for its style
  # numbers. The editor no longer colours unstyled numbers with C defaults, so they borrow them.
  shared=styles.get({'asp':'html','jsp':'html','json5':'json'}.get(name,''))

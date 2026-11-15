@@ -86,6 +86,15 @@ import Foundation
                 withUDL.detect(filename: "HELLO.PY", text: "") == "python",
                 "UDL precedence leaves other extensions alone"
             )
+            // F22: every cpp-lexer profile numbers its styles for that lexer (0...27 and the user
+            // keyword sets from 128), not for the hypertext lexer's embedded-script range.
+            for profile in catalog.profiles where profile.lexer == "cpp" {
+                check(
+                    !profile.styles.isEmpty && profile.styles.contains { $0.id == 5 }
+                        && profile.styles.allSatisfy { (0...27).contains($0.id) || (128...135).contains($0.id) }
+                        && Set(profile.styles.map(\.id)).count == profile.styles.count,
+                    "\(profile.id): styles are numbered for the cpp lexer")
+            }
             // F95: the interpreter is parsed from the shebang line, not found as a substring.
             for (line, expected) in [
                 ("#!/bin/sh\n", "bash"), ("#!/bin/bash -e\n", "bash"), ("#!/usr/bin/python3.11\n", "python"),
