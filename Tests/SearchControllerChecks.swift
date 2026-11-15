@@ -310,6 +310,84 @@ final class OffscreenWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             check(
                 recorded == ["next", "previous"] && editor.selectionStart == 9,
                 "Find-window Previous that lands on a match is recorded")
+            // G372: a Find-window result is acted on, and recorded, only while it is still fresh.
+            var unrecordable: [String] = []
+            controller.onUnrecordableCommand = { unrecordable.append($0) }
+            recorded = []
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            controller.next(nil)
+            await settle()
+            check(
+                recorded == ["next"] && unrecordable.isEmpty && editor.selectionStart == 0
+                    && editor.selectedText == "TODO",
+                "a fresh Find-window Next is recorded once and discards nothing")
+            recorded = []
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            controller.next(nil)
+            editor.text = "changed"
+            let overtakenRevision = editor.revision, overtakenCaret = editor.selectionCaret
+            await settle()
+            check(
+                recorded.isEmpty && unrecordable.count == 1
+                    && unrecordable.first?.contains("changed while the search was running") == true,
+                "a Next overtaken by an edit is not recorded and reports once that it could not be")
+            check(
+                controller.lastOutcome == .staleResult && editor.text == "changed"
+                    && editor.revision == overtakenRevision && editor.selectionCaret == overtakenCaret,
+                "a Next overtaken by an edit says the result is stale and leaves text, revision and caret alone")
+            editor.text = "TODO one\nTODO two\ntail\n"
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            let bystander = TTEditor(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+            controller.next(nil)
+            controller.currentEditor = { bystander }
+            await settle()
+            controller.currentEditor = { editor }
+            check(
+                recorded.isEmpty && unrecordable.count == 2 && controller.lastOutcome == .staleResult
+                    && editor.selectionCaret == 0,
+                "a Next whose editor is no longer current is stale, not 'no further matches', and is not recorded")
+            // F277: a result row moves the caret with no recordable step.
+            unrecordable = []
+            controller.findAll(nil)
+            await settle()
+            controller.open(row: 99)
+            check(unrecordable.isEmpty && editor.selectionCaret == 0, "a row that does not exist opens nothing")
+            controller.open(row: 1)
+            check(
+                editor.selectionStart == 9 && editor.selectedText == "TODO" && unrecordable.count == 1
+                    && unrecordable.first?.contains("search result") == true,
+                "opening a result row reports that the jump cannot be recorded")
+            editor.text = "TODO one\nTODO two\ntail\n "
+            controller.open(row: 0)
+            check(
+                unrecordable.count == 1 && controller.lastOutcome == .staleResult,
+                "a stale result row moves nothing and reports nothing to the recording")
+            controller.onUnrecordableCommand = nil
+            recorded = []
+            // F43: a recorded search step has the interactive budget, and a step that runs out of
+            // time has edited nothing.
+            check(
+                SearchController.recordedStepTimeLimit == SearchCore.defaultTimeLimit
+                    && SearchCore.defaultTimeLimit == 2,
+                "macro playback of a search step uses the interactive search budget from the one constant")
+            var runaway = SearchOptions()
+            runaway.query = "(a+)+$"
+            runaway.replacement = "x"
+            runaway.mode = .regularExpression
+            editor.text = String(repeating: "a", count: 100) + "!"
+            editor.resetUndoHistory()
+            editor.setSavePoint()
+            _ = editor.setSelectionAnchor(3, caret: 5)
+            let runawayText = editor.text, runawayRevision = editor.revision
+            for action in ["replaceAll", "next"] {
+                let stopped = stops {
+                    try controller.playRecorded(options: runaway, action: action, on: editor, timeLimit: 0.05)
+                }
+                check(
+                    stopped != nil && editor.text == runawayText && editor.revision == runawayRevision
+                        && editor.selectionAnchor == 3 && editor.selectionCaret == 5 && !editor.modified,
+                    "a recorded \(action) that exceeds its budget throws with text, revision and selection unchanged")
+            }
             // F34: single Replace on a many-hit buffer converts the hits once, and replaces only the selected hit.
             let hitLine = "é needle 0123456789 0123456789 0123456\n", hitCount = 20000, chosenHit = 12345,
                 hitBytes = hitLine.utf8.count

@@ -58,9 +58,12 @@ enum SearchCore {
         return lines
     }
 
+    /// The time one interactive search may take. Macro playback of a recorded search step uses
+    /// the same value, so a step that could be recorded can also be replayed (F43).
+    static let defaultTimeLimit: TimeInterval = 2
     static func search(
         _ text: String, options: SearchOptions, cancellation: TTSearchCancellation = TTSearchCancellation(),
-        limit: Int = 100000, timeLimit: TimeInterval = 2
+        limit: Int = 100000, timeLimit: TimeInterval = defaultTimeLimit
     ) throws -> SearchReport {
         let result = try TTSearchEngine.matches(
             inText: text, query: options.query, replacement: options.replacement, mode: options.mode.rawValue,

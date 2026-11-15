@@ -268,6 +268,19 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 switch action {
                 case .all: break
                 case .next, .previous:
+                    // G372: the editor stayed editable while the search ran. A result for text that
+                    // has since changed, or for an editor that is no longer current, moves nothing and
+                    // a recording that already holds the later edits is discarded.
+                    if currentDocumentScope, let b = buffers.first,
+                        !(b.editor.window != nil && b.editor.revision == b.revision
+                            && self.currentEditor() === b.editor)
+                    {
+                        self.status.stringValue = "Result is stale; search again. Selection unchanged."
+                        self.lastOutcome = .staleResult
+                        self.onUnrecordableCommand?(
+                            "The document changed while the search was running; the search step was not recorded.")
+                        return
+                    }
                     // A miss is not recorded: playback stops on a recorded search that finds nothing.
                     let moved = self.navigate(backwards: action == .previous, wrap: opts.wrap)
                     if moved, currentDocumentScope, let editor = buffers.first?.editor {
@@ -367,12 +380,18 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             }
         }
     }
-    /// Macro playback is bounded and has no disk or connector side effects. Next and Previous throw
-    /// when they do not land on a match, so the steps after them never run at a stale caret;
-    /// Replace All with no match is a deliberate no-op.
-    func playRecorded(options: SearchOptions, action: String, on editor: TTEditor) throws {
+    /// The budget of one recorded search step: the interactive budget, from the one constant.
+    static let recordedStepTimeLimit = SearchCore.defaultTimeLimit
+    /// Macro playback is bounded and has no disk or connector side effects: each step may search
+    /// for at most `timeLimit` seconds, synchronously, and a step that runs out of time throws
+    /// before any edit. Next and Previous throw when they do not land on a match, so the steps
+    /// after them never run at a stale caret; Replace All with no match is a deliberate no-op.
+    func playRecorded(
+        options: SearchOptions, action: String, on editor: TTEditor,
+        timeLimit: TimeInterval = SearchController.recordedStepTimeLimit
+    ) throws {
         let text = editor.text, revision = editor.revision
-        let report = try SearchCore.search(text, options: options, timeLimit: 0.1)
+        let report = try SearchCore.search(text, options: options, timeLimit: timeLimit)
         guard !report.truncated else {
             throw NSError(
                 domain: "TextTank.Search", code: 4,
@@ -507,8 +526,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         return
             "\(r.buffer.editor.window?.title ?? "Document") · \(r.hit.range.location) · \(String(match.prefix(160)).replacingOccurrences(of:"\n",with:" ↵ "))"
     }
-    @objc private func openResult(_ sender: Any?) {
-        guard rows.indices.contains(table.clickedRow) else { return }
-        select(rows[table.clickedRow])
+    @objc private func openResult(_ sender: Any?) { open(row: table.clickedRow) }
+    /// A result row moves the caret with no recordable step (F277).
+    func open(row: Int) {
+        guard rows.indices.contains(row) else { return }
+        if select(rows[row]) { onUnrecordableCommand?("Opening a search result is not recorded in macros yet.") }
     }
 }
