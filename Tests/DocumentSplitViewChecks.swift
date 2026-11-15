@@ -119,6 +119,13 @@ extension DocumentChecks {
             check(
                 session.activeDocumentID == document.recoveryID,
                 "a saved session marks the current document as active while another window is main")
+            let longName = String(repeating: "s", count: 230)
+            let filename = root.appendingPathComponent(longName + "." + WorkspaceStore.sessionFileExtension)
+            let longSession = try delegate.workspace.capture(name: filename.deletingPathExtension().lastPathComponent)
+            check(
+                longSession.name == String(longName.prefix(200)) && longSession.activeDocumentID == document.recoveryID,
+                "G358 a valid long session filename yields a 200-character display name without losing document identity"
+            )
             let stray = TextDocument()
             let isolated = WorkspaceController()
             isolated.activeDocument = { stray }

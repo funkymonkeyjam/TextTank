@@ -21,7 +21,8 @@ final class WorkspaceController: NSObject {
         let active = activeDocument().flatMap { current in
             documents.contains { $0 === current } ? current.recoveryID : nil
         }
-        let session = WorkspaceSession(id: UUID(), name: name, documents: snapshots, activeDocumentID: active)
+        let session = WorkspaceSession(
+            id: UUID(), name: String(name.prefix(200)), documents: snapshots, activeDocumentID: active)
         try session.validate()
         return session
     }
