@@ -220,6 +220,71 @@ import AppKit
                 check(
                     EditorTransform.uniqueLines.transform("é\ne\u{301}\n").utf8.elementsEqual("é\ne\u{301}\n".utf8),
                     "duplicate removal preserves canonically equivalent distinct bytes")
+                // F11: a duplicate final row without a line ending must not leave one behind.
+                func bytesEqual(_ a: String, _ b: String) -> Bool { a.utf8.elementsEqual(b.utf8) }
+                let unique = EditorTransform.uniqueLines, invert = EditorTransform.invertCase,
+                    title = EditorTransform.titleCase
+                check(
+                    bytesEqual(unique.transform("a\nb\na"), "a\nb"),
+                    "duplicate removal adds no line ending when the unterminated last row is a duplicate")
+                check(bytesEqual(unique.transform("a\na"), "a"), "duplicate removal of two equal rows leaves one row")
+                check(
+                    bytesEqual(unique.transform("a\nb"), "a\nb"),
+                    "duplicate removal keeps an unterminated last row that is not a duplicate")
+                check(
+                    bytesEqual(unique.transform("a\r\na\nb\r"), "a\r\nb\r"),
+                    "duplicate removal moves each separator with its kept row")
+                check(
+                    bytesEqual(unique.transform("a\r\nb\na"), "a\r\nb"),
+                    "duplicate removal with mixed endings adds no line ending for a duplicate last row")
+                check(
+                    bytesEqual(EditorTransform.removeEmptyLines.transform("a\n\nb"), "a\nb")
+                        && bytesEqual(EditorTransform.removeEmptyLines.transform("a\n\n"), "a\n"),
+                    "empty-line removal is unchanged for unterminated and terminated input")
+                // G348: Invert Case maps scalar for scalar; Title Case is deliberately left as it is.
+                check(bytesEqual(invert.transform("aB1 "), "Ab1 "), "invert case swaps ASCII letters only")
+                check(
+                    bytesEqual(invert.transform("\u{E9}"), "\u{C9}")
+                        && bytesEqual(invert.transform("e\u{301}"), "E\u{301}"),
+                    "invert case handles precomposed and decomposed letters without recomposing")
+                check(
+                    bytesEqual(invert.transform("\u{3A3}\u{3C3}"), "\u{3C3}\u{3A3}")
+                        && bytesEqual(invert.transform("\u{3C2}"), "\u{3A3}"),
+                    "invert case still inverts Greek sigma, including final sigma")
+                check(bytesEqual(invert.transform("aB\r\nc"), "Ab\r\nC"), "invert case leaves line endings alone")
+                let family = "\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467} \u{1F600}"
+                check(bytesEqual(invert.transform(family), family), "invert case returns emoji sequences unchanged")
+                check(bytesEqual(title.transform("hello wORLD"), "Hello World"), "title case capitalizes each word")
+                check(
+                    bytesEqual(title.transform("don't x_y a1b"), "Don't X_y A1b"),
+                    "title case keeps Foundation's word boundaries")
+                check(
+                    bytesEqual(title.transform("\u{DF}-stra\u{DF}e"), "Ss-Stra\u{DF}e"),
+                    "title case is unchanged for a word-initial expanding letter")
+                for (scalar, name) in [
+                    ("\u{DF}", "sharp s"), ("\u{FB01}", "the fi ligature"), ("\u{130}", "dotted capital I"),
+                    ("\u{1C5}", "a titlecase digraph")
+                ] {
+                    check(bytesEqual(invert.transform(scalar), scalar), "invert case leaves \(name) unchanged")
+                }
+                check(
+                    bytesEqual(invert.transform(invert.transform("stra\u{DF}e")), "stra\u{DF}e"),
+                    "invert case applied twice restores text containing sharp s")
+                let mixed = "Stra\u{DF}e \u{FB01}nal \u{130}\u{1C5} \u{3C2}\u{3A3} e\u{301} \u{1F600}\r\n"
+                check(
+                    invert.transform(mixed).unicodeScalars.count == mixed.unicodeScalars.count,
+                    "invert case preserves the scalar count of mixed text")
+                let inverted = TextDocument()
+                inverted.editor.text = "Stra\u{DF}e\nabc\n"
+                inverted.editor.resetUndoHistory()
+                inverted.editor.setSavePoint()
+                try EditorTransform.invertCase.apply(to: inverted.editor)
+                check(bytesEqual(inverted.editor.text, "sTRA\u{DF}E\nABC\n"), "invert case edits the document buffer")
+                inverted.editor.executeCommand("undo")
+                check(
+                    bytesEqual(inverted.editor.text, "Stra\u{DF}e\nabc\n") && !inverted.editor.modified,
+                    "invert case is one Undo back to the save point")
+                inverted.close()
                 let transformed = TextDocument()
                 transformed.editor.text = "b\na\n"
                 transformed.editor.resetUndoHistory()

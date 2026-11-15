@@ -277,11 +277,10 @@ extension DocumentChecks {
                 fixed: same(
                     try automation.transform("\(UnicodeFixtures.nfc)\n\(UnicodeFixtures.nfd)\n"),
                     "\(UnicodeFixtures.nfc)\n\(UnicodeFixtures.nfd)\n"))
-            knownDefect(
-                "G354", "Invert Case applied twice restores the original text for \u{DF}",
-                fixed: same(
+            check(
+                same(
                     EditorTransform.invertCase.transform(EditorTransform.invertCase.transform("stra\u{DF}e")),
-                    "stra\u{DF}e"))
+                    "stra\u{DF}e"), "Invert Case applied twice restores the original text for \u{DF}")
             knownDefect(
                 "G354", "a filename glob typed precomposed matches a decomposed file name",
                 fixed: FolderSearchFilters.matches("caf\(UnicodeFixtures.nfd).txt", "caf\(UnicodeFixtures.nfc).*"))

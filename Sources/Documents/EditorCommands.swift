@@ -22,10 +22,20 @@ enum EditorTransform: String, CaseIterable {
     func transform(_ text: String) -> String {
         if self == .titleCase { return text.capitalized(with: Locale(identifier: "en_US_POSIX")) }
         if self == .invertCase {
-            return text.map { c -> String in
-                let s = String(c)
-                return s == s.uppercased() ? s.lowercased() : s.uppercased()
-            }.joined()
+            // One scalar in, one scalar out, so the text never changes length: a mapping that would
+            // expand (sharp s to "SS", a ligature to two letters) leaves the scalar as it is, and
+            // so does a titlecase digraph. Upper if that changes the scalar, else lower.
+            var inverted = String.UnicodeScalarView()
+            for scalar in text.unicodeScalars {
+                let properties = scalar.properties, original = String(scalar)
+                let mapped =
+                    properties.generalCategory == .titlecaseLetter
+                    ? original
+                    : (properties.uppercaseMapping == original
+                        ? properties.lowercaseMapping : properties.uppercaseMapping)
+                inverted.append(mapped.unicodeScalars.count == 1 ? mapped.unicodeScalars.first! : scalar)
+            }
+            return String(inverted)
         }
         // Keep original separators by position for reordering, and move separators
         // with retained rows for deletion. A terminal newline is not an empty row.
@@ -53,8 +63,11 @@ enum EditorTransform: String, CaseIterable {
             }
         case .removeEmptyLines: rows = rows.filter { !$0.0.isEmpty }
         case .uniqueLines:
+            // A duplicate final row without a line ending must not leave the previous row's behind.
+            let unterminated = rows.last?.1.isEmpty == true
             var seen = Set<Data>()
             rows = rows.filter { seen.insert(Data($0.0.utf8)).inserted }
+            if unterminated, !rows.isEmpty { rows[rows.count - 1].1 = "" }
         default:
             let values = rows.enumerated().map { ($0.offset, $0.element.0) }
             let sorted: [(Int, String)]
