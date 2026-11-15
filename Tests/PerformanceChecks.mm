@@ -4,15 +4,20 @@
 //   performance-checks            the gated tier: 1 and 10 MiB, 100 buffers, one long line
 //   performance-checks full       the manual tier: the same plus 100 MiB
 //
-// The budgets are a coarse tripwire, not a benchmark: each is many times the value
-// logged on the development Mac (see harness/logs/performance-checks.log), so only a
-// change of cost class, such as copying the whole buffer several more times, trips it.
+// The budgets are a coarse tripwire, not a benchmark. Each time budget is about five
+// times the value logged on the development Mac (see harness/logs/performance-checks.log:
+// load 0.0075 s per MiB, whole-document find 0.00003 to 0.00017 s, replace and Undo
+// 0.000007 s, 100 buffers 0.063 s, long line 0.071 s), so a change that makes an
+// operation ten times slower, or makes replace or Undo copy the buffer, trips it. The
+// memory ceiling is about three times the logged peak. They were calibrated on one Mac
+// only; a slower runner sets TEXTTANK_PERF_BUDGET_SCALE.
 // TEXTTANK_PERF_BUDGET_SCALE multiplies every budget: above 1 for a slow machine, and a
 // tiny value proves that the budgets do fail.
 #import <AppKit/AppKit.h>
 #import "TTEditor.h"
 #import "ScintillaView.h"
 #include <sys/resource.h>
+#include <algorithm>
 #include <chrono>
 #include <vector>
 #import "Checks.h"
@@ -35,34 +40,54 @@ int main(int argc,char **argv){@autoreleasepool{
   NSString *line=@"alpha beta gamma delta 0123456789\n";
   while([fixture length]<mib*1024*1024)[fixture appendString:line];
   [fixture appendString:@"UNIQUE-END-TOKEN"];
-  TTEditor *editor=[[TTEditor alloc]initWithFrame:NSMakeRect(0,0,900,600)];
-  double a=seconds();editor.text=fixture;[editor resetUndoHistory];double b=seconds();
-  BOOL found=[editor find:@"UNIQUE-END-TOKEN" matchCase:YES backwards:NO];double c=seconds();
-  [editor replaceSelection:@"tail"];double d=seconds();[editor executeCommand:@"undo"];double e=seconds();
+  // Every timing is the best of a few repetitions, so one scheduling hiccup on a busy
+  // machine cannot trip a budget; a real change of cost shows in every repetition.
+  TTEditor *editor=nil;double load=1e9;
+  for(int attempt=0;attempt<(mib<=10?3:1);++attempt){@autoreleasepool{
+   editor=nil;
+   TTEditor *candidate=[[TTEditor alloc]initWithFrame:NSMakeRect(0,0,900,600)];
+   double a=seconds();candidate.text=fixture;[candidate resetUndoHistory];load=std::min(load,seconds()-a);editor=candidate;
+  }}
+  BOOL found=YES,restored=YES;double find=1e9,replace=1e9,undo=1e9;
+  for(int attempt=0;attempt<5;++attempt){
+   // From the start of the document, so the find scans the whole fixture.
+   [editor setSelectionAnchor:0 caret:0];
+   double b=seconds();found=[editor find:@"UNIQUE-END-TOKEN" matchCase:YES backwards:NO] && found;double c=seconds();
+   [editor replaceSelection:@"tail"];double d=seconds();[editor executeCommand:@"undo"];double e=seconds();
+   find=std::min(find,c-b);replace=std::min(replace,d-c);undo=std::min(undo,e-d);
+  }
+  restored=[editor.text isEqual:fixture];
   NSString *size=[NSString stringWithFormat:@"%d MiB",mib];
-  check(found && [editor.text isEqual:fixture],[[size stringByAppendingString:@" find, replace and Undo restore the exact text"] UTF8String]);
-  check(b-a<=60 && c-b<=10,[[size stringByAppendingString:@" load within 60 s and find within 10 s"] UTF8String]);
+  check(found && restored,[[size stringByAppendingString:@" find, replace and Undo restore the exact text"] UTF8String]);
+  check(load<=60 && find<=10,[[size stringByAppendingString:@" load within 60 s and find within 10 s"] UTF8String]);
   long peak=peakBytes();
-  printf("multiline,%d,%.6f,%.6f,%.6f,%.6f,%ld\n",mib,b-a,c-b,d-c,e-d,peak);fflush(stdout);
-  within(b-a,0.25+0.1*mib,[size stringByAppendingString:@" load"],"s");
-  within(c-b,0.25+0.01*mib,[size stringByAppendingString:@" find of the last token"],"s");
-  within(d-c,0.1,[size stringByAppendingString:@" replace of one selection"],"s");
-  within(e-d,0.1,[size stringByAppendingString:@" Undo of one replacement"],"s");
+  printf("multiline,%d,%.6f,%.6f,%.6f,%.6f,%ld\n",mib,load,find,replace,undo,peak);fflush(stdout);
+  within(load,0.04*mib,[size stringByAppendingString:@" load"],"s");
+  within(find,0.0001+0.0001*mib,[size stringByAppendingString:@" find of the last token"],"s");
+  within(replace,0.00005,[size stringByAppendingString:@" replace of one selection"],"s");
+  within(undo,0.00005,[size stringByAppendingString:@" Undo of one replacement"],"s");
   // Peak resident size is cumulative for the process, so the ceiling grows with the largest
   // fixture loaded so far: a fixed allowance plus thirty times the fixture's UTF-8 size.
   within((double)peak,150.0*1024*1024+30.0*mib*1024*1024,[size stringByAppendingString:@" peak resident memory"],"bytes");
  }}
- NSMutableArray *tabs=[NSMutableArray array];double start=seconds();
- for(int i=0;i<100;++i){TTEditor *view=[[TTEditor alloc]initWithFrame:NSMakeRect(0,0,900,600)];view.text=@"100 independent synthetic buffers 😀";[tabs addObject:view];}
- double buffers=seconds()-start;
+ NSMutableArray *tabs=nil;double buffers=1e9,start=0;
+ for(int attempt=0;attempt<3;++attempt){@autoreleasepool{
+  tabs=[NSMutableArray array];start=seconds();
+  for(int i=0;i<100;++i){TTEditor *view=[[TTEditor alloc]initWithFrame:NSMakeRect(0,0,900,600)];view.text=@"100 independent synthetic buffers 😀";[tabs addObject:view];}
+  buffers=std::min(buffers,seconds()-start);
+ }}
  printf("buffers100,0,%.6f,0,0,0,0\n",buffers);
  check(tabs.count==100 && [[(TTEditor *)tabs.lastObject text] isEqual:@"100 independent synthetic buffers 😀"],"100 independent buffers hold their text");
- within(buffers,1.0,@"creating 100 buffers","s");
- TTEditor *longLine=[[TTEditor alloc]initWithFrame:NSMakeRect(0,0,900,600)];
- NSString *line=[@"a" stringByPaddingToLength:10*1024*1024 withString:@"a" startingAtIndex:0];start=seconds();longLine.text=line;
- double longLoad=seconds()-start;
+ within(buffers,0.3,@"creating 100 buffers","s");
+ NSString *line=[@"a" stringByPaddingToLength:10*1024*1024 withString:@"a" startingAtIndex:0];
+ TTEditor *longLine=nil;double longLoad=1e9;
+ for(int attempt=0;attempt<3;++attempt){@autoreleasepool{
+  longLine=nil;
+  TTEditor *candidate=[[TTEditor alloc]initWithFrame:NSMakeRect(0,0,900,600)];
+  start=seconds();candidate.text=line;longLoad=std::min(longLoad,seconds()-start);longLine=candidate;
+ }}
  check([longLine.text isEqual:line],"10 MiB single line loads exactly");
  printf("longline,10,%.6f,0,0,0,0\n",longLoad);
- within(longLoad,2.0,@"10 MiB single line load","s");
+ within(longLoad,0.35,@"10 MiB single line load","s");
  return ttchecks::finish("PerformanceChecks",full?"full tier to 100 MiB; synthetic editor load/find/replace/Undo; no physical scrolling claim":"gated tier to 10 MiB; synthetic editor load/find/replace/Undo; no physical scrolling claim");
 }}
