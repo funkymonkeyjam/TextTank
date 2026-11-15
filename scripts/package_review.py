@@ -33,8 +33,9 @@ def public_acceptance_log(text, root):
     replacements = [(str(root), '<repository>'), (str(root.resolve()), '<repository>'),
                     (str(pathlib.Path.home()), '<home>'), (tempfile.gettempdir(), '<temporary>')]
     for original, replacement in sorted(replacements, key=lambda pair: len(pair[0]), reverse=True):
-        text = text.replace(original + '/', replacement + '/')
-    if re.search(r'/(?:Users|home)/[^/\s]+/', text):
+        boundary = r"(?=$|[/\s,;:)\]}>'\"])"
+        text = re.sub(r'(?<![\w])' + re.escape(original) + boundary, lambda _: replacement, text)
+    if re.search(r"/(?:Users|home)/[^/\s\"'<>(),;:]+(?:/|$|[\s\"'<>(),;:])", text):
         raise ValueError('Acceptance log contains an uncurated home path; review it before packaging.')
     return text
 

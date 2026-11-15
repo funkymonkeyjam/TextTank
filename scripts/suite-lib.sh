@@ -71,10 +71,16 @@ suite_build() {
 
 suite_run() {
   local name="$1" log="$2" status=0 limit="${TEXTTANK_SUITE_TIMEOUT:-300}"
+  local requires_completion="${TEXTTANK_NATIVE_COMPLETION_REQUIRED:-0}"
   shift 2
   if [[ "$SUITE_BROKEN" == *" $name "* ]]; then echo "NOT RUN $name: its build failed"; return 0; fi
+  if [[ "$1" == build/tests/* || "$1" == "$PWD"/build/tests/* ]]; then requires_completion=1; fi
   # alarm() survives exec, so the suite itself receives SIGALRM when the limit passes.
   perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or die "cannot run $ARGV[0]: $!\n"' "$limit" "$@" 2>&1 | tee "$log" || status=${PIPESTATUS[0]}
+  if [[ "$status" == 0 && "$requires_completion" == 1 ]] && ! grep -Eq '^(PASS )?[A-Za-z][A-Za-z0-9]*Checks: [0-9]+ (native )?assertions' "$log"; then
+    echo "FAIL $name: exited zero without its native completion summary; the suite is incomplete" | tee -a "$log"
+    status=1
+  fi
   if [[ "$status" == 0 ]]; then
     suite_record "PASS" "$name" "$(tail -n 1 "$log" | cut -c1-110)"
   elif [[ "$status" == 142 ]]; then

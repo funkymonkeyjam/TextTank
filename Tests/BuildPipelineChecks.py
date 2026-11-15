@@ -67,6 +67,16 @@ class BuildPipelineChecks(unittest.TestCase):
                 self.assertIn('arm64', rejected.stderr)
 
 
+    def test_public_path_boundaries_include_bare_prefixes_without_username_prefix_substitution(self):
+        package = module('package_review', 'package_review.py')
+        self.assertEqual(package.public_acceptance_log(str(ROOT), ROOT), '<repository>')
+        self.assertEqual(package.public_acceptance_log(str(Path.home()), ROOT), '<home>')
+        self.assertEqual(package.public_acceptance_log(tempfile.gettempdir(), ROOT), '<temporary>')
+        for text in ['/Users/unrelated-person', 'Path: /Users/unrelated-person.',
+                     str(Path.home()) + '-another-person/file.txt']:
+            with self.assertRaises(ValueError):
+                package.public_acceptance_log(text, ROOT)
+
     def test_public_derived_diagnostics_are_curated_without_mutating_raw_evidence(self):
         package = module('package_review', 'package_review.py')
         skip = f'SKIP fixture at {ROOT}/private-session/fixture.txt'
