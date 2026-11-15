@@ -284,6 +284,27 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
 - (NSInteger)selectionStart { [self assertThread]; return [_engine message:SCI_GETSELECTIONSTART]; }
 - (NSInteger)selectionEnd { [self assertThread]; return [_engine message:SCI_GETSELECTIONEND]; }
 - (NSInteger)selectionAnchor { [self assertThread]; return [_engine message:SCI_GETANCHOR]; }
+- (NSInteger)selectedCharacterCount {
+    [self assertThread];
+    NSInteger total=0, count=[_engine message:SCI_GETSELECTIONS];
+    for (NSInteger i=0;i<count;++i) {
+        NSInteger start=[_engine message:SCI_GETSELECTIONNSTART wParam:i];
+        NSInteger end=[_engine message:SCI_GETSELECTIONNEND wParam:i];
+        total += [_engine message:SCI_COUNTCHARACTERS wParam:start lParam:end];
+    }
+    return total;
+}
+- (NSDictionary<NSString *,NSNumber *> *)statusInfo {
+    [self assertThread];
+    NSInteger caret = [_engine message:SCI_GETCURRENTPOS];
+    return @{@"line":@([_engine message:SCI_LINEFROMPOSITION wParam:caret]+1),
+             @"column":@([_engine message:SCI_GETCOLUMN wParam:caret]+1+[_engine message:SCI_GETSELECTIONNCARETVIRTUALSPACE wParam:[_engine message:SCI_GETMAINSELECTION]]),
+             @"lines":@([_engine message:SCI_GETLINECOUNT]),
+             @"tabWidth":@([_engine message:SCI_GETTABWIDTH]),
+             @"useTabs":@([_engine message:SCI_GETUSETABS]),
+             @"fontSize":@([_engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_DEFAULT]/100.0+[_engine message:SCI_GETZOOM]),
+             @"eol":@([_engine message:SCI_GETEOLMODE])};
+}
 - (NSInteger)selectionCaret { [self assertThread]; return [_engine message:SCI_GETCURRENTPOS]; }
 - (BOOL)setSelectionAnchor:(NSInteger)anchor caret:(NSInteger)caret {
     [self assertThread];

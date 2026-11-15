@@ -21,6 +21,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) NSInteger selectionEnd;
 @property(nonatomic, readonly) NSInteger selectionAnchor;
 @property(nonatomic, readonly) NSInteger selectionCaret;
+/// View metadata; line/column are one-based, column expands tabs.
+@property(nonatomic, readonly) NSDictionary<NSString *, NSNumber *> *statusInfo;
+/// Unicode scalar count across actual selections, without clipboard separators.
+@property(nonatomic, readonly) NSInteger selectedCharacterCount;
 /// Restores one ordinary selection. Rejects out-of-bounds or split UTF-8 code points.
 - (BOOL)setSelectionAnchor:(NSInteger)anchor caret:(NSInteger)caret;
 @property(nonatomic, readonly) NSArray<NSNumber *> *bookmarkLines;

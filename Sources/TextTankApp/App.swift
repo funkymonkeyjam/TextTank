@@ -244,7 +244,11 @@ final class TextDocument: NSDocument {
         do {
             if isDocumentEdited || editor.modified || format != savedFormat {
                 try Self.recovery.save(RecoverySnapshot(id:recoveryID,text:editor.text,format:format,originalURL:fileURL?.absoluteString,revision:recoveryBase+UInt64(editor.revision)))
-            } else { try Self.recovery.remove(id:recoveryID,throughRevision:recoveryBase+UInt64(editor.revision)) }
+                windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.status.stringValue="Draft saved for session restore · Incomplete preview" }
+            } else {
+                try Self.recovery.remove(id:recoveryID,throughRevision:recoveryBase+UInt64(editor.revision))
+                windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.status.stringValue=(fileURL == nil ? "Ready" : "Saved")+" · Incomplete preview" }
+            }
         } catch { windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.status.stringValue="Recovery failed: \(error.localizedDescription)" } }
     }
     override func close() {
@@ -286,7 +290,7 @@ final class TextDocument: NSDocument {
         case "latin1":target=FileFormat(encoding:.latin1,bom:false)
         default:target=FileFormat(encoding:.utf8,bom:false)
         }
-        do { _ = try FileCodec.encode(editor.text,format:target); format=target; flushRecovery(); windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.status.stringValue="\(code) · INCOMPLETE PREVIEW" } }
+        do { _ = try FileCodec.encode(editor.text,format:target); format=target; flushRecovery(); windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.refreshStatusDetails() } }
         catch { presentError(error) }
     }
     override func printOperation(withSettings printSettings:[NSPrintInfo.AttributeKey:Any]) throws -> NSPrintOperation {
@@ -325,7 +329,14 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     let findField = NSSearchField()
     let replaceField = NSTextField()
     let caseBox = NSButton(checkboxWithTitle:"Match case",target:nil,action:nil)
-    let status = NSTextField(labelWithString:"UTF-8 · INCOMPLETE PREVIEW")
+    let status = NSTextField(labelWithString:"Ready · Incomplete preview")
+    let statusDetails = NSTextField(labelWithString:"")
+    private var statusTimer: Timer?
+    private var statusRevision: UInt?
+    private var cachedCharacterCount = 0
+    private var cachedSelectionKey = ""
+    private var cachedSelectedCount = 0
+    private var cachedEndings = "LF"
     var secondary: TTEditor?
     weak var lastEditor: TTEditor?
     var focusObserver: NSObjectProtocol?
@@ -362,9 +373,50 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         let findButton = NSButton(title:"Next",target:self,action:#selector(findNext(_:)))
         let replaceButton = NSButton(title:"Replace Selection",target:self,action:#selector(replaceSelection(_:)))
         let search = NSStackView(views:[findField,replaceField,caseBox,findButton,replaceButton]); search.spacing = 8
-        [search,split,status].forEach { $0.translatesAutoresizingMaskIntoConstraints=false;root.addSubview($0) }
-        NSLayoutConstraint.activate([split.heightAnchor.constraint(greaterThanOrEqualToConstant:200),search.topAnchor.constraint(equalTo:root.topAnchor,constant:10),search.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),search.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),findField.widthAnchor.constraint(greaterThanOrEqualToConstant:200),replaceField.widthAnchor.constraint(greaterThanOrEqualToConstant:160),split.topAnchor.constraint(equalTo:search.bottomAnchor,constant:10),split.leadingAnchor.constraint(equalTo:root.leadingAnchor),split.trailingAnchor.constraint(equalTo:root.trailingAnchor),split.bottomAnchor.constraint(equalTo:status.topAnchor,constant:-6),status.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),status.bottomAnchor.constraint(equalTo:root.bottomAnchor,constant:-6)])
+        let detailsScroll = NSScrollView()
+        detailsScroll.documentView=statusDetails; detailsScroll.hasHorizontalScroller=true
+        detailsScroll.autohidesScrollers=true; detailsScroll.drawsBackground=false
+        statusDetails.font = .monospacedDigitSystemFont(ofSize:11,weight:.regular)
+        statusDetails.textColor = .secondaryLabelColor
+        statusDetails.setAccessibilityLabel("Document details")
+        [search,split,status,detailsScroll].forEach { $0.translatesAutoresizingMaskIntoConstraints=false;root.addSubview($0) }
+        NSLayoutConstraint.activate([split.heightAnchor.constraint(greaterThanOrEqualToConstant:200),search.topAnchor.constraint(equalTo:root.topAnchor,constant:10),search.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),search.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),findField.widthAnchor.constraint(greaterThanOrEqualToConstant:200),replaceField.widthAnchor.constraint(greaterThanOrEqualToConstant:160),split.topAnchor.constraint(equalTo:search.bottomAnchor,constant:10),split.leadingAnchor.constraint(equalTo:root.leadingAnchor),split.trailingAnchor.constraint(equalTo:root.trailingAnchor),split.bottomAnchor.constraint(equalTo:detailsScroll.topAnchor,constant:-5),detailsScroll.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),detailsScroll.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),detailsScroll.heightAnchor.constraint(equalToConstant:22),detailsScroll.bottomAnchor.constraint(equalTo:status.topAnchor,constant:-2),status.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),status.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),status.bottomAnchor.constraint(equalTo:root.bottomAnchor,constant:-6)])
         status.font = .systemFont(ofSize:11); status.textColor = .secondaryLabelColor
+        status.lineBreakMode = .byTruncatingTail
+        statusTimer=Timer.scheduledTimer(withTimeInterval:0.2,repeats:true) { [weak self] _ in self?.refreshStatusDetails() }
+        refreshStatusDetails(for:document)
+    }
+    func refreshStatusDetails(for suppliedDocument:TextDocument? = nil) {
+        guard let doc=suppliedDocument ?? document as? TextDocument else { return }
+        let editor=activeEditor, info=editor.statusInfo
+        if statusRevision != doc.editor.revision {
+            let text=doc.editor.text
+            cachedCharacterCount=text.unicodeScalars.count
+            var cr=false,lf=false,crlf=false
+            let bytes=Array(text.utf8);var i=0
+            while i < bytes.count {
+                if bytes[i] == 13 { if i+1 < bytes.count && bytes[i+1] == 10 {crlf=true;i+=1} else {cr=true} }
+                else if bytes[i] == 10 {lf=true}
+                i+=1
+            }
+            let endings=[crlf ? "CRLF" : nil,lf ? "LF" : nil,cr ? "CR" : nil].compactMap{$0}
+            cachedEndings=endings.count > 1 ? "Mixed EOL" : endings.first ?? ""
+            statusRevision=doc.editor.revision
+        }
+        let encoding:[FileEncoding:String]=[.utf8:"UTF-8",.utf16LE:"UTF-16 LE",.utf16BE:"UTF-16 BE",.windows1252:"Windows-1252",.latin1:"Latin-1"]
+        let language=(NSApp.delegate as? AppDelegate)?.languages.profile(identifier:doc.languageIdentifier)?.title ?? (doc.languageIdentifier == "null" ? "Plain Text" : doc.languageIdentifier)
+        let eol=cachedEndings.isEmpty ? ([0:"CRLF",1:"CR",2:"LF"][info["eol"]?.intValue ?? 2] ?? "LF") : cachedEndings
+        let indentation=(info["useTabs"]?.boolValue == true ? "Tabs" : "Spaces")+": \(info["tabWidth"]?.intValue ?? 4)"
+        var fields=[doc.displayName+(doc.isDocumentEdited ? " *" : ""),"\(doc.editor.bookmarkLines.count) Bookmarks",language,
+                    "Ln \(info["line"]?.intValue ?? 1), Col \(info["column"]?.intValue ?? 1)","\(cachedCharacterCount) chars","\(info["lines"]?.intValue ?? 1) lines"]
+        let selectionKey="\(ObjectIdentifier(editor))-\(doc.editor.revision)-\(editor.selectionRanges)"
+        if cachedSelectionKey != selectionKey {cachedSelectedCount=editor.selectedCharacterCount;cachedSelectionKey=selectionKey}
+        if cachedSelectedCount > 0 { fields.append("\(cachedSelectedCount) selected") }
+        if editor.selectionCount > 1 {fields.append("\(editor.selectionCount) selections")}
+        fields += [String(format:"Base %g pt",info["fontSize"]?.doubleValue ?? 14),indentation,(encoding[doc.format.encoding] ?? "UTF-8")+(doc.format.bom ? " BOM" : ""),eol,editor.wrap ? "Wrap" : "No Wrap"]
+        if editor.readOnly {fields.append("Read Only")}
+        let value=fields.joined(separator:"   ·   ")
+        if statusDetails.stringValue != value {statusDetails.stringValue=value;statusDetails.sizeToFit();statusDetails.toolTip=value}
     }
     func toolbarAllowedItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     func toolbarDefaultItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier] {
@@ -387,6 +439,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     }
     @objc func closeTab(_ sender:Any?) { window?.performClose(sender) }
     func prepareForClose() {
+        statusTimer?.invalidate();statusTimer=nil
         if let focusObserver { NotificationCenter.default.removeObserver(focusObserver);self.focusObserver=nil }
         if let automationObserver { NotificationCenter.default.removeObserver(automationObserver);self.automationObserver=nil }
         primaryEditor.onFocus=nil;secondary?.onFocus=nil;secondary?.readOnly=true
@@ -407,8 +460,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         (NSApp.delegate as? AppDelegate)?.macros.willExecuteCommand(id,on:editor)
         editor.executeCommand(id)
     }
-    deinit { if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }; if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) } }
-    @objc func language(_ sender:NSMenuItem) { if let id=sender.representedObject as? String { activeEditor.setLanguage(id); (document as? TextDocument)?.languageIdentifier=id; status.stringValue="\(id) · INCOMPLETE PREVIEW" } }
+    deinit { statusTimer?.invalidate(); if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }; if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) } }
+    @objc func language(_ sender:NSMenuItem) { if let id=sender.representedObject as? String { activeEditor.setLanguage(id); (document as? TextDocument)?.languageIdentifier=id; refreshStatusDetails() } }
     @objc func showFind(_ sender:Any?) { _ = activeEditor; window?.makeFirstResponder(findField) }
     @objc func findNext(_ sender:Any?) { performFind(backwards:false) }
     @objc func findPrevious(_ sender:Any?) { performFind(backwards:true) }

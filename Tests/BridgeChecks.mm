@@ -12,6 +12,15 @@ int main() {
         TTEditor *first = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 600, 400)];
         ScintillaView *initialNative = (ScintillaView *)first.subviews.firstObject;
         check(initialNative.scrollView.frame.size.width == 600 && initialNative.scrollView.frame.size.height == 400 && initialNative.content.frame.size.height > 0, "Engine viewport initialized before any resize event");
+        first.text = @"one\n\t😀";
+        [first configureTabWidth:4 useTabs:NO];
+        [first setSelectionAnchor:9 caret:9];
+        NSDictionary *details=first.statusInfo;
+        check([details[@"line"] integerValue] == 2 && [details[@"column"] integerValue] == 6, "Status caret uses one-based line and tab-expanded Unicode column");
+        check([details[@"lines"] integerValue] == 2 && [details[@"tabWidth"] integerValue] == 4 && ![details[@"useTabs"] boolValue], "Status reports document line count and actual indentation settings");
+        check([first.text isEqual:@"one\n\t😀"], "Status query never adds virtual gutter lines to document");
+        [first setSelectionRanges:@[@{@"anchor":@0,@"caret":@0},@{@"anchor":@5,@"caret":@9}]];
+        check(first.selectedCharacterCount == 1, "Status counts Unicode selection with empty main caret without synthetic separators");
         first.text = @"\uFEFFa";
         check([first.text isEqual:@"\uFEFFa"], "Leading content U+FEFF is not consumed as a file BOM");
         [first executeCommand:@"selectAll"];
