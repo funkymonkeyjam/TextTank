@@ -97,11 +97,15 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         var resolved = self
         for index in steps.indices {
             if steps[index].askForFind == true {
-                guard let value = try ask(index, "Find", steps[index].find ?? "") else { return nil }
+                guard let value = try ask(index, steps[index].kind.findTitle, steps[index].find ?? "") else {
+                    return nil
+                }
                 resolved.steps[index].find = value
             }
             if steps[index].askForReplacement == true {
-                guard let value = try ask(index, "Replacement", steps[index].replacement ?? "") else { return nil }
+                guard let value = try ask(index, Step.Kind.replacementTitle, steps[index].replacement ?? "") else {
+                    return nil
+                }
                 resolved.steps[index].replacement = value
             }
         }
@@ -551,8 +555,10 @@ extension AutomationDefinition.Step.Kind {
     var acceptsReplacement: Bool { self == .replaceLiteral }
     /// The kind whose text to match is a regular expression.
     var findIsPattern: Bool { self == .clearLinesMatching }
-    /// What the rule dialog calls the text to match for this kind.
+    /// What the rule dialog and the run-time prompt call the text to match for this kind.
     var findTitle: String { findIsPattern ? "Pattern" : "Text to match" }
+    /// What the rule dialog and the run-time prompt call the replacement.
+    static let replacementTitle = "Replace with"
     /// Both names, for a message that the rule builder and the JSON editor each show.
     var described: String { "“\(label)” (\(rawValue) in JSON)" }
     /// The JSON fields this kind takes, for the reference.

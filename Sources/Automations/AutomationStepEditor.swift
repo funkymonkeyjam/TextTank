@@ -519,7 +519,7 @@ private final class RuleFields: NSObject {
         kind.setAccessibilityLabel("Rule")
         find.stringValue = initial.find ?? ""
         replacement.stringValue = initial.replacement ?? ""
-        replacement.setAccessibilityLabel("Replace with")
+        replacement.setAccessibilityLabel(AutomationDefinition.Step.Kind.replacementTitle)
         askFind.state = initial.askForFind == true ? .on : .off
         askReplacement.state = initial.askForReplacement == true ? .on : .off
         let stack = NSStackView()
@@ -528,7 +528,7 @@ private final class RuleFields: NSObject {
         stack.spacing = 10
         for (title, control) in [
             (NSTextField(labelWithString: "Rule"), kind as NSView), (findTitle, find),
-            (NSTextField(labelWithString: "Replace with"), replacement)
+            (NSTextField(labelWithString: AutomationDefinition.Step.Kind.replacementTitle), replacement)
         ] {
             title.widthAnchor.constraint(equalToConstant: 100).isActive = true
             control.widthAnchor.constraint(equalToConstant: 420).isActive = true

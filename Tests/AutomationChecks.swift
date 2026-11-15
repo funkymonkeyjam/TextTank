@@ -203,17 +203,17 @@ import Darwin
             var labels: [String] = []
             let resolved = try prompted.resolvingParameters { index, label, value in
                 labels.append(label)
-                return label == "Find" ? "½" : "$()"
+                return label == "Text to match" ? "½" : "$()"
             }
             check(
-                try resolved?.transform("½ cup") == "$() cup" && labels == ["Find", "Replacement"],
+                try resolved?.transform("½ cup") == "$() cup" && labels == ["Text to match", "Replace with"],
                 "runtime parameters are ordered literal data")
             check(prompted.steps[0].find == "saved", "runtime parameters do not mutate saved defaults")
             check(
                 try prompted.resolvingParameters { _, _, _ in nil } == nil,
                 "parameter cancellation returns no runnable definition")
             rejects("runtime empty find rejected") {
-                _ = try prompted.resolvingParameters { _, label, _ in label == "Find" ? "" : "value" }
+                _ = try prompted.resolvingParameters { _, label, _ in label == "Text to match" ? "" : "value" }
             }
             prompted.steps = [.init(kind: .removeBlankLines, askForFind: true)]
             rejects("irrelevant parameter prompt rejected") { try prompted.validate() }
@@ -310,7 +310,9 @@ import Darwin
                 rejects("\(kind.rawValue) rejects replacement prompt") { try rule.validate() }
                 rule.steps = [.init(kind: kind, find: "saved", askForFind: true)]
                 let promptedRule = try rule.resolvingParameters { _, label, value in
-                    check(label == "Find" && value == "saved", "\(kind.rawValue) prompts with saved literal default")
+                    check(
+                        label == "Text to match" && value == "saved",
+                        "\(kind.rawValue) prompts with saved literal default")
                     return "drop"
                 }
                 check(
@@ -946,6 +948,22 @@ import Darwin
                     "G381 a literal line rule with a replacement is reported for that kind",
                     message: "“Clear lines equal to text” (removeLinesEqualTo in JSON) needs text to match"
                 ) { try Step(kind: .clearLinesEqualTo, find: "x", replacement: "y").validate() }
+                // G381: a run-time prompt uses the names the rule dialog uses.
+                var promptLabels: [String] = []
+                var asking = AutomationDefinition.example
+                asking.steps = [
+                    Step(kind: .clearLinesMatching, find: "a+", askForFind: true),
+                    Step(kind: .replaceLiteral, find: "x", replacement: "y", askForFind: true, askForReplacement: true)
+                ]
+                _ = try asking.resolvingParameters { _, label, value in
+                    promptLabels.append(label)
+                    return value
+                }
+                check(
+                    promptLabels == ["Pattern", "Text to match", "Replace with"]
+                        && promptLabels[0] == Step.Kind.clearLinesMatching.findTitle
+                        && promptLabels[2] == Step.Kind.replacementTitle,
+                    "G381 run-time prompts are labelled as the rule dialog labels the same fields")
                 // G389: the reference document's table cannot drift from the kinds.
                 let rulesDocument = try String(
                     contentsOf: TestPaths.repoRoot.appendingPathComponent("docs/AUTOMATION-RULES.md"), encoding: .utf8)
