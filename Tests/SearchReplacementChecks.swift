@@ -178,11 +178,18 @@ import Darwin
             check(
                 try Set(listed.skipped.filter { $0.reason == .recoveryArtifact }.map { $0.url.lastPathComponent })
                     == Set(artifacts()), "every recovery copy and journal appears in the opt-in exclusion list")
-            let backupURL = root.appendingPathComponent(
+            // The forged match is built under the kernel's canonical root, as search results are, so
+            // the artifact rule is the only thing between it and a rewrite.
+            let template = beforeCancel.matches[0]
+            let canonicalRoot = template.url.deletingLastPathComponent()
+            let openedRoot = try FolderSearch.openCanonicalDirectory(root)
+            close(openedRoot.fd)
+            try require(
+                canonicalRoot.path == openedRoot.path, "fixture: the forged match is inside the canonical root")
+            let backupURL = canonicalRoot.appendingPathComponent(
                 try requireValue(
                     backups.first { (try? Data(contentsOf: root.appendingPathComponent($0))) == Data("key=34".utf8) },
                     "fixture: the recovery copy of b.txt"))
-            let template = beforeCancel.matches[0]
             let backupJournal = try JSONDecoder().decode(
                 [String: String].self, from: Data(contentsOf: backupURL.appendingPathExtension("json")))
             let forged = FolderSearchMatch(
