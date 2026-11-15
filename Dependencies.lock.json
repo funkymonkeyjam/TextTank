@@ -6,16 +6,32 @@
       "file": "scintilla569.tgz",
       "bytes": 1797262,
       "sha256": "1622546ce1d3804b589292f1adae98ad1d87fa8c43bb401edc098adae12dcacb",
-      "folder": "scintilla"
+      "folder": "scintilla",
+      "version": "5.6.9"
     },
     {
       "url": "https://www.scintilla.org/lexilla555.tgz",
       "file": "lexilla555.tgz",
       "bytes": 1134083,
       "sha256": "fa4093ad5c48acf49a6f3eca1b75143a5c824ef1a6f5b0ee59e8c3d6a970f229",
-      "folder": "lexilla"
+      "folder": "lexilla",
+      "version": "5.5.5"
     }
   ],
   "patches": [],
-  "architecture": "arm64"
+  "architecture": "arm64",
+  "vendoredInTree": [
+    {
+      "name": "Boost.Regex",
+      "version": "1.90.0",
+      "provenance": "Sources/Search/Boost/PROVENANCE.json",
+      "license": "Boost Software License 1.0"
+    },
+    {
+      "name": "Notepad++ LexUser port",
+      "sourceCommit": "61246e5741fd7c59352f3feb5ccc7e33e4594d15",
+      "provenance": "Sources/Languages/LexUserPort/PROVENANCE.json",
+      "license": "GPL-2.0-or-later, combined GPL-3.0-or-later"
+    }
+  ]
 }

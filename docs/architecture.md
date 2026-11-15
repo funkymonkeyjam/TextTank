@@ -4,6 +4,21 @@ Scintilla owns authoritative UTF-8 bytes and undo. TTEditor bridges Cocoa throug
 
 Pinned clean engines precede explicit audit/port of Notepad++ UDL and Boost regex deltas. Native app target in TextTank.xcodeproj; scripts build exact dependencies before xcodebuild.
 
+## Ownership and enforcing files
+
+| Invariant | Owner and focused evidence |
+| --- | --- |
+| One authoritative UTF-8 document/Undo history; main-thread bridge access | `Sources/EditorBridge/TTEditor.h/.mm`; bridge and split-view document checks |
+| Captured/revalidated save payload, disk identity and recovery lifecycle | `TextDocument` in `Sources/TextTankApp/App.swift`; `DocumentOpenSaveChecks` and file/recovery checks |
+| Strict bytes and private bounded recovery | `FileCodec`, `RecoveryStore`, `RecoveryWriter` in `Sources/Documents/`; `FileChecks` |
+| Snapshot search, revision guards and descriptor/fingerprint-gated folder replacement | `SearchController`, `FolderSearch`, `FolderReplacement` in `Sources/Search/`; search/controller/replacement checks |
+| Named, versioned automations and inert imports | `AutomationCore`/`AutomationController`; automation and controller checks |
+| Explicit bounded process execution and stale-result refusal | `Sources/Run/`; Run/core/controller checks |
+| Uncertain Reminders barrier and explicit destination | `RemindersConnector`; injected-store checks, with live fault limits stated separately |
+| Current build/source/log identity | `Dependencies.lock.json`, `scripts/env.sh`, `record-validation.py`, `suite-lib.sh` and `package_review.py`; isolated pipeline/runner fault checks |
+
+This table names ownership rather than asserting full parity. Dated per-capability source/check mappings and unassessed requirements are in [the matrix guide](parity/README.md). Temporary strings for I/O/immutable background work are not a second mutable document model. Generated `TextTank.xcodeproj` is derived by `scripts/generate-project.py`; explicit narrow suite source lists continue to enforce core layering.
+
 ## Search semantics
 
 `TTSearchEngine` searches immutable text snapshots and reports UTF-16 ranges. Regular expressions run over Unicode code points, not UTF-16 units, so `.`, classes and quantifiers take a whole astral character and a match never splits a surrogate pair; this departs on purpose from the Windows reference, which walks UTF-16 units. The regex carries its own UTF-8 locale (the process locale is never changed), so case folding, `\w`, `\b` and `\s` follow Unicode as literal mode and Whole word do; `\d` and `[[:digit:]]` stay `0-9`. Replacement output that would contain half a surrogate pair is refused.
