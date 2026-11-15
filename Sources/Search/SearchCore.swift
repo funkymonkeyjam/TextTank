@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
+/// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
+/// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
 struct SearchOptions: Codable, Equatable, Sendable {
     enum Mode: Int, Codable, Sendable { case normal=0, extended=1, regularExpression=2 }
     var query="",replacement=""

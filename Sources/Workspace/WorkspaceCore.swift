@@ -46,6 +46,8 @@ struct SessionDocument: Codable, Equatable, Identifiable {
     }
 }
 
+/// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
+/// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
 struct WorkspaceSession: Codable, Equatable, Identifiable {
     var schemaVersion: Int = 1
     var id: UUID

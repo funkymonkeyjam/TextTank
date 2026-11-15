@@ -1,0 +1,43 @@
+{
+  "macros" : [
+    {
+      "id" : "11111111-2222-4333-8444-555555555555",
+      "name" : "Golden macro",
+      "steps" : [
+        {
+          "kind" : "insertText",
+          "text" : "café"
+        },
+        {
+          "command" : "lineEnd",
+          "kind" : "command"
+        },
+        {
+          "backwards" : false,
+          "kind" : "findLiteral",
+          "matchCase" : true,
+          "text" : "x"
+        },
+        {
+          "kind" : "replaceSelection",
+          "text" : "y"
+        },
+        {
+          "kind" : "search",
+          "search" : {
+            "action" : "replaceAll",
+            "dotMatchesNewline" : false,
+            "matchCase" : true,
+            "mode" : 2,
+            "query" : "a+",
+            "replacement" : "b",
+            "wholeWord" : false,
+            "wrap" : true
+          }
+        }
+      ],
+      "version" : 1
+    }
+  ],
+  "version" : 1
+}

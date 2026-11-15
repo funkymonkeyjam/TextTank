@@ -1,0 +1,1 @@
+{"mode":2,"replacement":"$1:$2","dotMatchesNewline":true,"wrap":false,"query":"([a-z]+)=(\\d+)","wholeWord":true,"matchCase":true}

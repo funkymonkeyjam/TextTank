@@ -5,6 +5,8 @@ enum FileEncoding: String, Codable, CaseIterable {
     case utf8, utf16LE, utf16BE, windows1252, latin1
 }
 
+/// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
+/// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
 struct FileFormat: Codable, Equatable {
     var encoding: FileEncoding = .utf8
     var bom: Bool = false

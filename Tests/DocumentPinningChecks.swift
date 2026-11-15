@@ -235,6 +235,97 @@ extension DocumentChecks {
             check(document.editor.text == "reloaded with a clone open\n" && !document.isDocumentEdited,"closing the split keeps the buffer and its clean state")
             document.close()
         }
+        // G355: one committed file per persisted format, written by the build of 15 November 2026
+        // through the production writers. Each must keep decoding, through the production
+        // reader, to exactly these values. Adding a non-optional field to a persisted type
+        // without a decoder for old files fails here. TEXTTANK_WRITE_PERSISTENCE_FIXTURES=1
+        // rewrites the files; do that only for a deliberate, versioned format change.
+        section("persisted format golden fixtures",#line) {
+            let folder=TestPaths.fixtures.appendingPathComponent("persistence",isDirectory:true)
+            let writing=ProcessInfo.processInfo.environment["TEXTTANK_WRITE_PERSISTENCE_FIXTURES"] != nil
+            let scratch=root.appendingPathComponent("persistence-scratch",isDirectory:true)
+            try FileManager.default.createDirectory(at:scratch,withIntermediateDirectories:true)
+            if writing { try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true) }
+            func golden(_ name:String,_ produce:()throws->Data)throws->Data {
+                let url=folder.appendingPathComponent(name)
+                if writing { try produce().write(to:url);print("WROTE \(url.path)") }
+                return try Data(contentsOf:url)
+            }
+            func copy(_ data:Data,_ name:String)throws->URL { let url=scratch.appendingPathComponent(name);try data.write(to:url);return url }
+            let stamp=Date(timeIntervalSinceReferenceDate:784_000_000),idA=UUID(uuidString:"11111111-2222-4333-8444-555555555555")!,idB=UUID(uuidString:"66666666-7777-4888-9999-AAAAAAAAAAAA")!
+            let suiteName="TextTankPersistenceFixtures-"+UUID().uuidString
+            let defaults=try requireValue(UserDefaults(suiteName:suiteName),"fixture: isolated defaults suite");defer { defaults.removePersistentDomain(forName:suiteName) }
+
+            var settings=EditorSettings();settings.tabWidth=8;settings.useTabs=false;settings.wrap=true;settings.appearance="dark";settings.shortcuts=["upper":"u","joinLines":"J"]
+            let settingsBytes=try golden("Settings.json") { let url=scratch.appendingPathComponent("write-Settings.json");try SettingsController(url:url).save(settings);return try Data(contentsOf:url) }
+            let settingsReader=SettingsController(url:try copy(settingsBytes,"Settings.json"))
+            check(try EditorSettings.decode(settingsBytes) == settings && settingsReader.value == settings && settingsReader.loadError == nil,"golden Settings.json decodes to the recorded editor settings")
+
+            var search=SearchOptions();search.query="([a-z]+)=(\\d+)";search.replacement="$1:$2";search.mode = .regularExpression;search.matchCase=true;search.wholeWord=true;search.dotMatchesNewline=true;search.wrap=false
+            let searchBytes=try golden("SearchOptions.json") {
+                // The Find window writes its options when an action reads the controls.
+                let writer=SearchController(defaults:defaults)
+                writer.queryField.stringValue=search.query;writer.replacementField.stringValue=search.replacement;writer.mode.selectItem(at:search.mode.rawValue)
+                writer.caseButton.state = .on;writer.wordButton.state = .on;writer.dotButton.state = .on;writer.wrapButton.state = .off
+                writer.findAll(nil);writer.cancel(nil)
+                return try requireValue(defaults.data(forKey:"TextTank.Search.v1"),"fixture: the Find window saved its options")
+            }
+            defaults.set(searchBytes,forKey:"TextTank.Search.v1")
+            let finder=SearchController(defaults:defaults)
+            check(try JSONDecoder().decode(SearchOptions.self,from:searchBytes) == search && finder.queryField.stringValue == search.query && finder.replacementField.stringValue == search.replacement && finder.mode.indexOfSelectedItem == 2 && finder.caseButton.state == .on && finder.wordButton.state == .on && finder.dotButton.state == .on && finder.wrapButton.state == .off,"golden Find options decode and restore every Find-window control")
+
+            var folderSettings=FolderSearchSettings();folderSettings.folder=URL(fileURLWithPath:"/Users/Shared/TextTank Fixture/project",isDirectory:true);folderSettings.workspaceScope=true;folderSettings.recursive=false;folderSettings.includeHidden=true;folderSettings.extensions="txt, swift";folderSettings.filters="*.swift !*Tests* !+\\build";folderSettings.options=search
+            let folderBytes=try golden("FolderSearchSettings.json") { try folderSettings.save(defaults);return try requireValue(defaults.data(forKey:"TextTank.FolderSearch.v1"),"fixture: folder settings saved") }
+            defaults.set(folderBytes,forKey:"TextTank.FolderSearch.v1")
+            check(try FolderSearchSettings.load(defaults) == folderSettings,"golden Find-in-Folder settings decode to the recorded values")
+
+            var browser=WorkspaceBrowserState();browser.folders=[URL(fileURLWithPath:"/Users/Shared/TextTank Fixture/project",isDirectory:true),URL(fileURLWithPath:"/Users/Shared/TextTank Fixture/notes",isDirectory:true)];browser.recent=[URL(fileURLWithPath:"/Users/Shared/TextTank Fixture/project/caf\u{E9} \u{1F600}.txt")]
+            let browserBytes=try golden("WorkspaceBrowser.json") { let url=scratch.appendingPathComponent("write-WorkspaceBrowser.json");try WorkspaceBrowserStore(url:url).save(browser);return try Data(contentsOf:url) }
+            let browserReader=WorkspaceBrowserStore(url:try copy(browserBytes,"WorkspaceBrowser.json"))
+            check(browserReader.loadError == nil && browserReader.state == browser,"golden workspace browser state decodes to the recorded folders and recent files")
+
+            let runs=[ConfiguredRun(id:idA,name:"Word count",executable:"/usr/bin/wc",arguments:["-w","{file}"]),ConfiguredRun(id:idB,name:"Shell filter",executable:"/bin/zsh",arguments:["-c","sort | uniq"],shellMode:true),ConfiguredRun(id:UUID(uuidString:"BBBBBBBB-CCCC-4DDD-8EEE-FFFFFFFFFFFF")!,name:"Extension",executable:"/usr/local/bin/texttank-extension",arguments:["{selection}"],extensionMode:true)]
+            let runBytes=try golden("RunLibrary.json") { try ConfiguredRun.encodeLibrary(runs) }
+            check(try ConfiguredRun.decodeLibrary(runBytes) == runs,"golden Run library decodes to the recorded commands, including shell and extension modes")
+
+            let sessionText="\u{FEFF}caf\u{E9}\u{1F600}\r\n2 eggs\0"
+            let sessionDocument=SessionDocument(id:idA,originalURL:URL(fileURLWithPath:"/Users/Shared/TextTank Fixture/project/list.txt"),text:sessionText,format:FileFormat(encoding:.utf16LE,bom:true),isDirty:true,selection:SessionSelection(anchorByte:sessionText.utf8.count,caretByte:3),bookmarks:[0,1],language:"python",originalSHA256:String(repeating:"ab",count:32))
+            var session=WorkspaceSession(id:idB,name:"Golden session",documents:[sessionDocument],activeDocumentID:idA);session.savedAt=stamp
+            let sessionBytes=try golden("Session.texttanksession") { let url=scratch.appendingPathComponent("write.texttanksession");try WorkspaceStore.save(session,to:url);return try Data(contentsOf:url) }
+            check(try WorkspaceStore.load(from:copy(sessionBytes,"Session.texttanksession")) == session,"golden session file decodes to the recorded dirty document with bookmarks, selection and format")
+
+            var snapshot=RecoverySnapshot(id:idA,text:sessionText,format:FileFormat(encoding:.windows1252,bom:false),originalURL:"file:///Users/Shared/TextTank%20Fixture/project/list.txt",revision:42);snapshot.savedAt=stamp
+            let snapshotBytes=try golden("RecoverySnapshot.json") { let store=RecoveryStore(directory:scratch.appendingPathComponent("write-recovery",isDirectory:true));try store.save(snapshot);return try Data(contentsOf:store.fileURL(for:idA)) }
+            let recoveryReader=RecoveryStore(directory:scratch.appendingPathComponent("read-recovery",isDirectory:true))
+            try FileManager.default.createDirectory(at:recoveryReader.fileURL(for:idA).deletingLastPathComponent(),withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+            try snapshotBytes.write(to:recoveryReader.fileURL(for:idA));try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:recoveryReader.fileURL(for:idA).path)
+            let scanned=try recoveryReader.scan()
+            if !check(scanned.issues.isEmpty && scanned.snapshots == [snapshot],"golden recovery snapshot is found by a scan and decodes to the recorded text, format and revision") { print("NOTE recovery scan issues \(scanned.issues.map(\.message))") }
+
+            let batch=ReminderBatch(id:idA,destinationID:"calendar-1",destinationTitle:"Groceries",destinationSource:"iCloud",rows:[ReminderRow(id:idB,title:"2 eggs",status:.confirmed,reminderID:"reminder-9",message:nil),ReminderRow(id:idA,title:"\u{BD} cup flour",status:.uncertain,reminderID:nil,message:"Save was interrupted")],createdAt:stamp)
+            let batchBytes=try golden("ReminderBatch.json") { try RemindersConnector.encodedJournal(batch) }
+            let decodedBatch=try JSONDecoder().decode(ReminderBatch.self,from:batchBytes)
+            check(decodedBatch.schemaVersion == 1 && decodedBatch.id == idA && decodedBatch.destinationID == "calendar-1" && decodedBatch.destinationTitle == "Groceries" && decodedBatch.destinationSource == "iCloud" && decodedBatch.createdAt == stamp && decodedBatch.rows.map(\.id) == [idB,idA] && decodedBatch.rows.map(\.title) == ["2 eggs","\u{BD} cup flour"] && decodedBatch.rows.map(\.status) == [.confirmed,.uncertain] && decodedBatch.rows.map(\.reminderID) == ["reminder-9",nil] && decodedBatch.rows.map(\.message) == [nil,"Save was interrupted"],"golden reminder journal decodes to the recorded batch and row states")
+
+            let macro=RecordedMacro(id:idA,name:"Golden macro",steps:[.init(kind:.insertText,text:"caf\u{E9}"),.init(kind:.command,command:"lineEnd"),.init(kind:.findLiteral,text:"x",matchCase:true,backwards:false),.init(kind:.replaceSelection,text:"y"),.init(kind:.search,search:.init(query:"a+",replacement:"b",mode:2,matchCase:true,wholeWord:false,dotMatchesNewline:false,wrap:true,action:"replaceAll"))])
+            let macros=MacroLibrary(macros:[macro])
+            let macroBytes=try golden("MacroLibrary.json") { try macros.encoded() }
+            check(try MacroLibrary.decode(macroBytes) == macros,"golden macro library decodes to the recorded steps of every kind")
+
+            var definition=AutomationDefinition(id:idA,name:"Golden automation",input:.selection,steps:[.init(kind:.removeMatchingLines,find:"^#"),.init(kind:.replaceLiteral,find:"a",replacement:"b",askForFind:true,askForReplacement:false),.init(kind:.trimWhitespace)],output:.newDocument,previewBeforeApply:true,pinToToolbar:true)
+            definition.shortcut="g";definition.destinationID="list-1"
+            let automations=AutomationLibrary(workflows:[definition])
+            let automationBytes=try golden("Automations.json") { try automations.encoded() }
+            check(try AutomationLibrary.decode(automationBytes) == automations,"golden automation library decodes to the recorded definition with every optional field")
+
+            let language=UserDefinedLanguage(name:"Golden language",extensions:"gold",version:"2.1",global:["caseIgnored":"yes","forcePureLC":"0","decimalSeparator":"0"],prefix:["Keywords1":"yes"],keywords:["Keywords1":"alpha beta","Comments":"00// 01 02 03/* 04*/"],styles:[.init(name:"DEFAULT",attributes:["fgColor":"000000","fontStyle":"0"]),.init(name:"KEYWORDS1",attributes:["fgColor":"0000FF","fontStyle":"1"])])
+            let catalogBytes=try golden("LanguageCatalog.json") { try LanguageCatalog(sourceCommit:"golden-fixture",sourceHashes:["LanguageProfiles.json":"00ff"],limitations:["fixture only"],profiles:[try language.profile()]).encoded() }
+            let catalog=try LanguageCatalog.decode(catalogBytes)
+            check(catalog.version == 1 && catalog.sourceCommit == "golden-fixture" && catalog.sourceHashes == ["LanguageProfiles.json":"00ff"] && catalog.limitations == ["fixture only"] && catalog.profiles.count == 1 && catalog.profiles[0].title == "Golden language" && catalog.profiles[0].lexer == "user" && catalog.profiles[0].id.hasPrefix("udl.") && catalog.profiles[0].extensions == ["gold"] && catalog.profiles[0].keywordLists["7"] == "alpha beta" && catalog.profiles[0].properties["userDefine.prefixKeywords1"] == "1" && catalog.profiles[0].properties["userDefine.isCaseIgnored"] == "1" && catalog.profiles[0].styles.map(\.name) == ["DEFAULT","KEYWORDS1"] && catalog.profiles[0].udl == language,"golden language catalog decodes to the recorded user-defined profile")
+            let present=Set(try FileManager.default.contentsOfDirectory(atPath:folder.path))
+            check(present == ["Settings.json","SearchOptions.json","FolderSearchSettings.json","WorkspaceBrowser.json","RunLibrary.json","Session.texttanksession","RecoverySnapshot.json","ReminderBatch.json","MacroLibrary.json","Automations.json","LanguageCatalog.json"],"every committed persistence fixture is decoded by a check")
+            check(!writing,"persistence fixtures were not rewritten by this run")
+        }
         // F251
         section("menu and command wiring",#line) {
             let document=TextDocument();NSDocumentController.shared.addDocument(document);document.makeWindowControllers();document.showWindows()

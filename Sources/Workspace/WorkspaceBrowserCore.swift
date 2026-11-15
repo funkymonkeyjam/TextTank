@@ -2,6 +2,8 @@
 import Foundation
 import Darwin
 
+/// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
+/// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
 struct WorkspaceBrowserState: Codable, Equatable {
     var version=1
     var folders:[URL]=[]

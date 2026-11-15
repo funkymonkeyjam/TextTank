@@ -52,6 +52,8 @@ enum MacroError: LocalizedError {
     case invalid(String)
     var errorDescription: String? { switch self { case .invalid(let message): return message } }
 }
+/// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
+/// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
 struct MacroLibrary: Codable, Equatable {
     var version: Int = 1
     var macros: [RecordedMacro]

@@ -1,0 +1,1 @@
+{"workspaceScope":true,"filters":"*.swift !*Tests* !+\\build","folder":"file:\/\/\/Users\/Shared\/TextTank%20Fixture\/project\/","extensions":"txt, swift","includeHidden":true,"options":{"wholeWord":true,"replacement":"$1:$2","query":"([a-z]+)=(\\d+)","dotMatchesNewline":true,"matchCase":true,"wrap":false,"mode":2},"version":1,"recursive":false}

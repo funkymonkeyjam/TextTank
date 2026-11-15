@@ -35,6 +35,8 @@ struct LanguageProfile: Codable,Equatable,Identifiable {
         Array(Set(keywordLists.values.flatMap { $0.split(whereSeparator:\.isWhitespace).map(String.init) }.filter { !$0.contains("\0") })).sorted()
     }
 }
+/// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
+/// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
 struct LanguageCatalog:Codable,Equatable {
     var version:Int=1
     var sourceCommit:String

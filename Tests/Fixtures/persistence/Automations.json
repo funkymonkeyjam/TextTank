@@ -1,0 +1,32 @@
+{
+  "version" : 1,
+  "workflows" : [
+    {
+      "destinationID" : "list-1",
+      "id" : "11111111-2222-4333-8444-555555555555",
+      "input" : "selection",
+      "name" : "Golden automation",
+      "output" : "newDocument",
+      "pinToToolbar" : true,
+      "previewBeforeApply" : true,
+      "shortcut" : "g",
+      "steps" : [
+        {
+          "find" : "^#",
+          "kind" : "removeMatchingLines"
+        },
+        {
+          "askForFind" : true,
+          "askForReplacement" : false,
+          "find" : "a",
+          "kind" : "replaceLiteral",
+          "replacement" : "b"
+        },
+        {
+          "kind" : "trimWhitespace"
+        }
+      ],
+      "version" : 1
+    }
+  ]
+}

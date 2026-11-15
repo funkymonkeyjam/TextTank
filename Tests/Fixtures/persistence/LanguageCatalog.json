@@ -1,0 +1,126 @@
+{
+  "limitations" : [
+    "fixture only"
+  ],
+  "profiles" : [
+    {
+      "comments" : {
+        "blockClose" : "*/",
+        "blockOpen" : "/*",
+        "line" : "//"
+      },
+      "extensions" : [
+        "gold"
+      ],
+      "id" : "udl.1d20011f4d4db78bc77f4d6d",
+      "keywordLists" : {
+        "0" : "",
+        "1" : "",
+        "10" : "",
+        "11" : "",
+        "12" : "",
+        "13" : "",
+        "14" : "",
+        "2" : "",
+        "3" : "",
+        "4" : "",
+        "5" : "",
+        "6" : "",
+        "7" : "alpha beta",
+        "8" : "",
+        "9" : ""
+      },
+      "lexer" : "user",
+      "properties" : {
+        "fold" : "1",
+        "userDefine.allowFoldOfComments" : "0",
+        "userDefine.comments" : "00// 01 02 03/* 04*/",
+        "userDefine.decimalSeparator" : "0",
+        "userDefine.delimiters" : "",
+        "userDefine.foldCompact" : "0",
+        "userDefine.foldersInCode1Close" : "",
+        "userDefine.foldersInCode1Middle" : "",
+        "userDefine.foldersInCode1Open" : "",
+        "userDefine.forcePureLC" : "0",
+        "userDefine.isCaseIgnored" : "1",
+        "userDefine.nesting.00" : "0",
+        "userDefine.nesting.04" : "0",
+        "userDefine.numberExtras1" : "",
+        "userDefine.numberExtras2" : "",
+        "userDefine.numberPrefix1" : "",
+        "userDefine.numberPrefix2" : "",
+        "userDefine.numberRange" : "",
+        "userDefine.numberSuffix1" : "",
+        "userDefine.numberSuffix2" : "",
+        "userDefine.operators1" : "",
+        "userDefine.prefixKeywords1" : "1",
+        "userDefine.prefixKeywords2" : "0",
+        "userDefine.prefixKeywords3" : "0",
+        "userDefine.prefixKeywords4" : "0",
+        "userDefine.prefixKeywords5" : "0",
+        "userDefine.prefixKeywords6" : "0",
+        "userDefine.prefixKeywords7" : "0",
+        "userDefine.prefixKeywords8" : "0"
+      },
+      "referenceKeywordClasses" : {
+        "Comments" : "00// 01 02 03/* 04*/",
+        "Keywords1" : "alpha beta"
+      },
+      "styles" : [
+        {
+          "fontStyle" : 0,
+          "foreground" : "000000",
+          "id" : 0,
+          "name" : "DEFAULT",
+          "useCustomColor" : true
+        },
+        {
+          "fontStyle" : 1,
+          "foreground" : "0000FF",
+          "id" : 4,
+          "name" : "KEYWORDS1",
+          "useCustomColor" : true
+        }
+      ],
+      "title" : "Golden language",
+      "udl" : {
+        "extensions" : "gold",
+        "global" : {
+          "caseIgnored" : "yes",
+          "decimalSeparator" : "0",
+          "forcePureLC" : "0"
+        },
+        "keywords" : {
+          "Comments" : "00// 01 02 03/* 04*/",
+          "Keywords1" : "alpha beta"
+        },
+        "name" : "Golden language",
+        "prefix" : {
+          "Keywords1" : "yes"
+        },
+        "styles" : [
+          {
+            "attributes" : {
+              "fgColor" : "000000",
+              "fontStyle" : "0"
+            },
+            "name" : "DEFAULT"
+          },
+          {
+            "attributes" : {
+              "fgColor" : "0000FF",
+              "fontStyle" : "1"
+            },
+            "name" : "KEYWORDS1"
+          }
+        ],
+        "version" : "2.1"
+      }
+    }
+  ],
+  "sourceCommit" : "golden-fixture",
+  "sourceHashes" : {
+    "LanguageProfiles.json" : "00ff"
+  },
+  "version" : 1
+}
