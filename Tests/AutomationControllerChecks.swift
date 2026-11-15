@@ -69,13 +69,13 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 nameAccepted=name.stringValue=="Keyboard Recipe" && name.isEditable
                 // A guarded management call must return without creating another modal.
                 // A nested watchdog closes a regression-created alert so the test never hangs.
-                var returned=false, openedNested=false
+                var openedNested=false
                 let guardTimer=Timer(timeInterval:0.1,repeats:false) { _ in
-                    if !returned,NSApp.modalWindow !== modal { openedNested=true;NSApp.abortModal() }
+                    if NSApp.modalWindow !== modal { openedNested=true;NSApp.abortModal() }
                 }
                 RunLoop.main.add(guardTimer,forMode:.modalPanel)
                 controller.manage()
-                returned=true;guardTimer.invalidate()
+                guardTimer.invalidate()
                 reentryBlocked = !openedNested && NSApp.modalWindow === modal
             } else if stage==2,let cancel=buttons.first(where:{$0.title=="Cancel"}),let sample=views.compactMap({$0 as? NSTextView}).first(where:{$0.accessibilityLabel()=="Sample input"}) {
                 stage=3
