@@ -828,6 +828,7 @@
     }
   ],
   "reference_profile": {
+    "snapshot_scope": "Historical source/release research snapshot. Retained artifact_state describes that capture, not current Git transport availability; no new artifact acquisition or runtime observation is claimed.",
     "source_commit": "61246e5741fd7c59352f3feb5ccc7e33e4594d15",
     "source_version": "8.9.8.1",
     "profile": "official source standard portable/installer package recipes",
