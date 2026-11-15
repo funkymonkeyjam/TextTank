@@ -248,38 +248,19 @@ enum WorkspaceStore {
         clock_gettime(CLOCK_REALTIME, &now)
         return Int64(now.tv_sec)
     }
+    private static func mappedFileError(_ error: Error) -> Error {
+        switch error {
+        case PrivateFileError.unsafeLocation: return WorkspaceError.unsafeLocation
+        case PrivateFileError.tooLarge(let limit, let url): return WorkspaceError.fileTooLarge(limit: limit, url: url)
+        default: return error
+        }
+    }
     static func validateLocalURL(_ url: URL) throws {
-        guard url.isFileURL, (url.host ?? "").isEmpty || url.host == "localhost",
-            url.query == nil, url.fragment == nil, url.path.hasPrefix("/"), !url.path.contains("\0"),
-            !url.pathComponents.contains(".."), !url.lastPathComponent.isEmpty
-        else { throw WorkspaceError.unsafeLocation }
+        do { try PrivateFileStore.validateLocalURL(url) } catch { throw mappedFileError(error) }
     }
-    private static func directoryDescriptor(for url: URL) throws -> Int32 {
-        try validateLocalURL(url)
-        let directory = url.deletingLastPathComponent()
-        let fd = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
-        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        return fd
-    }
-    /// The one way a document or session file is opened for reading: its directory and the
-    /// file itself without following a link, without blocking on a FIFO, a regular file only,
-    /// and within the size limit. The caller closes the descriptor.
     private static func openRegularFile(_ url: URL, maximumBytes: Int) throws -> (descriptor: Int32, info: stat) {
-        let dir = try directoryDescriptor(for: url)
-        defer { close(dir) }
-        let descriptor = openat(dir, url.lastPathComponent, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        do {
-            var info = stat()
-            guard fstat(descriptor, &info) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-            guard (info.st_mode & S_IFMT) == S_IFREG else { throw WorkspaceError.unsafeLocation }
-            guard info.st_size >= 0, info.st_size <= maximumBytes else {
-                throw WorkspaceError.fileTooLarge(limit: maximumBytes, url: url)
-            }
-            return (descriptor, info)
-        } catch {
-            close(descriptor)
-            throw error
+        do { return try PrivateFileStore.openRegularFile(url, maximumBytes: maximumBytes) } catch {
+            throw mappedFileError(error)
         }
     }
     /// Metadata only: opens, checks and closes the file, and reads none of it.
@@ -342,56 +323,24 @@ enum WorkspaceStore {
     }
     /// `signature` is set only when the metadata was the same before and after the read.
     private static func readRegularFile(_ url: URL, maximumBytes: Int, signature: inout FileSignature?) throws -> Data {
-        let (descriptor, info) = try openRegularFile(url, maximumBytes: maximumBytes)
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer { try? handle.close() }
-        var data = Data()
-        while true {
-            let chunk =
-                try handle.read(
-                    upToCount: min(64 * 1024, maximumBytes - data.count)
-                        + (maximumBytes - data.count < 64 * 1024 ? 1 : 0)) ?? Data()
-            if chunk.isEmpty { break }
-            data.append(chunk)
-            guard data.count <= maximumBytes else { throw WorkspaceError.fileTooLarge(limit: maximumBytes, url: url) }
-        }
-        var after = stat()
-        if fstat(descriptor, &after) == 0, FileSignature(after) == FileSignature(info), Int(after.st_size) == data.count
-        {
-            signature = FileSignature(after)
-        }
-        return data
+        do {
+            let read = try PrivateFileStore.readSample(url, maximumBytes: maximumBytes)
+            if let after = read.after, FileSignature(after) == FileSignature(read.before),
+                Int(after.st_size) == read.data.count
+            {
+                signature = FileSignature(after)
+            }
+            return read.data
+        } catch { throw mappedFileError(error) }
     }
     static func load(from url: URL) throws -> WorkspaceSession { try WorkspaceSession.decode(readRegularFile(url)) }
     static func save(_ session: WorkspaceSession, to url: URL) throws {
         try writePrivate(try session.encoded(), to: url)
     }
     static func writePrivate(_ data: Data, to url: URL) throws {
-        guard data.count <= maximumSessionBytes else {
-            throw WorkspaceError.fileTooLarge(limit: maximumSessionBytes, url: url)
-        }
-        let dir = try directoryDescriptor(for: url)
-        defer { close(dir) }
-        let destination = url.lastPathComponent
-        var existing = stat()
-        if fstatat(dir, destination, &existing, AT_SYMLINK_NOFOLLOW) == 0 {
-            guard (existing.st_mode & S_IFMT) == S_IFREG else { throw WorkspaceError.unsafeLocation }
-        } else if errno != ENOENT {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        let temporary = ".texttank-session-" + UUID().uuidString
-        let descriptor = openat(dir, temporary, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer {
-            try? handle.close()
-            unlinkat(dir, temporary, 0)
-        }
-        try handle.write(contentsOf: data)
-        try handle.synchronize()
-        try handle.close()
-        guard renameat(dir, temporary, dir, destination) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
+        do {
+            try PrivateFileStore.write(
+                data, to: url, maximumBytes: maximumSessionBytes, temporaryPrefix: ".texttank-session-")
+        } catch { throw mappedFileError(error) }
     }
 }
