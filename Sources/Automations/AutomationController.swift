@@ -194,7 +194,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         alert.informativeText =
             "Choose a saved automation. Its current saved definition will run. Preview is optional; Reminders always asks you to choose a destination and Send."
         alert.addButton(withTitle: "Run")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         let choice = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 400, height: 28), pullsDown: false)
         for workflow in library.workflows {
             let item = NSMenuItem(title: workflow.name, action: nil, keyEquivalent: "")
@@ -280,25 +280,28 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         ] { choose.addButton(withTitle: title).identifier = NSUserInterfaceItemIdentifier(id) }
         let selection = Self.workflowPopup(for: library.workflows)
         choose.accessoryView = selection
-        let response = choose.runModal()
-        if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
+        enum ManageChoice { case edit, cancel, advancedJSON, create, delete }
+        guard let response = choose.choice([ManageChoice.edit, .cancel, .advancedJSON, .create, .delete]),
+            response != .cancel
+        else { return }
+        if response == .advancedJSON {
             busy = false
             manageAdvanced()
             return
         }
-        if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
+        if response == .create {
             busy = false
             createAutomation()
             return
         }
-        if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 4 {
+        if response == .delete {
             if let id = selection.selectedItem?.representedObject as? String {
                 let confirm = TTAlert()
                 confirm.messageText = "Delete this automation?"
                 confirm.informativeText =
                     "Its saved definition and trigger bindings will be removed. Documents and exported reminders are unchanged."
                 confirm.addButton(withTitle: "Delete").hasDestructiveAction = true
-                confirm.addButton(withTitle: "Cancel")
+                confirm.addButton(withTitle: "Cancel", role: .cancel)
                 if confirm.runModal() == .alertFirstButtonReturn {
                     do {
                         var proposed = library
@@ -309,7 +312,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             }
             return
         }
-        guard response == .alertFirstButtonReturn,
+        guard response == .edit,
             let id = selection.selectedItem?.representedObject as? String,
             let workflow = library.workflows.first(where: { $0.id.uuidString == id })
         else { return }
@@ -352,8 +355,11 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             rows: [("Name", name), ("Input", input), ("Output", output), ("Shortcut", shortcut)],
             options: [preview, pinned])
         while true {
-            let response = edit.runModal()
-            if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
+            enum SettingsChoice { case save, cancel, rules }
+            guard let response = edit.choice([SettingsChoice.save, .cancel, .rules]), response != .cancel else {
+                return
+            }
+            if response == .rules {
                 edit.window.makeFirstResponder(nil)
                 workflow.name = name.stringValue
                 if let revised = AutomationStepEditor.edit(workflow, savedWorkflows: library.workflows) {
@@ -363,7 +369,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 }
                 continue
             }
-            guard response == .alertFirstButtonReturn else { return }
+            guard response == .save else { return }
             edit.window.makeFirstResponder(nil)
             var candidate = workflow
             candidate.name = name.stringValue
@@ -384,7 +390,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     "It will pass its text through unchanged until you add rules with Edit Rules & Test."
                 confirm.addButton(withTitle: "Save Without Rules").identifier = NSUserInterfaceItemIdentifier(
                     "automation.settings.saveEmpty")
-                confirm.addButton(withTitle: "Cancel")
+                confirm.addButton(withTitle: "Cancel", role: .cancel)
                 guard confirm.runModal() == .alertFirstButtonReturn else { continue }
             }
             do {
@@ -430,7 +436,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             "This adds new copies of \(presets.map { "‘\($0.name)’" }.joined(separator: " and ")) as they ship with this version. Your saved automations are kept as they are, including any you edited or renamed."
         confirm.addButton(withTitle: "Add Defaults").identifier = NSUserInterfaceItemIdentifier(
             "automation.restore.confirm")
-        confirm.addButton(withTitle: "Cancel")
+        confirm.addButton(withTitle: "Cancel", role: .cancel)
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
         do {
             var proposed = library
@@ -499,10 +505,13 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         accessory.addSubview(text.scroll)
         alert.accessoryView = accessory
         while true {
-            let response = alert.runModal()
-            if response == .alertSecondButtonReturn { return }
+            enum LibraryChoice { case save, cancel, importFile, exportFile, insertExample }
+            guard let response = alert.choice([LibraryChoice.save, .cancel, .importFile, .exportFile, .insertExample]),
+                response != .cancel
+            else { return }
+            if response == .cancel { return }
             do {
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
+                if response == .importFile {
                     let panel = NSOpenPanel()
                     panel.allowsMultipleSelection = false
                     panel.canChooseDirectories = false
@@ -514,7 +523,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     continue
                 }
                 var proposed = try AutomationLibrary.decode(Data(text.editor.string.utf8))
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
+                if response == .exportFile {
                     let panel = NSSavePanel()
                     panel.nameFieldStringValue = "TextTank-Automations.json"
                     if panel.runModal() == .OK, let url = panel.url {
@@ -522,7 +531,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     }
                     continue
                 }
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 4 {
+                if response == .insertExample {
                     // The example shows the shape of an automation. It joins the JSON in the editor
                     // only; nothing is saved until Save.
                     var example = AutomationDefinition.example
@@ -630,7 +639,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 alert.messageText = "\(workflow.name) — Step \(index + 1)"
                 alert.informativeText = label
                 alert.addButton(withTitle: "Continue")
-                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Cancel", role: .cancel)
                 let field = NSTextField(string: initial)
                 field.frame = NSRect(x: 0, y: 0, width: 500, height: 28)
                 alert.accessoryView = field
@@ -656,7 +665,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     alert.informativeText =
                         "All selections apply together after every preview is accepted. Cancel preserves the entire editor."
                     alert.addButton(withTitle: "Accept")
-                    alert.addButton(withTitle: "Cancel")
+                    alert.addButton(withTitle: "Cancel", role: .cancel)
                     let preview = makeTextView(height: 250)
                     preview.editor.string = output
                     alert.accessoryView = preview.scroll
@@ -705,7 +714,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             alert.informativeText =
                 "Input: \(workflow.input.rawValue). \(destination). Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
             alert.addButton(withTitle: "Apply")
-            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Cancel", role: .cancel)
             let preview = makeTextView(height: 350)
             preview.editor.string = output
             alert.accessoryView = preview.scroll
@@ -860,7 +869,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 alert.informativeText =
                     "Choose the Reminders list to add these items to. Nothing is sent until you choose Send. Each item's result is recorded, and an item whose result is uncertain is never sent again automatically."
                 alert.addButton(withTitle: "Send \(rows.count) Items")
-                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Cancel", role: .cancel)
                 let choice = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 650, height: 28), pullsDown: false)
                 // A list is named as Reminders names it. Only two lists with the same name in the same
                 // account need telling apart, and then by position rather than by an identifier.
@@ -906,7 +915,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     unreadable.informativeText =
                         "A previous export of these items may be recorded in a file that cannot be read, so TextTank cannot tell whether they were already sent. Check Reminders before sending. The files are left unchanged in the ReminderExports folder:\n\n"
                         + Self.issueSummary(issues)
-                    unreadable.addButton(withTitle: "Cancel")
+                    unreadable.addButton(withTitle: "Cancel", role: .cancel)
                     unreadable.addButton(withTitle: "Send Anyway")
                     guard unreadable.runModal() == .alertSecondButtonReturn else { return }
                 case .match(let existing):
@@ -915,14 +924,17 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     repeated.informativeText =
                         "An export with the same rows and destination already exists. Review its confirmed, failed and uncertain results to avoid duplicates. Send Another Copy intentionally creates another set."
                     repeated.addButton(withTitle: "Review Existing Export")
-                    repeated.addButton(withTitle: "Cancel")
+                    repeated.addButton(withTitle: "Cancel", role: .cancel)
                     repeated.addButton(withTitle: "Send Another Copy")
-                    let response = repeated.runModal()
-                    if response == .alertFirstButtonReturn {
+                    enum RepeatedChoice { case review, cancel, sendCopy }
+                    guard let response = repeated.choice([RepeatedChoice.review, .cancel, .sendCopy]),
+                        response != .cancel
+                    else { return }
+                    if response == .review {
                         self.showReminderResults(existing)
                         return
                     }
-                    guard response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 else {
+                    guard response == .sendCopy else {
                         return
                     }
                 }
@@ -1064,7 +1076,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     "Choose a recorded batch to inspect its durable per-item results. Reading this history does not request system access."
                     + unreadable
                 alert.addButton(withTitle: "Review")
-                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Cancel", role: .cancel)
                 alert.addButton(withTitle: "Request Access and Resume Unsent")
                 let clearable = Self.clearableBatches(batches)
                 if !clearable.isEmpty { alert.addButton(withTitle: "Clear Confirmed History…") }
@@ -1081,8 +1093,14 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     choice.lastItem?.representedObject = batch.id.uuidString
                 }
                 alert.accessoryView = choice
-                let response = alert.runModal()
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
+                enum HistoryChoice { case review, cancel, resume, clear }
+                guard
+                    let response = alert.choice(
+                        clearable.isEmpty
+                            ? [HistoryChoice.review, .cancel, .resume]
+                            : [HistoryChoice.review, .cancel, .resume, .clear]), response != .cancel
+                else { return }
+                if response == .clear {
                     let confirm = TTAlert()
                     confirm.messageText =
                         clearable.count == 1
@@ -1093,7 +1111,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                         + (batches.count > clearable.count
                             ? "\(batches.count - clearable.count) exports with unsent, failed or uncertain items are kept."
                             : "No export has unsent, failed or uncertain items.")
-                    confirm.addButton(withTitle: "Cancel")
+                    confirm.addButton(withTitle: "Cancel", role: .cancel)
                     confirm.addButton(withTitle: "Remove Records").hasDestructiveAction = true
                     guard confirm.runModal() == .alertSecondButtonReturn else { return }
                     let removed = try connector.deleteConfirmedBatches(ids: clearable.map(\.id))
@@ -1108,10 +1126,10 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     _ = report.runModal()
                     return
                 }
-                guard response != .alertSecondButtonReturn, let id = choice.selectedItem?.representedObject as? String,
+                guard response != .cancel, let id = choice.selectedItem?.representedObject as? String,
                     let batch = batches.first(where: { $0.id.uuidString == id })
                 else { return }
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
+                if response == .resume {
                     // The explicit retry choice authorizes a new access request, never a new batch ID.
                     try await connector.requestAccess()
                     let progress = self.exportProgressPanel(total: batch.rows.count)
@@ -1164,7 +1182,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             alert.messageText = "TextTank cannot use Reminders"
             alert.informativeText = error.localizedDescription
             alert.addButton(withTitle: "Open Privacy Settings")
-            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Cancel", role: .cancel)
             if alert.runModal() == .alertFirstButtonReturn,
                 let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders")
             {
@@ -1172,7 +1190,6 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             }
             return
         }
-        let alert = NSAlert(error: error)
-        alert.runModal()
+        TTAlert.present(error)
     }
 }

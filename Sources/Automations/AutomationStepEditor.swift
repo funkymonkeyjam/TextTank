@@ -365,14 +365,15 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
                 + templates.problems.joined(separator: "; ")
         }
         picker.addButton(withTitle: "Load Selected").identifier = NSUserInterfaceItemIdentifier("rules.load.selected")
-        picker.addButton(withTitle: "Cancel")
+        picker.addButton(withTitle: "Cancel", role: .cancel)
         picker.addButton(withTitle: "Import File…")
         let choices = Self.ruleSetPopup(saved: saved, templates: templates.sets)
         picker.accessoryView = choices
-        let response = picker.runModal()
+        enum LoadChoice { case load, cancel, importFile }
+        guard let response = picker.choice([LoadChoice.load, .cancel, .importFile]), response != .cancel else { return }
         do {
             let selected: AutomationRuleSet
-            if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
+            if response == .importFile {
                 let panel = NSOpenPanel()
                 panel.title = "Import Processing Rules"
                 panel.canChooseDirectories = false
@@ -384,7 +385,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
                 guard let chosen = imported.fromLibrary ? Self.chooseFromLibrary(imported.sets) : imported.sets.first
                 else { return }
                 selected = chosen
-            } else if response == .alertFirstButtonReturn,
+            } else if response == .load,
                 let chosen = Self.selectedRuleSet(in: choices, from: saved + templates.sets)
             {
                 selected = chosen
@@ -398,12 +399,12 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
                 "Load \(selected.steps.count) processing steps from ‘\(selected.name)’. Canceling the builder will still preserve the saved automation."
             confirm.addButton(withTitle: "Replace Rules").identifier = NSUserInterfaceItemIdentifier(
                 "rules.load.replace")
-            confirm.addButton(withTitle: "Cancel")
+            confirm.addButton(withTitle: "Cancel", role: .cancel)
             if confirm.runModal() == .alertFirstButtonReturn {
                 list.replaceAll(with: selected.steps)
                 rulesChanged()
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     /// The chosen file is a whole automation library, not a rule file. Its automations are offered
     /// by name; only the chosen one's rules are taken.
@@ -413,7 +414,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         picker.informativeText =
             "It holds \(sets.count == 1 ? "one automation" : "\(sets.count) automations") rather than a single rule set. Choose the automation whose rules to copy. Its name, input, output, shortcut and destination are not imported."
         picker.addButton(withTitle: "Use Its Rules")
-        picker.addButton(withTitle: "Cancel")
+        picker.addButton(withTitle: "Cancel", role: .cancel)
         let choices = ruleSetPopup(saved: sets, templates: [], savedPrefix: "Automation: ")
         picker.accessoryView = choices
         guard picker.runModal() == .alertFirstButtonReturn else { return nil }
@@ -429,7 +430,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
             panel.allowedContentTypes = [.json]
             guard panel.runModal() == .OK, let url = panel.url else { return }
             try data.write(to: url, options: .atomic)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func testRules() {
         window.makeFirstResponder(nil)
@@ -477,7 +478,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
             accepted = true
             cancelPreview()
             NSApp.stopModal()
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func cancel() {
         cancelPreview()
@@ -511,7 +512,7 @@ private final class RuleFields: NSObject {
     func run() -> AutomationDefinition.Step? {
         alert.messageText = "Configure Rule"
         alert.addButton(withTitle: "Save Rule").identifier = NSUserInterfaceItemIdentifier("rule.save")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         // One menu item for every kind, in `allCases` order, so the selected index is the kind.
         for value in AutomationDefinition.Step.Kind.allCases {
             kind.menu?.addItem(NSMenuItem(title: value.label, action: nil, keyEquivalent: ""))
@@ -552,7 +553,7 @@ private final class RuleFields: NSObject {
             do {
                 try step.validate()
                 return step
-            } catch { NSAlert(error: error).runModal() }
+            } catch { TTAlert.present(error) }
         }
         return nil
     }

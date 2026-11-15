@@ -175,7 +175,7 @@ final class SettingsController: NSObject {
         stack.frame = NSRect(x: 0, y: 0, width: 420, height: 250)
         alert.accessoryView = stack
         alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         // The ellipsis says a confirmation follows (DS-22); the confirmation holds the destructive button.
         alert.addButton(withTitle: "Reset Defaults…")
         let result = alert.runModal()
@@ -187,7 +187,7 @@ final class SettingsController: NSObject {
                 confirm.messageText = "Reset all editor settings to their defaults?"
                 confirm.informativeText =
                     "Tab width, indentation, wrapping, appearance and every assigned shortcut return to their defaults. Documents are not changed."
-                confirm.addButton(withTitle: "Cancel")
+                confirm.addButton(withTitle: "Cancel", role: .cancel)
                 confirm.addButton(withTitle: "Reset Defaults").hasDestructiveAction = true
                 guard confirm.runModal() == .alertSecondButtonReturn else { return }
                 updated = EditorSettings()
@@ -208,7 +208,7 @@ final class SettingsController: NSObject {
                 confirm.messageText = "Replace unreadable settings?"
                 confirm.informativeText =
                     "The saved settings file could not be read, so this window started from defaults. Saving now replaces that file. A backup copy of the original will be kept next to it.\n\n\(url.path)"
-                confirm.addButton(withTitle: "Cancel")
+                confirm.addButton(withTitle: "Cancel", role: .cancel)
                 confirm.addButton(withTitle: "Replace and Keep Backup")
                 guard confirm.runModal() == .alertSecondButtonReturn else { return }
                 replacing = true
@@ -219,6 +219,6 @@ final class SettingsController: NSObject {
                 done.informativeText = "The previous settings file was kept as:\n\(backup.path)"
                 _ = done.runModal()
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
 }

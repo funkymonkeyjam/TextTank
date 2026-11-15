@@ -114,14 +114,14 @@ final class RunController: NSObject, NSMenuItemValidation {
         "Each entry is one saved command: name, executable (an absolute path), arguments, shellMode and extensionMode. Edit an entry to change it, or remove an entry to delete it. Keep id to keep a command's identity. Saving never runs a command."
     @objc private func manage(_ sender: Any?) {
         if let error = loadError {
-            NSAlert(error: error).runModal()
+            TTAlert.present(error)
             return
         }
         let alert = TTAlert()
         alert.messageText = "Manage Run Commands"
         alert.informativeText = Self.manageHelp
         alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 650, height: 400))
         scroll.hasVerticalScroller = true
         let text = NSTextView(frame: scroll.bounds)
@@ -139,7 +139,7 @@ final class RunController: NSObject, NSMenuItemValidation {
         text.setAccessibilityLabel("Saved Run commands as JSON")
         scroll.documentView = text
         do { text.string = try libraryText() } catch {
-            NSAlert(error: error).runModal()
+            TTAlert.present(error)
             return
         }
         alert.accessoryView = scroll
@@ -148,7 +148,7 @@ final class RunController: NSObject, NSMenuItemValidation {
             do {
                 try replaceLibrary(json: Data(text.string.utf8))
                 return
-            } catch { NSAlert(error: error).runModal() }
+            } catch { TTAlert.present(error) }
         }
     }
     @objc private func addSample(_ sender: Any?) {
@@ -157,13 +157,13 @@ final class RunController: NSObject, NSMenuItemValidation {
             if !commands.contains(where: { $0.extensionMode && $0.executable == "/usr/bin/tr" }) {
                 try persist(commands + [.uppercaseSample])
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     static let configureHelp =
         "Runs only when explicitly selected. Arguments stay separate; use {file}, {directory}, or {selection} as a complete argument. A selection that begins with - is read by the tool as an option, so put -- or the tool's own pattern flag (for example -e) before {selection} where the tool supports it. The command starts in the saved document's folder, or in your home folder. Shell mode deliberately executes the argument as shell code."
     @objc private func configure(_ sender: Any?) {
         if let error = loadError {
-            NSAlert(error: error).runModal()
+            TTAlert.present(error)
             return
         }
         let alert = TTAlert()
@@ -185,7 +185,7 @@ final class RunController: NSObject, NSMenuItemValidation {
         stack.frame = NSRect(x: 0, y: 0, width: 550, height: 250)
         alert.accessoryView = stack
         alert.addButton(withTitle: "Save Command")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
             let shellMode = shell.state == .on
@@ -196,7 +196,7 @@ final class RunController: NSObject, NSMenuItemValidation {
                 name: name.stringValue, executable: shellMode ? "/bin/zsh" : path.stringValue, arguments: argv,
                 shellMode: shellMode, extensionMode: ext.state == .on)
             try persist(commands + [command])
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func cancel(_ sender: Any?) { execution?.cancel() }
     /// True while a configured command is running.
@@ -224,7 +224,7 @@ final class RunController: NSObject, NSMenuItemValidation {
         guard let id = sender.representedObject as? String,
             let configured = commands.first(where: { $0.id.uuidString == id })
         else { return }
-        do { try start(configured) } catch { NSAlert(error: error).runModal() }
+        do { try start(configured) } catch { TTAlert.present(error) }
     }
     /// Starts one configured command. Throws, starting nothing, while another is running, when the
     /// configuration cannot be resolved, or when an extension has no writable single selection.
@@ -273,7 +273,7 @@ final class RunController: NSObject, NSMenuItemValidation {
         resultWindow?.close()
         resultWindow = nil
         switch outcome {
-        case .failure(let error): NSAlert(error: error).runModal()
+        case .failure(let error): TTAlert.present(error)
         case .success(let result):
             let decoded = String(decoding: result.stdout, as: UTF8.self)
             let output: String? = decoded.utf8.elementsEqual(result.stdout) ? decoded : nil
@@ -323,7 +323,7 @@ final class RunController: NSObject, NSMenuItemValidation {
         }
     }
     @objc func apply(_ sender: NSButton) {
-        do { try applyResult(sender) } catch { NSAlert(error: error).runModal() }
+        do { try applyResult(sender) } catch { TTAlert.present(error) }
     }
     /// Applies the pending extension result. A result that can no longer be applied is dropped and
     /// the reason is thrown; a click on the button of a replaced preview does nothing.

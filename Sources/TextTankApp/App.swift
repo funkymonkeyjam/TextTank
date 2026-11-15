@@ -523,7 +523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         choice.selectItem(at: windows.firstIndex(where: { $0.isVisible }) ?? 0)
         alert.accessoryView = choice
         alert.addButton(withTitle: "Switch")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         guard alert.runModal() == .alertFirstButtonReturn, let index = choice.selectedItem?.tag,
             windows.indices.contains(index), DocumentTabWindow.documents.contains(where: { $0 === windows[index] })
         else { return }
@@ -591,7 +591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 confirm.messageText = "Discard \(snapshots.count) recovery snapshots?"
                 confirm.informativeText =
                     "The unsaved text in these snapshots will be permanently deleted. Original files are not changed. This cannot be undone."
-                confirm.addButton(withTitle: "Cancel")
+                confirm.addButton(withTitle: "Cancel", role: .cancel)
                 confirm.addButton(withTitle: "Discard")
                 confirm.buttons.last?.hasDestructiveAction = true
                 guard confirm.runModal() == .alertSecondButtonReturn else { return }
@@ -609,7 +609,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             default: return
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     /// The About panel's options. The name, version, build and copyright come from the bundle,
     /// so they cannot disagree with Finder's Get Info; only the preview notice is added to the
@@ -889,7 +889,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.messageText = "Discard unsaved changes and reload?"
             alert.informativeText =
                 "The disk bytes will be interpreted as \(raw). Use Convert to change the save encoding while keeping your text."
-            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Cancel", role: .cancel)
             alert.addButton(withTitle: "Discard and Reload").hasDestructiveAction = true
             guard alert.runModal() == .alertSecondButtonReturn else { return }
         }
@@ -1266,7 +1266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.messageText = message
         alert.informativeText = detail
         alert.addButton(withTitle: "Print")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         return alert.runModal() == .alertFirstButtonReturn
     }
     /// The warning shown before printing a large document, or nil when none is needed. Reads only
@@ -1409,7 +1409,7 @@ final class ExplicitEncodingOpener: NSObject {
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
             return true
         } catch {
-            NSAlert(error: error).runModal()
+            TTAlert.present(error)
             return false
         }
     }
@@ -2323,7 +2323,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         input.setAccessibilityLabel("Line number")
         alert.accessoryView = input
         alert.addButton(withTitle: "Go")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         alert.window.initialFirstResponder = input
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         // The engine's own line model decides which lines exist; a folded target is revealed.
@@ -2398,7 +2398,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             NSSound.beep()
             return
         }
-        do { try perform(command: id) } catch { NSAlert(error: error).runModal() }
+        do { try perform(command: id) } catch { TTAlert.present(error) }
     }
     /// Runs one editor command on the active editor. A command that edits text is refused with the
     /// read-only reason before anything else happens, so a macro recording is left as it was.
@@ -2580,7 +2580,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             try activeEditor.requireWritable()
             app.macros.invalidateRecording(reason: "Language-specific comments are not yet recorded.")
             try command.apply(to: activeEditor, profile: profile)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc func columnInsert(_ sender: Any?) {
         let editor = activeEditor
@@ -2605,7 +2605,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         stack.frame = NSRect(x: 0, y: 0, width: 400, height: 180)
         alert.accessoryView = stack
         alert.addButton(withTitle: "Insert").identifier = NSUserInterfaceItemIdentifier("column.insert")
-        alert.addButton(withTitle: "Cancel").identifier = NSUserInterfaceItemIdentifier("column.cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel).identifier = NSUserInterfaceItemIdentifier("column.cancel")
         for (control, name) in [(text as NSView, "text"), (number, "number"), (start, "start"), (step, "step")] {
             control.identifier = NSUserInterfaceItemIdentifier("column." + name)
         }

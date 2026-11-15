@@ -164,7 +164,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
             "\(loadError.localizedDescription)\n\n\(storage.path)\n\nThe built-in languages are in use and the file has not been changed. To edit languages, move the file aside: it is renamed next to the original, not deleted, and your imported languages and style changes stay in it."
         alert.addButton(withTitle: "Move Damaged File Aside and Use Defaults")
         alert.addButton(withTitle: "Reveal in Finder")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             try quarantineDamagedStorage()
@@ -200,7 +200,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
                 let id = try first.profile().id
                 if applyToDocument(identifier: id, through: editor) { setLanguage(id) }
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func editUDL() {
         do {
@@ -215,7 +215,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
             alert.informativeText =
                 "Edit the UDL 2.x XML settings, keyword groups, comments, folding, delimiters and styles. Save validates the entire definition before changing it. Renaming here preserves the saved language identifier."
             alert.addButton(withTitle: "Save")
-            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Cancel", role: .cancel)
             let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 700, height: 420))
             scroll.hasVerticalScroller = true
             let text = NSTextView(frame: scroll.bounds)
@@ -239,9 +239,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
                     try persist(proposed)
                     reapply([id])
                     return
-                } catch { NSAlert(error: error).runModal() }
+                } catch { TTAlert.present(error) }
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func exportUDL() {
         do {
@@ -252,7 +252,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
             panel.nameFieldStringValue = "TextTank-UserLanguage.xml"
             guard panel.runModal() == .OK, let url = panel.url else { return }
             try definition.encodedXML().write(to: url, options: .atomic)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     func detect(filename: String, text: String) -> String? { catalog?.detect(filename: filename, text: text) }
     /// Applies a profile to a whole document. The lexer, keyword lists and properties belong to
@@ -410,7 +410,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
             choose.messageText = "Syntax Style Settings"
             choose.informativeText = "Choose the syntax category to customize for this language."
             choose.addButton(withTitle: "Edit")
-            choose.addButton(withTitle: "Cancel")
+            choose.addButton(withTitle: "Cancel", role: .cancel)
             let selector = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 440, height: 28), pullsDown: false)
             Self.populateStylePicker(selector, styles: proposed.profiles[profileIndex].styles)
             choose.accessoryView = selector
@@ -425,7 +425,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
                     ? "the adaptive native syntax palette" : "the editor's text color, which follows the appearance")
                 + ". Changes affect this language only."
             edit.addButton(withTitle: "Save")
-            edit.addButton(withTitle: "Cancel")
+            edit.addButton(withTitle: "Cancel", role: .cancel)
             let font = NSTextField(string: style.fontName ?? ""),
                 size = NSTextField(string: style.fontSize.map { String($0) } ?? "")
             font.placeholderString = "Editor font"
@@ -465,9 +465,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
                     try persist(proposed)
                     reapply([proposed.profiles[profileIndex].id])
                     return
-                } catch { NSAlert(error: error).runModal() }
+                } catch { TTAlert.present(error) }
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func selectLanguage(_ item: NSMenuItem) {
         guard let id = item.representedObject as? String, let editor = editorProvider(),
@@ -501,7 +501,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
                 self?.onUnrecordableCommand?("Function-list navigation is not recorded in macros yet.")
             }
             navigator?.showWindow(nil)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc func configure() {
         do {
@@ -524,10 +524,13 @@ final class LanguageController: NSObject, NSMenuDelegate {
             text.string = String(data: try catalog.encoded(), encoding: .utf8)!
             alert.accessoryView = scroll
             while true {
-                let choice = alert.runModal()
-                if choice == .alertSecondButtonReturn { return }
+                enum LibraryChoice { case save, cancel, importFile, exportFile }
+                guard let choice = alert.choice([LibraryChoice.save, .cancel, .importFile, .exportFile]),
+                    choice != .cancel
+                else { return }
+                if choice == .cancel { return }
                 do {
-                    if choice.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
+                    if choice == .importFile {
                         let panel = NSOpenPanel()
                         panel.canChooseDirectories = false
                         panel.allowsMultipleSelection = false
@@ -538,7 +541,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
                         continue
                     }
                     let proposed = try LanguageCatalog.decode(Data(text.string.utf8))
-                    if choice.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
+                    if choice == .exportFile {
                         let panel = NSSavePanel()
                         panel.nameFieldStringValue = "TextTank-LanguageProfiles.json"
                         if panel.runModal() == .OK, let url = panel.url {
@@ -550,9 +553,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
                     // The whole catalog may have changed.
                     reapply(nil)
                     return
-                } catch { NSAlert(error: error).runModal() }
+                } catch { TTAlert.present(error) }
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     /// Saves what `proposed` changes in the bundled catalog. Never shows UI and never moves files:
     /// while the stored file is unreadable it throws and leaves that file byte for byte as it is.

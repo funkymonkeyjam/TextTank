@@ -89,7 +89,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         if (error as NSError).recoveryAttempter != nil {
             NSApp.presentError(error)
         } else {
-            NSAlert(error: error).runModal()
+            TTAlert.present(error)
         }
     }
     func menu() -> NSMenu {
@@ -145,15 +145,14 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             return
         }
         guard let document = currentDocument() else {
-            NSAlert(error: WorkspaceError.invalid("Choose a saved document window before enabling monitoring."))
-                .runModal()
+            TTAlert.present(WorkspaceError.invalid("Choose a saved document window before enabling monitoring."))
             return
         }
         do {
             try monitor.start(document)
             sender.state = .on
             show(nil)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func reloadMonitored(_ sender: Any?) {
         guard let document = monitor.document else {
@@ -174,9 +173,9 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         alert.informativeText =
             "Replace the clean editor contents with the current disk bytes. This clears its Undo history."
         alert.addButton(withTitle: "Reload")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do { try monitor.reload(expectedRevision: revision) } catch { NSAlert(error: error).runModal() }
+        do { try monitor.reload(expectedRevision: revision) } catch { TTAlert.present(error) }
     }
     @objc func show(_ sender: Any?) {
         if window == nil { buildWindow() }
@@ -284,7 +283,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             try store.addFolder(url)
             mode.selectedSegment = 1
             show(nil)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc func removeFolder(_ sender: Any?) {
         guard mode.selectedSegment == 1, let node = outline.item(atRow: outline.selectedRow) as? WorkspaceBrowserNode,
@@ -296,7 +295,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         do {
             try store.removeFolder(node.entry.url)
             refresh(nil)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func openRecent(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }

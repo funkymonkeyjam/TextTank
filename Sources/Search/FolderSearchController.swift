@@ -59,7 +59,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         replace.identifier = NSUserInterfaceItemIdentifier("folder.replace.confirm")
         // Files on disk change and editor Undo does not reach them, so Return is Cancel here.
         replace.hasDestructiveAction = true
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         return alert.runModal() == .alertFirstButtonReturn
     }
     /// Passed to FolderReplacement as `beforeCommit`; nil in the app. Runs on the worker.

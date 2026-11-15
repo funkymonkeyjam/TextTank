@@ -33,7 +33,7 @@ final class WorkspaceController: NSObject {
             "Save open documents, including unsaved text, encoding, selection and bookmarks. This file contains the document contents."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { try WorkspaceStore.save(capture(name: url.deletingPathExtension().lastPathComponent), to: url) } catch {
-            NSAlert(error: error).runModal()
+            TTAlert.present(error)
         }
     }
     @objc func openSession(_ sender: Any?) {
@@ -69,7 +69,7 @@ final class WorkspaceController: NSObject {
                 alert.informativeText = Self.restorePromptText(session, inspections)
                 alert.addButton(withTitle: "Restore Snapshots")
                 if inspections == nil { alert.addButton(withTitle: "Check Originals…") }
-                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Cancel", role: .cancel)
                 let response = alert.runModal()
                 if response == .alertFirstButtonReturn { break }
                 guard inspections == nil, response == .alertSecondButtonReturn else { return }
@@ -77,7 +77,7 @@ final class WorkspaceController: NSObject {
                 inspections = checked
             }
             _ = try restore(session)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     /// Inspects the session's originals on a utility queue behind a Cancel prompt. Returns nil
     /// when cancelled; the work stops at the next file or 64 KiB step and its result is dropped.
@@ -88,7 +88,7 @@ final class WorkspaceController: NSObject {
         progress.messageText = "Checking Original Files…"
         progress.informativeText =
             "Each original is compared with the fingerprint saved in the session. Nothing is changed."
-        progress.addButton(withTitle: "Cancel")
+        progress.addButton(withTitle: "Cancel", role: .cancel)
         DispatchQueue.global(qos: .utility).async {
             let inspections = session.inspectReferencedFiles(isCancelled: { cancellation.isCancelled })
             // Delivered inside the modal session below; main-queue work runs in modal mode.

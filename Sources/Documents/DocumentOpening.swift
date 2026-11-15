@@ -66,7 +66,7 @@ enum EncodingChoice {
         let choice = popUp(after: failure)
         alert.accessoryView = choice
         alert.addButton(withTitle: "Open")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         return selection(of: choice)
     }

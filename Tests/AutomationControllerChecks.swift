@@ -886,6 +886,51 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         }
     }
     static func horizontalDialogChecks() throws {
+        let ownership = TTAlert()
+        let alertObject: AnyObject = ownership
+        check(!(alertObject is NSAlert), "F304 the horizontal dialog owns its panel instead of subclassing NSAlert")
+        ownership.addButton(withTitle: "OK")
+        let acknowledgmentRoles = ownership.keyRoles()
+        check(
+            acknowledgmentRoles.returnIndex == 0 && acknowledgmentRoles.escapeIndex == 0,
+            "F16 a single acknowledgment has both Return and Escape as a way out")
+        let localizedCancel = TTAlert()
+        localizedCancel.addButton(withTitle: "Proceed")
+        localizedCancel.addButton(withTitle: "Annuler", role: .cancel)
+        check(localizedCancel.keyRoles().escapeIndex == 1, "F16 an explicit cancel role is independent of its title")
+        check(
+            TTAlert.Result(.abort) == .dismissed && TTAlert.Result(.stop) == .dismissed,
+            "F16 unexpected modal termination is a typed dismissal, never a Save choice")
+        let recoveryError = NSError(
+            domain: "Fixture.Error", code: 7,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Fixture failure",
+                NSLocalizedRecoverySuggestionErrorKey: "Try the fixture again.",
+                NSLocalizedRecoveryOptionsErrorKey: ["Retry Fixture", "Cancel Fixture"],
+                NSRecoveryAttempterErrorKey: NSObject()
+            ])
+        let nativeError = TTAlert.errorAlert(recoveryError)
+        check(
+            nativeError.messageText == "Fixture failure"
+                && nativeError.informativeText.contains("Try the fixture again.")
+                && nativeError.buttons.map(\.title) == ["Retry Fixture", "Cancel Fixture"],
+            "F325 shared error presentation preserves native recovery suggestion and choices")
+        let sheetParent = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 300), styleMask: [.titled],
+            backing: .buffered, defer: false)
+        sheetParent.isReleasedWhenClosed = false
+        defer { sheetParent.close() }
+        let sheet = TTAlert()
+        sheet.messageText = "Fixture recovery notice"
+        sheet.addButton(withTitle: "Close")
+        var sheetResponse: NSApplication.ModalResponse?
+        sheet.beginSheetModal(for: sheetParent) { sheetResponse = $0 }
+        check(sheet.window.sheetParent === sheetParent, "F304 the owned dialog presents as a native sheet")
+        sheet.buttons[0].performClick(nil)
+        spinUntil("the fixture sheet ends after its button") { sheetResponse != nil }
+        check(
+            sheetResponse == .alertFirstButtonReturn && sheetParent.attachedSheet == nil,
+            "F304 a native sheet ends with its original button response")
         let alert = TTAlert()
         alert.messageText = "Horizontal action regression"
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 28))

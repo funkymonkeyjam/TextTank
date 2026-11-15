@@ -39,7 +39,7 @@ final class UtilityController: NSObject {
     }
     @objc private func run(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let utility = TextUtility(rawValue: raw) else { return }
-        do { try apply(utility) } catch { NSAlert(error: error).runModal() }
+        do { try apply(utility) } catch { TTAlert.present(error) }
     }
     /// The editor a utility may change, or the first precondition that fails, in a fixed order
     /// that names the cause the person can least see first: no document, read-only (the shared
@@ -69,7 +69,7 @@ final class UtilityController: NSObject {
     @objc private func hexOptions(_ sender: Any?) {
         let editor: TTEditor
         do { editor = try editableEditor(requireNonEmpty: true) } catch {
-            NSAlert(error: error).runModal()
+            TTAlert.present(error)
             return
         }
         let revision = editor.revision
@@ -92,7 +92,7 @@ final class UtilityController: NSObject {
         stack.frame = NSRect(x: 0, y: 0, width: 340, height: 160)
         alert.accessoryView = stack
         alert.addButton(withTitle: "Apply")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
             _ = try Self.recheck(editor, captured: editor, revision: revision, selection: selection)
@@ -104,7 +104,7 @@ final class UtilityController: NSObject {
             editor.beginUndoGroup()
             editor.replaceSelection(output)
             editor.endUndoGroup()
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     static let numberConversionNote =
         "Convert an unsigned 32-bit number. Your document changes only if you then choose Insert into Editor."
@@ -133,7 +133,7 @@ final class UtilityController: NSObject {
         stack.frame = NSRect(x: 0, y: 0, width: 350, height: 160)
         alert.accessoryView = stack
         alert.addButton(withTitle: "Convert")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
             let bases = [2, 8, 10, 16]
@@ -143,7 +143,7 @@ final class UtilityController: NSObject {
             result.messageText = "Converted Number"
             result.informativeText = output
             result.addButton(withTitle: "Copy")
-            result.addButton(withTitle: "Cancel")
+            result.addButton(withTitle: "Cancel", role: .cancel)
             result.addButton(withTitle: "Insert into Editor")
             let action = result.runModal()
             if action == .alertFirstButtonReturn {
@@ -158,7 +158,7 @@ final class UtilityController: NSObject {
                 editor.replaceSelection(output)
                 editor.endUndoGroup()
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     /// Snapshot only: Scintilla remains authoritative. An ordinary nonempty
     /// selection is exported; no selection exports the complete document.
@@ -192,7 +192,7 @@ final class UtilityController: NSObject {
                 guard panel.runModal() == .OK, let url = panel.url else { return }
                 try data.write(to: url, options: .atomic)
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     func apply(_ utility: TextUtility) throws {
         precondition(Thread.isMainThread)

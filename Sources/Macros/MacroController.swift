@@ -227,7 +227,8 @@ final class MacroController: NSObject, NSMenuDelegate {
         alert.informativeText =
             "Repeat count (1–10000). Playback changes the captured editor as one Undo group. Find steps (literal find and Find-window Next or Previous) stop the macro on no match; earlier edits remain undoable. Replace All with no matches is skipped. Clipboard commands operate on the current clipboard. No shell or external workflow runs."
         alert.addButton(withTitle: "Play").identifier = NSUserInterfaceItemIdentifier("macro.play.confirm")
-        alert.addButton(withTitle: "Cancel").identifier = NSUserInterfaceItemIdentifier("macro.play.cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel).identifier = NSUserInterfaceItemIdentifier(
+            "macro.play.cancel")
         let count = NSTextField(string: "1")
         count.frame = NSRect(x: 0, y: 0, width: 200, height: 24)
         count.identifier = NSUserInterfaceItemIdentifier("macro.play.count")
@@ -323,7 +324,8 @@ final class MacroController: NSObject, NSMenuDelegate {
         let alert = TTAlert()
         alert.messageText = "Name Recorded Macro"
         alert.addButton(withTitle: "Save").identifier = NSUserInterfaceItemIdentifier("macro.save.confirm")
-        alert.addButton(withTitle: "Cancel").identifier = NSUserInterfaceItemIdentifier("macro.save.cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel).identifier = NSUserInterfaceItemIdentifier(
+            "macro.save.cancel")
         let name = NSTextField(string: macro.name)
         name.frame = NSRect(x: 0, y: 0, width: 400, height: 24)
         name.identifier = NSUserInterfaceItemIdentifier("macro.save.name")
@@ -354,7 +356,7 @@ final class MacroController: NSObject, NSMenuDelegate {
         alert.informativeText =
             "Edit names or steps, or remove entries. Preserve id to rename. Only validated text, editor commands and literal find/replace steps are accepted. Saving never executes macros."
         alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         alert.addButton(withTitle: "Import…")
         alert.addButton(withTitle: "Export…")
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 650, height: 400))
@@ -371,10 +373,13 @@ final class MacroController: NSObject, NSMenuDelegate {
         text.string = String(data: (try? library.encoded()) ?? Data(), encoding: .utf8) ?? ""
         alert.accessoryView = scroll
         while true {
-            let response = alert.runModal()
-            if response == .alertSecondButtonReturn { return }
+            enum LibraryChoice { case save, cancel, importFile, exportFile }
+            guard let response = alert.choice([LibraryChoice.save, .cancel, .importFile, .exportFile]),
+                response != .cancel
+            else { return }
+            if response == .cancel { return }
             do {
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
+                if response == .importFile {
                     let panel = NSOpenPanel()
                     panel.allowsMultipleSelection = false
                     panel.canChooseDirectories = false
@@ -385,7 +390,7 @@ final class MacroController: NSObject, NSMenuDelegate {
                     continue
                 }
                 let proposed = try MacroLibrary.decode(Data(text.string.utf8))
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
+                if response == .exportFile {
                     let panel = NSSavePanel()
                     panel.nameFieldStringValue = "TextTank-Macros.json"
                     if panel.runModal() == .OK, let url = panel.url {
@@ -426,7 +431,7 @@ final class MacroController: NSObject, NSMenuDelegate {
         library = proposed
         rebuild()
     }
-    private func showError(_ error: Error) { NSAlert(error: error).runModal() }
+    private func showError(_ error: Error) { TTAlert.present(error) }
 }
 
 /// Bounded incremental playback shared by native progress UI and deterministic tests.
