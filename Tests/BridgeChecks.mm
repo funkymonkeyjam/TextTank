@@ -453,6 +453,46 @@ int main() {
         check(posted==1 && retiring==b && successor==a, "retiring a view names the remaining view of the same document");
         [NSNotificationCenter.defaultCenter removeObserver:token];
         });
+        // F295: the menu assigned to a TTEditor is reachable from a right-click in the text.
+        ttchecks::section("context menu", [&] {
+        NSWindow *menuWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,600,400) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+        TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        menuWindow.contentView = editor;
+        editor.text = @"right-click here";
+        ScintillaView *native = (ScintillaView *)editor.subviews.firstObject;
+        NSView *margin = nil;
+        for (NSView *view in native.scrollView.subviews) if ([view isKindOfClass:NSRulerView.class]) margin = view;
+        if (!margin) margin = native.scrollView.verticalRulerView;
+        NSEvent *click = [NSEvent mouseEventWithType:NSEventTypeRightMouseDown location:NSMakePoint(200,200) modifierFlags:0 timestamp:0 windowNumber:menuWindow.windowNumber context:nil eventNumber:0 clickCount:1 pressure:0];
+        NSArray<NSString *> *engineTitles = @[@"Undo", @"Redo", @"", @"Cut", @"Copy", @"Paste", @"Delete", @"", @"Select All"];
+        NSArray<NSString *> *(^titles)(NSMenu *) = ^NSArray<NSString *> *(NSMenu *menu) { return [menu.itemArray valueForKey:@"title"]; };
+        NSMenu *plain = [native.content menuForEvent:click];
+        check([titles(plain) isEqual:engineTitles], "without an assigned menu a right-click shows the engine's edit menu only");
+        NSObject *target = [NSObject new];
+        NSMenu *assigned = [[NSMenu alloc] initWithTitle:@"Run Automation"];
+        NSMenuItem *heading = [assigned addItemWithTitle:@"Heading" action:nil keyEquivalent:@""];
+        (void)heading;
+        NSMenuItem *run = [assigned addItemWithTitle:@"Tidy" action:@selector(description) keyEquivalent:@""];
+        run.target = target; run.representedObject = @"3F2504E0-4F89-11D3-9A0C-0305E82C3301";
+        editor.menu = assigned;
+        NSMenu *merged = [native.content menuForEvent:click];
+        BOOL engineKept = merged.numberOfItems == 12 && [[titles(merged) subarrayWithRange:NSMakeRange(0, 9)] isEqual:engineTitles];
+        for (NSInteger i = 0; engineKept && i < 9; i++) {
+            NSMenuItem *was = plain.itemArray[i], *now = merged.itemArray[i];
+            if (was.isSeparatorItem) continue;
+            engineKept = now.tag == was.tag && now.action == was.action && now.target == merged && was.target == plain;
+        }
+        check(engineKept, "with an assigned menu the engine's seven edit items keep their order, tags and targets");
+        NSMenuItem *added = merged.itemArray.lastObject;
+        check(merged.itemArray[9].isSeparatorItem && [added.title isEqual:@"Tidy"] && added.target == target && added.action == @selector(description) && [added.representedObject isEqual:run.representedObject] && added.isEnabled, "the assigned menu's item follows a separator with its target, action and represented object");
+        check(!merged.itemArray[10].isEnabled && [merged.itemArray[10].title isEqual:@"Heading"], "an assigned item without an action is shown disabled");
+        check(added != run && assigned.numberOfItems == 2 && run.menu == assigned, "the assigned menu keeps its own items; the shown ones are copies");
+        NSMenu *again = [native.content menuForEvent:click];
+        check(again.numberOfItems == 12 && [titles(again) isEqual:titles(merged)], "asking twice neither raises nor duplicates the added items");
+        check(margin != nil && [titles([margin menuForEvent:click]) isEqual:engineTitles], "the margin keeps the engine's menu");
+        editor.menu = [[NSMenu alloc] initWithTitle:@"Empty"];
+        check([titles([native.content menuForEvent:click]) isEqual:engineTitles], "an empty assigned menu adds nothing, not even a separator");
+        });
         return ttchecks::finish("BridgeChecks", "IME, VoiceOver, UI focus and permission tests not covered");
     }
 }
