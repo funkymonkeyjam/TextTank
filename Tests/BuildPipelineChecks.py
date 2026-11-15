@@ -26,6 +26,100 @@ def module(name, filename):
 
 
 class BuildPipelineChecks(unittest.TestCase):
+    def test_signing_cleans_metadata_at_each_boundary_and_keeps_failures_fatal(self):
+        # Simulate metadata arriving between signing steps; this does not attribute
+        # the real metadata recurrence to codesign, Finder or a file provider.
+        fixture_parent = ROOT / 'tmp'
+        fixture_parent.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='signing-boundary-', dir=fixture_parent) as work:
+            fixture = Path(work).resolve()
+            scripts = fixture / 'scripts'
+            scripts.mkdir()
+            shutil.copyfile(ROOT / 'scripts/build.sh', scripts / 'build.sh')
+            (scripts / 'env.sh').write_text('''CONFIGURATION=Debug
+ARCH=arm64
+DEPLOYMENT_TARGET=14.0
+VENDOR_BUILD="$PWD/build/vendor/Debug"
+APP_PATH="$PWD/build/Fixture App.app"
+export APP_PATH
+''')
+            for name in ['bootstrap.py', 'build-lexilla.py']:
+                (scripts / name).write_text('# isolated build fixture; no acquisition\n')
+            app = fixture / 'build/Fixture App.app'
+            framework = app / 'Contents/Frameworks/Scintilla.framework'
+            framework.mkdir(parents=True)
+            binary = fixture / 'bin'
+            binary.mkdir()
+            tool_source = '''#!/usr/bin/env python3
+import json, os, pathlib, sys
+tool = pathlib.Path(sys.argv[0]).name
+args = sys.argv[1:]
+app = pathlib.Path(os.environ['APP_PATH'])
+framework = app / 'Contents/Frameworks/Scintilla.framework'
+flag = pathlib.Path(os.environ['TEXTTANK_FIXTURE_METADATA'])
+scenario = os.environ['TEXTTANK_FIXTURE_SCENARIO']
+with open(os.environ['TEXTTANK_FIXTURE_EVENTS'], 'a') as output:
+    output.write(json.dumps([tool, args]) + '\\n')
+if tool == 'xcodebuild':
+    sys.exit(0)
+if tool == 'xattr':
+    if len(args) != 3 or args[0] != '-dr' or args[1] not in (
+            'com.apple.FinderInfo', 'com.apple.ResourceFork') or args[2] != str(app):
+        sys.exit(91)
+    if scenario != 'persistent-metadata' and flag.exists():
+        flag.unlink()
+    sys.exit(0)
+if tool != 'codesign':
+    sys.exit(92)
+if args == ['--force', '--sign', '-', str(framework)]:
+    flag.write_text('metadata arrived between steps')
+    sys.exit(0)
+if args == ['--force', '--sign', '-', str(app)]:
+    if scenario == 'ordinary-sign-error':
+        print('fixture: unrelated signing failure', file=sys.stderr)
+        sys.exit(73)
+    if flag.exists():
+        print('resource fork, Finder information, or similar detritus not allowed', file=sys.stderr)
+        sys.exit(1)
+    sys.exit(0)
+if args == ['--verify', '--deep', '--strict', str(app)]:
+    sys.exit(74 if scenario == 'strict-verify-error' else 0)
+sys.exit(93)
+'''
+            for name in ['xcodebuild', 'xattr', 'codesign']:
+                path = binary / name
+                path.write_text(tool_source)
+                path.chmod(0o755)
+            events = fixture / 'events.jsonl'
+            metadata = fixture / 'metadata-flag'
+            expected = [
+                ['--force', '--sign', '-', str(framework)],
+                ['--force', '--sign', '-', str(app)],
+                ['--verify', '--deep', '--strict', str(app)],
+            ]
+            for scenario, code in [('arrival-between-steps', 0), ('persistent-metadata', 1),
+                                   ('ordinary-sign-error', 73), ('strict-verify-error', 74)]:
+                with self.subTest(scenario=scenario):
+                    events.write_text('')
+                    if metadata.exists():
+                        metadata.unlink()
+                    environment = dict(os.environ, PATH=str(binary) + os.pathsep + os.environ['PATH'],
+                                       TEXTTANK_FIXTURE_EVENTS=str(events),
+                                       TEXTTANK_FIXTURE_METADATA=str(metadata),
+                                       TEXTTANK_FIXTURE_SCENARIO=scenario)
+                    result = subprocess.run(['bash', 'scripts/build.sh'], cwd=fixture,
+                                            env=environment, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, code, result.stderr)
+                    trace = [json.loads(line) for line in events.read_text().splitlines()]
+                    signing = [args for tool, args in trace if tool == 'codesign']
+                    self.assertEqual(signing, expected if code in (0, 74) else expected[:2])
+                    for tool, args in trace:
+                        if tool == 'xattr':
+                            self.assertEqual(args[0], '-dr')
+                            self.assertIn(args[1], ['com.apple.FinderInfo', 'com.apple.ResourceFork'])
+                            self.assertEqual(args[2], str(app))
+                    self.assertEqual('Built ' in result.stdout, code == 0)
+
     def test_shared_defaults_are_deferred_behind_isolation(self):
         owners = [str(path.relative_to(ROOT)) for path in (ROOT / 'Sources').rglob('*.swift')
                   if 'UserDefaults.standard' in path.read_text()]
