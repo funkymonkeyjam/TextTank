@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "name": "Sort unique lines",
+  "steps": [
+    {
+      "kind": "sortLines"
+    },
+    {
+      "kind": "deduplicateLines"
+    }
+  ]
+}

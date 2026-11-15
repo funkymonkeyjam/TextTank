@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "name": "Recipe ingredient cleanup",
+  "steps": [
+    {
+      "kind": "removeMatchingLines",
+      "find": "(?i)^[ \\t]*(?:Ingredients|Cups|Metric|Garnish[ \\t]*\\(optional\\))[ \\t]*$"
+    },
+    {
+      "kind": "removeMatchingLines",
+      "find": "^[ \\t]*[\\p{L}][^:]*:[ \\t]*$"
+    },
+    {
+      "kind": "removeMarkdownHeadings"
+    },
+    {
+      "kind": "removeListMarkers"
+    },
+    {
+      "kind": "removeMarkdownFormatting"
+    },
+    {
+      "kind": "removeCheckboxMarkers"
+    },
+    {
+      "kind": "removeNoteReferences"
+    },
+    {
+      "kind": "trimWhitespace"
+    },
+    {
+      "kind": "removeBlankLines"
+    }
+  ]
+}

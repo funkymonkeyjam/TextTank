@@ -14,12 +14,19 @@ enum UserRecipeFixtures {
                 encoding: .utf8)
         )
     }
+    /// G377: the rules written for these four samples are test data, not part of the app. The
+    /// rule file is the bundled recipe template plus the literal headings and note suffixes
+    /// that only these samples contain.
+    static func sampleRules() throws -> AutomationRuleSet {
+        try AutomationRuleSet.decode(
+            Data(contentsOf: directory.appendingPathComponent("recipe-user-samples.rules.json")))
+    }
     /// An explicit user-configurable recipe for these supplied examples. This
     /// deliberately promises no inference about arbitrary headings or notes.
-    static var configured: AutomationDefinition {
+    static func configured() throws -> AutomationDefinition {
         var value = AutomationDefinition.example
         value.name = "My ingredient cleanup"
-        value.steps = AutomationDefinition.shoppingRecipeSteps
+        value.steps = try sampleRules().steps
         return value
     }
 }
@@ -27,8 +34,26 @@ enum UserRecipeFixtures {
 @main struct UserRecipeChecks {
     static func main() {
         Checks.run("UserRecipeChecks") {
-            let definition = UserRecipeFixtures.configured
+            let definition = try UserRecipeFixtures.configured()
             try definition.validate()
+            // G377: the shipped template is the same pipeline without the sample-specific literals.
+            let template = try AutomationTemplates.load("recipe-ingredient-cleanup")
+            let literalKinds: Set<AutomationDefinition.Step.Kind> = [.clearLinesEqualTo, .replaceLiteral]
+            check(
+                definition.steps.filter { !literalKinds.contains($0.kind) } == template.steps,
+                "the sample rule file is the bundled recipe template plus literal rules only")
+            fixtureCheck(
+                definition.steps.filter { literalKinds.contains($0.kind) }.count == 8,
+                "the sample rule file carries the eight sample-specific literal rules")
+            check(
+                !template.steps.contains { literalKinds.contains($0.kind) },
+                "the bundled recipe template carries no sample-specific literal text")
+            var generic = definition
+            generic.steps = template.steps
+            check(
+                try generic.transform("Sauce:\n- **2 eggs** (Note 1)\n\nYellow Rice\n▢ 1 cup rice , (optional)\n")
+                    == "2 eggs\nYellow Rice\n1 cup rice , (optional)\n",
+                "the bundled recipe template cleans markers and notes and leaves unknown headings and notes alone")
             for (index, rows) in [32, 7, 13, 13].enumerated() {
                 let number = index + 1, (input, expected) = try UserRecipeFixtures.pair(number)
                 fixtureCheck(

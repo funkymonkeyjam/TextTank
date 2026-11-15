@@ -5,7 +5,7 @@ Scope: F01-F14 in harness/reviews/audit-2026-11-15/README.md. Preserve all remai
 ## Ownership and sequence
 
 1. Integrator: F01 shared dialog dependency and screen-backed frame handling; F03 exact saved-byte baseline; F06 keyboard/document navigation; F09 visible-only status work; F11 ordered background recovery with maximum checkpoint interval; F12 stable status controls; F14 candidate validation and checkpoint records.
-2. Automation worker: F02 bounded production transforms; F05 consistent Reminders journal limits; F13 bounded regular-file configuration IO.
+2. Automation worker: F02 bounded production transforms (the size ceiling only; cooperative cancellation regardless of input size came later, with audit package 14: every run is on a worker with a run control); F05 consistent Reminders journal limits; F13 bounded regular-file configuration IO.
 3. Search/workspace worker: F07 session profile restore; F08 filename detection ordering; F10 linear, cancellable bookmark computation.
 4. Run worker: F04 aggregate configuration bounds, then independent review of integrator changes.
 

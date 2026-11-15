@@ -161,7 +161,7 @@ extension DocumentChecks {
                     "fixture: the Run result window has an Apply button")
             }
             let output = RunResult(
-                stdout: Data("RUN OUTPUT".utf8), stderr: Data(), status: 0, cancelled: false, truncated: false)
+                stdout: Data("RUN OUTPUT".utf8), stderr: Data(), status: 0, reason: .finished)
             try recordOneStep(delegate, in: document.editor)
             delegate.runner.show(
                 .success(output), command: .uppercaseSample, target: document.editor,
@@ -462,8 +462,7 @@ extension DocumentChecks {
                     "fixture: the Run result window has an Apply button")
             }
             let output = RunResult(
-                stdout: Data("def three():\n    pass\n".utf8), stderr: Data(), status: 0, cancelled: false,
-                truncated: false)
+                stdout: Data("def three():\n    pass\n".utf8), stderr: Data(), status: 0, reason: .finished)
             weak var released: TTEditor?
             var functions: LanguageFunctionController?
             try autoreleasepool {

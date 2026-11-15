@@ -74,6 +74,11 @@ extension DocumentChecks {
                 (
                     .titleCase, "hello wORLD\r\nsecond line", "Hello World\r\nSecond Line",
                     "title case capitalizes each word and keeps line endings"
+                ),
+                (
+                    .sortLocalized, "item 10\r\nZucchini\n\u{C9}clairs\napples\nitem 9",
+                    "apples\r\n\u{C9}clairs\nitem 9\nitem 10\nZucchini",
+                    "locale sort puts accents and case second, numbers by value, and keeps each separator in place"
                 )
             ]
             check(
@@ -224,14 +229,14 @@ extension DocumentChecks {
                     try automation.transform(" \(UnicodeFixtures.zwjEmoji) \n\t\(UnicodeFixtures.nfd)\0 \n"),
                     "\(UnicodeFixtures.zwjEmoji)\n\(UnicodeFixtures.nfd)\0\n"),
                 "automation trim keeps ZWJ emoji, combining marks and NUL intact")
-            automation.steps = [.init(kind: .removeLinesContaining, find: "needle")]
+            automation.steps = [.init(kind: .clearLinesContaining, find: "needle")]
             check(
                 same(
                     try automation.transform(
                         "\(UnicodeFixtures.astralLetter) needle\n\(UnicodeFixtures.astralLetter) keep\n"),
                     "\n\(UnicodeFixtures.astralLetter) keep\n"),
                 "automation contains-filter empties the matching row beside an astral letter and keeps its separator")
-            automation.steps = [.init(kind: .removeLinesStartingWith, find: UnicodeFixtures.zwjEmoji)]
+            automation.steps = [.init(kind: .clearLinesStartingWith, find: UnicodeFixtures.zwjEmoji)]
             check(
                 same(
                     try automation.transform("\(UnicodeFixtures.zwjEmoji) gone\nkept \(UnicodeFixtures.zwjEmoji)\n"),
@@ -243,40 +248,40 @@ extension DocumentChecks {
                 editor.setSelectionAnchor(wide.utf8.count, caret: wide.utf8.count)
                     && editor.statusInfo["column"]?.intValue == 7,
                 "the status column after a ZWJ emoji and a combining pair counts six scalars, not two characters")
-            automation.steps = [.init(kind: .removeLinesEqualTo, find: UnicodeFixtures.zwjEmoji)]
+            automation.steps = [.init(kind: .clearLinesEqualTo, find: UnicodeFixtures.zwjEmoji)]
             check(
                 same(
                     try automation.transform(
                         "\(UnicodeFixtures.zwjEmoji)\r\n\(UnicodeFixtures.zwjEmoji) kept\r\n\u{1F469}\r\n"),
                     "\r\n\(UnicodeFixtures.zwjEmoji) kept\r\n\u{1F469}\r\n"),
                 "automation equal-to filter empties only the row that is the whole ZWJ emoji and keeps its separator")
-            automation.steps = [.init(kind: .removeLinesEqualTo, find: "a\0a")]
+            automation.steps = [.init(kind: .clearLinesEqualTo, find: "a\0a")]
             check(
                 same(try automation.transform("b\0b\na\0a\n"), "b\0b\n\n"),
                 "automation equal-to filter compares across an embedded NUL")
             // Confirmed defects (G354 and the findings it lists). Each states the repaired behaviour.
-            automation.steps = [.init(kind: .removeLinesEqualTo, find: UnicodeFixtures.nfc)]
-            knownDefect(
-                "G345", "automation equal-to filter keeps a canonically equivalent row whose bytes differ",
-                fixed: same(
+            automation.steps = [.init(kind: .clearLinesEqualTo, find: UnicodeFixtures.nfc)]
+            check(
+                same(
                     try automation.transform("\(UnicodeFixtures.nfc)\n\(UnicodeFixtures.nfd)\n"),
-                    "\n\(UnicodeFixtures.nfd)\n"))
+                    "\n\(UnicodeFixtures.nfd)\n"),
+                "automation equal-to filter keeps a canonically equivalent row whose bytes differ")
             // CR, CRLF and LF in one text: the classic result of a botched conversion. The guard that
             // promises "Mixed endings were not changed" has to refuse it.
             automation.steps = [.init(kind: .sortLines)]
             check(
                 (try? automation.transform(UnicodeFixtures.mixedEndings)) == nil,
                 "automation sort refuses the mixed CRLF, CR and LF fixture")
-            knownDefect(
-                "G351", "automation sort refuses a text whose CR, CRLF and LF run together",
-                fixed: (try? automation.transform("a\r\r\n\nb")) == nil)
+            check(
+                (try? automation.transform("a\r\r\n\nb")) == nil,
+                "automation sort refuses a text whose CR, CRLF and LF run together")
             automation.steps = [.init(kind: .deduplicateLines)]
-            knownDefect(
-                "G354",
-                "automation dedupe keeps canonically equivalent rows whose bytes differ, as Remove Duplicate Lines does",
-                fixed: same(
+            check(
+                same(
                     try automation.transform("\(UnicodeFixtures.nfc)\n\(UnicodeFixtures.nfd)\n"),
-                    "\(UnicodeFixtures.nfc)\n\(UnicodeFixtures.nfd)\n"))
+                    "\(UnicodeFixtures.nfc)\n\(UnicodeFixtures.nfd)\n"),
+                "automation dedupe keeps canonically equivalent rows whose bytes differ, as Remove Duplicate Lines does"
+            )
             check(
                 same(
                     EditorTransform.invertCase.transform(EditorTransform.invertCase.transform("stra\u{DF}e")),
@@ -792,7 +797,7 @@ extension DocumentChecks {
             var definition = AutomationDefinition(
                 id: idA, name: "Golden automation", input: .selection,
                 steps: [
-                    .init(kind: .removeMatchingLines, find: "^#"),
+                    .init(kind: .clearLinesMatching, find: "^#"),
                     .init(
                         kind: .replaceLiteral, find: "a", replacement: "b", askForFind: true, askForReplacement: false),
                     .init(kind: .trimWhitespace)

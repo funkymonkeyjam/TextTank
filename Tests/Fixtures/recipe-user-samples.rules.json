@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "name": "Recipe cleanup for the four supplied samples",
+  "steps": [
+    {
+      "kind": "removeMatchingLines",
+      "find": "(?i)^[ \\t]*(?:Ingredients|Cups|Metric|Garnish[ \\t]*\\(optional\\))[ \\t]*$"
+    },
+    {
+      "kind": "removeMatchingLines",
+      "find": "^[ \\t]*[\\p{L}][^:]*:[ \\t]*$"
+    },
+    {
+      "kind": "removeMarkdownHeadings"
+    },
+    {
+      "kind": "removeLinesEqualTo",
+      "find": "Yellow Rice"
+    },
+    {
+      "kind": "removeLinesEqualTo",
+      "find": "Chicken Shawarma"
+    },
+    {
+      "kind": "removeLinesEqualTo",
+      "find": "White Sauce"
+    },
+    {
+      "kind": "removeLinesEqualTo",
+      "find": "Toppings"
+    },
+    {
+      "kind": "removeListMarkers"
+    },
+    {
+      "kind": "removeMarkdownFormatting"
+    },
+    {
+      "kind": "removeCheckboxMarkers"
+    },
+    {
+      "kind": "removeNoteReferences"
+    },
+    {
+      "kind": "replaceLiteral",
+      "find": " (do not use white button mushrooms, as they have far less flavor), finely chopped",
+      "replacement": ""
+    },
+    {
+      "kind": "replaceLiteral",
+      "find": " , (cut in half lengthways)",
+      "replacement": ""
+    },
+    {
+      "kind": "replaceLiteral",
+      "find": " , (chopped)",
+      "replacement": ""
+    },
+    {
+      "kind": "replaceLiteral",
+      "find": " , (optional)",
+      "replacement": ""
+    },
+    {
+      "kind": "trimWhitespace"
+    },
+    {
+      "kind": "removeBlankLines"
+    }
+  ]
+}

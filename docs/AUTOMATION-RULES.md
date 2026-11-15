@@ -1,21 +1,132 @@
-# Configuring automation rules
+# Automation rules reference
 
-Use the single Automations dropdown to run any saved workflow. Favorites appear first; keyboard shortcuts remain optional. New workflows do not create separate toolbar buttons. Existing saved pin flags are displayed as favorites.
+An automation is a saved, named workflow: one input, an ordered list of rules, and one output. This document describes the rules, the dialogs that edit them and the limits that apply. It describes the app as built; the checks named at the end pin the behaviour.
 
-Automations → Manage Automations → Create Automation opens one builder with an editable name. To change an existing workflow, select it → Edit → Edit Rules & Test.
+## Running and managing
 
-Load Rules copies processing steps from any saved workflow or a general template. Import File reads a portable JSON rule set; Export Rules writes one with version, name and steps. Loading only replaces draft steps after confirmation; it never adopts an imported connector destination, input/output, shortcut or identifier. Invalid or oversized files leave the draft unchanged. Recipes are one optional template.
+The Automations menu and the Automations toolbar dropdown list every saved automation. Favorites come first in the dropdown and the context menu and are marked with a star. A keyboard shortcut is optional: one lowercase letter, bound to Command-Option, refused if an application command already uses it. Automations do not get toolbar buttons of their own from the dialogs; the `pinToToolbar` field of a saved automation is shown as its favorite status.
 
-The ordered list shows each rule in plain language. Add Rule opens a choice of actions. Text-match rules use case-sensitive literal text; special characters do not require escaping. Clear-lines rules leave an empty row; follow them with Remove empty lines for a compact list. Regular expressions remain an explicitly advanced option. Duplicate, Move Up, Move Down and Remove operate on the selected rule.
+The management commands are in the Automations menu:
 
-Paste test text into Sample input and press Test Rules. The result is read-only. Tests use saved parameter defaults, not runtime prompts, and never read a configured file/clipboard, change an editor or invoke a connector. Input is limited to64KiB; intermediate results are capped at1MiB with conservative replacement preflight. Testing runs off the UI thread; edits or closing invalidate/cancel pending results. Time is checked between steps, not a hard preemptive deadline for every operation.
+- **Manage Automations…** lists the saved automations. Two automations may share a name; both are listed, and each keeps its own identifier.
+- **Choose Automation…** runs one from a list.
+- **Review Reminder Export History…** shows recorded Reminders exports, newest first. A record file that cannot be read is named there and left unchanged; a new export then asks before sending, because the unreadable file may record the same items. **Clear Confirmed History…** in that dialog removes, after a confirmation, TextTank's record of exports whose every item was confirmed. Exports with unsent, failed or uncertain items are kept, Reminders itself is not changed, and a cleared list no longer triggers the already-sent warning. Nothing is removed automatically.
+- **Restore Default Automations…** adds fresh copies of the automations a new installation starts with (Clean up recipe list and Add to Reminders), under new identifiers. Nothing already saved is replaced, including edited copies of the same automations.
 
-Use These Rules returns the draft to workflow settings; Save persists it. Cancel discards draft changes. Workflow names, IDs, triggers, input/output and preview choice are retained. JSON remains available as an advanced interchange/configuration option.
+### Creating an automation
 
-## Supplied recipe examples
+Manage Automations → Create Automation opens the rule builder with the name My Automation. Use These Rules then opens the settings dialog, titled New Automation, with the name from the builder. There you choose input, output, shortcut, preview and favorite status. Nothing is saved until Save in that dialog; Cancel there, or in the builder, discards the new automation. Saving a new automation with no rules asks for confirmation first.
 
-Load Rules → Template: Recipe ingredient cleanup replaces the draft with editable literal heading/note removals plus marker, Markdown and blank-line cleanup. It preserves unknown text rather than guessing whether an unmarked row is an ingredient. Four sample input/output pairs are retained in Tests/Fixtures/recipe-user-sample*; outputs contain32,7,13 and13 ingredient rows. The earlier browser/Markdown/plain-copy fixtures also match. The sample-specific notes are literal rules: arbitrary preparation prose is not inferred. Parenthetical quantities and substitution options remain unless an explicit matching rule removes them.
+### Editing an automation
 
-The native walkthrough loaded and saved these rules to the existing Clean up text workflow, tested sample4 in the preview, invoked the toolbar cleanup in the same editor and restored the exact original with one Undo. Add to Reminders stays a separate explicit action; this change did not send reminders.
+Manage Automations → Edit opens the settings dialog for the selected automation. Edit Rules & Test opens the rule builder on a draft; Use These Rules returns the draft's rules and name to the settings dialog, and Cancel in the builder discards them. Save writes the automation. If Save fails (an empty or over-long name, a shortcut that is not one lowercase letter or is already taken, a write error) the error is shown and the settings dialog opens again with every field and the rule edits intact. A blank Shortcut field stores no shortcut.
 
-This rule builder is a linear low-code pipeline, not a branching programming system. Full application parity remains incomplete.
+The identifier, the Reminders destination and the rules of other automations are never changed by editing.
+
+## The rule builder
+
+The builder shows the automation name, the ordered rule list, a sample input pane, a read-only result pane and a status line. The window can be resized; the rule list and the two panes share the extra space.
+
+Each row shows the rule, its text to match, its replacement, and whether it asks for a value when run, for example `Find and replace text · “x” → “y” · asks for the replacement when run`. Add Rule and Edit open the Configure Rule dialog. Duplicate, Move Up, Move Down and Remove act on the selected rule. An automation holds at most 100 rules; Add Rule and Duplicate are unavailable at the limit.
+
+In Configure Rule the text field is called Text to match, or Pattern for the pattern rule. A rule that takes no text has both fields disabled. Ask for this text when running stores a default and prompts on every run; such a rule may be saved with its text left empty. A rule that is opened and saved unchanged is stored exactly as it was.
+
+### Rule kinds
+
+| Rule in the builder | JSON `kind` | Parameters | Effect |
+| --- | --- | --- | --- |
+| Remove bullet markers | `removeListMarkers` | none | Removes a leading `-`, `*` or `•` and the spaces after it. Leading numbers stay, because `2 eggs` is a quantity. |
+| Remove empty lines | `removeBlankLines` | none | Drops lines that are empty or hold only spaces and tabs. Needs uniform line endings. |
+| Sort lines (case-sensitive) | `sortLines` | none | Sorts by character code: capitals before lowercase, accented letters after z. Needs uniform line endings. |
+| Remove duplicate lines | `deduplicateLines` | none | Keeps the first of each byte-identical line. Needs uniform line endings. |
+| Find and replace text | `replaceLiteral` | `find`, `replacement`, `askForFind`, `askForReplacement` | Replaces every occurrence of the literal, case-sensitive text. An empty replacement removes it. |
+| Clear lines equal to text | `removeLinesEqualTo` | `find`, `askForFind` | Empties each line that is exactly the literal text. The line ending stays. |
+| Clear lines containing text | `removeLinesContaining` | `find`, `askForFind` | Empties each line that contains the literal text. The line ending stays. |
+| Clear lines starting with text | `removeLinesStartingWith` | `find`, `askForFind` | Empties each line that starts with the literal text. The line ending stays. |
+| Trim spaces at line edges | `trimWhitespace` | none | Removes Unicode spaces and tabs, including no-break spaces, from both ends of every line. |
+| Clear lines matching a pattern (advanced) | `removeMatchingLines` | `find` (regular expression, 1–500 characters), `askForFind` | Empties each line that the pattern matches from start to end. The line ending stays. |
+| Clear Markdown headings | `removeMarkdownHeadings` | none | Empties lines that start with one to six `#` marks and a space. The line ending stays. |
+| Remove Markdown formatting | `removeMarkdownFormatting` | none | Removes emphasis marks and code ticks and replaces an inline link with its label. A mark with no partner is left as typed. |
+| Remove checkbox markers | `removeCheckboxMarkers` | none | Removes a leading `☐`, `☑`, `☒`, `▢`, `□`, `[ ]` or `[x]`. |
+| Remove numbered note references | `removeNoteReferences` | none | Removes references such as `(Note 2)` or `see Notes 1 and 3`, and tidies the gap on that line only. |
+| Keep marked list rows (strict) | `keepMarkedListRows` | none | Keeps only rows that start with a bullet or checkbox. Any other non-blank row must be a `#` heading or a label ending in a colon, or the run stops with nothing changed. A list with no marked rows is left as it is. |
+| Sort lines in locale order | `sortLinesLocalized` | none | Sorts as Finder does in your language: case and accents come second and numbers inside a line sort by value. Needs uniform line endings. |
+
+The five Clear rules empty a line and keep its line ending, so the number of lines does not change. Follow them with Remove empty lines to drop the emptied lines. Their JSON names say `remove` for compatibility with saved files.
+
+### What the rules match
+
+- Literal text means the same characters, as in Find. The clear-lines rules and Find and replace do not treat a precomposed letter (é as one character) and its decomposed spelling (e followed by a combining accent) as equal, and they find text inside a joined emoji sequence. Remove duplicate lines compares bytes, exactly as Remove Duplicate Lines in the Edit menu does, so those two spellings are different rows.
+- Trim spaces at line edges removes Unicode spaces and tabs, including the no-break spaces common in text copied from web pages. The Edit menu's Trim Leading and Trailing Whitespace removes only the space and tab characters.
+- Clear lines matching a pattern empties a line only when the pattern can match the whole line. Every alternative is tried, so `Cups|Cups Metric` empties the line `Cups Metric`.
+- Pattern rules share one time budget of a tenth of a second per run, counted over every pattern rule and every line. Test Rules applies the same budget to the sample. A sample is at most 64 KiB, so a large document can still exceed the budget when its sample passed; the run then stops with nothing changed.
+- Remove numbered note references tidies the gap a removed reference leaves, on that line only. It does not trim other lines; add Trim spaces at line edges for that.
+- Remove Markdown formatting removes the padding before an opening emphasis mark whose text starts with a comma or semicolon (`each) *, halved*` becomes `each), halved`). It changes no other spacing.
+- Sort lines (case-sensitive) orders by character code. Sort lines in locale order orders as Finder does in your language. The Edit menu has the same pair, Sort Lines Ascending and Sort Lines in Locale Order.
+- Remove empty lines, the two sort rules, Remove duplicate lines and Keep marked list rows need one kind of line ending in the text. Mixed endings are refused and nothing is changed. Every other rule keeps each line's own ending.
+- A rule set to ask for its text when running may be saved with the text left empty. Running or testing it without a value stops with a message that names the rule.
+
+### Testing
+
+Paste text into Sample input and press Test Rules. The result pane is read-only. A test:
+
+- runs the rules in the list as they are now, with the saved defaults of any rule that asks when run; it shows no prompts;
+- never reads the automation's configured file or clipboard, never changes a document and never invokes an output or connector;
+- does not depend on the automation's name, which is checked only by Use These Rules and Save;
+- accepts a sample of at most 64 KiB and stops if a result would exceed 1 MiB, with a conservative check before a replacement that could grow the text;
+- runs off the main thread and stops after two seconds, checked between rules.
+
+A freshly opened builder shows the instruction to paste sample text. After a test, editing the sample or the rules clears the result and says it is stale; a test still running is cancelled and its late result is discarded. Closing the builder cancels a running test.
+
+### Load Rules and Export Rules
+
+Load Rules copies rules into the draft from a saved automation, a built-in template, or a file. Only the rules are taken: the draft keeps its name, input, output, shortcut and destination. The draft's rules are replaced only after a confirmation that names the source and the number of rules.
+
+Import File reads a JSON file of at most 1 MiB. It is not followed if it is a symbolic link. It accepts:
+
+- a rule file written by Export Rules (`version`, `name`, `steps`). The name is only a label, so a blank or over-long name does not refuse the file;
+- an automation library exported from Advanced JSON. Its automations are listed by name and the rules of the one you choose are loaded.
+
+Any other file is reported as not a rule file, and the draft is unchanged. Export Rules writes the current rule list with the name in the name field, which must be 1–120 characters.
+
+The templates are rule files bundled with the app (`Resources/AutomationTemplates/*.rules.json`), in the format Export Rules writes: Trim and remove empty lines, Sort unique lines, and Recipe ingredient cleanup.
+
+## Advanced JSON
+
+Manage Automations → Advanced JSON edits the whole library as JSON. The dialog lists every rule kind with its builder label and parameters; the list is generated from the same definitions the app validates against. An empty library is shown as an empty library. Insert Example adds the example automation to the JSON in the editor; nothing is saved until Save. Import and Export read and write a library file of at most 32 MiB.
+
+A library holds at most 200 automations. Each has `version` 1, a unique `id`, a `name` of 1–120 characters, an `input` (`selection`, `document`, `clipboard`, `file`), `steps`, an `output` (`editor`, `clipboard`, `newDocument`, `file`, `reminders`), and optionally `shortcut`, `previewBeforeApply`, `pinToToolbar` and `destinationID`. A step has a `kind` and only the parameters that kind takes; a stray `find` or `replacement` is refused. Validation messages name a rule by its builder label and its JSON kind. No automation runs when it is saved or imported.
+
+## Running
+
+Every run happens off the main thread on a copy of the text; input and result are each limited to 32 MiB. A run that takes longer than a fifth of a second shows a progress panel whose Cancel button (or Escape) ends the run at once with nothing changed, whatever the size of the input. Editor output is applied only if the document, its revision and its selection are still what they were when the run started.
+
+File input reads a regular UTF-8 file. A missing file, a symbolic link, a folder or device, and a file over the limit are each reported as what they are.
+
+Clipboard input reads plain text first, then rich text. A clipboard that offers only HTML is converted locally to text: tags are removed, list items, paragraphs and line breaks become lines, and scripts, styles and images are dropped. Nothing in the markup is rendered, run or fetched.
+
+## First run and storage
+
+Automations are stored in `Automations.json` in the app's support folder, written atomically with private permissions. When no file exists, the two starting automations are installed. If that first write fails, they stay available for the session, the failure is reported once, and the next save writes them. An existing file that cannot be read is never overwritten: saving is refused until it is repaired or removed outside the app.
+
+The automation installed first is named Clean up recipe list. It is a strict, marker-based cleanup: when a list has bullets or checkboxes, every other non-blank line must be a Markdown heading or a colon label, or the run stops with nothing changed. Add to Reminders is a separate automation with its own explicit destination and Send.
+
+## Recipe template and fixtures
+
+Load Rules → Template: Recipe ingredient cleanup replaces the draft with general rules only: the recipe control words and colon labels are cleared, then markers, Markdown, checkbox marks and numbered note references are removed, line edges are trimmed and empty lines dropped. It preserves unknown text rather than guessing whether an unmarked row is an ingredient or a heading: a heading without a colon stays, and so does preparation prose after an ingredient. Add your own Clear lines equal to text or Find and replace rules for those.
+
+The four supplied sample input and output pairs are `Tests/Fixtures/recipe-user-sample*`; the outputs contain 32, 7, 13 and 13 ingredient rows. They are matched byte for byte by `Tests/Fixtures/recipe-user-samples.rules.json`, which is the template plus eight literal rules for the headings and note suffixes that only those samples contain. That rule file is test data and is not part of the app; it can be imported with Load Rules → Import File. Samples 1 and 4 mix marked rows with unmarked ones, so the strict first-run automation refuses them; they need the rules above. `Tests/Fixtures/README.md` says which rules each fixture is checked against.
+
+## Changes for automations saved by earlier builds
+
+Saved automations are never rewritten. Three corrections change what an existing one does:
+
+- An automation that uses Remove numbered note references without Trim spaces at line edges no longer trims lines that hold no note reference.
+- A pattern with a shorter alternative first, or a lazy quantifier, now clears every line it can match entirely. It may clear lines it used to leave.
+- A literal rule typed with a precomposed letter no longer matches the decomposed spelling, and the reverse.
+
+The rule labelled Sort lines alphabetically in earlier builds is now labelled Sort lines (case-sensitive). Its JSON kind and its behaviour are unchanged.
+
+## Scope
+
+The rule builder is a linear pipeline, not a branching programming system. The behaviour described here is checked by `Tests/AutomationChecks.swift` (rules, limits, files) and `Tests/AutomationControllerChecks.swift` (the dialogs, driven headless). Full application parity remains incomplete.
