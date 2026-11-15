@@ -2,15 +2,28 @@
 #import "TTSearchEngine.h"
 #include <atomic>
 #include <chrono>
+#include <locale>
+#include <mutex>
 #include <string>
 #include <stdexcept>
+#include <vector>
 #define BOOST_REGEX_STANDALONE
+// Standalone Boost.Regex does not include Boost.Config, so nothing else defines this. Without it
+// the traits cache and the matcher's memory-block cache are unlocked, and two searches on
+// different threads (a folder search and the Find window, say) corrupt them.
+#define BOOST_HAS_THREADS
 #include <boost/regex.hpp>
 
 @implementation TTSearchCancellation { std::atomic<bool> _cancelled; }
 - (instancetype)init { if ((self=[super init])) _cancelled=false; return self; }
 - (void)cancel { _cancelled=true; }
 - (BOOL)cancelled { return _cancelled.load(); }
+@end
+@implementation TTSearchMatch
+- (instancetype)initWithRange:(NSRange)range replacement:(NSString *)replacement { if ((self=[super init])) { _range=range; _replacement=[replacement copy]; } return self; }
+@end
+@implementation TTSearchResult
+- (instancetype)initWithMatches:(NSArray<TTSearchMatch *> *)matches truncated:(BOOL)truncated { if ((self=[super init])) { _matches=[matches copy]; _truncated=truncated; } return self; }
 @end
 namespace {
 struct Budget {
@@ -24,7 +37,10 @@ struct Budget {
         }
     }
 };
-/// UTF-16 code units match the reference Windows wchar_t iterator, even on macOS.
+/// The regex runs over Unicode code points (wchar_t is 32 bits on macOS), so one character is one
+/// element for `.`, classes and quantifiers and a match can never split a surrogate pair. This
+/// departs on purpose from the reference Windows iterator, which walks UTF-16 code units. Reported
+/// ranges are converted back to UTF-16.
 struct CheckedIterator {
     using iterator_category=std::bidirectional_iterator_tag;
     using value_type=wchar_t; using difference_type=ptrdiff_t;
@@ -38,11 +54,91 @@ struct CheckedIterator {
     bool operator==(const CheckedIterator&o)const{return position==o.position;}
     bool operator!=(const CheckedIterator&o)const{return position!=o.position;}
 };
-std::wstring units(NSString *s) {std::wstring out;out.reserve(s.length);for(NSUInteger i=0;i<s.length;i++)out.push_back([s characterAtIndex:i]);return out;}
-bool validUnits(const std::wstring&s){for(size_t i=0;i<s.size();i++){auto c=s[i];if(c>=0xD800&&c<=0xDBFF){if(i+1==s.size()||s[i+1]<0xDC00||s[i+1]>0xDFFF)return false;++i;}else if(c>=0xDC00&&c<=0xDFFF)return false;else if(c>0xFFFF)return false;}return true;}
-NSString *stringUnits(const std::wstring&s){if(!validUnits(s))throw std::runtime_error("The replacement produces an incomplete Unicode surrogate pair; no edits were applied.");std::vector<unichar> out;out.reserve(s.size());for(auto c:s)out.push_back((unichar)c);return [[NSString alloc]initWithCharacters:out.data() length:out.size()];}
-bool boundary(NSString *s,NSUInteger i){return i==0||i==s.length||!([s characterAtIndex:i]>=0xDC00&&[s characterAtIndex:i]<=0xDFFF&&[s characterAtIndex:i-1]>=0xD800&&[s characterAtIndex:i-1]<=0xDBFF);}
-bool word(wchar_t c){return c=='_'||[[NSCharacterSet alphanumericCharacterSet]characterIsMember:(unichar)c];}
+const NSUInteger maximumUnits=64*1024*1024;
+bool high(unsigned c){return c>=0xD800&&c<=0xDBFF;}
+bool low(unsigned c){return c>=0xDC00&&c<=0xDFFF;}
+/// Appends the code points of `range` with one bulk copy per chunk. An unpaired surrogate is kept
+/// as its own value, so malformed text is still searchable. `range` must not split a pair.
+void appendCodePoints(std::wstring &out,NSString *s,NSRange range){
+    const NSUInteger chunkSize=65536,end=NSMaxRange(range);
+    std::vector<unichar> chunk(std::min(range.length,chunkSize));
+    out.reserve(out.size()+range.length);
+    for(NSUInteger i=range.location;i<end;){
+        NSUInteger n=std::min(end-i,chunkSize);
+        [s getCharacters:chunk.data() range:NSMakeRange(i,n)];
+        if(n>1&&high(chunk[n-1])&&i+n<end)--n; // decode a pair that straddles two chunks in the next one
+        for(NSUInteger k=0;k<n;k++){
+            unichar c=chunk[k];
+            if(high(c)&&k+1<n&&low(chunk[k+1])){out.push_back((wchar_t)(0x10000+((c-0xD800)<<10)+(chunk[k+1]-0xDC00)));++k;}
+            else out.push_back(c);
+        }
+        i+=n;
+    }
+}
+std::wstring codePoints(NSString *s){std::wstring out;appendCodePoints(out,s,NSMakeRange(0,s.length));return out;}
+bool validUnits(const unichar *s,size_t count){for(size_t i=0;i<count;i++){if(high(s[i])){if(i+1==count||!low(s[i+1]))return false;++i;}else if(low(s[i]))return false;}return true;}
+bool validUnits(NSString *s){std::vector<unichar> units(s.length);[s getCharacters:units.data() range:NSMakeRange(0,s.length)];return validUnits(units.data(),units.size());}
+/// Encodes code points as UTF-16. Output that would hold half a surrogate pair is refused, so no
+/// half character is ever written.
+NSString *stringUnits(const std::wstring&s){
+    std::vector<unichar> out;out.reserve(s.size());
+    for(auto value:s){
+        auto c=(uint32_t)value;
+        if(c>0x10FFFF)throw std::runtime_error("The replacement produces a value outside Unicode; no edits were applied.");
+        if(c>0xFFFF){out.push_back((unichar)(0xD800+((c-0x10000)>>10)));out.push_back((unichar)(0xDC00+((c-0x10000)&0x3FF)));}
+        else out.push_back((unichar)c);
+    }
+    if(!validUnits(out.data(),out.size()))throw std::runtime_error("The replacement produces an incomplete Unicode surrogate pair; no edits were applied.");
+    return [[NSString alloc]initWithCharacters:out.data() length:out.size()];
+}
+size_t unitCount(const std::wstring&s){size_t count=s.size();for(auto c:s)if((uint32_t)c>0xFFFF)++count;return count;}
+bool boundary(NSString *s,NSUInteger i){return i==0||i==s.length||!(low([s characterAtIndex:i])&&high([s characterAtIndex:i-1]));}
+bool word(unichar c){return c=='_'||[[NSCharacterSet alphanumericCharacterSet]characterIsMember:c];}
+bool word(unichar highUnit,unichar lowUnit){return [[NSCharacterSet alphanumericCharacterSet]longCharacterIsMember:0x10000+((UTF32Char)(highUnit-0xD800)<<10)+(lowUnit-0xDC00)];}
+/// Whether the character ending at `i` is a word character. Only a low surrogate preceded by a
+/// high one is combined, so a unit inside a match is never joined with one outside it.
+bool wordBefore(NSString *s,NSUInteger i){
+    if(i==0)return false;
+    unichar c=[s characterAtIndex:i-1];
+    if(low(c)&&i>=2&&high([s characterAtIndex:i-2]))return word([s characterAtIndex:i-2],c);
+    return word(c);
+}
+/// Whether the character starting at `i` is a word character.
+bool wordAfter(NSString *s,NSUInteger i){
+    if(i>=s.length)return false;
+    unichar c=[s characterAtIndex:i];
+    if(high(c)&&i+1<s.length&&low([s characterAtIndex:i+1]))return word(c,[s characterAtIndex:i+1]);
+    return word(c);
+}
+/// Per-regex UTF-8 locale: case folding and \w, \b, \s follow Unicode without touching the
+/// process-wide locale, which Scintilla and number formatting depend on.
+const std::locale &unicodeLocale(){
+    static const std::locale locale=[]{try{return std::locale("en_US.UTF-8");}catch(...){return std::locale::classic();}}();
+    return locale;
+}
+/// \d and [[:digit:]] stay 0-9 as before the Unicode locale: a class asking for digits without
+/// letters takes only ASCII digits. \w and [[:alnum:]] ask for letters too and stay Unicode-wide,
+/// in step with the Whole word test.
+struct SearchTraits:boost::regex_traits<wchar_t>{
+    bool isctype(wchar_t c,char_class_type mask)const{
+        const char_class_type digit=std::ctype_base::digit,alpha=std::ctype_base::alpha;
+        if((mask&digit)&&!(mask&alpha))return (c>=L'0'&&c<=L'9')||((mask&~digit)&&boost::regex_traits<wchar_t>::isctype(c,mask&~digit));
+        return boost::regex_traits<wchar_t>::isctype(c,mask);
+    }
+};
+using SearchRegex=boost::basic_regex<wchar_t,SearchTraits>;
+std::atomic<NSUInteger> compilations{0};
+/// One-entry cache, so a folder search compiles its pattern once and not once per file. A compiled
+/// boost regex is immutable shared state; every search works on its own copy of the handle.
+SearchRegex compiledRegex(const std::wstring &pattern,bool matchCase){
+    static std::mutex mutex;static bool cached=false,cachedCase=false;static std::wstring cachedPattern;static SearchRegex cachedRegex;
+    {std::lock_guard<std::mutex> lock(mutex);if(cached&&cachedCase==matchCase&&cachedPattern==pattern)return cachedRegex;}
+    SearchRegex regex;regex.imbue(unicodeLocale());
+    regex.assign(pattern,boost::regex::ECMAScript|(matchCase?0:boost::regex::icase));
+    ++compilations;
+    std::lock_guard<std::mutex> lock(mutex);cached=true;cachedCase=matchCase;cachedPattern=pattern;cachedRegex=regex;
+    return regex;
+}
 }
 @implementation TTSearchEngine
 + (NSString *)decodeExtended:(NSString *)text {
@@ -59,9 +155,24 @@ bool word(wchar_t c){return c=='_'||[[NSCharacterSet alphanumericCharacterSet]ch
         }}[out appendFormat:@"%C",c];
     }return out;
 }
++ (NSUInteger)regexCompilationCount { return compilations.load(); }
 + (NSDictionary *)matchesInText:(NSString *)text query:(NSString *)query replacement:(NSString *)replacement mode:(NSInteger)mode matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord dotMatchesNewline:(BOOL)dotMatchesNewline cancellation:(TTSearchCancellation *)cancellation maximumMatches:(NSInteger)maximumMatches timeLimit:(NSTimeInterval)timeLimit error:(NSError **)error {
+    TTSearchResult *result=[self searchText:text range:NSMakeRange(0,text.length) query:query replacement:replacement mode:mode matchCase:matchCase wholeWord:wholeWord dotMatchesNewline:dotMatchesNewline cancellation:cancellation maximumMatches:maximumMatches timeLimit:timeLimit error:error];
+    if(!result)return nil;
+    NSMutableArray *rows=[NSMutableArray arrayWithCapacity:result.matches.count];
+    for(TTSearchMatch *match in result.matches)[rows addObject:@{@"range":[NSValue valueWithRange:match.range],@"replacement":match.replacement}];
+    return @{@"matches":rows,@"truncated":@(result.truncated)};
+}
++ (TTSearchResult *)searchText:(NSString *)text range:(NSRange)scope query:(NSString *)query replacement:(NSString *)replacement mode:(NSInteger)mode matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord dotMatchesNewline:(BOOL)dotMatchesNewline cancellation:(TTSearchCancellation *)cancellation maximumMatches:(NSInteger)maximumMatches timeLimit:(NSTimeInterval)timeLimit error:(NSError **)error {
     @try { try {
-        if(mode<0||mode>2||query.length==0||query.length>65536||text.length>64*1024*1024||replacement.length>1024*1024||maximumMatches<1||maximumMatches>100000||timeLimit<=0||timeLimit>30)throw std::runtime_error("Invalid search input or safety limit (64 Mi UTF-16 document, 64 Ki pattern, 1 Mi replacement, 100,000 results).");
+        if(mode<0||mode>2)throw std::runtime_error("Unknown search mode.");
+        if(query.length==0)throw std::runtime_error("Enter a nonempty search expression.");
+        if(query.length>65536)throw std::runtime_error("The search expression is longer than the 64 Ki UTF-16 limit.");
+        if(text.length>maximumUnits)throw std::runtime_error("The document is larger than the 64 Mi UTF-16 search limit.");
+        if(replacement.length>1024*1024)throw std::runtime_error("The replacement is longer than the 1 Mi UTF-16 limit.");
+        if(maximumMatches<1||maximumMatches>100000)throw std::runtime_error("The result limit must be between 1 and 100,000.");
+        if(!(timeLimit>0&&timeLimit<=30))throw std::runtime_error("The search time limit must be more than 0 and at most 30 seconds.");
+        if(scope.location>text.length||scope.length>text.length-scope.location||!boundary(text,scope.location)||!boundary(text,NSMaxRange(scope)))throw std::runtime_error("The search range is outside the text or splits a Unicode surrogate pair.");
         if(cancellation.cancelled)throw std::runtime_error("Search cancelled; no replacement was applied.");
         NSString *needle=mode==1?[self decodeExtended:query]:query;
         NSString *replacementText=mode==1?[self decodeExtended:replacement]:replacement;
@@ -70,37 +181,70 @@ bool word(wchar_t c){return c=='_'||[[NSCharacterSet alphanumericCharacterSet]ch
         // \\uD83D escape) would delete matches in the editor or be written as U+FFFD by folder
         // replace. Validate the whole decoded strings: a pair written as two escapes stays valid.
         // Regex patterns and formats are not literal text; that path validates its own output.
-        if(mode!=2&&!validUnits(units(needle)))throw std::runtime_error("The search text contains an incomplete Unicode surrogate pair; write both \\u halves or the full character.");
-        if(mode!=2&&!validUnits(units(replacementText)))throw std::runtime_error("The replacement contains an incomplete Unicode surrogate pair; no edits were applied.");
+        if(mode!=2&&!validUnits(needle))throw std::runtime_error("The search text contains an incomplete Unicode surrogate pair; write both \\u halves or the full character.");
+        if(mode!=2&&!validUnits(replacementText))throw std::runtime_error("The replacement contains an incomplete Unicode surrogate pair; no edits were applied.");
         Budget budget{cancellation,std::chrono::steady_clock::now()+std::chrono::milliseconds((long long)(timeLimit*1000))};
-        NSMutableArray *matches=[NSMutableArray array];bool truncated=false;size_t outputSize=0;
+        NSMutableArray<TTSearchMatch *> *matches=[NSMutableArray array];bool truncated=false;size_t outputSize=0;
+        const NSUInteger scopeEnd=NSMaxRange(scope);
         if(mode==2) {
-            auto input=units(text),pattern=units(needle),format=units(replacementText);
-            boost::wregex regex(pattern,boost::regex::ECMAScript|(matchCase?0:boost::regex::icase));
+            // The text before the range is decoded too and handed to Boost as `base`, so ^, \b, \A
+            // and lookbehind at the start of the range see the real document. Boost cannot look
+            // past `last`: lookahead, \b and \z at the end of the range stay range-relative, and a
+            // match is cut off there. Only $ is corrected, below.
+            std::wstring input;appendCodePoints(input,text,NSMakeRange(0,scope.location));
+            const size_t firstPoint=input.size();appendCodePoints(input,text,scope);
+            auto pattern=codePoints(needle),format=codePoints(replacementText);
+            const SearchRegex regex=compiledRegex(pattern,matchCase);
             auto flags=dotMatchesNewline?boost::match_default:boost::match_not_dot_newline;
-            CheckedIterator first{input.data(),&budget},last{input.data()+input.size(),&budget};
-            boost::regex_iterator<CheckedIterator,wchar_t> it(first,last,regex,flags),end;
-            for(;it!=end;++it){
-                budget.check();const auto &m=*it;NSUInteger location=m[0].first.position-input.data(),length=m.length();
+            if(scopeEnd<text.length){
+                // $ may match at the end of the range only where a line really ends there.
+                unichar next=[text characterAtIndex:scopeEnd];
+                bool separator=next=='\n'||next=='\r'||next=='\f'||next==0x2028||next==0x2029||next==0x85;
+                if(!separator||(next=='\n'&&scopeEnd>0&&[text characterAtIndex:scopeEnd-1]=='\r'))flags|=boost::match_not_eol;
+            }
+            const wchar_t *data=input.data();
+            CheckedIterator base{data,&budget},start{data+firstPoint,&budget},last{data+input.size(),&budget};
+            boost::match_results<CheckedIterator> m;
+            // Matches arrive in ascending order, so one running cursor converts code-point indexes
+            // to UTF-16 offsets in a single pass with no offset table.
+            size_t cursorPoint=firstPoint;NSUInteger cursorUnit=scope.location;
+            auto unitAt=[&](size_t point){
+                if(point<cursorPoint||point>input.size())throw std::runtime_error("Search produced an out-of-order match; no replacement was applied.");
+                for(;cursorPoint<point;++cursorPoint)cursorUnit+=(uint32_t)input[cursorPoint]>0xFFFF?2:1;
+                return cursorUnit;
+            };
+            // Same progression as boost::regex_iterator, which has no way to take `base`: continue
+            // from the end of the last match and refuse a second empty match at that position.
+            for(bool previousEmpty=false;;){
+                if(!boost::regex_search(start,last,m,regex,previousEmpty?flags|boost::regex_constants::match_not_initial_null:flags,base))break;
+                budget.check();
+                const size_t firstMatched=m[0].first.position-data,lastMatched=m[0].second.position-data;
+                start=m[0].second;previousEmpty=firstMatched==lastMatched;
+                const NSUInteger location=unitAt(firstMatched),length=unitAt(lastMatched)-location;
+                // Unreachable over code points; kept so a half character can never be reported.
                 if(!boundary(text,location)||!boundary(text,location+length))throw std::runtime_error("The expression matches part of a Unicode surrogate pair; use an expression that preserves the full character.");
-                if(wholeWord&&((location>0&&word(input[location-1]))||(location+length<input.size()&&word(input[location+length]))))continue;
+                if(wholeWord&&(wordBefore(text,location)||wordAfter(text,location+length)))continue;
                 if(matches.count>=(NSUInteger)maximumMatches){truncated=true;break;}
-                auto expanded=m.format(format,boost::format_all);outputSize+=expanded.size();if(outputSize>64*1024*1024)throw std::runtime_error("Replacement expansion exceeded the 64 Mi UTF-16 safety limit.");
-                [matches addObject:@{@"range":[NSValue valueWithRange:NSMakeRange(location,length)],@"replacement":stringUnits(expanded)}];
+                auto expanded=m.format(format,boost::format_all);outputSize+=unitCount(expanded);if(outputSize>maximumUnits)throw std::runtime_error("Replacement expansion exceeded the 64 Mi UTF-16 safety limit.");
+                [matches addObject:[[TTSearchMatch alloc]initWithRange:NSMakeRange(location,length) replacement:stringUnits(expanded)]];
             }
         }else {
-            NSRange remainder=NSMakeRange(0,text.length);NSStringCompareOptions options=NSLiteralSearch|(matchCase?0:NSCaseInsensitiveSearch);
-            while(remainder.location<=text.length){
+            NSRange remainder=scope;NSStringCompareOptions options=NSLiteralSearch|(matchCase?0:NSCaseInsensitiveSearch);
+            while(remainder.location<=scopeEnd){
                 if(cancellation.cancelled)throw std::runtime_error("Search cancelled; no replacement was applied.");
                 if(std::chrono::steady_clock::now()>budget.deadline)throw std::runtime_error("Search exceeded its time budget; narrow the scope.");
                 NSRange r=[text rangeOfString:needle options:options range:remainder];if(r.location==NSNotFound)break;
-                bool accept=!wholeWord||((r.location==0||!word([text characterAtIndex:r.location-1]))&&(NSMaxRange(r)==text.length||!word([text characterAtIndex:NSMaxRange(r)])));
-                if(accept){if(matches.count>=(NSUInteger)maximumMatches){truncated=true;break;}outputSize+=replacementText.length;if(outputSize>64*1024*1024)throw std::runtime_error("Replacement expansion exceeded the safety limit.");[matches addObject:@{@"range":[NSValue valueWithRange:r],@"replacement":replacementText}];}
-                remainder=NSMakeRange(NSMaxRange(r),text.length-NSMaxRange(r));
+                bool accept=!wholeWord||(!wordBefore(text,r.location)&&!wordAfter(text,NSMaxRange(r)));
+                if(accept){if(matches.count>=(NSUInteger)maximumMatches){truncated=true;break;}outputSize+=replacementText.length;if(outputSize>maximumUnits)throw std::runtime_error("Replacement expansion exceeded the 64 Mi UTF-16 safety limit.");[matches addObject:[[TTSearchMatch alloc]initWithRange:r replacement:replacementText]];}
+                // A rejected whole-word candidate may overlap a valid one, so step one unit past
+                // its start; an accepted match is skipped whole so hits never overlap.
+                NSUInteger next=accept?NSMaxRange(r):r.location+1;
+                remainder=NSMakeRange(next,scopeEnd-next);
             }
         }
-        return @{@"matches":matches,@"truncated":@(truncated)};
-    }catch(const std::exception&e){if(error)*error=[NSError errorWithDomain:@"TextTank.Search" code:1 userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithUTF8String:e.what()]}];return nil;}}
+        return [[TTSearchResult alloc]initWithMatches:matches truncated:truncated];
+    }catch(const std::exception&e){if(error)*error=[NSError errorWithDomain:@"TextTank.Search" code:1 userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithUTF8String:e.what()]?:@"Search failed safely."}];return nil;}
+    catch(...){if(error)*error=[NSError errorWithDomain:@"TextTank.Search" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Search failed safely."}];return nil;}}
     @catch(NSException *e){if(error)*error=[NSError errorWithDomain:@"TextTank.Search" code:2 userInfo:@{NSLocalizedDescriptionKey:e.reason?:@"Search failed safely."}];return nil;}
 }
 @end

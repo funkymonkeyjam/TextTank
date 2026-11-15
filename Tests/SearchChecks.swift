@@ -19,7 +19,7 @@ final class CancelAfterPolls: TTSearchCancellation {
             func search(
                 _ text: String, _ query: String, _ replacement: String = "",
                 mode: SearchOptions.Mode = .regularExpression, caseSensitive: Bool = true, whole: Bool = false,
-                dot: Bool = false
+                dot: Bool = false, range: NSRange? = nil
             ) throws -> SearchReport {
                 var o = SearchOptions()
                 o.query = query
@@ -28,7 +28,7 @@ final class CancelAfterPolls: TTSearchCancellation {
                 o.matchCase = caseSensitive
                 o.wholeWord = whole
                 o.dotMatchesNewline = dot
-                return try SearchCore.search(text, options: o)
+                return try SearchCore.search(text, options: o, range: range)
             }
             let literal = try search("a.b aXb a.b", "a.b", "X", mode: .normal)
             check(literal.hits.count == 2, "normal mode is literal")
@@ -133,12 +133,18 @@ final class CancelAfterPolls: TTSearchCancellation {
             var failed = false
             do { _ = try search("text", "(") } catch { failed = true }
             check(failed, "malformed Boost pattern rejected")
-            failed = false
-            do { _ = try search("🥑", ".") } catch { failed = true }
-            check(failed, "regex splitting surrogate rejected before mutation")
-            failed = false
-            do { _ = try search("🥑", "(.).", "$1") } catch { failed = true }
-            check(failed, "replacement capture splitting surrogate rejected")
+            // F19: the regex runs over code points, so these two no longer reject; they used to assert
+            // "regex splitting surrogate rejected before mutation" and "replacement capture splitting
+            // surrogate rejected".
+            check(
+                try search("🥑", ".").hits.map(\.range) == [NSRange(location: 0, length: 2)],
+                "regex dot matches a whole astral character")
+            check(try search("🥑", "(.).", "$1").hits.isEmpty, "two dots do not match the two halves of one character")
+            let twoDots = try search("🥑🥑", "(.).", "$1")
+            check(
+                try twoDots.hits.map(\.range) == [NSRange(location: 0, length: 4)]
+                    && (try SearchCore.replacing("🥑🥑", with: twoDots.hits)) == "🥑",
+                "a capture of one astral character is written back whole")
             // F20/G343: extended escapes must not inject unpaired surrogates into matches or replacements.
             for (text, query, replacement, label) in [
                 ("x😀y", "\\uD83D", "", "lone high-surrogate query"), ("x😀y", "\\uDE00", "", "lone low-surrogate query"),
@@ -229,6 +235,278 @@ final class CancelAfterPolls: TTSearchCancellation {
                     cancellation: TTSearchCancellation()
                 ).count == 100000 && Date().timeIntervalSince(denseStart) < 10,
                 "dense bookmark offsets bounded linear pass")
+
+            func ranges(_ report: SearchReport) -> [NSRange] { report.hits.map(\.range) }
+            func at(_ location: Int, _ length: Int) -> NSRange { NSRange(location: location, length: length) }
+            func message(_ body: () throws -> Void) -> String {
+                do { try body() } catch { return error.localizedDescription }
+                return ""
+            }
+            // F19: regex over code points.
+            let avocado = "🥑 a"
+            let dots = try search(avocado, ".")
+            check(ranges(dots) == [at(0, 2), at(2, 1), at(3, 1)], "regex dot steps over an astral character as one")
+            check(
+                SearchCore.byteRanges(ranges(dots), in: avocado)?.count == 3,
+                "every dot hit on astral text maps to a byte range")
+            check(ranges(try search(avocado, "[^a]")) == [at(0, 2), at(2, 1)], "negated class takes a whole character")
+            let stars = try search(avocado, "a*", "_")
+            check(
+                ranges(stars) == [at(0, 0), at(2, 0), at(3, 1), at(4, 0)],
+                "empty matches never land inside a surrogate pair")
+            check(
+                try SearchCore.replacing(avocado, with: stars.hits) == "_🥑_ __",
+                "empty-match replace all on astral text is well formed")
+            check(ranges(try search(avocado, "\\x{1F951}")) == [at(0, 2)], "astral code point escape matches")
+            check(ranges(try search("🥑🥑", "🥑+")) == [at(0, 4)], "quantifier applies to the whole astral character")
+            check(ranges(try search("🥑🍎x", "[🥑🍎]+")) == [at(0, 4)], "class of astral characters")
+            let doubled = try search("🥑", "(.)", "$1$1")
+            check(try SearchCore.replacing("🥑", with: doubled.hits) == "🥑🥑", "astral capture expands twice")
+            check(
+                try ranges(try search("🥑", "x|$", "\\x{1F34E}")) == [at(2, 0)]
+                    && (try search("🥑", "$", "\\x{1F34E}")).hits.first?.replacement == "🍎",
+                "astral escape in the replacement format is written as a surrogate pair")
+            check(ranges(try search("🥑a", "a", whole: true)) == [at(2, 1)], "whole word after an emoji still matches")
+            check(
+                ranges(try search("\u{1D400}b", "\\w+", whole: true)) == [at(0, 3)],
+                "an astral letter and a BMP letter are one regex word")
+            check(
+                ranges(try search("🥑é", "É", caseSensitive: false)) == [at(2, 1)],
+                "case-insensitive regex after an emoji reports the UTF-16 range")
+            check(
+                try ranges(try search("a🥑b🥑c", "🥑", "X")) == [at(1, 2), at(4, 2)]
+                    && ranges(try search("🥑🥑🥑abc🥑", "b")) == [at(7, 1)],
+                "UTF-16 offsets stay exact after several astral characters")
+            rejects("format producing half a surrogate pair is still refused", message: "surrogate") {
+                _ = try search("a", "a", "\\x{D83D}")
+            }
+            let lone = NSString(characters: [0x61, 0xD83D, 0x62], length: 3) as String
+            let loneDots = try search(lone, ".")
+            check(
+                ranges(loneDots) == [at(0, 1), at(1, 1), at(2, 1)],
+                "text with an unpaired surrogate is searched unit by unit without a crash")
+            rejects("an unpaired surrogate captured from the text is never written back", message: "surrogate") {
+                _ = try search(lone, "(.)", "$1")
+            }
+            // 524,288 astral characters are 1 Mi UTF-16 units: 70 copies pass the 64 Mi limit only if
+            // an astral character counts as two units; 60 copies stay below it.
+            var expanding = SearchOptions()
+            expanding.query = "a"
+            expanding.replacement = String(repeating: "🥑", count: 512 * 1024)
+            expanding.mode = .regularExpression
+            rejects("expansion limit counts astral output as two UTF-16 units", message: "64 Mi") {
+                _ = try SearchCore.search(String(repeating: "a", count: 70), options: expanding, timeLimit: 30)
+            }
+            check(
+                try SearchCore.search(String(repeating: "a", count: 60), options: expanding, timeLimit: 30).hits.count
+                    == 60, "expansion below the UTF-16 limit is accepted")
+            // F23: regex mode folds case and classifies words by Unicode, as literal mode does.
+            check(
+                try ranges(try search("CAFÉ café", "café", caseSensitive: false)) == [at(0, 4), at(5, 4)]
+                    && ranges(try search("CAFÉ café", "café")) == [at(5, 4)],
+                "regex case folding covers non-ASCII letters")
+            check(
+                ranges(try search("café 中文", "\\w+")) == [at(0, 4), at(5, 2)], "regex word class covers non-ASCII")
+            check(
+                try search("café", "caf\\b").hits.isEmpty
+                    && ranges(try search("cafés café", "café", whole: true)) == [at(6, 4)],
+                "regex word boundary and Whole word agree on a non-ASCII letter")
+            check(
+                ranges(try search("CAFÉ", "[a-z]+", caseSensitive: false)) == [at(0, 3)],
+                "explicit ASCII range is unchanged by Unicode folding")
+            check(
+                try ranges(search("١٢٣ 123", "\\d+")) == [at(4, 3)]
+                    && ranges(search("١٢٣ 123", "[[:digit:]]+")) == [at(4, 3)]
+                    && ranges(search("١a 1", "[\\d\\s]+")) == [at(2, 2)]
+                    && ranges(search("١1", "\\D")) == [at(0, 1)],
+                "regex digit class stays ASCII, as it was")
+            check(
+                try ranges(search("١٢٣ 123", "\\w+")) == [at(0, 3), at(4, 3)]
+                    && search("١٢٣", "٢", mode: .normal, whole: true).hits.isEmpty,
+                "non-ASCII digits are word characters in regex and Whole word alike")
+            // F27: a rejected whole-word candidate must not hide an overlapping valid one.
+            let overlap = try search("xab ab ab", "ab ab", "X", mode: .normal, whole: true)
+            check(ranges(overlap) == [at(4, 5)], "whole word finds the occurrence overlapping a rejected candidate")
+            check(
+                try SearchCore.replacing("xab ab ab", with: overlap.hits) == "xab X",
+                "whole-word hits after a rejected candidate do not overlap")
+            check(
+                ranges(try search("ab ab ab", "ab ab", mode: .normal, whole: true)) == [at(0, 5)],
+                "accepted whole-word matches still advance past themselves")
+            check(
+                ranges(try search("🥑ab ab", "ab", mode: .normal, whole: true)) == [at(2, 2), at(5, 2)],
+                "whole word beside a surrogate pair")
+            check(
+                try search("abc", "ab|abc", whole: true).hits.isEmpty,
+                "regex whole word does not retry a rejected match (pinned; see F27)")
+            // G349: astral letters are word characters on both sides, in both branches.
+            for mode in [SearchOptions.Mode.normal, .regularExpression] {
+                let name = mode == .normal ? "literal" : "regex"
+                check(
+                    try search("\u{1D431}ab", "ab", mode: mode, whole: true).hits.isEmpty,
+                    "\(name) whole word rejected after an astral letter")
+                check(
+                    try search("ab\u{20000}", "ab", mode: mode, whole: true).hits.isEmpty,
+                    "\(name) whole word rejected before an astral letter")
+                check(
+                    ranges(try search("🥑ab🥑", "ab", mode: mode, whole: true)) == [at(2, 2)],
+                    "\(name) whole word accepted between plain emoji")
+                check(
+                    ranges(try search("ab \u{1D431}ab", "ab", mode: mode, whole: true)) == [at(0, 2)],
+                    "\(name) whole word keeps only the occurrence not joined to an astral letter")
+            }
+            // F37: a range is searched inside the full text.
+            for mode in [SearchOptions.Mode.normal, .regularExpression] {
+                let name = mode == .normal ? "literal" : "regex"
+                check(
+                    try search("foobar foo", "foo", mode: mode, whole: true, range: at(0, 3)).hits.isEmpty,
+                    "\(name) ranged whole word sees the letter after the range")
+                check(
+                    ranges(try search("foobar foo", "foo", mode: mode, whole: true, range: at(7, 3))) == [at(7, 3)],
+                    "\(name) ranged hit is reported at its absolute location")
+                check(
+                    try search("xfoo", "foo", mode: mode, whole: true, range: at(1, 3)).hits.isEmpty,
+                    "\(name) ranged whole word sees the letter before the range")
+                check(
+                    ranges(try search("🥑 foo foo foo", "foo", mode: mode, range: at(7, 7))) == [at(7, 3), at(11, 3)],
+                    "\(name) ranged search stays inside the range after an astral prefix")
+                check(
+                    try search("foo", "foo", mode: mode, range: at(1, 2)).hits.isEmpty
+                        && (try search("foo", "foo", mode: mode, range: at(0, 2))).hits.isEmpty,
+                    "\(name) match may not extend past either end of the range")
+                check(
+                    message { _ = try search("abc", "a", mode: mode, range: at(2, 2)) }.contains("range")
+                        && message { _ = try search("🥑", "a", mode: mode, range: at(1, 1)) }.contains("range"),
+                    "\(name) range outside the text or inside a surrogate pair is refused")
+            }
+            check(ranges(try search("ab", "(?<=a)b", range: at(1, 1))) == [at(1, 1)], "ranged lookbehind sees the text")
+            check(
+                try search("ax", "^x", range: at(1, 1)).hits.isEmpty
+                    && ranges(try search("a\nx", "^x", range: at(2, 1))) == [at(2, 1)],
+                "ranged line start anchor uses the real line start")
+            check(
+                try search("xa", "x$", range: at(0, 1)).hits.isEmpty
+                    && ranges(try search("x\na", "x$", range: at(0, 1))) == [at(0, 1)]
+                    && ranges(try search("ax", "x$", range: at(1, 1))) == [at(1, 1)]
+                    && ranges(try search("x\r\na", "x$", range: at(0, 1))) == [at(0, 1)]
+                    && (try search("x\r\na", "\\r$", range: at(0, 2))).hits.isEmpty,
+                "ranged line end anchor uses the real line end")
+            check(try search("ab", "\\bb", range: at(1, 1)).hits.isEmpty, "ranged word boundary sees the text before")
+            check(try search("ab", "\\Ab", range: at(1, 1)).hits.isEmpty, "ranged buffer start is the text start")
+            check(
+                ranges(try search("foo bar", "\\w+", range: at(0, 6))) == [at(0, 3), at(4, 2)],
+                "ranged match is truncated at the range end")
+            let rangedEmpty = try search("xab\nx", "(?=.)|$", "_", range: at(1, 2))
+            check(
+                ranges(rangedEmpty) == [at(1, 0), at(2, 0), at(3, 0)],
+                "ranged zero-width matches progress and include the range end")
+            check(
+                try SearchCore.replacing("xab\nx", with: rangedEmpty.hits) == "x_a_b_\nx",
+                "ranged zero-width replacements land at their absolute offsets")
+            check(
+                ranges(try search("xabx", "(?=.)|$", range: at(1, 2))) == [at(1, 0), at(2, 0)],
+                "ranged zero-width matches stop where the range ends mid-line")
+            check(
+                try search("ab ab", "b", "[$`]", range: at(3, 2)).hits.first?.replacement == "[a]",
+                "ranged prefix reference starts at the range, as a substring search did")
+            var rangedOptions = SearchOptions()
+            rangedOptions.query = "a"
+            let rangedLimit = try SearchCore.search("aaaaa", options: rangedOptions, range: at(1, 3), limit: 2)
+            check(
+                rangedLimit.truncated && rangedLimit.hits.map(\.range) == [at(1, 1), at(2, 1)],
+                "ranged result cap reports truncation")
+            let rangedAll = try SearchCore.search("aaaaa", options: rangedOptions, range: at(1, 3), limit: 3)
+            check(!rangedAll.truncated && rangedAll.hits.count == 3, "ranged result cap counts only hits in the range")
+            // F210: typed results; the dictionary selector stays as a wrapper.
+            let typed = try TTSearchEngine.searchText(
+                "a b", range: at(0, 3), query: "\\w", replacement: "<$0>", mode: 2, matchCase: true, wholeWord: false,
+                dotMatchesNewline: false, cancellation: TTSearchCancellation(), maximumMatches: 1, timeLimit: 2)
+            check(
+                typed.truncated && typed.matches.count == 1 && typed.matches[0].range == at(0, 1)
+                    && typed.matches[0].replacement == "<a>", "typed search result carries range and replacement")
+            let legacy = try TTSearchEngine.matches(
+                inText: "a b", query: "\\w", replacement: "<$0>", mode: 2, matchCase: true, wholeWord: false,
+                dotMatchesNewline: false, cancellation: TTSearchCancellation(), maximumMatches: 5, timeLimit: 2)
+            let legacyRows = legacy["matches"] as? [[String: Any]] ?? []
+            check(
+                legacy["truncated"] as? Bool == false
+                    && legacyRows.map { ($0["range"] as? NSValue)?.rangeValue } == [at(0, 1), at(2, 1)]
+                    && legacyRows.map { $0["replacement"] as? String } == ["<a>", "<b>"],
+                "dictionary selector still returns the same matches")
+            var bad = SearchOptions()
+            bad.query = "a"
+            check(
+                message { _ = try SearchCore.search("a", options: bad, limit: 0) }.contains("result limit")
+                    && message { _ = try SearchCore.search("a", options: bad, limit: 100001) }.contains("result limit"),
+                "result limit outside its bounds is named")
+            check(
+                message { _ = try SearchCore.search("a", options: bad, timeLimit: 0) }.contains("time limit")
+                    && message { _ = try SearchCore.search("a", options: bad, timeLimit: 31) }.contains("time limit"),
+                "time limit outside its bounds is named")
+            bad.replacement = String(repeating: "r", count: 1024 * 1024 + 1)
+            check(
+                message { _ = try SearchCore.search("a", options: bad) }.contains("replacement"),
+                "oversized replacement is named")
+            bad.replacement = ""
+            bad.query = String(repeating: "q", count: 65537)
+            check(
+                message { _ = try SearchCore.search("a", options: bad) }.contains("search expression"),
+                "oversized search expression is named")
+            bad.query = ""
+            check(
+                message { _ = try SearchCore.search("a", options: bad) }.contains("nonempty"),
+                "empty search expression is named")
+            check(
+                message {
+                    _ = try TTSearchEngine.searchText(
+                        "a", range: at(0, 1), query: "a", replacement: "", mode: 3, matchCase: true, wholeWord: false,
+                        dotMatchesNewline: false, cancellation: TTSearchCancellation(), maximumMatches: 1, timeLimit: 2)
+                }.contains("mode"), "unknown search mode is named")
+            check(
+                message {
+                    _ = try SearchCore.bookmarkLines(in: "abc", locations: [2, 1], cancellation: TTSearchCancellation())
+                }.contains("ascending")
+                    && message {
+                        _ = try SearchCore.bookmarkLines(
+                            in: "abc", locations: [9], cancellation: TTSearchCancellation())
+                    }.contains("past the end"), "bookmark offset errors carry a description")
+            // F228: one compilation per pattern and flag set across consecutive searches.
+            let compiledBefore = TTSearchEngine.regexCompilationCount()
+            for file in ["one cache1", "two cache1", "three"] { _ = try search(file, "cache1\\d*") }
+            check(
+                TTSearchEngine.regexCompilationCount() == compiledBefore + 1,
+                "the same regex is compiled once for consecutive searches")
+            _ = try search("x", "cache1\\d*", caseSensitive: false)
+            check(
+                TTSearchEngine.regexCompilationCount() == compiledBefore + 2,
+                "a different flag set compiles again")
+            check(
+                try ranges(try search("CACHE1 cache12", "cache1\\d*", caseSensitive: false)) == [at(0, 6), at(7, 7)]
+                    && ranges(try search("CACHE1 cache12", "cache1\\d*")) == [at(7, 7)],
+                "cached patterns keep their own case flag")
+            let chunked = String(repeating: "ab🥑", count: 100000) + "Z"
+            check(
+                try ranges(try search(chunked, "Z")) == [at(400000, 1)]
+                    && (try search(chunked, "🥑")).hits.count == 100000,
+                "bulk-copied input keeps every surrogate pair and offset")
+            // Searches run on background tasks, so two can compile and match at once. Before Boost's
+            // locks were enabled this aborted the process inside its traits cache.
+            let mismatches = NSLock()
+            var wrong = 0
+            DispatchQueue.concurrentPerform(iterations: 16) { worker in
+                var concurrent = SearchOptions()
+                concurrent.mode = .regularExpression
+                for turn in 0..<300 {
+                    concurrent.query = turn % 2 == 0 ? "a+\(worker % 3)" : "b+"
+                    let found = (try? SearchCore.search("aa\(worker % 3) bb", options: concurrent).hits.count) ?? -1
+                    if found != 1 {
+                        mismatches.lock()
+                        wrong += 1
+                        mismatches.unlock()
+                    }
+                }
+            }
+            check(wrong == 0, "regex searches on sixteen threads at once compile, share the cache and match correctly")
             Checks.summary { "PASS SearchChecks: \(Checks.count) assertions" }
         }
     }

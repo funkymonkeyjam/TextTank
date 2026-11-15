@@ -42,9 +42,23 @@ enum SearchCore {
         }
         try check()
         for target in locations {
-            guard target >= position else { throw NSError(domain: "TextTank.Search", code: 7) }
+            guard target >= position else {
+                throw NSError(
+                    domain: "TextTank.Search", code: 7,
+                    userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "Bookmark offsets are not in ascending order; bookmarks were preserved."
+                    ])
+            }
             while position < target {
-                guard index < text.utf16.endIndex else { throw NSError(domain: "TextTank.Search", code: 7) }
+                guard index < text.utf16.endIndex else {
+                    throw NSError(
+                        domain: "TextTank.Search", code: 7,
+                        userInfo: [
+                            NSLocalizedDescriptionKey:
+                                "A bookmark offset is past the end of the text; bookmarks were preserved."
+                        ])
+                }
                 let unit = text.utf16[index]
                 if unit == 13 { line += 1 } else if unit == 10 && !priorCR { line += 1 }
                 priorCR = unit == 13
@@ -58,19 +72,20 @@ enum SearchCore {
         return lines
     }
 
+    /// `range` (UTF-16, default the whole text) limits where matches may lie; hits keep their
+    /// offsets in `text` and the engine still sees the text around the range.
     static func search(
-        _ text: String, options: SearchOptions, cancellation: TTSearchCancellation = TTSearchCancellation(),
-        limit: Int = 100000, timeLimit: TimeInterval = 2
+        _ text: String, options: SearchOptions, range: NSRange? = nil,
+        cancellation: TTSearchCancellation = TTSearchCancellation(), limit: Int = 100000, timeLimit: TimeInterval = 2
     ) throws -> SearchReport {
-        let result = try TTSearchEngine.matches(
-            inText: text, query: options.query, replacement: options.replacement, mode: options.mode.rawValue,
-            matchCase: options.matchCase, wholeWord: options.wholeWord, dotMatchesNewline: options.dotMatchesNewline,
-            cancellation: cancellation, maximumMatches: limit, timeLimit: timeLimit)
-        let rows = result["matches"] as? [[String: Any]] ?? []
+        let result = try TTSearchEngine.searchText(
+            text, range: range ?? NSRange(location: 0, length: (text as NSString).length), query: options.query,
+            replacement: options.replacement, mode: options.mode.rawValue, matchCase: options.matchCase,
+            wholeWord: options.wholeWord, dotMatchesNewline: options.dotMatchesNewline, cancellation: cancellation,
+            maximumMatches: limit, timeLimit: timeLimit)
         return SearchReport(
-            hits: rows.map {
-                SearchHit(range: ($0["range"] as! NSValue).rangeValue, replacement: $0["replacement"] as! String)
-            }, truncated: result["truncated"] as? Bool ?? false)
+            hits: result.matches.map { SearchHit(range: $0.range, replacement: $0.replacement) },
+            truncated: result.truncated)
     }
     /// Scalar-granular like byteRanges: nil for surrogate splits, negative and out-of-range input.
     static func byteRange(_ range: NSRange, in text: String) -> NSRange? { byteRanges([range], in: text)?.first }

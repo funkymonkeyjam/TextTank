@@ -289,13 +289,14 @@ extension DocumentChecks {
             word.query = "cat"
             word.wholeWord = true
             word.matchCase = true
-            knownDefect(
-                "G354", "literal whole-word search does not match inside a word that continues with an astral letter",
-                fixed: try SearchCore.search("\(UnicodeFixtures.astralLetter)cat cat", options: word).hits.count == 1)
+            // Repaired by G349: both were G354 known-defect lines.
+            check(
+                try SearchCore.search("\(UnicodeFixtures.astralLetter)cat cat", options: word).hits.count == 1,
+                "literal whole-word search does not match inside a word that continues with an astral letter")
             word.mode = .regularExpression
-            knownDefect(
-                "G354", "regex whole-word search does not match inside a word that continues with an astral letter",
-                fixed: try SearchCore.search("\(UnicodeFixtures.astralLetter)cat cat", options: word).hits.count == 1)
+            check(
+                try SearchCore.search("\(UnicodeFixtures.astralLetter)cat cat", options: word).hits.count == 1,
+                "regex whole-word search does not match inside a word that continues with an astral letter")
             var half = SearchOptions()
             half.query = "\\uD83D"
             half.mode = .extended
