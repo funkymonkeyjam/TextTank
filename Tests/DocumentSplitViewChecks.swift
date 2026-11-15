@@ -414,12 +414,12 @@ extension DocumentChecks {
             rejects("reloading the document discards a recording started in its clone", message: "reloaded") {
                 _ = try delegate.macros.finishRecording()
             }
-            // F21: the reload detected Python again for a document that had been set to another
-            // language; the language found by a reload reaches the clone as well.
+            // G373: a reload keeps the language the document was set to instead of detecting again,
+            // so there is no newly detected language to carry to the clone (F21); the panes still agree.
             check(
-                document.languageIdentifier == "python" && palette(document.editor) != cpp
+                document.languageIdentifier == user.id && palette(document.editor) != cpp
                     && palette(clone) == palette(document.editor),
-                "a language detected by a reload restyles both panes")
+                "a reload keeps the chosen language and both panes still agree")
 
             // G341: recording across views is not supported, so closing the split ends a recording
             // started in the clone, and the closed clone no longer reports focus.
