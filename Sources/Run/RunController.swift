@@ -99,10 +99,12 @@ final class RunController: NSObject, NSMenuItemValidation {
         // compact form that is stored. This bound only keeps the decoder's input finite.
         guard json.count <= 4 * ConfiguredRun.maximumLibraryBytes else { throw RunFailure.configurationTooLarge }
         let updated = try JSONDecoder().decode([ConfiguredRun].self, from: json)
-        try ConfiguredRun.validateLibrary(updated)
-        // JSON object key order is not stable across encodes or OS versions. An unchanged
-        // library keeps its existing bytes and file identity instead of being rewritten.
-        guard updated != commands else { return }
+        // Compare stable encoded models, not Swift String equality: canonically equivalent
+        // Unicode strings can carry distinct command bytes (V32-02). Both encodes keep every
+        // existing validation and byte ceiling; default persistence formatting is unchanged.
+        let updatedBytes = try ConfiguredRun.encodeLibrary(updated, sortedKeys: true)
+        let currentBytes = try ConfiguredRun.encodeLibrary(commands, sortedKeys: true)
+        guard updatedBytes != currentBytes else { return }
         try persist(updated)
     }
     static let manageHelp =

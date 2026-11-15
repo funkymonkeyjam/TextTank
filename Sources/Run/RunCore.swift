@@ -56,7 +56,7 @@ struct ConfiguredRun: Codable, Equatable {
     }
     /// One shared byte ceiling for persistence and restart, including JSON escaping.
     static let maximumLibraryBytes = 1024 * 1024
-    static func encodeLibrary(_ commands: [Self]) throws -> Data {
+    static func encodeLibrary(_ commands: [Self], sortedKeys: Bool = false) throws -> Data {
         try validateLibrary(commands)
         // Reject obviously oversized inputs before JSONEncoder allocates an expanded
         // representation. JSON overhead/escaping is checked on the encoded result.
@@ -68,7 +68,9 @@ struct ConfiguredRun: Codable, Equatable {
                 remaining -= bytes
             }
         }
-        let data = try JSONEncoder().encode(commands)
+        let encoder = JSONEncoder()
+        if sortedKeys { encoder.outputFormatting = .sortedKeys }
+        let data = try encoder.encode(commands)
         guard data.count <= maximumLibraryBytes else { throw RunFailure.configurationTooLarge }
         return data
     }
