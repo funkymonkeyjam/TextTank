@@ -655,6 +655,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return RecoveryStore(directory: root.appendingPathComponent("Recovery", isDirectory: true))
     }()
     var recoveryID = UUID()
+    /// Offset for recovery metadata changes; adding the editor revision gives the store revision.
     var recoveryBase: UInt64 = 0
     /// One notice per app session about repeated recovery-write failures.
     static var recoveryFailureNoticeShown = false
@@ -667,23 +668,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recoveryTimer: Timer?
     private var recoveryDeadlineTimer: Timer?
     private let recoveryWriter = RecoveryWriter()
+    /// Invalidates completion callbacks whenever recovery is rescheduled, flushed or closed.
     private var recoveryGeneration = 0
+    /// Terminal once close starts: no timer or late completion may enqueue another copy.
     private var recoveryClosed = false
+    private static let defaultAutomaticRecoveryDelay: TimeInterval = 0.5
+    private static let defaultMaximumRecoveryDelay: TimeInterval = 5
     #if TESTING
-        var automaticRecoveryDelay: TimeInterval = 0.5
-        var maximumRecoveryDelay: TimeInterval = 5
+        var automaticRecoveryDelay = TextDocument.defaultAutomaticRecoveryDelay
+        var maximumRecoveryDelay = TextDocument.defaultMaximumRecoveryDelay
     #else
-        private let automaticRecoveryDelay: TimeInterval = 0.5
-        private let maximumRecoveryDelay: TimeInterval = 5
+        private let automaticRecoveryDelay = TextDocument.defaultAutomaticRecoveryDelay
+        private let maximumRecoveryDelay = TextDocument.defaultMaximumRecoveryDelay
     #endif
     let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
+    /// Encoding/BOM checkpoint paired with the save point from the latest completed read or save.
     var savedFormat = FileFormat(encoding: .utf8, bom: false)
     var format = FileFormat(encoding: .utf8, bom: false) {
         didSet {
             if !loading && format != oldValue {
                 recoveryBase += 1
-                updateChangeCount(
-                    format != savedFormat || editor.modified || !savepointMatchesDisk ? .changeDone : .changeCleared)
+                updateChangeCount(hasUnsavedState ? .changeDone : .changeCleared)
             }
         }
     }
@@ -694,8 +699,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var diskSignature: FileSignature?
     /// A sample taken by a caller that read the bytes through its own descriptor.
     private var capturedSample: FileSample?
+    /// Immutable bytes captured before a coordinated write; only data(ofType:) reads them during that write.
     private var savePayload: Data?
+    /// False if edits arrived during a save, so Scintilla's save point no longer identifies the disk bytes.
     private var savepointMatchesDisk = true
+    /// Ordinary dirty state shared by editor-change and format-change callbacks.
+    private var hasUnsavedState: Bool { editor.modified || format != savedFormat || !savepointMatchesDisk }
+    /// Recovery also keeps an untouched restored document: its framework dirty flag is independent
+    /// of the freshly loaded editor's save point and format checkpoint. Keep this broader rule distinct.
+    private var shouldKeepRecoveryCopy: Bool { isDocumentEdited || editor.modified || format != savedFormat }
+    private var recoveryRevision: UInt64 { recoveryBase + UInt64(editor.revision) }
     #if TESTING
         var afterWriteForTesting: (() throws -> Void)?
         /// Runs while NSDocument is inside an in-progress write, as the bytes are produced.
@@ -710,6 +723,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Status-line text for a recovered draft: what it is a draft of and when it was written.
     /// Cleared when the draft is saved under a name of its own.
     private(set) var recoveredOrigin: String?
+    /// Suppresses ordinary edit/recovery callbacks while a read or restore establishes its checkpoints.
     private var loading = false
     /// Set only while an explicit open-with-encoding is reading the file.
     private var openEncoding: FileEncoding?
@@ -787,7 +801,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ])
         }
     }
-    enum DiskState: Equatable { case unchanged, changed, missing }
+    enum DiskState: Equatable {
+        case unchanged, changed, missing
+        var alertText: (title: String, detail: String) {
+            let title: String
+            switch self {
+            case .unchanged: title = "File is unchanged"
+            case .missing: title = "File is missing"
+            case .changed: title = "File changed outside TextTank"
+            }
+            let detail =
+                self == .unchanged
+                ? "The on-disk bytes match the last read or save."
+                : "Your editor contents are preserved. Use Save As to keep your edits, or Revert to Saved to reload the disk version."
+            return (title: title, detail: detail)
+        }
+    }
     func diskState() throws -> DiskState {
         try diskState(trustingSettledMetadata: false)
     }
@@ -828,13 +857,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let state = try diskState()
             let alert = TTAlert()
-            alert.messageText =
-                state == .unchanged
-                ? "File is unchanged" : state == .missing ? "File is missing" : "File changed outside TextTank"
-            alert.informativeText =
-                state == .unchanged
-                ? "The on-disk bytes match the last read or save."
-                : "Your editor contents are preserved. Use Save As to keep your edits, or Revert to Saved to reload the disk version."
+            let text = state.alertText
+            alert.messageText = text.title
+            alert.informativeText = text.detail
             alert.runModal()
         } catch { presentError(error) }
     }
@@ -878,9 +903,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editor.onReadOnlyAttempt = { [weak self] in self?.noteReadOnlyAttempt() }
         editor.onChange = { [weak self] in
             guard let self, !self.loading else { return }
-            self.updateChangeCount(
-                self.editor.modified || self.format != self.savedFormat || !self.savepointMatchesDisk
-                    ? .changeDone : .changeCleared)
+            self.updateChangeCount(self.hasUnsavedState ? .changeDone : .changeCleared)
             self.showSaveState(recoveryCopyKept: false)
             self.recoveryTimer?.invalidate()
             self.recoveryGeneration += 1
@@ -905,8 +928,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recoveryDeadlineTimer = nil
     }
     private func recoveryOperation() -> () throws -> Void {
-        let store = Self.recovery, id = recoveryID, revision = recoveryBase + UInt64(editor.revision)
-        if isDocumentEdited || editor.modified || format != savedFormat {
+        let store = Self.recovery, id = recoveryID, revision = recoveryRevision
+        if shouldKeepRecoveryCopy {
             let snapshot = RecoverySnapshot(
                 id: id, text: editor.text, format: format, originalURL: fileURL?.absoluteString, revision: revision)
             return { try store.save(snapshot) }
@@ -917,10 +940,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// "Edited" from the moment of the change, and says so about the recovery copy only once that
     /// copy has been written.
     func saveStateStatus(recoveryCopyKept: Bool) -> String {
-        recoveredOrigin
-            ?? ((isDocumentEdited
-                ? (recoveryCopyKept ? "Edited — recovery copy kept" : "Edited") : fileURL == nil ? "Ready" : "Saved")
-                + " · Incomplete preview")
+        if let recoveredOrigin { return recoveredOrigin }
+        let status: String
+        if isDocumentEdited {
+            status = recoveryCopyKept ? "Edited — recovery copy kept" : "Edited"
+        } else if fileURL == nil {
+            status = "Ready"
+        } else {
+            status = "Saved"
+        }
+        return status + " · Incomplete preview"
     }
     /// Whether the last recovery write since the latest edit succeeded.
     private var recoveryCopyKept = false
@@ -1018,7 +1047,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editor.readOnly = true
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.prepareForClose() }
         // NSDocument only reaches close after the user has chosen Save or Discard.
-        let store = Self.recovery, id = recoveryID, revision = recoveryBase + UInt64(editor.revision)
+        let store = Self.recovery, id = recoveryID, revision = recoveryRevision
         // Never block or prompt here: close runs once per document on the quit path. A snapshot
         // that could not be removed is found by the next launch's scan and offered or listed there.
         do { try recoveryWriter.finish { try store.remove(id: id, throughRevision: revision) } } catch {
