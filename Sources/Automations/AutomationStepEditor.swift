@@ -200,7 +200,7 @@ private final class RuleFields: NSObject {
     init(_ initial:AutomationDefinition.Step) { self.initial = initial; super.init() }
     private var selected:AutomationDefinition.Step.Kind { AutomationDefinition.Step.Kind.allCases[kind.indexOfSelectedItem] }
     func run() -> AutomationDefinition.Step? {
-        alert.messageText = "Configure Rule"; alert.addButton(withTitle:"Save Rule"); alert.addButton(withTitle:"Cancel")
+        alert.messageText = "Configure Rule"; alert.addButton(withTitle:"Save Rule").identifier=NSUserInterfaceItemIdentifier("rule.save"); alert.addButton(withTitle:"Cancel")
         for value in AutomationDefinition.Step.Kind.allCases { kind.addItem(withTitle:value.label) }
         kind.selectItem(at:AutomationDefinition.Step.Kind.allCases.firstIndex(of:initial.kind)!)
         kind.target = self; kind.action = #selector(changed)

@@ -73,7 +73,7 @@ final class RunController:NSObject {
             let view=NSTextView();view.isEditable=false;view.isRichText=false;view.font = .monospacedSystemFont(ofSize:12,weight:.regular)
             view.string=status+"\n\n"+(output ?? "Output is not valid UTF-8")+"\n\nStandard error:\n"+String(decoding:result.stderr,as:UTF8.self)
             let scroll=NSScrollView();scroll.documentView=view;scroll.hasVerticalScroller=true;view.autoresizingMask=[.width];view.isVerticallyResizable=true
-            let button=NSButton(title:"Apply Extension Result",target:self,action:#selector(apply(_:)))
+            let button=NSButton(title:"Apply Extension Result",target:self,action:#selector(apply(_:)));button.identifier=NSUserInterfaceItemIdentifier("run.apply")
             applyButton=button;pending=nil
             if command.extensionMode,result.status==0,!result.cancelled,!result.truncated,let target,let output {pending=(target,revision,output,selection,anchor,caret)}
             button.isEnabled=pending != nil

@@ -11,6 +11,16 @@ private final class FolderProgressGate: @unchecked Sendable {
     }
 }
 
+/// What the last Find-in-Folder action did, set wherever the status line is set.
+enum FolderSearchOutcome:Equatable {
+    case needsInput
+    case searched(matches:Int,filesSearched:Int,skipped:Int,cancelled:Bool,limitReached:Bool)
+    case replaced(replaced:Int,notReplaced:Int)
+    case noReplacementReport
+    case staleResult
+    case failed(String)
+}
+
 final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
     let queryField=NSTextField(),extensionField=NSTextField(),replacementField=NSTextField(),filterField=NSTextField()
     var workspaceRoots:()->[URL] = {[]}
@@ -37,6 +47,10 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     private var cancellation:FolderSearchCancellation?
     private var work:Task<Void,Never>?
     private var searchButton:NSButton!,cancelButton:NSButton!
+    /// True while a search or a replacement is running.
+    private(set) var isSearching=false
+    /// Nil while work is running and before the first action.
+    private(set) var lastOutcome:FolderSearchOutcome?
 
     init(defaults:UserDefaults = .standard) {
         self.defaults=defaults
@@ -104,17 +118,17 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     @objc private func startSearch(_ sender:Any?) {
         window?.makeFirstResponder(nil)
         let roots=scope.indexOfSelectedItem==1 ? workspaceRoots():(folder.map{[$0]} ?? [])
-        guard let folder=roots.first else{status.stringValue=scope.indexOfSelectedItem==1 ? "Add a folder in Workspace before searching Workspace Folders.":"Choose a folder first.";return}
+        guard let folder=roots.first else{status.stringValue=scope.indexOfSelectedItem==1 ? "Add a folder in Workspace before searching Workspace Folders.":"Choose a folder first.";lastOutcome = .needsInput;return}
         let query=queryField.stringValue
-        guard !query.isEmpty else{status.stringValue="Enter a nonempty search expression.";return}
+        guard !query.isEmpty else{status.stringValue="Enter a nonempty search expression.";lastOutcome = .needsInput;return}
         let extensions=Set(extensionField.stringValue.split(whereSeparator:{$0 == "," || $0.isWhitespace}).map(String.init))
         var request=FolderSearchRequest(directory:folder,query:query);request.matchCase=caseButton.state == .on;request.recursive=recursiveButton.state == .on;request.extensions=extensions;request.mode=SearchOptions.Mode(rawValue:mode.indexOfSelectedItem) ?? .normal;request.wholeWord=wordButton.state == .on;request.dotMatchesNewline=dotButton.state == .on;request.filenameFilters=filterField.stringValue;request.includeHidden=hiddenButton.state == .on
-        do{_=try FolderSearchFilters(request.filenameFilters);try saveSettings()}catch{status.stringValue=error.localizedDescription;return}
+        do{_=try FolderSearchFilters(request.filenameFilters);try saveSettings()}catch{status.stringValue=error.localizedDescription;lastOutcome = .failed(error.localizedDescription);return}
         cancelSearch(nil);let token=UUID();generation=token
         searchedOptions=SearchOptions();searchedOptions.query=query;searchedOptions.matchCase=request.matchCase;searchedOptions.mode=request.mode;searchedOptions.wholeWord=request.wholeWord;searchedOptions.dotMatchesNewline=request.dotMatchesNewline
         let flag=FolderSearchCancellation(),gate=FolderProgressGate();cancellation=flag
         matches=[];replaceButton.isEnabled=false;searchedFolder=folder;table.reloadData();details.string="Limits: 10,000 files · 100,000 entries · 32 MiB/file · 256 MiB total · 10,000 results. Symbolic links are excluded. Filename filters: \(request.filenameFilters)."
-        searchedQuery=query;searchedCase=request.matchCase;searchButton.isEnabled=false;cancelButton.isEnabled=true;status.stringValue="Searching…"
+        searchedQuery=query;searchedCase=request.matchCase;searchButton.isEnabled=false;cancelButton.isEnabled=true;status.stringValue="Searching…";isSearching=true;lastOutcome=nil
         work=Task { @MainActor [weak self] in
             do {
                 let report=try await FolderSearch.searchAcross(request,directories:roots,cancellation:flag,progress:{ [weak self] progress in
@@ -127,10 +141,11 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                 guard let self,self.generation==token else{return}
                 self.matches=report.matches;self.table.reloadData();self.replaceButton.isEnabled = !report.wasCancelled && report.reachedLimit == nil && !report.matches.isEmpty
                 self.status.stringValue="\(report.matches.count) matches · \(report.filesSearched) files searched · \(report.skipped.count) skipped" + (report.wasCancelled ? " · Cancelled (partial results)" : "") + (report.reachedLimit.map{" · Limit reached: \($0.rawValue) (partial results)"} ?? "")
+                self.lastOutcome = .searched(matches:report.matches.count,filesSearched:report.filesSearched,skipped:report.skipped.count,cancelled:report.wasCancelled,limitReached:report.reachedLimit != nil)
                 self.details.string += "\n" + report.skipped.map { "\($0.url.path): \(String(describing:$0.reason))" }.joined(separator:"\n")
                 self.finish()
             } catch {
-                guard let self,self.generation==token else{return};self.status.stringValue=error.localizedDescription;self.finish()
+                guard let self,self.generation==token else{return};self.status.stringValue=error.localizedDescription;self.lastOutcome = .failed(error.localizedDescription);self.finish()
             }
         }
     }
@@ -144,7 +159,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         window?.makeFirstResponder(nil)
         var options=searchedOptions;options.replacement=replacementField.stringValue
         let excluded=Set(NSDocumentController.shared.documents.compactMap{$0.fileURL}),snapshot=matches,flag=FolderSearchCancellation(),token=UUID();generation=token;cancellation=flag
-        searchButton.isEnabled=false;replaceButton.isEnabled=false;cancelButton.isEnabled=true;status.stringValue="Replacing snapshot-matched files…"
+        searchButton.isEnabled=false;replaceButton.isEnabled=false;cancelButton.isEnabled=true;status.stringValue="Replacing snapshot-matched files…";isSearching=true;lastOutcome=nil
         work=Task { @MainActor [weak self] in
                 let outcomes=await Task.detached(priority:.userInitiated){
                     var outcomes:[FolderReplacementOutcome]=[]
@@ -163,11 +178,12 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     }
     func retainReplacementOutcomes(_ outcomes:[FolderReplacementOutcome]) { lastReplacementOutcomes=outcomes }
     @objc func showReplacementReport(_ sender:Any?) {
-        guard !lastReplacementOutcomes.isEmpty else{status.stringValue="No completed replacement report in this session.";return}
+        guard !lastReplacementOutcomes.isEmpty else{status.stringValue="No completed replacement report in this session.";lastOutcome = .noReplacementReport;return}
         status.stringValue="\(lastReplacementOutcomes.filter{$0.status == .replaced}.count) files replaced · \(lastReplacementOutcomes.filter{$0.status != .replaced}.count) unchanged/skipped/failed. Recovery copies retained."
+        lastOutcome = .replaced(replaced:lastReplacementOutcomes.filter{$0.status == .replaced}.count,notReplaced:lastReplacementOutcomes.filter{$0.status != .replaced}.count)
         details.string=lastReplacementOutcomes.map{"\($0.url.path): \($0.status.rawValue) — \($0.message)"+($0.backup.map{"\nRecovery copy: \($0.path)"} ?? "")+($0.recoveryReport.map{"\nDurable recovery report: \($0.path)"} ?? "")}.joined(separator:"\n")
     }
-    private func finish(){searchButton.isEnabled=true;cancelButton.isEnabled=false;work=nil;cancellation=nil}
+    private func finish(){searchButton.isEnabled=true;cancelButton.isEnabled=false;work=nil;cancellation=nil;isSearching=false}
     @objc private func cancelSearch(_ sender:Any?){cancellation?.cancel();work?.cancel()}
     func windowWillClose(_ notification:Notification){try? saveSettings();cancelSearch(nil);generation=UUID();finish()}
     func numberOfRows(in tableView:NSTableView)->Int{matches.count}
@@ -205,15 +221,15 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         NSDocumentController.shared.openDocument(withContentsOf:match.url,display:true) { [weak self] document,_,error in
             Task { @MainActor [weak self] in
                 guard let self,self.generation==token else{return}
-                if let error {self.status.stringValue=error.localizedDescription;return}
-                guard let document=document as? TextDocument else{self.status.stringValue="This result could not be opened as a text document.";return}
+                if let error {self.status.stringValue=error.localizedDescription;self.lastOutcome = .failed(error.localizedDescription);return}
+                guard let document=document as? TextDocument else{self.status.stringValue="This result could not be opened as a text document.";self.lastOutcome = .failed("This result could not be opened as a text document.");return}
                 let editor=(document.windowControllers.first as? EditorWindowController)?.activeEditor ?? document.editor
                 let snapshot=editor.text,revision=editor.revision
                 let report=try? await Task.detached(priority:.userInitiated){try SearchCore.search(snapshot,options:options)}.value
                 guard self.generation==token,editor.window != nil,editor.revision==revision,editor.text==snapshot,
                       report?.hits.contains(where:{$0.range==NSRange(location:match.utf16Range.location,length:match.utf16Range.length)}) == true,
                       let bytes=SearchCore.byteRange(NSRange(location:match.utf16Range.location,length:match.utf16Range.length),in:snapshot),
-                      bytes==NSRange(location:match.utf8Range.location,length:match.utf8Range.length),editor.setSelectionAnchor(bytes.location,caret:NSMaxRange(bytes)) else{self.status.stringValue="Result is stale or could not be revalidated. Search again; selection was not changed.";return}
+                      bytes==NSRange(location:match.utf8Range.location,length:match.utf8Range.length),editor.setSelectionAnchor(bytes.location,caret:NSMaxRange(bytes)) else{self.status.stringValue="Result is stale or could not be revalidated. Search again; selection was not changed.";self.lastOutcome = .staleResult;return}
                 document.showWindows();document.windowControllers.first?.window?.makeFirstResponder(editor)
             }
         }

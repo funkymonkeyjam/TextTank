@@ -618,6 +618,7 @@ private final class StatusBadgeRow: NSView {
             let (text,key)=entry
             let badge=existing[id] ?? StatusBadge(text)
             badge.title=text;badge.toolTip=text+" — click for options"
+            badge.identifier=NSUserInterfaceItemIdentifier("status."+id)
             badge.activate = { [weak self] button in self?.onActivate?(key,button) }
             if badge.superview == nil {addSubview(badge)}
             return badge
@@ -728,7 +729,7 @@ private final class DocumentTabStrip: NSView {
             x+=width
         }
         let add=NSButton(image:NSImage(systemSymbolName:"plus",accessibilityDescription:"New tab")!,target:self,action:#selector(newTab(_:)))
-        add.isBordered=false;add.contentTintColor = .controlAccentColor;add.toolTip="New tab (⌘N)";add.frame=NSRect(x:x+4,y:3,width:32,height:30);row.addSubview(add)
+        add.isBordered=false;add.contentTintColor = .controlAccentColor;add.toolTip="New tab (⌘N)";add.identifier=NSUserInterfaceItemIdentifier("tab.new");add.frame=NSRect(x:x+4,y:3,width:32,height:30);row.addSubview(add)
         row.frame=NSRect(x:0,y:0,width:x+40,height:36)
         row.scrollToVisible(activeRect)
     }
@@ -960,7 +961,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         if identifier.rawValue == "TextTank.CloseTab" {
             let item=NSToolbarItem(itemIdentifier:identifier);item.label="Close Tab";item.paletteLabel="Close Tab"
             let button=NSButton(title:"Close Tab",image:NSImage(systemSymbolName:"xmark",accessibilityDescription:"Close Tab")!,target:self,action:#selector(closeTab(_:)))
-            button.bezelStyle = .rounded;button.imagePosition = .imageLeading;button.toolTip="Close this tab (⌘W). Unsaved changes will be reviewed."
+            button.bezelStyle = .rounded;button.imagePosition = .imageLeading;button.identifier=NSUserInterfaceItemIdentifier("tab.close");button.toolTip="Close this tab (⌘W). Unsaved changes will be reviewed."
             item.view=button;return item
         }
         guard let automations=(NSApp.delegate as? AppDelegate)?.automations else { return nil }

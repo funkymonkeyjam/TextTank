@@ -274,6 +274,7 @@ import AppKit
         check(window.standardWindowButton(.closeButton)?.isHidden == false,"native close control is visible")
         let closeControl = controller.toolbar(NSToolbar(identifier:"test"),itemForItemIdentifier:.init("TextTank.CloseTab"),willBeInsertedIntoToolbar:true)
         check((closeControl?.view as? NSButton)?.title == "Close Tab","explicit close button remains accessible outside titlebar")
+        check((closeControl?.view as? NSButton)?.identifier?.rawValue == "tab.close","close-tab control carries a stable identifier")
         }
         // The delegate installed here is deliberately left in place for every later section:
         // NSApp.delegate is weak, and the tab, status and navigation paths checked below reach
@@ -356,7 +357,7 @@ import AppKit
         tabsController.refreshStatusDetails()
         let buttons=descendants(winA.contentView!).compactMap{$0 as? NSButton}
         let closeB=buttons.first{$0.toolTip == "Close \(winB.title)"}!
-        let plus=buttons.first{$0.toolTip == "New tab (⌘N)"}!
+        let plus=buttons.first{$0.identifier?.rawValue == "tab.new"}!
         check(plus.frame.minX<500,"new-tab button follows compact tabs rather than window edge")
         check(winA.tabbingMode == .disallowed,"native full-width tab strip disabled")
         let heldFrame=winA.frame
@@ -516,10 +517,11 @@ import AppKit
         spinUntil("two recurring status refreshes of the visible tab"){secondController.statusRefreshCount>=visibleRefreshes+2}
         check(firstController.statusRefreshCount == hiddenRefreshes,"hidden tabs perform no recurring status refresh")
         secondController.refreshStatusDetails()
-        let eolBefore=descendants(secondController.window!.contentView!).compactMap{$0 as? NSButton}.first{$0.title == "LF"}!
+        let eolBefore=descendants(secondController.window!.contentView!).compactMap{$0 as? NSButton}.first{$0.identifier?.rawValue == "status.eol.0"}!
         second.editor.text="new text";secondController.refreshStatusDetails()
-        let eolAfter=descendants(secondController.window!.contentView!).compactMap{$0 as? NSButton}.first{$0.title == "LF"}!
+        let eolAfter=descendants(secondController.window!.contentView!).compactMap{$0 as? NSButton}.first{$0.identifier?.rawValue == "status.eol.0"}!
         check(eolBefore === eolAfter,"unrelated status changes retain existing control identity")
+        check(eolAfter.title == "LF","the line-ending badge found by identifier shows the document's ending")
         let navigation=AppDelegate();navigation.previousDocumentTab(nil)
         check(firstController.window!.isVisible && !secondController.window!.isVisible,"previous-tab command selects hidden document")
         let sameA=NSWindow(),sameB=NSWindow();sameA.title="same.txt";sameB.title="same.txt"

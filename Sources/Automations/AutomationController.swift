@@ -127,7 +127,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
         busy = true; defer { busy = false }
         let choose = TTAlert(); choose.messageText = "Manage Automations"
         choose.informativeText = "Rename an automation, choose its input and output, and choose its preview and favorite status. Edit Rules opens a visual rule list with sample testing. JSON is optional for advanced users."
-        for title in ["Edit", "Cancel", "Advanced JSON…", "Create Automation…", "Delete Automation"] { choose.addButton(withTitle:title) }
+        for (title,id) in [("Edit","automation.edit"), ("Cancel","automation.cancel"), ("Advanced JSON…","automation.json"), ("Create Automation…","automation.create"), ("Delete Automation","automation.delete")] { choose.addButton(withTitle:title).identifier=NSUserInterfaceItemIdentifier(id) }
         let selection = NSPopUpButton(frame:NSRect(x:0,y:0,width:550,height:28),pullsDown:false)
         for workflow in library.workflows { selection.addItem(withTitle:workflow.name); selection.lastItem?.representedObject = workflow.id.uuidString }
         choose.accessoryView = selection

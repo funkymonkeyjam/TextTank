@@ -1,6 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
+/// What the last Find-window action did, set wherever the status line is set. Checks and
+/// callers read this instead of parsing the status wording.
+enum SearchOutcome:Equatable {
+    case needsInput
+    case found(matches:Int,documents:Int,truncated:Bool)
+    case noFurtherMatches
+    case staleResult
+    case limitReached
+    case replaced(changed:Int,stale:Int)
+    case marked(matches:Int,stale:Int,zeroWidth:Int)
+    case bookmarked(stale:Int)
+    case clearedHighlights(documents:Int)
+    case cancelled
+    case failed(String)
+}
+
 /// Native snapshot search. Workers never access TTEditor; results are revision checked.
 final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewDataSource,NSTableViewDelegate {
     var currentEditor:()->TTEditor? = {nil}
@@ -23,6 +39,10 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
     private var searchButtons:[NSButton]=[]
     private var lastNavigation:(TTEditor,UInt,NSRange)?
     private let defaults:UserDefaults
+    /// True from the moment a search is started until its result, failure or cancellation is shown.
+    private(set) var isSearching=false
+    /// Nil while a search is running and before the first action.
+    private(set) var lastOutcome:SearchOutcome?
     init(defaults:UserDefaults = .standard) {
         self.defaults=defaults
         let window=NSWindow(contentRect:NSRect(x:0,y:0,width:780,height:470),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false)
@@ -68,24 +88,24 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
         let editors=scope.indexOfSelectedItem==2 ? openEditors():currentEditor().map{[$0]} ?? []
         var cleared=Set<ObjectIdentifier>()
         for editor in editors where editor.window != nil {if cleared.insert(ObjectIdentifier(editor)).inserted{editor.clearSearchHighlights()}}
-        status.stringValue="Cleared search highlights from \(cleared.count) document(s)."
+        status.stringValue="Cleared search highlights from \(cleared.count) document(s).";lastOutcome = .clearedHighlights(documents:cleared.count)
     }
-    @objc func cancel(_ sender:Any?){cancellation?.cancel();task?.cancel();generation=UUID();finish();status.stringValue="Cancelled; no pending replacements applied."}
+    @objc func cancel(_ sender:Any?){cancellation?.cancel();task?.cancel();generation=UUID();finish();status.stringValue="Cancelled; no pending replacements applied.";lastOutcome = .cancelled}
     func windowWillClose(_ notification:Notification){cancel(nil)}
-    private func finish(){searchButtons.forEach{$0.isEnabled=true};cancellation=nil;task=nil}
+    private func finish(){searchButtons.forEach{$0.isEnabled=true};cancellation=nil;task=nil;isSearching=false}
     private enum Action {case next,previous,all,replaceAll,replaceOne,bookmark,mark}
     private func run(_ action:Action){
-        let opts=readOptions();guard !opts.query.isEmpty else{status.stringValue="Enter a search expression.";return}
+        let opts=readOptions();guard !opts.query.isEmpty else{status.stringValue="Enter a search expression.";lastOutcome = .needsInput;return}
         var editors=scope.indexOfSelectedItem==2 ? openEditors():currentEditor().map{[$0]} ?? []
         var identities=Set<ObjectIdentifier>();editors=editors.filter{identities.insert(ObjectIdentifier($0)).inserted}
-        guard !editors.isEmpty else{status.stringValue="Open a document first.";return}
+        guard !editors.isEmpty else{status.stringValue="Open a document first.";lastOutcome = .needsInput;return}
         if scope.indexOfSelectedItem != 0 {onUnrecordableCommand?("Selection and all-open search operations are not recorded in macros.")}
         let currentDocumentScope=scope.indexOfSelectedItem==0,selectionScope=scope.indexOfSelectedItem==1
         var buffers:[Buffer]=[]
         for e in editors {
             let text=e.text
             if scope.indexOfSelectedItem==1 {
-                guard e.selectionCount==1,let r=SearchCore.utf16Range(NSRange(location:e.selectionStart,length:e.selectionEnd-e.selectionStart),in:text),r.length>0 else{status.stringValue="Select one nonempty range first.";return}
+                guard e.selectionCount==1,let r=SearchCore.utf16Range(NSRange(location:e.selectionStart,length:e.selectionEnd-e.selectionStart),in:text),r.length>0 else{status.stringValue="Select one nonempty range first.";lastOutcome = .needsInput;return}
                 buffers.append(Buffer(editor:e,text:text,revision:e.revision,offset:r.location,anchor:e.selectionAnchor,caret:e.selectionCaret))
             }else{buffers.append(Buffer(editor:e,text:text,revision:e.revision,offset:0,anchor:e.selectionAnchor,caret:e.selectionCaret))}
         }
@@ -94,7 +114,7 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
             return NSRange(location:0,length:(b.text as NSString).length)
         }
         cancellation?.cancel();task?.cancel();let token=UUID();generation=token;let flag=TTSearchCancellation();cancellation=flag
-        searchButtons.forEach{$0.isEnabled=false};status.stringValue="Searching snapshots…";rows=[];table.reloadData()
+        searchButtons.forEach{$0.isEnabled=false};status.stringValue="Searching snapshots…";isSearching=true;lastOutcome=nil;rows=[];table.reloadData()
         let bookmarkSnapshots=buffers.map{($0.text,$0.offset)}
         let needsBookmarks=action == .bookmark
         let snapshots=zip(buffers,selectionRanges).map{($0.0.text as NSString).substring(with:$0.1)}
@@ -113,6 +133,7 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
                 self.rows=zip(buffers,reports).flatMap{b,r in r.hits.map{Row(buffer:b,hit:SearchHit(range:NSRange(location:$0.range.location+b.offset,length:$0.range.length),replacement:$0.replacement))}}
                 self.table.reloadData();let truncated=reports.contains{$0.truncated}
                 self.status.stringValue="\(self.rows.count) matches in \(buffers.count) document(s)"+(truncated ? " · result limit reached":"")
+                self.lastOutcome = .found(matches:self.rows.count,documents:buffers.count,truncated:truncated)
                 switch action {
                 case .all:break
                 case .next,.previous:
@@ -120,7 +141,7 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
                     let moved=self.navigate(backwards:action == .previous,wrap:opts.wrap)
                     if moved,currentDocumentScope,let editor=buffers.first?.editor {self.onCommand?(opts,action == .previous ? "previous":"next",editor)}
                 case .replaceAll,.replaceOne:
-                    guard !truncated else{self.status.stringValue="Result limit reached; replacements were not applied. Narrow the scope.";return}
+                    guard !truncated else{self.status.stringValue="Result limit reached; replacements were not applied. Narrow the scope.";self.lastOutcome = .limitReached;return}
                     var changed=0,stale=0
                     for buffer in buffers {
                         let hits=self.rows.filter{$0.buffer.editor===buffer.editor}.map{$0.hit}
@@ -130,9 +151,10 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
                         if Self.apply(chosen,text:buffer.text,revision:buffer.revision,to:buffer.editor){changed+=chosen.count}else{stale+=1}
                     }
                     self.status.stringValue="Replaced \(changed) matches; \(stale) changed documents skipped. Undo is per document."
+                    self.lastOutcome = .replaced(changed:changed,stale:stale)
                     if changed>0,stale==0,currentDocumentScope,let editor=buffers.first?.editor {self.onCommand?(opts,action == .replaceOne ? "replaceOne":"replaceAll",editor)}
                 case .mark:
-                    guard !truncated else{self.status.stringValue="Result limit reached; previous highlights were preserved. Narrow the scope.";return}
+                    guard !truncated else{self.status.stringValue="Result limit reached; previous highlights were preserved. Narrow the scope.";self.lastOutcome = .limitReached;return}
                     var marked=0,stale=0,zeroWidth=0
                     for b in buffers {
                         let hits=self.rows.filter{$0.buffer.editor===b.editor}.map{$0.hit}
@@ -140,18 +162,19 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
                         if Self.highlight(hits,text:b.text,revision:b.revision,in:b.editor){marked+=hits.filter{$0.range.length>0}.count;zeroWidth+=hits.filter{$0.range.length==0}.count}else{stale+=1}
                     }
                     self.status.stringValue="Marked \(marked) matches; \(stale) changed/closed documents skipped."+(zeroWidth>0 ? " \(zeroWidth) zero-width matches have no visible span.":"")
+                    self.lastOutcome = .marked(matches:marked,stale:stale,zeroWidth:zeroWidth)
                 case .bookmark:
                     var stale=0
-                    guard !truncated else{self.status.stringValue="Result limit reached; bookmarks were preserved. Narrow the scope.";return}
+                    guard !truncated else{self.status.stringValue="Result limit reached; bookmarks were preserved. Narrow the scope.";self.lastOutcome = .limitReached;return}
                     for (index,b) in buffers.enumerated() {
                         guard b.editor.window != nil,b.editor.revision==b.revision,b.editor.text==b.text,
                               !selectionScope || (b.editor.selectionAnchor==b.anchor && b.editor.selectionCaret==b.caret) else{stale+=1;continue}
                         var lines=Set(b.editor.bookmarkLines.map{$0.intValue})
                         lines.formUnion(computed.1[index])
                         _=b.editor.setBookmarks(lines.sorted().map{NSNumber(value:$0)})
-                    };self.status.stringValue="Bookmarked matching lines; \(stale) changed documents skipped."
+                    };self.status.stringValue="Bookmarked matching lines; \(stale) changed documents skipped.";self.lastOutcome = .bookmarked(stale:stale)
                 }
-            }catch{guard let self,self.generation==token else{return};self.status.stringValue=error.localizedDescription;self.finish()}
+            }catch{guard let self,self.generation==token else{return};self.status.stringValue=error.localizedDescription;self.lastOutcome = .failed(error.localizedDescription);self.finish()}
         }
     }
     /// Macro playback is bounded and has no disk or connector side effects. Next and Previous throw
@@ -197,9 +220,9 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
         let continuing=lastNavigation.map{$0.0===e && $0.1==e.revision && $0.2==selection} ?? false
         let candidates=available.filter{r in backwards ? NSMaxRange(r.hit.range)<=selection.location && !(continuing && r.hit.range==selection):r.hit.range.location>=NSMaxRange(selection) && !(continuing && r.hit.range==selection)}
         if let row=backwards ? candidates.last:candidates.first {return select(row)}else if wrap,let row=backwards ? available.last:available.first{return select(row)}
-        status.stringValue="No further matches.";return false
+        status.stringValue="No further matches.";lastOutcome = .noFurtherMatches;return false
     }
-    @discardableResult private func select(_ row:Row)->Bool {let b=row.buffer;guard b.editor.window != nil,b.editor.revision==b.revision,b.editor.text==b.text,let range=SearchCore.byteRange(row.hit.range,in:b.text),b.editor.setSelectionAnchor(range.location,caret:NSMaxRange(range)) else{status.stringValue="Result is stale; search again. Selection unchanged.";return false};lastNavigation=(b.editor,b.revision,row.hit.range);b.editor.window?.makeKeyAndOrderFront(nil);b.editor.window?.makeFirstResponder(b.editor);return true}
+    @discardableResult private func select(_ row:Row)->Bool {let b=row.buffer;guard b.editor.window != nil,b.editor.revision==b.revision,b.editor.text==b.text,let range=SearchCore.byteRange(row.hit.range,in:b.text),b.editor.setSelectionAnchor(range.location,caret:NSMaxRange(range)) else{status.stringValue="Result is stale; search again. Selection unchanged.";lastOutcome = .staleResult;return false};lastNavigation=(b.editor,b.revision,row.hit.range);b.editor.window?.makeKeyAndOrderFront(nil);b.editor.window?.makeFirstResponder(b.editor);return true}
     func numberOfRows(in tableView:NSTableView)->Int{rows.count}
     func tableView(_ tableView:NSTableView,objectValueFor tableColumn:NSTableColumn?,row:Int)->Any?{guard rows.indices.contains(row) else{return nil};let r=rows[row];let match=(r.buffer.text as NSString).substring(with:r.hit.range);return "\(r.buffer.editor.window?.title ?? "Document") · \(r.hit.range.location) · \(String(match.prefix(160)).replacingOccurrences(of:"\n",with:" ↵ "))"}
     @objc private func openResult(_ sender:Any?){guard rows.indices.contains(table.clickedRow) else{return};select(rows[table.clickedRow])}

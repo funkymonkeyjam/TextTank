@@ -24,7 +24,7 @@ import AppKit
   check(boundaryRestart.makeMenu().items.contains{($0.representedObject as? String)==boundary.id.uuidString},"exact 1 MiB saved file remains readable after restart")
   try controller.persist([sample])
   let result=RunResult(stdout:Data("FIRST".utf8),stderr:Data(),status:0,cancelled:false,truncated:false)
-  @MainActor func button()->NSButton{NSApp.windows.flatMap{($0.contentView as? NSStackView)?.views ?? []}.compactMap{$0 as? NSButton}.last{$0.title=="Apply Extension Result"}!}
+  @MainActor func button()->NSButton{NSApp.windows.flatMap{($0.contentView as? NSStackView)?.views ?? []}.compactMap{$0 as? NSButton}.last{$0.identifier?.rawValue=="run.apply"}!}
   controller.show(.success(result),command:sample,target:document.editor,revision:document.editor.revision,selection:false,anchor:0,caret:0)
   let old=button()
   controller.show(.success(RunResult(stdout:Data("SECOND".utf8),stderr:Data(),status:0,cancelled:false,truncated:false)),command:sample,target:document.editor,revision:document.editor.revision,selection:false,anchor:0,caret:0)

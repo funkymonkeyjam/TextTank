@@ -36,8 +36,11 @@ import AppKit
         try Data("needle".utf8).write(to:first.appendingPathComponent("one.txt"));try Data("needle".utf8).write(to:second.appendingPathComponent("two.txt"));try Data("needle".utf8).write(to:second.appendingPathComponent("skip.log"))
         restored.workspaceRoots={ [first,second] };restored.mode.selectItem(at:0)
         check(NSApp.sendAction(restored.queryField.action!,to:restored.queryField.target,from:restored.queryField),"native workspace search action dispatched")
-        await waitUntil("the workspace search to finish"){!restored.status.stringValue.hasPrefix("Searching")}
-        check(restored.status.stringValue.hasPrefix("2 matches") && restored.numberOfRows(in:restored.table)==2,"native saved workspace roots search respects filename filters")
+        check(restored.isSearching && restored.lastOutcome == nil,"a started folder search reports that it is searching")
+        await waitUntil("the workspace search to finish"){!restored.isSearching}
+        var searchedTwo=false
+        if case .searched(matches:2,filesSearched:2,skipped:_,cancelled:false,limitReached:false)? = restored.lastOutcome { searchedTwo=true } else { print("NOTE folder outcome \(String(describing:restored.lastOutcome))") }
+        check(searchedTwo && restored.numberOfRows(in:restored.table)==2,"native saved workspace roots search respects filename filters")
         let corrupt=Data("invalid settings".utf8);isolated.set(corrupt,forKey:"TextTank.FolderSearch.v1")
         let invalid=FolderSearchController(defaults:isolated);invalid.queryField.stringValue="new";try invalid.saveSettings()
         check(isolated.data(forKey:"TextTank.FolderSearch.v1")==corrupt,"native corrupt settings stay preserved after attempted save")

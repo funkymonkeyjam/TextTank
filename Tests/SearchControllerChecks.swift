@@ -12,7 +12,7 @@ final class OffscreenWindow:NSWindow {override func makeKeyAndOrderFront(_ sende
         let standardBefore=UserDefaults.standard.data(forKey:"TextTank.Search.v1")
         let editor=TTEditor(frame:NSRect(x:0,y:0,width:600,height:400)),window=NSWindow(contentRect:NSRect(x:0,y:0,width:600,height:400),styleMask:.titled,backing:.buffered,defer:false);window.contentView=editor
         let controller=SearchController(defaults:isolated);controller.currentEditor={editor};controller.openEditors={[editor]}
-        @MainActor func finished()async{await waitUntil("the search to finish"){!controller.status.stringValue.hasPrefix("Searching")}}
+        @MainActor func finished()async{await waitUntil("the search to finish"){!controller.isSearching}}
         let fresh0=SearchOptions()
         check(controller.queryField.stringValue==fresh0.query && controller.caseButton.state==(fresh0.matchCase ? .on:.off) && controller.wordButton.state==(fresh0.wholeWord ? .on:.off) && controller.dotButton.state==(fresh0.dotMatchesNewline ? .on:.off) && controller.wrapButton.state==(fresh0.wrap ? .on:.off) && controller.mode.indexOfSelectedItem==fresh0.mode.rawValue,"controller on an empty defaults suite starts from default options, not from an earlier run")
         editor.text="🥑 one=12 two=34";editor.resetUndoHistory();editor.setSavePoint()
@@ -56,12 +56,12 @@ final class OffscreenWindow:NSWindow {override func makeKeyAndOrderFront(_ sende
         let markRevision=editor.revision,markSelection=editor.selectionRanges
         controller.mark(nil)
         await finished()
-        check(controller.status.stringValue.hasPrefix("Marked 2 matches") && editor.revision==markRevision && !editor.modified && editor.selectionRanges==markSelection,"native mark action works read-only without text dirty or selection change")
+        check(controller.lastOutcome == .marked(matches:2,stale:0,zeroWidth:0) && editor.revision==markRevision && !editor.modified && editor.selectionRanges==markSelection,"native mark action works read-only without text dirty or selection change")
         controller.clearMarks(nil)
-        check(controller.status.stringValue.hasPrefix("Cleared search highlights") && editor.revision==markRevision && !editor.modified && editor.selectionRanges==markSelection,"native clear marks preserves content and selection")
+        check(controller.lastOutcome == .clearedHighlights(documents:1) && editor.revision==markRevision && !editor.modified && editor.selectionRanges==markSelection,"native clear marks preserves content and selection")
         editor.readOnly=false;controller.mark(nil);editor.text="changed during search";let changedRevision=editor.revision
         await finished()
-        check(controller.status.stringValue.contains("1 changed/closed") && editor.text=="changed during search" && editor.revision==changedRevision,"stale asynchronous mark preserves new content")
+        check(controller.lastOutcome == .marked(matches:0,stale:1,zeroWidth:0) && editor.text=="changed during search" && editor.revision==changedRevision,"stale asynchronous mark preserves new content")
         editor.text="a\r\na\ra\nend";editor.resetUndoHistory();editor.setSavePoint();_ = editor.setBookmarks([3])
         controller.queryField.stringValue="a";controller.mode.selectItem(at:0);controller.scope.selectItem(at:0)
         controller.bookmark(nil)
@@ -71,10 +71,10 @@ final class OffscreenWindow:NSWindow {override func makeKeyAndOrderFront(_ sende
         // A negative: nothing observable marks the end of a cancelled run, so wait a fixed
         // interval and then require that neither the markers nor the status were overwritten.
         try await Task.sleep(nanoseconds:50_000_000)
-        check(editor.bookmarkLines.map{$0.intValue}==[3] && controller.status.stringValue.hasPrefix("Cancelled"),"cancelled bookmark action preserves existing markers")
+        check(editor.bookmarkLines.map{$0.intValue}==[3] && controller.lastOutcome == .cancelled && !controller.isSearching,"cancelled bookmark action preserves existing markers")
         controller.bookmark(nil);editor.text="new content";_ = editor.setBookmarks([0])
         await finished()
-        check(controller.status.stringValue.contains("1 changed") && editor.bookmarkLines.map{$0.intValue}==[0],"stale bookmark completion preserves current markers")
+        check(controller.lastOutcome == .bookmarked(stale:1) && editor.bookmarkLines.map{$0.intValue}==[0],"stale bookmark completion preserves current markers")
         // G366: a recorded Next/Previous that finds nothing stops the macro instead of returning normally.
         func stops(_ work:()throws->Void)->String? {do{try work();return nil}catch{return error.localizedDescription}}
         var miss=SearchOptions();miss.query="TODO";miss.mode = .normal;miss.matchCase=true;miss.wrap=false
@@ -104,9 +104,9 @@ final class OffscreenWindow:NSWindow {override func makeKeyAndOrderFront(_ sende
         _ = editor.setSelectionAnchor(0,caret:0);controller.next(nil);await settle()
         check(recorded==["next"] && editor.selectionStart==0 && editor.selectedText=="TODO","Find-window Next that lands on a match is recorded")
         _ = editor.setSelectionAnchor(tail,caret:tail);controller.next(nil);await settle()
-        check(recorded==["next"] && controller.status.stringValue=="No further matches." && editor.selectionCaret==tail,"Find-window Next that finds nothing is not recorded")
+        check(recorded==["next"] && controller.lastOutcome == .noFurtherMatches && editor.selectionCaret==tail,"Find-window Next that finds nothing is not recorded")
         _ = editor.setSelectionAnchor(0,caret:0);controller.previous(nil);await settle()
-        check(recorded==["next"] && controller.status.stringValue=="No further matches.","Find-window Previous that finds nothing is not recorded")
+        check(recorded==["next"] && controller.lastOutcome == .noFurtherMatches,"Find-window Previous that finds nothing is not recorded")
         _ = editor.setSelectionAnchor(tail,caret:tail);controller.previous(nil);await settle()
         check(recorded==["next","previous"] && editor.selectionStart==9,"Find-window Previous that lands on a match is recorded")
         // F34: single Replace on a many-hit buffer converts the hits once, and replaces only the selected hit.
@@ -115,15 +115,24 @@ final class OffscreenWindow:NSWindow {override func makeKeyAndOrderFront(_ sende
         controller.queryField.stringValue="needle";controller.replacementField.stringValue="pin";recorded=[]
         _ = editor.setSelectionAnchor(chosenHit*hitBytes+3,caret:chosenHit*hitBytes+9)
         let replaceStart=Date();controller.replaceOne(nil)
-        await waitUntil(timeout:120,"the many-hit single Replace to finish"){!controller.status.stringValue.hasPrefix("Searching")}
+        await waitUntil(timeout:120,"the many-hit single Replace to finish"){!controller.isSearching}
         let replaceElapsed=Date().timeIntervalSince(replaceStart)
         let expectedBig=String(repeating:hitLine,count:chosenHit)+"é pin 0123456789 0123456789 0123456\n"+String(repeating:hitLine,count:hitCount-chosenHit-1)
-        check(controller.status.stringValue.hasPrefix("Replaced 1 matches; 0 changed") && editor.text==expectedBig && recorded==["replaceOne"],"single Replace on a \(hitCount)-hit buffer replaces exactly the selected hit")
+        check(controller.lastOutcome == .replaced(changed:1,stale:0) && editor.text==expectedBig && recorded==["replaceOne"],"single Replace on a \(hitCount)-hit buffer replaces exactly the selected hit")
         check(replaceElapsed<10,"single Replace on a \(hitCount)-hit buffer stays within its time bound (\(String(format:"%.2f",replaceElapsed)) s)")
         editor.executeCommand("undo");check(editor.text==big && !editor.modified,"many-hit single Replace is one Undo back to the save point")
         _ = editor.setSelectionAnchor(chosenHit*hitBytes+3,caret:chosenHit*hitBytes+8);recorded=[];controller.replaceOne(nil)
-        await waitUntil(timeout:120,"the many-hit single Replace to finish"){!controller.status.stringValue.hasPrefix("Searching")}
-        check(controller.status.stringValue.hasPrefix("Replaced 0 matches") && editor.text==big && !editor.modified && recorded.isEmpty,"single Replace with a selection that is not exactly a hit changes and records nothing")
+        await waitUntil(timeout:120,"the many-hit single Replace to finish"){!controller.isSearching}
+        check(controller.lastOutcome == .replaced(changed:0,stale:0) && editor.text==big && !editor.modified && recorded.isEmpty,"single Replace with a selection that is not exactly a hit changes and records nothing")
+        // G404: the typed state is set with the status text, and the wording is the product's.
+        controller.queryField.stringValue="";controller.findAll(nil)
+        check(controller.lastOutcome == .needsInput && !controller.isSearching && controller.status.stringValue=="Enter a search expression.","an empty query is reported as needing input without starting a search")
+        editor.text="aa bb aa";controller.queryField.stringValue="aa";controller.mode.selectItem(at:0);controller.findAll(nil)
+        check(controller.isSearching && controller.lastOutcome == nil && controller.status.stringValue.hasPrefix("Searching"),"a started search reports that it is searching and has no outcome yet")
+        await finished()
+        check(controller.lastOutcome == .found(matches:2,documents:1,truncated:false) && controller.status.stringValue=="2 matches in 1 document(s)","a finished Find All reports its match and document counts")
+        controller.queryField.stringValue="(";controller.mode.selectItem(at:2);controller.findAll(nil);await finished()
+        if case .failed(let reason)? = controller.lastOutcome { check(!reason.isEmpty && controller.status.stringValue==reason,"an invalid expression is reported as a failure carrying the shown reason") } else { check(false,"an invalid expression is reported as a failure carrying the shown reason") }
         Checks.summary { "PASS SearchControllerChecks: \(Checks.count) assertions" }
         }
     }

@@ -29,7 +29,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             guard !acted else{return}
             let views=descendants(content)
             guard let popup=views.compactMap({$0 as? NSPopUpButton}).first,
-                  let save=views.compactMap({$0 as? NSButton}).first(where:{$0.title=="Save Rule"}) else{return}
+                  let save=views.compactMap({$0 as? NSButton}).first(where:{$0.identifier?.rawValue=="rule.save"}) else{return}
             acted=true
             popup.selectItem(at:AutomationDefinition.Step.Kind.allCases.firstIndex(of:.replaceLiteral)!)
             if let action=popup.action { actionSent=NSApp.sendAction(action,to:popup.target,from:popup) }
@@ -54,7 +54,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             guard let modal=NSApp.modalWindow,let content=modal.contentView else{return}
             let views=descendants(content), buttons=views.compactMap{$0 as? NSButton}
             if Date() > deadline { timedOut=true;NSApp.abortModal();return }
-            if stage==0,let create=buttons.first(where:{$0.title=="Create Automation…"}) {
+            if stage==0,let create=buttons.first(where:{$0.identifier?.rawValue=="automation.create"}) {
                 stage=1;create.performClick(nil)
             } else if stage==1,let name=views.compactMap({$0 as? NSTextField}).first(where:{$0.stringValue=="My Automation" && $0.isEditable}) {
                 stage=2
