@@ -164,7 +164,7 @@ final class MacroController: NSObject, NSMenuDelegate {
         return macro
     }
     @objc func stopRecording() {
-        do { _ = try finishRecording() } catch { showError(error) }
+        do { _ = try finishRecording() } catch { TTAlert.present(error) }
     }
     /// Root calls only after application-layer literal find; parameters are captured, not read at playback.
     /// A find that did not match changed nothing and would stop playback, so it is left out (F68).
@@ -216,7 +216,7 @@ final class MacroController: NSObject, NSMenuDelegate {
             guard let target = try playbackEditor() else { return }
             editor = target
         } catch {
-            showError(error)
+            TTAlert.present(error)
             return
         }
         let revision = editor.revision
@@ -246,7 +246,7 @@ final class MacroController: NSObject, NSMenuDelegate {
                 macro.steps.count <= 100000 / repeats
             else { throw MacroError.invalid("Choose a valid count; at most 100000 total steps per invocation.") }
             try playInteractively(macro, on: editor, repeats: repeats, untilEnd: untilEnd.state == .on)
-        } catch { showError(error) }
+        } catch { TTAlert.present(error) }
     }
     @objc private func cancelPlayback() { playbackCancelled = true }
     private func playInteractively(_ macro: RecordedMacro, on editor: TTEditor, repeats: Int, untilEnd: Bool) throws {
@@ -318,7 +318,7 @@ final class MacroController: NSObject, NSMenuDelegate {
     }
     @objc private func saveLast() {
         guard var macro = lastRecording, loadingError == nil else {
-            if let loadingError { showError(loadingError) }
+            if let loadingError { TTAlert.present(loadingError) }
             return
         }
         let alert = TTAlert()
@@ -341,12 +341,12 @@ final class MacroController: NSObject, NSMenuDelegate {
             }
             try persist(proposed)
             lastRecording = macro
-        } catch { showError(error) }
+        } catch { TTAlert.present(error) }
     }
     @objc private func manage() {
         guard !playing, recordingEditor == nil else { return }
         if let loadingError {
-            showError(
+            TTAlert.present(
                 MacroError.invalid(
                     "Saved macros could not be loaded and are preserved: \(loadingError.localizedDescription)"))
             return
@@ -400,7 +400,7 @@ final class MacroController: NSObject, NSMenuDelegate {
                 }
                 try persist(proposed)
                 return
-            } catch { showError(error) }
+            } catch { TTAlert.present(error) }
         }
     }
     private func persist(_ proposed: MacroLibrary) throws {
@@ -431,7 +431,6 @@ final class MacroController: NSObject, NSMenuDelegate {
         library = proposed
         rebuild()
     }
-    private func showError(_ error: Error) { TTAlert.present(error) }
 }
 
 /// Bounded incremental playback shared by native progress UI and deterministic tests.

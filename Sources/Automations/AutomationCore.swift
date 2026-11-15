@@ -797,7 +797,7 @@ struct AutomationLibrary: Codable, Equatable {
         guard data.count <= maximumBytes else {
             throw AutomationError.invalid("Automation configuration exceeds 32 MiB.")
         }
-        let result = try JSONDecoder().decode(AutomationLibrary.self, from: data)
+        let result = try JSONInputFailure.decode(AutomationLibrary.self, from: data, context: "Automations")
         try result.validate()
         return result
     }
@@ -856,10 +856,12 @@ enum AutomationFileInput {
         let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
         // The system's own reason: a missing file, a symbolic link (not followed) and a permission
         // problem are different things to fix.
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard descriptor >= 0 else { throw FileOperationFailure(errno, operation: "read input file", path: url.path) }
         defer { close(descriptor) }
         var info = stat()
-        guard fstat(descriptor, &info) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard fstat(descriptor, &info) == 0 else {
+            throw FileOperationFailure(errno, operation: "read input file", path: url.path)
+        }
         guard info.st_mode & S_IFMT == S_IFREG else {
             throw AutomationError.invalid("Automation input must be a regular file, not a folder, pipe or device.")
         }
@@ -872,7 +874,7 @@ enum AutomationFileInput {
             let count = Darwin.read(descriptor, &chunk, chunk.count)
             if count < 0 {
                 if errno == EINTR { continue }
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                throw FileOperationFailure(errno, operation: "read input file", path: url.path)
             }
             if count == 0 { break }
             guard data.count <= limit - count else {
@@ -897,7 +899,7 @@ struct AutomationRuleSet: Codable {
     }
     static func decode(_ data: Data) throws -> AutomationRuleSet {
         guard data.count <= 1_048_576 else { throw AutomationError.invalid("Rule files must be at most 1 MiB.") }
-        let value = try JSONDecoder().decode(Self.self, from: data)
+        let value = try JSONInputFailure.decode(Self.self, from: data, context: "Rules")
         try value.validate()
         return value
     }

@@ -17,6 +17,41 @@ struct SearchReport {
     let hits: [SearchHit]
     let truncated: Bool
 }
+enum SearchFailure: LocalizedError, CustomNSError, Equatable {
+    case invalidBookmarkLimit, bookmarkCancelled, bookmarkOffsetsUnordered, bookmarkOffsetOutOfBounds
+    case replacementCancelled, invalidReplacementRange, macroResultLimit, macroReplacement(String)
+    case unknownRecordedAction, macroStopped(String)
+    static var errorDomain: String { "TextTank.Search" }
+    var errorCode: Int {
+        switch self {
+        case .invalidReplacementRange: return 3
+        case .macroResultLimit: return 4
+        case .macroReplacement: return 5
+        case .unknownRecordedAction: return 6
+        case .invalidBookmarkLimit, .bookmarkOffsetsUnordered, .bookmarkOffsetOutOfBounds, .macroStopped: return 7
+        case .bookmarkCancelled: return 8
+        case .replacementCancelled: return 9
+        }
+    }
+    var errorDescription: String? {
+        switch self {
+        case .invalidBookmarkLimit: return "Invalid bookmark work limit."
+        case .bookmarkCancelled:
+            return "Bookmark calculation cancelled or exceeded its time budget; bookmarks were preserved."
+        case .bookmarkOffsetsUnordered: return "Bookmark offsets are not in ascending order; bookmarks were preserved."
+        case .bookmarkOffsetOutOfBounds:
+            return "A bookmark offset is past the end of the text; bookmarks were preserved."
+        case .replacementCancelled: return "Replacement cancelled; no text was changed."
+        case .invalidReplacementRange: return "Invalid or overlapping replacement range."
+        case .macroResultLimit: return "Macro search reached the result limit; no edits were applied."
+        case .macroReplacement(let reason): return "Macro replacement was not applied: \(reason)."
+        case .unknownRecordedAction: return "Unrecognized recorded search action."
+        case .macroStopped(let reason): return "Macro stopped: \(reason). Prior edits remain undoable."
+        }
+    }
+    var errorUserInfo: [String: Any] { [NSLocalizedDescriptionKey: errorDescription ?? ""] }
+}
+
 enum SearchCore {
     /// One forward UTF-16 pass over zero-based lines. A break is counted once its terminator has
     /// been passed in full, so an offset between CR and LF is still on the line that owns the
@@ -26,40 +61,23 @@ enum SearchCore {
         in text: String, locations: [Int], cancellation: TTSearchCancellation, timeLimit: TimeInterval = 2
     ) throws -> [Int] {
         guard locations.count <= 100000, timeLimit > 0, timeLimit <= 30 else {
-            throw NSError(
-                domain: "TextTank.Search", code: 7,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid bookmark work limit."])
+            throw SearchFailure.invalidBookmarkLimit
         }
         let deadline = Date().addingTimeInterval(timeLimit)
         var index = text.utf16.startIndex, position = 0, line = 0, lines: [Int] = []
         func check() throws {
             if cancellation.cancelled || Date() >= deadline {
-                throw NSError(
-                    domain: "TextTank.Search", code: 8,
-                    userInfo: [
-                        NSLocalizedDescriptionKey:
-                            "Bookmark calculation cancelled or exceeded its time budget; bookmarks were preserved."
-                    ])
+                throw SearchFailure.bookmarkCancelled
             }
         }
         try check()
         for target in locations {
             guard target >= position else {
-                throw NSError(
-                    domain: "TextTank.Search", code: 7,
-                    userInfo: [
-                        NSLocalizedDescriptionKey:
-                            "Bookmark offsets are not in ascending order; bookmarks were preserved."
-                    ])
+                throw SearchFailure.bookmarkOffsetsUnordered
             }
             while position < target {
                 guard index < text.utf16.endIndex else {
-                    throw NSError(
-                        domain: "TextTank.Search", code: 7,
-                        userInfo: [
-                            NSLocalizedDescriptionKey:
-                                "A bookmark offset is past the end of the text; bookmarks were preserved."
-                        ])
+                    throw SearchFailure.bookmarkOffsetOutOfBounds
                 }
                 let unit = text.utf16[index], next = text.utf16.index(after: index)
                 if unit == 10 || (unit == 13 && (next == text.utf16.endIndex || text.utf16[next] != 10)) { line += 1 }
@@ -184,8 +202,8 @@ enum SearchCore {
     }
     /// Builds the result in one forward pass: the text between matches and each replacement are
     /// appended once, so the cost is linear however many matches change length. Hits must be in
-    /// ascending order, must not overlap and must not split a surrogate pair (error code 3).
-    /// A cancelled token stops the pass with error code 9 and nothing is returned.
+    /// ascending order, must not overlap and must not split a surrogate pair (invalidReplacementRange).
+    /// A cancelled token stops the pass with replacementCancelled and nothing is returned.
     static func replacing(_ text: String, with hits: [SearchHit], cancellation: TTSearchCancellation? = nil) throws
         -> String
     {
@@ -194,17 +212,13 @@ enum SearchCore {
         var previousEnd = 0
         for (number, hit) in hits.enumerated() {
             if number & 1023 == 0, cancellation?.cancelled == true {
-                throw NSError(
-                    domain: "TextTank.Search", code: 9,
-                    userInfo: [NSLocalizedDescriptionKey: "Replacement cancelled; no text was changed."])
+                throw SearchFailure.replacementCancelled
             }
             guard hit.range.location >= previousEnd, hit.range.length >= 0, hit.range.location <= length,
                 hit.range.length <= length - hit.range.location, isScalarBoundary(hit.range.location, in: source),
                 isScalarBoundary(NSMaxRange(hit.range), in: source)
             else {
-                throw NSError(
-                    domain: "TextTank.Search", code: 3,
-                    userInfo: [NSLocalizedDescriptionKey: "Invalid or overlapping replacement range."])
+                throw SearchFailure.invalidReplacementRange
             }
             if hit.range.location > previousEnd {
                 result.append(

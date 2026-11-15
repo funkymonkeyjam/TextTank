@@ -427,7 +427,7 @@ extension DocumentChecks {
             viewSettings.tabWidth = 8
             viewSettings.useTabs = false
             try splitDelegate.settings.save(viewSettings)
-            defer { try? splitDelegate.settings.save(EditorSettings()) }
+            defer { _ = try? splitDelegate.settings.save(EditorSettings()) }
             let url = root.appendingPathComponent("split-view.txt")
             try Data("zero\none\ntwo\n".utf8).write(to: url)
             let document = TextDocument()

@@ -78,7 +78,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     AutomationFileInput.readData(storage, limit: AutomationLibrary.maximumBytes))
             } catch { loadError = error }
         } else if errno != ENOENT {
-            loadError = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            loadError = FileOperationFailure(errno, operation: "inspect saved automations", path: storage.path)
         } else {
             // Presets are ordinary editable definitions, installed only for a new configuration.
             // There is no library to protect here, so a failed first write does not block the
@@ -277,7 +277,10 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         for (title, id) in [
             ("Edit", "automation.edit"), ("Cancel", "automation.cancel"), ("Advanced JSON…", "automation.json"),
             ("Create Automation…", "automation.create"), ("Delete Automation", "automation.delete")
-        ] { choose.addButton(withTitle: title).identifier = NSUserInterfaceItemIdentifier(id) }
+        ] {
+            choose.addButton(withTitle: title, role: id == "automation.cancel" ? .cancel : .action).identifier =
+                NSUserInterfaceItemIdentifier(id)
+        }
         let selection = Self.workflowPopup(for: library.workflows)
         choose.accessoryView = selection
         enum ManageChoice { case edit, cancel, advancedJSON, create, delete }
@@ -335,7 +338,10 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         for (title, id) in [
             ("Save", "automation.settings.save"), ("Cancel", "automation.settings.cancel"),
             ("Edit Rules & Test…", "automation.settings.rules")
-        ] { edit.addButton(withTitle: title).identifier = NSUserInterfaceItemIdentifier(id) }
+        ] {
+            edit.addButton(withTitle: title, role: id == "automation.settings.cancel" ? .cancel : .action).identifier =
+                NSUserInterfaceItemIdentifier(id)
+        }
         let name = NSTextField(string: workflow.name)
         name.identifier = NSUserInterfaceItemIdentifier("automation.settings.name")
         let shortcut = NSTextField(string: workflow.shortcut ?? "")
@@ -489,7 +495,10 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             ("Save", "automation.json.save"), ("Cancel", "automation.json.cancel"),
             ("Import…", "automation.json.import"),
             ("Export…", "automation.json.export"), ("Insert Example", "automation.json.example")
-        ] { alert.addButton(withTitle: title).identifier = NSUserInterfaceItemIdentifier(id) }
+        ] {
+            alert.addButton(withTitle: title, role: id == "automation.json.cancel" ? .cancel : .action).identifier =
+                NSUserInterfaceItemIdentifier(id)
+        }
         // The rule kinds, generated from the kinds themselves, above the editable JSON.
         let reference = makeTextView(height: 96)
         reference.editor.isEditable = false
@@ -570,7 +579,9 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         }
         let temporary = directory.appendingPathComponent(".automations-" + UUID().uuidString)
         let descriptor = open(temporary.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard descriptor >= 0 else {
+            throw FileOperationFailure(errno, operation: "create automation settings beside", path: storage.path)
+        }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer {
             try? handle.close()
@@ -580,7 +591,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         try handle.synchronize()
         try handle.close()
         guard rename(temporary.path, storage.path) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            throw FileOperationFailure(errno, operation: "replace saved automations", path: storage.path)
         }
         installError = nil
         library = proposed

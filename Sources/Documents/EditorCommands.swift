@@ -120,19 +120,12 @@ enum EditorTransform: String, CaseIterable {
     func apply(to editor: TTEditor) throws {
         try editor.requireWritable()
         guard editor.selectionCount == 1 else {
-            throw NSError(
-                domain: "TextTank", code: 4,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "This command works on a single selection. Collapse multiple selections and try again."
-                ])
+            throw DocumentActionError.multipleSelections
         }
         let selection = editor.selectionStart != editor.selectionEnd
         let source = selection ? editor.selectedText : editor.text
         guard source.utf8.count <= 16 * 1024 * 1024 else {
-            throw NSError(
-                domain: "TextTank", code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "Select at most 16 MiB for this command."])
+            throw DocumentActionError.selectionTooLarge
         }
         let output = transform(source)
         guard output != source else { return }
@@ -140,9 +133,7 @@ enum EditorTransform: String, CaseIterable {
         defer { editor.endUndoGroup() }
         // The whole-document case replaces only the span that differs, keeping bookmarks and the caret line.
         guard selection ? editor.replaceSelection(output) : editor.replaceDocumentText(output) else {
-            throw NSError(
-                domain: "TextTank", code: 6,
-                userInfo: [NSLocalizedDescriptionKey: "The document could not be changed."])
+            throw DocumentActionError.changeRejected
         }
     }
 }

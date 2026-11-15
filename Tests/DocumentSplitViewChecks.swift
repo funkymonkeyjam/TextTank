@@ -200,7 +200,7 @@ extension DocumentChecks {
             global.useTabs = false
             global.wrap = false
             try delegate.settings.save(global)
-            defer { try? delegate.settings.save(EditorSettings()) }
+            defer { _ = try? delegate.settings.save(EditorSettings()) }
             let originalCatalog = try requireValue(delegate.languages.catalog, "fixture: language catalog")
             defer { try? delegate.languages.persist(originalCatalog) }
             let (document, controller, window) = try opened("split.py", "import os\nvalue = 42  # note\n")

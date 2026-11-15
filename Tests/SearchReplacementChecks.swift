@@ -243,6 +243,27 @@ import Darwin
             check(
                 try FolderReplacement.replace(directory: root, matches: [fake], options: options).first?.status
                     == .failed, "symlink leaf rejected")
+            let unwritable = root.appendingPathComponent("unwritable-parent")
+            try FileManager.default.createDirectory(at: unwritable, withIntermediateDirectories: true)
+            defer { chmod(unwritable.path, 0o700) }
+            let deniedFile = unwritable.appendingPathComponent("denied.txt")
+            try Data("old".utf8).write(to: deniedFile)
+            let deniedReport = try await FolderSearch.search(FolderSearchRequest(directory: unwritable, query: "old"))
+            try require(chmod(unwritable.path, 0o500) == 0, "F206 fixture: parent directory is not writable")
+            var deniedOptions = SearchOptions()
+            deniedOptions.query = "old"
+            deniedOptions.replacement = "new"
+            let deniedResult = try FolderReplacement.replace(
+                directory: unwritable, matches: deniedReport.matches, options: deniedOptions)
+            check(
+                deniedResult.count == 1 && deniedResult[0].status == .failed
+                    && deniedResult[0].message.lowercased().contains("permission denied")
+                    && deniedResult[0].message.lowercased().contains("create"),
+                "F206 a real denied replacement preserves errno and names the failed operation")
+            check(
+                try Data(contentsOf: deniedFile) == Data("old".utf8),
+                "F206 a denied replacement preserves original bytes")
+            chmod(unwritable.path, 0o700)
             Checks.summary { "PASS SearchReplacementChecks: \(Checks.count) assertions" }
         }
     }

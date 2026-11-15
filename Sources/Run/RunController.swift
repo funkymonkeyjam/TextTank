@@ -47,7 +47,7 @@ final class RunController: NSObject, NSMenuItemValidation {
         do {
             commands = try ConfiguredRun.decodeLibrary(
                 WorkspaceStore.readRegularFile(storage, maximumBytes: ConfiguredRun.maximumLibraryBytes))
-        } catch let e as NSError where e.domain == NSPOSIXErrorDomain && e.code == ENOENT {} catch {
+        } catch  where error.isFileNotFound {} catch {
             loadError = error
             commands = []
         }
@@ -101,7 +101,7 @@ final class RunController: NSObject, NSMenuItemValidation {
         // Indentation is not counted against the 1 MiB limit; persist applies that limit to the
         // compact form that is stored. This bound only keeps the decoder's input finite.
         guard json.count <= 4 * ConfiguredRun.maximumLibraryBytes else { throw RunFailure.configurationTooLarge }
-        let updated = try JSONDecoder().decode([ConfiguredRun].self, from: json)
+        let updated = try JSONInputFailure.decode([ConfiguredRun].self, from: json, context: "Run commands")
         // Compare stable encoded models, not Swift String equality: canonically equivalent
         // Unicode strings can carry distinct command bytes (V32-02). Both encodes keep every
         // existing validation and byte ceiling; default persistence formatting is unchanged.
@@ -186,17 +186,38 @@ final class RunController: NSObject, NSMenuItemValidation {
         alert.accessoryView = stack
         alert.addButton(withTitle: "Save Command")
         alert.addButton(withTitle: "Cancel", role: .cancel)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            let shellMode = shell.state == .on
-            let argv =
-                shellMode
-                ? ["-c", args.stringValue] : try JSONDecoder().decode([String].self, from: Data(args.stringValue.utf8))
-            let command = ConfiguredRun(
-                name: name.stringValue, executable: shellMode ? "/bin/zsh" : path.stringValue, arguments: argv,
-                shellMode: shellMode, extensionMode: ext.state == .on)
-            try persist(commands + [command])
-        } catch { TTAlert.present(error) }
+        name.setAccessibilityLabel("Run command name")
+        path.setAccessibilityLabel("Executable path")
+        args.setAccessibilityLabel("Command arguments")
+        while alert.runModal() == .alertFirstButtonReturn {
+            do {
+                let shellMode = shell.state == .on
+                let argv =
+                    shellMode
+                    ? ["-c", args.stringValue]
+                    : try JSONInputFailure.decode(
+                        [String].self, from: Data(args.stringValue.utf8), context: "Arguments")
+                let command = ConfiguredRun(
+                    name: name.stringValue, executable: shellMode ? "/bin/zsh" : path.stringValue, arguments: argv,
+                    shellMode: shellMode, extensionMode: ext.state == .on)
+                try persist(commands + [command])
+                return
+            } catch {
+                let invalidField: NSView?
+                if case RunFailure.configuration(let field, _) = error {
+                    switch field {
+                    case .name: invalidField = name
+                    case .executable: invalidField = path
+                    case .arguments, .argument: invalidField = args
+                    case .mode, .shell: invalidField = ext
+                    default: invalidField = nil
+                    }
+                } else {
+                    invalidField = error is JSONInputFailure ? args : nil
+                }
+                alert.showValidation(error, field: invalidField)
+            }
+        }
     }
     @objc private func cancel(_ sender: Any?) { execution?.cancel() }
     /// True while a configured command is running.
@@ -240,8 +261,9 @@ final class RunController: NSObject, NSMenuItemValidation {
         let anchor = target?.selectionAnchor ?? 0, caret = target?.selectionCaret ?? 0
         do {
             if configured.extensionMode {
-                guard let target, target.selectionCount == 1 else { throw RunFailure.invalid }
+                guard let target else { throw RunFailure.noDocument }
                 try target.requireWritable()
+                guard target.selectionCount == 1 else { throw RunFailure.multipleSelections }
             }
             let document = file()
             let command = try configured.resolved(file: document, selection: target?.selectedText ?? "")

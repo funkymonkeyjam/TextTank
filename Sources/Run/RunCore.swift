@@ -12,13 +12,52 @@ struct ConfiguredRun: Codable, Equatable {
     var shellMode = false
     var extensionMode = false
     func validate() throws {
-        guard version == 1, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 200,
-            executable.hasPrefix("/"), !executable.contains("\0"), arguments.count <= 256,
-            arguments.allSatisfy({ !$0.contains("\0") && $0.utf8.count <= 1024 * 1024 }),
-            !(shellMode && extensionMode)
-        else { throw RunFailure.invalid }
+        let title = String(name.prefix(200))
+        guard version == 1 else {
+            throw RunFailure.configuration(
+                field: .version,
+                message: "Run command “\(title)” requires version 1. The saved commands were not changed.")
+        }
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 200 else {
+            throw RunFailure.configuration(
+                field: .name,
+                message: "The Run command name must contain 1–200 characters. The saved commands were not changed.")
+        }
+        guard executable.hasPrefix("/"), !executable.contains("\0") else {
+            throw RunFailure.configuration(
+                field: .executable,
+                message:
+                    "Run command “\(title)” must use an absolute executable path without a NUL character. The saved commands were not changed."
+            )
+        }
+        guard arguments.count <= 256 else {
+            throw RunFailure.configuration(
+                field: .arguments,
+                message:
+                    "Run command “\(title)” must contain at most 256 arguments. The saved commands were not changed.")
+        }
+        for (index, argument) in arguments.enumerated() {
+            guard !argument.contains("\0"), argument.utf8.count <= 1024 * 1024 else {
+                throw RunFailure.configuration(
+                    field: .argument(index + 1),
+                    message:
+                        "Argument \(index + 1) of Run command “\(title)” must contain no NUL character and be at most 1 MiB. The saved commands were not changed."
+                )
+            }
+        }
+        guard !(shellMode && extensionMode) else {
+            throw RunFailure.configuration(
+                field: .mode,
+                message:
+                    "Run command “\(title)” cannot use shell mode and text extension mode together. The saved commands were not changed."
+            )
+        }
         if shellMode && (executable != "/bin/zsh" || arguments.count != 2 || arguments.first != "-c") {
-            throw RunFailure.invalid
+            throw RunFailure.configuration(
+                field: .shell,
+                message:
+                    "Run command “\(title)” must use /bin/zsh with -c and one script argument in shell mode. The saved commands were not changed."
+            )
         }
     }
     func resolved(file: URL?, selection: String) throws -> Self {
@@ -51,8 +90,21 @@ struct ConfiguredRun: Codable, Equatable {
         return result
     }
     static func validateLibrary(_ commands: [Self]) throws {
-        guard commands.count <= 1000, Set(commands.map(\.id)).count == commands.count else { throw RunFailure.invalid }
-        for command in commands { try command.validate() }
+        guard commands.count <= 1000 else {
+            throw RunFailure.configuration(
+                field: .library, message: "Keep at most 1000 Run commands. The saved commands were not changed.")
+        }
+        var seen = Set<UUID>()
+        for command in commands {
+            guard seen.insert(command.id).inserted else {
+                throw RunFailure.configuration(
+                    field: .identity,
+                    message:
+                        "Run command “\(String(command.name.prefix(200)))” appears more than once. The saved commands were not changed."
+                )
+            }
+            try command.validate()
+        }
     }
     /// One shared byte ceiling for persistence and restart, including JSON escaping.
     static let maximumLibraryBytes = 1024 * 1024
@@ -76,7 +128,7 @@ struct ConfiguredRun: Codable, Equatable {
     }
     static func decodeLibrary(_ data: Data) throws -> [Self] {
         guard data.count <= maximumLibraryBytes else { throw RunFailure.configurationTooLarge }
-        let commands = try JSONDecoder().decode([Self].self, from: data)
+        let commands = try JSONInputFailure.decode([Self].self, from: data, context: "Run commands")
         try validateLibrary(commands)
         return commands
     }
@@ -99,11 +151,23 @@ struct ConfiguredRun: Codable, Equatable {
             extensionMode: true)
     }
 }
-enum RunFailure: Error, LocalizedError {
+enum RunConfigurationField: Equatable {
+    case version, name, executable, arguments, argument(Int), mode, shell, library, identity
+}
+enum RunFailure: Error, LocalizedError, Equatable {
     case invalid, fileRequired, busy, tooLarge, configurationTooLarge, documentChanged, documentClosed
-    case selectionUnsuitable
+    case selectionUnsuitable, noDocument, multipleSelections
+    case configuration(field: RunConfigurationField, message: String)
+    case preparationFailed(Int32)
     var errorDescription: String? {
         switch self {
+        case .noDocument: return "Open a document before running a text extension. Nothing was changed."
+        case .multipleSelections:
+            return
+                "This text extension needs one selection. Collapse multiple selections and try again. Nothing was changed."
+        case .configuration(_, let message): return message
+        case .preparationFailed(let code):
+            return "The command could not be prepared: \(String(cString: strerror(code))). Nothing was run."
         case .invalid: return "Invalid command configuration. Use an absolute executable path and an argument array."
         case .fileRequired: return "This command needs a saved document path."
         case .busy: return "A command is already running. Wait for it to finish or cancel it, then try again."
@@ -221,8 +285,12 @@ final class RunExecution: @unchecked Sendable {
             guard fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == 0 else { throw failure() }
         }
         var actions: posix_spawn_file_actions_t?, attributes: posix_spawnattr_t?
-        guard posix_spawn_file_actions_init(&actions) == 0, posix_spawnattr_init(&attributes) == 0 else {
-            throw RunFailure.invalid
+        let actionsError = posix_spawn_file_actions_init(&actions)
+        guard actionsError == 0 else { throw RunFailure.preparationFailed(actionsError) }
+        let attributesError = posix_spawnattr_init(&attributes)
+        guard attributesError == 0 else {
+            posix_spawn_file_actions_destroy(&actions)
+            throw RunFailure.preparationFailed(attributesError)
         }
         defer {
             posix_spawn_file_actions_destroy(&actions)

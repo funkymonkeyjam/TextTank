@@ -16,11 +16,13 @@ struct FileOperationFailure: LocalizedError, CustomNSError {
     static var errorDomain: String { NSPOSIXErrorDomain }
     var errorCode: Int { Int(errorNumber) }
     var errorDescription: String? {
-        "Could not \(operation) “\(path)”: \(String(cString: strerror(errorNumber)))."
+        "The file action “\(operation)” failed for “\(path)”. \(String(cString: strerror(errorNumber)))."
     }
     var errorUserInfo: [String: Any] {
-        [NSLocalizedDescriptionKey: errorDescription ?? "", NSFilePathErrorKey: path,
-         NSUnderlyingErrorKey: POSIXError(POSIXErrorCode(rawValue: errorNumber) ?? .EIO)]
+        [
+            NSLocalizedDescriptionKey: errorDescription ?? "", NSFilePathErrorKey: path,
+            NSUnderlyingErrorKey: POSIXError(POSIXErrorCode(rawValue: errorNumber) ?? .EIO)
+        ]
     }
 }
 
@@ -43,8 +45,7 @@ struct JSONInputFailure: LocalizedError {
     let underlying: Error
     var errorDescription: String? { message }
     static func decode<Value: Decodable>(_ type: Value.Type, from data: Data, context: String) throws -> Value {
-        do { return try JSONDecoder().decode(type, from: data) }
-        catch let error as DecodingError {
+        do { return try JSONDecoder().decode(type, from: data) } catch let error as DecodingError {
             let message: String
             func path(_ keys: [CodingKey]) -> String {
                 keys.reduce(context) { text, key in
@@ -54,13 +55,16 @@ struct JSONInputFailure: LocalizedError {
             }
             switch error {
             case .keyNotFound(let key, let detail):
-                message = "A required value is missing at \(path(detail.codingPath + [key])). The saved data was not changed."
+                message =
+                    "A required value is missing at \(path(detail.codingPath + [key])). The saved data was not changed."
             case .typeMismatch(_, let detail):
-                message = "The value at \(path(detail.codingPath)) has the wrong JSON type. The saved data was not changed."
+                message =
+                    "The value at \(path(detail.codingPath)) has the wrong JSON type. The saved data was not changed."
             case .valueNotFound(_, let detail):
                 message = "The value at \(path(detail.codingPath)) cannot be null. The saved data was not changed."
             case .dataCorrupted(let detail):
-                message = detail.codingPath.isEmpty
+                message =
+                    detail.codingPath.isEmpty
                     ? "The JSON is not valid. Check its punctuation and quoted text. The saved data was not changed."
                     : "The value at \(path(detail.codingPath)) is not valid. The saved data was not changed."
             @unknown default:
@@ -92,11 +96,13 @@ enum DocumentActionError: LocalizedError, CustomNSError {
     var errorDescription: String? {
         switch self {
         case .diskChanged:
-            return "The file changed outside TextTank. Use Save As to preserve your edits, or revert to inspect the disk version."
+            return
+                "The file changed outside TextTank. Use Save As to preserve your edits, or revert to inspect the disk version."
         case .notSaved: return "Save the document before reloading its disk bytes."
         case .unsavedChanges: return "Reload would discard unsaved changes."
         case .unsafeDiskPath(let url, _):
-            return "“\(url.path)” is now a symbolic link or its folder was replaced, so TextTank will not read or overwrite it in place. Your editor contents are preserved; use Save As to keep them."
+            return
+                "“\(url.path)” is now a symbolic link or its folder was replaced, so TextTank will not read or overwrite it in place. Your editor contents are preserved; use Save As to keep them."
         case .multipleSelections:
             return "This command works on a single selection. Collapse multiple selections and try again."
         case .selectionTooLarge: return "Select at most 16 MiB for this command."

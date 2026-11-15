@@ -16,6 +16,25 @@ final class CancelAfterPolls: TTSearchCancellation {
 @main struct SearchChecks {
     static func main() {
         Checks.run("SearchChecks") {
+            rejects(
+                "F181 bookmark work-limit failures have a distinct typed identity",
+                expecting: SearchFailure.invalidBookmarkLimit
+            ) {
+                _ = try SearchCore.bookmarkLines(
+                    in: "abc", locations: [0], cancellation: TTSearchCancellation(), timeLimit: 0)
+            }
+            rejects(
+                "F181 reversed bookmark offsets have their own typed identity",
+                expecting: SearchFailure.bookmarkOffsetsUnordered
+            ) {
+                _ = try SearchCore.bookmarkLines(in: "abc", locations: [2, 1], cancellation: TTSearchCancellation())
+            }
+            check(
+                POSIXError(.ENOENT).isFileNotFound
+                    && NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT)).isFileNotFound
+                    && FileOperationFailure(ENOENT, operation: "read", path: "/fixture/absent").isFileNotFound
+                    && !POSIXError(.EACCES).isFileNotFound,
+                "F181 one missing-file predicate preserves native and bridged error identities")
             func search(
                 _ text: String, _ query: String, _ replacement: String = "",
                 mode: SearchOptions.Mode = .regularExpression, caseSensitive: Bool = true, whole: Bool = false,

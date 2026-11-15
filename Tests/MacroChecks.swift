@@ -232,8 +232,10 @@ import Foundation
             check(
                 editor.text == "keep" && editor.selectionCaret == 1 && !editor.modified,
                 "a step that carried SCI_CLEARALL as a number runs only its named command")
-            rejects("a file cannot name the bridge's unsupported marker as a step kind", where: { $0 is DecodingError })
-            {
+            rejects(
+                "a file cannot name the bridge's unsupported marker as a step kind",
+                where: { ($0 as? JSONInputFailure)?.underlying is DecodingError }
+            ) {
                 _ = try MacroLibrary.decode(
                     Data(
                         String(decoding: smuggled, as: UTF8.self).replacingOccurrences(
@@ -613,7 +615,7 @@ import Foundation
             rejects("unknown command cannot launch shell", message: "Unrecognized or unsafe macro command") {
                 _ = try MacroLibrary.decode(Data(json.replacingOccurrences(of: "charLeft", with: "executeShell").utf8))
             }
-            rejects("unknown step kind", where: { $0 is DecodingError }) {
+            rejects("unknown step kind", where: { ($0 as? JSONInputFailure)?.underlying is DecodingError }) {
                 _ = try MacroLibrary.decode(Data(json.replacingOccurrences(of: "insertText", with: "reminders").utf8))
             }
             rejects("pointer step rejected", message: "Unrecognized or unsafe macro command") {
@@ -634,7 +636,7 @@ import Foundation
             rejects("missing captured find parameters") { try invalid.validate() }
             invalid.steps = [.init(kind: .insertText, text: "x", command: "cut")]
             rejects("incompatible parameters") { try invalid.validate() }
-            rejects("duplicate macro ID", message: "duplicate IDs") {
+            rejects("duplicate macro ID", message: "appears more than once") {
                 try MacroLibrary(macros: [macro, macro]).validate()
             }
             var other = macro

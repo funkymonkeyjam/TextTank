@@ -785,20 +785,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// real folder.
     private func onDiskFile<T>(_ read: (URL) throws -> T) throws -> T {
         guard let url = diskURL else {
-            throw NSError(
-                domain: "TextTank", code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "Save the document before reloading its disk bytes."])
+            throw DocumentActionError.notSaved
         }
         do { return try read(url) } catch let error as POSIXError
             where error.code == .ELOOP || error.code == .ENOTDIR
         {
-            throw NSError(
-                domain: "TextTank", code: 5,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "“\(url.path)” is now a symbolic link or its folder was replaced, so TextTank will not read or overwrite it in place. Your editor contents are preserved; use Save As to keep them.",
-                    NSUnderlyingErrorKey: error as NSError
-                ])
+            throw DocumentActionError.unsafeDiskPath(url, underlying: error)
         }
     }
     enum DiskState: Equatable {
@@ -838,7 +830,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 diskSignature = sample.signature
                 return .unchanged
             }
-        } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == 2 { return .missing }
+        } catch  where error.isFileNotFound { return .missing }
     }
     @objc func toggleReadOnly(_ sender: NSMenuItem) {
         // Read-only belongs to the Scintilla document, so this covers a split view's other pane.
@@ -867,14 +859,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// require a native confirmation before this method is called with discard=true.
     func reload(using encoding: FileEncoding, discard: Bool = false) throws {
         guard fileURL != nil else {
-            throw NSError(
-                domain: "TextTank", code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "Save the document before reloading its disk bytes."])
+            throw DocumentActionError.notSaved
         }
         if isDocumentEdited && !discard {
-            throw NSError(
-                domain: "TextTank", code: 3,
-                userInfo: [NSLocalizedDescriptionKey: "Reload would discard unsaved changes."])
+            throw DocumentActionError.unsavedChanges
         }
         let (bytes, sample) = try onDiskFile { try WorkspaceStore.readRegularFileSample($0, maximumBytes: Int.max) }
         let decoded = try FileCodec.decode(bytes, encoding: encoding)
@@ -1338,12 +1326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if inPlace, diskDigest != nil, try diskState(trustingSettledMetadata: true) == .changed,
             saveOperation != .saveAsOperation
         {
-            throw NSError(
-                domain: "TextTank", code: 1,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "The file changed outside TextTank. Use Save As to preserve your edits, or revert to inspect the disk version."
-                ])
+            throw DocumentActionError.diskChanged
         }
         let submitted = try FileCodec.encode(editor.text, format: format), submittedFormat = format,
             submittedRevision = editor.revision
@@ -2517,10 +2500,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         try editor.requireWritable()
         let text = replaceField.stringValue
         guard editor.replaceSelection(text) else {
-            throw NSError(
-                domain: "TextTank", code: 7,
-                userInfo: [NSLocalizedDescriptionKey: "The replacement text could not be written. Nothing was changed."]
-            )
+            throw DocumentActionError.replacementRejected
         }
         (NSApp.delegate as? AppDelegate)?.macros.recordReplace(text: text, editor: editor)
     }
@@ -2657,9 +2637,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         (NSApp.delegate as? AppDelegate)?.macros.invalidateRecording(
             reason: "Line-ending conversion is not yet recorded.")
         guard editor.convertLineEndings(mode) else {
-            throw NSError(
-                domain: "TextTank", code: 8,
-                userInfo: [NSLocalizedDescriptionKey: "Line endings could not be converted. Nothing was changed."])
+            throw DocumentActionError.lineEndingsRejected
         }
     }
 }

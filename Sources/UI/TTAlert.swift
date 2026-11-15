@@ -17,6 +17,18 @@ final class TTAlert: NSObject, NSWindowDelegate {
     var informativeText = ""
     var alertStyle: NSAlert.Style = .informational
     var accessoryView: NSView?
+    private var validationMessage: String?
+    private weak var validationField: NSView?
+    /// Preserve the controls and identify the field that needs correction on the next presentation.
+    func showValidation(_ error: Error, field: NSView? = nil) {
+        validationField?.setAccessibilityHelp(nil)
+        validationField?.toolTip = nil
+        validationField = field
+        validationMessage = error.localizedDescription
+        field?.setAccessibilityHelp(validationMessage)
+        field?.toolTip = validationMessage
+        if let field { window.initialFirstResponder = field }
+    }
     private(set) var buttons: [NSButton] = []
     private var cancelButtons: Set<ObjectIdentifier> = []
     let window = NSPanel(
@@ -46,7 +58,7 @@ final class TTAlert: NSObject, NSWindowDelegate {
     /// Keep the native error alert and its recovery attempter/options intact. All error callers
     /// share this path; flattening the error into strings would discard its recovery behavior.
     static func errorAlert(_ error: Error) -> NSAlert { NSAlert(error: error) }
-    static func present(_ error: Error) { _ = errorAlert(error).runModal() }
+    static func present(_ error: Error) { _ = NSApp.presentError(error) }
 
     /// States why a command the person chose did nothing. Only for an explicit action, never
     /// from menu validation or a timer.
@@ -149,6 +161,13 @@ final class TTAlert: NSObject, NSWindowDelegate {
         }
         body.addArrangedSubview(title)
         if !informativeText.isEmpty { body.addArrangedSubview(detail) }
+        if let validationMessage {
+            let validation = AnnouncingLabel(wrappingLabelWithString: validationMessage)
+            validation.setAccessibilityLabel("Input needs correction")
+            body.addArrangedSubview(validation)
+            validation.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
+            Announce.say(validationMessage)
+        }
         if let accessory {
             accessory.translatesAutoresizingMaskIntoConstraints = false
             sizeConstraints.append(accessory.widthAnchor.constraint(equalToConstant: max(1, accessorySize.width)))
@@ -219,11 +238,15 @@ final class TTAlert: NSObject, NSWindowDelegate {
         prepare()
         sheetKeeper = self
         installKeyMonitor()
-        parent.beginSheet(window) { [self] response in
-            removeKeyMonitor()
-            window.orderOut(nil)
+        parent.beginSheet(window) { [weak self] response in
+            guard let self else {
+                completionHandler?(response)
+                return
+            }
+            self.removeKeyMonitor()
+            self.window.orderOut(nil)
             completionHandler?(response)
-            sheetKeeper = nil
+            self.sheetKeeper = nil
         }
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {

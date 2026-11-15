@@ -36,50 +36,108 @@ struct LanguageProfile: Codable, Equatable, Identifiable {
             && text.utf8.allSatisfy { (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }
     }
     func validate() throws {
-        guard !id.isEmpty, id.count <= 100, !title.isEmpty, title.count <= 150, !lexer.isEmpty, lexer.count <= 100,
-            !lexer.contains("\0"), extensions.count <= 200,
-            extensions.allSatisfy({ !$0.isEmpty && $0.count <= 100 && !$0.contains("/") && !$0.contains("\\") }),
-            keywordLists.count <= 32,
-            keywordLists.allSatisfy({
-                Int($0.key).map { (0..<32).contains($0) } == true && $0.value.utf8.count <= 1048576
-                    && !$0.value.contains("\0")
-            }),
-            properties.count <= 100,
-            properties.allSatisfy({
-                !$0.key.isEmpty && !$0.key.contains("\0") && !$0.value.contains("\0")
-                    && (lexer == "user" && Self.userListProperties.contains($0.key)
-                        ? $0.value.utf8.count <= Self.userListPropertyLimit : $0.value.count <= 4096)
-            }),
-            styles.count <= 256,
-            styles.allSatisfy({
-                (0...255).contains($0.id) && (0...7).contains($0.fontStyle) && Self.isHexColor($0.foreground)
-            })
-        else { throw LanguageError.invalid("Invalid language profile fields or safety limits.") }
+        let languageName = String(title.prefix(150))
+        guard !id.isEmpty, id.count <= 100 else {
+            throw LanguageError.invalid("Language “\(languageName)” must use a profile name of 1–100 characters.")
+        }
+        guard !title.isEmpty, title.count <= 150 else {
+            throw LanguageError.invalid("Language “\(languageName)” must use a display name of 1–150 characters.")
+        }
+        guard !lexer.isEmpty, lexer.count <= 100, !lexer.contains("\0") else {
+            throw LanguageError.invalid(
+                "Language “\(languageName)” must use a lexer name of 1–100 characters without a NUL character.")
+        }
+        guard extensions.count <= 200 else {
+            throw LanguageError.invalid("Language “\(languageName)” must contain at most 200 extensions.")
+        }
+        for (index, ext) in extensions.enumerated() {
+            guard !ext.isEmpty, ext.count <= 100, !ext.contains("/"), !ext.contains("\\") else {
+                throw LanguageError.invalid(
+                    "Extension \(index + 1) of language “\(languageName)” must contain 1–100 characters without a path separator."
+                )
+            }
+        }
+        guard keywordLists.count <= 32 else {
+            throw LanguageError.invalid("Language “\(languageName)” must contain at most 32 keyword lists.")
+        }
+        for (key, value) in keywordLists {
+            guard Int(key).map({ (0..<32).contains($0) }) == true, value.utf8.count <= 1048576,
+                !value.contains("\0")
+            else {
+                throw LanguageError.invalid(
+                    "Keyword list “\(String(key.prefix(40)))” of language “\(languageName)” must use a number from 0 to 31 and contain at most 1 MiB without NUL characters."
+                )
+            }
+        }
+        guard properties.count <= 100 else {
+            throw LanguageError.invalid("Language “\(languageName)” must contain at most 100 properties.")
+        }
+        for (key, value) in properties {
+            let validSize =
+                lexer == "user" && Self.userListProperties.contains(key)
+                ? value.utf8.count <= Self.userListPropertyLimit : value.count <= 4096
+            guard !key.isEmpty, !key.contains("\0"), !value.contains("\0"), validSize else {
+                throw LanguageError.invalid(
+                    "Property “\(String(key.prefix(60)))” of language “\(languageName)” has an empty name, a NUL character or exceeds its size limit."
+                )
+            }
+        }
+        guard styles.count <= 256 else {
+            throw LanguageError.invalid("Language “\(languageName)” must contain at most 256 styles.")
+        }
+        for style in styles {
+            guard (0...255).contains(style.id) else {
+                throw LanguageError.invalid("Language “\(languageName)” must use style numbers from 0 to 255.")
+            }
+            guard (0...7).contains(style.fontStyle) else {
+                throw LanguageError.invalid(
+                    "Language “\(languageName)” must use a font-style value from 0 to 7 for style \(style.id).")
+            }
+            guard Self.isHexColor(style.foreground) else {
+                throw LanguageError.invalid(
+                    "Language “\(languageName)” has an invalid style \(style.id) foreground. Enter exactly six hexadecimal digits."
+                )
+            }
+        }
         for style in styles {
             if let name = style.fontName {
                 guard name.count <= 150, !name.contains("\0") else {
-                    throw LanguageError.invalid("Invalid syntax font name.")
+                    throw LanguageError.invalid(
+                        "The font name of style \(style.id) in language “\(languageName)” must be at most 150 characters without a NUL character."
+                    )
                 }
             }
             if let size = style.fontSize {
                 guard size.isFinite, (6...72).contains(size) else {
-                    throw LanguageError.invalid("Syntax font size must be 6–72 points.")
+                    throw LanguageError.invalid(
+                        "The font size of style \(style.id) in language “\(languageName)” must be 6–72 points.")
                 }
             }
         }
         if let comments {
             for marker in [comments.line, comments.blockOpen, comments.blockClose].compactMap({ $0 }) {
                 guard marker.utf8.count <= 100, !marker.contains("\n"), !marker.contains("\r"), !marker.contains("\0")
-                else { throw LanguageError.invalid("Invalid comment delimiter.") }
+                else {
+                    throw LanguageError.invalid(
+                        "Comment delimiters in language “\(languageName)” must be at most 100 bytes without a line break or NUL character."
+                    )
+                }
             }
         }
         if let pattern = functionPattern {
             guard !pattern.isEmpty, pattern.count <= 2048 else {
-                throw LanguageError.invalid("Function pattern must contain 1–2048 characters.")
+                throw LanguageError.invalid(
+                    "The function pattern of language “\(languageName)” must contain 1–2048 characters.")
             }
-            let regex = try NSRegularExpression(pattern: pattern)
+            let regex: NSRegularExpression
+            do { regex = try NSRegularExpression(pattern: pattern) } catch {
+                throw LanguageError.invalid(
+                    "The function pattern of language “\(languageName)” could not be compiled. \(error.localizedDescription)"
+                )
+            }
             guard regex.numberOfCaptureGroups >= 1 else {
-                throw LanguageError.invalid("Function pattern requires capture group 1 for the symbol name.")
+                throw LanguageError.invalid(
+                    "The function pattern of language “\(languageName)” requires capture group 1 for the symbol name.")
             }
         }
     }
@@ -101,16 +159,21 @@ struct LanguageCatalog: Codable, Equatable {
     var limitations: [String]
     var profiles: [LanguageProfile]
     func validate() throws {
-        guard version == 1, profiles.count <= 500, Set(profiles.map(\.id)).count == profiles.count else {
-            throw LanguageError.invalid("Unsupported language catalog or duplicate identifiers.")
+        guard version == 1 else { throw LanguageError.invalid("Language profiles require version 1.") }
+        guard profiles.count <= 500 else { throw LanguageError.invalid("Keep at most 500 language profiles.") }
+        var seen = Set<String>()
+        for profile in profiles {
+            guard seen.insert(profile.id).inserted else {
+                throw LanguageError.invalid("Language “\(String(profile.title.prefix(150)))” appears more than once.")
+            }
+            try profile.validate()
         }
-        for profile in profiles { try profile.validate() }
     }
     /// The reader's size limit; writers check against the same constant.
     static let maximumBytes = 16 * 1024 * 1024
     static func decode(_ data: Data) throws -> Self {
         guard data.count <= maximumBytes else { throw LanguageError.invalid("Language catalog exceeds 16 MiB.") }
-        let value = try JSONDecoder().decode(Self.self, from: data)
+        let value = try JSONInputFailure.decode(Self.self, from: data, context: "Language profiles")
         try value.validate()
         return value
     }
@@ -126,8 +189,9 @@ struct LanguageCatalog: Codable, Equatable {
     static func load(stored data: Data, over bundled: LanguageCatalog) throws -> Self {
         guard data.count <= maximumBytes else { throw LanguageError.invalid("Language catalog exceeds 16 MiB.") }
         struct Probe: Decodable { var overridesVersion: Int? }
-        if try JSONDecoder().decode(Probe.self, from: data).overridesVersion != nil {
-            return try JSONDecoder().decode(LanguageOverrides.self, from: data).applied(to: bundled)
+        if try JSONInputFailure.decode(Probe.self, from: data, context: "Language profiles").overridesVersion != nil {
+            return try JSONInputFailure.decode(LanguageOverrides.self, from: data, context: "Language profile changes")
+                .applied(to: bundled)
         }
         return try LanguageOverrides(changing: bundled, to: decode(data), fullCopy: true).applied(to: bundled)
     }

@@ -1,7 +1,7 @@
 {
   "note": "Budgets for scripts/check-design-standards.py. Each is the most occurrences Sources/ may contain. Lower a budget whenever the count drops. Raising one is a departure from docs/DESIGN-STANDARDS.md and needs the owner's agreement.",
   "budgets": {
-    "app_modal_calls": 77,
+    "app_modal_calls": 75,
     "literal_font_sizes": 17,
     "literal_colours": 8,
     "lazy_plurals": 3,

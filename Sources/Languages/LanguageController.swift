@@ -147,7 +147,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
         let destination = storage.deletingLastPathComponent().appendingPathComponent(
             "LanguageProfiles.damaged-\(stamp.string(from: Date()))-\(UUID().uuidString.prefix(8)).json")
         guard renamex_np(storage.path, destination.path, UInt32(RENAME_EXCL)) == 0 else {
-            throw CocoaError(.fileWriteUnknown)
+            throw FileOperationFailure(errno, operation: "rename language profiles", path: storage.path)
         }
         storageDamaged = false
         loadError = nil
@@ -511,7 +511,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
             alert.messageText = "Language Profiles"
             alert.informativeText =
                 "Edit native lexer keywords, properties, style emphasis, extension detection and optional function patterns (capture group 1 is the name). This JSON profile format is not Notepad++ UDL XML. Imported files never execute code. Preserve identifiers to keep session language choices. Only your changes are saved, so built-in languages you leave alone follow later versions of TextTank. Removing a profile's \"comments\" turns comment commands off for it; an empty object does the same."
-            for title in ["Save", "Cancel", "Import…", "Export…"] { alert.addButton(withTitle: title) }
+            for (title, role) in [
+                ("Save", TTAlert.ButtonRole.action), ("Cancel", .cancel), ("Import…", .action), ("Export…", .action)
+            ] { alert.addButton(withTitle: title, role: role) }
             let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 700, height: 420))
             scroll.hasVerticalScroller = true
             let text = NSTextView(frame: scroll.bounds)
@@ -579,7 +581,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
         if FileManager.default.fileExists(atPath: storage.path) { _ = try Self.readRegular(storage) }
         let temp = directory.appendingPathComponent(".languages-" + UUID().uuidString)
         let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode_t(0o600))
-        guard fd >= 0 else { throw CocoaError(.fileWriteNoPermission) }
+        guard fd >= 0 else {
+            throw FileOperationFailure(errno, operation: "create language settings beside", path: storage.path)
+        }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         defer {
             try? handle.close()
@@ -588,12 +592,14 @@ final class LanguageController: NSObject, NSMenuDelegate {
         try handle.write(contentsOf: bytes)
         try handle.synchronize()
         try handle.close()
-        guard rename(temp.path, storage.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        guard rename(temp.path, storage.path) == 0 else {
+            throw FileOperationFailure(errno, operation: "rename language profiles", path: storage.path)
+        }
         catalog = merged
     }
     private static func readRegular(_ url: URL) throws -> Data {
         let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-        guard fd >= 0 else { throw CocoaError(.fileReadNoPermission) }
+        guard fd >= 0 else { throw FileOperationFailure(errno, operation: "read language profiles", path: url.path) }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         defer { try? handle.close() }
         var info = stat()

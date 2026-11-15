@@ -118,7 +118,7 @@ struct WorkspaceSession: Codable, Equatable, Identifiable {
                 }
                 return SessionFileInspection(
                     documentID: document.id, status: fingerprint == expected ? .unchanged : .changed)
-            } catch let error as POSIXError where error.code == .ENOENT {
+            } catch  where error.isFileNotFound {
                 return SessionFileInspection(documentID: document.id, status: .missing)
             } catch is CancellationError {
                 return SessionFileInspection(documentID: document.id, status: .unreadable("the check was cancelled"))
@@ -207,11 +207,15 @@ struct FileSample: Equatable {
 }
 enum WorkspaceError: LocalizedError {
     case invalid(String), unsafeLocation, tooLarge
+    case fileTooLarge(limit: Int, url: URL)
     var errorDescription: String? {
         switch self {
         case .invalid(let reason): return reason
         case .unsafeLocation:
-            return "Session storage requires a regular local file in a real directory, not a symbolic link."
+            return "This action requires a regular local file in a real directory, not a symbolic link."
+        case .fileTooLarge(let limit, let url):
+            return
+                "“\(url.lastPathComponent)” exceeds this action’s limit of \(limit) bytes. Its bytes have not been changed."
         case .tooLarge:
             return
                 "The session or referenced file exceeds the 512 MiB inspection limit. Its bytes have not been changed."
@@ -269,7 +273,9 @@ enum WorkspaceStore {
             var info = stat()
             guard fstat(descriptor, &info) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
             guard (info.st_mode & S_IFMT) == S_IFREG else { throw WorkspaceError.unsafeLocation }
-            guard info.st_size >= 0, info.st_size <= maximumBytes else { throw WorkspaceError.tooLarge }
+            guard info.st_size >= 0, info.st_size <= maximumBytes else {
+                throw WorkspaceError.fileTooLarge(limit: maximumBytes, url: url)
+            }
             return (descriptor, info)
         } catch {
             close(descriptor)
@@ -303,7 +309,7 @@ enum WorkspaceStore {
             }
             if count == 0 { break }
             total += count
-            guard total <= maximumBytes else { throw WorkspaceError.tooLarge }
+            guard total <= maximumBytes else { throw WorkspaceError.fileTooLarge(limit: maximumBytes, url: url) }
             buffer.withUnsafeBytes { hasher.update(bufferPointer: UnsafeRawBufferPointer(rebasing: $0[0..<count])) }
         }
         var after = stat()
@@ -347,7 +353,7 @@ enum WorkspaceStore {
                         + (maximumBytes - data.count < 64 * 1024 ? 1 : 0)) ?? Data()
             if chunk.isEmpty { break }
             data.append(chunk)
-            guard data.count <= maximumBytes else { throw WorkspaceError.tooLarge }
+            guard data.count <= maximumBytes else { throw WorkspaceError.fileTooLarge(limit: maximumBytes, url: url) }
         }
         var after = stat()
         if fstat(descriptor, &after) == 0, FileSignature(after) == FileSignature(info), Int(after.st_size) == data.count
@@ -361,7 +367,9 @@ enum WorkspaceStore {
         try writePrivate(try session.encoded(), to: url)
     }
     static func writePrivate(_ data: Data, to url: URL) throws {
-        guard data.count <= maximumSessionBytes else { throw WorkspaceError.tooLarge }
+        guard data.count <= maximumSessionBytes else {
+            throw WorkspaceError.fileTooLarge(limit: maximumSessionBytes, url: url)
+        }
         let dir = try directoryDescriptor(for: url)
         defer { close(dir) }
         let destination = url.lastPathComponent

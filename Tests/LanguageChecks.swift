@@ -17,6 +17,18 @@ import Foundation
             check(catalog.detect(filename: "unknown.zzzz", text: "") == nil, "unknown file remains explicit choice")
             let python = try requireValue(
                 catalog.profiles.first { $0.id == "python" }, "fixture: python profile exists")
+            var invalidColor = python
+            invalidColor.styles = [.init(id: 4, name: "Fixture style", foreground: "nothex", fontStyle: 0)]
+            do {
+                try invalidColor.validate()
+                check(false, "F213 invalid profile color is rejected")
+            } catch {
+                check(
+                    error.localizedDescription.contains(python.title)
+                        && error.localizedDescription.contains("style 4 foreground")
+                        && error.localizedDescription.contains("six hexadecimal"),
+                    "F213 language validation names the affected profile, style and color field")
+            }
             check(python.completions.contains("def"), "source keywords supply completion")
             let symbols = try LanguageFunctions.symbols(
                 text: "# café\r\nclass Example:\r\n    def work(self):\r\n        return 1\r\n", profile: python)

@@ -57,7 +57,7 @@ import Darwin
             }
             var json = String(data: try library.encoded(), encoding: .utf8)!
             json = json.replacingOccurrences(of: "removeListMarkers", with: "executeShell")
-            rejects("unknown executable step", where: { $0 is DecodingError }) {
+            rejects("unknown executable step", where: { ($0 as? JSONInputFailure)?.underlying is DecodingError }) {
                 _ = try AutomationLibrary.decode(Data(json.utf8))
             }
             var sameNames = library
@@ -240,11 +240,12 @@ import Darwin
             let link = root.appendingPathComponent("link")
             try FileManager.default.createSymbolicLink(at: link, withDestinationURL: utf8)
             // F72: the error is the system's own reason, and a size message names the limit in force.
-            rejects("symlink input is refused as a symbolic link", where: { ($0 as? POSIXError)?.code == .ELOOP }) {
+            rejects("symlink input is refused as a symbolic link", where: { $0.posixCode == .ELOOP }) {
                 _ = try AutomationFileInput.read(link)
             }
-            rejects("F72 a missing input file is reported as missing", where: { ($0 as? POSIXError)?.code == .ENOENT })
-            { _ = try AutomationFileInput.read(root.appendingPathComponent("absent.txt")) }
+            rejects("F72 a missing input file is reported as missing", where: { $0.posixCode == .ENOENT }) {
+                _ = try AutomationFileInput.read(root.appendingPathComponent("absent.txt"))
+            }
             rejects("F72 an oversized input names the limit that applies", message: "larger than the 2 bytes limit") {
                 _ = try AutomationFileInput.read(utf8, limit: 2)
             }
@@ -422,7 +423,9 @@ import Darwin
             rejects("future portable version rejects loading", message: "Unsupported rule-set version") {
                 _ = try AutomationRuleSet.decode(JSONEncoder().encode(futurePortable))
             }
-            rejects("malformed portable file rejected", where: { $0 is DecodingError }) {
+            rejects(
+                "malformed portable file rejected", where: { ($0 as? JSONInputFailure)?.underlying is DecodingError }
+            ) {
                 _ = try AutomationRuleSet.decode(Data("{bad".utf8))
             }
             rejects("oversized portable file rejected before decode") {

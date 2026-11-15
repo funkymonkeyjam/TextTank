@@ -611,9 +611,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         let text = editor.text, revision = editor.revision
         let report = try SearchCore.search(text, options: options, timeLimit: timeLimit)
         guard !report.truncated else {
-            throw NSError(
-                domain: "TextTank.Search", code: 4,
-                userInfo: [NSLocalizedDescriptionKey: "Macro search reached the result limit; no edits were applied."])
+            throw SearchFailure.macroResultLimit
         }
         guard
             let selection = SearchCore.utf16Range(
@@ -630,9 +628,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 case .closed: reason = "the document is not in a window"
                 case .stale: reason = "the document changed during the step"
                 }
-                throw NSError(
-                    domain: "TextTank.Search", code: 5,
-                    userInfo: [NSLocalizedDescriptionKey: "Macro replacement was not applied: \(reason)."])
+                throw SearchFailure.macroReplacement(reason)
             }
         } else if action == "next" || action == "previous" {
             let backwards = action == "previous"
@@ -651,16 +647,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             else { throw Self.recordedSearchStopped("the match could not be selected") }
             lastNavigation = Navigation(editor: editor, revision: revision, range: hit.range, from: nil)
         } else {
-            throw NSError(
-                domain: "TextTank.Search", code: 6,
-                userInfo: [NSLocalizedDescriptionKey: "Unrecognized recorded search action."])
+            throw SearchFailure.unknownRecordedAction
         }
     }
-    private static func recordedSearchStopped(_ reason: String) -> NSError {
-        NSError(
-            domain: "TextTank.Search", code: 7,
-            userInfo: [NSLocalizedDescriptionKey: "Macro stopped: \(reason). Prior edits remain undoable."])
-    }
+    private static func recordedSearchStopped(_ reason: String) -> SearchFailure { .macroStopped(reason) }
     /// `revision` is the staleness authority: every insert and delete moves it, in every view of a
     /// shared document, so an equal revision means `text` is still the editor's text (F223).
     @discardableResult static func highlight(_ hits: [SearchHit], text: String, revision: UInt, in editor: TTEditor)

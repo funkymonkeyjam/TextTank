@@ -251,6 +251,63 @@ extension DocumentChecks {
             document.close()
         }
 
+        section("audit24 settings invalid drafts and unexpected termination", #line) {
+            let settings = SettingsController(url: root.appendingPathComponent("audit24-settings.json"))
+            let original = settings.value
+            var aborted = false
+            let abort = Timer(timeInterval: 0.02, repeats: true) { _ in
+                guard NSApp.modalWindow != nil else { return }
+                aborted = true
+                NSApp.abortModal()
+            }
+            RunLoop.main.add(abort, forMode: .modalPanel)
+            settings.showSettings(nil)
+            abort.invalidate()
+            check(
+                aborted && settings.value == original && !FileManager.default.fileExists(atPath: settings.url.path),
+                "F16 aborting Settings never saves defaults or creates its file")
+            var stage = 0, keptDraft = false
+            let deadline = Date().addingTimeInterval(10)
+            let retry = Timer(timeInterval: 0.02, repeats: true) { _ in
+                MainActor.assumeIsolated {
+                    guard let content = NSApp.modalWindow?.contentView else { return }
+                    let views = descendants(content)
+                    if Date() > deadline {
+                        NSApp.abortModal()
+                        return
+                    }
+                    guard let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
+                        let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save" })
+                    else {
+                        views.compactMap { $0 as? NSButton }.first?.performClick(nil)
+                        return
+                    }
+                    if stage == 0 {
+                        field.stringValue = "invalid width"
+                        stage = 1
+                        save.performClick(nil)
+                    } else if stage == 1 {
+                        keptDraft =
+                            field.stringValue == "invalid width"
+                            && views.compactMap({ $0 as? NSTextField }).contains(where: {
+                                !$0.isEditable && $0.stringValue.contains("Tab width must")
+                                    && $0.stringValue.contains("32")
+                            })
+                        field.stringValue = "8 "
+                        stage = 2
+                        save.performClick(nil)
+                    }
+                }
+            }
+            RunLoop.main.add(retry, forMode: .modalPanel)
+            settings.showSettings(nil)
+            retry.invalidate()
+            check(stage == 2 && keptDraft, "F214 Settings preserves invalid input and identifies its tab-width field")
+            check(
+                settings.value.tabWidth == 8,
+                "F214 corrected Settings input saves after retry, accepting surrounding whitespace")
+        }
+
         // F295
         section("the automation context menu is reachable", #line) {
             let (document, _, window) = try tab("p21-context")
@@ -757,7 +814,7 @@ extension DocumentChecks {
                 "Command-F is the find bar; Find and Replace has its own shortcut")
             check(all.contains { $0.path.hasPrefix("Help > ") }, "the Help menu has an item of its own")
             // N2: Return never destroys; Escape always has a button.
-            func roles(_ titles: [String], destructive: Int? = nil) -> [Int?] {
+            @MainActor func roles(_ titles: [String], destructive: Int? = nil) -> [Int?] {
                 let alert = TTAlert()
                 for (index, title) in titles.enumerated() {
                     alert.addButton(withTitle: title).hasDestructiveAction = index == destructive
@@ -780,7 +837,7 @@ extension DocumentChecks {
             // N8: saving Settings carries a changed default only to views that still had the old one.
             let settings = sessionDelegate.settings
             let original = settings.value
-            defer { try? settings.save(original) }
+            defer { _ = try? settings.save(original) }
             var base = original
             base.tabWidth = 4
             base.useTabs = true

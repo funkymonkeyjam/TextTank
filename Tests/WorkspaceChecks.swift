@@ -15,7 +15,7 @@ import Darwin
                 return false
             }
             let tooLarge: (Error) -> Bool = {
-                if case WorkspaceError.tooLarge = $0 { return true }
+                if case WorkspaceError.fileTooLarge = $0 { return true }
                 return false
             }
             func posix(_ code: POSIXErrorCode) -> (Error) -> Bool { { ($0 as? POSIXError)?.code == code } }
@@ -167,6 +167,15 @@ import Darwin
                         == WorkspaceStore.fingerprint(WorkspaceStore.readRegularFile(sized)),
                     "streamed fingerprint of \(count) bytes equals the fingerprint of the bytes read")
             }
+            do {
+                _ = try WorkspaceStore.readRegularFile(destination, maximumBytes: 2)
+                check(false, "F94 an oversized file is rejected")
+            } catch {
+                check(
+                    error.localizedDescription.contains("2 bytes")
+                        && error.localizedDescription.contains(destination.lastPathComponent),
+                    "F94 a bounded read names the actual file and its actual byte limit")
+            }
             rejects("streamed fingerprint enforces the read limit", where: tooLarge) {
                 _ = try WorkspaceStore.fingerprint(ofRegularFileAt: destination, maximumBytes: 2)
             }
@@ -188,7 +197,9 @@ import Darwin
             oversizedReference.documents[0].originalURL = oversized
             check(
                 oversizedReference.inspectReferencedFiles()[0].status
-                    == .unreadable(WorkspaceError.tooLarge.localizedDescription),
+                    == .unreadable(
+                        WorkspaceError.fileTooLarge(limit: WorkspaceStore.maximumSessionBytes, url: oversized)
+                            .localizedDescription),
                 "an original over the limit is reported as too large without being read")
             try FileManager.default.removeItem(at: oversized)
             var cancelledReference = session

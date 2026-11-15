@@ -40,9 +40,10 @@ struct EditorSettings: Codable, Equatable {
     }
 }
 enum SettingsError: Error, LocalizedError {
-    case invalid, conflict, unreadable
+    case invalid, conflict, unreadable, tabWidth
     var errorDescription: String? {
         switch self {
+        case .tabWidth: return "Tab width must be a whole number from 1 to 32. The settings were not changed."
         case .invalid: return "Unsupported settings version or value. Existing settings have not been replaced."
         case .conflict:
             return
@@ -64,7 +65,7 @@ final class SettingsController: NSObject {
         super.init()
         do {
             value = try EditorSettings.decode(WorkspaceStore.readRegularFile(self.url, maximumBytes: 1024 * 1024))
-        } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == ENOENT {} catch {
+        } catch  where error.isFileNotFound {} catch {
             loadError = error
         }
     }
@@ -165,6 +166,12 @@ final class SettingsController: NSObject {
         shortcut.addItems(withTitles: EditorSettings.commands.sorted())
         let key = NSTextField(string: "")
         key.placeholderString = "Optional shortcut for selected command"
+        width.setAccessibilityLabel("Tab width")
+        tabs.setAccessibilityLabel("Indent with tabs")
+        wrap.setAccessibilityLabel("Wrap lines")
+        appearance.setAccessibilityLabel("Appearance")
+        shortcut.setAccessibilityLabel("Command shortcut to assign")
+        key.setAccessibilityLabel("Shortcut key")
         let stack = NSStackView(views: [
             NSTextField(labelWithString: "Tab width (1–32)"), width, tabs, wrap, appearance,
             NSTextField(labelWithString: "Assign one command shortcut"), shortcut, key
@@ -178,47 +185,61 @@ final class SettingsController: NSObject {
         alert.addButton(withTitle: "Cancel", role: .cancel)
         // The ellipsis says a confirmation follows (DS-22); the confirmation holds the destructive button.
         alert.addButton(withTitle: "Reset Defaults…")
-        let result = alert.runModal()
-        guard result != .alertSecondButtonReturn else { return }
-        do {
-            var updated = value
-            if result == .alertThirdButtonReturn {
-                let confirm = TTAlert()
-                confirm.messageText = "Reset all editor settings to their defaults?"
-                confirm.informativeText =
-                    "Tab width, indentation, wrapping, appearance and every assigned shortcut return to their defaults. Documents are not changed."
-                confirm.addButton(withTitle: "Cancel", role: .cancel)
-                confirm.addButton(withTitle: "Reset Defaults").hasDestructiveAction = true
-                guard confirm.runModal() == .alertSecondButtonReturn else { return }
-                updated = EditorSettings()
-            } else {
-                updated.tabWidth = Int(width.stringValue) ?? 0
-                updated.useTabs = tabs.state == .on
-                updated.wrap = wrap.state == .on
-                updated.appearance = appearance.titleOfSelectedItem ?? "system"
-                if !key.stringValue.isEmpty, let id = shortcut.titleOfSelectedItem {
-                    updated.shortcuts[id] = key.stringValue
+        while true {
+            let result = alert.runModal()
+            guard result == .alertFirstButtonReturn || result == .alertThirdButtonReturn else { return }
+            do {
+                var updated = value
+                if result == .alertThirdButtonReturn {
+                    let confirm = TTAlert()
+                    confirm.messageText = "Reset all editor settings to their defaults?"
+                    confirm.informativeText =
+                        "Tab width, indentation, wrapping, appearance and every assigned shortcut return to their defaults. Documents are not changed."
+                    confirm.addButton(withTitle: "Cancel", role: .cancel)
+                    confirm.addButton(withTitle: "Reset Defaults").hasDestructiveAction = true
+                    guard confirm.runModal() == .alertSecondButtonReturn else { return }
+                    updated = EditorSettings()
+                } else {
+                    guard let tabWidth = Int(width.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)),
+                        (1...32).contains(tabWidth)
+                    else { throw SettingsError.tabWidth }
+                    updated.tabWidth = tabWidth
+                    updated.useTabs = tabs.state == .on
+                    updated.wrap = wrap.state == .on
+                    updated.appearance = appearance.titleOfSelectedItem ?? "system"
+                    if !key.stringValue.isEmpty, let id = shortcut.titleOfSelectedItem {
+                        updated.shortcuts[id] = key.stringValue
+                    }
                 }
+                var replacing = false
+                if loadError != nil {
+                    // Save and Reset Defaults both arrive here; neither may silently replace the unread file.
+                    let confirm = TTAlert()
+                    confirm.alertStyle = .warning
+                    confirm.messageText = "Replace unreadable settings?"
+                    confirm.informativeText =
+                        "The saved settings file could not be read, so this window started from defaults. Saving now replaces that file. A backup copy of the original will be kept next to it.\n\n\(url.path)"
+                    confirm.addButton(withTitle: "Cancel", role: .cancel)
+                    confirm.addButton(withTitle: "Replace and Keep Backup")
+                    guard confirm.runModal() == .alertSecondButtonReturn else { return }
+                    replacing = true
+                }
+                if let backup = try save(updated, replacingUnreadable: replacing) {
+                    let message =
+                        "Settings replaced. The previous settings file was kept as “\(backup.lastPathComponent)”."
+                    (NSApp.mainWindow?.windowController as? EditorWindowController)?.showTransientStatus(message)
+                    Announce.say(message)
+                }
+                return
+            } catch {
+                let field: NSView?
+                switch error {
+                case SettingsError.conflict: field = key
+                case SettingsError.tabWidth: field = width
+                default: field = nil
+                }
+                alert.showValidation(error, field: field)
             }
-            var replacing = false
-            if loadError != nil {
-                // Save and Reset Defaults both arrive here; neither may silently replace the unread file.
-                let confirm = TTAlert()
-                confirm.alertStyle = .warning
-                confirm.messageText = "Replace unreadable settings?"
-                confirm.informativeText =
-                    "The saved settings file could not be read, so this window started from defaults. Saving now replaces that file. A backup copy of the original will be kept next to it.\n\n\(url.path)"
-                confirm.addButton(withTitle: "Cancel", role: .cancel)
-                confirm.addButton(withTitle: "Replace and Keep Backup")
-                guard confirm.runModal() == .alertSecondButtonReturn else { return }
-                replacing = true
-            }
-            if let backup = try save(updated, replacingUnreadable: replacing) {
-                let done = TTAlert()
-                done.messageText = "Settings replaced"
-                done.informativeText = "The previous settings file was kept as:\n\(backup.path)"
-                _ = done.runModal()
-            }
-        } catch { TTAlert.present(error) }
+        }
     }
 }

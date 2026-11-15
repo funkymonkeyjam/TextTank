@@ -18,6 +18,14 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
     }
 }
 
+final class Audit24RecoverySpy: NSObject {
+    var attempts: [Int] = []
+    override func attemptRecovery(fromError error: Error, optionIndex: Int) -> Bool {
+        attempts.append(optionIndex)
+        return true
+    }
+}
+
 @main struct AutomationControllerChecks {
     static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     static func typeKeys(_ text: String, in window: NSWindow) {
@@ -885,7 +893,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 "F75 an existing unreadable library is never overwritten and no presets are substituted")
         }
     }
-    static func horizontalDialogChecks() throws {
+    @MainActor static func horizontalDialogChecks() throws {
         let ownership = TTAlert()
         let alertObject: AnyObject = ownership
         check(!(alertObject is NSAlert), "F304 the horizontal dialog owns its panel instead of subclassing NSAlert")
@@ -915,6 +923,40 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 && nativeError.informativeText.contains("Try the fixture again.")
                 && nativeError.buttons.map(\.title) == ["Retry Fixture", "Cancel Fixture"],
             "F325 shared error presentation preserves native recovery suggestion and choices")
+        let recoverySpy = Audit24RecoverySpy()
+        let recoverable = NSError(
+            domain: "Fixture.NativeRecovery", code: 1,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Fixture recoverable error",
+                NSLocalizedRecoverySuggestionErrorKey: "Retry this isolated fixture.",
+                NSLocalizedRecoveryOptionsErrorKey: ["Retry Fixture", "Cancel Fixture"],
+                NSRecoveryAttempterErrorKey: recoverySpy
+            ])
+        let recoveryDeadline = Date().addingTimeInterval(10)
+        var recoveryPressed = false
+        func recoveryButtons(_ view: NSView) -> [NSButton] {
+            (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(recoveryButtons)
+        }
+        let recoveryAnswer = Timer(timeInterval: 0.02, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard let content = NSApp.modalWindow?.contentView else { return }
+                if Date() > recoveryDeadline {
+                    NSApp.abortModal()
+                    return
+                }
+                guard !recoveryPressed,
+                    let retry = recoveryButtons(content).first(where: { $0.title == "Retry Fixture" })
+                else { return }
+                recoveryPressed = true
+                retry.performClick(nil)
+            }
+        }
+        RunLoop.main.add(recoveryAnswer, forMode: .modalPanel)
+        TTAlert.present(recoverable)
+        recoveryAnswer.invalidate()
+        check(
+            recoveryPressed && recoverySpy.attempts == [0],
+            "F325 shared native error presentation invokes the original recovery attempter with the chosen option")
         let sheetParent = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 300), styleMask: [.titled],
             backing: .buffered, defer: false)
@@ -931,6 +973,23 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         check(
             sheetResponse == .alertFirstButtonReturn && sheetParent.attachedSheet == nil,
             "F304 a native sheet ends with its original button response")
+        weak var releasedSheet: TTAlert?
+        var ephemeralResponse: NSApplication.ModalResponse?
+        autoreleasepool {
+            let ephemeral = TTAlert()
+            ephemeral.addButton(withTitle: "Close")
+            releasedSheet = ephemeral
+            ephemeral.beginSheetModal(for: sheetParent) { ephemeralResponse = $0 }
+        }
+        check(releasedSheet != nil, "F304 a native sheet survives the caller's local alert scope")
+        autoreleasepool { releasedSheet?.buttons[0].performClick(nil) }
+        spinUntil("the locally scoped sheet completes and releases its owner") { releasedSheet == nil }
+        check(
+            ephemeralResponse == .alertFirstButtonReturn && releasedSheet == nil,
+            "F304 a locally scoped sheet still responds and releases its owner on completion")
+        // A negative lifetime probe can leave an ownerless sheet: clean only this fixture
+        // after observing its failure so later modal checks still report their own results.
+        if let orphan = sheetParent.attachedSheet { sheetParent.endSheet(orphan, returnCode: .abort) }
         let alert = TTAlert()
         alert.messageText = "Horizontal action regression"
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 28))
@@ -940,13 +999,15 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         for index in [2, 1, 0] {
             var aligned = false
             let timer = Timer(timeInterval: 0.1, repeats: false) { _ in
-                let frames = alert.buttons.map { $0.convert($0.bounds, to: alert.window.contentView) }
-                print("ACTION_GEOMETRY", index, frames)
-                fflush(stdout)
-                aligned =
-                    frames.allSatisfy { abs($0.midY - frames[0].midY) < 1 } && frames[2].maxX < frames[1].minX
-                    && frames[1].maxX < frames[0].minX
-                alert.buttons[index].performClick(nil)
+                MainActor.assumeIsolated {
+                    let frames = alert.buttons.map { $0.convert($0.bounds, to: alert.window.contentView) }
+                    print("ACTION_GEOMETRY", index, frames)
+                    fflush(stdout)
+                    aligned =
+                        frames.allSatisfy { abs($0.midY - frames[0].midY) < 1 } && frames[2].maxX < frames[1].minX
+                        && frames[1].maxX < frames[0].minX
+                    alert.buttons[index].performClick(nil)
+                }
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             let response = alert.runModal()

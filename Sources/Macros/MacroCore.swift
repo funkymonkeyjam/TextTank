@@ -64,13 +64,19 @@ struct RecordedMacro: Codable, Identifiable, Equatable {
     var name: String
     var steps: [Step]
     func validate() throws {
-        guard version == 1, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 120,
-            !steps.isEmpty, steps.count <= 10000
-        else {
-            throw MacroError.invalid(
-                "A macro requires version 1, a name of 1–120 characters, and 1–10000 supported steps.")
+        let itemName = String(name.prefix(120))
+        guard version == 1 else { throw MacroError.invalid("Macro “\(itemName)” requires version 1.") }
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 120 else {
+            throw MacroError.invalid("The macro name must contain 1–120 characters.")
         }
-        for step in steps { try step.validate() }
+        guard !steps.isEmpty, steps.count <= 10000 else {
+            throw MacroError.invalid("Macro “\(itemName)” requires 1–10000 supported actions.")
+        }
+        for (index, step) in steps.enumerated() {
+            do { try step.validate() } catch {
+                throw MacroError.invalid("Macro “\(itemName)”, action \(index + 1): \(error.localizedDescription)")
+            }
+        }
     }
 }
 enum MacroError: LocalizedError {
@@ -87,13 +93,18 @@ struct MacroLibrary: Codable, Equatable {
     var version: Int = 1
     var macros: [RecordedMacro]
     func validate() throws {
-        guard version == 1, macros.count <= 200, Set(macros.map(\.id)).count == macros.count else {
-            throw MacroError.invalid("Invalid macro library version, count or duplicate IDs.")
+        guard version == 1 else { throw MacroError.invalid("Saved macros require version 1.") }
+        guard macros.count <= 200 else { throw MacroError.invalid("Keep at most 200 saved macros.") }
+        var seen = Set<UUID>()
+        for macro in macros {
+            guard seen.insert(macro.id).inserted else {
+                throw MacroError.invalid("Macro “\(String(macro.name.prefix(120)))” appears more than once.")
+            }
+            try macro.validate()
         }
-        for macro in macros { try macro.validate() }
     }
     static func decode(_ data: Data) throws -> MacroLibrary {
-        let library = try JSONDecoder().decode(Self.self, from: data)
+        let library = try JSONInputFailure.decode(Self.self, from: data, context: "Saved macros")
         try library.validate()
         return library
     }

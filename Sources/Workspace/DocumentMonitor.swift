@@ -81,9 +81,9 @@ final class DocumentMonitor {
             return Inspection(
                 status: sample.digest == expected ? .unchanged : .changed,
                 sample: sample.signature == nil ? nil : sample, readFile: true)
-        } catch let error as POSIXError where error.code == .ENOENT {
+        } catch  where error.isFileNotFound {
             return Inspection(status: .missing, sample: nil, readFile: false)
-        } catch WorkspaceError.tooLarge {
+        } catch WorkspaceError.fileTooLarge {
             return Inspection(
                 status: .unavailable("File exceeds the 32 MiB monitoring limit; editor text is preserved."),
                 sample: nil, readFile: false)

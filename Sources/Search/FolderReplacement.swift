@@ -80,7 +80,7 @@ enum FolderReplacement {
                     initial.st_mode & 0o222 != 0, initial.st_uid == getuid()
                 else { throw Failure.unsafe }
                 guard initial.st_size >= 0, initial.st_size <= 32 * 1024 * 1024 else { throw Failure.large }
-                let original = try read(source, size: Int(initial.st_size), cancellation: cancellation)
+                let original = try read(source, size: Int(initial.st_size), cancellation: cancellation, path: url.path)
                 guard sha(original) == expected else { throw Failure.changed }
                 let decoded = try FileCodec.decode(original)
                 let found = try SearchCore.search(
@@ -104,12 +104,14 @@ enum FolderReplacement {
                 guard encoded.count <= 64 * 1024 * 1024 else { throw Failure.large }
                 let tempName = ".texttank-replacement-" + UUID().uuidString
                 let temp = openat(parent, tempName, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-                guard temp >= 0 else { throw POSIXError(.EIO) }
+                guard temp >= 0 else {
+                    throw FileOperationFailure(errno, operation: "create replacement beside", path: url.path)
+                }
                 defer {
                     close(temp)
                     unlinkat(parent, tempName, 0)
                 }
-                try write(encoded, to: temp)
+                try write(encoded, to: temp, path: url.path)
                 // Copy permissions, ownership, ACLs, extended attributes and flags
                 // from the still-open source descriptor, without copying its data.
                 // COPYFILE_METADATA also copies the source's timestamps. The content is new, so
@@ -117,13 +119,20 @@ enum FolderReplacement {
                 // by modification time. The creation date and all other metadata are kept.
                 guard fcopyfile(source, temp, nil, copyfile_flags_t(COPYFILE_METADATA)) == 0, futimens(temp, nil) == 0,
                     fsync(temp) == 0
-                else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+                else {
+                    throw FileOperationFailure(
+                        errno, operation: "update file metadata or replacement beside", path: url.path)
+                }
                 let backupName = ".texttank-backup-" + UUID().uuidString
                 let copy = openat(parent, backupName, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-                guard copy >= 0 else { throw POSIXError(.EIO) }
+                guard copy >= 0 else {
+                    throw FileOperationFailure(errno, operation: "create recovery copy beside", path: url.path)
+                }
                 do {
-                    try write(original, to: copy)
-                    guard fsync(copy) == 0 else { throw POSIXError(.EIO) }
+                    try write(original, to: copy, path: url.path)
+                    guard fsync(copy) == 0 else {
+                        throw FileOperationFailure(errno, operation: "sync recovery copy beside", path: url.path)
+                    }
                     close(copy)
                 } catch {
                     close(copy)
@@ -143,8 +152,10 @@ enum FolderReplacement {
                 // returned: its result can be ambiguous on a network volume.
                 var renameAttempted = false
                 do {
-                    guard fsync(parent) == 0 else { throw POSIXError(.EIO) }
-                    try persistReport(journal, name: reportName, parent: parent)
+                    guard fsync(parent) == 0 else {
+                        throw FileOperationFailure(errno, operation: "sync directory beside", path: url.path)
+                    }
+                    try persistReport(journal, name: reportName, parent: parent, path: url.path)
                     reportURL = url.deletingLastPathComponent().appendingPathComponent(reportName)
                     beforeCommit?(url)
                     if cancellation.isCancelled { throw Failure.cancelled }
@@ -160,11 +171,13 @@ enum FolderReplacement {
                         latest.st_gid == initial.st_gid, latest.st_flags == initial.st_flags,
                         latest.st_ctimespec.tv_sec == initial.st_ctimespec.tv_sec,
                         latest.st_ctimespec.tv_nsec == initial.st_ctimespec.tv_nsec,
-                        try read(current, size: Int(latest.st_size), cancellation: cancellation) == original
+                        try read(current, size: Int(latest.st_size), cancellation: cancellation, path: url.path)
+                            == original
                     else { throw Failure.changed }
                     renameAttempted = true
                     guard renameat(parent, tempName, parent, name) == 0 else {
-                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                        throw FileOperationFailure(
+                            errno, operation: "update file metadata or replacement beside", path: url.path)
                     }
                 } catch {
                     if !renameAttempted {
@@ -181,7 +194,9 @@ enum FolderReplacement {
                 var committed = journal
                 committed["state"] = "replaced"
                 var journalConfirmed = true
-                do { try persistReport(committed, name: reportName, parent: parent) } catch { journalConfirmed = false }
+                do { try persistReport(committed, name: reportName, parent: parent, path: url.path) } catch {
+                    journalConfirmed = false
+                }
                 results.append(
                     .init(
                         url: url, status: .replaced,
@@ -209,38 +224,43 @@ enum FolderReplacement {
         }
         return results
     }
-    private static func persistReport(_ report: [String: String], name: String, parent: Int32) throws {
+    private static func persistReport(_ report: [String: String], name: String, parent: Int32, path: String) throws {
         let temporary = ".texttank-report-" + UUID().uuidString
         let fd = openat(parent, temporary, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-        guard fd >= 0 else { throw POSIXError(.EIO) }
+        guard fd >= 0 else { throw FileOperationFailure(errno, operation: "create recovery report beside", path: path) }
         defer {
             close(fd)
             unlinkat(parent, temporary, 0)
         }
-        try write(JSONEncoder().encode(report), to: fd)
+        try write(JSONEncoder().encode(report), to: fd, path: path)
         guard fsync(fd) == 0, renameat(parent, temporary, parent, name) == 0, fsync(parent) == 0 else {
-            throw POSIXError(.EIO)
+            throw FileOperationFailure(errno, operation: "commit recovery report beside", path: path)
         }
     }
     private static func sha(_ data: Data) -> String { FolderSearch.sha256Hex(data) }
-    private static func read(_ fd: Int32, size: Int, cancellation: FolderSearchCancellation) throws -> Data {
+    private static func read(_ fd: Int32, size: Int, cancellation: FolderSearchCancellation, path: String) throws
+        -> Data
+    {
         var output = Data(), bytes = [UInt8](repeating: 0, count: 65536)
         while output.count < size {
             if cancellation.isCancelled { throw Failure.cancelled }
             let count = Darwin.read(fd, &bytes, min(bytes.count, size - output.count))
             if count < 0 && errno == EINTR { continue }
+            if count < 0 { throw FileOperationFailure(errno, operation: "read", path: path) }
             guard count > 0 else { throw Failure.changed }
             output.append(contentsOf: bytes.prefix(count))
         }
         return output
     }
-    private static func write(_ data: Data, to fd: Int32) throws {
+    private static func write(_ data: Data, to fd: Int32, path: String) throws {
         try data.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {
                 let count = Darwin.write(fd, raw.baseAddress!.advanced(by: offset), raw.count - offset)
                 if count < 0 && errno == EINTR { continue }
-                guard count > 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+                guard count > 0 else {
+                    throw FileOperationFailure(count < 0 ? errno : EIO, operation: "write", path: path)
+                }
                 offset += count
             }
         }

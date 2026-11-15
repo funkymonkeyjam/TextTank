@@ -363,6 +363,40 @@ import zlib
                 choose("UTF-8 to Hex with Options…", ["Cancel"]) && editor.text == "abc"
                     && editor.revision == dialogRevision && unrecordableEdits == 1,
                 "Cancel in Hex Encoding Options changes nothing and reports no unrecordable edit")
+            var hexStage = 0, hexDraftKept = false
+            let hexDeadline = Date().addingTimeInterval(10)
+            func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+            let hexRetry = Timer(timeInterval: 0.01, repeats: true) { _ in
+                guard let content = NSApp.modalWindow?.contentView else { return }
+                let views = descendants(content)
+                if Date() > hexDeadline {
+                    NSApp.abortModal()
+                    return
+                }
+                guard let width = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
+                    let apply = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Apply" })
+                else {
+                    views.compactMap { $0 as? NSButton }.first?.performClick(nil)
+                    return
+                }
+                if hexStage == 0 {
+                    width.stringValue = "invalid width"
+                    hexStage = 1
+                    apply.performClick(nil)
+                } else if hexStage == 1 {
+                    hexDraftKept = width.stringValue == "invalid width"
+                    views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
+                    hexStage = 2
+                }
+            }
+            RunLoop.main.add(hexRetry, forMode: .modalPanel)
+            let hexItem = menu.items.first { $0.title == "UTF-8 to Hex with Options…" }!
+            _ = NSApp.sendAction(hexItem.action!, to: hexItem.target, from: hexItem)
+            hexRetry.invalidate()
+            check(hexStage == 2 && hexDraftKept, "F214 invalid Hex options retain their input for correction")
+            check(
+                editor.text == "abc" && editor.revision == dialogRevision && unrecordableEdits == 1,
+                "F214 cancelling invalid Hex options preserves text revision and recording state")
             check(
                 choose("UTF-8 to Hex with Options…", ["Apply"]) && editor.text.hasPrefix("616263")
                     && unrecordableEdits == 2,

@@ -404,10 +404,22 @@ import AppKit
         }
         var relative = other
         relative.executable = "printf"
-        rejects("F137 an edited command with a relative executable is refused", expecting: RunFailure.invalid) {
+        rejects(
+            "F137 an edited command with a relative executable is refused",
+            where: {
+                if case RunFailure.configuration(field: .executable, message: _) = $0 { return true }
+                return false
+            }
+        ) {
             try controller.replaceLibrary(json: try JSONEncoder().encode([sample, relative]))
         }
-        rejects("F137 two entries with one id are refused", expecting: RunFailure.invalid) {
+        rejects(
+            "F137 two entries with one id are refused",
+            where: {
+                if case RunFailure.configuration(field: .identity, message: _) = $0 { return true }
+                return false
+            }
+        ) {
             try controller.replaceLibrary(json: try JSONEncoder().encode([sample, sample]))
         }
         check(
@@ -449,6 +461,7 @@ import AppKit
         try controller.persist([sample])
         check(RunController.manageHelp.contains("never runs"), "F137 the dialog says saving runs nothing")
         try manageDialogChecks(controller, sample, other)
+        try configureRetryChecks(controller)
         check(
             RunController.configureHelp.contains("--") && RunController.configureHelp.contains("{selection}")
                 && RunController.configureHelp.contains("option"),
@@ -457,10 +470,11 @@ import AppKit
     static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     /// Opens Manage Commands… from its menu item and calls `step` each time a modal window is up,
     /// with a count of the calls so far, until the dialogs are gone. False if it had to be aborted.
-    @MainActor static func manage(_ controller: RunController, _ step: @escaping (Int, [NSView]) -> Void) throws -> Bool
-    {
+    @MainActor static func manage(
+        _ controller: RunController, title: String = "Manage Commands…", _ step: @escaping (Int, [NSView]) -> Void
+    ) throws -> Bool {
         let item = try requireValue(
-            controller.makeMenu().items.first { $0.title == "Manage Commands…" }, "the Manage Commands… item")
+            controller.makeMenu().items.first { $0.title == title }, "the requested Run configuration item")
         let deadline = Date().addingTimeInterval(8)
         var calls = 0, aborted = false
         let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
@@ -477,6 +491,84 @@ import AppKit
         defer { timer.invalidate() }
         NSApp.sendAction(try requireValue(item.action, "its action"), to: item.target, from: item)
         return !aborted
+    }
+    @MainActor static func configureRetryChecks(_ controller: RunController) throws {
+        var stage = 0, kept = false
+        let completed = try manage(controller, title: "Configure Command…") { _, views in
+            let fields = views.compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+            guard fields.count >= 3,
+                let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save Command" })
+            else {
+                views.compactMap { $0 as? NSButton }.first { $0.title == "OK" }?.performClick(nil)
+                return
+            }
+            if stage == 0 {
+                fields[0].stringValue = "Fixture retained Run draft"
+                fields[2].stringValue = "[ invalid JSON"
+                stage = 1
+                save.performClick(nil)
+            } else if stage == 1 {
+                kept =
+                    fields[0].stringValue == "Fixture retained Run draft" && fields[2].stringValue == "[ invalid JSON"
+                fields[2].stringValue = "[]"
+                stage = 2
+                save.performClick(nil)
+            }
+        }
+        check(
+            completed && stage == 2 && kept,
+            "F214 a Run configuration error retains the name and invalid arguments for correction")
+        check(
+            RunController().makeMenu().items.contains { $0.title == "Fixture retained Run draft" },
+            "F214 corrected Run configuration persists only after the next explicit Save")
+        for invalidKind in ["name", "executable", "mode"] {
+            var fieldStage = 0, focusedCorrectly = false, retainedName = false
+            let expectedName = "Fixture corrected \(invalidKind)"
+            let retried = try manage(controller, title: "Configure Command…") { _, views in
+                let fields = views.compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+                let buttons = views.compactMap { $0 as? NSButton }
+                guard fields.count >= 3,
+                    let save = buttons.first(where: { $0.title == "Save Command" }),
+                    let shell = buttons.first(where: { $0.title.hasPrefix("Intentional shell mode") }),
+                    let ext = buttons.first(where: { $0.title.hasPrefix("Version 1 text extension") })
+                else {
+                    buttons.first { $0.title == "OK" }?.performClick(nil)
+                    return
+                }
+                if fieldStage == 0 {
+                    fields[0].stringValue = invalidKind == "name" ? "" : expectedName
+                    fields[1].stringValue = invalidKind == "executable" ? "relative" : "/usr/bin/printf"
+                    fields[2].stringValue = "[]"
+                    if invalidKind == "mode" {
+                        shell.state = .on
+                        ext.state = .on
+                    }
+                    fieldStage = 1
+                    save.performClick(nil)
+                } else if fieldStage == 1 {
+                    let invalidControl: NSView =
+                        invalidKind == "name" ? fields[0] : invalidKind == "executable" ? fields[1] : ext
+                    let firstResponder = NSApp.modalWindow?.firstResponder
+                    let focusedField = (firstResponder as? NSTextView)?.delegate as AnyObject?
+                    focusedCorrectly =
+                        (firstResponder === invalidControl || focusedField === invalidControl)
+                        && invalidControl.accessibilityHelp()?.isEmpty == false
+                    retainedName = fields[0].stringValue == (invalidKind == "name" ? "" : expectedName)
+                    fields[0].stringValue = expectedName
+                    fields[1].stringValue = "/usr/bin/printf"
+                    shell.state = .off
+                    ext.state = .off
+                    fieldStage = 2
+                    save.performClick(nil)
+                }
+            }
+            check(
+                retried && fieldStage == 2 && retainedName && focusedCorrectly,
+                "F214 Run \(invalidKind) rejection preserves the draft and identifies/focuses its actual control")
+            check(
+                RunController().makeMenu().items.contains { $0.title == expectedName },
+                "F214 Run \(invalidKind) correction persists only on explicit Save")
+        }
     }
     @MainActor static func manageDialogChecks(
         _ controller: RunController, _ sample: ConfiguredRun, _ other: ConfiguredRun

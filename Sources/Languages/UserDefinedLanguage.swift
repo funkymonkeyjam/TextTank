@@ -21,21 +21,47 @@ struct UserDefinedLanguage: Codable, Equatable {
         "DELIMITERS7", "DELIMITERS8"
     ]
     func profile() throws -> LanguageProfile {
-        guard version == "2.1" || version == "2.0", !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            name.count <= 120, keywords.keys.allSatisfy({ Self.keywordNames.contains($0) }),
-            Set(styles.map(\.name)).count == styles.count, styles.allSatisfy({ Self.styleNames.contains($0.name) })
-        else { throw LanguageError.invalid("Unsupported UDL version, name, keyword or style field.") }
-        guard
-            Set(global.keys).isSubset(of: [
-                "caseIgnored", "allowFoldOfComments", "foldCompact", "forcePureLC", "decimalSeparator"
-            ]), Set(prefix.keys).isSubset(of: Set((1...8).map { "Keywords\($0)" })),
-            styles.allSatisfy({
-                Set($0.attributes.keys).isSubset(of: [
-                    "name", "styleID", "fgColor", "bgColor", "colorStyle", "fontName", "fontStyle", "fontSize",
-                    "nesting", Self.customColorAttribute
-                ])
-            })
-        else { throw LanguageError.invalid("Unknown UDL setting attributes.") }
+        let itemName = String(name.prefix(120))
+        guard version == "2.1" || version == "2.0" else {
+            throw LanguageError.invalid("Language “\(itemName)” requires UDL version 2.0 or 2.1.")
+        }
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 120 else {
+            throw LanguageError.invalid("The UDL language name must contain 1–120 characters.")
+        }
+        if let key = keywords.keys.first(where: { !Self.keywordNames.contains($0) }) {
+            throw LanguageError.invalid(
+                "Language “\(itemName)” has an unsupported keyword field “\(String(key.prefix(80)))”.")
+        }
+        guard Set(styles.map(\.name)).count == styles.count else {
+            throw LanguageError.invalid("Language “\(itemName)” contains a repeated style name.")
+        }
+        if let style = styles.first(where: { !Self.styleNames.contains($0.name) }) {
+            throw LanguageError.invalid(
+                "Language “\(itemName)” has an unsupported style “\(String(style.name.prefix(80)))”.")
+        }
+        let globalFields: Set<String> = [
+            "caseIgnored", "allowFoldOfComments", "foldCompact", "forcePureLC", "decimalSeparator"
+        ]
+        if let field = global.keys.first(where: { !globalFields.contains($0) }) {
+            throw LanguageError.invalid(
+                "Language “\(itemName)” has an unsupported global field “\(String(field.prefix(80)))”.")
+        }
+        let prefixFields = Set((1...8).map { "Keywords\($0)" })
+        if let field = prefix.keys.first(where: { !prefixFields.contains($0) }) {
+            throw LanguageError.invalid(
+                "Language “\(itemName)” has an unsupported prefix field “\(String(field.prefix(80)))”.")
+        }
+        let styleFields: Set<String> = [
+            "name", "styleID", "fgColor", "bgColor", "colorStyle", "fontName", "fontStyle", "fontSize", "nesting",
+            Self.customColorAttribute
+        ]
+        for style in styles {
+            if let field = style.attributes.keys.first(where: { !styleFields.contains($0) }) {
+                throw LanguageError.invalid(
+                    "Style “\(style.name)” of language “\(itemName)” has an unsupported field “\(String(field.prefix(80)))”."
+                )
+            }
+        }
         let direct = [
             0: "comments", 1: "numberPrefix1", 2: "numberPrefix2", 3: "numberExtras1", 4: "numberExtras2",
             5: "numberSuffix1", 6: "numberSuffix2", 7: "numberRange", 8: "operators1", 10: "foldersInCode1Open",
@@ -47,7 +73,8 @@ struct UserDefinedLanguage: Codable, Equatable {
             if let property = direct[i] {
                 guard text.utf8.count <= LanguageProfile.userListPropertyLimit else {
                     throw LanguageError.invalid(
-                        "UDL keyword group '\(key)' exceeds \(LanguageProfile.userListPropertyLimit) bytes.")
+                        "Keyword group “\(key)” of language “\(itemName)” exceeds \(LanguageProfile.userListPropertyLimit) bytes."
+                    )
                 }
                 properties["userDefine." + property] = text
             } else {
@@ -61,7 +88,8 @@ struct UserDefinedLanguage: Codable, Equatable {
         }
         for key in ["forcePureLC", "decimalSeparator"] {
             guard let value = Int(global[key] ?? "0"), (0...2).contains(value) else {
-                throw LanguageError.invalid("Invalid UDL numeric setting.")
+                throw LanguageError.invalid(
+                    "The “\(key)” setting of language “\(itemName)” must be a whole number from 0 to 2.")
             }
             properties["userDefine." + key] = String(value)
         }

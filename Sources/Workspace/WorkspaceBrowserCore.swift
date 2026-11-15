@@ -48,7 +48,7 @@ final class WorkspaceBrowserStore {
             let decoded = try JSONDecoder().decode(WorkspaceBrowserState.self, from: data)
             try decoded.validate()
             state = decoded
-        } catch let error as POSIXError where error.code == .ENOENT {} catch { loadError = error }
+        } catch  where error.isFileNotFound {} catch { loadError = error }
     }
     func save(_ value: WorkspaceBrowserState) throws {
         guard loadError == nil else {

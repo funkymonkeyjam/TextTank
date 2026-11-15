@@ -93,18 +93,33 @@ final class UtilityController: NSObject {
         alert.accessoryView = stack
         alert.addButton(withTitle: "Apply")
         alert.addButton(withTitle: "Cancel", role: .cancel)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            _ = try Self.recheck(editor, captured: editor, revision: revision, selection: selection)
-            let output = try HexEncodingOptions(
-                insertSpaces: spaces.state == .on, uppercase: uppercase.state == .on,
-                bytesPerLine: Int(width.stringValue) ?? -1, lineEnding: ["\n", "\r\n", "\r"][eol.indexOfSelectedItem]
-            ).encode(input)
-            onUnrecordableEdit()
-            editor.beginUndoGroup()
-            editor.replaceSelection(output)
-            editor.endUndoGroup()
-        } catch { TTAlert.present(error) }
+        width.setAccessibilityLabel("Hexadecimal bytes per line")
+        eol.setAccessibilityLabel("Hexadecimal line endings")
+        while alert.runModal() == .alertFirstButtonReturn {
+            do {
+                _ = try Self.recheck(editor, captured: editor, revision: revision, selection: selection)
+                guard let bytesPerLine = Int(width.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)),
+                    (0...65536).contains(bytesPerLine)
+                else {
+                    throw UtilityFailure.malformed("bytes per line; enter a whole number from 0 to 65536")
+                }
+                let output = try HexEncodingOptions(
+                    insertSpaces: spaces.state == .on, uppercase: uppercase.state == .on,
+                    bytesPerLine: bytesPerLine, lineEnding: ["\n", "\r\n", "\r"][eol.indexOfSelectedItem]
+                ).encode(input)
+                onUnrecordableEdit()
+                editor.beginUndoGroup()
+                editor.replaceSelection(output)
+                editor.endUndoGroup()
+                return
+            } catch {
+                if case UtilityFailure.malformed = error {
+                    alert.showValidation(error, field: width)
+                } else {
+                    alert.showValidation(error)
+                }
+            }
+        }
     }
     static let numberConversionNote =
         "Convert an unsigned 32-bit number. Your document changes only if you then choose Insert into Editor."
