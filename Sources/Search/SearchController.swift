@@ -22,13 +22,15 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
     private var rows:[Row]=[]
     private var searchButtons:[NSButton]=[]
     private var lastNavigation:(TTEditor,UInt,NSRange)?
-    init() {
+    private let defaults:UserDefaults
+    init(defaults:UserDefaults = .standard) {
+        self.defaults=defaults
         let window=NSWindow(contentRect:NSRect(x:0,y:0,width:780,height:470),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false)
         super.init(window:window);window.title="Find and Replace";window.isReleasedWhenClosed=false;window.delegate=self
         queryField.placeholderString="Find";replacementField.placeholderString="Replace with"
         mode.addItems(withTitles:["Normal","Extended (\\n, \\t, \\xNN)","Regular expression (Boost)"])
         scope.addItems(withTitles:["Current document","Selection","All open documents"])
-        if let data=UserDefaults.standard.data(forKey:"TextTank.Search.v1"),let saved=try? JSONDecoder().decode(SearchOptions.self,from:data){options=saved}
+        if let data=defaults.data(forKey:"TextTank.Search.v1"),let saved=try? JSONDecoder().decode(SearchOptions.self,from:data){options=saved}
         queryField.stringValue=options.query;replacementField.stringValue=options.replacement;mode.selectItem(at:options.mode.rawValue)
         caseButton.state=options.matchCase ? .on:.off;wordButton.state=options.wholeWord ? .on:.off;dotButton.state=options.dotMatchesNewline ? .on:.off;wrapButton.state=options.wrap ? .on:.off
         let actions:[(String,Selector)]=[("Previous",#selector(previous(_:))),("Next",#selector(next(_:))),("Find All / Count",#selector(findAll(_:))),("Replace",#selector(replaceOne(_:))),("Replace All",#selector(replaceAll(_:))),("Bookmark Matches",#selector(bookmark(_:))),("Mark Matches",#selector(mark(_:))),("Clear Marks",#selector(clearMarks(_:)))]
@@ -51,7 +53,7 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
         window?.makeFirstResponder(nil)
         var o=SearchOptions();o.query=queryField.stringValue;o.replacement=replacementField.stringValue
         o.mode=SearchOptions.Mode(rawValue:mode.indexOfSelectedItem) ?? .normal;o.matchCase=caseButton.state == .on;o.wholeWord=wordButton.state == .on;o.dotMatchesNewline=dotButton.state == .on;o.wrap=wrapButton.state == .on
-        if let data=try? JSONEncoder().encode(o){UserDefaults.standard.set(data,forKey:"TextTank.Search.v1")};options=o;return o
+        if let data=try? JSONEncoder().encode(o){defaults.set(data,forKey:"TextTank.Search.v1")};options=o;return o
     }
     @objc func next(_ sender:Any?){run(.next)}
     @objc func previous(_ sender:Any?){run(.previous)}
