@@ -10,6 +10,7 @@ final class WorkspaceBrowserNode {
 final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
     let store: WorkspaceBrowserStore
     let monitor = DocumentMonitor()
+    var chooseEncoding: (URL, Error) -> FileEncoding? = EncodingChoice.present
     var currentDocument: () -> TextDocument? = { NSApp.mainWindow?.windowController?.document as? TextDocument }
     private(set) var window: NSPanel?
     private let outline = NSOutlineView()
@@ -201,7 +202,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     }
     @objc private func openRecent(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
-        do { _ = try open(url) } catch { NSAlert(error: error).runModal() }
+        do { _ = try openOfferingEncoding(url) } catch { NSAlert(error: error).runModal() }
     }
     @objc func openSelected(_ sender: Any?) {
         let index = outline.selectedRow
@@ -223,12 +224,19 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             }
             url = node.entry.url
         }
-        do { _ = try open(url) } catch { NSAlert(error: error).runModal() }
+        do { _ = try openOfferingEncoding(url) } catch { NSAlert(error: error).runModal() }
+    }
+    /// Row activation and Reopen Recent: a file that cannot be decoded automatically is answered
+    /// with the encoding chooser. Returns nil when the person cancels. `open(_:)` itself never asks.
+    @discardableResult func openOfferingEncoding(_ url: URL) throws -> TextDocument? {
+        do { return try open(url) } catch {
+            return try EncodingChoice.retry(url, after: error, choose: chooseEncoding) { try open(url, as: $0) }
+        }
     }
     /// Read once through a nonblocking regular-file descriptor, then hand the
     /// captured bytes to NSDocument. This avoids a FIFO race between preflight
     /// and a second pathname open. Existing dirty documents are never reloaded.
-    @discardableResult func open(_ url: URL) throws -> TextDocument {
+    @discardableResult func open(_ url: URL, as encoding: FileEncoding? = nil) throws -> TextDocument {
         if let existing = NSDocumentController.shared.document(for: url) as? TextDocument {
             existing.showWindows()
             return existing
@@ -236,7 +244,11 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         let data = try WorkspaceStore.readRegularFile(url)
         let document = TextDocument()
         document.fileURL = url
-        try document.read(from: data, ofType: "public.plain-text")
+        if let encoding {
+            try document.read(from: data, ofType: "public.plain-text", as: encoding)
+        } else {
+            try document.read(from: data, ofType: "public.plain-text")
+        }
         NSDocumentController.shared.addDocument(document)
         document.makeWindowControllers()
         document.showWindows()

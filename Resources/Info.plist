@@ -19,6 +19,20 @@
 			<key>NSDocumentClass</key>
 			<string>TextTank.TextDocument</string>
 		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>TextTank Session Snapshot</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>app.texttank.session</string>
+			</array>
+			<key>NSDocumentClass</key>
+			<string>TextTank.TextDocument</string>
+		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
 	<string>TextTank</string>
@@ -42,5 +56,25 @@
 	<string>NSApplication</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Export reviewed automation items to the Reminders list you select.</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>app.texttank.session</string>
+			<key>UTTypeDescription</key>
+			<string>TextTank Session Snapshot</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.json</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>texttanksession</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>

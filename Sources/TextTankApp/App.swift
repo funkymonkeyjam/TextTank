@@ -4,11 +4,15 @@ import AppKit
     @main
     struct TextTankMain {
         static func main() {
+            // The first document controller created becomes the shared one, so this comes first.
+            let documents = TextDocumentController()
             let app = NSApplication.shared
             app.setActivationPolicy(.regular)
             let delegate = AppDelegate()
             app.delegate = delegate
-            _ = NSDocumentController.shared
+            if NSDocumentController.shared !== documents {
+                NSLog("TextTank: the document controller was created early; encoding choice on open is unavailable")
+            }
             app.run()
             withExtendedLifetime(delegate) {}
         }
@@ -353,6 +357,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         "These files were left untouched and are not recovered automatically.\n\n"
             + issues.map { $0.url.path + "\n" + $0.message }.joined(separator: "\n\n")
     }
+    /// The launch prompt's text: what each snapshot is a draft of and when it was written, so the
+    /// person can tell the drafts apart before recovering or discarding them. Display only.
+    static func recoveryPromptText(_ snapshots: [RecoverySnapshot], limit: Int = 12) -> String {
+        let listed = snapshots.prefix(limit).map { "• " + SnapshotLabel.line(for: $0) }
+        let more = snapshots.count > limit ? ["…and \(snapshots.count - limit) more"] : []
+        return
+            "Found \(snapshots.count) recovery snapshot\(snapshots.count == 1 ? "" : "s"). Recovered content opens as new unsaved documents; original files are not changed. Later keeps the snapshots and asks again at the next launch.\n\n"
+            + (listed + more).joined(separator: "\n")
+    }
     /// The Recover branch of the launch prompt. Documents are opened one at a time, so the
     /// snapshots before one that fails stay open when the error is shown.
     @discardableResult func openRecovered(_ snapshots: [RecoverySnapshot]) throws -> [TextDocument] {
@@ -377,8 +390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard !snapshots.isEmpty else { return }
             let alert = TTAlert()
             alert.messageText = "Recover unsaved documents?"
-            alert.informativeText =
-                "Found \(snapshots.count) recovery snapshots. Recovered content opens as new unsaved documents; original files are not changed. Later keeps the snapshots and asks again at the next launch."
+            alert.informativeText = Self.recoveryPromptText(snapshots)
             alert.addButton(withTitle: "Recover")
             alert.addButton(withTitle: "Later")
             alert.addButton(withTitle: "Discard…")
@@ -473,28 +485,85 @@ final class TextDocument: NSDocument {
     #endif
     var originalDiskFingerprint: String? { diskBytes.map(WorkspaceStore.fingerprint) }
     var languageIdentifier = "null"
+    /// Status-line text for a recovered draft: what it is a draft of and when it was written.
+    /// Cleared when the draft is saved under a name of its own.
+    private(set) var recoveredOrigin: String?
     private var loading = false
     /// Set only while an explicit open-with-encoding is reading the file.
     private var openEncoding: FileEncoding?
     private var readingURL: URL?
     /// A snapshot records the file it belongs to. A moved or renamed file is new snapshot
     /// metadata at the same text revision, so it needs a later recovery revision.
+    ///
+    /// While an in-place save is inside NSDocument, the getter answers with the resolved
+    /// location being written. NSDocument's safe save replaces the item at `fileURL`, not at the
+    /// URL it is handed: with a link as `fileURL` it fails, and with the two differing it can
+    /// remove the original and then fail. Answering with the destination keeps them equal.
     override var fileURL: URL? {
-        didSet {
-            guard fileURL != oldValue else { return }
+        get { inPlaceWriteURL ?? super.fileURL }
+        set {
+            let oldValue = super.fileURL
+            super.fileURL = newValue
+            guard newValue != oldValue else { return }
+            diskURL = newValue.map(Self.canonicalDiskURL)
             if Thread.isMainThread {
                 recoveryBase += 1
+                // Saved under a name of its own: no longer a recovered draft. Setting the URL has
+                // already replaced the "Recovered …" display name with the file's name.
+                recoveredOrigin = nil
             } else {
                 DispatchQueue.main.async { [weak self] in self?.recoveryBase += 1 }
             }
         }
     }
+    /// Where the file really is: `fileURL` with symbolic links resolved once, when `fileURL` is
+    /// set. The no-follow reads and the in-place write use it, so a document reached through a
+    /// link can be checked and saved, and a link swapped in later is still refused because this
+    /// is not resolved again. `fileURL` itself keeps the path the person opened.
+    private(set) var diskURL: URL?
+    private var inPlaceWriteURL: URL?
+    /// realpath(3) of the file; for a name that does not exist yet, of its folder. Falls back
+    /// to the URL as given.
+    static func canonicalDiskURL(_ url: URL) -> URL {
+        guard url.isFileURL else { return url }
+        func resolved(_ path: String) -> String? {
+            guard let pointer = realpath(path, nil) else { return nil }
+            defer { free(pointer) }
+            return String(cString: pointer)
+        }
+        if let path = resolved(url.path) { return URL(fileURLWithPath: path, isDirectory: false) }
+        if let folder = resolved(url.deletingLastPathComponent().path) {
+            return URL(fileURLWithPath: folder, isDirectory: true).appendingPathComponent(
+                url.lastPathComponent, isDirectory: false)
+        }
+        return url
+    }
+    /// The document's own file through the no-follow reader. ELOOP and ENOTDIR mean the
+    /// resolved path has since become a link, or its folder is no longer a real folder.
+    private func readDiskBytes() throws -> Data {
+        guard let url = diskURL else {
+            throw NSError(
+                domain: "TextTank", code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Save the document before reloading its disk bytes."])
+        }
+        do { return try WorkspaceStore.readRegularFile(url, maximumBytes: Int.max) } catch let error as POSIXError
+            where error.code == .ELOOP || error.code == .ENOTDIR
+        {
+            throw NSError(
+                domain: "TextTank", code: 5,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "“\(url.path)” is now a symbolic link or its folder was replaced, so TextTank will not read or overwrite it in place. Your editor contents are preserved; use Save As to keep them.",
+                    NSUnderlyingErrorKey: error as NSError
+                ])
+        }
+    }
     enum DiskState: Equatable { case unchanged, changed, missing }
     func diskState() throws -> DiskState {
-        guard let url = fileURL, let diskBytes else { return .unchanged }
-        do {
-            return try WorkspaceStore.readRegularFile(url, maximumBytes: Int.max) == diskBytes ? .unchanged : .changed
-        } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == 2 { return .missing }
+        guard fileURL != nil, let diskBytes else { return .unchanged }
+        do { return try readDiskBytes() == diskBytes ? .unchanged : .changed } catch let error as NSError
+            where error.domain == NSPOSIXErrorDomain && error.code == 2
+        { return .missing }
     }
     @objc func toggleReadOnly(_ sender: NSMenuItem) {
         editor.readOnly.toggle()
@@ -520,7 +589,7 @@ final class TextDocument: NSDocument {
     /// Explicit reinterpretation is a reload, not encoding conversion. Unsaved edits
     /// require a native confirmation before this method is called with discard=true.
     func reload(using encoding: FileEncoding, discard: Bool = false) throws {
-        guard let url = fileURL else {
+        guard fileURL != nil else {
             throw NSError(
                 domain: "TextTank", code: 2,
                 userInfo: [NSLocalizedDescriptionKey: "Save the document before reloading its disk bytes."])
@@ -530,7 +599,7 @@ final class TextDocument: NSDocument {
                 domain: "TextTank", code: 3,
                 userInfo: [NSLocalizedDescriptionKey: "Reload would discard unsaved changes."])
         }
-        let bytes = try WorkspaceStore.readRegularFile(url, maximumBytes: Int.max)
+        let bytes = try readDiskBytes()
         let decoded = try FileCodec.decode(bytes, encoding: encoding)
         loadDecoded(decoded, bytes: bytes)
         updateChangeCount(.changeCleared)
@@ -594,8 +663,9 @@ final class TextDocument: NSDocument {
         guard let error else {
             recoveryFailures.recordSuccess()
             let message =
-                (isDocumentEdited ? "Draft saved for session restore" : fileURL == nil ? "Ready" : "Saved")
-                + " · Incomplete preview"
+                recoveredOrigin
+                ?? ((isDocumentEdited ? "Draft saved for session restore" : fileURL == nil ? "Ready" : "Saved")
+                    + " · Incomplete preview")
             controllers.forEach { $0.showRecoveryStatus(message, failed: false) }
             return
         }
@@ -697,6 +767,13 @@ final class TextDocument: NSDocument {
         }
         loadDecoded(decoded, bytes: data)
     }
+    /// The same strict decode with an encoding the person chose, for callers that already hold
+    /// the bytes. A failure throws the codec's error and loads nothing.
+    func read(from data: Data, ofType typeName: String, as encoding: FileEncoding) throws {
+        openEncoding = encoding
+        defer { openEncoding = nil }
+        try read(from: data, ofType: typeName)
+    }
     /// Explicit open-with-encoding. An already open document is reloaded from disk instead;
     /// that only happens from Revert to Saved, where discarding edits was already confirmed.
     @discardableResult static func open(
@@ -751,6 +828,9 @@ final class TextDocument: NSDocument {
         NSDocumentController.shared.addDocument(doc)
         doc.makeWindowControllers()
         doc.loadUnsavedSnapshot(text: snapshot.text, format: snapshot.format)
+        // Display only: the original path is never opened, read or written by recovery.
+        doc.recoveredOrigin = SnapshotLabel.status(for: snapshot)
+        if let name = SnapshotLabel.originName(of: snapshot) { doc.displayName = "Recovered " + name }
         doc.showWindows()
         doc.flushRecovery()
         return doc
@@ -777,13 +857,33 @@ final class TextDocument: NSDocument {
             languageIdentifier = id
         }
     }
+    /// The source's own extension; ".txt" only for an untitled document, nothing for a name without one.
+    var suggestedCopyName: String {
+        guard let fileURL else { return "Untitled-copy.txt" }
+        let type = fileURL.pathExtension
+        return fileURL.deletingPathExtension().lastPathComponent + "-copy" + (type.isEmpty ? "" : "." + type)
+    }
+    /// Save Copy to a chosen location. Choosing the document's own file (the panel has already
+    /// asked to replace it) is an ordinary Save, with its conflict check and bookkeeping, so
+    /// the external-change baseline cannot fall behind what TextTank itself wrote.
+    func writeCopy(to url: URL, completion: @escaping (Error?) -> Void) {
+        if let fileURL, let diskURL, Self.canonicalDiskURL(url) == diskURL {
+            save(to: fileURL, ofType: fileType ?? "Plain Text", for: .saveOperation) { error in
+                // NSDocument wraps the failure in a bare "could not be saved"; report the reason itself.
+                completion(error.map { ($0 as NSError).userInfo[NSUnderlyingErrorKey] as? Error ?? $0 })
+            }
+            return
+        }
+        do {
+            try writeSafely(to: url, ofType: fileType ?? "Plain Text", for: .saveToOperation)
+            completion(nil)
+        } catch { completion(error) }
+    }
     @objc func saveCopy(_ sender: Any?) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = (fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled") + "-copy.txt"
+        panel.nameFieldStringValue = suggestedCopyName
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try writeSafely(to: url, ofType: fileType ?? "Plain Text", for: .saveToOperation) } catch {
-            presentError(error)
-        }
+        writeCopy(to: url) { [weak self] error in if let error { self?.presentError(error) } }
     }
     @objc func convertEncoding(_ sender: NSMenuItem) {
         guard let code = sender.representedObject as? String else { return }
@@ -839,22 +939,30 @@ final class TextDocument: NSDocument {
     override func writeSafely(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType)
         throws
     {
-        if url == fileURL, let diskBytes {
-            let current = try WorkspaceStore.readRegularFile(url, maximumBytes: Int.max)
-            guard current == diskBytes else {
-                throw NSError(
-                    domain: "TextTank", code: 1,
-                    userInfo: [
-                        NSLocalizedDescriptionKey:
-                            "The file changed outside TextTank. Use Save As to preserve your edits, or revert to inspect the disk version."
-                    ])
-            }
+        // A write to the document's own file goes to its resolved location, so the bytes checked
+        // and the bytes replaced are the same file and a link in the path stays a link.
+        let inPlace = fileURL != nil && url == fileURL
+        let destination = inPlace ? diskURL ?? url : url
+        // A missing file is simply written again. A changed one is refused, except for Save As:
+        // there the save panel has already asked the person to replace that file. Any other
+        // failure (the path became a link, a folder or unreadable) still stops the save.
+        if inPlace, diskBytes != nil, try diskState() == .changed, saveOperation != .saveAsOperation {
+            throw NSError(
+                domain: "TextTank", code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "The file changed outside TextTank. Use Save As to preserve your edits, or revert to inspect the disk version."
+                ])
         }
         let submitted = try FileCodec.encode(editor.text, format: format), submittedFormat = format,
             submittedRevision = editor.revision
         savePayload = submitted
         defer { savePayload = nil }
-        try super.writeSafely(to: url, ofType: typeName, for: saveOperation)
+        do {
+            inPlaceWriteURL = inPlace ? destination : nil
+            defer { inPlaceWriteURL = nil }
+            try super.writeSafely(to: destination, ofType: typeName, for: saveOperation)
+        }
         #if TESTING
             try afterWriteForTesting?()
         #endif

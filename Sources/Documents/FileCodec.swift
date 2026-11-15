@@ -17,7 +17,7 @@ struct DecodedFile {
     let format: FileFormat
 }
 
-enum FileCodecError: Error, LocalizedError {
+enum FileCodecError: Error, LocalizedError, Equatable {
     case invalidBytes(FileEncoding), unrepresentable(FileEncoding), unsupportedBOM, unsupportedUTF32
     var errorDescription: String? {
         switch self {
