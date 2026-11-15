@@ -2366,19 +2366,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         secondary?.onReadOnlyAttempt = nil
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
-    override func windowDidLoad() { super.windowDidLoad() }
     @objc func command(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
-        if let field = (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder as? NSTextView {
-            switch id {
-            case "cut": field.cut(nil)
-            case "copy": field.copy(nil)
-            case "paste": field.paste(nil)
-            case "selectAll": field.selectAll(nil)
-            case "undo": field.undoManager?.undo()
-            case "redo": field.undoManager?.redo()
-            default: NSSound.beep()
-            }
+        if (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder is NSTextView {
+            // Native editing selectors reach the field directly; this is only the custom-command path.
+            NSSound.beep()
             return
         }
         do { try perform(command: id) } catch { NSAlert(error: error).runModal() }
@@ -2404,15 +2396,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         if let stateObserver { NotificationCenter.default.removeObserver(stateObserver) }
         visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
         if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
-    }
-    @objc func language(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? String {
-            let editor = activeEditor
-            editor.setLanguage(id)
-            syncPaneStyles(from: editor)
-            (document as? TextDocument)?.languageIdentifier = id
-            refreshStatusDetails()
-        }
     }
     private func setFindBar(visible: Bool) {
         guard let findBar, findBar.isHidden == visible else { return }
@@ -2485,7 +2468,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         return false
     }
     @objc func findNext(_ sender: Any?) { performFind(backwards: false) }
-    @objc func findPrevious(_ sender: Any?) { performFind(backwards: true) }
     func performFind(backwards: Bool) {
         let editor = activeEditor
         // Focus stays where it is: in the find field, Return can be pressed again for the next match.

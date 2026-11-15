@@ -338,6 +338,7 @@ extension DocumentChecks {
                 check(
                     window.isVisible && control.window?.isVisible == false && isOpen(document),
                     "closing a background tab with unsaved changes shows that tab and keeps its document open")
+                spinUntil("the unsaved-changes review to attach to the tab now showing") { window.attachedSheet != nil }
                 let sheet = window.attachedSheet
                 check(sheet != nil, "the unsaved-changes review is presented on the tab that is now showing")
                 if keyDuringReview { window.sendEvent(leftArrow) }

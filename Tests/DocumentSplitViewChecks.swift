@@ -286,12 +286,15 @@ extension DocumentChecks {
             check(
                 document.editor.revision == revision && !document.isDocumentEdited,
                 "changing the language does not edit the document")
-            let rawItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-            rawItem.representedObject = "python"
-            controller.language(rawItem)
+            let pythonItem = try requireValue(
+                delegate.languages.menu().items.first { ($0.representedObject as? String) == "python" },
+                "fixture: a Python item in the Language menu")
+            check(
+                NSApp.sendAction(pythonItem.action!, to: pythonItem.target, from: pythonItem)
+                    && document.languageIdentifier == "python", "choosing Python uses the real Language menu path")
             check(
                 palette(document.editor) == palette(clone) && sci(clone, lexer) == sci(document.editor, lexer),
-                "a lexer chosen by name in one pane restyles the other pane as well")
+                "a language chosen from the menu in one pane restyles the other pane as well")
             NSApp.sendAction(cppItem.action!, to: cppItem.target, from: cppItem)
             let cpp = palette(document.editor)
 
