@@ -14,11 +14,16 @@ struct WorkspaceBrowserState: Codable, Equatable {
         }
         for urls in [folders, recent] {
             for url in urls { try WorkspaceStore.validateLocalURL(url) }
-            guard Set(urls.map { $0.standardizedFileURL.path }).count == urls.count else {
+            guard Set(urls.map(Self.identity)).count == urls.count else {
                 throw WorkspaceError.invalid("Duplicate workspace paths.")
             }
         }
     }
+}
+extension WorkspaceBrowserState {
+    /// The one rule for "the same folder or file": the standardized path. A trailing slash
+    /// or a `localhost` host is a different URL but not a different entry.
+    static func identity(_ url: URL) -> String { url.standardizedFileURL.path }
 }
 struct WorkspaceBrowserEntry: Equatable {
     let url: URL
@@ -60,40 +65,72 @@ final class WorkspaceBrowserStore {
         loadError = nil
     }
     func addFolder(_ folder: URL) throws {
-        _ = try Self.list(folder, limit: 1)
+        try WorkspaceStore.validateLocalURL(folder)
+        // Only checks that the folder can be listed; nothing is enumerated.
+        closedir(try Self.openDirectory(folder).stream)
         let path = folder.standardizedFileURL
-        if state.folders.contains(path) { return }
+        if contains(folder) { return }
         var next = state
         next.folders.append(path)
         try save(next)
     }
+    /// Whether `folder` is one of the saved roots, by path.
+    func contains(_ folder: URL) -> Bool {
+        state.folders.contains { WorkspaceBrowserState.identity($0) == WorkspaceBrowserState.identity(folder) }
+    }
     func removeFolder(_ folder: URL) throws {
         var next = state
-        next.folders.removeAll { $0.standardizedFileURL.path == folder.standardizedFileURL.path }
+        next.folders.removeAll { WorkspaceBrowserState.identity($0) == WorkspaceBrowserState.identity(folder) }
         try save(next)
     }
     func noteRecent(_ file: URL) throws {
         try WorkspaceStore.validateLocalURL(file)
         var next = state
         let file = file.standardizedFileURL
-        next.recent.removeAll { $0 == file }
+        next.recent.removeAll { WorkspaceBrowserState.identity($0) == WorkspaceBrowserState.identity(file) }
         next.recent.insert(file, at: 0)
         next.recent = Array(next.recent.prefix(100))
         try save(next)
     }
-    static func list(_ folder: URL, limit: Int = 2000, showHidden: Bool = false) throws -> WorkspaceDirectoryListing {
-        try WorkspaceStore.validateLocalURL(folder)
-        guard limit > 0 && limit <= 10000 else { throw WorkspaceError.invalid("Invalid directory listing limit.") }
+    /// Entries read from one directory before the scan stops. Sorting needs every name, so
+    /// this, not the display limit, bounds the work.
+    static let maximumScannedEntries = 20000
+    /// Opens the folder itself, never through a symbolic link. The stream owns the descriptor.
+    fileprivate static func openDirectory(_ folder: URL) throws -> (
+        stream: UnsafeMutablePointer<DIR>, descriptor: Int32
+    ) {
         let fd = open(folder.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK)
-        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard fd >= 0 else {
+            let code = errno
+            var info = stat()
+            if lstat(folder.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK {
+                throw WorkspaceError.invalid(
+                    "“\(folder.lastPathComponent)” is a symbolic link. Symbolic-link folders are not supported; choose the folder it points to instead."
+                )
+            }
+            throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+        }
         // fdopendir owns and closes this descriptor. Enumeration and metadata
         // checks share its identity even if a path is renamed during the scan.
         guard let dir = fdopendir(fd) else {
+            let code = errno
             close(fd)
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
         }
+        return (dir, fd)
+    }
+    /// The first `limit` entries in display order: directories first, then by name. The
+    /// whole directory is read (up to `maximumScannedEntries`) and sorted before the limit
+    /// applies, so the entries shown do not depend on the order the filesystem returns them.
+    /// `skipped` counts every hidden, symbolic-link or special entry that was read; those
+    /// never count toward the limit.
+    static func list(_ folder: URL, limit: Int = 2000, showHidden: Bool = false) throws -> WorkspaceDirectoryListing {
+        try WorkspaceStore.validateLocalURL(folder)
+        guard limit > 0 && limit <= 10000 else { throw WorkspaceError.invalid("Invalid directory listing limit.") }
+        let (dir, fd) = try openDirectory(folder)
         defer { closedir(dir) }
         var result = WorkspaceDirectoryListing()
+        var found: [(name: String, directory: Bool)] = []
         var seen = 0
         while true {
             errno = 0
@@ -108,7 +145,7 @@ final class WorkspaceBrowserStore {
             }
             if name == "." || name == ".." { continue }
             seen += 1
-            if seen > limit {
+            if seen > maximumScannedEntries {
                 result.truncated = true
                 break
             }
@@ -126,13 +163,16 @@ final class WorkspaceBrowserStore {
                 result.skipped += 1
                 continue
             }
-            result.entries.append(
-                WorkspaceBrowserEntry(
-                    url: folder.appendingPathComponent(name, isDirectory: type == S_IFDIR), directory: type == S_IFDIR))
+            found.append((name, type == S_IFDIR))
         }
-        result.entries.sort {
+        found.sort {
             if $0.directory != $1.directory { return $0.directory }
-            return $0.url.lastPathComponent.localizedStandardCompare($1.url.lastPathComponent) == .orderedAscending
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+        if found.count > limit { result.truncated = true }
+        result.entries = found.prefix(limit).map {
+            WorkspaceBrowserEntry(
+                url: folder.appendingPathComponent($0.name, isDirectory: $0.directory), directory: $0.directory)
         }
         return result
     }

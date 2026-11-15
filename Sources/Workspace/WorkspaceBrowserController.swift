@@ -12,12 +12,22 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     let monitor = DocumentMonitor()
     var currentDocument: () -> TextDocument? = { NSApp.mainWindow?.windowController?.document as? TextDocument }
     private(set) var window: NSPanel?
-    private let outline = NSOutlineView()
+    let outline = NSOutlineView()
     private let mode = NSSegmentedControl(
         labels: ["Open Documents", "Folders", "Recent Files"], trackingMode: .selectOne, target: nil, action: nil)
     private let status = NSTextField(labelWithString: "")
+    /// The monitor reports here, so it never replaces a listing, error or refresh message.
+    private let monitorStatus = NSTextField(labelWithString: "")
+    var statusText: String { status.stringValue }
+    var monitorStatusText: String { monitorStatus.stringValue }
     private var nodes: [WorkspaceBrowserNode] = []
+    /// A snapshot the outline view indexes, replaced whenever a document window opens or
+    /// closes while the panel is visible and emptied when the panel closes.
     private var documents: [TextDocument] = []
+    /// Paths of expanded folders, so a refresh, which rebuilds every node to re-read the
+    /// disk, can expand them again.
+    private var expanded = Set<String>()
+    private var reloading = false
     private var recent: [URL] = []
     private var rootMenu: NSMenu?
     private let recordsSystemRecent: Bool
@@ -29,7 +39,57 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             .appendingPathComponent("TextTank")
         store = WorkspaceBrowserStore(url: storeURL ?? support.appendingPathComponent("WorkspaceBrowser.json"))
         super.init()
-        monitor.onStatus = { [weak self] value in self?.status.stringValue = value.message }
+        monitor.onStatus = { [weak self] value in self?.monitorStatus.stringValue = value.message }
+        // AppKit has no notification for a document joining or leaving the document list.
+        // Its window closing or becoming main is the signal.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowWillClose(_:)), name: NSWindow.willCloseNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowDidBecomeMain(_:)), name: NSWindow.didBecomeMainNotification, object: nil)
+    }
+    deinit { NotificationCenter.default.removeObserver(self) }
+    @objc private func windowWillClose(_ notification: Notification) {
+        if let closing = notification.object as? NSWindow, closing === window {
+            // The panel outlives its window (isReleasedWhenClosed is false); do not keep
+            // documents alive behind a closed panel.
+            documents = []
+            if mode.selectedSegment == 0 { outline.reloadData() }
+            return
+        }
+        // The window closes before its document leaves the document list.
+        DispatchQueue.main.async { [weak self] in self?.reloadDocuments() }
+    }
+    @objc private func windowDidBecomeMain(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in self?.reloadDocuments() }
+    }
+    /// Brings the Open Documents list up to date without touching the status line or the
+    /// other two views.
+    private func reloadDocuments() {
+        guard window?.isVisible == true else { return }
+        let current = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
+        guard current.count != documents.count || !zip(current, documents).allSatisfy({ $0 === $1 }) else { return }
+        let selected = mode.selectedSegment == 0 ? outline.item(atRow: outline.selectedRow) as? TextDocument : nil
+        documents = current
+        guard mode.selectedSegment == 0 else { return }
+        outline.reloadData()
+        if let selected, let row = documents.firstIndex(where: { $0 === selected }) {
+            outline.selectRowIndexes([row], byExtendingSelection: false)
+        }
+    }
+    /// Shows one of the three views: 0 Open Documents, 1 Folders, 2 Recent Files.
+    func select(mode segment: Int) {
+        guard (0..<mode.segmentCount).contains(segment) else { return }
+        mode.selectedSegment = segment
+        refresh(nil)
+    }
+    /// An error that carries its own recovery, such as the explicit UTF-16 LE open, needs
+    /// AppKit's presentation: that is what calls the recovery attempter.
+    private func present(_ error: Error) {
+        if (error as NSError).recoveryAttempter != nil {
+            NSApp.presentError(error)
+        } else {
+            NSAlert(error: error).runModal()
+        }
     }
     func menu() -> NSMenu {
         let menu = NSMenu(title: "Workspace")
@@ -96,7 +156,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     }
     @objc private func reloadMonitored(_ sender: Any?) {
         guard let document = monitor.document else {
-            status.stringValue = "No document is being monitored."
+            monitorStatus.stringValue = "No document is being monitored."
             return
         }
         guard !document.isDocumentEdited else {
@@ -155,7 +215,13 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         controls.orientation = .horizontal
         let actions = NSStackView(views: [add, remove, open])
         actions.orientation = .horizontal
-        let stack = NSStackView(views: [controls, scroll, actions, status])
+        status.setAccessibilityIdentifier("workspace.status")
+        monitorStatus.setAccessibilityIdentifier("workspace.monitorStatus")
+        for label in [status, monitorStatus] {
+            label.lineBreakMode = .byTruncatingTail
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        }
+        let stack = NSStackView(views: [controls, scroll, actions, status, monitorStatus])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -173,12 +239,38 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         window = panel
     }
     @objc func refresh(_ sender: Any?) {
+        reloading = true
         documents = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
         recent = recentURLs()
+        // Fresh nodes every time: a node caches its listing, so this is what re-reads the disk.
         nodes = store.state.folders.map { WorkspaceBrowserNode(WorkspaceBrowserEntry(url: $0, directory: true)) }
         outline.reloadData()
+        if mode.selectedSegment == 1 { restoreExpansion() }
+        reloading = false
         status.stringValue =
             "\(documents.count) open documents · \(nodes.count) saved folders · \(recent.count) recent files"
+    }
+    /// Expands again the folders that were expanded before the nodes were rebuilt, parents
+    /// before children. A folder that is gone, or sits under one that is, is forgotten.
+    private func restoreExpansion() {
+        var live = Set<String>()
+        func visit(_ node: WorkspaceBrowserNode) {
+            let path = WorkspaceBrowserState.identity(node.entry.url)
+            guard node.entry.directory, expanded.contains(path) else { return }
+            live.insert(path)
+            outline.expandItem(node)
+            children(node).forEach(visit)
+        }
+        nodes.forEach(visit)
+        expanded = live
+    }
+    func outlineViewItemDidExpand(_ notification: Notification) {
+        guard !reloading, let node = notification.userInfo?["NSObject"] as? WorkspaceBrowserNode else { return }
+        expanded.insert(WorkspaceBrowserState.identity(node.entry.url))
+    }
+    func outlineViewItemDidCollapse(_ notification: Notification) {
+        guard !reloading, let node = notification.userInfo?["NSObject"] as? WorkspaceBrowserNode else { return }
+        expanded.remove(WorkspaceBrowserState.identity(node.entry.url))
     }
     @objc func addFolder(_ sender: Any?) {
         let panel = NSOpenPanel()
@@ -194,7 +286,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     }
     @objc func removeFolder(_ sender: Any?) {
         guard mode.selectedSegment == 1, let node = outline.item(atRow: outline.selectedRow) as? WorkspaceBrowserNode,
-            store.state.folders.contains(node.entry.url)
+            store.contains(node.entry.url)
         else {
             status.stringValue = "Select a saved root folder to remove it from this workspace. Files on disk are kept."
             return
@@ -206,14 +298,19 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     }
     @objc private func openRecent(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
-        do { _ = try open(url) } catch { NSAlert(error: error).runModal() }
+        do { _ = try open(url) } catch { present(error) }
     }
     @objc func openSelected(_ sender: Any?) {
         let index = outline.selectedRow
         guard index >= 0 else { return }
         if mode.selectedSegment == 0 {
-            guard index < documents.count else { return }
-            documents[index].showWindows()
+            guard let document = outline.item(atRow: index) as? TextDocument else { return }
+            // A row for a document that has since closed is removed, not shown again.
+            guard NSDocumentController.shared.documents.contains(where: { $0 === document }) else {
+                reloadDocuments()
+                return
+            }
+            document.showWindows()
             return
         }
         let url: URL
@@ -228,7 +325,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             }
             url = node.entry.url
         }
-        do { _ = try open(url) } catch { NSAlert(error: error).runModal() }
+        do { _ = try open(url) } catch { present(error) }
     }
     /// Read once through a nonblocking regular-file descriptor, then hand the
     /// captured bytes to NSDocument. This avoids a FIFO race between preflight
@@ -238,13 +335,14 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             existing.showWindows()
             return existing
         }
-        let data = try WorkspaceStore.readRegularFile(url)
+        let (data, sample) = try WorkspaceStore.readRegularFileSample(url)
         let document = TextDocument()
         document.fileURL = url
-        try document.read(from: data, ofType: "public.plain-text")
+        try document.read(captured: data, sample: sample, from: url, ofType: "public.plain-text")
         NSDocumentController.shared.addDocument(document)
         document.makeWindowControllers()
         document.showWindows()
+        reloadDocuments()
         if recordsSystemRecent { NSDocumentController.shared.noteNewRecentDocumentURL(url) }
         do { try store.noteRecent(url) } catch {
             status.stringValue = "Opened file; recent history could not be saved: \(error.localizedDescription)"
