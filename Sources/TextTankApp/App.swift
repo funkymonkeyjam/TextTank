@@ -78,6 +78,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             doc.showWindows()
             doc.windowControllers.first?.window?.makeFirstResponder(doc.editor)
         })
+    /// The reason often arrives inside an editor callback, and for a click while the button is
+    /// still down. A modal alert then would swallow the mouse-up and leave the editor dragging,
+    /// so the alert waits for a later turn with no button pressed.
+    private func explainDiscardedRecording(_ reason: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard NSEvent.pressedMouseButtons == 0 else {
+                self?.explainDiscardedRecording(reason)
+                return
+            }
+            TTAlert.explain(
+                "Macro recording was discarded",
+                detail: reason + " Choose Stop Recording, then Start Recording to record again."
+                    + " The previous recording is kept.")
+        }
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenus()
         settings.apply()
@@ -90,6 +105,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         searchController.onUnrecordableCommand = { [weak self] reason in
             self?.macros.invalidateRecording(reason: reason)
+        }
+        folderSearch.onUnrecordableCommand = { [weak self] reason in
+            self?.macros.invalidateRecording(reason: reason)
+        }
+        languages.onUnrecordableCommand = { [weak self] reason in
+            self?.macros.invalidateRecording(reason: reason)
+        }
+        // F67: the person hears and reads at once that the recording can no longer be saved.
+        macros.onInvalidated = { [weak self] reason in
+            NSSound.beep()
+            self?.explainDiscardedRecording(reason)
         }
         macros.searchPlayback = { [weak self] search, editor in
             guard let self else { throw MacroError.invalid("Search controller unavailable.") }
@@ -1632,13 +1658,28 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height), in: view)
         refreshStatusDetails()
     }
+    /// F277: neither jump has a recordable step, so a recording is discarded when the caret or the
+    /// selection actually moves, and not for a cancelled dialog, a line that does not exist or a
+    /// selection that was already empty.
+    static func goToLine(_ line: Int, in editor: TTEditor, macros: MacroController?) -> Bool {
+        guard let macros else { return editor.goToLine(line) }
+        return macros.unrecordedJump(in: editor, reason: "Go to Line is not recorded in macros yet.") {
+            editor.goToLine(line)
+        }
+    }
+    @discardableResult static func clearSelection(in editor: TTEditor, macros: MacroController?) -> Bool {
+        let clear = { editor.setSelectionAnchor(editor.selectionCaret, caret: editor.selectionCaret) }
+        guard let macros else { return clear() }
+        return macros.unrecordedJump(
+            in: editor, reason: "Clear Selection is not recorded in macros yet.", clear)
+    }
     @objc private func statusOption(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
         let editor = activeEditor, info = editor.statusInfo
         switch id {
         case "tabs", "spaces": editor.configureTabWidth(info["tabWidth"]?.intValue ?? 4, useTabs: id == "tabs")
         case "wrap.on", "wrap.off": editor.wrap = id == "wrap.on"
-        case "clearSelection": _ = editor.setSelectionAnchor(editor.selectionCaret, caret: editor.selectionCaret)
+        case "clearSelection": Self.clearSelection(in: editor, macros: (NSApp.delegate as? AppDelegate)?.macros)
         case "goToLine":
             let alert = TTAlert()
             alert.messageText = "Go to Line"
@@ -1653,7 +1694,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             // The engine's own line model decides which lines exist; a folded target is revealed.
             guard editor.window != nil else { return }
-            guard let line = Int(input.stringValue), editor.goToLine(line) else {
+            guard let line = Int(input.stringValue),
+                Self.goToLine(line, in: editor, macros: (NSApp.delegate as? AppDelegate)?.macros)
+            else {
                 TTAlert.explain(
                     Int(input.stringValue) == nil
                         ? "Enter a whole line number" : "There is no line \(input.stringValue)",
@@ -1787,9 +1830,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         window?.makeFirstResponder(nil)
         let query = findField.stringValue
         guard !query.isEmpty else { return }
-        if !editor.find(query, matchCase: caseBox.state == .on, backwards: backwards) { NSSound.beep() }
+        let matched = editor.find(query, matchCase: caseBox.state == .on, backwards: backwards)
+        if !matched { NSSound.beep() }
         (NSApp.delegate as? AppDelegate)?.macros.recordFind(
-            text: query, matchCase: caseBox.state == .on, backwards: backwards, editor: editor)
+            text: query, matchCase: caseBox.state == .on, backwards: backwards, matched: matched, editor: editor)
     }
     @objc func replaceSelection(_ sender: Any?) {
         do { try replaceSelectionFromBar() } catch { TTAlert.explain(error) }

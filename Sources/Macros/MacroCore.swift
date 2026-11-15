@@ -26,7 +26,14 @@ struct RecordedMacro: Codable, Identifiable, Equatable {
             "charLeft", "charRight", "lineUp", "lineDown", "home", "lineEnd", "documentStart", "documentEnd",
             "wordLeft", "wordRight", "deleteBack", "deleteForward", "newLine", "tab", "backTab",
             "charLeftExtend", "charRightExtend", "lineUpExtend", "lineDownExtend", "homeExtend", "lineEndExtend",
-            "documentStartExtend", "documentEndExtend", "wordLeftExtend", "wordRightExtend"
+            "documentStartExtend", "documentEndExtend", "wordLeftExtend", "wordRightExtend",
+            // G367: the rest of the standard Mac key map. Each name is also in the bridge's table.
+            "vcHome", "vcHomeExtend", "pageUp", "pageUpExtend", "pageDown", "pageDownExtend",
+            "paraUp", "paraUpExtend", "paraDown", "paraDownExtend",
+            "wordPartLeft", "wordPartLeftExtend", "wordPartRight", "wordPartRightExtend",
+            "homeDisplay", "lineEndDisplay",
+            "deleteWordLeft", "deleteWordRight", "deleteLineLeft", "deleteLineRight",
+            "lineCut", "lineCopy", "duplicateSelection", "moveLineUp", "moveLineDown", "cancel"
         ]
         func validate() throws {
             if kind != .search && search != nil {

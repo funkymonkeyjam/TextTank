@@ -12,6 +12,10 @@ final class MacroController: NSObject, NSMenuDelegate {
     private var lastRecording: RecordedMacro?
     private var captureError: Error?
     private var playing = false
+    /// Called once, at the moment a recording becomes unsaveable, with the reason (F67).
+    var onInvalidated: ((String) -> Void)?
+    /// Why the recording in progress can no longer be saved; nil while it is still good.
+    var discardReason: String? { recordingEditor == nil ? nil : captureError?.localizedDescription }
     var searchPlayback: ((RecordedMacro.Search, TTEditor) throws -> Void)?
     private lazy var macroMenu = NSMenu(title: "Macros")
     init(editorProvider: @escaping () -> TTEditor?) {
@@ -45,7 +49,9 @@ final class MacroController: NSObject, NSMenuDelegate {
             macroMenu.addItem(item)
         }
         item("Start Recording", #selector(startRecording), recordingEditor == nil && !playing)
-        item("Stop Recording", #selector(stopRecording), recordingEditor != nil)
+        item(
+            discardReason == nil ? "Stop Recording" : "Stop Recording (Already Discarded)", #selector(stopRecording),
+            recordingEditor != nil)
         item("Play Last Recording…", #selector(playLast), lastRecording != nil && recordingEditor == nil && !playing)
         item("Save Last Recording…", #selector(saveLast), lastRecording != nil && recordingEditor == nil)
         item("Manage Saved Macros…", #selector(manage), recordingEditor == nil && !playing)
@@ -59,18 +65,24 @@ final class MacroController: NSObject, NSMenuDelegate {
         recordingEditor = editor
         recorded = []
         captureError = nil
-        lastRecording = nil
+        // The previous recording stays playable and saveable until a new one finishes (F67).
         editor.onMacroStep = { [weak self, weak editor] raw in
             guard let self, let editor, self.recordingEditor === editor, !self.playing else { return }
             do {
+                // The bridge reports what it cannot replay; the name is for the person. This kind is
+                // never a Step.Kind, so it cannot arrive through an imported file.
+                if raw["kind"] as? String == "unsupported" {
+                    let name =
+                        raw["name"] as? String ?? "An editing action (Scintilla message \(raw["message"] ?? "unknown"))"
+                    throw MacroError.invalid("\(name) is not recordable yet. No partial macro will be saved.")
+                }
                 let data = try JSONSerialization.data(withJSONObject: raw)
                 let step = try JSONDecoder().decode(RecordedMacro.Step.self, from: data)
                 try step.validate()
                 guard self.recorded.count < 10000 else { throw MacroError.invalid("Recording exceeded 10000 steps.") }
                 self.recorded.append(step)
             } catch {
-                self.captureError = error
-                editor.stopRecording()
+                self.discard(error, editor: editor)
             }
         }
         editor.startRecording()
@@ -79,9 +91,30 @@ final class MacroController: NSObject, NSMenuDelegate {
     /// Invalidated recordings remain stoppable, but can never become a saved partial macro.
     func invalidateRecording(reason: String) {
         guard let editor = recordingEditor, !playing else { return }
-        if captureError == nil { captureError = MacroError.invalid(reason) }
+        discard(MacroError.invalid(reason), editor: editor)
+    }
+    /// The first reason wins and is reported at once; capture stops so nothing more is collected.
+    private func discard(_ error: Error, editor: TTEditor) {
+        guard captureError == nil else { return }
+        captureError = error
+        // Stopping settles a pending margin click, which can report again; the guard above ends that.
         editor.stopRecording()
         editor.onMacroStep = nil
+        rebuild()
+        onInvalidated?(error.localizedDescription)
+    }
+    /// An application-layer caret jump (Go to Line, Clear Selection, a function-list or result
+    /// row) has no recordable step. The recording is discarded at the point of mutation, and only
+    /// when the jump changed the selection or the text: a cancelled dialog or a jump to where the
+    /// caret already is leaves a valid recording alone (F277).
+    @discardableResult func unrecordedJump(in editor: TTEditor, reason: String, _ jump: () -> Bool) -> Bool {
+        guard recordingEditor != nil, !playing else { return jump() }
+        let before = (editor.revision, editor.selectionCount, editor.selectionAnchor, editor.selectionCaret)
+        let moved = jump()
+        if before != (editor.revision, editor.selectionCount, editor.selectionAnchor, editor.selectionCaret) {
+            invalidateRecording(reason: reason)
+        }
+        return moved
     }
     func editorDidFocus(_ editor: TTEditor) {
         if let recordingEditor, recordingEditor !== editor {
@@ -122,7 +155,9 @@ final class MacroController: NSObject, NSMenuDelegate {
         do { _ = try finishRecording() } catch { showError(error) }
     }
     /// Root calls only after application-layer literal find; parameters are captured, not read at playback.
-    func recordFind(text: String, matchCase: Bool, backwards: Bool, editor: TTEditor) {
+    /// A find that did not match changed nothing and would stop playback, so it is left out (F68).
+    func recordFind(text: String, matchCase: Bool, backwards: Bool, matched: Bool, editor: TTEditor) {
+        guard matched else { return }
         append(.init(kind: .findLiteral, text: text, matchCase: matchCase, backwards: backwards), editor: editor)
     }
     func recordSearch(_ search: RecordedMacro.Search, editor: TTEditor) {
@@ -145,8 +180,7 @@ final class MacroController: NSObject, NSMenuDelegate {
             guard recorded.count < 10000 else { throw MacroError.invalid("Recording exceeded 10000 steps.") }
             recorded.append(step)
         } catch {
-            captureError = error
-            editor.stopRecording()
+            discard(error, editor: editor)
         }
     }
     @objc private func playLast() { if let lastRecording { choosePlayback(lastRecording) } }

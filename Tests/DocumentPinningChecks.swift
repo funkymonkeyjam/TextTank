@@ -1241,6 +1241,49 @@ extension DocumentChecks {
             check(
                 goToLineDialog("1") && document.editor.selectionCaret == 0 && document.editor.revision == goRevision
                     && !document.editor.modified, "Go to Line never edits the document")
+            // F277: Go to Line and Clear Selection have no recordable step. A macro recording is
+            // discarded when one of them moves the caret or the selection, and only then.
+            let recorder = MacroController(editorProvider: { document.editor })
+            var discarded: [String] = []
+            recorder.onInvalidated = { discarded.append($0) }
+            document.editor.text = "one\ntwo\nthree\n"
+            document.editor.resetUndoHistory()
+            document.editor.setSavePoint()
+            _ = document.editor.setSelectionAnchor(0, caret: 0)
+            recorder.startRecording()
+            document.editor.executeCommand("charRight")
+            check(
+                !EditorWindowController.goToLine(9, in: document.editor, macros: recorder)
+                    && EditorWindowController.clearSelection(in: document.editor, macros: recorder)
+                    && discarded.isEmpty && document.editor.selectionCaret == 1,
+                "a line that does not exist and an already empty selection leave a recording alone")
+            check(
+                try recorder.finishRecording()?.steps.count == 1,
+                "the recording is still saveable after a refused Go to Line and a no-op Clear Selection")
+            recorder.startRecording()
+            document.editor.executeCommand("charRightExtend")
+            check(
+                EditorWindowController.clearSelection(in: document.editor, macros: recorder)
+                    && document.editor.selectionAnchor == document.editor.selectionCaret
+                    && discarded == ["Clear Selection is not recorded in macros yet."],
+                "Clear Selection of a real selection discards the recording when it clears")
+            rejects("Clear Selection cannot silently save a partial recording", message: "Clear Selection") {
+                _ = try recorder.finishRecording()
+            }
+            recorder.startRecording()
+            document.editor.executeCommand("charRight")
+            check(
+                EditorWindowController.goToLine(3, in: document.editor, macros: recorder)
+                    && document.editor.selectionCaret == 8 && discarded.count == 2
+                    && discarded.last?.contains("Go to Line") == true,
+                "Go to Line discards the recording when the caret moves")
+            rejects("Go to Line cannot silently save a partial recording", message: "Go to Line") {
+                _ = try recorder.finishRecording()
+            }
+            check(
+                EditorWindowController.goToLine(1, in: document.editor, macros: nil)
+                    && document.editor.selectionCaret == 0 && discarded.count == 2,
+                "Go to Line outside a recording moves the caret and reports nothing")
             document.editor.text = ""
             document.close()
         }

@@ -10,6 +10,8 @@ final class LanguageController: NSObject, NSMenuDelegate {
     private var loadError: Error?
     private let storage: URL
     private var navigator: LanguageFunctionController?
+    /// Called with the reason when a caret jump that macros cannot record has happened (F277).
+    var onUnrecordableCommand: ((String) -> Void)?
     init(
         editorProvider: @escaping () -> TTEditor?, languageProvider: @escaping () -> String,
         setLanguage: @escaping (String) -> Void
@@ -343,6 +345,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
             let text = editor.text, revision = editor.revision
             let symbols = try LanguageFunctions.symbols(text: text, profile: profile)
             navigator = LanguageFunctionController(editor: editor, text: text, revision: revision, symbols: symbols)
+            navigator?.onNavigate = { [weak self] in
+                self?.onUnrecordableCommand?("Function-list navigation is not recorded in macros yet.")
+            }
             navigator?.showWindow(nil)
         } catch { NSAlert(error: error).runModal() }
     }
@@ -438,6 +443,8 @@ final class LanguageController: NSObject, NSMenuDelegate {
 final class LanguageFunctionController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     private weak var editor: TTEditor?
     private let text: String, revision: UInt, symbols: [LanguageSymbol]
+    /// Called after a row moved the caret.
+    var onNavigate: (() -> Void)?
     private let table = NSTableView(),
         status = NSTextField(
             labelWithString: "Double-click a symbol to navigate. Basic pattern-based navigation; not a compiler index.")
@@ -476,9 +483,12 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
     func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?, row: Int) -> Any? {
         symbols.indices.contains(row) ? "\(symbols[row].line) · \(symbols[row].name)" : nil
     }
-    @objc private func openSelected() {
-        guard symbols.indices.contains(table.clickedRow), let editor else { return }
-        if !Self.navigate(symbols[table.clickedRow], text: text, revision: revision, editor: editor) {
+    @objc private func openSelected() { open(row: table.clickedRow) }
+    func open(row: Int) {
+        guard symbols.indices.contains(row), let editor else { return }
+        if Self.navigate(symbols[row], text: text, revision: revision, editor: editor) {
+            onNavigate?()
+        } else {
             status.stringValue = "The document changed or closed. Refresh the function list."
         }
     }

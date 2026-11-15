@@ -56,6 +56,8 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     private(set) var isSearching = false
     /// Nil while work is running and before the first action.
     private(set) var lastOutcome: FolderSearchOutcome?
+    /// Called with the reason when opening a result moved the caret, which macros cannot record (F277).
+    var onUnrecordableCommand: ((String) -> Void)?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -472,6 +474,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                     self.lastOutcome = .staleResult
                     return
                 }
+                self.onUnrecordableCommand?("Opening a folder search result is not recorded in macros yet.")
                 document.showWindows()
                 document.windowControllers.first?.window?.makeFirstResponder(editor)
             }
