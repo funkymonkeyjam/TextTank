@@ -10,6 +10,9 @@ import AppKit
             document.editor.text = "original"
             document.editor.resetUndoHistory()
             let controller = RunController(), sample = ConfiguredRun.uppercaseSample
+            // F278: applying a result is an unrecorded change; showing or refusing one is not.
+            var unrecordable = 0
+            controller.onUnrecordableAction = { unrecordable += 1 }
             try controller.persist([sample])
             let originalConfiguration = try Data(contentsOf: controller.storage)
             let oversized = ConfiguredRun(
@@ -57,8 +60,10 @@ import AppKit
             let current = button()
             controller.apply(old)
             check(document.editor.text == "original" && !old.isEnabled, "old preview cannot apply a newer result")
+            check(unrecordable == 0, "showing a result and refusing a superseded one report no unrecordable action")
             controller.apply(current)
             check(document.editor.text == "SECOND", "current preview applies explicit matching result")
+            check(unrecordable == 1, "applying an extension result reports one unrecordable action")
             document.editor.executeCommand("undo")
             check(document.editor.text == "original", "extension apply one Undo")
             let special = "\u{FEFF}identity\0tail"
@@ -78,6 +83,29 @@ import AppKit
             document.editor.text = "new edit"
             controller.apply(stale)
             check(document.editor.text == "new edit", "stale extension result preserves newer edits")
+            // G338: a result captured through a split pane follows the document when the pane closes.
+            let pane = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+            pane.shareDocument(with: document.editor)
+            controller.show(
+                .success(result), command: sample, target: pane, revision: pane.revision, selection: false, anchor: 0,
+                caret: 0)
+            let moved = button()
+            pane.retire(inFavorOf: document.editor)
+            controller.apply(moved)
+            check(
+                document.editor.text == "FIRST" && !moved.isEnabled,
+                "a whole-document result captured through a closed pane applies through the remaining view")
+            document.editor.executeCommand("undo")
+            _ = pane.setSelectionAnchor(0, caret: 3)
+            controller.show(
+                .success(result), command: sample, target: pane, revision: pane.revision, selection: true, anchor: 0,
+                caret: 3)
+            let withdrawn = button()
+            pane.retire(inFavorOf: document.editor)
+            controller.apply(withdrawn)
+            check(
+                document.editor.text == "new edit" && !withdrawn.isEnabled,
+                "a selection result captured through a closed pane is withdrawn, never applied elsewhere")
             controller.show(
                 .success(result), command: sample, target: document.editor, revision: document.editor.revision,
                 selection: false, anchor: 0, caret: 0)

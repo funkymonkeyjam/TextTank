@@ -335,6 +335,63 @@ final class OffscreenWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             } else {
                 check(false, "an invalid expression is reported as a failure carrying the shown reason")
             }
+            // G336, G338: a split view. All-open-documents search is given the focused pane, and
+            // listed results outlive the pane they were found through.
+            do {
+                let primary = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 400)),
+                    pane = TTEditor(frame: NSRect(x: 300, y: 0, width: 300, height: 400))
+                let splitWindow = OffscreenWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: .titled, backing: .buffered,
+                    defer: false)
+                let host = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+                splitWindow.contentView = host
+                host.addSubview(primary)
+                primary.text = "one TODO two TODO three"
+                primary.resetUndoHistory()
+                primary.setSavePoint()
+                pane.shareDocument(with: primary)
+                host.addSubview(pane)
+                let split = SearchController(defaults: isolated)
+                split.currentEditor = { pane }
+                split.openEditors = { [pane] }
+                split.queryField.stringValue = "TODO"
+                split.replacementField.stringValue = "DONE"
+                split.mode.selectItem(at: 0)
+                split.scope.selectItem(at: 2)
+                split.wrapButton.state = .off
+                _ = primary.setSelectionAnchor(20, caret: 20)
+                _ = pane.setSelectionAnchor(0, caret: 0)
+                split.next(nil)
+                await waitUntil("the split-view search to finish") { !split.isSearching }
+                check(
+                    split.lastOutcome != .noFurtherMatches && pane.selectionStart == 4 && pane.selectedText == "TODO"
+                        && primary.selectionCaret == 20,
+                    "All-open-documents Find Next moves the focused pane's selection and leaves the other pane's alone")
+                split.replaceOne(nil)
+                await waitUntil("the split-view replace to finish") { !split.isSearching }
+                check(
+                    split.lastOutcome == .replaced(changed: 1, stale: 0) && primary.text == "one DONE two TODO three",
+                    "Replace acts on the match selected in the focused pane, once")
+                pane.executeCommand("undo")
+                check(primary.text == "one TODO two TODO three" && !primary.modified, "that replacement is one Undo")
+                split.scope.selectItem(at: 0)
+                split.findAll(nil)
+                await waitUntil("the split-view Find All to finish") { !split.isSearching }
+                try require(
+                    split.lastOutcome == .found(matches: 2, documents: 1, truncated: false),
+                    "fixture: two results listed through the pane")
+                pane.retire(inFavorOf: primary)
+                pane.removeFromSuperview()
+                check(
+                    split.activateResult(at: 1) && split.lastOutcome != .staleResult && primary.selectionStart == 13
+                        && primary.selectedText == "TODO",
+                    "a result listed through a closed pane still selects its match in the remaining view")
+                primary.executeCommand("selectAll")
+                primary.replaceSelection("edited since")
+                check(
+                    !split.activateResult(at: 0) && split.lastOutcome == .staleResult,
+                    "a result retargeted to the remaining view still goes stale when the document changes")
+            }
             Checks.summary { "PASS SearchControllerChecks: \(Checks.count) assertions" }
         }
     }

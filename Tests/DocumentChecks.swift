@@ -486,7 +486,8 @@ import AppKit
                 NotificationCenter.default.post(name: NSWindow.didUpdateNotification, object: window)
                 app.updateWindows()
                 check(
-                    controller.focusObserver == nil && controller.automationObserver == nil,
+                    controller.focusObservation == nil && controller.automationObserver == nil
+                        && document.editor.onFocus == nil,
                     "close removes callbacks before document detaches")
                 check(
                     controller.activeEditor === document.editor,
@@ -1008,6 +1009,7 @@ import AppKit
             openSaveRecovery(root: root, documents: documentController) { name, line, body in
                 section(name, line: line, body)
             }
+            splitViewAndCurrentEditor(root: root, app: app) { name, line, body in section(name, line: line, body) }
             section("clean quit") {
                 let termination = AppDelegate().applicationShouldTerminate(app)
                 check(termination == .terminateNow, "clean application quit does not wait for async reply")

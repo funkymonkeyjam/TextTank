@@ -21,67 +21,102 @@ import AppKit
 #endif
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let workspace = WorkspaceController()
-    let workspaceBrowser = WorkspaceBrowserController()
+    lazy var workspace: WorkspaceController = {
+        let controller = WorkspaceController()
+        controller.activeDocument = { [weak self] in self?.currentDocument }
+        return controller
+    }()
+    lazy var workspaceBrowser: WorkspaceBrowserController = {
+        let controller = WorkspaceBrowserController()
+        controller.currentDocument = { [weak self] in self?.currentDocument }
+        return controller
+    }()
     let settings = SettingsController()
     lazy var folderSearch: FolderSearchController = {
         let controller = FolderSearchController()
         controller.workspaceRoots = { [weak self] in self?.workspaceBrowser.store.state.folders ?? [] }
         return controller
     }()
+    /// The document window focused last. Written where focus changes (a view's onFocus, a
+    /// document window becoming main, the status menu); never by a getter.
     weak var lastDocumentController: EditorWindowController?
-    var currentEditor: TTEditor? {
-        if let controller = NSApp.mainWindow?.windowController as? EditorWindowController {
-            lastDocumentController = controller
-        }
-        guard let controller = lastDocumentController, controller.document != nil else { return nil }
-        return controller.activeEditor
+    /// The one definition of "current" for every controller: the main window when it is a
+    /// document window, otherwise the document window focused last, because Find and Replace,
+    /// a Run result or another auxiliary window may be main. Nil once that document has closed.
+    var currentDocumentController: EditorWindowController? {
+        let controller = (NSApp.mainWindow?.windowController as? EditorWindowController) ?? lastDocumentController
+        return controller?.document == nil ? nil : controller
     }
-    lazy var languages = LanguageController(
-        editorProvider: { [weak self] in self?.currentEditor },
-        languageProvider: { [weak self] in
-            (self?.lastDocumentController?.document as? TextDocument)?.languageIdentifier ?? "normal"
-        },
-        setLanguage: { [weak self] id in
-            (self?.lastDocumentController?.document as? TextDocument)?.languageIdentifier = id
-        })
-    lazy var runner: RunController = {
-        let controller = RunController()
-        controller.editor = { [weak self] in
-            self?.macros.invalidateRecording(reason: "External execution is never recorded in macros.")
-            return self?.currentEditor
+    var currentDocument: TextDocument? { currentDocumentController?.document as? TextDocument }
+    var currentEditor: TTEditor? { currentDocumentController?.activeEditor }
+    lazy var languages: LanguageController = {
+        let controller = LanguageController(
+            editorProvider: { [weak self] in self?.currentEditor },
+            languageProvider: { [weak self] in self?.currentDocument?.languageIdentifier ?? "normal" },
+            setLanguage: { [weak self] id in self?.currentDocument?.languageIdentifier = id })
+        controller.siblingViews = { editor in
+            for document in NSDocumentController.shared.documents {
+                for case let window as EditorWindowController in document.windowControllers
+                where window.views.contains(where: { $0 === editor }) {
+                    return window.views.filter { $0 !== editor }
+                }
+            }
+            return []
         }
-        controller.file = { [weak self] in (self?.lastDocumentController?.document as? TextDocument)?.fileURL }
+        controller.openDocuments = {
+            NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }.map {
+                ($0.languageIdentifier, $0.editor)
+            }
+        }
         return controller
     }()
-    lazy var utilities = UtilityController(activeEditor: { [weak self] in
-        self?.macros.invalidateRecording(reason: "Text utilities are not recorded in macros yet.")
-        return self?.currentEditor
-    })
+    // The providers below only answer "which editor". A macro recording is invalidated where
+    // an action is committed, through each controller's hook, never by asking for the editor.
+    lazy var runner: RunController = {
+        let controller = RunController()
+        controller.editor = { [weak self] in self?.currentEditor }
+        controller.onUnrecordableAction = { [weak self] in
+            self?.macros.invalidateRecording(reason: "External execution is never recorded in macros.")
+        }
+        controller.file = { [weak self] in self?.currentDocument?.fileURL }
+        return controller
+    }()
+    lazy var utilities: UtilityController = {
+        let controller = UtilityController(activeEditor: { [weak self] in self?.currentEditor })
+        controller.onUnrecordableEdit = { [weak self] in
+            self?.macros.invalidateRecording(reason: "Text utilities are not recorded in macros yet.")
+        }
+        return controller
+    }()
     lazy var searchController: SearchController = {
         let controller = SearchController()
         controller.currentEditor = { [weak self] in self?.currentEditor }
-        controller.openEditors = { NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.editor } }
+        // One view per document, and the one the person last worked in: Find Next compares
+        // these with the current editor, and a replace reads that view's selection.
+        controller.openEditors = {
+            NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.activeEditor }
+        }
         return controller
     }()
-    lazy var macros = MacroController(editorProvider: {
-        (NSApp.mainWindow?.windowController as? EditorWindowController)?.activeEditor
-    })
-    lazy var automations = AutomationController(
-        editorProvider: { [weak self] in
+    lazy var macros = MacroController(editorProvider: { [weak self] in self?.currentEditor })
+    lazy var automations: AutomationController = {
+        let controller = AutomationController(
+            editorProvider: { [weak self] in self?.currentEditor }, newDocument: AppDelegate.openAutomationOutput)
+        controller.onInvocation = { [weak self] in
             self?.macros.invalidateRecording(
                 reason: "An automation was invoked during macro recording. Automation side effects are not recorded.")
-            return (NSApp.mainWindow?.windowController as? EditorWindowController)?.activeEditor
-        },
-        newDocument: { text in
-            let doc = TextDocument()
-            NSDocumentController.shared.addDocument(doc)
-            doc.makeWindowControllers()
-            doc.editor.text = text
-            doc.editor.setLineEndingMode(LineEnding.detect(in: text).rawValue)
-            doc.showWindows()
-            doc.windowControllers.first?.window?.makeFirstResponder(doc.editor)
-        })
+        }
+        return controller
+    }()
+    private static func openAutomationOutput(_ text: String) {
+        let doc = TextDocument()
+        NSDocumentController.shared.addDocument(doc)
+        doc.makeWindowControllers()
+        doc.editor.text = text
+        doc.editor.setLineEndingMode(LineEnding.detect(in: text).rawValue)
+        doc.showWindows()
+        doc.windowControllers.first?.window?.makeFirstResponder(doc.editor)
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenus()
         settings.apply()
@@ -574,10 +609,8 @@ final class TextDocument: NSDocument {
         { return .missing }
     }
     @objc func toggleReadOnly(_ sender: NSMenuItem) {
+        // Read-only belongs to the Scintilla document, so this covers a split view's other pane.
         editor.readOnly.toggle()
-        windowControllers.compactMap { $0 as? EditorWindowController }.forEach {
-            $0.secondary?.readOnly = editor.readOnly
-        }
         sender.state = editor.readOnly ? .on : .off
     }
     @objc func checkExternalChanges(_ sender: Any?) {
@@ -860,7 +893,7 @@ final class TextDocument: NSDocument {
         loading = false
         if let app = NSApp.delegate as? AppDelegate,
             let id = app.languages.detect(filename: fileURL?.lastPathComponent ?? "", text: decoded.text),
-            app.languages.apply(identifier: id, to: editor)
+            app.languages.applyToDocument(identifier: id, through: editor)
         {
             languageIdentifier = id
         }
@@ -1155,6 +1188,12 @@ private final class DocumentTabWindow: NSWindow {
             $0 is DocumentTabWindow
         }
     }
+    override func becomeMain() {
+        super.becomeMain()
+        if let controller = windowController as? EditorWindowController {
+            (NSApp.delegate as? AppDelegate)?.lastDocumentController = controller
+        }
+    }
     override func makeKeyAndOrderFront(_ sender: Any?) {
         let others = Self.documents.filter { $0 !== self }
         let sharedFrame = others.first(where: { $0.isVisible })?.frame
@@ -1289,7 +1328,13 @@ private final class DocumentTabStrip: NSView {
     @objc private func newTab(_ sender: Any?) { (NSApp.delegate as? AppDelegate)?.newDocument(sender) }
 }
 
-final class EditorWindowController: NSWindowController, NSToolbarDelegate {
+extension TextDocument {
+    /// The view of this document the person last worked in: the focused pane of a split view,
+    /// otherwise the primary view. Exactly one view per document.
+    var activeEditor: TTEditor { (windowControllers.first as? EditorWindowController)?.activeEditor ?? editor }
+}
+
+final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMenuItemValidation {
     let split = NSSplitView()
     let findField = NSSearchField()
     let replaceField = NSTextField()
@@ -1306,19 +1351,41 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     private var cachedSelectedCount = 0
     private var cachedEndings = "LF"
     var secondary: TTEditor?
+    /// The pane focused last. Written when the window's first responder moves into a pane, by
+    /// each view's onFocus (see `wire`) and by closeSplit.
     weak var lastEditor: TTEditor?
-    var focusObserver: NSObjectProtocol?
+    /// Scintilla reports focus only while the window is key and the application active, so the
+    /// first responder is observed as well: a pane chosen in a background window still counts.
+    var focusObservation: NSKeyValueObservation?
     var automationObserver: NSObjectProtocol?
     let primaryEditor: TTEditor
+    /// The primary view and, while the window is split, the clone.
+    var views: [TTEditor] { [primaryEditor] + (secondary.map { [$0] } ?? []) }
+    /// The pane that holds the first responder, otherwise the pane focused last (focus may be
+    /// in the find field or another window). A pure read.
     var activeEditor: TTEditor {
-        if let secondary, let responder = window?.firstResponder as? NSView, responder.isDescendant(of: secondary) {
-            lastEditor = secondary
-            return secondary
-        }
-        if let responder = window?.firstResponder as? NSView, responder.isDescendant(of: primaryEditor) {
-            lastEditor = primaryEditor
+        if let responder = window?.firstResponder as? NSView,
+            let focused = views.last(where: { responder.isDescendant(of: $0) })
+        {
+            return focused
         }
         return lastEditor ?? primaryEditor
+    }
+    /// Per-view wiring shared by the primary view and a clone.
+    private func wire(_ editor: TTEditor) {
+        editor.onFocus = { [weak self, weak editor] in
+            guard let self, let editor else { return }
+            self.lastEditor = editor
+            let app = NSApp.delegate as? AppDelegate
+            app?.lastDocumentController = self
+            app?.macros.editorDidFocus(editor)
+        }
+        editor.menu = (NSApp.delegate as? AppDelegate)?.automations.contextMenu()
+    }
+    /// Copies the active pane's syntax styles to the other pane after a language or style
+    /// change. The lexer itself belongs to the shared document and is never applied twice.
+    func syncPaneStyles(from source: TTEditor) {
+        for view in views where view !== source { view.adoptSyntaxStyles(from: source) }
     }
     init(document: TextDocument) {
         primaryEditor = document.editor
@@ -1327,15 +1394,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
         lastEditor = document.editor
-        document.editor.onFocus = { [weak self, weak document] in
-            guard let editor = document?.editor else { return }
-            self?.lastEditor = editor
-            (NSApp.delegate as? AppDelegate)?.lastDocumentController = self
-            (NSApp.delegate as? AppDelegate)?.macros.editorDidFocus(editor)
+        wire(document.editor)
+        focusObservation = window.observe(\.firstResponder) { [weak self] window, _ in
+            guard let self, let responder = window.firstResponder as? NSView,
+                let pane = self.views.last(where: { responder.isDescendant(of: $0) })
+            else { return }
+            self.lastEditor = pane
         }
         if let app = NSApp.delegate as? AppDelegate {
             app.settings.apply(to: document.editor)
-            document.editor.menu = app.automations.contextMenu()
             let toolbar = NSToolbar(identifier: "TextTankToolbar")
             toolbar.delegate = self
             toolbar.displayMode = .iconOnly
@@ -1344,9 +1411,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
                 forName: .textTankAutomationsDidChange, object: app.automations, queue: .main
             ) { [weak self] _ in self?.refreshAutomationToolbar() }
         }
-        focusObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didUpdateNotification, object: window, queue: .main
-        ) { [weak self] _ in _ = self?.activeEditor }
         window.title = "TextTank"
         window.center()
         window.tabbingMode = .disallowed
@@ -1498,6 +1562,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         let editor = activeEditor, info = editor.statusInfo
         let app = NSApp.delegate as? AppDelegate
         app?.lastDocumentController = self
+        lastEditor = editor
         let menu = NSMenu()
         menu.autoenablesItems = false
         func add(
@@ -1538,7 +1603,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
                 add(name, #selector(TextDocument.convertEncoding(_:)), doc, code, current == code, !editor.readOnly)
             }
         case "indent":
-            heading("Indentation for this view")
+            heading("Indentation for this document")
             add("Tabs", #selector(statusOption(_:)), self, "tabs", info["useTabs"]?.boolValue == true)
             add("Spaces", #selector(statusOption(_:)), self, "spaces", info["useTabs"]?.boolValue == false)
             menu.addItem(.separator())
@@ -1679,17 +1744,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     func prepareForClose() {
         statusTimer?.invalidate()
         statusTimer = nil
-        if let focusObserver {
-            NotificationCenter.default.removeObserver(focusObserver)
-            self.focusObserver = nil
-        }
         if let automationObserver {
             NotificationCenter.default.removeObserver(automationObserver)
             self.automationObserver = nil
         }
+        focusObservation?.invalidate()
+        focusObservation = nil
+        // TextDocument.close has already made the shared document read-only for both panes.
         primaryEditor.onFocus = nil
         secondary?.onFocus = nil
-        secondary?.readOnly = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
     override func windowDidLoad() { super.windowDidLoad() }
@@ -1719,18 +1782,21 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     }
     deinit {
         statusTimer?.invalidate()
-        if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }
+        focusObservation?.invalidate()
         if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
     }
     @objc func language(_ sender: NSMenuItem) {
         if let id = sender.representedObject as? String {
-            activeEditor.setLanguage(id)
+            let editor = activeEditor
+            editor.setLanguage(id)
+            syncPaneStyles(from: editor)
             (document as? TextDocument)?.languageIdentifier = id
             refreshStatusDetails()
         }
     }
     @objc func showFind(_ sender: Any?) {
-        _ = activeEditor
+        // Remember the pane the find bar acts on before focus leaves it.
+        lastEditor = activeEditor
         window?.makeFirstResponder(findField)
     }
     @objc func findNext(_ sender: Any?) { performFind(backwards: false) }
@@ -1753,21 +1819,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     }
     @objc func clone(_ sender: Any?) {
         guard secondary == nil else { return }
+        let source = primaryEditor
         let clone = TTEditor(frame: split.bounds)
-        clone.shareDocument(with: primaryEditor)
-        clone.readOnly = primaryEditor.readOnly
-        if let app = NSApp.delegate as? AppDelegate, let doc = document as? TextDocument {
-            app.settings.apply(to: clone)
-            clone.menu = app.automations.contextMenu()
-            _ = app.languages.apply(identifier: doc.languageIdentifier, to: clone)
-        }
+        // Everything document-level (text, read-only, tab settings, lexer and keyword lists,
+        // undo) arrives with the shared document and is not written again here. The new pane
+        // copies only what a view owns, from the pane it was cloned from.
+        clone.shareDocument(with: source)
+        clone.adoptViewState(from: source)
+        wire(clone)
         secondary = clone
-        clone.onFocus = { [weak self, weak clone] in
-            guard let clone else { return }
-            self?.lastEditor = clone
-            (NSApp.delegate as? AppDelegate)?.lastDocumentController = self
-            (NSApp.delegate as? AppDelegate)?.macros.editorDidFocus(clone)
-        }
         split.addArrangedSubview(clone)
         split.adjustSubviews()
         split.layoutSubtreeIfNeeded()
@@ -1775,10 +1835,23 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         window?.makeFirstResponder(clone)
     }
     @objc func closeSplit(_ sender: Any?) {
+        guard let clone = secondary else { return }
+        clone.onFocus = nil
         lastEditor = primaryEditor
         window?.makeFirstResponder(primaryEditor)
-        secondary?.removeFromSuperview()
+        // Recording across views is not supported; say so even if no focus event was sent.
+        (NSApp.delegate as? AppDelegate)?.macros.editorDidFocus(primaryEditor)
+        // Deferred results that do not depend on the clone's selection move to the primary view.
+        clone.retire(inFavorOf: primaryEditor)
+        clone.removeFromSuperview()
         secondary = nil
+    }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(clone(_:)): return secondary == nil
+        case #selector(closeSplit(_:)): return secondary != nil
+        default: return true
+        }
     }
     @objc func toggleWrap(_ sender: Any?) { activeEditor.wrap.toggle() }
     @objc func comment(_ sender: NSMenuItem) {

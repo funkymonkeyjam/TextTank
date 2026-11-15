@@ -33,8 +33,9 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     let table = NSTableView()
     private var options = SearchOptions(), generation = UUID(), cancellation: TTSearchCancellation?
     private var task: Task<Void, Never>?
-    private struct Buffer { let editor: TTEditor, text: String, revision: UInt, offset: Int, anchor: Int, caret: Int }
-    private struct Row { let buffer: Buffer, hit: SearchHit }
+    private struct Buffer { var editor: TTEditor, text: String, revision: UInt, offset: Int, anchor: Int, caret: Int }
+    private struct Row { var buffer: Buffer, hit: SearchHit }
+    private var retirementObserver: NSObjectProtocol?
     private var rows: [Row] = []
     private var searchButtons: [NSButton] = []
     private var lastNavigation: (TTEditor, UInt, NSRange)?
@@ -50,6 +51,20 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             backing: .buffered, defer: false)
         super.init(window: window)
         window.title = "Find and Replace"
+        // Listed results are positions in a document, checked against its text and revision.
+        // When the split pane they were found through closes, they stay usable through the
+        // remaining view of that document instead of going stale with the detached view.
+        retirementObserver = NotificationCenter.default.addObserver(
+            forName: .TTEditorWillRetire, object: nil, queue: nil
+        ) { [weak self] note in
+            guard let self, let retiring = note.object as? TTEditor,
+                let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor
+            else { return }
+            for index in self.rows.indices where self.rows[index].buffer.editor === retiring {
+                self.rows[index].buffer.editor = successor
+            }
+            if self.lastNavigation?.0 === retiring { self.lastNavigation = nil }
+        }
         window.isReleasedWhenClosed = false
         window.delegate = self
         queryField.placeholderString = "Find"
@@ -107,6 +122,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         window.minSize = NSSize(width: 780, height: 390)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
+    deinit { if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) } }
     @objc func showSearch(_ sender: Any?) {
         showWindow(sender)
         window?.makeKeyAndOrderFront(sender)
@@ -486,8 +502,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         return
             "\(r.buffer.editor.window?.title ?? "Document") · \(r.hit.range.location) · \(String(match.prefix(160)).replacingOccurrences(of:"\n",with:" ↵ "))"
     }
-    @objc private func openResult(_ sender: Any?) {
-        guard rows.indices.contains(table.clickedRow) else { return }
-        select(rows[table.clickedRow])
+    @objc private func openResult(_ sender: Any?) { activateResult(at: table.clickedRow) }
+    /// What a click on a listed result does: selects that match if the result is still current.
+    @discardableResult func activateResult(at row: Int) -> Bool {
+        guard rows.indices.contains(row) else { return false }
+        return select(rows[row])
     }
 }

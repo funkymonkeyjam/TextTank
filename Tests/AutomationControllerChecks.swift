@@ -320,7 +320,24 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 editor.text = source
                 editor.resetUndoHistory()
                 editor.setSavePoint()
+                // F278, F302: a macro recording is discarded when an automation runs, not when
+                // the palette asks which editor is current and is then cancelled.
+                var invocations = 0
+                controller.onInvocation = { invocations += 1 }
+                let palette = drivingModal(
+                    timeout: 20,
+                    { _, views in
+                        guard let cancel = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
+                        else { return false }
+                        cancel.performClick(nil)
+                        return true
+                    }
+                ) { controller.showPalette() }
+                check(
+                    palette.acted && !palette.timedOut && invocations == 0 && editor.text == source,
+                    "opening and cancelling the automation palette is not an invocation")
                 try controller.runSavedAutomation(id: AutomationDefinition.example.id)
+                check(invocations == 1, "running a saved automation reports one invocation")
                 check(
                     editor.text == "2 eggs\n½ cup flour\n",
                     "cleanup applies directly to actual editor without preview dialog")

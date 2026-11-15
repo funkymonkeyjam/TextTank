@@ -8,6 +8,8 @@ extension Notification.Name {
 
 final class AutomationController: NSObject, NSMenuDelegate {
     private let editorProvider: () -> TTEditor?
+    /// Called once each time a saved automation starts to run, before any prompt or change.
+    var onInvocation: () -> Void = {}
     private let newDocument: (String) -> Void
     private let storage: URL
     private var library = AutomationLibrary(workflows: [])
@@ -482,6 +484,8 @@ final class AutomationController: NSObject, NSMenuDelegate {
         do { try runSavedAutomation(id: id) } catch { showError(error) }
     }
     private func run(_ original: AutomationDefinition, capturedEditor: TTEditor?) throws {
+        // Invocation, not lookup: opening and cancelling the palette never reaches this.
+        onInvocation()
         let workflow = original
         // Capture once before showing the preview. Never re-query the frontmost editor on Apply.
         let editor = capturedEditor

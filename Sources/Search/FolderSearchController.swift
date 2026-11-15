@@ -415,13 +415,13 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         guard let range = validatedRange(match, text: document.editor.text, query: query, matchCase: matchCase) else {
             return false
         }
-        let editor = (document.windowControllers.first as? EditorWindowController)?.activeEditor ?? document.editor
+        let editor = document.activeEditor
         return editor.setSelectionAnchor(range.location, caret: range.location + range.length)
     }
     @discardableResult static func selectResult(
         _ match: FolderSearchMatch, in document: TextDocument, options: SearchOptions
     ) -> Bool {
-        let editor = (document.windowControllers.first as? EditorWindowController)?.activeEditor ?? document.editor
+        let editor = document.activeEditor
         let text = editor.text
         guard let report = try? SearchCore.search(text, options: options),
             report.hits.contains(where: {
@@ -451,8 +451,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                     self.lastOutcome = .failed("This result could not be opened as a text document.")
                     return
                 }
-                let editor =
-                    (document.windowControllers.first as? EditorWindowController)?.activeEditor ?? document.editor
+                let editor = document.activeEditor
                 let snapshot = editor.text, revision = editor.revision
                 let report = try? await Task.detached(priority: .userInitiated) {
                     try SearchCore.search(snapshot, options: options)

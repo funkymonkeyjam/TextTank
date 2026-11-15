@@ -3,6 +3,9 @@ import AppKit
 
 final class UtilityController: NSObject {
     let activeEditor: () -> TTEditor?
+    /// Called immediately before a utility changes the document, and at no other time: asking
+    /// for the editor, a cancelled dialog, a failed guard and an export leave a macro recording alone.
+    var onUnrecordableEdit: () -> Void = {}
     init(activeEditor: @escaping () -> TTEditor?) { self.activeEditor = activeEditor }
     func makeMenu() -> NSMenu {
         precondition(Thread.isMainThread)
@@ -75,6 +78,7 @@ final class UtilityController: NSObject {
                 insertSpaces: spaces.state == .on, uppercase: uppercase.state == .on,
                 bytesPerLine: Int(width.stringValue) ?? -1, lineEnding: ["\n", "\r\n", "\r"][eol.indexOfSelectedItem]
             ).encode(input)
+            onUnrecordableEdit()
             editor.beginUndoGroup()
             editor.replaceSelection(output)
             editor.endUndoGroup()
@@ -125,6 +129,7 @@ final class UtilityController: NSObject {
                     editor.revision == revision, editor.selectionRanges == selection, !editor.readOnly,
                     editor.selectionCount == 1
                 else { throw UtilityFailure.selectionRequired }
+                onUnrecordableEdit()
                 editor.beginUndoGroup()
                 editor.replaceSelection(output)
                 editor.endUndoGroup()
@@ -172,6 +177,7 @@ final class UtilityController: NSObject {
             !editor.readOnly, editor.selectionStart != editor.selectionEnd
         else { throw UtilityFailure.selectionRequired }
         let transformed = try utility.apply(editor.selectedText)
+        onUnrecordableEdit()
         editor.beginUndoGroup()
         defer { editor.endUndoGroup() }
         editor.replaceSelection(transformed)

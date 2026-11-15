@@ -124,6 +124,67 @@ import AppKit
             check(
                 editor.revision == beforeStyleRevision && !editor.modified, "font and color changes never edit document"
             )
+            // F21, F83: a saved style change reaches every view of every open document on that
+            // profile, the lexer is installed once per document, and other documents are left alone.
+            do {
+                func look(_ view: TTEditor) -> (size: CGFloat, red: CGFloat) {
+                    let output = view.attributedText(forSelection: false),
+                        font = output.attribute(.font, at: 0, effectiveRange: nil) as! NSFont,
+                        color = (output.attribute(.foregroundColor, at: 0, effectiveRange: nil) as! NSColor)
+                            .usingColorSpace(.sRGB)!
+                    return (font.pointSize, color.redComponent)
+                }
+                let pane = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+                pane.shareDocument(with: editor)
+                let sameProfile = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+                sameProfile.text = editor.text
+                sameProfile.resetUndoHistory()
+                sameProfile.setSavePoint()
+                let otherProfile = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+                otherProfile.text = "import os\n"
+                otherProfile.resetUndoHistory()
+                otherProfile.setSavePoint()
+                check(controller.apply(identifier: "python", to: otherProfile), "fixture: a Python document")
+                let otherBefore = look(otherProfile)
+                var installs: [String] = []
+                let fanout = LanguageController(
+                    editorProvider: { pane }, languageProvider: { user.id }, setLanguage: { installs.append($0) })
+                fanout.siblingViews = { view in
+                    [editor, pane].contains { $0 === view } ? [editor, pane].filter { $0 !== view } : []
+                }
+                fanout.openDocuments = { [(user.id, editor), (user.id, sameProfile), ("python", otherProfile)] }
+                custom.profiles[index].styles[styleIndex].fontSize = 23.5
+                custom.profiles[index].styles[styleIndex].foreground = "AB3456"
+                try fanout.persist(custom)
+                let revisions = [editor, pane, sameProfile, otherProfile].map(\.revision)
+                fanout.reapply([user.id])
+                let expectedRed = CGFloat(0xAB) / 255
+                check(
+                    [editor, pane, sameProfile].allSatisfy {
+                        abs(look($0).size - 23.5) < 0.01 && abs(look($0).red - expectedRed) < 0.005
+                    }, "a saved style change reaches both panes and another document on the profile")
+                check(
+                    look(otherProfile) == otherBefore,
+                    "a document on a different profile keeps its lexer and styles after a re-apply")
+                check(
+                    [editor, pane, sameProfile, otherProfile].map(\.revision) == revisions
+                        && ![editor, sameProfile, otherProfile].contains { $0.modified },
+                    "re-applying a profile to every view never edits a document")
+                // Choosing a language in one pane restyles the other pane from it.
+                let chooser = fanout.menu().items.first { ($0.representedObject as? String) == "python" }!
+                check(
+                    NSApp.sendAction(chooser.action!, to: chooser.target, from: chooser) && installs == ["python"],
+                    "fixture: Python chosen from the Language menu with the second pane current")
+                check(
+                    look(editor) == look(pane) && abs(look(editor).size - 23.5) > 0.01,
+                    "a language chosen in one pane gives both panes the new profile's styles")
+                check(
+                    fanout.applyToDocument(identifier: user.id, through: editor), "fixture: back on the user language")
+                custom.profiles[index].styles[styleIndex].fontSize = 19.25
+                custom.profiles[index].styles[styleIndex].foreground = "123456"
+                try controller.persist(custom)
+                _ = controller.apply(identifier: user.id, to: editor)
+            }
             let settingsWindow = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 400, height: 180), styleMask: [.titled], backing: .buffered,
                 defer: false)

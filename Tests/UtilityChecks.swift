@@ -62,6 +62,10 @@ import AppKit
             let window = NSWindow(contentRect: editor.bounds, styleMask: [.titled], backing: .buffered, defer: false)
             window.contentView = editor
             let controller = UtilityController(activeEditor: { editor })
+            // F278, F302: the hook that discards a macro recording fires when a utility changes
+            // the document and at no other time.
+            var unrecordableEdits = 0
+            controller.onUnrecordableEdit = { unrecordableEdits += 1 }
             editor.text = "before café after"
             editor.resetUndoHistory()
             editor.setSavePoint()
@@ -72,6 +76,7 @@ import AppKit
                 "fixture: padded Base64 menu item exists")
             check(NSApplication.shared.sendAction(item.action!, to: item.target, from: item), "menu dispatch")
             check(editor.text == "before Y2Fmw6k= after", "menu changes selected UTF8")
+            check(unrecordableEdits == 1, "a utility that changes the document reports one unrecordable edit")
             editor.executeCommand("undo")
             check(editor.text == "before café after", "one Undo restores exact text")
             editor.text = "bad %GG"
@@ -85,6 +90,7 @@ import AppKit
                 "failure preserves native bytes revision dirty")
             _ = editor.setSelectionAnchor(0, caret: 0)
             rejects("empty selection is rejected by the native command") { try controller.apply(.hexEncode) }
+            check(unrecordableEdits == 1, "a refused utility reports no unrecordable edit")
             editor.text = "int café = 42; // <script>&\n"
             editor.setLanguage("cpp")
             editor.resetUndoHistory()
@@ -98,12 +104,67 @@ import AppKit
             check(
                 restored.attribute(.foregroundColor, at: 0, effectiveRange: nil) != nil, "RTF style attributes survive")
             let (html, _) = try controller.exportData(format: "html")
+            check(unrecordableEdits == 1, "a styled export reports no unrecordable edit")
             let htmlText = String(data: html, encoding: .utf8)!
             check(htmlText.contains("&lt;script&gt;") && !htmlText.contains("// <script>"), "HTML escapes user markup")
             check(editor.revision == exportRevision && !editor.modified, "styled export leaves editor unchanged")
             _ = editor.setSelectionAnchor(4, caret: 9)
             let (_, selectionPlain) = try controller.exportData(format: "rtf")
             check(selectionPlain == "café", "styled export selection boundary")
+            // The two dialog utilities. In each modal the menu item presents, the next named
+            // button is clicked; a dialog still open after 20 s is aborted and reported.
+            func buttons(_ view: NSView) -> [NSButton] {
+                (view as? NSButton).map { [$0] } ?? [] + view.subviews.flatMap(buttons)
+            }
+            func choose(_ title: String, _ answers: [String]) -> Bool {
+                var remaining = answers, timedOut = false
+                let deadline = Date().addingTimeInterval(20)
+                let timer = Timer(timeInterval: 0.005, repeats: true) { _ in
+                    guard let content = NSApp.modalWindow?.contentView else { return }
+                    if Date() > deadline {
+                        timedOut = true
+                        NSApp.abortModal()
+                        return
+                    }
+                    guard let next = remaining.first, let button = buttons(content).first(where: { $0.title == next })
+                    else { return }
+                    remaining.removeFirst()
+                    button.performClick(nil)
+                }
+                RunLoop.main.add(timer, forMode: .modalPanel)
+                defer { timer.invalidate() }
+                guard let item = menu.items.first(where: { $0.title == title }), let action = item.action else {
+                    return false
+                }
+                return NSApp.sendAction(action, to: item.target, from: item) && remaining.isEmpty && !timedOut
+            }
+            func load(_ text: String) -> UInt {
+                editor.text = text
+                editor.resetUndoHistory()
+                editor.setSavePoint()
+                editor.executeCommand("selectAll")
+                return editor.revision
+            }
+            var dialogRevision = load("abc")
+            check(
+                choose("UTF-8 to Hex with Options…", ["Cancel"]) && editor.text == "abc"
+                    && editor.revision == dialogRevision && unrecordableEdits == 1,
+                "Cancel in Hex Encoding Options changes nothing and reports no unrecordable edit")
+            check(
+                choose("UTF-8 to Hex with Options…", ["Apply"]) && editor.text.hasPrefix("616263")
+                    && unrecordableEdits == 2,
+                "Apply in Hex Encoding Options replaces the selection and reports one unrecordable edit")
+            dialogRevision = load("255")
+            check(
+                choose("Number Conversion…", ["Cancel"]) && choose("Number Conversion…", ["Convert", "Cancel"])
+                    && editor.text == "255" && editor.revision == dialogRevision && unrecordableEdits == 2,
+                "opening, converting and cancelling Number Conversion changes nothing and reports no unrecordable edit")
+            check(
+                choose("Number Conversion…", ["Convert", "Insert into Editor"]) && editor.text.uppercased() == "FF"
+                    && unrecordableEdits == 3,
+                "Insert into Editor from Number Conversion reports one unrecordable edit")
+            editor.executeCommand("undo")
+            check(editor.text == "255" && !editor.modified, "the inserted conversion is one Undo")
             editor.readOnly = true
             rejects("read-only editor rejects the native command") { try controller.apply(.hexEncode) }
             editor.readOnly = false

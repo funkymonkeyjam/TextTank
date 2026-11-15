@@ -2,10 +2,13 @@
 import AppKit
 
 final class WorkspaceController: NSObject {
+    /// The document a saved session marks as active. The application supplies its one
+    /// definition of the current document; a controller made on its own asks the main window.
+    var activeDocument: () -> TextDocument? = { NSApp.mainWindow?.windowController?.document as? TextDocument }
     func capture(name: String) throws -> WorkspaceSession {
         let documents = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
         let snapshots = documents.map { document -> SessionDocument in
-            let editor = (document.windowControllers.first as? EditorWindowController)?.activeEditor ?? document.editor
+            let editor = document.activeEditor
             return SessionDocument(
                 id: document.recoveryID, originalURL: document.fileURL, text: document.editor.text,
                 format: document.format, isDirty: document.isDocumentEdited,
@@ -13,7 +16,11 @@ final class WorkspaceController: NSObject {
                 bookmarks: editor.bookmarkLines.map(\.intValue), language: document.languageIdentifier,
                 originalSHA256: document.originalDiskFingerprint)
         }
-        let active = (NSApp.mainWindow?.windowController?.document as? TextDocument)?.recoveryID
+        // A session names an active document only when that document is in the session:
+        // validate() rejects an unknown identifier, and that must never fail a save.
+        let active = activeDocument().flatMap { current in
+            documents.contains { $0 === current } ? current.recoveryID : nil
+        }
         let session = WorkspaceSession(id: UUID(), name: name, documents: snapshots, activeDocumentID: active)
         try session.validate()
         return session
