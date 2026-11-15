@@ -29,5 +29,16 @@
     "Actual macOS14 and Intel runtimes unavailable in this session",
     "Additional live Reminders fault tests require a designated scratch list"
   ],
-  "required_implementation_gaps": "docs/REVIEW-ME.md and per-feature reviews; remaining work is not all externally blocked"
+  "required_implementation_gaps": "docs/REVIEW-ME.md and per-feature reviews; remaining work is not all externally blocked",
+  "latest_independent_audit": {
+    "date": "2026-11-15",
+    "source_commit": "bcee103f2f6a845d68239ada65d1f7abaeabcb26",
+    "source_tree": "1d8b1c74c9c65e783535be1646e24f6afacfb89a",
+    "report": "harness/reviews/audit-2026-11-15/README.md",
+    "findings": 14,
+    "status": "analysis complete; findings open; no production changes",
+    "local_acceptance": "failed: macro integration TTAlert compile dependency",
+    "remote_acceptance": "run43667148429 failed: tab geometry assertion",
+    "next": "F01/F14 evidence foundation, then bounded resource and recovery repairs with independent re-review"
+  }
 }
