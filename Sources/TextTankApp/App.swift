@@ -473,13 +473,20 @@ final class TextDocument: NSDocument {
             }
         }
     }
-    private var diskBytes: Data?
+    /// SHA-256 of the bytes last read or saved. No copy of the file is kept.
+    private var diskDigest: String?
+    /// Settled metadata of a file known to hold those bytes, when there is one. While the file
+    /// still has exactly this metadata it need not be read again; nil means read and hash.
+    private var diskSignature: FileSignature?
+    /// A sample taken by a caller that read the bytes through its own descriptor.
+    private var capturedSample: FileSample?
     private var savePayload: Data?
     private var savepointMatchesDisk = true
     #if TESTING
         var afterWriteForTesting: (() throws -> Void)?
+        var hasSettledDiskSignature: Bool { diskSignature != nil }
     #endif
-    var originalDiskFingerprint: String? { diskBytes.map(WorkspaceStore.fingerprint) }
+    var originalDiskFingerprint: String? { diskDigest }
     var languageIdentifier = LanguageProfile.plainTextID { didSet { languageResolved = true } }
     /// False until the first load has chosen a language, or the person or a restored session has.
     /// Reload and Revert then keep that choice instead of detecting again.
@@ -502,9 +509,13 @@ final class TextDocument: NSDocument {
     }
     enum DiskState: Equatable { case unchanged, changed, missing }
     func diskState() throws -> DiskState {
-        guard let url = fileURL, let diskBytes else { return .unchanged }
+        guard let url = fileURL, let diskDigest else { return .unchanged }
         do {
-            return try WorkspaceStore.readRegularFile(url, maximumBytes: Int.max) == diskBytes ? .unchanged : .changed
+            // An explicit check always hashes the file, in steps, without holding it in memory.
+            let sample = try WorkspaceStore.sample(ofRegularFileAt: url, maximumBytes: Int.max)
+            guard sample.digest == diskDigest else { return .changed }
+            diskSignature = sample.signature
+            return .unchanged
         } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == 2 { return .missing }
     }
     @objc func toggleReadOnly(_ sender: NSMenuItem) {
@@ -541,9 +552,9 @@ final class TextDocument: NSDocument {
                 domain: "TextTank", code: 3,
                 userInfo: [NSLocalizedDescriptionKey: "Reload would discard unsaved changes."])
         }
-        let bytes = try WorkspaceStore.readRegularFile(url, maximumBytes: Int.max)
+        let (bytes, sample) = try WorkspaceStore.readRegularFileSample(url, maximumBytes: Int.max)
         let decoded = try FileCodec.decode(bytes, encoding: encoding)
-        loadDecoded(decoded, bytes: bytes)
+        loadDecoded(decoded, sample: sample)
         updateChangeCount(.changeCleared)
         flushRecovery()
     }
@@ -689,7 +700,27 @@ final class TextDocument: NSDocument {
     override func read(from url: URL, ofType typeName: String) throws {
         readingURL = url
         defer { readingURL = nil }
+        // AppKit reads the file itself. Settled metadata that is the same on both sides of
+        // that read belongs to the bytes it read; anything else leaves the next check to hash.
+        let now = WorkspaceStore.currentSecond()
+        let before = try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max)
         try super.read(from: url, ofType: typeName)
+        if let before, before.isSettled(at: now),
+            (try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max)) == before
+        {
+            diskSignature = before
+        }
+    }
+    /// Reads bytes the caller captured from `url` through the regular-file descriptor guard.
+    /// Naming the file lets a UTF-32-looking signature offer the explicit UTF-16 LE open.
+    func read(captured data: Data, sample: FileSample, from url: URL, ofType typeName: String) throws {
+        readingURL = url
+        capturedSample = sample
+        defer {
+            readingURL = nil
+            capturedSample = nil
+        }
+        try read(from: data, ofType: typeName)
     }
     override func read(from data: Data, ofType typeName: String) throws {
         let decoded: DecodedFile
@@ -706,7 +737,8 @@ final class TextDocument: NSDocument {
                 throw ExplicitEncodingOpener(url: readingURL, typeName: typeName, encoding: .utf16LE).error()
             }
         }
-        loadDecoded(decoded, bytes: data)
+        loadDecoded(
+            decoded, sample: capturedSample ?? FileSample(digest: WorkspaceStore.fingerprint(data), signature: nil))
     }
     /// Explicit open-with-encoding. An already open document is reloaded from disk instead;
     /// that only happens from Revert to Saved, where discarding edits was already confirmed.
@@ -766,7 +798,7 @@ final class TextDocument: NSDocument {
         doc.flushRecovery()
         return doc
     }
-    private func loadDecoded(_ decoded: DecodedFile, bytes: Data) {
+    private func loadDecoded(_ decoded: DecodedFile, sample: FileSample) {
         (NSApp.delegate as? AppDelegate)?.macros.editorWillReset(editor, reason: "The recording document was reloaded.")
         loading = true
         let locked = editor.readOnly
@@ -776,7 +808,8 @@ final class TextDocument: NSDocument {
         editor.resetUndoHistory()
         format = decoded.format
         savedFormat = format
-        diskBytes = bytes
+        diskDigest = sample.digest
+        diskSignature = sample.signature
         savepointMatchesDisk = true
         editor.setSavePoint()
         editor.readOnly = locked
@@ -852,9 +885,17 @@ final class TextDocument: NSDocument {
     override func writeSafely(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType)
         throws
     {
-        if url == fileURL, let diskBytes {
-            let current = try WorkspaceStore.readRegularFile(url, maximumBytes: Int.max)
-            guard current == diskBytes else {
+        if url == fileURL, let diskDigest {
+            // Unchanged settled metadata is the file last read. Otherwise the file is hashed:
+            // right after a save the metadata is too new to rely on, so the hash still runs.
+            var unchanged = false
+            if let diskSignature {
+                unchanged = try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max) == diskSignature
+            }
+            if !unchanged {
+                unchanged = try WorkspaceStore.fingerprint(ofRegularFileAt: url, maximumBytes: Int.max) == diskDigest
+            }
+            guard unchanged else {
                 throw NSError(
                     domain: "TextTank", code: 1,
                     userInfo: [
@@ -872,7 +913,10 @@ final class TextDocument: NSDocument {
             try afterWriteForTesting?()
         #endif
         if saveOperation != .saveToOperation {
-            diskBytes = submitted
+            // The baseline is what was submitted. The file's metadata is not recorded here:
+            // another writer may already have replaced it, and only a hash can tell.
+            diskDigest = WorkspaceStore.fingerprint(submitted)
+            diskSignature = nil
             savedFormat = submittedFormat
             if editor.revision == submittedRevision && format == submittedFormat {
                 savepointMatchesDisk = true

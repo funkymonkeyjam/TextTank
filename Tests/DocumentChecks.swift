@@ -726,6 +726,84 @@ import AppKit
                 changed.close()
 
             }
+            section("disk baseline is a digest, with metadata as a shortcut only when it is safe") {
+                // F227: no second copy of the file; metadata stands in for the hash only once settled.
+                let baselineURL = root.appendingPathComponent("baseline.txt")
+                let baselineBytes = Data("baseline bytes \u{1F98B}\n".utf8)
+                try baselineBytes.write(to: baselineURL)
+                let kept = TextDocument()
+                kept.fileURL = baselineURL
+                try kept.read(from: baselineURL, ofType: "Plain Text")
+                func retainsFileBytes(_ document: TextDocument) -> Bool {
+                    var mirror: Mirror? = Mirror(reflecting: document)
+                    while let current = mirror {
+                        if current.children.contains(where: { !(($0.value as? Data)?.isEmpty ?? true) }) { return true }
+                        mirror = current.superclassMirror
+                    }
+                    return false
+                }
+                check(!retainsFileBytes(kept), "an open document keeps no copy of its file's bytes")
+                check(
+                    kept.originalDiskFingerprint == WorkspaceStore.fingerprint(baselineBytes),
+                    "the session fingerprint is still the SHA-256 of the bytes read")
+                check(
+                    try !kept.hasSettledDiskSignature && kept.diskState() == .unchanged
+                        && !kept.hasSettledDiskSignature,
+                    "a file written a moment ago is always hashed, never trusted by its metadata")
+                spinUntil("the file's timestamps to settle") {
+                    try WorkspaceStore.sample(ofRegularFileAt: baselineURL).signature != nil
+                }
+                check(
+                    try kept.diskState() == .unchanged && kept.hasSettledDiskSignature,
+                    "an explicit check that hashed a settled file records its metadata")
+                let settledOpen = TextDocument()
+                settledOpen.fileURL = baselineURL
+                try settledOpen.read(from: baselineURL, ofType: "Plain Text")
+                check(
+                    settledOpen.hasSettledDiskSignature && settledOpen.editor.text == "baseline bytes \u{1F98B}\n",
+                    "opening a settled file records the metadata of the bytes read")
+                try settledOpen.reload(using: .utf8)
+                check(settledOpen.hasSettledDiskSignature, "reload records the metadata of the bytes it read")
+                settledOpen.close()
+                // Same size, same inode, modification time put back: only the change time and the bytes differ.
+                var statBefore = stat()
+                try require(stat(baselineURL.path, &statBefore) == 0, "fixture: stat the baseline file")
+                var rewritten = baselineBytes
+                rewritten[0] = UInt8(ascii: "B")
+                let rewriter = try FileHandle(forWritingTo: baselineURL)
+                try rewriter.write(contentsOf: rewritten)
+                try rewriter.close()
+                try require(
+                    utimensat(AT_FDCWD, baselineURL.path, [statBefore.st_atimespec, statBefore.st_mtimespec], 0) == 0,
+                    "fixture: put the modification time back")
+                var statAfter = stat()
+                try require(stat(baselineURL.path, &statAfter) == 0, "fixture: stat the rewritten file")
+                fixtureCheck(
+                    statAfter.st_size == statBefore.st_size && statAfter.st_ino == statBefore.st_ino
+                        && statAfter.st_mtimespec.tv_sec == statBefore.st_mtimespec.tv_sec
+                        && statAfter.st_mtimespec.tv_nsec == statBefore.st_mtimespec.tv_nsec,
+                    "the rewrite kept size, inode and the exact modification time")
+                kept.editor.text = "our edit"
+                rejects(
+                    "save refuses a same-size rewrite whose modification time was put back",
+                    message: "The file changed outside TextTank"
+                ) { try kept.writeSafely(to: baselineURL, ofType: "Plain Text", for: .saveOperation) }
+                check(
+                    try Data(contentsOf: baselineURL) == rewritten && kept.editor.text == "our edit",
+                    "the refused save leaves the external bytes and the edit alone")
+                check(try kept.diskState() == .changed, "the explicit check reports the same rewrite as changed")
+                try baselineBytes.write(to: baselineURL, options: .atomic)
+                try kept.writeSafely(to: baselineURL, ofType: "Plain Text", for: .saveOperation)
+                check(
+                    try Data(contentsOf: baselineURL) == Data("our edit".utf8) && !kept.hasSettledDiskSignature
+                        && !retainsFileBytes(kept)
+                        && kept.originalDiskFingerprint == WorkspaceStore.fingerprint(Data("our edit".utf8)),
+                    "a save over an atomically restored file succeeds, and its baseline is the digest of what was submitted"
+                )
+                try FileManager.default.removeItem(at: baselineURL)
+                check(try kept.diskState() == .missing, "a deleted file is reported missing")
+                kept.close()
+            }
             section("recovery timing and failure reporting") {
                 let recoveryDoc = TextDocument()
                 recoveryDoc.automaticRecoveryDelay = 0.25
