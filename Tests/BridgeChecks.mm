@@ -355,6 +355,26 @@ int main() {
         }
         NSUInteger eolRevision=ed.revision; [ed convertLineEndings:@"bogus"];
         check(ed.revision==eolRevision && [ed.text isEqual:@"a\r\nb\rc\n"], "an unknown line-ending name converts nothing");
+        // Completion list and call tip: asked of Scintilla, and closed again at once.
+        ScintillaView *popupNative=(ScintillaView *)ed.subviews.firstObject;
+        ed.text=@"pri"; [ed resetUndoHistory]; [ed setSelectionAnchor:3 caret:3];
+        [ed showCompletions:@[]];
+        check(![popupNative message:SCI_AUTOCACTIVE], "showCompletions with no words opens no list");
+        [ed showCompletions:@[@"two words", @"nul\0inside"]];
+        check(![popupNative message:SCI_AUTOCACTIVE], "showCompletions drops words containing white space or NUL and opens no empty list");
+        [ed showCompletions:@[@"printf", @"two words", @"print", @"apple"]];
+        bool listed=[popupNative message:SCI_AUTOCACTIVE] && [popupNative message:SCI_AUTOCPOSSTART]==3;
+        check(listed && [ed.text isEqual:@"pri"], "showCompletions opens a list at the caret for the word being typed, without editing");
+        [popupNative message:SCI_AUTOCCOMPLETE];
+        check(![popupNative message:SCI_AUTOCACTIVE] && [ed.text isEqual:@"print"], "accepting the completion list inserts the first sorted word that continues the typed prefix");
+        [ed executeCommand:@"undo"];
+        check([ed.text isEqual:@"pri"], "an accepted completion is one Undo");
+        [ed showCallTip:@"bad\0tip"];
+        check(![popupNative message:SCI_CALLTIPACTIVE], "showCallTip refuses text containing NUL");
+        [ed showCallTip:@"print(value)"];
+        check([popupNative message:SCI_CALLTIPACTIVE] && [popupNative message:SCI_CALLTIPPOSSTART]==3 && [ed.text isEqual:@"pri"], "showCallTip opens a call tip at the caret without editing");
+        [popupNative message:SCI_CALLTIPCANCEL];
+        check(![popupNative message:SCI_CALLTIPACTIVE], "the call tip closes on request");
         // cut, copy and paste go through the general pasteboard, which belongs to the person
         // at the keyboard, so they run only on request and put the previous text back.
         if (getenv("TEXTTANK_TEST_PASTEBOARD")) {
