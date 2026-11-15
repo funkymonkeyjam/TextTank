@@ -137,7 +137,7 @@ final class TextDocumentController: NSDocumentController {
     /// The interactive answer to a decode failure on open. Cancel creates no document.
     func openChoosingEncoding(_ url: URL, after failure: Error, display: Bool = true) throws -> TextDocument? {
         try EncodingChoice.retry(url, after: failure, choose: chooseEncoding) { encoding in
-            let type = (try? self.typeForContents(of: url)) ?? "Plain Text"
+            let type = (try? self.typeForContents(of: url)) ?? TextDocument.plainTextType
             let document = try TextDocument.open(url, as: encoding, ofType: type, display: display)
             self.noteNewRecentDocumentURL(url)
             return document

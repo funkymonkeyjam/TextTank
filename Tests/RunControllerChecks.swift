@@ -79,6 +79,30 @@ import AppKit
             controller.show(
                 .success(result), command: sample, target: document.editor, revision: document.editor.revision,
                 selection: false, anchor: 0, caret: 0)
+            // Package 21 (F293, F294, G400): the result window is a panel that leaves the document
+            // window main; Escape closes it only when no result is waiting to be applied.
+            let resultPanel = try requireValue(
+                NSApp.windows.last { $0.title == sample.name && $0.isVisible } as? NSPanel,
+                "the Run result window is a panel")
+            check(
+                !resultPanel.canBecomeMain && !resultPanel.hidesOnDeactivate && !resultPanel.isFloatingPanel
+                    && resultPanel.level == .normal && resultPanel.defaultButtonCell == nil,
+                "the Run result panel cannot become main, does not float, stays when the application is deactivated and has no default button"
+            )
+            resultPanel.cancelOperation(nil)
+            check(
+                resultPanel.isVisible && button().isEnabled,
+                "Escape does not discard a result that has not been applied")
+            let cancelItem = try requireValue(
+                controller.makeMenu().items.first { $0.title == "Cancel Running Command" },
+                "fixture: the Cancel Running Command item")
+            let configureItem = try requireValue(
+                controller.makeMenu().items.first { $0.title == "Configure Command…" },
+                "fixture: the Configure Command item")
+            check(
+                !controller.isRunning && !controller.validateMenuItem(cancelItem)
+                    && controller.validateMenuItem(configureItem),
+                "Cancel Running Command is disabled while nothing is running; the other Run items stay enabled")
             let stale = button()
             document.editor.text = "new edit"
             controller.apply(stale)
@@ -113,6 +137,11 @@ import AppKit
             document.close()
             controller.apply(closed)
             check(document.editor.text == "new edit", "detached editor cannot receive extension result")
+            let spent = try requireValue(
+                NSApp.windows.last { $0.title == sample.name && $0.isVisible } as? NSPanel,
+                "fixture: the result panel with nothing left to apply")
+            spent.cancelOperation(nil)
+            check(!spent.isVisible, "Escape closes the Run result panel once nothing is waiting to be applied")
             Checks.summary { "PASS RunControllerChecks: \(Checks.count) assertions" }
         }
     }

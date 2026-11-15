@@ -863,7 +863,7 @@ extension DocumentChecks {
             check(
                 bar.items.map(\.title) == [
                     "TextTank", "File", "Workspace", "Encoding", "Edit", "Search", "Run", "Text Utilities", "View",
-                    "Language", "Macros", "Automations", "Window"
+                    "Language", "Macros", "Automations", "Window", "Help"
                 ], "the menu bar has the expected top-level menus in order")
             // Items without a target go to the first responder. The chain is walked here from the
             // editor that would be focused, so the check does not depend on the test process

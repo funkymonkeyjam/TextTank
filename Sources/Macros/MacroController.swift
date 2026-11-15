@@ -211,6 +211,8 @@ final class MacroController: NSObject, NSMenuDelegate {
         let status = NSTextField(labelWithString: "Playing recorded editing steps…")
         status.frame = NSRect(x: 20, y: 70, width: 400, height: 24)
         let stop = NSButton(title: "Stop", target: self, action: #selector(cancelPlayback))
+        // The panel has only this button; Escape presses it.
+        stop.keyEquivalent = "\u{1b}"
         stop.frame = NSRect(x: 310, y: 20, width: 110, height: 30)
         panel.contentView?.addSubview(status)
         panel.contentView?.addSubview(stop)

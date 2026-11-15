@@ -1010,6 +1010,9 @@ import AppKit
                 section(name, line: line, body)
             }
             splitViewAndCurrentEditor(root: root, app: app) { name, line, body in section(name, line: line, body) }
+            windowMenuAndKeyboard(root: root, app: app, sessionDelegate: sessionDelegate) { name, line, body in
+                section(name, line: line, body)
+            }
             section("clean quit") {
                 let termination = AppDelegate().applicationShouldTerminate(app)
                 check(termination == .terminateNow, "clean application quit does not wait for async reply")

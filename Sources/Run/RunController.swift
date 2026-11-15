@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
-final class RunController: NSObject {
+final class RunController: NSObject, NSMenuItemValidation {
     var editor: () -> TTEditor? = { nil }, file: () -> URL? = { nil }
     /// Called when a configured command is actually started and again before its result is
     /// applied to the document. Neither is ever part of a macro recording.
@@ -120,6 +120,12 @@ final class RunController: NSObject {
         } catch { NSAlert(error: error).runModal() }
     }
     @objc private func cancel(_ sender: Any?) { execution?.cancel() }
+    /// True while a configured command is running.
+    var isRunning: Bool { execution != nil }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        // Cancel Running Command is available only while there is something to cancel.
+        item.action == #selector(cancel(_:)) ? isRunning : true
+    }
     @objc private func run(_ sender: NSMenuItem) {
         guard execution == nil, let id = sender.representedObject as? String,
             let configured = commands.first(where: { $0.id.uuidString == id })
@@ -192,12 +198,19 @@ final class RunController: NSObject {
             stack.orientation = .vertical
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled, .closable, .resizable],
-                backing: .buffered, defer: false)
+            // A panel, so the document window stays main while the result is key, and one that
+            // stays on screen when the application is deactivated. Escape closes it, except
+            // while it holds a result that has not been applied: that would discard the result.
+            // Apply is deliberately not the default button. This window takes the keyboard when
+            // the command finishes, and a Return typed for the editor must not change the document.
+            let window = ToolPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled, .closable, .resizable])
+            window.allowsEscapeToClose = { [weak self] in self?.pending == nil }
             window.title = command.name
             window.isReleasedWhenClosed = false
             window.contentView = stack
+            window.initialFirstResponder = view
+            WindowFrames.track(window, as: "TextTank.RunResult")
             resultWindow = window
             window.makeKeyAndOrderFront(nil)
         }

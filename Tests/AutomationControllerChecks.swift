@@ -167,9 +167,10 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         var definition = AutomationDefinition.example
         definition.steps = [literal("a"), literal("b"), literal("c")]
         var trail: [RuleListState] = [], nestedSaved = false
+        var keyLoopClosed = false, keyLoopReaches = false, defaultAndCancel = false
         let edited = drivingModal(
             timeout: 10,
-            { _, views in
+            { modal, views in
                 guard let table = views.compactMap({ $0 as? NSTableView }).first,
                     let use = button("rules.use", in: views),
                     let add = button("rules.add", in: views), let duplicate = button("rules.duplicate", in: views),
@@ -214,10 +215,24 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 note()
                 up.performClick(nil)
                 note()
+                // G400: Tab reaches every control of this hand-framed window and comes back round.
+                var view = modal.initialFirstResponder, reached: [NSView] = []
+                while let current = view, reached.count < 200, !reached.contains(where: { $0 === current }) {
+                    reached.append(current)
+                    view = current.nextKeyView
+                }
+                keyLoopClosed = view != nil && view === modal.initialFirstResponder
+                keyLoopReaches = [use, add, remove, up].allSatisfy { control in reached.contains { $0 === control } }
+                defaultAndCancel =
+                    use.keyEquivalent == "\r" && button("rules.cancel", in: views)?.keyEquivalent == "\u{1b}"
                 use.performClick(nil)
                 return true
             }
         ) { AutomationStepEditor.edit(definition) }
+        check(
+            keyLoopClosed && keyLoopReaches,
+            "the rule editor's Tab order starts at its first field, reaches its buttons and closes into a loop")
+        check(defaultAndCancel, "the rule editor has Return and Escape buttons")
         check(
             edited.acted && !edited.timedOut && nestedSaved,
             "rule builder buttons were driven and Add Rule accepted the nested default rule")
@@ -614,12 +629,19 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     return editor.revision
                 }
                 _ = load(largeInput)
+                var progressCancelKey: String?
                 let applied = try drivingModal(
-                    timeout: 60, { _, views in button("automation.transform.cancel", in: views) != nil }
+                    timeout: 60,
+                    { _, views in
+                        guard let cancel = button("automation.transform.cancel", in: views) else { return false }
+                        progressCancelKey = cancel.keyEquivalent
+                        return true
+                    }
                 ) { try restarted.runSavedAutomation(id: workflowID) }
                 check(
                     applied.acted && !applied.timedOut,
                     "an input over 256 KiB runs behind the modal progress panel, which closes itself")
+                check(progressCancelKey == "\u{1b}", "Escape presses Cancel in the automation progress panel")
                 check(editor.text == largeExpected, "the worker result replaces the large document exactly")
                 editor.executeCommand("undo")
                 check(

@@ -166,6 +166,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 180)
         ])
         panel.center()
+        WindowFrames.track(panel, as: "TextTank.Workspace")
         window = panel
     }
     @objc func refresh(_ sender: Any?) {
@@ -253,9 +254,9 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         let document = TextDocument()
         document.fileURL = url
         if let encoding {
-            try document.read(from: data, ofType: "public.plain-text", as: encoding)
+            try document.read(from: data, ofType: TextDocument.plainTextType, as: encoding)
         } else {
-            try document.read(from: data, ofType: "public.plain-text")
+            try document.read(from: data, ofType: TextDocument.plainTextType)
         }
         NSDocumentController.shared.addDocument(document)
         document.makeWindowControllers()

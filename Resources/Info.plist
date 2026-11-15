@@ -14,10 +14,28 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>public.text</string>
+				<string>public.plain-text</string>
+				<string>public.source-code</string>
+				<string>public.script</string>
+				<string>public.xml</string>
+				<string>public.json</string>
+			</array>
+			<key>NSDocumentClass</key>
+			<string>TextDocument</string>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Any File</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>None</string>
+			<key>LSItemContentTypes</key>
+			<array>
 				<string>public.data</string>
 			</array>
 			<key>NSDocumentClass</key>
-			<string>TextTank.TextDocument</string>
+			<string>TextDocument</string>
 		</dict>
 		<dict>
 			<key>CFBundleTypeName</key>
@@ -31,15 +49,21 @@
 				<string>app.texttank.session</string>
 			</array>
 			<key>NSDocumentClass</key>
-			<string>TextTank.TextDocument</string>
+			<string>TextDocument</string>
 		</dict>
 	</array>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>TextTank</string>
 	<key>CFBundleExecutable</key>
 	<string>TextTank</string>
 	<key>CFBundleIconFile</key>
 	<string>TextTank</string>
 	<key>CFBundleIdentifier</key>
 	<string>app.texttank.editor</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>TextTank</string>
 	<key>CFBundlePackageType</key>
@@ -48,10 +72,14 @@
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>TextTank is free software under the GNU General Public License, version 3 or later.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSRemindersFullAccessUsageDescription</key>

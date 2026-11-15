@@ -56,6 +56,23 @@ Use synthetic scratch files, not personal documents.
 7. **Utilities and Run:** try Base64/URL/quoted-printable/hex/number conversions and styled HTML/RTF export. Add the sample text extension under Run, invoke it on synthetic text, inspect the preview and explicitly Apply. Argv stays separate unless intentional shell mode is configured. Run cancellation/output limits and stale preview guards have focused tests; see `EXTENSIONS-AND-RUN.md`.
 8. **Settings and closing:** change a nonconflicting shortcut/font setting, restart and check persistence. Exercise dirty close and Quit Save/Discard/Cancel with scratch documents. Earlier Quit-crash repairs and detached-controller regression tests remain in place; the complete physical dialog matrix is not certified by automated tests alone.
 
+## Where things are
+
+A short inventory of features that the walkthrough above does not name, and of where two commands moved.
+
+- **Status bar.** Every field at the bottom of a document window is a button that opens options: document (Save, Save As, Read Only), bookmarks, language, position (Go to Line…), selection, text size, indentation (tabs or spaces and width, for this document), encoding (re-read or convert), line endings and wrap.
+- **Go to Line.** Search → Go to Line… (⌘L), and the position field of the status bar.
+- **Tabs.** Window → Next Tab (⌃⇥), Previous Tab (⌃⇧⇥) and Open Documents…. Closing a tab shows the tab beside it; closing a background tab from its × returns to the tab that was active. Document windows do not enter full screen, because each tab is its own window.
+- **Find bar and Find window.** The bar above the text finds literal text in the current view. Search → Find and Replace… is a panel: the document's own commands (Save, Encoding, Close Split View) keep working while it has the keyboard, Return in its Find field is Find Next, Escape closes it, and Return on a selected result opens it. Its Mark Matches, Clear Marks and Bookmark Matches buttons highlight or bookmark matches without editing.
+- **Find in Folder and Function List.** Return on a selected row opens it, as a double-click does. Escape closes Find in Folder while it is idle.
+- **Automations.** Automations → Automation Palette… (⇧⌘P) is the one entry for the palette. A right-click in the text shows the edit commands followed by the saved automations. Automations → Review Reminder Export History… lists earlier exports and offers Request Access and Resume Unsent.
+- **Language.** Language → Show Keyword Help and Edit Language Profiles….
+- **Workspace.** Workspace → Reload Monitored File… is the explicit reload after a reported change.
+- **Text Utilities.** Includes SAML Decode.
+- **Settings.** TextTank → Settings… includes the appearance override (system, light or dark). ⌘H, ⌥⌘H and ⌘L are application shortcuts and cannot be assigned to an editor command.
+- **Standard menus.** TextTank → Services, Hide TextTank, Hide Others and Show All; Window → Bring All to Front; Help, whose search field finds any menu command.
+- **Window positions.** The document window and each tool window reopen where they were left.
+
 ## Evidence and repaired findings
 
 The detailed records are in `harness/reviews/` and `docs/parity/implementation-evidence.json`. Observed suite results are bound to source hashes in ignored logs and the delivered validation record. The native walkthrough observed Unicode save, actual Boost replacement, Python rendering, symbol navigation and native step-editor controls.

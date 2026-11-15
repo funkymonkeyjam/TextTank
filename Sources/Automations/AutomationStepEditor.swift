@@ -182,6 +182,9 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         content.addSubview(save)
         reload(0)
         window.center()
+        // The controls are placed by frame. With an initial first responder set, AppKit does not
+        // work out the Tab order by itself, so ask for it: every control is then reachable.
+        window.recalculateKeyViewLoop()
         window.initialFirstResponder = nameField
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(nameField)

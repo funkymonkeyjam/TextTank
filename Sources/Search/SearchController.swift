@@ -30,7 +30,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     let dotButton = NSButton(checkboxWithTitle: "Dot matches newline", target: nil, action: nil)
     let wrapButton = NSButton(checkboxWithTitle: "Wrap", target: nil, action: nil)
     let status = NSTextField(labelWithString: "Search current document, selection or open documents")
-    let table = NSTableView()
+    let table = ActivatingTableView()
     private var options = SearchOptions(), generation = UUID(), cancellation: TTSearchCancellation?
     private var task: Task<Void, Never>?
     private struct Buffer { var editor: TTEditor, text: String, revision: UInt, offset: Int, anchor: Int, caret: Int }
@@ -46,9 +46,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     private(set) var lastOutcome: SearchOutcome?
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 780, height: 470), styleMask: [.titled, .closable, .resizable],
-            backing: .buffered, defer: false)
+        // A panel, so the document window stays main and its menu commands keep working while
+        // Find and Replace is key. Escape closes it, which cancels a running search as closing does.
+        let window = ToolPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 780, height: 470), styleMask: [.titled, .closable, .resizable])
         super.init(window: window)
         window.title = "Find and Replace"
         // Listed results are positions in a document, checked against its text and revision.
@@ -68,6 +69,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         window.isReleasedWhenClosed = false
         window.delegate = self
         queryField.placeholderString = "Find"
+        // Return in the query field is Find Next. Only Return sends it, never leaving the field.
+        queryField.target = self
+        queryField.action = #selector(findNextFromQuery(_:))
+        queryField.cell?.sendsActionOnEndEditing = false
         replacementField.placeholderString = "Replace with"
         mode.addItems(withTitles: ["Normal", "Extended (\\n, \\t, \\xNN)", "Regular expression (Boost)"])
         scope.addItems(withTitles: ["Current document", "Selection", "All open documents"])
@@ -105,6 +110,9 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         table.delegate = self
         table.target = self
         table.doubleAction = #selector(openResult(_:))
+        // Return on the selected row does what a double-click on it does.
+        table.onActivate = { [weak self] row in self?.activateResult(at: row) }
+        table.setAccessibilityLabel("Search results")
         let scroll = NSScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
@@ -120,6 +128,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         }
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 150).isActive = true
         window.minSize = NSSize(width: 780, height: 390)
+        window.initialFirstResponder = queryField
+        WindowFrames.track(window, as: "TextTank.FindAndReplace")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
     deinit { if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) } }
@@ -145,6 +155,12 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         return o
     }
     @objc func next(_ sender: Any?) { run(.next) }
+    /// Return in the query field. Ignored while a search is running: the buttons are disabled
+    /// then, and starting Find Next would cancel a Replace All that has not been applied yet.
+    @objc func findNextFromQuery(_ sender: Any?) {
+        guard !isSearching else { return }
+        run(.next)
+    }
     @objc func previous(_ sender: Any?) { run(.previous) }
     @objc func findAll(_ sender: Any?) { run(.all) }
     @objc func replaceAll(_ sender: Any?) { run(.replaceAll) }
@@ -470,16 +486,22 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 ? NSMaxRange(r.hit.range) <= selection.location && !(continuing && r.hit.range == selection)
                 : r.hit.range.location >= NSMaxRange(selection) && !(continuing && r.hit.range == selection)
         }
+        // Find Next stays in the Find window: these rows belong to the current editor, whose
+        // window is already showing, so the document window is not made key over this one.
         if let row = backwards ? candidates.last : candidates.first {
-            return select(row)
+            return select(row, focusEditor: false)
         } else if wrap, let row = backwards ? available.last : available.first {
-            return select(row)
+            return select(row, focusEditor: false)
         }
         status.stringValue = "No further matches."
         lastOutcome = .noFurtherMatches
         return false
     }
-    @discardableResult private func select(_ row: Row) -> Bool {
+    /// `focusEditor` brings the result's document window forward and puts the keyboard in its
+    /// editor: opening a listed result does that, and it is what switches the document tab for a
+    /// result in another document. Without it only the selection moves, unless the document is
+    /// not showing at all.
+    @discardableResult private func select(_ row: Row, focusEditor: Bool) -> Bool {
         let b = row.buffer
         guard b.editor.window != nil, b.editor.revision == b.revision, b.editor.text == b.text,
             let range = SearchCore.byteRange(row.hit.range, in: b.text),
@@ -490,8 +512,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             return false
         }
         lastNavigation = (b.editor, b.revision, row.hit.range)
-        b.editor.window?.makeKeyAndOrderFront(nil)
-        b.editor.window?.makeFirstResponder(b.editor)
+        if focusEditor || b.editor.window?.isVisible == false {
+            b.editor.window?.makeKeyAndOrderFront(nil)
+            b.editor.window?.makeFirstResponder(b.editor)
+        }
         return true
     }
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -502,10 +526,13 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         return
             "\(r.buffer.editor.window?.title ?? "Document") · \(r.hit.range.location) · \(String(match.prefix(160)).replacingOccurrences(of:"\n",with:" ↵ "))"
     }
-    @objc private func openResult(_ sender: Any?) { activateResult(at: table.clickedRow) }
-    /// What a click on a listed result does: selects that match if the result is still current.
+    /// A double-click. `clickedRow` is -1 for the header and the empty area below the rows,
+    /// which therefore do nothing even while a row is selected.
+    @objc func openResult(_ sender: Any?) { activateResult(at: table.clickedRow) }
+    /// What a double-click or Return on a listed result does: selects that match if the result
+    /// is still current, and brings its document forward.
     @discardableResult func activateResult(at row: Int) -> Bool {
         guard rows.indices.contains(row) else { return false }
-        return select(rows[row])
+        return select(rows[row], focusEditor: true)
     }
 }

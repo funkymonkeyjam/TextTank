@@ -466,17 +466,19 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
     private(set) weak var editor: TTEditor?
     private var retirementObserver: NSObjectProtocol?
     private let text: String, revision: UInt, symbols: [LanguageSymbol]
-    private let table = NSTableView(),
+    let table = ActivatingTableView(),
         status = NSTextField(
-            labelWithString: "Double-click a symbol to navigate. Basic pattern-based navigation; not a compiler index.")
+            labelWithString:
+                "Double-click a symbol, or select it and press Return, to navigate. Basic pattern-based navigation; not a compiler index."
+        )
     init(editor: TTEditor, text: String, revision: UInt, symbols: [LanguageSymbol]) {
         self.editor = editor
         self.text = text
         self.revision = revision
         self.symbols = symbols
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 420), styleMask: [.titled, .closable, .resizable],
-            backing: .buffered, defer: false)
+        // A panel, so the document window stays main while the list is key. Escape closes it.
+        let window = ToolPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 420), styleMask: [.titled, .closable, .resizable])
         super.init(window: window)
         // The list is about the document; when its split pane closes it follows the remaining view.
         retirementObserver = NotificationCenter.default.addObserver(
@@ -492,6 +494,9 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
         table.delegate = self
         table.target = self
         table.doubleAction = #selector(openSelected)
+        // Return on the selected row does what a double-click on it does.
+        table.onActivate = { [weak self] row in self?.open(row: row) }
+        table.setAccessibilityLabel("Functions and symbols")
         let scroll = NSScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
@@ -502,6 +507,8 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
         window.contentView = stack
         scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20).isActive = true
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
+        window.initialFirstResponder = table
+        WindowFrames.track(window, as: "TextTank.FunctionList")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
     deinit { if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) } }
@@ -509,9 +516,12 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
     func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?, row: Int) -> Any? {
         symbols.indices.contains(row) ? "\(symbols[row].line) · \(symbols[row].name)" : nil
     }
-    @objc private func openSelected() {
-        guard symbols.indices.contains(table.clickedRow), let editor else { return }
-        if !Self.navigate(symbols[table.clickedRow], text: text, revision: revision, editor: editor) {
+    /// A double-click. `clickedRow` is -1 for the header and the empty area below the rows.
+    @objc func openSelected() { open(row: table.clickedRow) }
+    /// What a double-click or Return on a listed symbol does.
+    func open(row: Int) {
+        guard symbols.indices.contains(row), let editor else { return }
+        if !Self.navigate(symbols[row], text: text, revision: revision, editor: editor) {
             status.stringValue = "The document changed or closed. Refresh the function list."
         }
     }

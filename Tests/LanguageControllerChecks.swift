@@ -32,6 +32,43 @@ import AppKit
                 LanguageFunctionController.navigate(symbols[1], text: text, revision: revision, editor: editor)
                     && editor.selectedText == "work",
                 "function navigation selects exact UTF8 symbol after Unicode prefix")
+            // Package 21 (F293, G391): the Function List is a panel and a symbol opens from the keyboard.
+            do {
+                let list = LanguageFunctionController(editor: editor, text: text, revision: revision, symbols: symbols)
+                let panel = try requireValue(list.window as? NSPanel, "the Function List window is a panel")
+                check(
+                    !panel.canBecomeMain && !panel.hidesOnDeactivate && !panel.isFloatingPanel
+                        && panel.level == .normal && panel.initialFirstResponder === list.table,
+                    "the Function List panel cannot become main, does not float and starts in the list")
+                check(
+                    list.numberOfRows(in: list.table) == symbols.count
+                        && list.table.accessibilityLabel() == "Functions and symbols",
+                    "fixture: the list shows the symbols and has a VoiceOver label")
+                _ = editor.setSelectionAnchor(0, caret: 0)
+                list.table.selectRowIndexes([1], byExtendingSelection: false)
+                check(
+                    list.table.clickedRow == -1
+                        && NSApp.sendAction(NSSelectorFromString("openSelected"), to: list, from: nil)
+                        && editor.selectionCaret == 0,
+                    "a double-click away from the rows navigates nowhere, even with a symbol selected")
+                let returnKey = try requireValue(
+                    NSEvent.keyEvent(
+                        with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                        characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36),
+                    "fixture: a Return key event")
+                list.table.keyDown(with: returnKey)
+                check(editor.selectedText == "work", "Return on a selected symbol navigates to it")
+                let hint = (panel.contentView as? NSStackView)?.views.compactMap { $0 as? NSTextField }.first
+                check(
+                    hint?.stringValue.contains("press Return") == true,
+                    "the Function List says how to open a symbol from the keyboard")
+                editor.replaceSelection("work2")
+                list.table.selectRowIndexes([0], byExtendingSelection: false)
+                list.table.keyDown(with: returnKey)
+                check(
+                    hint?.stringValue == "The document changed or closed. Refresh the function list.",
+                    "Return on a symbol of a changed document reports that the list is stale")
+            }
             editor.text = "changed"
             let selection = editor.selectionCaret
             check(
