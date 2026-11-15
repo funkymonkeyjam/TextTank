@@ -261,7 +261,7 @@ final class TextDocument: NSDocument {
         super.close()
     }
     override class var autosavesInPlace: Bool { false }
-    override func makeWindowControllers() { addWindowController(EditorWindowController(document: self)) }
+    override func makeWindowControllers() { addWindowController(EditorWindowController(document:self)) }
     override func read(from data: Data, ofType typeName: String) throws {
         let decoded = try FileCodec.decode(data)
         loadDecoded(decoded,bytes:data)
@@ -386,6 +386,93 @@ private final class StatusBadgeRow: NSView {
     }
 }
 
+/// Each document retains its native window and save lifecycle; only the selected tab is visible.
+private final class DocumentTabWindow: NSWindow {
+    static var documents: [NSWindow] {
+        NSDocumentController.shared.documents.flatMap { $0.windowControllers.compactMap { $0.window } }.filter { $0 is DocumentTabWindow }
+    }
+    override func makeKeyAndOrderFront(_ sender:Any?) {
+        let others=Self.documents.filter{$0 !== self}
+        if let visible=others.first(where:{$0.isVisible}) { setFrame(visible.frame,display:false) }
+        others.forEach{$0.orderOut(nil)}
+        super.makeKeyAndOrderFront(sender)
+    }
+    override func close() {
+        let wasVisible=isVisible
+        let closingFrame=frame
+        let next=Self.documents.first{$0 !== self}
+        super.close()
+        if wasVisible {next?.setFrame(closingFrame,display:false);next?.makeKeyAndOrderFront(nil)}
+    }
+}
+private final class DocumentTabActionButton: NSButton {
+    weak var documentWindow: NSWindow?
+}
+
+private final class DocumentTabButton: NSButton {
+    weak var documentWindow: NSWindow?
+}
+private final class DocumentTabBackground: NSView {
+    override func draw(_ dirtyRect:NSRect) {
+        NSColor.controlAccentColor.withAlphaComponent(0.15).setFill();bounds.fill()
+        NSColor.controlAccentColor.setFill();NSRect(x:0,y:isFlipped ? bounds.height-3 : 0,width:bounds.width,height:3).fill()
+    }
+}
+
+private final class DocumentTabStrip: NSView {
+    private let scroll = NSScrollView()
+    private let row = NSView()
+    private var signature = ""
+    weak var owner: NSWindow?
+    override init(frame:NSRect) {
+        super.init(frame:frame)
+        scroll.drawsBackground=false;scroll.hasHorizontalScroller=true;scroll.autohidesScrollers=true
+        scroll.documentView=row;addSubview(scroll)
+    }
+    required init?(coder:NSCoder) { fatalError("init(coder:) not used") }
+    override func layout() { super.layout();scroll.frame=bounds }
+    func refresh() {
+        guard let owner else{return}
+        let windows=DocumentTabWindow.documents
+        let key=windows.map { "\(ObjectIdentifier($0)):\($0.title):\($0.isDocumentEdited):\($0 === owner)" }.joined(separator:"|")
+        guard key != signature else{return};signature=key
+        row.subviews.forEach{$0.removeFromSuperview()}
+        var x:CGFloat=0
+        var activeRect=NSRect.zero
+        for window in windows {
+            let title=window.title+(window.isDocumentEdited ? "  •" : "")
+            let width=min(220,max(130,ceil((title as NSString).size(withAttributes:[.font:NSFont.systemFont(ofSize:13)]).width)+66))
+            let button=DocumentTabButton(title:title,target:self,action:#selector(selectTab(_:)))
+            button.isBordered=false;button.font = .systemFont(ofSize:13,weight:window === owner ? .semibold : .regular)
+            button.alignment = .left;button.image=NSImage(systemSymbolName:"doc.text",accessibilityDescription:nil);button.imagePosition = .imageLeading
+            button.lineBreakMode = .byTruncatingTail;button.toolTip=window.title;button.setAccessibilityLabel(window.title+(window === owner ? ", active tab" : ", tab"))
+            button.documentWindow=window;button.frame=NSRect(x:x+8,y:0,width:width-34,height:36)
+            // The highlighted area includes the close control.
+            if window === owner {let cell=DocumentTabBackground(frame:NSRect(x:x,y:0,width:width,height:36));activeRect=cell.frame;row.addSubview(cell)}
+            row.addSubview(button)
+            let close=DocumentTabActionButton(image:NSImage(systemSymbolName:"xmark",accessibilityDescription:"Close \(window.title)")!,target:self,action:#selector(closeTab(_:)))
+            close.isBordered=false;close.documentWindow=window;close.frame=NSRect(x:x+width-26,y:7,width:22,height:22);close.toolTip="Close \(window.title)";row.addSubview(close)
+            x+=width
+        }
+        let add=NSButton(image:NSImage(systemSymbolName:"plus",accessibilityDescription:"New tab")!,target:self,action:#selector(newTab(_:)))
+        add.isBordered=false;add.contentTintColor = .controlAccentColor;add.toolTip="New tab (⌘N)";add.frame=NSRect(x:x+4,y:3,width:32,height:30);row.addSubview(add)
+        row.frame=NSRect(x:0,y:0,width:x+40,height:36)
+        row.scrollToVisible(activeRect)
+    }
+    @objc private func selectTab(_ sender:NSButton) {
+        guard owner != nil else{return};let windows=DocumentTabWindow.documents
+        guard let target=(sender as? DocumentTabButton)?.documentWindow,windows.contains(where:{$0 === target}) else{return}
+        target.makeKeyAndOrderFront(nil)
+    }
+    @objc private func closeTab(_ sender:NSButton) {
+        guard owner != nil else{return};let windows=DocumentTabWindow.documents
+        guard let target=(sender as? DocumentTabActionButton)?.documentWindow,windows.contains(where:{$0 === target}) else{return}
+        target.makeKeyAndOrderFront(nil)
+        target.performClose(sender)
+    }
+    @objc private func newTab(_ sender:Any?) { (NSApp.delegate as? AppDelegate)?.newDocument(sender) }
+}
+
 final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     let split = NSSplitView()
     let findField = NSSearchField()
@@ -393,6 +480,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     let caseBox = NSButton(checkboxWithTitle:"Match case",target:nil,action:nil)
     let status = NSTextField(labelWithString:"Ready · Incomplete preview")
     private let statusDetails = StatusBadgeRow()
+    private let documentTabs = DocumentTabStrip()
     private var statusTimer: Timer?
     private var statusRevision: UInt?
     private var cachedCharacterCount = 0
@@ -411,7 +499,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     }
     init(document: TextDocument) {
         primaryEditor = document.editor
-        let window = NSWindow(contentRect:NSRect(x:0,y:0,width:1080,height:720),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
+        let window = DocumentTabWindow(contentRect:NSRect(x:0,y:0,width:1080,height:720),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
         super.init(window:window)
         lastEditor = document.editor
         document.editor.onFocus = { [weak self, weak document] in
@@ -425,7 +513,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             automationObserver = NotificationCenter.default.addObserver(forName:.textTankAutomationsDidChange,object:app.automations,queue:.main) { [weak self] _ in self?.refreshAutomationToolbar() }
         }
         focusObserver = NotificationCenter.default.addObserver(forName:NSWindow.didUpdateNotification,object:window,queue:.main) { [weak self] _ in _ = self?.activeEditor }
-        window.title = "TextTank"; window.center(); window.tabbingMode = .preferred
+        window.title = "TextTank"; window.center(); window.tabbingMode = .disallowed
         window.titleVisibility = .visible; window.titlebarAppearsTransparent = false
         for button in [NSWindow.ButtonType.closeButton,.miniaturizeButton,.zoomButton] { window.standardWindowButton(button)?.isHidden = false }
         window.contentMinSize=NSSize(width:800,height:500)
@@ -435,8 +523,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         let findButton = NSButton(title:"Next",target:self,action:#selector(findNext(_:)))
         let replaceButton = NSButton(title:"Replace Selection",target:self,action:#selector(replaceSelection(_:)))
         let search = NSStackView(views:[findField,replaceField,caseBox,findButton,replaceButton]); search.spacing = 8
-        [search,split,status,statusDetails].forEach { $0.translatesAutoresizingMaskIntoConstraints=false;root.addSubview($0) }
-        NSLayoutConstraint.activate([split.heightAnchor.constraint(greaterThanOrEqualToConstant:200),search.topAnchor.constraint(equalTo:root.topAnchor,constant:10),search.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),search.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),findField.widthAnchor.constraint(greaterThanOrEqualToConstant:200),replaceField.widthAnchor.constraint(greaterThanOrEqualToConstant:160),split.topAnchor.constraint(equalTo:search.bottomAnchor,constant:10),split.leadingAnchor.constraint(equalTo:root.leadingAnchor),split.trailingAnchor.constraint(equalTo:root.trailingAnchor),split.bottomAnchor.constraint(equalTo:statusDetails.topAnchor,constant:-5),statusDetails.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),statusDetails.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),statusDetails.bottomAnchor.constraint(equalTo:status.topAnchor,constant:-2),status.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),status.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),status.bottomAnchor.constraint(equalTo:root.bottomAnchor,constant:-6)])
+        documentTabs.owner=window
+        [documentTabs,search,split,status,statusDetails].forEach { $0.translatesAutoresizingMaskIntoConstraints=false;root.addSubview($0) }
+        NSLayoutConstraint.activate([split.heightAnchor.constraint(greaterThanOrEqualToConstant:200),documentTabs.topAnchor.constraint(equalTo:root.topAnchor),documentTabs.leadingAnchor.constraint(equalTo:root.leadingAnchor),documentTabs.trailingAnchor.constraint(equalTo:root.trailingAnchor),documentTabs.heightAnchor.constraint(equalToConstant:36),search.topAnchor.constraint(equalTo:documentTabs.bottomAnchor,constant:10),search.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),search.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),findField.widthAnchor.constraint(greaterThanOrEqualToConstant:200),replaceField.widthAnchor.constraint(greaterThanOrEqualToConstant:160),split.topAnchor.constraint(equalTo:search.bottomAnchor,constant:10),split.leadingAnchor.constraint(equalTo:root.leadingAnchor),split.trailingAnchor.constraint(equalTo:root.trailingAnchor),split.bottomAnchor.constraint(equalTo:statusDetails.topAnchor,constant:-5),statusDetails.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),statusDetails.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),statusDetails.bottomAnchor.constraint(equalTo:status.topAnchor,constant:-2),status.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),status.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),status.bottomAnchor.constraint(equalTo:root.bottomAnchor,constant:-6)])
         status.font = .systemFont(ofSize:11); status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
         statusDetails.onActivate = { [weak self] key,view in self?.showStatusOptions(key,at:view) }
@@ -445,6 +534,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     }
     func refreshStatusDetails(for suppliedDocument:TextDocument? = nil) {
         guard let doc=suppliedDocument ?? document as? TextDocument else { return }
+        documentTabs.refresh()
         let editor=activeEditor, info=editor.statusInfo
         if statusRevision != doc.editor.revision {
             let text=doc.editor.text

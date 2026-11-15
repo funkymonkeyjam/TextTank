@@ -222,6 +222,29 @@ import AppKit
         try check(emptyRestored[0].isDocumentEdited && emptyRecovery?.text == "","empty dirty session restoration retains a recovery snapshot")
         emptyRestored.forEach { $0.close() }
         restored.forEach { $0.close() }
+        let tabA=TextDocument(), tabB=TextDocument()
+        for doc in [tabA,tabB] { NSDocumentController.shared.addDocument(doc);doc.makeWindowControllers();doc.showWindows() }
+        let winA=tabA.windowControllers[0].window!,winB=tabB.windowControllers[0].window!
+        try check(!winA.isVisible && winB.isVisible,"only selected compact tab is visible")
+        winB.setFrame(NSRect(x:150,y:150,width:900,height:650),display:true)
+        winA.makeKeyAndOrderFront(nil)
+        try check(winA.isVisible && !winB.isVisible,"switching tabs changes visible document")
+        if !NSScreen.screens.isEmpty {try check(winA.frame == winB.frame,"switching tabs preserves window geometry")} else { print("SKIP window geometry: no screen in native test process") }
+        let tabsController=tabA.windowControllers[0] as! EditorWindowController
+        tabsController.refreshStatusDetails()
+        let buttons=descendants(winA.contentView!).compactMap{$0 as? NSButton}
+        let closeB=buttons.first{$0.toolTip == "Close \(winB.title)"}!
+        let plus=buttons.first{$0.toolTip == "New tab (⌘N)"}!
+        try check(plus.frame.minX<500,"new-tab button follows compact tabs rather than window edge")
+        try check(winA.tabbingMode == .disallowed,"native full-width tab strip disabled")
+        let heldFrame=winA.frame
+        tabA.close()
+        try check(winB.isVisible,"closing active tab reveals next")
+        if !NSScreen.screens.isEmpty {try check(winB.frame == heldFrame,"closing active tab preserves window geometry")}
+        tabB.close()
+        let remaining=NSDocumentController.shared.documents.count
+        closeB.performClick(nil)
+        try check(NSDocumentController.shared.documents.count == remaining,"stale tab close cannot retarget another document")
         let termination = AppDelegate().applicationShouldTerminate(app)
         try check(termination == .terminateNow,"clean application quit does not wait for async reply")
         try check(NSDocumentController.shared.documents.isEmpty,"clean quit leaves no owned documents")
