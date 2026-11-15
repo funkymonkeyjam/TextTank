@@ -1,7 +1,7 @@
 name: Native Mac checks
 on:
   push:
-    branches: [implementation/native-mac]
+    branches: [main, implementation/native-mac]
   pull_request:
 permissions:
   contents: read
