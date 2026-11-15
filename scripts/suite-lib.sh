@@ -15,6 +15,15 @@
 #
 # TEXTTANK_SUITE_TIMEOUT sets the per-suite limit in seconds (default 300).
 
+# First-party Swift is warning-clean. A new toolchain can be inspected with an explicit
+# TEXTTANK_WARNINGS_AS_ERRORS=0 override; ordinary acceptance keeps warnings fatal.
+SWIFT_WARNING_FLAGS=()
+case "${TEXTTANK_WARNINGS_AS_ERRORS:-1}" in
+  1) SWIFT_WARNING_FLAGS=(-warnings-as-errors) ;;
+  0) ;;
+  *) echo "TEXTTANK_WARNINGS_AS_ERRORS must be 0 or 1" >&2; exit 64 ;;
+esac
+
 SUITE_BROKEN=" "
 SUITE_OWNER=0
 SUITE_FIRST_RECORD=1
