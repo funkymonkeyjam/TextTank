@@ -154,7 +154,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         let grouped=Dictionary(grouping:matches,by:{$0.sourceRoot ?? fallbackDirectory})
         let alert=TTAlert();alert.messageText="Replace Matched Files?"
         alert.informativeText="Replace matches in \(Set(matches.map(\.url)).count) files across \(grouped.count) root(s) from the completed search. Each changed file gets a byte-exact .texttank-backup copy beside it. Files open in TextTank, changed since search, read-only, symlinked are skipped. Changes commit per file, not as one transaction."
-        alert.addButton(withTitle:"Replace Files");alert.addButton(withTitle:"Cancel")
+        alert.addButton(withTitle:"Replace Files").identifier=NSUserInterfaceItemIdentifier("folder.replace.confirm");alert.addButton(withTitle:"Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else{return}
         window?.makeFirstResponder(nil)
         var options=searchedOptions;options.replacement=replacementField.stringValue

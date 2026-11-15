@@ -44,6 +44,40 @@ import AppKit
         let corrupt=Data("invalid settings".utf8);isolated.set(corrupt,forKey:"TextTank.FolderSearch.v1")
         let invalid=FolderSearchController(defaults:isolated);invalid.queryField.stringValue="new";try invalid.saveSettings()
         check(isolated.data(forKey:"TextTank.FolderSearch.v1")==corrupt,"native corrupt settings stay preserved after attempted save")
+        // F253: Replace Matched Files through the controller, which is the only place that works
+        // out which result files are open. One result is open with unsaved edits.
+        let replaceRoot=support.appendingPathComponent("replace-flow");try FileManager.default.createDirectory(at:replaceRoot,withIntermediateDirectories:true)
+        let closedFile=replaceRoot.appendingPathComponent("closed.txt"),openFile=replaceRoot.appendingPathComponent("open.txt")
+        try Data("needle closed\n".utf8).write(to:closedFile);try Data("needle open\n".utf8).write(to:openFile)
+        let openDocument=TextDocument();openDocument.fileURL=openFile;try openDocument.read(from:Data("needle open\n".utf8),ofType:"Plain Text")
+        NSDocumentController.shared.addDocument(openDocument);_ = openDocument.editor.setSelectionAnchor(0,caret:0);openDocument.editor.replaceSelection("unsaved ")
+        let flowSuite="TextTankFolderReplaceFlow-"+UUID().uuidString
+        let flowDefaults=try requireValue(UserDefaults(suiteName:flowSuite),"fixture: isolated defaults suite");defer{flowDefaults.removePersistentDomain(forName:flowSuite)}
+        let flow=FolderSearchController(defaults:flowDefaults)
+        flow.workspaceRoots={ [replaceRoot] };flow.scope.selectItem(at:1);flow.mode.selectItem(at:0);flow.filterField.stringValue="*.txt";flow.queryField.stringValue="needle";flow.replacementField.stringValue="pin"
+        check(NSApp.sendAction(flow.queryField.action!,to:flow.queryField.target,from:flow.queryField),"fixture: replace-flow search dispatched")
+        await waitUntil("the replace-flow search to finish"){!flow.isSearching}
+        try require(flow.numberOfRows(in:flow.table)==2,"fixture: both files matched on disk")
+        @MainActor func everyView(_ view:NSView)->[NSView]{[view]+view.subviews.flatMap{everyView($0)}}
+        var confirmed=false;let giveUp=Date().addingTimeInterval(10)
+        let confirm=Timer(timeInterval:0.05,repeats:true) { _ in
+            MainActor.assumeIsolated {
+                guard !confirmed,let modal=NSApp.modalWindow,let content=modal.contentView else{return}
+                if let go=everyView(content).compactMap({$0 as? NSButton}).first(where:{$0.identifier?.rawValue=="folder.replace.confirm"}) {confirmed=true;go.performClick(nil)}
+                else if Date()>giveUp {NSApp.abortModal()}
+            }
+        }
+        RunLoop.main.add(confirm,forMode:.modalPanel)
+        let replaceSent=NSApp.sendAction(NSSelectorFromString("replaceMatchedFiles:"),to:flow,from:nil)
+        confirm.invalidate()
+        check(replaceSent && confirmed,"Replace Matched Files asks for confirmation before changing any file")
+        await waitUntil("the folder replacement to finish"){!flow.isSearching}
+        let byFile=Dictionary(flow.lastReplacementOutcomes.map{($0.url.lastPathComponent,$0)},uniquingKeysWith:{first,_ in first})
+        check(try Data(contentsOf:closedFile)==Data("pin closed\n".utf8) && byFile["closed.txt"]?.status == .replaced && byFile["closed.txt"]?.backup != nil,"the closed result file is replaced and has a backup")
+        check(try Data(contentsOf:openFile)==Data("needle open\n".utf8) && byFile["open.txt"]?.status == .skipped && byFile["open.txt"]?.backup == nil,"a result file that is open in TextTank is skipped on disk and reported as skipped")
+        check(openDocument.editor.text=="unsaved needle open\n" && openDocument.isDocumentEdited,"the open document keeps its unsaved text")
+        check(flow.lastOutcome == .replaced(replaced:1,notReplaced:1) && flow.lastReplacementOutcomes.count==2 && flow.numberOfRows(in:flow.table)==0,"the replacement report counts one replaced and one skipped file and clears the stale results")
+        openDocument.close()
         document.close()
         Checks.summary { "PASS FolderSearchControllerChecks: \(Checks.count) assertions" }
         }
