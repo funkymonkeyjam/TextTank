@@ -92,7 +92,10 @@ struct WorkspaceSession: Codable, Equatable, Identifiable {
     }
     static func decode(_ data: Data) throws -> Self {
         let result: Self
-        do { result = try JSONDecoder().decode(Self.self, from: data) } catch {
+        do {
+            try PersistedFormat.check(data, context: "Session snapshot")
+            result = try JSONDecoder().decode(Self.self, from: data)
+        } catch {
             throw WorkspaceError.invalid(
                 "The session is not valid TextTank session data: \(error.localizedDescription)")
         }

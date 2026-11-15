@@ -130,6 +130,7 @@ struct FolderSearchSettings: Codable, Equatable {
         guard data.count <= maximumBytes else {
             throw FolderSearchError.invalidRequest("Saved folder search settings exceed their size limit.")
         }
+        try PersistedFormat.check(data, context: "Find in Folder settings")
         let value = try JSONDecoder().decode(Self.self, from: data)
         try value.validate()
         return value

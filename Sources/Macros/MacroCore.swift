@@ -124,6 +124,7 @@ struct MacroLibrary: Codable, Equatable {
         guard data.count <= maximumBytes else {
             throw MacroError.invalid("Saved macros exceed the 32 MiB limit. The file was not changed.")
         }
+        try PersistedFormat.check(data, context: "Saved macros")
         let library = try JSONInputFailure.decode(Self.self, from: data, context: "Saved macros")
         try library.validate()
         return library

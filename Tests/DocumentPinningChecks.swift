@@ -640,19 +640,9 @@ extension DocumentChecks {
             search.dotMatchesNewline = true
             search.wrap = false
             let searchBytes = try golden("SearchOptions.json") {
-                // The Find window writes its options when an action reads the controls.
-                let writer = SearchController(defaults: defaults)
-                writer.queryField.stringValue = search.query
-                writer.replacementField.stringValue = search.replacement
-                writer.mode.selectItem(at: search.mode.rawValue)
-                writer.caseButton.state = .on
-                writer.wordButton.state = .on
-                writer.dotButton.state = .on
-                writer.wrapButton.state = .off
-                writer.findAll(nil)
-                writer.cancel(nil)
-                return try requireValue(
-                    defaults.data(forKey: "TextTank.Search.v1"), "fixture: the Find window saved its options")
+                // The legacy defaults fixture remains byte/schema compatible. New Find files
+                // wrap these unchanged options in a versioned FindPreferences envelope.
+                try JSONEncoder().encode(search)
             }
             defaults.set(searchBytes, forKey: "TextTank.Search.v1")
             let finder = SearchController(defaults: defaults)
@@ -878,6 +868,78 @@ extension DocumentChecks {
                     && overlaid.profiles[0] == storedOverrides.added[0] && overlaid.profiles[2] == base.profiles[2]
                     && overlaid.sourceCommit == "base",
                 "golden language overrides merge over a bundled catalog: changed, cleared, removed, added and ordered")
+            let futureRecovery = RecoveryStore(directory: scratch.appendingPathComponent("reader-gated-recovery"))
+            try FileManager.default.createDirectory(
+                at: futureRecovery.fileURL(for: idA).deletingLastPathComponent(), withIntermediateDirectories: true)
+            let readers: [(String, String, Data, (Data) throws -> Void)] = [
+                ("Settings", "version", settingsBytes, { _ = try EditorSettings.decode($0) }),
+                (
+                    "Find", "version", try FindPreferences(options: search).encoded(),
+                    { _ = try FindPreferences.decode($0) }
+                ),
+                ("Folder", "version", folderBytes, { _ = try FolderSearchSettings.decode($0) }),
+                (
+                    "Browser", "version", browserBytes,
+                    { data in
+                        let store = WorkspaceBrowserStore(url: try copy(data, "reader-browser.json"))
+                        if let error = store.loadError { throw error }
+                    }
+                ),
+                ("Run", "version", runBytes, { _ = try ConfiguredRun.decodeLibrary($0) }),
+                ("Session", "schemaVersion", sessionBytes, { _ = try WorkspaceSession.decode($0) }),
+                (
+                    "Recovery", "schemaVersion", snapshotBytes,
+                    { data in
+                        try data.write(to: futureRecovery.fileURL(for: idA))
+                        _ = try futureRecovery.load(id: idA)
+                    }
+                ),
+                (
+                    "Reminder", "schemaVersion", batchBytes,
+                    { data in
+                        _ = try ReminderJournal.read(copy(data, "reader-reminder.json"), id: idA)
+                    }
+                ),
+                ("Macro", "version", macroBytes, { _ = try MacroLibrary.decode($0) }),
+                ("Automation", "version", automationBytes, { _ = try AutomationLibrary.decode($0) }),
+                ("Language", "version", catalogBytes, { _ = try LanguageCatalog.decode($0) }),
+                (
+                    "Overrides", "overridesVersion", overridesBytes,
+                    { _ = try LanguageCatalog.load(stored: $0, over: base) }
+                )
+            ]
+            for (name, versionKey, bytes, read) in readers {
+                // Edit only envelope bytes. JSONSerialization's object bridge drops a leading
+                // FEFF inside a string on this macOS; it must never rewrite snapshot payloads.
+                func metadata(_ minimum: Int) throws -> Data {
+                    var result = bytes
+                    let opening = try requireValue(result.firstIndex(of: 0x7B), "fixture: JSON object opening")
+                    result.insert(contentsOf: Data("\"minimumReaderVersion\":\(minimum),".utf8), at: opening + 1)
+                    return result
+                }
+                let future = try metadata(2)
+                rejects("G356 \(name) production reader refuses newer minimum reader metadata") { try read(future) }
+                try read(metadata(1))
+                check(true, "G356 \(name) accepts reader 1 metadata without a schema migration")
+                var missing = bytes
+                let key = Data("\"\(versionKey)\"".utf8)
+                let field = try requireValue(
+                    missing.range(of: key, options: .backwards), "fixture: required version key")
+                var lower = field.lowerBound, upper = field.upperBound
+                func space(_ byte: UInt8) -> Bool { byte == 0x20 || byte == 0x0A || byte == 0x0D || byte == 0x09 }
+                while upper < missing.count && (space(missing[upper]) || missing[upper] == 0x3A) { upper += 1 }
+                try require(missing[upper] == 0x31, "fixture: recorded schema version is 1")
+                upper += 1
+                while upper < missing.count && space(missing[upper]) { upper += 1 }
+                if missing[upper] == 0x2C {
+                    upper += 1
+                } else {
+                    while lower > 0 && space(missing[lower - 1]) { lower -= 1 }
+                    if lower > 0 && missing[lower - 1] == 0x2C { lower -= 1 }
+                }
+                missing.removeSubrange(lower..<upper)
+                rejects("G356 \(name) never defaults a missing required schema version") { try read(missing) }
+            }
             let present = Set(try FileManager.default.contentsOfDirectory(atPath: folder.path))
             check(
                 present == [

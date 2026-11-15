@@ -797,6 +797,7 @@ struct AutomationLibrary: Codable, Equatable {
         guard data.count <= maximumBytes else {
             throw AutomationError.invalid("Automation configuration exceeds 32 MiB.")
         }
+        try PersistedFormat.check(data, context: "Automations")
         let result = try JSONInputFailure.decode(AutomationLibrary.self, from: data, context: "Automations")
         try result.validate()
         return result
@@ -877,6 +878,7 @@ struct AutomationRuleSet: Codable {
     }
     static func decode(_ data: Data) throws -> AutomationRuleSet {
         guard data.count <= 1_048_576 else { throw AutomationError.invalid("Rule files must be at most 1 MiB.") }
+        try PersistedFormat.check(data, context: "Rules")
         let value = try JSONInputFailure.decode(Self.self, from: data, context: "Rules")
         try value.validate()
         return value

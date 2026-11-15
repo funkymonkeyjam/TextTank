@@ -94,6 +94,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             legacyValue: {
                 guard let data = legacy?.data(forKey: "TextTank.Search.v1") else { return nil }
                 guard data.count <= FindPreferences.maximumBytes else { throw SearchFailure.preferencesTooLarge }
+                try PersistedFormat.check(data, context: "Find settings")
                 let options = try JSONInputFailure.decode(SearchOptions.self, from: data, context: "Find settings")
                 try options.validatePreferences()
                 return FindPreferences(options: options)

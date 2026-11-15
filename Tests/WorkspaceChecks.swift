@@ -24,6 +24,15 @@ import Darwin
                 check(
                     damaged.state.error != nil && damaged.value.text.isEmpty,
                     "failed load uses defaults with a durable error latch")
+                for metadata in ["2", "0", "\"2\"", "null"] {
+                    let future = root.appendingPathComponent("reader-" + UUID().uuidString + ".json")
+                    let bytes = Data(("{\"text\":\"retained\",\"minimumReaderVersion\":" + metadata + "}").utf8)
+                    try bytes.write(to: future)
+                    let reader = store(future.lastPathComponent)
+                    check(
+                        reader.state.error != nil && reader.value.text.isEmpty,
+                        "G356 invalid or unsupported minimum reader metadata latches before using data: " + metadata)
+                }
                 do {
                     try damaged.save(Value(text: "replacement"))
                     check(false, "failed load blocks direct save")

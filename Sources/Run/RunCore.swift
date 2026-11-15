@@ -128,6 +128,7 @@ struct ConfiguredRun: Codable, Equatable {
     }
     static func decodeLibrary(_ data: Data) throws -> [Self] {
         guard data.count <= maximumLibraryBytes else { throw RunFailure.configurationTooLarge }
+        try PersistedFormat.check(data, context: "Run commands", array: true)
         let commands = try JSONInputFailure.decode([Self].self, from: data, context: "Run commands")
         try validateLibrary(commands)
         return commands

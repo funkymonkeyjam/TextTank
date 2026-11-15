@@ -172,6 +172,7 @@ enum ReminderJournal {
         }
         let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
         guard data.count <= maximumBytes else { throw ReminderConnectorError.invalidBatch }
+        try PersistedFormat.check(data, context: "Reminders export record")
         let batch = try JSONDecoder().decode(ReminderBatch.self, from: data)
         guard batch.schemaVersion == 1, batch.id == id, Set(batch.rows.map(\.id)).count == batch.rows.count,
             batch.rows.allSatisfy({ $0.status != .confirmed || !($0.reminderID ?? "").isEmpty })

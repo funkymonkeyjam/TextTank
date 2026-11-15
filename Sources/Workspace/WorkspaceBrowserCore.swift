@@ -50,6 +50,7 @@ final class WorkspaceBrowserStore {
         loadState = StoreLoadState(url: url, displayName: "Saved workspace")
         do {
             let data = try WorkspaceStore.readRegularFile(url, maximumBytes: 1024 * 1024)
+            try PersistedFormat.check(data, context: "Saved workspace")
             let decoded = try JSONDecoder().decode(WorkspaceBrowserState.self, from: data)
             try decoded.validate()
             state = decoded

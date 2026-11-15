@@ -22,6 +22,7 @@ struct FindPreferences: Codable {
     static let maximumBytes = 8 * 1024 * 1024
     static func decode(_ data: Data) throws -> Self {
         guard data.count <= maximumBytes else { throw SearchFailure.preferencesTooLarge }
+        try PersistedFormat.check(data, context: "Find settings")
         let value = try JSONInputFailure.decode(Self.self, from: data, context: "Find settings")
         guard value.version == 1 else { throw SearchFailure.preferencesVersion }
         try value.options.validatePreferences()

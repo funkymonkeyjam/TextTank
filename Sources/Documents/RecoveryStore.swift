@@ -231,7 +231,10 @@ final class RecoveryStore {
         }
         snapshotReads += 1
         let snapshot: RecoverySnapshot
-        do { snapshot = try JSONDecoder().decode(RecoverySnapshot.self, from: data) } catch {
+        do {
+            try PersistedFormat.check(data, context: "Recovery snapshot")
+            snapshot = try JSONDecoder().decode(RecoverySnapshot.self, from: data)
+        } catch {
             throw RecoveryError.invalidSnapshot
         }
         guard snapshot.id == expectedID else { throw RecoveryError.invalidSnapshot }

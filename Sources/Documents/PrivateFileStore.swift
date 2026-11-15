@@ -95,6 +95,7 @@ final class JSONFileStore<Value> {
         self.encode = encode
         do {
             let data = try PrivateFileStore.read(url, maximumBytes: maximumBytes)
+            try PersistedFormat.check(data, context: displayName)
             value = try decode(data)
             savedModelBytes = try encode(value)
         } catch  where error.isFileNotFound {
@@ -338,5 +339,41 @@ enum PersistedValue {
         encoder.outputFormatting = [.sortedKeys]
         guard let left = try? encoder.encode(lhs), let right = try? encoder.encode(rhs) else { return false }
         return left == right
+    }
+}
+
+/// Optional envelope metadata supplements, never replaces, each model's required schema version.
+/// Writers of the unchanged version-1 formats omit it; absent means reader 1. Do not inspect
+/// arbitrary nested dictionaries: names and user payloads remain data, not behavior selectors.
+enum PersistedFormat {
+    static let readerVersion = 1
+    private struct Metadata: Decodable {
+        enum CodingKeys: String, CodingKey { case minimumReaderVersion }
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            guard values.contains(.minimumReaderVersion) else { return }
+            let minimum = try values.decode(Int.self, forKey: .minimumReaderVersion)
+            guard minimum >= 1 else { throw PersistedFormatError.invalidMinimumReader }
+            guard minimum <= PersistedFormat.readerVersion else { throw PersistedFormatError.needsReader(minimum) }
+        }
+    }
+    static func check(_ data: Data, context: String, array: Bool = false) throws {
+        if array {
+            _ = try JSONInputFailure.decode([Metadata].self, from: data, context: context)
+        } else {
+            _ = try JSONInputFailure.decode(Metadata.self, from: data, context: context)
+        }
+    }
+}
+enum PersistedFormatError: LocalizedError {
+    case needsReader(Int), invalidMinimumReader
+    var errorDescription: String? {
+        switch self {
+        case .needsReader(let version):
+            return
+                "This saved data requires TextTank reader version \(version). This build supports reader version 1. The original file has not been changed."
+        case .invalidMinimumReader:
+            return "Saved minimumReaderVersion must be a positive integer. The original file has not been changed."
+        }
     }
 }

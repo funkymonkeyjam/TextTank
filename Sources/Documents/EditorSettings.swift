@@ -34,6 +34,7 @@ struct EditorSettings: Codable, Equatable {
         }
     }
     static func decode(_ data: Data) throws -> Self {
+        try PersistedFormat.check(data, context: "Editor settings")
         let settings = try JSONDecoder().decode(Self.self, from: data)
         try settings.validate()
         return settings

@@ -173,6 +173,7 @@ struct LanguageCatalog: Codable, Equatable {
     static let maximumBytes = 16 * 1024 * 1024
     static func decode(_ data: Data) throws -> Self {
         guard data.count <= maximumBytes else { throw LanguageError.invalid("Language catalog exceeds 16 MiB.") }
+        try PersistedFormat.check(data, context: "Language profiles")
         let value = try JSONInputFailure.decode(Self.self, from: data, context: "Language profiles")
         try value.validate()
         return value
@@ -190,6 +191,7 @@ struct LanguageCatalog: Codable, Equatable {
     /// catalog, and is read as the changes it makes to today's bundled catalog.
     static func load(stored data: Data, over bundled: LanguageCatalog) throws -> Self {
         guard data.count <= maximumBytes else { throw LanguageError.invalid("Language catalog exceeds 16 MiB.") }
+        try PersistedFormat.check(data, context: "Language profiles")
         struct Probe: Decodable { var overridesVersion: Int? }
         if try JSONInputFailure.decode(Probe.self, from: data, context: "Language profiles").overridesVersion != nil {
             return try JSONInputFailure.decode(LanguageOverrides.self, from: data, context: "Language profile changes")
