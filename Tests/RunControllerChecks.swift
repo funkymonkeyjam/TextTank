@@ -465,7 +465,7 @@ import AppKit
         let originalReveal = StoreRecovery.reveal
         StoreRecovery.reveal = { revealed.append($0) }
         defer { StoreRecovery.reveal = originalReveal }
-        func recovery(_ identifier: String) throws -> Bool {
+        func recovery(_ identifier: String, action: (() throws -> Bool)? = nil) throws -> Bool {
             let deadline = Date().addingTimeInterval(5)
             var clicked = false
             let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
@@ -484,7 +484,12 @@ import AppKit
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             defer { timer.invalidate() }
-            let writable = try StoreRecovery.ensureWritable(damaged.loadState)
+            let writable: Bool
+            if let action {
+                writable = try action()
+            } else {
+                writable = try StoreRecovery.ensureWritable(damaged.loadState)
+            }
             check(clicked, "fixture: explicit recovery choice dispatched")
             return writable
         }
@@ -511,6 +516,34 @@ import AppKit
         check(
             ids(RunController().makeMenu()) == [sample.id.uuidString],
             "F198 only an explicit move-aside permits a later save and reload")
+        let preferenceURL = damaged.storage.deletingLastPathComponent().appendingPathComponent("damaged-find.json")
+        let preferenceBytes = Data("retain failed preference bytes".utf8)
+        try preferenceBytes.write(to: preferenceURL)
+        let finder = SearchController(preferencesURL: preferenceURL)
+        finder.queryField.stringValue = "reset this query"
+        check(
+            finder.preferenceNotice.superview?.isHidden == false,
+            "F212 failed Find preferences expose persistent recovery")
+        _ = try recovery(
+            "store.recover.move",
+            action: {
+                finder.resetSavedPreferences(nil)
+                return true
+            })
+        let preferenceBackups = try FileManager.default.contentsOfDirectory(
+            at: preferenceURL.deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("damaged-find.previous-") }
+        check(
+            finder.queryField.stringValue.isEmpty && finder.preferenceNotice.superview?.isHidden == true
+                && preferenceBackups.count == 1,
+            "F212 explicit preference reset uses common recovery and restores default controls")
+        if let backup = preferenceBackups.first {
+            check(
+                try Data(contentsOf: backup) == preferenceBytes
+                    && FindPreferences.decode(Data(contentsOf: preferenceURL)).options.query.isEmpty,
+                "F212 preference reset retains unreadable bytes beside readable defaults")
+        }
         try controller.persist([sample])
         check(RunController.manageHelp.contains("never runs"), "F137 the dialog says saving runs nothing")
         try manageDialogChecks(controller, sample, other)

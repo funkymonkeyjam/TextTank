@@ -263,7 +263,10 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         resetPreferencesButton.isHidden = false
     }
     private func savePreferencesOrReport() {
-        do { try saveSettings() } catch { showPreferenceFailure(error) }
+        do {
+            try saveSettings()
+            preferenceNotice.superview?.isHidden = true
+        } catch { showPreferenceFailure(error) }
     }
     @objc func resetSavedPreferences(_ sender: Any?) {
         guard StoreRecovery.confirmPreferenceReset(preferences.state) else { return }

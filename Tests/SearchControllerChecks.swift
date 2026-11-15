@@ -57,6 +57,36 @@ final class CountingWindow: NSWindow {
             var signals = 0
             controller.onFailureSignal = { signals += 1 }
             @MainActor func finished() async { await waitUntil("the search to finish") { !controller.isSearching } }
+            editor.text = "one needle"
+            let damagedURL = support.url.appendingPathComponent("damaged-find.json"),
+                damagedBytes = Data("keep unreadable settings".utf8)
+            try damagedBytes.write(to: damagedURL)
+            let degraded = SearchController(preferencesURL: damagedURL)
+            degraded.currentEditor = { editor }
+            degraded.openEditors = { [editor] }
+            degraded.queryField.stringValue = "needle"
+            degraded.findAll(nil)
+            await waitUntil("search with unreadable preferences to finish") { !degraded.isSearching }
+            check(
+                degraded.lastOutcome == .found(matches: 1, documents: 1, truncated: false)
+                    && degraded.preferenceNotice.superview?.isHidden == false
+                    && degraded.resetPreferencesButton.isHidden == false,
+                "F212 unreadable preferences leave search functional with persistent recovery controls")
+            check(
+                try Data(contentsOf: damagedURL) == damagedBytes,
+                "F212 searching never overwrites unreadable saved preferences")
+            let obstructed = support.url.appendingPathComponent("blocked-preference-parent")
+            let transient = SearchController(preferencesURL: obstructed.appendingPathComponent("find.json"))
+            transient.currentEditor = { editor }
+            transient.openEditors = { [editor] }
+            try Data("fixture obstruction".utf8).write(to: obstructed)
+            transient.queryField.stringValue = "needle"
+            transient.findAll(nil)
+            await waitUntil("search with a failed preference save to finish") { !transient.isSearching }
+            check(
+                transient.lastOutcome == .found(matches: 1, documents: 1, truncated: false)
+                    && transient.preferenceNotice.superview?.isHidden == false,
+                "F212 preference write failure is reported without aborting the requested search")
             let fresh0 = SearchOptions()
             check(
                 controller.queryField.stringValue == fresh0.query

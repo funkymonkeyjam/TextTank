@@ -214,7 +214,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         o.wholeWord = wordButton.state == .on
         o.dotMatchesNewline = dotButton.state == .on
         o.wrap = wrapButton.state == .on
-        do { try preferences.save(FindPreferences(options: o)) } catch { showPreferenceFailure(error) }
+        do {
+            try preferences.save(FindPreferences(options: o))
+            preferenceNotice.superview?.isHidden = true
+        } catch { showPreferenceFailure(error) }
         options = o
         return o
     }

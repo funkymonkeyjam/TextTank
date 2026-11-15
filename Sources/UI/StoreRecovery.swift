@@ -31,6 +31,12 @@ enum StoreRecovery {
         }
     }
     static func confirmPreferenceReset(_ state: StoreLoadState) -> Bool {
+        if state.error != nil {
+            do { return try ensureWritable(state) } catch {
+                TTAlert.present(error)
+                return false
+            }
+        }
         let alert = TTAlert()
         alert.messageText = "Reset “\(state.displayName)”?"
         alert.informativeText =
