@@ -17,7 +17,7 @@
     },
     {
       "path": "Resources/TextTank.icns",
-      "sha256": "ad63b96ce98fbac1d6acb0c4156323c16b76f0cd061aee8e7341a204ce7ea3c9"
+      "sha256": "a915d3c6ef9800dbbb0d8ccddd5d409f95d1e6630ee18e66f208f55b1903e0c1"
     },
     {
       "path": "Sources/Automations/AutomationController.swift",
@@ -101,7 +101,7 @@
     },
     {
       "path": "scripts/build-icon.swift",
-      "sha256": "c8d2a64f6983c464dbea35328639fc101f5f2cfd3afdcfe27256c86ec3281f3f"
+      "sha256": "b01042a095ad9e363e193a62f325306d09abfa98dd52ee07531f0c1306478fe3"
     },
     {
       "path": "scripts/build.sh",
@@ -186,8 +186,8 @@
       "sha256": "44b9d570603230c4f756fabe1d27140c096d3fe4f45ced96f41842bc2e005d17"
     },
     {
-      "path": "harness/logs/test-source-manifest.json",
-      "sha256": "8882ad0f15aed93cfec3ee581c8a08e0d98f38ca3d7a8084074376b606403bd5"
+      "path": "harness/logs/test-source-state.json",
+      "status": "Regenerated clean start/end git-tree checkpoint; see candidate-validation.json. Historical per-file hash removed."
     },
     {
       "path": "harness/logs/app-build.log",
@@ -535,8 +535,8 @@
     "IME/dead-key composition and actual VoiceOver reading/navigation/editing."
   ],
   "tested_source_manifest": {
-    "path": "harness/logs/test-source-manifest.json",
-    "status": "Historical until final candidate checks regenerate and validate it; this incremental ledger does not claim all current hashes match.",
+    "path": "harness/logs/test-source-state.json",
+    "status": "Clean git tree identity at start and end plus dirty-state checks and acceptance-log SHA-256; per-file hashes removed. Candidate-specific evidence remains required.",
     "final_record": "output/review/validation.json"
   },
   "final_ui_recheck": {

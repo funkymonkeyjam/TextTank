@@ -15,14 +15,18 @@
 #
 # TEXTTANK_SUITE_TIMEOUT sets the per-suite limit in seconds (default 300).
 
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+source "$TEXTTANK_ROOT/scripts/lib/test-common.sh"
+
 # First-party Swift is warning-clean. A new toolchain can be inspected with an explicit
 # TEXTTANK_WARNINGS_AS_ERRORS=0 override; ordinary acceptance keeps warnings fatal.
 SWIFT_WARNING_FLAGS=()
 case "${TEXTTANK_WARNINGS_AS_ERRORS:-1}" in
-  1) SWIFT_WARNING_FLAGS=(-warnings-as-errors) ;;
+  1) SWIFT_WARNING_FLAGS=(-warnings-as-errors); SWIFT_BASE+=(-warnings-as-errors) ;;
   0) ;;
   *) echo "TEXTTANK_WARNINGS_AS_ERRORS must be 0 or 1" >&2; exit 64 ;;
 esac
+
 
 SUITE_BROKEN=" "
 SUITE_OWNER=0
@@ -34,7 +38,14 @@ suite_begin() {
     TEXTTANK_SUITE_RESULTS=$(mktemp "${TMPDIR:-/tmp}/texttank-suites.XXXXXX")
     export TEXTTANK_SUITE_RESULTS
     SUITE_OWNER=1
+    TEXTTANK_NATIVE_OBJECT_DIR=$(mktemp -d "$PWD/build/tests/native-objects.XXXXXX")
+    export TEXTTANK_NATIVE_OBJECT_DIR
+    trap 'rm -rf "$TEXTTANK_NATIVE_OBJECT_DIR"' EXIT
   fi
+  BRIDGE_OBJECT="$TEXTTANK_NATIVE_OBJECT_DIR/TTEditor.o"
+  SEARCH_OBJECT="$TEXTTANK_NATIVE_OBJECT_DIR/TTSearchEngine.o"
+  USER_LEXER_OBJECT="$TEXTTANK_NATIVE_OBJECT_DIR/UserLexer.o"
+  export BRIDGE_OBJECT SEARCH_OBJECT USER_LEXER_OBJECT
   SUITE_FIRST_RECORD=$(( $(wc -l < "$TEXTTANK_SUITE_RESULTS") + 1 ))
   # The shared harness is passed by absolute path so that #filePath, and with it
   # the repository root the checks derive, does not depend on the current directory.
@@ -42,8 +53,8 @@ suite_begin() {
 }
 
 suite_require_build() {
-  if [[ ! -d build/vendor/Debug/Scintilla.framework || ! -f Vendor/lexilla/bin/liblexilla.a ]]; then
-    echo "The native dependencies are not built (build/vendor/Debug/Scintilla.framework and Vendor/lexilla/bin/liblexilla.a are required). Run scripts/build.sh first." >&2
+  if [[ ! -d "$VENDOR_BUILD/Scintilla.framework" || ! -f "$LEXILLA_LIBRARY" ]]; then
+    echo "The native dependencies are not built ($CONFIGURATION Scintilla.framework and liblexilla.a are required). Run scripts/build.sh first." >&2
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then echo "::error::Native dependencies are not built; run scripts/build.sh first"; fi
     suite_record "NOT-BUILT" "$(basename "$0")" "run scripts/build.sh first"
     suite_finish
@@ -70,19 +81,42 @@ suite_build() {
 
 suite_run() {
   local name="$1" log="$2" status=0 limit="${TEXTTANK_SUITE_TIMEOUT:-300}"
+  local requires_completion="${TEXTTANK_NATIVE_COMPLETION_REQUIRED:-0}"
+  local log_status=0 log_detail
+  local -a pipeline_status
   shift 2
   if [[ "$SUITE_BROKEN" == *" $name "* ]]; then echo "NOT RUN $name: its build failed"; return 0; fi
+  if [[ "$1" == build/tests/* || "$1" == "$PWD"/build/tests/* ]]; then requires_completion=1; fi
   # alarm() survives exec, so the suite itself receives SIGALRM when the limit passes.
-  perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or die "cannot run $ARGV[0]: $!\n"' "$limit" "$@" 2>&1 | tee "$log" || status=${PIPESTATUS[0]}
+  # Both branches copy PIPESTATUS before any other command can overwrite it (Bash 3.2).
+  if perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or die "cannot run $ARGV[0]: $!\n"' "$limit" "$@" 2>&1 | tee "$log"; then
+    pipeline_status=("${PIPESTATUS[@]}")
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
+  fi
+  status=${pipeline_status[0]}
+  log_status=${pipeline_status[1]}
+  log_detail="log $log"
+  if [[ "$log_status" != 0 ]]; then
+    log_detail="log unavailable: $log (tee exit $log_status; check exit $status)"
+    echo "FAIL $name: log write failed (tee exit $log_status; check exit $status); stale log contents are not accepted" >&2
+    # Keep the check's failure/timeout when it already failed; a successful check
+    # cannot turn a failed evidence write into acceptance.
+    if [[ "$status" == 0 ]]; then status=1; fi
+  fi
+  if [[ "$status" == 0 && "$requires_completion" == 1 ]] && ! grep -Eq '^(PASS )?[A-Za-z][A-Za-z0-9]*Checks: [0-9]+ (native )?assertions' "$log"; then
+    echo "FAIL $name: exited zero without its native completion summary; the suite is incomplete" | tee -a "$log"
+    status=1
+  fi
   if [[ "$status" == 0 ]]; then
     suite_record "PASS" "$name" "$(tail -n 1 "$log" | cut -c1-110)"
   elif [[ "$status" == 142 ]]; then
-    suite_record "TIMEOUT" "$name" "no result after $limit s; log $log"
-    echo "TIMEOUT $name: stopped after $limit s (TEXTTANK_SUITE_TIMEOUT); log $log"
+    suite_record "TIMEOUT" "$name" "no result after $limit s; $log_detail"
+    echo "TIMEOUT $name: stopped after $limit s (TEXTTANK_SUITE_TIMEOUT); $log_detail"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then echo "::error::$name timed out after $limit s"; fi
   else
-    suite_record "FAILED" "$name" "exit $status; log $log"
-    echo "FAILED $name: exit $status; log $log"
+    suite_record "FAILED" "$name" "exit $status; $log_detail"
+    echo "FAILED $name: exit $status; $log_detail"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then echo "::error::$name failed with exit $status"; fi
   fi
   return 0
