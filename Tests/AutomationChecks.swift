@@ -209,6 +209,21 @@ import Darwin
         let cancelDuring = AutomationRunControl()
         cancelDuring.onProgress = { completed,total in if completed==total {cancelDuring.cancel()} }
         rejects("sample observes cancellation between completed steps") { _ = try expanding.testSample("a",control:cancelDuring) }
+        let portable = AutomationRuleSet(name:"Literal heading cleanup",steps:[.init(kind:.removeLinesEqualTo,find:"Ingredients",askForFind:true),.init(kind:.removeBlankLines)])
+        let portableData = try portable.encoded()
+        let portableDecoded = try AutomationRuleSet.decode(portableData)
+        try check(portableDecoded.name==portable.name && portableDecoded.steps==portable.steps,"portable rule file roundtrip preserves ordered rules and parameter flags")
+        let portableObject = try JSONSerialization.jsonObject(with:portableData) as! [String:Any]
+        try check(Set(portableObject.keys)==Set(["version","name","steps"]),"portable rules exclude workflow triggers destinations and external outputs")
+        var futurePortable=portable;futurePortable.version=2
+        rejects("future portable version rejects encoding") { _ = try futurePortable.encoded() }
+        rejects("future portable version rejects loading") { _ = try AutomationRuleSet.decode(JSONEncoder().encode(futurePortable)) }
+        rejects("malformed portable file rejected") { _ = try AutomationRuleSet.decode(Data("{bad".utf8)) }
+        rejects("oversized portable file rejected before decode") { _ = try AutomationRuleSet.decode(Data(repeating:32,count:1048577)) }
+        var invalidPortable=portable;invalidPortable.steps=[.init(kind:.removeLinesEqualTo,find:"")]
+        rejects("invalid portable rule rejects loading") { _ = try AutomationRuleSet.decode(JSONEncoder().encode(invalidPortable)) }
+        invalidPortable.name=""
+        rejects("invalid portable name rejects export") { _ = try invalidPortable.encoded() }
         print("PASS AutomationChecks: \(count) assertions (pure core; native UI and external outputs not covered)")
     }
 }

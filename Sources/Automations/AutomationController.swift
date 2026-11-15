@@ -35,10 +35,12 @@ final class AutomationController: NSObject, NSMenuDelegate {
     /// Fresh menus all dispatch by stable ID and resolve the currently saved definition at invocation.
     func contextMenu() -> NSMenu { invocationMenu(title: "Run Automation") }
     func makeToolbarItem() -> NSToolbarItem {
-        let item = NSMenuToolbarItem(itemIdentifier: NSToolbarItem.Identifier("TextTank.Automations"))
+        let item = NSToolbarItem(itemIdentifier:NSToolbarItem.Identifier("TextTank.Automations"))
         item.label = "Automations"; item.paletteLabel = "Automations"
-        item.image = NSImage(systemSymbolName: "bolt", accessibilityDescription: "Run Automation")
-        item.menu = invocationMenu(title: "Automations")
+        let button = NSPopUpButton(frame:NSRect(x:0,y:0,width:165,height:30),pullsDown:true)
+        button.menu = invocationMenu(title:"Automation Launcher")
+        button.setAccessibilityLabel("Automations"); button.toolTip = "Run a saved automation or manage your workflows"
+        item.view = button
         return item
     }
     func toolbarIdentifiers() -> [NSToolbarItem.Identifier] {
@@ -75,8 +77,9 @@ final class AutomationController: NSObject, NSMenuDelegate {
     }
     private func populateInvocations(_ menu: NSMenu) {
         menu.removeAllItems()
-        for workflow in library.workflows {
-            let item = NSMenuItem(title: workflow.name, action: #selector(runAction(_:)), keyEquivalent: "")
+        if menu.title == "Automation Launcher" { menu.addItem(withTitle:"Automations",action:nil,keyEquivalent:"") }
+        for workflow in library.workflows.sorted(by: { ($0.pinToToolbar == true ? 0 : 1) < ($1.pinToToolbar == true ? 0 : 1) }) {
+            let item = NSMenuItem(title: (workflow.pinToToolbar == true ? "★ " : "") + workflow.name, action: #selector(runAction(_:)), keyEquivalent: "")
             item.target = self; item.representedObject = workflow.id.uuidString; menu.addItem(item)
         }
         let manage = NSMenuItem(title: "Manage Automations…", action: #selector(manageAction), keyEquivalent: "")
@@ -85,6 +88,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
     func showPalette() {
         guard !busy, !exportInProgress else { return }
         guard !library.workflows.isEmpty else { manage(); return }
+        busy = true; defer { busy = false }
         let alert = NSAlert(); alert.messageText = "Run Automation"
         alert.informativeText = "Choose a saved automation. Its current saved definition will run. Preview is optional; Reminders always asks you to choose a destination and Send."
         alert.addButton(withTitle: "Run"); alert.addButton(withTitle: "Cancel")
@@ -94,7 +98,6 @@ final class AutomationController: NSObject, NSMenuDelegate {
         // Preserve editor context before the palette becomes the key window.
         let capturedEditor = editorProvider()
         guard alert.runModal() == .alertFirstButtonReturn, let id = choice.selectedItem?.representedObject as? String, let workflow = library.workflows.first(where: {$0.id.uuidString == id}) else { return }
-        busy = true; defer { busy = false }
         do { try run(workflow, capturedEditor: capturedEditor) } catch { showError(error) }
     }
     private func rebuild() {
@@ -105,8 +108,6 @@ final class AutomationController: NSObject, NSMenuDelegate {
         palette.target = self; automationMenu.addItem(palette)
         let history = NSMenuItem(title: "Review Reminder Export History…", action: #selector(reminderHistory), keyEquivalent: "")
         history.target = self; automationMenu.addItem(history)
-        let presets = NSMenuItem(title: "Add Recipe Buttons…", action: #selector(addRecipeButtons), keyEquivalent: "")
-        presets.target = self; automationMenu.addItem(presets)
         if !library.workflows.isEmpty { automationMenu.addItem(.separator()) }
         for workflow in library.workflows {
             let item = NSMenuItem(title: workflow.name, action: #selector(runAction(_:)), keyEquivalent: workflow.shortcut ?? "")
@@ -122,16 +123,15 @@ final class AutomationController: NSObject, NSMenuDelegate {
         guard !library.workflows.isEmpty else { createAutomation(); return }
         busy = true; defer { busy = false }
         let choose = NSAlert(); choose.messageText = "Manage Automations"
-        choose.informativeText = "Rename an automation, choose its input and output, and turn its preview or toolbar button on or off. Edit Rules opens a visual rule list with sample testing. JSON is optional for advanced users."
-        for title in ["Edit", "Cancel", "Advanced JSON…", "Add Recipe Buttons…", "Create Automation…", "Delete Automation"] { choose.addButton(withTitle:title) }
+        choose.informativeText = "Rename an automation, choose its input and output, and choose its preview and favorite status. Edit Rules opens a visual rule list with sample testing. JSON is optional for advanced users."
+        for title in ["Edit", "Cancel", "Advanced JSON…", "Create Automation…", "Delete Automation"] { choose.addButton(withTitle:title) }
         let selection = NSPopUpButton(frame:NSRect(x:0,y:0,width:550,height:28),pullsDown:false)
         for workflow in library.workflows { selection.addItem(withTitle:workflow.name); selection.lastItem?.representedObject = workflow.id.uuidString }
         choose.accessoryView = selection
         let response = choose.runModal()
         if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 { busy = false; manageAdvanced(); return }
-        if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 { busy = false; addRecipeButtons(); return }
-        if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 4 { busy = false; createAutomation(); return }
-        if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 5 {
+        if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 { busy = false; createAutomation(); return }
+        if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 4 {
             if let id = selection.selectedItem?.representedObject as? String {
                 let confirm = NSAlert(); confirm.messageText = "Delete this automation?"; confirm.informativeText = "Its saved definition and trigger bindings will be removed. Documents and exported reminders are unchanged."; confirm.addButton(withTitle:"Delete"); confirm.addButton(withTitle:"Cancel")
                 if confirm.runModal() == .alertFirstButtonReturn { do { var proposed = library; proposed.workflows.removeAll { $0.id.uuidString == id }; try persistLibrary(proposed) } catch { showError(error) } }
@@ -151,11 +151,11 @@ final class AutomationController: NSObject, NSMenuDelegate {
         for value in ["editor","clipboard","newDocument","file","reminders"] { output.addItem(withTitle:value) }
         input.selectItem(withTitle:workflow.input.rawValue); output.selectItem(withTitle:workflow.output.rawValue)
         let preview = NSButton(checkboxWithTitle:"Preview before applying",target:nil,action:nil); preview.state = workflow.previewBeforeApply == true ? .on : .off
-        let pinned = NSButton(checkboxWithTitle:"Show a named toolbar button",target:nil,action:nil); pinned.state = workflow.pinToToolbar == true ? .on : .off
+        let pinned = NSButton(checkboxWithTitle:"Favorite in the Automations menu",target:nil,action:nil); pinned.state = workflow.pinToToolbar == true ? .on : .off
         edit.accessoryView = settingsView(rows:[("Name",name),("Input",input),("Output",output),("Shortcut",shortcut)],options:[preview,pinned])
         while true {
             let response = edit.runModal()
-            if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 { edit.window.makeFirstResponder(nil); workflow.name = name.stringValue; if let revised = AutomationStepEditor.edit(workflow) { workflow.steps = revised.steps }; continue }
+            if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 { edit.window.makeFirstResponder(nil); workflow.name = name.stringValue; if let revised = AutomationStepEditor.edit(workflow, savedWorkflows:library.workflows) { workflow.steps = revised.steps; workflow.name = revised.name; name.stringValue = revised.name }; continue }
             guard response == .alertFirstButtonReturn else { return }; break
         }
         do {
@@ -171,13 +171,12 @@ final class AutomationController: NSObject, NSMenuDelegate {
     }
     private func createAutomation() {
         guard !busy, !exportInProgress else { return }
-        let alert = NSAlert(); alert.messageText = "Create Automation"; alert.informativeText = "Choose a name. You can then edit its ordered processing steps, input, output and triggers."
-        alert.addButton(withTitle:"Create"); alert.addButton(withTitle:"Cancel")
-        let name = NSTextField(string:"My Automation"); name.frame = NSRect(x:0,y:0,width:440,height:28); alert.accessoryView = name
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        alert.window.makeFirstResponder(nil)
-        let definition = AutomationDefinition(id:UUID(),name:name.stringValue,input:.document,steps:[],output:.editor)
-        do { try definition.validate(); guard let edited = AutomationStepEditor.edit(definition) else { return }; var proposed = library; proposed.workflows.append(edited); try persistLibrary(proposed) } catch { showError(error) }
+        busy = true; defer { busy = false }
+        let definition = AutomationDefinition(id:UUID(),name:"My Automation",input:.document,steps:[],output:.editor,pinToToolbar:false)
+        do {
+            guard let edited = AutomationStepEditor.edit(definition,savedWorkflows:library.workflows) else { return }
+            var proposed = library; proposed.workflows.append(edited); try persistLibrary(proposed)
+        } catch { showError(error) }
     }
     @objc func addRecipeButtons() {
         guard !busy, !exportInProgress else { return }

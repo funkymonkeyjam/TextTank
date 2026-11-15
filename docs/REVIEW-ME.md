@@ -41,7 +41,7 @@ The minimum deployment target remains macOS 14. Local testing used the current a
 
 ## Low-code automation rules
 
-Open Automations → Manage Automations → Edit → Edit Rules & Test. The native builder shows an ordered rule list, plain-language rule choices, editable parameters and isolated sample/result panes. Add, duplicate, move and remove rules; use Test Rules before saving. Load Recipe Rules loads editable rules for the four supplied samples while preserving earlier browser/Markdown cleanup. It changes only the draft until Use These Rules and Save. See [automation guide](AUTOMATION-RULES.md).
+Open Automations → Manage Automations → Edit → Edit Rules & Test. The native builder shows an ordered rule list, plain-language rule choices, editable parameters and isolated sample/result panes. Add, duplicate, move and remove rules; use Test Rules before saving. Load Rules offers saved automations, general templates and portable import/export. Its recipe template loads editable rules for the four supplied samples while preserving earlier browser/Markdown cleanup. It changes only the draft until Use These Rules and Save. See [automation guide](AUTOMATION-RULES.md).
 
 ## Review walkthrough
 

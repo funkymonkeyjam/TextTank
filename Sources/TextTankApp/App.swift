@@ -368,7 +368,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     }
     func toolbarAllowedItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     func toolbarDefaultItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier] {
-        ((NSApp.delegate as? AppDelegate)?.automations.toolbarIdentifiers() ?? []) + [.flexibleSpace,.init("TextTank.Automations"),.init("TextTank.CloseTab")]
+        [.flexibleSpace,.init("TextTank.Automations"),.init("TextTank.CloseTab")]
     }
     func toolbar(_ toolbar:NSToolbar,itemForItemIdentifier identifier:NSToolbarItem.Identifier,willBeInsertedIntoToolbar:Bool)->NSToolbarItem? {
         if identifier.rawValue == "TextTank.CloseTab" {
@@ -395,7 +395,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     override func windowDidLoad() { super.windowDidLoad() }
     @objc func command(_ sender:NSMenuItem) {
         guard let id=sender.representedObject as? String else { return }
-        if let field=NSApp.keyWindow?.firstResponder as? NSTextView {
+        if let field=(NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder as? NSTextView {
             switch id { case "cut": field.cut(nil); case "copy": field.copy(nil); case "paste": field.paste(nil); case "selectAll": field.selectAll(nil); case "undo": field.undoManager?.undo(); case "redo": field.undoManager?.redo(); default: NSSound.beep() }
             return
         }

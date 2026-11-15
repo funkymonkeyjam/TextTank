@@ -357,3 +357,25 @@ enum AutomationFileInput {
         return text
     }
 }
+
+/// Portable processing rules only. Loading never changes a workflow's identity or output.
+struct AutomationRuleSet: Codable {
+    var version: Int = 1
+    var name: String
+    var steps: [AutomationDefinition.Step]
+    func validate() throws {
+        let probe = AutomationDefinition(id:UUID(),name:name,input:.document,steps:steps,output:.editor)
+        guard version == 1 else { throw AutomationError.invalid("Unsupported rule-set version.") }
+        try probe.validate()
+    }
+    static func decode(_ data:Data) throws -> AutomationRuleSet {
+        guard data.count <= 1_048_576 else { throw AutomationError.invalid("Rule files must be at most 1 MiB.") }
+        let value = try JSONDecoder().decode(Self.self,from:data); try value.validate(); return value
+    }
+    func encoded() throws -> Data {
+        try validate(); let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted,.sortedKeys]
+        let data = try encoder.encode(self)
+        guard data.count <= 1_048_576 else { throw AutomationError.invalid("Rule files must be at most 1 MiB.") }
+        return data
+    }
+}

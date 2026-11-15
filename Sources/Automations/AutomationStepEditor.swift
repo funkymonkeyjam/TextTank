@@ -37,6 +37,8 @@ extension AutomationDefinition.Step.Kind {
 /// A draft-only native rule builder. Testing never invokes inputs, outputs or connectors.
 final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSTextViewDelegate {
     private var draft: AutomationDefinition
+    private let savedWorkflows: [AutomationDefinition]
+    private let nameField = NSTextField()
     private var accepted = false
     private var previewGeneration = 0
     private var previewControl: AutomationRunControl?
@@ -46,9 +48,9 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
     private let status = NSTextField(wrappingLabelWithString:"Paste sample text, then Test Rules. Testing never changes a document or sends reminders.")
     private var selectionButtons: [NSButton] = []
     private var addButton: NSButton!
-    private init(_ definition:AutomationDefinition) { draft = definition; super.init() }
-    static func edit(_ original:AutomationDefinition) -> AutomationDefinition? {
-        let editor = AutomationStepEditor(original); editor.build()
+    private init(_ definition:AutomationDefinition, savedWorkflows:[AutomationDefinition]) { draft = definition; self.savedWorkflows = savedWorkflows; super.init() }
+    static func edit(_ original:AutomationDefinition, savedWorkflows:[AutomationDefinition] = []) -> AutomationDefinition? {
+        let editor = AutomationStepEditor(original,savedWorkflows:savedWorkflows); editor.build()
         NSApp.runModal(for:editor.window)
         editor.window.orderOut(nil)
         return editor.accepted ? editor.draft : nil
@@ -59,8 +61,10 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
     private func build() {
         window.title = "Rules — \(draft.name)"; window.isReleasedWhenClosed = false; window.delegate = self
         guard let content = window.contentView else { return }
-        let heading = NSTextField(labelWithString:"Rules run from top to bottom")
-        heading.font = .boldSystemFont(ofSize:16); heading.frame = NSRect(x:20,y:660,width:880,height:24); content.addSubview(heading)
+        let heading = NSTextField(labelWithString:"Automation name")
+        heading.font = .boldSystemFont(ofSize:16); heading.frame = NSRect(x:20,y:660,width:175,height:24); content.addSubview(heading)
+        nameField.stringValue = draft.name; nameField.isEditable = true; nameField.isSelectable = true; nameField.isBezeled = true
+        nameField.setAccessibilityLabel("Automation name"); nameField.frame = NSRect(x:200,y:656,width:720,height:30); content.addSubview(nameField)
         let note = NSTextField(labelWithString:"Choose a rule, fill in its fields, then test the result. Changes stay in this draft until you save.")
         note.frame = NSRect(x:20,y:632,width:900,height:22); content.addSubview(note)
         let column = NSTableColumn(identifier:NSUserInterfaceItemIdentifier("rule")); column.title = "Processing rules"; column.width = 870; table.addTableColumn(column)
@@ -71,12 +75,13 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         let edit = button("Edit…",#selector(editRule)), duplicate = button("Duplicate",#selector(duplicateRule)), up = button("Move Up",#selector(moveUp)), down = button("Move Down",#selector(moveDown)), remove = button("Remove",#selector(removeRule))
         selectionButtons = [edit,duplicate,up,down,remove]
         let actions = NSStackView(views:[addButton,edit,duplicate,up,down,remove]); actions.spacing = 8; actions.frame = NSRect(x:20,y:342,width:670,height:32); content.addSubview(actions)
-        let recipe = button("Load Recipe Rules…",#selector(loadRecipe)); recipe.frame = NSRect(x:735,y:342,width:185,height:32); content.addSubview(recipe)
+        let load = button("Load Rules…",#selector(loadRules)); load.frame = NSRect(x:680,y:342,width:120,height:32); content.addSubview(load)
+        let export = button("Export Rules…",#selector(exportRules)); export.frame = NSRect(x:800,y:342,width:120,height:32); content.addSubview(export)
         for (title,x) in [("Sample input — paste text to test",20.0),("Test result — read only",480.0)] {
             let label = NSTextField(labelWithString:title); label.frame = NSRect(x:x,y:309,width:440,height:24); content.addSubview(label)
         }
         for (text,x,editable) in [(sample,20.0,true),(result,480.0,false)] {
-            text.isRichText = false; text.isEditable = editable; text.font = .monospacedSystemFont(ofSize:12,weight:.regular)
+            text.isRichText = false; text.isEditable = editable; text.isSelectable = true; text.allowsUndo = editable; text.font = .monospacedSystemFont(ofSize:12,weight:.regular)
             text.isAutomaticQuoteSubstitutionEnabled = false; text.isAutomaticDashSubstitutionEnabled = false
             text.isVerticallyResizable = true; text.autoresizingMask = [.width]; text.textContainer?.widthTracksTextView = true
             text.setAccessibilityLabel(editable ? "Sample input" : "Test result")
@@ -88,7 +93,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         status.frame = NSRect(x:150,y:62,width:760,height:44); content.addSubview(status)
         let cancel = button("Cancel",#selector(cancel)); cancel.keyEquivalent = "\u{1b}"; cancel.frame = NSRect(x:680,y:18,width:100,height:32); content.addSubview(cancel)
         let save = button("Use These Rules",#selector(save)); save.keyEquivalent = "\r"; save.frame = NSRect(x:785,y:18,width:135,height:32); content.addSubview(save)
-        reload(0); window.center(); window.makeKeyAndOrderFront(nil)
+        reload(0); window.center(); window.initialFirstResponder = nameField; window.makeKeyAndOrderFront(nil); window.makeFirstResponder(nameField); nameField.selectText(nil)
     }
     func numberOfRows(in tableView:NSTableView) -> Int { draft.steps.count }
     func tableView(_ tableView:NSTableView,viewFor tableColumn:NSTableColumn?,row:Int) -> NSView? {
@@ -120,11 +125,44 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
     @objc private func removeRule() { let i = table.selectedRow; guard draft.steps.indices.contains(i) else { return }; draft.steps.remove(at:i); reload(i) }
     @objc private func moveUp() { let i = table.selectedRow; guard i > 0 else { return }; draft.steps.swapAt(i,i-1); reload(i-1) }
     @objc private func moveDown() { let i = table.selectedRow; guard i >= 0,i+1 < draft.steps.count else { return }; draft.steps.swapAt(i,i+1); reload(i+1) }
-    @objc private func loadRecipe() {
-        let alert = NSAlert(); alert.messageText = "Load recipe rules into this draft?"
-        alert.informativeText = "Replaces this draft’s rules with editable heading and note removals for the four supplied recipe samples. Other text and duplicate ingredients are retained. Your saved workflow changes only after you save."
-        alert.addButton(withTitle:"Load Rules"); alert.addButton(withTitle:"Cancel")
-        if alert.runModal() == .alertFirstButtonReturn { draft.steps = AutomationDefinition.shoppingRecipeSteps; reload(0) }
+    @objc private func loadRules() {
+        window.makeFirstResponder(nil)
+        var sets = savedWorkflows.map { AutomationRuleSet(name:$0.name,steps:$0.steps) }
+        let savedCount = sets.count
+        sets += [AutomationRuleSet(name:"Trim and remove empty lines",steps:[.init(kind:.trimWhitespace),.init(kind:.removeBlankLines)]),
+                 AutomationRuleSet(name:"Sort unique lines",steps:[.init(kind:.sortLines),.init(kind:.deduplicateLines)]),
+                 AutomationRuleSet(name:"Recipe ingredient cleanup",steps:AutomationDefinition.shoppingRecipeSteps)]
+        let picker = NSAlert(); picker.messageText = "Load Rules"
+        picker.informativeText = "Copy rules from any saved automation or template, or import a rule file. Only this draft’s processing steps are replaced; its name, input, output and shortcuts stay unchanged."
+        picker.addButton(withTitle:"Load Selected"); picker.addButton(withTitle:"Cancel"); picker.addButton(withTitle:"Import File…")
+        let choices = NSPopUpButton(frame:NSRect(x:0,y:0,width:540,height:28),pullsDown:false)
+        for (i,set) in sets.enumerated() { choices.addItem(withTitle:(i < savedCount ? "Saved: " : "Template: ") + set.name) }
+        picker.accessoryView = choices
+        let response = picker.runModal()
+        do {
+            let selected:AutomationRuleSet
+            if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
+                let panel = NSOpenPanel(); panel.title = "Import Processing Rules"; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                let text = try AutomationFileInput.read(url,limit:1_048_576)
+                selected = try AutomationRuleSet.decode(Data(text.utf8))
+            } else if response == .alertFirstButtonReturn, sets.indices.contains(choices.indexOfSelectedItem) {
+                selected = sets[choices.indexOfSelectedItem]
+            } else { return }
+            try selected.validate()
+            let confirm = NSAlert(); confirm.messageText = "Replace this draft’s rules?"; confirm.informativeText = "Load \(selected.steps.count) processing steps from ‘\(selected.name)’. Canceling the builder will still preserve the saved automation."
+            confirm.addButton(withTitle:"Replace Rules"); confirm.addButton(withTitle:"Cancel")
+            if confirm.runModal() == .alertFirstButtonReturn { draft.steps = selected.steps; reload(0) }
+        } catch { NSAlert(error:error).runModal() }
+    }
+    @objc private func exportRules() {
+        window.makeFirstResponder(nil)
+        do {
+            let data = try AutomationRuleSet(name:nameField.stringValue,steps:draft.steps).encoded()
+            let panel = NSSavePanel(); panel.title = "Export Processing Rules"; panel.nameFieldStringValue = "Automation-Rules.json"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            try data.write(to:url,options:.atomic)
+        } catch { NSAlert(error:error).runModal() }
     }
     @objc private func testRules() {
         window.makeFirstResponder(nil); invalidatePreview()
@@ -144,7 +182,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
             }
         }
     }
-    @objc private func save() { do { try draft.validate(); accepted = true; invalidatePreview(); NSApp.stopModal() } catch { NSAlert(error:error).runModal() } }
+    @objc private func save() { window.makeFirstResponder(nil); draft.name = nameField.stringValue; do { try draft.validate(); accepted = true; invalidatePreview(); NSApp.stopModal() } catch { NSAlert(error:error).runModal() } }
     @objc private func cancel() { invalidatePreview(); NSApp.stopModal() }
     func windowShouldClose(_ sender:NSWindow) -> Bool { cancel(); return false }
     static func editStep(_ initial:AutomationDefinition.Step) -> AutomationDefinition.Step? {

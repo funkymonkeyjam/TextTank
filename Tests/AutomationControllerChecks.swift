@@ -17,6 +17,55 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         guard try condition() else { fatalError("FAIL: \(name)") }; checks += 1
         print("PASS: \(name)")
     }
+    static func descendants(_ view:NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    static func typeKeys(_ text:String, in window:NSWindow) {
+        for character in text {
+            let value=String(character)
+            let event=NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:ProcessInfo.processInfo.systemUptime,windowNumber:window.windowNumber,context:nil,characters:value,charactersIgnoringModifiers:value,isARepeat:false,keyCode:0)!
+            window.sendEvent(event)
+        }
+    }
+    static func modalKeyboardChecks(_ controller:AutomationController) throws {
+        var stage=0, nameAccepted=false, sampleAccepted=false, reentryBlocked=false, timedOut=false
+        let deadline=Date().addingTimeInterval(8)
+        let timer=Timer(timeInterval:0.1,repeats:true) { _ in
+            guard let modal=NSApp.modalWindow,let content=modal.contentView else{return}
+            let views=descendants(content), buttons=views.compactMap{$0 as? NSButton}
+            if Date() > deadline { timedOut=true;NSApp.abortModal();return }
+            if stage==0,let create=buttons.first(where:{$0.title=="Create Automation…"}) {
+                stage=1;create.performClick(nil)
+            } else if stage==1,let name=views.compactMap({$0 as? NSTextField}).first(where:{$0.stringValue=="My Automation" && $0.isEditable}) {
+                stage=2
+                name.selectText(nil)
+                typeKeys("Keyboard Recipe",in:modal)
+                modal.makeFirstResponder(nil)
+                nameAccepted=name.stringValue=="Keyboard Recipe" && name.isEditable
+                // A guarded management call must return without creating another modal.
+                // A nested watchdog closes a regression-created alert so the test never hangs.
+                var returned=false, openedNested=false
+                let guardTimer=Timer(timeInterval:0.1,repeats:false) { _ in
+                    if !returned,NSApp.modalWindow !== modal { openedNested=true;NSApp.abortModal() }
+                }
+                RunLoop.main.add(guardTimer,forMode:.modalPanel)
+                controller.manage()
+                returned=true;guardTimer.invalidate()
+                reentryBlocked = !openedNested && NSApp.modalWindow === modal
+            } else if stage==2,let cancel=buttons.first(where:{$0.title=="Cancel"}),let sample=views.compactMap({$0 as? NSTextView}).first(where:{$0.accessibilityLabel()=="Sample input"}) {
+                stage=3
+                modal.makeFirstResponder(sample)
+                typeKeys("2 eggs",in:modal)
+                sampleAccepted=sample.string=="2 eggs" && modal.firstResponder === sample
+                cancel.performClick(nil)
+            }
+        }
+        RunLoop.main.add(timer,forMode:.modalPanel)
+        controller.manage()
+        timer.invalidate()
+        try check(!timedOut && stage==3,"native Create Automation and Rules modal chain completed")
+        try check(nameAccepted,"Create Automation name accepts dispatched keyboard events")
+        try check(sampleAccepted,"Sample Input accepts dispatched keyboard events")
+        try check(reentryBlocked,"management cannot open another dialog during Create Automation")
+    }
     static func main() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("TextTankAutomationControllerChecks-" + UUID().uuidString)
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
@@ -161,6 +210,9 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         try check(AutomationController.matchingExport(rows:["3 eggs"],destinationID:"list-a",batches:[confirmed]) == nil,"changed content is distinct export")
         try check(AutomationController.matchingExport(rows:["2 eggs"],destinationID:"list-b",batches:[confirmed]) == nil,"different destination is distinct export")
         try check(AutomationController.matchingExport(rows:["2 eggs","2 eggs"],destinationID:"list-a",batches:[confirmed]) == nil,"intentional duplicate rows retain identity")
+        let beforeModal=try Data(contentsOf:path)
+        try modalKeyboardChecks(restarted)
+        try check(try Data(contentsOf:path)==beforeModal,"Cancel from keyboard-edited rule draft preserves saved definitions")
         withExtendedLifetime(toolbarHost) {}
         print("PASS AutomationControllerChecks: \(checks) native assertions; no Reminders access")
     }
