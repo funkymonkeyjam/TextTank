@@ -62,16 +62,29 @@ struct FolderSearchFilters: Equatable, Sendable {
         excludedAllFolders.contains { Self.matches(name, $0) }
             || (depth == 1 && excludedTopFolders.contains { Self.matches(name, $0) })
     }
-    /// Greedy wildcard backtracking uses constant auxiliary state, never regex.
+    /// A name matches when it matches as precomposed (NFC) Unicode scalars, so a decomposed file
+    /// name (an unzipped archive, a synced folder) meets a typed pattern and ? is one character;
+    /// or as UTF-16 units, the Windows reference behaviour, so every pattern that matched before
+    /// still does. An exclusion can therefore only protect more files than it did.
+    /// Lowercase first: lowercasing can itself decompose (U+0130 becomes i and U+0307).
     static func matches(_ name: String, _ pattern: String) -> Bool {
-        let input = Array(name.lowercased().utf16),
-            pattern = Array((pattern == "*.*" ? "*" : pattern).lowercased().utf16)
+        let name = name.lowercased(), pattern = (pattern == "*.*" ? "*" : pattern).lowercased()
+        if wildcardMatch(Array(name.utf16), Array(pattern.utf16), any: 63, many: 42) { return true }
+        let scalars = Array(name.precomposedStringWithCanonicalMapping.unicodeScalars),
+            patternScalars = Array(pattern.precomposedStringWithCanonicalMapping.unicodeScalars)
+        // Scalars, not Characters: a combining mark must not fuse with a literal "." or "*".
+        return wildcardMatch(scalars, patternScalars, any: "?", many: "*")
+    }
+    /// Greedy wildcard backtracking uses constant auxiliary state, never regex.
+    private static func wildcardMatch<Unit: Equatable>(_ input: [Unit], _ pattern: [Unit], any: Unit, many: Unit)
+        -> Bool
+    {
         var i = 0, p = 0, star: Int?, retry = 0
         while i < input.count {
-            if p < pattern.count && (pattern[p] == 63 || pattern[p] == input[i]) {
+            if p < pattern.count && (pattern[p] == any || pattern[p] == input[i]) {
                 i += 1
                 p += 1
-            } else if p < pattern.count && pattern[p] == 42 {
+            } else if p < pattern.count && pattern[p] == many {
                 star = p
                 p += 1
                 retry = i
@@ -83,7 +96,7 @@ struct FolderSearchFilters: Equatable, Sendable {
                 return false
             }
         }
-        while p < pattern.count && pattern[p] == 42 { p += 1 }
+        while p < pattern.count && pattern[p] == many { p += 1 }
         return p == pattern.count
     }
 }

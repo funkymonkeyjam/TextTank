@@ -30,6 +30,10 @@ import Darwin
             try FileManager.default.createSymbolicLink(
                 at: root.appendingPathComponent("symlink.txt"), withDestinationURL: outside)
             var request = FolderSearchRequest(directory: root, query: "🦋")
+            // F42: policy exclusions are only counted unless a request asks for the list. The
+            // checks below that read individual exclusions ask for it; the default is checked
+            // against the same tree further down.
+            request.listsPolicyExclusions = true
             let report = try await FolderSearch.search(request)
             check(report.matches.count == 6, "recursive Unicode search across strict UTF8/UTF16")
             let hits = report.matches.filter { $0.url.lastPathComponent == unicodeURL.lastPathComponent }
@@ -69,6 +73,29 @@ import Darwin
                 visible.matches.count == 7 && visible.skipped.contains { $0.reason == .extensionFiltered },
                 "hidden opt-in and exact case-insensitive extension filter")
             check(visible.isComplete, "policy exclusions do not imply incomplete coverage")
+            var counted = FolderSearchRequest(directory: root, query: "🦋")
+            let countedReport = try await FolderSearch.search(counted)
+            check(
+                countedReport.matches == report.matches && countedReport.isComplete == report.isComplete
+                    && countedReport.excludedCounts == report.excludedCounts,
+                "counting exclusions changes no match, count or coverage verdict")
+            check(
+                countedReport.excludedCounts == [.symbolicLink: 1, .hidden: 1] && countedReport.excludedTotal == 2,
+                "policy exclusions are counted by reason")
+            check(
+                countedReport.skipped.count == 1 && countedReport.skipped.allSatisfy { $0.reason.affectsCoverage }
+                    && countedReport.notSearched == countedReport.skipped
+                    && countedReport.skipped[0].url.lastPathComponent == "invalid.bin",
+                "only entries that could not be searched are listed by default")
+            check(
+                report.skipped.count == 3 && report.notSearched.count == 1,
+                "the opt-in list holds the exclusions as well as the entry that could not be searched")
+            counted.extensions = ["none"]
+            let allFiltered = try await FolderSearch.search(counted)
+            check(
+                allFiltered.skipped.isEmpty && allFiltered.isComplete
+                    && allFiltered.excludedCounts[.extensionFiltered] == 4
+                    && allFiltered.filesSearched == 0, "files left out by a filter cost a counter, not a list entry")
             check(!report.isComplete, "invalid encoding explicitly makes coverage incomplete")
             let literalURL = root.appendingPathComponent("literal.txt")
             try Data("a.*b A.*B café café\0tail".utf8).write(to: literalURL)
@@ -93,13 +120,25 @@ import Darwin
             check(zeros.matches.count == 1 && zeros.matches[0].utf8Range.length == 0, "zero-width folder offsets")
             var malformed = FolderSearchRequest(directory: root, query: "(")
             malformed.mode = .regularExpression
-            let malformedReport = try await FolderSearch.search(malformed)
-            check(
-                !malformedReport.isComplete && malformedReport.matches.isEmpty
-                    && malformedReport.skipped.contains {
-                        if case .unreadable(let reason) = $0.reason { return reason.hasPrefix("Search:") }
-                        return false
-                    }, "invalid folder regex explicit per-file failure")
+            // F200: an expression that cannot compile is one error before any file is read, on
+            // both entry points. This check used to pin one "unreadable" skip per file.
+            func invalidRequest(_ error: Error) -> Bool {
+                if case FolderSearchError.invalidRequest(let reason)? = error as? FolderSearchError {
+                    return !reason.isEmpty
+                }
+                return false
+            }
+            await rejects("invalid folder regex is one up-front error", where: invalidRequest) {
+                _ = try await FolderSearch.search(malformed)
+            }
+            await rejects("invalid folder regex is one up-front error across roots", where: invalidRequest) {
+                _ = try await FolderSearch.searchAcross(malformed, directories: [root])
+            }
+            let cancelledFirst = FolderSearchCancellation()
+            cancelledFirst.cancel()
+            await checkAsync(
+                try await FolderSearch.search(regex, cancellation: cancelledFirst).wasCancelled,
+                "a cancelled search with a valid expression still reports cancellation, not an error")
             let nul = try await FolderSearch.search(FolderSearchRequest(directory: root, query: "\0tail"))
             check(nul.matches.count == 1 && nul.matches[0].utf8Range.length == 5, "embedded NUL literal query retained")
             let crossing = try await FolderSearch.search(FolderSearchRequest(directory: root, query: "\r\nβ"))
@@ -171,6 +210,99 @@ import Darwin
                 try await FolderSearch.search(request).skipped.contains {
                     $0.url.lastPathComponent == fifo.lastPathComponent && $0.reason == .notRegularFile
                 }, "FIFO skipped without blocking reader")
+            // F200: once the expression compiles, a failure while searching one file skips that
+            // file only. Catastrophic backtracking is stopped by the engine for the first file.
+            let perFile = root.deletingLastPathComponent().appendingPathComponent(
+                "TextTankFolderSearchPerFile-" + UUID().uuidString
+            ).resolvingSymlinksInPath()
+            try FileManager.default.createDirectory(at: perFile, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: perFile) }
+            try Data(String(repeating: "x", count: 48).utf8).write(to: perFile.appendingPathComponent("slow.txt"))
+            try Data("xxy".utf8).write(to: perFile.appendingPathComponent("quick.txt"))
+            var costly = FolderSearchRequest(directory: perFile, query: "(x+x+)+y")
+            costly.mode = .regularExpression
+            let costlyReport = try await FolderSearch.search(costly)
+            check(
+                costlyReport.matches.map { $0.url.lastPathComponent } == ["quick.txt"] && !costlyReport.isComplete
+                    && costlyReport.skipped.count == 1
+                    && costlyReport.skipped.contains {
+                        if case .unreadable(let reason) = $0.reason {
+                            return reason.hasPrefix("Search:") && $0.url.lastPathComponent == "slow.txt"
+                        }
+                        return false
+                    }, "a search failure in one file skips that file and the other file still matches")
+            // F47 and F200: half a surrogate pair in an Extended query can never match a whole
+            // character. It is refused once, up front, and no root is reported unreadable.
+            try Data("ab😀cd".utf8).write(to: perFile.appendingPathComponent("emoji.txt"))
+            try Data("abcd".utf8).write(to: perFile.appendingPathComponent("plain.txt"))
+            var half = FolderSearchRequest(directory: perFile, query: "\\uD83D")
+            half.mode = .extended
+            await rejects("half a surrogate pair in a folder query is one up-front error", where: invalidRequest) {
+                _ = try await FolderSearch.search(half)
+            }
+            var whole = FolderSearchRequest(directory: perFile, query: "cd")
+            whole.mode = .extended
+            await checkAsync(
+                try await Set(FolderSearch.search(whole).matches.map { $0.url.lastPathComponent }) == [
+                    "emoji.txt", "plain.txt"
+                ], "an Extended query matches beside an emoji in every file")
+            // F47: a range that splits a character is a nil for this file, never a thrown error
+            // that would discard the whole root.
+            check(
+                FolderSearch.located([NSRange(location: 2, length: 1)], in: "ab😀cd", stop: { false }) == nil
+                    && FolderSearch.located([NSRange(location: 4, length: 9)], in: "ab😀cd", stop: { false }) == nil
+                    && FolderSearch.located(
+                        [NSRange(location: 4, length: 1), NSRange(location: 2, length: 2)], in: "ab😀cd",
+                        stop: { false }) == nil
+                    && FolderSearch.located([NSRange(location: 0, length: 1)], in: "ab", stop: { true }) == nil,
+                "a range that splits a character, runs past the end or goes backwards, or a stop, locates nothing")
+            let positions = FolderSearch.located(
+                [NSRange(location: 2, length: 2), NSRange(location: 6, length: 1)], in: "ab😀\r\ncd", stop: { false })
+            check(
+                positions?.count == 2 && positions?[0].line == 1 && positions?[0].columnUTF16 == 3
+                    && positions?[0].utf8Range == SearchSpan(location: 2, length: 4) && positions?[1].line == 2
+                    && positions?[1].columnUTF16 == 1 && positions?[1].utf8Range == SearchSpan(location: 8, length: 1),
+                "whole-character ranges are located by line, column and UTF-8 span")
+            check(
+                FolderSearch.relativeComponents(of: "/r/a/\u{301}b/c", under: "/r/") ?? [] == ["a", "\u{301}b", "c"]
+                    && FolderSearch.relativeComponents(of: "/r/a//b", under: "/r/") ?? [] == ["a", "b"],
+                "relative components are split on the path separator byte")
+            check(
+                FolderSearch.relativeComponents(of: "/r/../x", under: "/r/") == nil
+                    && FolderSearch.relativeComponents(of: "/r/./x", under: "/r/") == nil
+                    && FolderSearch.relativeComponents(of: "/r/a\0b", under: "/r/") == nil
+                    && FolderSearch.relativeComponents(of: "/r/", under: "/r/") == nil
+                    && FolderSearch.relativeComponents(of: "/other/x", under: "/r/") == nil
+                    && FolderSearch.relativeComponents(of: "/rr/x", under: "/r") == nil,
+                "a path outside the root, or with a dot, dot-dot or NUL component, has no components")
+            // G352: a name that starts with a combining mark is inside the root. Comparing
+            // Characters fused the mark with the "/" before it.
+            let marked = root.deletingLastPathComponent().appendingPathComponent(
+                "TextTankFolderSearchMarks-" + UUID().uuidString
+            ).resolvingSymlinksInPath()
+            let markedDirectory = marked.appendingPathComponent("sub").appendingPathComponent("\u{301}dir")
+            try FileManager.default.createDirectory(at: markedDirectory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: marked) }
+            try Data("needle".utf8).write(to: marked.appendingPathComponent("\u{301}lead.txt"))
+            try Data("needle".utf8).write(to: markedDirectory.appendingPathComponent("inner.txt"))
+            // G344: a decomposed file name, as an unzipped archive or a synced folder stores it.
+            try Data("needle".utf8).write(to: marked.appendingPathComponent("cafe\u{301}.md"))
+            let markedReport = try await FolderSearch.search(FolderSearchRequest(directory: marked, query: "needle"))
+            check(
+                markedReport.matches.count == 3 && markedReport.isComplete
+                    && !markedReport.skipped.contains {
+                        if case .unreadable = $0.reason { return true }
+                        return false
+                    }, "names that start with a combining mark are searched, at the root and below it")
+            var composedFilter = FolderSearchRequest(directory: marked, query: "needle")
+            composedFilter.filenameFilters = "caf\u{e9}*.md"
+            await checkAsync(
+                try await FolderSearch.search(composedFilter).matches.count == 1,
+                "a composed filename filter finds a file whose name is stored decomposed")
+            composedFilter.filenameFilters = "*.* !caf\u{e9}*.md"
+            await checkAsync(
+                try await FolderSearch.search(composedFilter).matches.count == 2,
+                "a composed exclusion filter keeps a decomposed file name out of the results")
             Checks.summary {
                 "PASS FolderSearchChecks: \(Checks.count) assertions; normal/extended/Boost cases, no complete parity or disk replacement claim"
             }

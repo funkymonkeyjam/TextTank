@@ -587,10 +587,9 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             let backwards = action == "previous"
             let continuing =
                 lastNavigation.map { $0.editor === editor && $0.revision == revision && $0.range == selection } ?? false
-            let candidates = report.hits.filter { h in
-                backwards
-                    ? NSMaxRange(h.range) <= selection.location && !(continuing && h.range == selection)
-                    : h.range.location >= NSMaxRange(selection) && !(continuing && h.range == selection)
+            let candidates = report.hits.filter {
+                SearchCore.isNavigationCandidate(
+                    $0.range, from: selection, backwards: backwards, continuing: continuing)
             }
             let hit =
                 (backwards ? candidates.last : candidates.first)
@@ -690,10 +689,9 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 let continuing =
                     lastNavigation.map { $0.editor === e && $0.revision == e.revision && $0.range == selection }
                     ?? false
-                let candidates = available.filter { r in
-                    backwards
-                        ? NSMaxRange(r.hit.range) <= selection.location && !(continuing && r.hit.range == selection)
-                        : r.hit.range.location >= NSMaxRange(selection) && !(continuing && r.hit.range == selection)
+                let candidates = available.filter {
+                    SearchCore.isNavigationCandidate(
+                        $0.hit.range, from: selection, backwards: backwards, continuing: continuing)
                 }
                 row = backwards ? candidates.last : candidates.first
             }

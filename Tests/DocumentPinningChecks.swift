@@ -282,9 +282,10 @@ extension DocumentChecks {
                 fixed: same(
                     EditorTransform.invertCase.transform(EditorTransform.invertCase.transform("stra\u{DF}e")),
                     "stra\u{DF}e"))
-            knownDefect(
-                "G354", "a filename glob typed precomposed matches a decomposed file name",
-                fixed: FolderSearchFilters.matches("caf\(UnicodeFixtures.nfd).txt", "caf\(UnicodeFixtures.nfc).*"))
+            // Repaired by G344: this was a G354 known-defect line.
+            check(
+                FolderSearchFilters.matches("caf\(UnicodeFixtures.nfd).txt", "caf\(UnicodeFixtures.nfc).*"),
+                "a filename glob typed precomposed matches a decomposed file name")
             var word = SearchOptions()
             word.query = "cat"
             word.wholeWord = true

@@ -46,8 +46,29 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     private var replaceButton: NSButton!
     private(set) var lastReplacementOutcomes: [FolderReplacementOutcome] = []
     private var matches: [FolderSearchMatch] = []
-    private var searchedQuery = "", searchedCase = true
     private var searchedOptions = SearchOptions()
+    /// True from the confirmation of Replace Matched Files until its report is shown or the
+    /// window closes. A new search is refused meanwhile: starting one cancels the shared flag.
+    private var replacing = false
+    /// Asks before any file is changed. Replaceable so that checks need no modal alert.
+    var confirmReplacement: (_ explanation: String) -> Bool = { explanation in
+        let alert = TTAlert()
+        alert.messageText = "Replace Matched Files?"
+        alert.informativeText = explanation
+        alert.addButton(withTitle: "Replace Files").identifier = NSUserInterfaceItemIdentifier("folder.replace.confirm")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+    /// Passed to FolderReplacement as `beforeCommit`; nil in the app. Runs on the worker.
+    var replacementBeforeCommit: (@Sendable (URL) -> Void)?
+    /// Opens a result's file as a document. Replaceable so that checks show no window.
+    var openResultDocument: (URL, @escaping (NSDocument?, Error?) -> Void) -> Void = { url, completion in
+        NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { document, _, error in
+            completion(document, error)
+        }
+    }
+    /// At most this many not-searched entries are written to the details view.
+    static let maximumListedProblems = 200
     private var generation = UUID()
     private var cancellation: FolderSearchCancellation?
     private var work: Task<Void, Never>?
@@ -201,6 +222,11 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         try value.save(defaults)
     }
     @objc private func startSearch(_ sender: Any?) {
+        // Before anything else, so that a refused Return has no side effect at all.
+        guard !replacing else {
+            status.stringValue = "Replacement in progress. Cancel it or wait for the report before searching."
+            return
+        }
         window?.makeFirstResponder(nil)
         let roots = scope.indexOfSelectedItem == 1 ? workspaceRoots() : (folder.map { [$0] } ?? [])
         guard let folder = roots.first else {
@@ -252,8 +278,6 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         table.reloadData()
         details.string =
             "Limits: 10,000 files · 100,000 entries · 32 MiB/file · 256 MiB total · 10,000 results. Symbolic links are excluded. Filename filters: \(request.filenameFilters)."
-        searchedQuery = query
-        searchedCase = request.matchCase
         searchButton.isEnabled = false
         cancelButton.isEnabled = true
         status.stringValue = "Searching…"
@@ -276,16 +300,18 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                 self.table.reloadData()
                 self.replaceButton.isEnabled =
                     !report.wasCancelled && report.reachedLimit == nil && !report.matches.isEmpty
+                let problems = report.notSearched, excluded = report.excludedTotal
                 self.status.stringValue =
-                    "\(report.matches.count) matches · \(report.filesSearched) files searched · \(report.skipped.count) skipped"
+                    "\(report.matches.count) matches · \(report.filesSearched) files searched"
+                    + (problems.isEmpty ? "" : " · \(problems.count) not searched (errors)")
+                    + (excluded == 0 ? "" : " · \(excluded) excluded by filters or settings")
                     + (report.wasCancelled ? " · Cancelled (partial results)" : "")
                     + (report.reachedLimit.map { " · Limit reached: \($0.rawValue) (partial results)" } ?? "")
                 self.lastOutcome = .searched(
-                    matches: report.matches.count, filesSearched: report.filesSearched, skipped: report.skipped.count,
-                    cancelled: report.wasCancelled, limitReached: report.reachedLimit != nil)
-                self.details.string +=
-                    "\n"
-                    + report.skipped.map { "\($0.url.path): \(String(describing:$0.reason))" }.joined(separator: "\n")
+                    matches: report.matches.count, filesSearched: report.filesSearched,
+                    skipped: problems.count + excluded, cancelled: report.wasCancelled,
+                    limitReached: report.reachedLimit != nil)
+                self.details.string += "\n" + Self.skipDetails(report)
                 self.finish()
             } catch {
                 guard let self, self.generation == token else { return }
@@ -298,20 +324,21 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     @objc private func replaceMatchedFiles(_ sender: Any?) {
         guard cancellation == nil, let fallbackDirectory = searchedFolder, !matches.isEmpty else { return }
         let grouped = Dictionary(grouping: matches, by: { $0.sourceRoot ?? fallbackDirectory })
-        let alert = TTAlert()
-        alert.messageText = "Replace Matched Files?"
-        alert.informativeText =
-            "Replace matches in \(Set(matches.map(\.url)).count) files across \(grouped.count) root(s) from the completed search. Each changed file gets a byte-exact .texttank-backup copy beside it. Files open in TextTank, changed since search, read-only, symlinked are skipped. Changes commit per file, not as one transaction."
-        alert.addButton(withTitle: "Replace Files").identifier = NSUserInterfaceItemIdentifier("folder.replace.confirm")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard
+            confirmReplacement(
+                "Replace matches in \(Set(matches.map(\.url)).count) files across \(grouped.count) root(s) from the completed search. Each changed file gets a byte-exact .texttank-backup copy beside it. Files open in TextTank, changed since search, read-only, symlinked are skipped. Changes commit per file, not as one transaction."
+            )
+        else { return }
+        // The confirmation is modal; nothing may have started meanwhile.
+        guard cancellation == nil, !matches.isEmpty else { return }
         window?.makeFirstResponder(nil)
         var options = searchedOptions
         options.replacement = replacementField.stringValue
         let excluded = Set(NSDocumentController.shared.documents.compactMap { $0.fileURL }), snapshot = matches,
-            flag = FolderSearchCancellation(), token = UUID()
+            flag = FolderSearchCancellation(), token = UUID(), beforeCommit = replacementBeforeCommit
         generation = token
         cancellation = flag
+        replacing = true
         searchButton.isEnabled = false
         replaceButton.isEnabled = false
         cancelButton.isEnabled = true
@@ -327,7 +354,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                     do {
                         outcomes += try FolderReplacement.replace(
                             directory: directory, matches: selected, options: options, excluding: excluded,
-                            cancellation: flag)
+                            cancellation: flag, beforeCommit: beforeCommit)
                     } catch {
                         outcomes += Set(selected.map(\.url)).map {
                             FolderReplacementOutcome(
@@ -369,7 +396,29 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         cancelButton.isEnabled = false
         work = nil
         cancellation = nil
+        replacing = false
         isSearching = false
+    }
+    /// The text added to the details view after a search: the entries that could not be
+    /// searched, capped, then one line of counts for what the filters left out on purpose.
+    static func skipDetails(_ report: FolderSearchReport) -> String {
+        var lines: [String] = []
+        let problems = report.notSearched
+        if !problems.isEmpty {
+            lines.append("Not searched (\(problems.count)):")
+            lines += problems.prefix(maximumListedProblems).map { "\($0.url.path): \($0.reason.explanation)" }
+            if problems.count > maximumListedProblems {
+                lines.append("… and \(problems.count - maximumListedProblems) more not listed.")
+            }
+        }
+        let counts = FolderSearchSkipReason.policyExclusions.compactMap { reason in
+            report.excludedCounts[reason].map { "\($0) \(reason.explanation)" }
+        }
+        if !counts.isEmpty {
+            lines.append(
+                "Excluded by filters or settings (\(report.excludedTotal)): " + counts.joined(separator: " · "))
+        }
+        return lines.joined(separator: "\n")
     }
     @objc private func cancelSearch(_ sender: Any?) {
         cancellation?.cancel()
@@ -392,53 +441,35 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             return match.preview.replacingOccurrences(of: "\n", with: " ↵ ").replacingOccurrences(of: "\r", with: " ↵ ")
         }
     }
-    /// Validates both recorded offsets against the live buffer, including dirty documents.
-    static func validatedRange(_ match: FolderSearchMatch, text: String, query: String, matchCase: Bool) -> NSRange? {
-        let bytes = Array(text.utf8), span = match.utf8Range
-        guard !query.isEmpty, span.location >= 0, span.length > 0, span.location <= bytes.count,
-            span.length <= bytes.count - span.location
-        else { return nil }
-        let selected = String(decoding: bytes[span.location..<span.location + span.length], as: UTF8.self)
-        guard Array(selected.utf8) == Array(bytes[span.location..<span.location + span.length]) else { return nil }
-        let prefix = String(decoding: bytes[..<span.location], as: UTF8.self)
-        guard prefix.utf8.count == span.location, prefix.utf16.count == match.utf16Range.location,
-            selected.utf16.count == match.utf16Range.length
-        else { return nil }
-        let options: NSString.CompareOptions = matchCase ? [.literal] : [.literal, .caseInsensitive]
-        let found = (selected as NSString).range(of: query, options: options)
-        guard found.location == 0, found.length == (selected as NSString).length else { return nil }
-        return NSRange(location: span.location, length: span.length)
-    }
+    /// The one validation behind opening a result: selects the match in `editor` only if the
+    /// editor still holds `snapshot` at `revision`, the search of that snapshot (`hits`) still
+    /// reports the match at the recorded UTF-16 range, and that range is the recorded UTF-8 range.
+    /// Dirty documents are judged by their live text. False leaves the selection alone.
     @discardableResult static func selectResult(
-        _ match: FolderSearchMatch, in document: TextDocument, query: String, matchCase: Bool
+        _ match: FolderSearchMatch, in editor: TTEditor, snapshot: String, revision: UInt, hits: [SearchHit]?
     ) -> Bool {
-        guard let range = validatedRange(match, text: document.editor.text, query: query, matchCase: matchCase) else {
-            return false
-        }
-        let editor = (document.windowControllers.first as? EditorWindowController)?.activeEditor ?? document.editor
-        return editor.setSelectionAnchor(range.location, caret: range.location + range.length)
-    }
-    @discardableResult static func selectResult(
-        _ match: FolderSearchMatch, in document: TextDocument, options: SearchOptions
-    ) -> Bool {
-        let editor = (document.windowControllers.first as? EditorWindowController)?.activeEditor ?? document.editor
-        let text = editor.text
-        guard let report = try? SearchCore.search(text, options: options),
-            report.hits.contains(where: {
-                $0.range == NSRange(location: match.utf16Range.location, length: match.utf16Range.length)
-            }),
-            let bytes = SearchCore.byteRange(
-                NSRange(location: match.utf16Range.location, length: match.utf16Range.length), in: text),
+        let recorded = NSRange(location: match.utf16Range.location, length: match.utf16Range.length)
+        guard editor.revision == revision, editor.text == snapshot,
+            hits?.contains(where: { $0.range == recorded }) == true,
+            let bytes = SearchCore.byteRange(recorded, in: snapshot),
             bytes == NSRange(location: match.utf8Range.location, length: match.utf8Range.length)
         else { return false }
         return editor.setSelectionAnchor(bytes.location, caret: NSMaxRange(bytes))
     }
-    @objc private func openResult(_ sender: Any?) {
-        let row = table.clickedRow
+    @objc private func openResult(_ sender: Any?) { activateResult(row: table.clickedRow) }
+    /// Opens the result in `row` and selects its match. Refused while a search or a replacement
+    /// is running: a file opened mid-run would be rewritten on disk underneath its new document.
+    func activateResult(row: Int) {
+        guard cancellation == nil else {
+            status.stringValue =
+                replacing
+                ? "Replacement in progress; open results after it finishes."
+                : "Search in progress; open results after it finishes."
+            return
+        }
         guard matches.indices.contains(row) else { return }
         let match = matches[row], options = searchedOptions, token = generation
-        NSDocumentController.shared.openDocument(withContentsOf: match.url, display: true) {
-            [weak self] document, _, error in
+        openResultDocument(match.url) { [weak self] document, error in
             Task { @MainActor [weak self] in
                 guard let self, self.generation == token else { return }
                 if let error {
@@ -457,15 +488,8 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                 let report = try? await Task.detached(priority: .userInitiated) {
                     try SearchCore.search(snapshot, options: options)
                 }.value
-                guard self.generation == token, editor.window != nil, editor.revision == revision,
-                    editor.text == snapshot,
-                    report?.hits.contains(where: {
-                        $0.range == NSRange(location: match.utf16Range.location, length: match.utf16Range.length)
-                    }) == true,
-                    let bytes = SearchCore.byteRange(
-                        NSRange(location: match.utf16Range.location, length: match.utf16Range.length), in: snapshot),
-                    bytes == NSRange(location: match.utf8Range.location, length: match.utf8Range.length),
-                    editor.setSelectionAnchor(bytes.location, caret: NSMaxRange(bytes))
+                guard self.generation == token, editor.window != nil,
+                    Self.selectResult(match, in: editor, snapshot: snapshot, revision: revision, hits: report?.hits)
                 else {
                     self.status.stringValue =
                         "Result is stale or could not be revalidated. Search again; selection was not changed."

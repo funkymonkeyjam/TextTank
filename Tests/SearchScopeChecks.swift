@@ -25,6 +25,28 @@ import Foundation
             check(
                 FolderSearchFilters.matches("abXYZcd", "a*?cd") && !FolderSearchFilters.matches("acd", "a?cd"),
                 "wildcard suffix and required character")
+            // G344: names and patterns are compared as precomposed scalars, so the stored form of a
+            // file name does not decide whether a filter applies, and ? is one character.
+            let decomposed = "cafe\u{301}.txt", precomposed = "caf\u{e9}.txt"
+            check(
+                FolderSearchFilters.matches(decomposed, "caf\u{e9}*.txt")
+                    && FolderSearchFilters.matches(precomposed, "cafe\u{301}*.txt"),
+                "decomposed name matches composed pattern and the reverse")
+            check(FolderSearchFilters.matches(decomposed, "caf?.txt"), "? matches one decomposed character")
+            check(FolderSearchFilters.matches("😀.txt", "?.txt"), "? matches one character outside the BMP")
+            check(
+                try !FolderSearchFilters("!caf\u{e9}*.txt").acceptsFile(decomposed),
+                "a composed exclusion protects a decomposed file name")
+            check(
+                try FolderSearchFilters("*.* !+\\caf\u{e9}").excludesFolder("cafe\u{301}", depth: 3),
+                "a composed folder exclusion applies to a decomposed folder name")
+            check(
+                FolderSearchFilters.matches("😀.txt", "??.txt") && FolderSearchFilters.matches(decomposed, "cafe*.txt"),
+                "patterns written against UTF-16 units and base letters keep matching")
+            check(
+                !FolderSearchFilters.matches(decomposed, "caf.txt") && !FolderSearchFilters.matches("a.txt", "?.md")
+                    && FolderSearchFilters.matches("a.b.txt", "*.txt"),
+                "normalisation does not make unrelated names match")
             for malformed in ["!", "!\\", "a/b", "\"unclosed"] {
                 var refused = false
                 do { _ = try FolderSearchFilters(malformed) } catch { refused = true }
@@ -48,6 +70,7 @@ import Foundation
             try Data("needle".utf8).write(to: other.appendingPathComponent("extra.txt"))
             var request = FolderSearchRequest(directory: root, query: "needle")
             request.filenameFilters = "*.* !*.log !\\tests !+\\build"
+            request.listsPolicyExclusions = true // F42: the check below reads individual exclusions.
             let found = try await FolderSearch.search(request)
             check(
                 Set(found.matches.map { $0.url.lastPathComponent }) == ["top.txt", "README", "nested.txt", "keep.txt"],
@@ -57,11 +80,18 @@ import Foundation
                     && found.skipped.contains { $0.reason == .filenameFiltered },
                 "filter exclusions reported explicitly")
             check(found.isComplete, "intentional filters retain complete-search status")
+            check(
+                found.excludedCounts == [.folderFiltered: 3, .filenameFiltered: 1],
+                "filter exclusions counted by reason")
             let multiple = try await FolderSearch.searchAcross(
                 request, directories: [other, root, root, root.appendingPathComponent("src")])
             check(
                 multiple.matches.count == 5 && Set(multiple.matches.map { $0.url }).count == 5,
                 "workspace roots union deduplicates overlapping files")
+            check(
+                multiple.excludedCounts[.duplicateScope] == 1 && multiple.excludedCounts[.folderFiltered] == 5
+                    && multiple.excludedCounts[.filenameFiltered] == 1,
+                "exclusion counts are summed across workspace roots")
             check(
                 multiple.matches.allSatisfy { $0.sourceRoot != nil },
                 "matches retain opened root identity for safe replacement")
@@ -102,6 +132,14 @@ import Foundation
                         if case .unreadable = $0.reason { return true }
                         return false
                     }, "unavailable workspace root explicit while independent root searched")
+            // F47 and F200: an expression that can never match is refused once for all roots, not
+            // turned into one unreadable root each.
+            var half = FolderSearchRequest(directory: root, query: "\\uD83D")
+            half.mode = .extended
+            await rejects(
+                "half a surrogate pair is one up-front error across workspace roots",
+                where: { $0 is FolderSearchError }
+            ) { _ = try await FolderSearch.searchAcross(half, directories: [other, root]) }
             let suite = "TextTankSearchSettings-" + UUID().uuidString
             let isolated = UserDefaults(suiteName: suite)!
             defer { isolated.removePersistentDomain(forName: suite) }

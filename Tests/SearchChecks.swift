@@ -204,6 +204,50 @@ final class CancelAfterPolls: TTSearchCancellation {
                     ])
             } catch { failed = true }
             check(failed, "overlap rejected before edits")
+            // F40: replacing is one forward pass. 100,000 length-changing hits in 20 million
+            // UTF-16 units took 15 to 30 s when every hit shifted the rest of the buffer.
+            let row = "ab" + String(repeating: "é", count: 198), rows = 100_000
+            let large = String(repeating: row, count: rows)
+            let largeHits = (0..<rows).map {
+                SearchHit(range: NSRange(location: $0 * 200, length: 2), replacement: "xyz")
+            }
+            let scale = Double(ProcessInfo.processInfo.environment["TEXTTANK_PERF_BUDGET_SCALE"] ?? "") ?? 1
+            let started = Date()
+            let rebuilt = try SearchCore.replacing(large, with: largeHits)
+            let seconds = Date().timeIntervalSince(started)
+            print("NOTE replacing 100,000 hits in 20 M units took \(String(format: "%.2f", seconds)) s")
+            check(
+                rebuilt == String(repeating: "xyz" + String(repeating: "é", count: 198), count: rows),
+                "100,000 length-changing replacements give the exact text")
+            check(seconds < 4 * max(scale, 1), "100,000 length-changing replacements finish within 4 s")
+            rejects(
+                "replacement range that splits a surrogate pair refused with code 3",
+                where: { ($0 as NSError).code == 3 }
+            ) {
+                _ = try SearchCore.replacing(
+                    "a🥑b", with: [SearchHit(range: NSRange(location: 1, length: 1), replacement: "X")])
+            }
+            rejects("replacement ranges out of order refused with code 3", where: { ($0 as NSError).code == 3 }) {
+                _ = try SearchCore.replacing(
+                    "abcd",
+                    with: [
+                        SearchHit(range: NSRange(location: 2, length: 1), replacement: "X"),
+                        SearchHit(range: NSRange(location: 0, length: 1), replacement: "Y")
+                    ])
+            }
+            rejects("replacement range past the end refused with code 3", where: { ($0 as NSError).code == 3 }) {
+                _ = try SearchCore.replacing(
+                    "abcd", with: [SearchHit(range: NSRange(location: 3, length: 2), replacement: "X")])
+            }
+            check(
+                try SearchCore.replacing(
+                    "abcd",
+                    with: [
+                        SearchHit(range: NSRange(location: 0, length: 0), replacement: "<"),
+                        SearchHit(range: NSRange(location: 0, length: 1), replacement: "A"),
+                        SearchHit(range: NSRange(location: 1, length: 0), replacement: "|"),
+                        SearchHit(range: NSRange(location: 4, length: 0), replacement: ">")
+                    ]) == "<A|bcd>", "adjacent and zero-width replacements keep their order")
             options.query = String(repeating: "(", count: 10000) + "a" + String(repeating: ")", count: 10000)
             failed = false
             let compileStart = Date()
@@ -521,6 +565,40 @@ final class CancelAfterPolls: TTSearchCancellation {
                 }
             }
             check(wrong == 0, "regex searches on sixteen threads at once compile, share the cache and match correctly")
+            // F162: one cursor converts offsets for in-document and folder search alike.
+            var cursor = SearchCore.UTFCursor("é\r\n🥑x\ry", tracksLines: true)
+            check(
+                cursor.advance(to: 3) && cursor.byteOffset == 4 && cursor.line == 2 && cursor.columnUTF16 == 1,
+                "cursor counts CRLF as one line break and é as two bytes")
+            check(!cursor.advance(to: 4), "cursor refuses a target inside a surrogate pair")
+            var later = SearchCore.UTFCursor("é\r\n🥑x\ry", tracksLines: true)
+            check(
+                later.advance(to: 7) && later.byteOffset == 10 && later.line == 3 && later.columnUTF16 == 1
+                    && !later.advance(to: 6) && !later.advance(to: 9),
+                "cursor follows a lone CR, and refuses to go back or past the end")
+            var stopped = SearchCore.UTFCursor("abc")
+            check(!stopped.advance(to: 2, stop: { true }), "cursor stops when asked")
+            let pair = "a🥑" as NSString
+            check(
+                SearchCore.isScalarBoundary(0, in: pair) && SearchCore.isScalarBoundary(1, in: pair)
+                    && !SearchCore.isScalarBoundary(2, in: pair) && SearchCore.isScalarBoundary(3, in: pair),
+                "only the middle of a surrogate pair is not a boundary")
+            let chosen = NSRange(location: 4, length: 2)
+            func candidate(_ location: Int, _ length: Int, backwards: Bool, continuing: Bool = false) -> Bool {
+                SearchCore.isNavigationCandidate(
+                    NSRange(location: location, length: length), from: chosen, backwards: backwards,
+                    continuing: continuing)
+            }
+            check(
+                candidate(6, 2, backwards: false) && !candidate(5, 2, backwards: false)
+                    && candidate(2, 2, backwards: true) && !candidate(3, 2, backwards: true),
+                "Next takes matches after the selection and Previous matches before it")
+            let caret = NSRange(location: 4, length: 0)
+            check(
+                SearchCore.isNavigationCandidate(caret, from: caret, backwards: false, continuing: false)
+                    && !SearchCore.isNavigationCandidate(caret, from: caret, backwards: false, continuing: true)
+                    && !SearchCore.isNavigationCandidate(caret, from: caret, backwards: true, continuing: true),
+                "a zero-width match just chosen is not chosen again")
             Checks.summary { "PASS SearchChecks: \(Checks.count) assertions" }
         }
     }

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import Darwin
-import CryptoKit
 
 struct FolderReplacementOutcome: Sendable {
     enum Status: String, Sendable { case replaced, unchanged, conflict, skipped, failed, cancelled }
@@ -29,12 +28,9 @@ enum FolderReplacement {
         directory: URL, matches: [FolderSearchMatch], options: SearchOptions, excluding: Set<URL> = [],
         cancellation: FolderSearchCancellation = FolderSearchCancellation(), beforeCommit: ((URL) -> Void)? = nil
     ) throws -> [FolderReplacementOutcome] {
-        let root = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
-        guard root >= 0 else { throw Failure.unsafe }
+        guard let opened = try? FolderSearch.openCanonicalDirectory(directory) else { throw Failure.unsafe }
+        let root = opened.fd, rootPath = opened.path, prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
         defer { close(root) }
-        var canonical = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        guard fcntl(root, F_GETPATH, &canonical) == 0 else { throw Failure.unsafe }
-        let rootPath = String(cString: canonical), prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
         let excluded = Set(excluding.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
         let grouped = Dictionary(grouping: matches, by: { $0.url })
         var results: [FolderReplacementOutcome] = []
@@ -62,11 +58,11 @@ enum FolderReplacement {
             }
             var backup: URL?, reportURL: URL?
             do {
-                guard url.path.hasPrefix(prefix) else { throw Failure.unsafe }
-                let parts = String(url.path.dropFirst(prefix.count)).split(separator: "/").map(String.init)
-                guard !parts.isEmpty, parts.allSatisfy({ $0 != "." && $0 != ".." && !$0.contains("\0") }) else {
-                    throw Failure.unsafe
-                }
+                // The matches are the caller's, so this is the guard that keeps a recovery copy,
+                // journal or temporary file from ever being rewritten.
+                guard let parts = FolderSearch.relativeComponents(of: url.path, under: prefix),
+                    !FolderSearch.isRecoveryArtifact(parts[parts.count - 1])
+                else { throw Failure.unsafe }
                 var parent = dup(root)
                 guard parent >= 0 else { throw Failure.unsafe }
                 defer { close(parent) }
@@ -92,8 +88,15 @@ enum FolderReplacement {
                 guard !found.truncated else {
                     throw FolderSearchError.invalidRequest("Replacement result limit reached; file not changed.")
                 }
-                let output = try SearchCore.replacing(decoded.text, with: found.hits),
-                    encoded = try FileCodec.encode(output, format: decoded.format)
+                let output: String
+                do {
+                    output = try SearchCore.replacing(
+                        decoded.text, with: found.hits, cancellation: cancellation.engineToken)
+                } catch {
+                    if cancellation.isCancelled { throw Failure.cancelled }
+                    throw error
+                }
+                let encoded = try FileCodec.encode(output, format: decoded.format)
                 if encoded == original {
                     results.append(.init(url: url, status: .unchanged, message: "No byte changes.", backup: nil))
                     continue
@@ -128,32 +131,50 @@ enum FolderReplacement {
                     throw error
                 }
                 backup = url.deletingLastPathComponent().appendingPathComponent(backupName)
-                guard fsync(parent) == 0 else { throw POSIXError(.EIO) }
                 let reportName = backupName + ".json"
                 let journal: [String: String] = [
                     "version": "1", "state": "prepared", "file": name, "backup": backupName, "originalSHA256": expected,
                     "replacementSHA256": sha(encoded),
                     "note": "Prepared does not prove whether rename committed. Compare file hashes before restoring."
                 ]
-                try persistReport(journal, name: reportName, parent: parent)
-                reportURL = url.deletingLastPathComponent().appendingPathComponent(reportName)
-                beforeCommit?(url)
-                if cancellation.isCancelled { throw Failure.cancelled }
-                let current = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-                guard current >= 0 else { throw Failure.changed }
-                defer { close(current) }
-                var latest = stat()
-                guard fstat(current, &latest) == 0, latest.st_mode & S_IFMT == S_IFREG, latest.st_ino == initial.st_ino,
-                    latest.st_dev == initial.st_dev, latest.st_size == initial.st_size,
-                    latest.st_mtimespec.tv_sec == initial.st_mtimespec.tv_sec,
-                    latest.st_mtimespec.tv_nsec == initial.st_mtimespec.tv_nsec, latest.st_nlink == 1,
-                    latest.st_mode == initial.st_mode, latest.st_uid == initial.st_uid, latest.st_gid == initial.st_gid,
-                    latest.st_flags == initial.st_flags, latest.st_ctimespec.tv_sec == initial.st_ctimespec.tv_sec,
-                    latest.st_ctimespec.tv_nsec == initial.st_ctimespec.tv_nsec,
-                    try read(current, size: Int(latest.st_size), cancellation: cancellation) == original
-                else { throw Failure.changed }
-                guard renameat(parent, tempName, parent, name) == 0 else {
-                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                // Until the rename is attempted the file is certainly unchanged, so a failure,
+                // a conflict or a cancellation here leaves no recovery copy and no "prepared"
+                // journal behind. Once the rename has been attempted both are kept, whatever it
+                // returned: its result can be ambiguous on a network volume.
+                var renameAttempted = false
+                do {
+                    guard fsync(parent) == 0 else { throw POSIXError(.EIO) }
+                    try persistReport(journal, name: reportName, parent: parent)
+                    reportURL = url.deletingLastPathComponent().appendingPathComponent(reportName)
+                    beforeCommit?(url)
+                    if cancellation.isCancelled { throw Failure.cancelled }
+                    let current = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+                    guard current >= 0 else { throw Failure.changed }
+                    defer { close(current) }
+                    var latest = stat()
+                    guard fstat(current, &latest) == 0, latest.st_mode & S_IFMT == S_IFREG,
+                        latest.st_ino == initial.st_ino, latest.st_dev == initial.st_dev,
+                        latest.st_size == initial.st_size, latest.st_mtimespec.tv_sec == initial.st_mtimespec.tv_sec,
+                        latest.st_mtimespec.tv_nsec == initial.st_mtimespec.tv_nsec, latest.st_nlink == 1,
+                        latest.st_mode == initial.st_mode, latest.st_uid == initial.st_uid,
+                        latest.st_gid == initial.st_gid, latest.st_flags == initial.st_flags,
+                        latest.st_ctimespec.tv_sec == initial.st_ctimespec.tv_sec,
+                        latest.st_ctimespec.tv_nsec == initial.st_ctimespec.tv_nsec,
+                        try read(current, size: Int(latest.st_size), cancellation: cancellation) == original
+                    else { throw Failure.changed }
+                    renameAttempted = true
+                    guard renameat(parent, tempName, parent, name) == 0 else {
+                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    }
+                } catch {
+                    if !renameAttempted {
+                        unlinkat(parent, backupName, 0)
+                        unlinkat(parent, reportName, 0)
+                        _ = fsync(parent)
+                        backup = nil
+                        reportURL = nil
+                    }
+                    throw error
                 }
                 // Once renamed the file is changed even if directory durability fails.
                 let durable = fsync(parent) == 0
@@ -201,9 +222,7 @@ enum FolderReplacement {
             throw POSIXError(.EIO)
         }
     }
-    private static func sha(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
+    private static func sha(_ data: Data) -> String { FolderSearch.sha256Hex(data) }
     private static func read(_ fd: Int32, size: Int, cancellation: FolderSearchCancellation) throws -> Data {
         var output = Data(), bytes = [UInt8](repeating: 0, count: 65536)
         while output.count < size {

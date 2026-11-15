@@ -102,6 +102,11 @@ import Darwin
             let before = try await FolderSearch.search(fresh)
             options.query = fresh.query
             options.replacement = "next=$1"
+            func artifacts() throws -> [String] {
+                try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.hasPrefix(".texttank-") }
+                    .sorted()
+            }
+            let artifactsBeforeConflict = try artifacts()
             let changed = try FolderReplacement.replace(
                 directory: root, matches: before.matches, options: options,
                 beforeCommit: { url in
@@ -114,6 +119,108 @@ import Darwin
             check(
                 changed.first { $0.url.lastPathComponent == "b.txt" }?.status == .replaced,
                 "independent file completes despite other conflict")
+            // F39: a file that was not changed keeps no recovery copy and no "prepared" journal.
+            let conflicted = changed.first { $0.url.lastPathComponent == "a.txt" }
+            check(
+                conflicted?.backup == nil && conflicted?.recoveryReport == nil,
+                "a conflicting file reports no recovery copy")
+            check(
+                try changed.filter { $0.status == .replaced }.count == 2
+                    && artifacts().count == artifactsBeforeConflict.count + 4,
+                "only the two replaced files add a recovery copy and a journal each")
+            let bBytes = try Data(contentsOf: b), cBytes = try Data(contentsOf: c),
+                artifactsBeforeCancel = try artifacts()
+            var later = FolderSearchRequest(directory: root, query: "next=(\\d+)")
+            later.mode = .regularExpression
+            later.extensions = ["txt"]
+            let beforeCancel = try await FolderSearch.search(later)
+            try require(
+                Set(beforeCancel.matches.map { $0.url.lastPathComponent }) == ["b.txt", "c.txt"],
+                "fixture: two files match before the cancelled run")
+            options.query = later.query
+            options.replacement = "last=$1"
+            let stopping = FolderSearchCancellation()
+            let stopped = try FolderReplacement.replace(
+                directory: root, matches: beforeCancel.matches, options: options, cancellation: stopping,
+                beforeCommit: { _ in stopping.cancel() })
+            check(
+                stopped.count == 2
+                    && stopped.allSatisfy { $0.status == .cancelled && $0.backup == nil && $0.recoveryReport == nil },
+                "cancelling before the commit reports no recovery copy")
+            let duringBuild = FolderSearchCancellation()
+            duringBuild.cancel()
+            rejects("a cancelled token stops the replacement text being built", where: { ($0 as NSError).code == 9 }) {
+                _ = try SearchCore.replacing(
+                    "abc", with: [SearchHit(range: NSRange(location: 0, length: 1), replacement: "X")],
+                    cancellation: duringBuild.engineToken)
+            }
+            check(
+                try artifacts() == artifactsBeforeCancel && Data(contentsOf: b) == bBytes
+                    && Data(contentsOf: c) == cBytes,
+                "cancelling before the commit leaves no recovery copy or journal and the files unchanged")
+            // F39: recovery copies are never search results, even with hidden files included,
+            // and never replacement targets.
+            var hiddenToo = FolderSearchRequest(directory: root, query: "key=")
+            hiddenToo.includeHidden = true
+            let withHidden = try await FolderSearch.search(hiddenToo)
+            let backups = try artifacts().filter { !$0.hasSuffix(".json") }
+            try require(
+                backups.contains { (try? Data(contentsOf: root.appendingPathComponent($0))) == original },
+                "fixture: a recovery copy holding the searched text exists")
+            check(
+                !withHidden.matches.contains { $0.url.lastPathComponent.hasPrefix(".texttank-") },
+                "recovery copies are not searched when hidden files are included")
+            check(
+                try withHidden.excludedCounts[.recoveryArtifact] == artifacts().count && withHidden.isComplete,
+                "recovery copies and journals are counted as exclusions and leave coverage complete")
+            hiddenToo.listsPolicyExclusions = true
+            let listed = try await FolderSearch.search(hiddenToo)
+            check(
+                try Set(listed.skipped.filter { $0.reason == .recoveryArtifact }.map { $0.url.lastPathComponent })
+                    == Set(artifacts()), "every recovery copy and journal appears in the opt-in exclusion list")
+            let backupURL = root.appendingPathComponent(
+                try requireValue(
+                    backups.first { (try? Data(contentsOf: root.appendingPathComponent($0))) == Data("key=34".utf8) },
+                    "fixture: the recovery copy of b.txt"))
+            let template = beforeCancel.matches[0]
+            let backupJournal = try JSONDecoder().decode(
+                [String: String].self, from: Data(contentsOf: backupURL.appendingPathExtension("json")))
+            let forged = FolderSearchMatch(
+                url: backupURL, line: 1, columnUTF16: 1, utf16Range: .init(location: 0, length: 6),
+                utf8Range: .init(location: 0, length: 6), preview: template.preview,
+                previewMatchRange: template.previewMatchRange, isMatchTruncatedInPreview: false,
+                sourceSHA256: try requireValue(
+                    backupJournal["originalSHA256"], "fixture: the journal records the hash of the recovery copy"))
+            var forgedOptions = SearchOptions()
+            forgedOptions.query = "key=34"
+            forgedOptions.replacement = "overwritten"
+            let forgedResult = try FolderReplacement.replace(directory: root, matches: [forged], options: forgedOptions)
+            check(
+                try forgedResult.first?.status == .failed && Data(contentsOf: backupURL) == Data("key=34".utf8),
+                "a recovery copy is refused as a replacement target and keeps its bytes")
+            check(
+                try !artifacts().contains {
+                    $0.hasPrefix(".texttank-replacement-") || $0.hasPrefix(".texttank-report-")
+                },
+                "no replacement or report temporaries remain after any run")
+            // G352: files whose names start with a combining mark are inside the root.
+            let markedDirectory = root.appendingPathComponent("sub").appendingPathComponent("\u{301}dir")
+            try FileManager.default.createDirectory(at: markedDirectory, withIntermediateDirectories: true)
+            let lead = root.appendingPathComponent("\u{301}lead.txt"),
+                inner = markedDirectory.appendingPathComponent("inner.txt")
+            try Data("mark here".utf8).write(to: lead)
+            try Data("mark there".utf8).write(to: inner)
+            let markedMatches = try await FolderSearch.search(FolderSearchRequest(directory: root, query: "mark"))
+            var markedOptions = SearchOptions()
+            markedOptions.query = "mark"
+            markedOptions.replacement = "sign"
+            let markedResult = try FolderReplacement.replace(
+                directory: root, matches: markedMatches.matches, options: markedOptions)
+            check(
+                try markedResult.count == 2 && markedResult.allSatisfy { $0.status == .replaced }
+                    && Data(contentsOf: lead) == Data("sign here".utf8)
+                    && Data(contentsOf: inner) == Data("sign there".utf8),
+                "files whose names start with a combining mark are replaced")
             let token = FolderSearchCancellation()
             token.cancel()
             let cancelled = try FolderReplacement.replace(

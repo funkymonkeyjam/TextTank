@@ -99,27 +99,74 @@ enum SearchCore {
     /// Linear offset conversion for sorted nonoverlapping matches; avoids copying
     /// a document prefix separately for every replacement.
     static func byteRanges(_ ranges: [NSRange], in text: String) -> [NSRange]? {
-        var index = text.unicodeScalars.startIndex, units = 0, bytes = 0, output: [NSRange] = []
-        func advance(_ target: Int) -> Bool {
-            guard target >= units else { return false }
-            while units < target, index < text.unicodeScalars.endIndex {
-                let value = text.unicodeScalars[index].value, width = value > 0xFFFF ? 2 : 1
-                guard units + width <= target else { return false }
-                units += width
-                bytes += value < 0x80 ? 1 : value < 0x800 ? 2 : value < 0x10000 ? 3 : 4
-                index = text.unicodeScalars.index(after: index)
-            }
-            return units == target
-        }
+        var cursor = UTFCursor(text), output: [NSRange] = []
         for range in ranges {
             guard range.location >= 0, range.length >= 0, range.length <= Int.max - range.location,
-                advance(range.location)
+                cursor.advance(to: range.location)
             else { return nil }
-            let start = bytes
-            guard advance(NSMaxRange(range)) else { return nil }
-            output.append(NSRange(location: start, length: bytes - start))
+            let start = cursor.byteOffset
+            guard cursor.advance(to: NSMaxRange(range)) else { return nil }
+            output.append(NSRange(location: start, length: cursor.byteOffset - start))
         }
         return output
+    }
+    /// The one forward walk from UTF-16 offsets to UTF-8 offsets, shared by in-document search and
+    /// folder search. Targets must not go backwards, so any number of sorted matches costs a single
+    /// pass over the text. Line and column (one-based, CRLF counted once) are kept only on request.
+    struct UTFCursor {
+        let text: String
+        let tracksLines: Bool
+        private var index: String.UnicodeScalarView.Index
+        private(set) var utf16Offset = 0
+        private(set) var byteOffset = 0
+        private(set) var line = 1
+        private(set) var columnUTF16 = 1
+        init(_ text: String, tracksLines: Bool = false) {
+            self.text = text
+            self.tracksLines = tracksLines
+            index = text.unicodeScalars.startIndex
+        }
+        /// False when the target is behind the cursor, past the end of the text or inside a
+        /// surrogate pair, and when `stop` (asked every 4,096 scalars) answers true.
+        mutating func advance(to target: Int, stop: () -> Bool = { false }) -> Bool {
+            let scalars = text.unicodeScalars
+            var count = 0
+            guard target >= utf16Offset else { return false }
+            while utf16Offset < target && index < scalars.endIndex {
+                if count % 4096 == 0, stop() { return false }
+                count += 1
+                let value = scalars[index].value, width = value > 0xFFFF ? 2 : 1
+                if utf16Offset + width > target { return false }
+                let next = scalars.index(after: index)
+                utf16Offset += width
+                byteOffset += value < 0x80 ? 1 : (value < 0x800 ? 2 : (value < 0x10000 ? 3 : 4))
+                if tracksLines {
+                    if value == 10 || (value == 13 && (next == scalars.endIndex || scalars[next].value != 10)) {
+                        line += 1
+                        columnUTF16 = 1
+                    } else {
+                        columnUTF16 += width
+                    }
+                }
+                index = next
+            }
+            return utf16Offset == target
+        }
+    }
+    /// False only between the two halves of a surrogate pair.
+    static func isScalarBoundary(_ i: Int, in source: NSString) -> Bool {
+        i <= 0 || i >= source.length
+            || !(source.character(at: i) >= 0xDC00 && source.character(at: i) <= 0xDFFF
+                && source.character(at: i - 1) >= 0xD800 && source.character(at: i - 1) <= 0xDBFF)
+    }
+    /// Whether a match is where Next (or Previous) may go from `selection`. `continuing` is true
+    /// when the selection is the match the last navigation chose, which is then not chosen again.
+    static func isNavigationCandidate(_ range: NSRange, from selection: NSRange, backwards: Bool, continuing: Bool)
+        -> Bool
+    {
+        backwards
+            ? NSMaxRange(range) <= selection.location && !(continuing && range == selection)
+            : range.location >= NSMaxRange(selection) && !(continuing && range == selection)
     }
     static func utf16Range(_ range: NSRange, in text: String) -> NSRange? {
         let bytes = text.utf8
@@ -131,26 +178,38 @@ enum SearchCore {
         guard let a = start.samePosition(in: text), let b = end.samePosition(in: text) else { return nil }
         return NSRange(a..<b, in: text)
     }
-    static func replacing(_ text: String, with hits: [SearchHit]) throws -> String {
-        let result = NSMutableString(string: text), source = text as NSString
-        func boundary(_ i: Int) -> Bool {
-            i == 0 || i == source.length
-                || !(source.character(at: i) >= 0xDC00 && source.character(at: i) <= 0xDFFF
-                    && source.character(at: i - 1) >= 0xD800 && source.character(at: i - 1) <= 0xDBFF)
-        }
-        var previous = source.length
-        for hit in hits.reversed() {
-            guard hit.range.location >= 0, hit.range.length >= 0, hit.range.location <= previous,
-                hit.range.length <= previous - hit.range.location, boundary(hit.range.location),
-                boundary(NSMaxRange(hit.range))
+    /// Builds the result in one forward pass: the text between matches and each replacement are
+    /// appended once, so the cost is linear however many matches change length. Hits must be in
+    /// ascending order, must not overlap and must not split a surrogate pair (error code 3).
+    /// A cancelled token stops the pass with error code 9 and nothing is returned.
+    static func replacing(_ text: String, with hits: [SearchHit], cancellation: TTSearchCancellation? = nil) throws
+        -> String
+    {
+        let source = text as NSString, length = source.length
+        let result = NSMutableString(capacity: length)
+        var previousEnd = 0
+        for (number, hit) in hits.enumerated() {
+            if number & 1023 == 0, cancellation?.cancelled == true {
+                throw NSError(
+                    domain: "TextTank.Search", code: 9,
+                    userInfo: [NSLocalizedDescriptionKey: "Replacement cancelled; no text was changed."])
+            }
+            guard hit.range.location >= previousEnd, hit.range.length >= 0, hit.range.location <= length,
+                hit.range.length <= length - hit.range.location, isScalarBoundary(hit.range.location, in: source),
+                isScalarBoundary(NSMaxRange(hit.range), in: source)
             else {
                 throw NSError(
                     domain: "TextTank.Search", code: 3,
                     userInfo: [NSLocalizedDescriptionKey: "Invalid or overlapping replacement range."])
             }
-            result.replaceCharacters(in: hit.range, with: hit.replacement)
-            previous = hit.range.location
+            if hit.range.location > previousEnd {
+                result.append(
+                    source.substring(with: NSRange(location: previousEnd, length: hit.range.location - previousEnd)))
+            }
+            result.append(hit.replacement)
+            previousEnd = NSMaxRange(hit.range)
         }
+        if previousEnd < length { result.append(source.substring(from: previousEnd)) }
         return result as String
     }
 }
