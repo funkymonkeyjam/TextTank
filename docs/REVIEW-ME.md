@@ -10,13 +10,13 @@ Interface rules: [DESIGN-STANDARDS.md](DESIGN-STANDARDS.md).
 
 ## Run
 
-From the repository root:
+First create a clean, committed review package with `scripts/build.sh`, `scripts/test.sh` and `scripts/package-review.sh` (the commands below). Then, from the repository root:
 
 ```sh
 ./scripts/launch-review.sh
 ```
 
-This launches `output/review/TextTank-review.zip` after extraction to a temporary directory outside synced storage. The package also contains `Launch-TextTank.command`, the application, source/dependency archives, licenses and hashes. `output/review/manifest.json` identifies the packaged commit/tree and archive; `validation.json` records observed tests and exact remote CI. Read those candidate-specific records instead of inferring results from an older run.
+This verifies the archive against `SHA256SUMS`, then launches `output/review/TextTank-review.zip` after extraction to a temporary directory outside synced storage. The launch command waits for the application to exit and removes that temporary copy afterward; if its wait is interrupted, it keeps the potentially running copy and prints its location. The package also contains `Launch-TextTank.command`, the application, source/dependency archives, licenses and hashes. `output/review/manifest.json` identifies the packaged commit/tree and archive; `validation.json` records observed tests and labels any manually supplied CI metadata as self-reported; it never treats that metadata as verified remote CI. Read those candidate-specific records instead of inferring results from an older run.
 
 Rebuild and test on an arm64 Mac with Xcode:
 
@@ -38,6 +38,8 @@ To package a committed clean source tree:
 ./scripts/package-review.sh
 (cd output/review && shasum -a 256 -c SHA256SUMS)
 ```
+
+Build identity is shared by `scripts/env.sh`, the dependency lock and the generator. `CONFIGURATION=Debug` is the default; set `CONFIGURATION=Release` for **each** build, test, performance and package command to exercise the independent optimized engine/app outputs. Only arm64 is supported by this build workflow. Debug and Release Lexilla sources/objects and Scintilla outputs are isolated under `build/vendor/<configuration>/`; changing the configuration cannot reuse the other configuration's objects.
 
 The minimum deployment target remains macOS 14. Local testing used the current arm64 host; a deployment target is not macOS 14 runtime evidence. Ad-hoc signing is for local review and is not notarized public distribution. Initial pinned dependency downloads need network access; ordinary editing and deterministic automations do not need an account or paid service.
 
@@ -82,7 +84,7 @@ A short inventory of features that the walkthrough above does not name, and of w
 
 ## Evidence and repaired findings
 
-The detailed records are in `harness/reviews/` and `docs/parity/implementation-evidence.json`. Observed suite results are bound to source hashes in ignored logs and the delivered validation record. The native walkthrough observed Unicode save, actual Boost replacement, Python rendering, symbol navigation and native step-editor controls.
+The detailed records are in `harness/reviews/` and `docs/parity/implementation-evidence.json`. Observed suite results are bound to matching clean git trees at the start and end, plus the acceptance-log SHA-256 in ignored logs and the delivered validation record. Packaged logs replace known repository/home/temporary prefixes, retaining the original log hash and recording the public log hash separately. Per-file source hashing was removed; dirty or mismatched trees still cannot be packaged. The native walkthrough observed Unicode save, actual Boost replacement, Python rendering, symbol navigation and native step-editor controls.
 
 Independent reviews found and repaired default shortcut collisions, canonical-Unicode duplicate-line loss, invalid-surrogate regex replacement, shared AppKit field-editor confusion, detached/stale extension application, an old preview applying a newer result, leading-FEFF output loss, corrupt workspace settings overwrite, and discarded folder-replacement outcomes. Additional scope/indicator changes require their own final results rather than inheriting those passes.
 
