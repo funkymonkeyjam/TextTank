@@ -276,9 +276,10 @@ final class LanguageController: NSObject, NSMenuDelegate {
     }
     private static func color(_ style: LanguageProfile.Style, imported: Bool) -> NSColor {
         if style.useCustomColor == true { return rgb(style.foreground) }
-        // An imported style with no colour of its own is ordinary text. The palette below goes by
-        // style name, and would turn a UDL's black keyword group blue.
-        if imported, style.useCustomColor == nil { return .textColor }
+        // An imported style without a fixed colour is ordinary text, whether the file gave it no
+        // real colour (nil) or the person turned the custom colour off (false). The palette below
+        // goes by style name, and would turn a UDL's black keyword group blue.
+        if imported { return .textColor }
         // Keep native dynamic contrast unless the user selected a fixed RGB color.
         return NSColor(
             name: nil,
@@ -394,7 +395,10 @@ final class LanguageController: NSObject, NSMenuDelegate {
             let edit = TTAlert()
             edit.messageText = "\(proposed.profiles[profileIndex].title) — \(style.name)"
             edit.informativeText =
-                "Choose a font and size, or leave either blank to follow the editor. Custom RGB stays fixed in light/dark appearances; turn it off to use the adaptive native syntax palette. Changes affect this language only."
+                "Choose a font and size, or leave either blank to follow the editor. Custom RGB stays fixed in light/dark appearances; turn it off to use "
+                + (proposed.profiles[profileIndex].udl == nil
+                    ? "the adaptive native syntax palette" : "the editor's text color, which follows the appearance")
+                + ". Changes affect this language only."
             edit.addButton(withTitle: "Save")
             edit.addButton(withTitle: "Cancel")
             let font = NSTextField(string: style.fontName ?? ""),

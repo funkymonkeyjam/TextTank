@@ -688,6 +688,61 @@ import AppKit
                     print("NOTE contrast \(contrast(ordinary.text, ordinary.back)) keyword \(keyword.text)")
                 }
             }
+            // F82: a style edit that leaves "Use custom text color" off keeps an adaptive imported
+            // style ordinary text. The name palette would turn this black keyword group blue.
+            let monoLanguage = UserDefinedLanguage(
+                name: "Pin mono", extensions: "sample", version: "2.1",
+                global: ["caseIgnored": "no", "forcePureLC": "0", "decimalSeparator": "0"], prefix: [:],
+                keywords: ["Keywords1": "hello"],
+                styles: [
+                    .init(name: "DEFAULT", attributes: ["fgColor": "000000", "fontStyle": "0"]),
+                    .init(name: "KEYWORDS1", attributes: ["fgColor": "000000", "fontStyle": "0"])
+                ])
+            var mono = try monoLanguage.profile()
+            var monoCatalog = try requireValue(controller.catalog, "fixture: catalog")
+            monoCatalog.profiles.append(mono)
+            try controller.persist(monoCatalog)
+            let monoIndex = monoCatalog.profiles.count - 1,
+                monoStyle = try requireValue(
+                    mono.styles.firstIndex { $0.name == "KEYWORDS1" }, "fixture: keyword style")
+            func monoColors(_ name: NSAppearance.Name) -> (keyword: [Double], ordinary: [Double], back: [Double]) {
+                let themed = hostedEditor()
+                themed.appearance = NSAppearance(named: name)
+                themed.text = "hello ordinary\n"
+                _ = controller.apply(identifier: mono.id, to: themed)
+                return (colors(themed, at: 0).text, colors(themed, at: 6).text, colors(themed, at: 0).back)
+            }
+            check(
+                mono.styles.allSatisfy { $0.useCustomColor == nil }
+                    && close(monoColors(.aqua).keyword, monoColors(.aqua).ordinary),
+                "fixture: an imported black keyword group is ordinary text")
+            let monoSaved = try LanguageController.readStyle(
+                mono.styles[monoStyle], font: NSTextField(string: ""), size: NSTextField(string: ""), color: .black,
+                custom: false, bold: true, italic: false, window: settingsWindow)
+            mono.styles[monoStyle] = monoSaved
+            var monoUDL = try requireValue(mono.udl, "fixture: embedded UDL")
+            LanguageController.mirror(monoSaved, into: &monoUDL)
+            mono.udl = monoUDL
+            monoCatalog.profiles[monoIndex] = mono
+            try controller.persist(monoCatalog)
+            for name in [NSAppearance.Name.aqua, .darkAqua] {
+                let seen = monoColors(name)
+                if !check(
+                    monoSaved.fontStyle == 1 && close(seen.keyword, seen.ordinary)
+                        && contrast(seen.keyword, seen.back) >= 4.5,
+                    "a style edit with custom colour off leaves an imported style as text in \(name == .darkAqua ? "dark" : "light") appearance"
+                ) {
+                    print("NOTE keyword \(seen.keyword) ordinary \(seen.ordinary)")
+                }
+            }
+            mono = try UserDefinedLanguage.decode(monoUDL.encodedXML())[0].profile(preserving: mono)
+            monoCatalog.profiles[monoIndex] = mono
+            try controller.persist(monoCatalog)
+            check(
+                mono.styles[monoStyle].useCustomColor != true && mono.styles[monoStyle].fontStyle == 1
+                    && close(monoColors(.aqua).keyword, monoColors(.aqua).ordinary)
+                    && close(monoColors(.darkAqua).keyword, monoColors(.darkAqua).ordinary),
+                "and it is still text after Edit Current UDL regenerates the profile")
             // F84: a blank font or size field means "follow the editor", and can be saved and restored.
             let inherit = LanguageProfile.Style(id: 4, name: "KEYWORDS1", foreground: "0000FF", fontStyle: 0)
             func entered(_ original: LanguageProfile.Style, font: String, size: String, bold: Bool = false) throws
