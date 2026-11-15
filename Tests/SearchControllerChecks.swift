@@ -1,6 +1,12 @@
 import AppKit
 /// Find-window navigation fronts the document window; checks must never put one on screen.
-final class OffscreenWindow: NSWindow { override func makeKeyAndOrderFront(_ sender: Any?) {} }
+/// `shown` stands for being the visible tab: fronting sets it, and a check clears it by hand
+/// where the application would have ordered the other document windows out.
+final class OffscreenWindow: NSWindow {
+    var shown = false
+    override var isVisible: Bool { shown }
+    override func makeKeyAndOrderFront(_ sender: Any?) { shown = true }
+}
 @main struct SearchControllerChecks {
     @MainActor static func main() async {
         await Checks.run("SearchControllerChecks") {
@@ -642,9 +648,111 @@ final class OffscreenWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             check(
                 place() == "0-0 0-0 0-2",
                 "a current editor outside the open list counts as after the last document for Previous")
+
+            // F36 with F48: after Next has moved into another document, Replace edits that document
+            // although the application's current editor still names the one before.
+            literal("a", "b", scope: 2, wrap: false)
+            load(editor, "a x")
+            load(second, "a a")
+            open = [editor, second]
+            focused = editor
+            caretsToStart()
+            recorded = []
+            await next()
+            await next()
+            check(place() == "0-1 0-1 0-0", "fixture: Next selected a match in the first document, then in the second")
+            let leftBehindRevision = editor.revision
+            await replaceOne()
+            check(
+                editor.text == "a x" && editor.revision == leftBehindRevision && !editor.modified,
+                "Replace after a cross-document Next leaves the document left behind untouched")
+            check(
+                second.text == "b a" && controller.lastOutcome == .replaced(changed: 1, stale: 0)
+                    && controller.status.stringValue.hasPrefix("Replaced 1 matches") && recorded.isEmpty,
+                "Replace after a cross-document Next replaces the match that Next selected")
+            second.executeCommand("undo")
+            check(second.text == "a a" && !second.modified, "that Replace is one Undo in the document navigated to")
+            load(editor, "none")
+            load(second, "a a")
+            caretsToStart()
+            await next()
+            await replaceOne()
+            check(
+                editor.text == "none" && !editor.modified && second.text == "b a"
+                    && controller.lastOutcome == .replaced(changed: 1, stale: 0),
+                "All open documents Next into another document, then Replace, replaces that match")
+            // The person goes back: the document left behind is the visible tab again, and the
+            // application's current editor is the same object as while it lagged.
+            load(second, "a x")
+            load(third, "a a")
+            open = [second, third]
+            focused = second
+            caretsToStart()
+            await next()
+            await next()
+            check(place() == "0-0 0-1 0-1", "fixture: Next moved from the second document into the third")
+            secondWindow.shown = true
+            thirdWindow.shown = false
+            let hiddenRevision = third.revision
+            await replaceOne()
+            check(
+                second.text == "b x" && third.text == "a a" && third.revision == hiddenRevision && !third.modified
+                    && controller.lastOutcome == .replaced(changed: 1, stale: 0),
+                "Replace after the person returned to the earlier document edits it, not the hidden one")
+            load(second, "a x")
+            load(third, "a a")
+            caretsToStart()
+            await next()
+            await next()
+            secondWindow.shown = true
+            thirdWindow.shown = false
+            await next()
+            check(
+                place() == "0-0 0-1 0-1",
+                "Next after the person returned to the earlier document continues from it, not from the hidden one")
+            secondWindow.shown = false
+            thirdWindow.shown = true
+            await next()
+            check(place() == "0-0 0-1 2-3", "fixture: with the third document shown, Next continues in it")
+            // A current editor outside the open list, such as a split view: Replace needs a match
+            // selected by Next, and then replaces it.
+            load(editor, "a x")
+            load(second, "a a")
+            open = [editor, second]
+            focused = stray
+            caretsToStart()
+            await replaceOne()
+            check(
+                controller.lastOutcome == .noMatchSelected && editor.text == "a x" && second.text == "a a"
+                    && stray.text == "zq zq",
+                "All open documents Replace from an unlisted editor with nothing navigated changes nothing")
+            await next()
+            await replaceOne()
+            check(
+                editor.text == "b x" && second.text == "a a" && stray.text == "zq zq"
+                    && controller.lastOutcome == .replaced(changed: 1, stale: 0),
+                "All open documents Next then Replace from an unlisted editor replaces the selected match")
             _ = (secondWindow, thirdWindow, strayWindow)
             open = [editor]
             focused = editor
+
+            // F35: a scope kept from Selection scope does not survive navigation in another scope.
+            literal("a", "b", scope: 1, wrap: false)
+            load(editor, "xa a a ax")
+            _ = editor.setSelectionAnchor(1, caret: 6)
+            await next()
+            controller.scope.selectItem(at: 0)
+            for _ in 0..<3 { await next() }
+            check(
+                editor.selectionStart == 7 && editor.selectionEnd == 8,
+                "fixture: Current document Next left the scope selected earlier")
+            controller.scope.selectItem(at: 1)
+            await next()
+            check(
+                editor.selectionStart == 7 && editor.selectionEnd == 8
+                    && controller.lastOutcome == .found(matches: 1, documents: 1, truncated: false),
+                "Selection scope Next after navigating in another scope takes the live selection as its scope")
+            controller.scope.selectItem(at: 0)
 
             // F45: Replace finds the next match when none is selected, and moves on after replacing.
             controller.mode.selectItem(at: 2)
@@ -716,6 +824,44 @@ final class OffscreenWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 editor.text == "changed meanwhile" && controller.lastOutcome == .replaced(changed: 0, stale: 1)
                     && controller.status.stringValue.contains("1 changed documents skipped") && recorded.isEmpty,
                 "Replace on a document edited during the search preserves it and reports the skip")
+            // F45: cancelling while the following match is being looked for does not deny the
+            // replacement that was already made.
+            literal("a", "b", scope: 0, wrap: false)
+            load(editor, "a a")
+            _ = editor.setSelectionAnchor(0, caret: 1)
+            recorded = []
+            var cancelQueued = false
+            let changeHandler = editor.onChange
+            editor.onChange = {
+                changeHandler?()
+                guard !cancelQueued else { return }
+                cancelQueued = true
+                // Runs on the main queue after the replacement and before the follow-up search returns.
+                DispatchQueue.main.async { controller.cancel(nil) }
+            }
+            controller.replaceOne(nil)
+            await finished()
+            editor.onChange = changeHandler
+            try await Task.sleep(nanoseconds: 50_000_000)
+            check(
+                cancelQueued && editor.text == "b a" && editor.selectionCaret == 1 && editor.selectionAnchor == 1,
+                "fixture: the search was cancelled after the replacement and before the next match was selected")
+            check(
+                controller.lastOutcome == .replaced(changed: 1, stale: 0)
+                    && controller.status.stringValue.hasPrefix("Replaced 1 matches")
+                    && controller.status.stringValue.hasSuffix("Cancelled before the next match was selected.")
+                    && !controller.status.stringValue.contains("no pending replacements applied")
+                    && !controller.isSearching && recorded == ["replaceOne"],
+                "Cancel during the search that follows a Replace still reports the replacement")
+            editor.executeCommand("undo")
+            check(editor.text == "a a" && !editor.modified, "that cancelled Replace is one Undo")
+            controller.replaceAll(nil)
+            controller.cancel(nil)
+            try await Task.sleep(nanoseconds: 50_000_000)
+            check(
+                editor.text == "a a" && controller.lastOutcome == .cancelled
+                    && controller.status.stringValue == "Cancelled; no pending replacements applied.",
+                "Cancel before any replacement keeps saying that nothing was applied")
 
             // F46: a match that starts on the LF of a CRLF bookmarks the line that owns the CRLF.
             load(editor, "a\r\nb\r\n")

@@ -69,6 +69,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     private var resultKey: ResultKey?, resultTruncated = false
     private var searchButtons: [NSButton] = []
     private var lastNavigation: Navigation?, navigationScope: Navigation?
+    /// Set while the match after a single Replace is being looked for: what that Replace reported.
+    private var appliedReplace: (status: String, outcome: SearchOutcome?)?
     /// Called when Find Next or Find Previous selects nothing; the default is the system alert sound.
     var onFailureSignal: () -> Void = { NSSound.beep() }
     /// How many Next and Previous presses walked the held results without searching again.
@@ -193,7 +195,14 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         cancellation?.cancel()
         task?.cancel()
         generation = UUID()
+        let applied = appliedReplace
         finish()
+        if let applied {
+            // The replacement was made before the cancel; only the move to the next match was not.
+            status.stringValue = applied.status + " Cancelled before the next match was selected."
+            lastOutcome = applied.outcome
+            return
+        }
         status.stringValue = "Cancelled; no pending replacements applied."
         lastOutcome = .cancelled
     }
@@ -210,6 +219,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         cancellation = nil
         task = nil
         isSearching = false
+        appliedReplace = nil
     }
     /// Every exit that selects and changes nothing reports here. Find Next and Find Previous also
     /// work from the menu while this window is closed, so their failures are audible too (F308).
@@ -227,8 +237,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         }
         let scopeIndex = scope.indexOfSelectedItem
         // Captured before the search: focus may have moved by the time the results arrive (F36).
-        let active = currentEditor()
-        var editors = scopeIndex == 2 ? openEditors() : active.map { [$0] } ?? []
+        let current = currentEditor()
+        var editors = scopeIndex == 2 ? openEditors() : current.map { [$0] } ?? []
         var identities = Set<ObjectIdentifier>()
         editors = editors.filter { identities.insert(ObjectIdentifier($0)).inserted }
         guard !editors.isEmpty else {
@@ -239,6 +249,9 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             onUnrecordableCommand?("Selection and all-open search operations are not recorded in macros.")
         }
         let currentDocumentScope = scopeIndex == 0, selectionScope = scopeIndex == 1
+        // A scope kept for Selection scope ends with any action in another scope: navigation there
+        // would otherwise leave a selection that reads as a continuation inside the old scope.
+        if !selectionScope { navigationScope = nil }
         var buffers: [Buffer] = [], freshScope = false
         for e in editors {
             let revision = e.revision
@@ -276,6 +289,11 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     editor: e, text: text, revision: revision, anchor: e.selectionAnchor, caret: e.selectionCaret,
                     range: range))
         }
+        // F36: the document a single Replace may edit. In All open documents scope that is the
+        // document Next last moved to while its match is still selected, by the same rule as
+        // navigation, because the application's current editor can lag behind that move.
+        let active =
+            scopeIndex == 2 ? allOpenOrigin(in: buffers, current: current).flatMap { buffers[$0].editor } : current
         var keyOptions = opts
         keyOptions.wrap = false
         let key = ResultKey(
@@ -304,6 +322,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         let flag = TTSearchCancellation()
         cancellation = flag
         searchButtons.forEach { $0.isEnabled = false }
+        appliedReplace = nil
         status.stringValue = "Searching snapshots…"
         isSearching = true
         lastOutcome = nil
@@ -340,6 +359,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     // F45: a single Replace then moves to the next match. The text has changed, so
                     // that needs a search of the new text; it is recorded as an ordinary Next.
                     let text = editor.text, revision = editor.revision
+                    self.appliedReplace = (self.status.stringValue, self.lastOutcome)
                     let report = try? await Task.detached(priority: .userInitiated) {
                         try SearchCore.search(text, options: opts, cancellation: flag)
                     }.value
@@ -620,28 +640,34 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         else { return .stale }
         return .applied(hits.count)
     }
+    /// All open documents: the buffer of the document the person is in, for Next, Previous and
+    /// single Replace alike. After a move into another document the application's idea of the
+    /// current editor can lag (F48), so the document last navigated to stays the answer while its
+    /// selection is still that match and the person has not moved elsewhere. Moving elsewhere
+    /// shows as a different listed current editor, or, since only the selected tab's window is
+    /// visible, as the editor navigated from being on screen while the one navigated to is not.
+    private func allOpenOrigin(in buffers: [Buffer], current: TTEditor?) -> Int? {
+        if let last = lastNavigation, let editor = last.editor, editor.revision == last.revision,
+            current == nil || current === editor || !buffers.contains(where: { $0.editor === current })
+                || (current === last.from
+                    && !(current?.window?.isVisible == true && editor.window?.isVisible != true)),
+            let index = buffers.firstIndex(where: { $0.editor === editor && $0.revision == last.revision }),
+            SearchCore.utf16Range(
+                NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart),
+                in: buffers[index].text) == last.range
+        {
+            return index
+        }
+        guard let current else { return nil }
+        return buffers.firstIndex { $0.editor === current }
+    }
     /// True only when the selection moved to a match. `freshScope` is the first press in Selection
     /// scope: the selection is then the scope itself, not a place to continue from.
     private func navigate(backwards: Bool, wrap: Bool, freshScope: Bool, allOpen: Bool, audible: Bool) -> Bool {
         let buffers = resultBuffers
         var origin: Int?
         if allOpen {
-            // F48: after a move into another document the application's idea of the current editor
-            // can lag, so the document last navigated to stays the origin while its selection is
-            // still that match and the person has not moved to a third document.
-            let current = currentEditor()
-            if let last = lastNavigation, let editor = last.editor, editor.revision == last.revision,
-                current == nil || current === editor || current === last.from
-                    || !buffers.contains(where: { $0.editor === current }),
-                let index = buffers.firstIndex(where: { $0.editor === editor && $0.revision == last.revision }),
-                SearchCore.utf16Range(
-                    NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart),
-                    in: buffers[index].text) == last.range
-            {
-                origin = index
-            } else if let current {
-                origin = buffers.firstIndex { $0.editor === current }
-            }
+            origin = allOpenOrigin(in: buffers, current: currentEditor())
         } else if !buffers.isEmpty {
             origin = 0
         }
