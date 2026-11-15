@@ -1,0 +1,5 @@
+# Commits that changed layout only. Skip them in blame with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# F320: reformat first-party Swift with swift-format, layout only
+b4bc897ba5669e1bc76340a4c8d5aa6d08a8e899
