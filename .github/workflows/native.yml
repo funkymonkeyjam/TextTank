@@ -21,6 +21,11 @@ jobs:
           uname -m
           xcodebuild -version
           test "$(uname -m)" = arm64
+      # Advisory: swift-format output differs between toolchain versions and this
+      # image's Xcode is not pinned to the version the sources were formatted with.
+      - name: Lint Swift layout (advisory)
+        continue-on-error: true
+        run: scripts/swift-format.sh lint
       - name: Build pinned native app
         run: scripts/build.sh
       - name: Run acceptance checks

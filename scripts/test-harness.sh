@@ -49,4 +49,7 @@ suite_begin
 suite_build "harness-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache "$SUITE_SUPPORT" Tests/HarnessChecks.swift -o build/tests/harness-checks
 suite_run harness-checks harness/logs/harness-checks.log build/tests/harness-checks
 suite_run runner-selftest harness/logs/runner-selftest.log scripts/test-harness.sh --runner-selftest
+# The tool that proves a formatting commit changed layout only must itself accept
+# layout changes and reject every other kind of edit.
+suite_run layout-proof-selftest harness/logs/layout-proof-selftest.log python3 scripts/check-layout-only.py --self-test
 suite_finish
