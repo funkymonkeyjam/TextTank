@@ -93,6 +93,11 @@ extension DocumentChecks {
                 check(same(EditorTransform.reverseLines.transform(EditorTransform.reverseLines.transform(text)),text),"\(name): reversing twice restores the exact bytes")
                 editor.text=text
                 check(same(editor.text,text) && editor.statusInfo["lines"]?.intValue == UnicodeFixtures.lineBreaks(in:text)+1,"\(name): the editor keeps the exact bytes and counts only CR, LF and CRLF as line breaks")
+                // The status bar's position at the end of the text: the line is counted in CR, LF and
+                // CRLF breaks, the column in Unicode scalars after the last break (current behaviour:
+                // a ZWJ emoji is four columns and a combining mark is its own column).
+                let lastRow=text.unicodeScalars.split(omittingEmptySubsequences:false,whereSeparator:{ $0 == "\r" || $0 == "\n" }).last?.count ?? 0
+                check(editor.setSelectionAnchor(text.utf8.count,caret:text.utf8.count) && editor.statusInfo["line"]?.intValue == UnicodeFixtures.lineBreaks(in:text)+1 && editor.statusInfo["column"]?.intValue == lastRow+1,"\(name): the status line and column at the end of the text count CR/LF breaks and scalars")
             }
             // The line model is CR, LF and CRLF only. Swift's isNewline and NSString's line
             // APIs also break on these characters, so a rewrite on top of them would change this.
@@ -110,7 +115,21 @@ extension DocumentChecks {
             check(same(try automation.transform("\(UnicodeFixtures.astralLetter) needle\n\(UnicodeFixtures.astralLetter) keep\n"),"\n\(UnicodeFixtures.astralLetter) keep\n"),"automation contains-filter empties the matching row beside an astral letter and keeps its separator")
             automation.steps=[.init(kind:.removeLinesStartingWith,find:UnicodeFixtures.zwjEmoji)]
             check(same(try automation.transform("\(UnicodeFixtures.zwjEmoji) gone\nkept \(UnicodeFixtures.zwjEmoji)\n"),"\nkept \(UnicodeFixtures.zwjEmoji)\n"),"automation starts-with filter matches a whole ZWJ emoji prefix and keeps the row separator")
+            let wide="\(UnicodeFixtures.zwjEmoji)\(UnicodeFixtures.nfd)"
+            editor.text=wide
+            check(editor.setSelectionAnchor(wide.utf8.count,caret:wide.utf8.count) && editor.statusInfo["column"]?.intValue == 7,"the status column after a ZWJ emoji and a combining pair counts six scalars, not two characters")
+            automation.steps=[.init(kind:.removeLinesEqualTo,find:UnicodeFixtures.zwjEmoji)]
+            check(same(try automation.transform("\(UnicodeFixtures.zwjEmoji)\r\n\(UnicodeFixtures.zwjEmoji) kept\r\n\u{1F469}\r\n"),"\r\n\(UnicodeFixtures.zwjEmoji) kept\r\n\u{1F469}\r\n"),"automation equal-to filter empties only the row that is the whole ZWJ emoji and keeps its separator")
+            automation.steps=[.init(kind:.removeLinesEqualTo,find:"a\0a")]
+            check(same(try automation.transform("b\0b\na\0a\n"),"b\0b\n\n"),"automation equal-to filter compares across an embedded NUL")
             // Confirmed defects (G354 and the findings it lists). Each states the repaired behaviour.
+            automation.steps=[.init(kind:.removeLinesEqualTo,find:UnicodeFixtures.nfc)]
+            knownDefect("G345","automation equal-to filter keeps a canonically equivalent row whose bytes differ",fixed:same(try automation.transform("\(UnicodeFixtures.nfc)\n\(UnicodeFixtures.nfd)\n"),"\n\(UnicodeFixtures.nfd)\n"))
+            // CR, CRLF and LF in one text: the classic result of a botched conversion. The guard that
+            // promises "Mixed endings were not changed" has to refuse it.
+            automation.steps=[.init(kind:.sortLines)]
+            check((try? automation.transform(UnicodeFixtures.mixedEndings)) == nil,"automation sort refuses the mixed CRLF, CR and LF fixture")
+            knownDefect("G351","automation sort refuses a text whose CR, CRLF and LF run together",fixed:(try? automation.transform("a\r\r\n\nb")) == nil)
             automation.steps=[.init(kind:.deduplicateLines)]
             knownDefect("G354","automation dedupe keeps canonically equivalent rows whose bytes differ, as Remove Duplicate Lines does",fixed:same(try automation.transform("\(UnicodeFixtures.nfc)\n\(UnicodeFixtures.nfd)\n"),"\(UnicodeFixtures.nfc)\n\(UnicodeFixtures.nfd)\n"))
             knownDefect("G354","Invert Case applied twice restores the original text for \u{DF}",fixed:same(EditorTransform.invertCase.transform(EditorTransform.invertCase.transform("stra\u{DF}e")),"stra\u{DF}e"))
@@ -120,8 +139,8 @@ extension DocumentChecks {
             word.mode = .regularExpression
             knownDefect("G354","regex whole-word search does not match inside a word that continues with an astral letter",fixed:try SearchCore.search("\(UnicodeFixtures.astralLetter)cat cat",options:word).hits.count == 1)
             var half=SearchOptions();half.query="\\uD83D";half.mode = .extended;half.matchCase=true
-            let halfHits=(try? SearchCore.search("a\u{1F600}b",options:half).hits) ?? []
-            check(halfHits.isEmpty,"an extended-mode escape for half a surrogate pair does not match inside a character")
+            // The search engine refuses the query outright; it must not come back as "no matches".
+            rejects("an extended-mode escape for half a surrogate pair is rejected, not searched for inside a character",message:"surrogate") { _ = try SearchCore.search("a\u{1F600}b",options:half) }
         }
         // F243
         section("launch recovery and dirty quit",#line) {
@@ -215,6 +234,18 @@ extension DocumentChecks {
                 check(clone.revision == document.editor.revision,"the two views report the same revision")
                 document.editor.executeCommand("undo");clone.executeCommand("undo")
                 check(document.editor.text == "zero\none\ntwo\n" && !document.isDocumentEdited,"undo from each view returns the shared buffer to its save point")
+                // The search, utility and language controllers ask the application delegate for the
+                // current editor; menu commands go to the window controller's active editor.
+                // The check process has no main window, so the delegate is told which window is frontmost.
+                splitDelegate.lastDocumentController=controller
+                check(window.makeFirstResponder(clone) && splitDelegate.currentEditor === clone,"with the clone focused it is the current editor the search, utility and language controllers receive")
+                _ = document.editor.setSelectionAnchor(5,caret:8);_ = clone.setSelectionAnchor(0,caret:4)
+                let upper=NSMenuItem(title:"",action:nil,keyEquivalent:"");upper.representedObject="upper"
+                controller.command(upper)
+                check(document.editor.text == "ZERO\none\ntwo\n" && document.editor.selectionStart == 5 && document.editor.selectionEnd == 8,"a menu command with the clone active uses the clone's selection and leaves the primary view's selection alone")
+                clone.executeCommand("undo")
+                check(document.editor.text == "zero\none\ntwo\n" && !document.isDocumentEdited,"the command sent through the clone is one Undo in the shared history")
+                check(window.makeFirstResponder(document.editor) && splitDelegate.currentEditor === document.editor,"with the primary view focused it is the current editor again")
                 let indicatorAllOnFor:UInt32=2506,searchIndicator=1<<20
                 check(document.editor.setSearchHighlights([NSValue(range:NSRange(location:0,length:4))]) && sci(clone,indicatorAllOnFor,1) & searchIndicator != 0 && sci(clone,indicatorAllOnFor,5) & searchIndicator == 0,"a search highlight set through the primary view is present in the clone")
                 clone.clearSearchHighlights()
@@ -230,6 +261,7 @@ extension DocumentChecks {
                 check(window.makeFirstResponder(clone) && controller.activeEditor === clone,"fixture: the clone is active before the split closes")
                 controller.closeSplit(nil)
                 check(controller.secondary == nil && controller.activeEditor === document.editor && controller.lastEditor === document.editor,"closing the split returns the active editor to the primary view")
+                check(splitDelegate.currentEditor === document.editor,"after the split closes the controllers receive the primary view, never the detached clone")
             }
             for _ in 0..<10 where released != nil { autoreleasepool { window.displayIfNeeded();RunLoop.current.run(until:Date().addingTimeInterval(0.05)) } }
             // A bare TTEditor, one sharing this document and one removed from a split view in a
