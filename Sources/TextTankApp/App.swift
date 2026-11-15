@@ -500,7 +500,13 @@ private final class DocumentTabWindow: NSWindow {
         let closingFrame=frame
         let next=Self.documents.first{$0 !== self}
         super.close()
-        if wasVisible {next?.setFrame(closingFrame,display:false);next?.makeKeyAndOrderFront(nil)}
+        if wasVisible {
+            next?.makeKeyAndOrderFront(nil)
+            // Ordering a hidden window can apply AppKit's screen constraints.
+            // Restore the shared frame after that layout transition, as on tab selection.
+            next?.contentView?.layoutSubtreeIfNeeded()
+            next?.setFrame(closingFrame,display:true)
+        }
     }
 }
 private final class DocumentTabActionButton: NSButton {
