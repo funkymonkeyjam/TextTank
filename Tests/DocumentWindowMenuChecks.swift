@@ -294,17 +294,20 @@ extension DocumentChecks {
                 "fixture: the last of four tabs is showing")
             winD.setFrame(NSRect(x: 160, y: 140, width: 900, height: 640), display: true)
             let frame = winD.frame
-            try closeButton(for: winC, in: controlD).performClick(nil)
+            // B first, while C is still open between it and D: only the return-to target, not
+            // adjacency, brings D back (B's neighbour is C).
+            try closeButton(for: winB, in: controlD).performClick(nil)
             check(
-                winD.isVisible && !isOpen(c) && isOpen(d) && !winA.isVisible && !winB.isVisible,
-                "closing a clean background tab from its close button returns to the tab that was active")
+                winD.isVisible && !isOpen(b) && isOpen(c) && isOpen(d) && !winC.isVisible && !winA.isVisible,
+                "closing a background tab that is not next to the active one returns to the active tab, not its neighbour"
+            )
             if !NSScreen.screens.isEmpty {
                 check(winD.frame == frame, "closing a background tab leaves the window's frame as it was")
             }
-            try closeButton(for: winB, in: controlD).performClick(nil)
+            try closeButton(for: winC, in: controlD).performClick(nil)
             check(
-                winD.isVisible && !isOpen(b) && !winA.isVisible,
-                "closing a background tab that is not next to the active one still returns to the active tab")
+                winD.isVisible && !isOpen(c) && isOpen(d) && !winA.isVisible,
+                "closing a clean background tab from its close button returns to the tab that was active")
             let (e, controlE, winE) = try tab("p21-E")
             let (f, _, winF) = try tab("p21-F")
             try require(winF.isVisible, "fixture: the new last tab is showing")
@@ -541,6 +544,12 @@ extension DocumentChecks {
                                     atPath: TestPaths.repoRoot.appendingPathComponent("Resources/" + $0).path)
                         },
                 "the bundled credits name all four licences and the files that hold them")
+            // Every listed content type is a writable type, and all but one are named "Plain Text":
+            // the Save panel's File Format pop-up would offer seven entries, three of which add an
+            // extension (.txt, .xml, .json) to the name. The document keeps its own type instead.
+            check(
+                !TextDocument().shouldRunSavePanelWithAccessoryView,
+                "the Save panel has no File Format pop-up, so saving never switches the type or adds its extension")
             check(
                 AppDelegate.aboutOptions(info: nil, credits: nil).isEmpty,
                 "without bundle information the About panel falls back to its standard contents")

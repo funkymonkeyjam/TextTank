@@ -517,6 +517,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @objc(TextDocument) final class TextDocument: NSDocument {
     /// The type name used where a document has none of its own. Reading ignores the type.
     static let plainTextType = "public.plain-text"
+    /// No File Format pop-up in the Save panel. Every content type in Info.plist is a writable
+    /// type and nearly all are named "Plain Text"; choosing one would only switch the type name
+    /// and, for some, add that type's extension. The text is written the same way for all.
+    override var shouldRunSavePanelWithAccessoryView: Bool { false }
     static let recovery: RecoveryStore = {
         let env = ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]
         let root =
