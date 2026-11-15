@@ -31,7 +31,7 @@ final class WorkspaceController: NSObject {
         do {
             let session=try WorkspaceStore.load(from:url)
             let inspections=session.inspectReferencedFiles()
-            let alert=NSAlert();alert.messageText="Restore \(session.documents.count) Documents from \(session.name)?"
+            let alert=TTAlert();alert.messageText="Restore \(session.documents.count) Documents from \(session.name)?"
             alert.informativeText="Snapshots open as new unsaved documents. Existing tabs and original files are kept.\n\n" + zip(session.documents,inspections).map { entry in
                 "\(entry.0.originalURL?.lastPathComponent ?? "Untitled"): \(entry.1.status.description)"
             }.joined(separator:"\n")

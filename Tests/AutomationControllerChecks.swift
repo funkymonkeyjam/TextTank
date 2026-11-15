@@ -97,6 +97,27 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         try check(nestedRule.1,"changing rule kind enables find and replacement fields")
         try check(nestedRule.2?.kind == .replaceLiteral && nestedRule.2?.find == "[salt]" && nestedRule.2?.replacement == "2 eggs","nested Save Rule commits keyboard-entered find and replacement")
     }
+    static func horizontalDialogChecks() throws {
+        let alert = TTAlert()
+        alert.messageText = "Horizontal action regression"
+        let field = NSTextField(frame:NSRect(x:0,y:0,width:420,height:28))
+        field.stringValue = "Draft survives reopening"
+        alert.accessoryView = field
+        for title in ["Save", "Cancel", "Reset Defaults"] { alert.addButton(withTitle:title) }
+        for index in [2, 1, 0] {
+            var aligned = false
+            let timer = Timer(timeInterval:0.1,repeats:false) { _ in
+                let frames = alert.buttons.map { $0.convert($0.bounds,to:alert.window.contentView) }
+                aligned = frames.allSatisfy { abs($0.midY-frames[0].midY)<1 } && frames[2].maxX<frames[1].minX && frames[1].maxX<frames[0].minX
+                alert.buttons[index].performClick(nil)
+            }
+            RunLoop.main.add(timer,forMode:.modalPanel)
+            let response = alert.runModal(); timer.invalidate()
+            try check(response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue+index,"horizontal dialog preserves response index \(index)")
+            try check(aligned,"horizontal dialog actions remain side by side on presentation \(index)")
+            try check(field.stringValue == "Draft survives reopening","horizontal dialog preserves accessory on presentation \(index)")
+        }
+    }
     static func main() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("TextTankAutomationControllerChecks-" + UUID().uuidString)
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
@@ -104,6 +125,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         setenv("TEXTTANK_SUPPORT_DIRECTORY",root.path,1)
         defer { if let old { setenv("TEXTTANK_SUPPORT_DIRECTORY",old,1) } else { unsetenv("TEXTTANK_SUPPORT_DIRECTORY") }; try? FileManager.default.removeItem(at:root) }
         _ = NSApplication.shared
+        try horizontalDialogChecks()
         let window = NSWindow(contentRect:NSRect(x:0,y:0,width:800,height:500),styleMask:[.titled],backing:.buffered,defer:false)
         let editor = TTEditor(frame:window.contentView!.bounds); window.contentView = editor
         var newDocumentCalls = 0

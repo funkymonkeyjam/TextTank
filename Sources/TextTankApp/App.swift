@@ -156,9 +156,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let scan = try TextDocument.recovery.scan()
             let snapshots = scan.snapshots
-            if !scan.issues.isEmpty { let warning=NSAlert();warning.messageText="Some recovery files need review";warning.informativeText=scan.issues.map { $0.url.lastPathComponent+": "+$0.message }.joined(separator:"\n");warning.runModal() }
+            if !scan.issues.isEmpty { let warning=TTAlert();warning.messageText="Some recovery files need review";warning.informativeText=scan.issues.map { $0.url.lastPathComponent+": "+$0.message }.joined(separator:"\n");warning.runModal() }
             guard !snapshots.isEmpty else { return }
-            let alert=NSAlert(); alert.messageText="Recover unsaved documents?"; alert.informativeText="Found \(snapshots.count) recovery snapshots. Recovered content opens as new unsaved documents; original files are not changed.";alert.addButton(withTitle:"Recover");alert.addButton(withTitle:"Later")
+            let alert=TTAlert(); alert.messageText="Recover unsaved documents?"; alert.informativeText="Found \(snapshots.count) recovery snapshots. Recovered content opens as new unsaved documents; original files are not changed.";alert.addButton(withTitle:"Recover");alert.addButton(withTitle:"Later")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             for snapshot in snapshots {
                 let (base,overflow)=snapshot.revision.addingReportingOverflow(1)
@@ -205,7 +205,7 @@ final class TextDocument: NSDocument {
     }
     @objc func checkExternalChanges(_ sender:Any?) {
         do {
-            let state=try diskState(); let alert=NSAlert()
+            let state=try diskState(); let alert=TTAlert()
             alert.messageText=state == .unchanged ? "File is unchanged" : state == .missing ? "File is missing" : "File changed outside TextTank"
             alert.informativeText=state == .unchanged ? "The on-disk bytes match the last read or save." : "Your editor contents are preserved. Use Save As to keep your edits, or Revert to Saved to reload the disk version."
             alert.runModal()
@@ -224,7 +224,7 @@ final class TextDocument: NSDocument {
     @objc func reloadEncoding(_ sender:NSMenuItem) {
         guard let raw=sender.representedObject as? String,let encoding=FileEncoding(rawValue:raw) else { return }
         if isDocumentEdited {
-            let alert=NSAlert();alert.messageText="Discard unsaved changes and reload?";alert.informativeText="The disk bytes will be interpreted as \(raw). Use Convert to change the save encoding while keeping your text."
+            let alert=TTAlert();alert.messageText="Discard unsaved changes and reload?";alert.informativeText="The disk bytes will be interpreted as \(raw). Use Convert to change the save encoding while keeping your text."
             alert.addButton(withTitle:"Cancel");alert.addButton(withTitle:"Discard and Reload")
             guard alert.runModal() == .alertSecondButtonReturn else { return }
         }
@@ -548,7 +548,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         case "wrap.on","wrap.off":editor.wrap=id == "wrap.on"
         case "clearSelection":_ = editor.setSelectionAnchor(editor.selectionCaret,caret:editor.selectionCaret)
         case "goToLine":
-            let alert=NSAlert();alert.messageText="Go to Line"
+            let alert=TTAlert();alert.messageText="Go to Line"
             let input=NSTextField(string:String(info["line"]?.intValue ?? 1));input.frame=NSRect(x:0,y:0,width:240,height:24)
             alert.accessoryView=input;alert.addButton(withTitle:"Go");alert.addButton(withTitle:"Cancel")
             alert.window.initialFirstResponder=input
@@ -634,7 +634,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     }
     @objc func columnInsert(_ sender:Any?) {
         let editor=activeEditor;let revision=editor.revision,selections=editor.selectionRanges
-        let alert=NSAlert();alert.messageText="Insert into Each Selection";alert.informativeText="Use Option-drag for a rectangle or add multiple carets. Text replaces each selected range; numbering follows selection order."
+        let alert=TTAlert();alert.messageText="Insert into Each Selection";alert.informativeText="Use Option-drag for a rectangle or add multiple carets. Text replaces each selected range; numbering follows selection order."
         let text=NSTextField(string:"");text.placeholderString="Text to insert"
         let number=NSButton(checkboxWithTitle:"Insert sequential numbers",target:nil,action:nil)
         let start=NSTextField(string:"1"),step=NSTextField(string:"1")
@@ -648,7 +648,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             for i in 0..<editor.selectionCount { values.append(String(value));if i+1<editor.selectionCount { let(next,overflow)=value.addingReportingOverflow(increment);guard !overflow else {NSSound.beep();return};value=next } }
         }
         (NSApp.delegate as? AppDelegate)?.macros.invalidateRecording(reason:"Column insertion is not yet recorded.")
-        if !Self.applyColumn(values,to:editor,revision:revision,selections:selections) {let error=NSAlert();error.messageText="Selections changed or are not writable";error.informativeText="No column insertion was applied.";error.runModal()}
+        if !Self.applyColumn(values,to:editor,revision:revision,selections:selections) {let error=TTAlert();error.messageText="Selections changed or are not writable";error.informativeText="No column insertion was applied.";error.runModal()}
     }
     static func applyColumn(_ values:[String],to editor:TTEditor,revision:UInt,selections:[[String:NSNumber]])->Bool {
         guard editor.window != nil,editor.selectionRanges==selections else{return false}

@@ -47,7 +47,7 @@ final class LanguageController:NSObject,NSMenuDelegate {
         do {
             guard var proposed=catalog,let index=proposed.profiles.firstIndex(where:{$0.id==languageProvider()}),let definition=proposed.profiles[index].udl else{throw LanguageError.invalid("Choose an imported user-defined language first.")}
             let id=proposed.profiles[index].id
-            let alert=NSAlert();alert.messageText="Edit User-Defined Language";alert.informativeText="Edit the UDL 2.x XML settings, keyword groups, comments, folding, delimiters and styles. Save validates the entire definition before changing it. Renaming here preserves the saved language identifier."
+            let alert=TTAlert();alert.messageText="Edit User-Defined Language";alert.informativeText="Edit the UDL 2.x XML settings, keyword groups, comments, folding, delimiters and styles. Save validates the entire definition before changing it. Renaming here preserves the saved language identifier."
             alert.addButton(withTitle:"Save");alert.addButton(withTitle:"Cancel")
             let scroll=NSScrollView(frame:NSRect(x:0,y:0,width:700,height:420));scroll.hasVerticalScroller=true
             let text=NSTextView(frame:scroll.bounds);text.isRichText=false;text.isAutomaticQuoteSubstitutionEnabled=false;text.isAutomaticDashSubstitutionEnabled=false;text.autoresizingMask=[.width];text.font = .monospacedSystemFont(ofSize:12,weight:.regular);scroll.documentView=text;text.string=String(data:try definition.encodedXML(),encoding:.utf8)!;alert.accessoryView=scroll
@@ -112,12 +112,12 @@ final class LanguageController:NSObject,NSMenuDelegate {
             if let loadError{throw loadError}
             guard var proposed=catalog,let profileIndex=proposed.profiles.firstIndex(where:{$0.id==languageProvider()}) else{throw LanguageError.invalid("Choose a language first.")}
             if proposed.profiles[profileIndex].styles.isEmpty {proposed.profiles[profileIndex].styles=[.init(id:0,name:"DEFAULT",foreground:"15201F",fontStyle:0)]}
-            let choose=NSAlert();choose.messageText="Syntax Style Settings";choose.informativeText="Choose the syntax category to customize for this language.";choose.addButton(withTitle:"Edit");choose.addButton(withTitle:"Cancel")
+            let choose=TTAlert();choose.messageText="Syntax Style Settings";choose.informativeText="Choose the syntax category to customize for this language.";choose.addButton(withTitle:"Edit");choose.addButton(withTitle:"Cancel")
             let selector=NSPopUpButton(frame:NSRect(x:0,y:0,width:440,height:28),pullsDown:false)
             for style in proposed.profiles[profileIndex].styles{selector.addItem(withTitle:style.name)};choose.accessoryView=selector
             guard choose.runModal() == .alertFirstButtonReturn,selector.indexOfSelectedItem>=0 else{return}
             let styleIndex=selector.indexOfSelectedItem;var style=proposed.profiles[profileIndex].styles[styleIndex]
-            let edit=NSAlert();edit.messageText="\(proposed.profiles[profileIndex].title) — \(style.name)";edit.informativeText="Choose a font and size. Custom RGB stays fixed in light/dark appearances; turn it off to use the adaptive native syntax palette. Changes affect this language only."
+            let edit=TTAlert();edit.messageText="\(proposed.profiles[profileIndex].title) — \(style.name)";edit.informativeText="Choose a font and size. Custom RGB stays fixed in light/dark appearances; turn it off to use the adaptive native syntax palette. Changes affect this language only."
             edit.addButton(withTitle:"Save");edit.addButton(withTitle:"Cancel")
             let font=NSTextField(string:style.fontName ?? NSFont.monospacedSystemFont(ofSize:12,weight:.regular).fontName),size=NSTextField(string:String(style.fontSize ?? 12))
             let color=NSColorWell();color.color=Self.rgb(style.foreground)
@@ -154,7 +154,7 @@ final class LanguageController:NSObject,NSMenuDelegate {
     @objc func configure(){
         do {
             if let loadError{throw loadError};guard let catalog else{return}
-            let alert=NSAlert();alert.messageText="Language Profiles";alert.informativeText="Edit native lexer keywords, properties, style emphasis, extension detection and optional function patterns (capture group 1 is the name). This JSON profile format is not Notepad++ UDL XML. Imported files never execute code. Preserve identifiers to keep session language choices."
+            let alert=TTAlert();alert.messageText="Language Profiles";alert.informativeText="Edit native lexer keywords, properties, style emphasis, extension detection and optional function patterns (capture group 1 is the name). This JSON profile format is not Notepad++ UDL XML. Imported files never execute code. Preserve identifiers to keep session language choices."
             for title in ["Save","Cancel","Import…","Export…"]{alert.addButton(withTitle:title)}
             let scroll=NSScrollView(frame:NSRect(x:0,y:0,width:700,height:420));scroll.hasVerticalScroller=true
             let text=NSTextView(frame:scroll.bounds);text.isRichText=false;text.isAutomaticQuoteSubstitutionEnabled=false;text.isAutomaticDashSubstitutionEnabled=false;text.font = .monospacedSystemFont(ofSize:12,weight:.regular);text.autoresizingMask=[.width];scroll.documentView=text;text.string=String(data:try catalog.encoded(),encoding:.utf8)!;alert.accessoryView=scroll

@@ -31,7 +31,7 @@ final class RunController:NSObject {
     @objc private func addSample(_ sender:Any?){do{if let error=loadError{throw error};if !commands.contains(where:{$0.extensionMode && $0.executable=="/usr/bin/tr"}){try persist(commands+[.uppercaseSample])}}catch{NSAlert(error:error).runModal()}}
     @objc private func configure(_ sender:Any?){
         if let error=loadError{NSAlert(error:error).runModal();return}
-        let alert=NSAlert();alert.messageText="Configure Run Command";alert.informativeText="Runs only when explicitly selected. Arguments stay separate; use {file}, {directory}, or {selection} as a complete argument. Shell mode deliberately executes the argument as shell code."
+        let alert=TTAlert();alert.messageText="Configure Run Command";alert.informativeText="Runs only when explicitly selected. Arguments stay separate; use {file}, {directory}, or {selection} as a complete argument. Shell mode deliberately executes the argument as shell code."
         let name=NSTextField(string:""),path=NSTextField(string:"/usr/bin/printf"),args=NSTextField(string:"[\"%s\\n\",\"{file}\"]")
         let shell=NSButton(checkboxWithTitle:"Intentional shell mode (/bin/zsh -c)",target:nil,action:nil)
         let ext=NSButton(checkboxWithTitle:"Version 1 text extension (stdin → preview → explicit Apply)",target:nil,action:nil)

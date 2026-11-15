@@ -30,7 +30,7 @@ final class UtilityController: NSObject {
     @objc private func hexOptions(_ sender:Any?) {
         guard let editor=activeEditor(),editor.window != nil,!editor.readOnly,editor.selectionCount == 1,editor.selectionStart != editor.selectionEnd else { NSAlert(error:UtilityFailure.selectionRequired).runModal();return }
         let revision=editor.revision;let selection=editor.selectionRanges;let input=editor.selectedText
-        let alert=NSAlert();alert.messageText="Hex Encoding Options"
+        let alert=TTAlert();alert.messageText="Hex Encoding Options"
         let spaces=NSButton(checkboxWithTitle:"Spaces between bytes",target:nil,action:nil)
         let uppercase=NSButton(checkboxWithTitle:"Uppercase hexadecimal",target:nil,action:nil);uppercase.state = .on
         let width=NSTextField(string:"16")
@@ -45,7 +45,7 @@ final class UtilityController: NSObject {
         } catch { NSAlert(error:error).runModal() }
     }
     @objc private func convertNumber(_ sender:Any?) {
-        let alert=NSAlert();alert.messageText="Number Conversion";alert.informativeText="Convert an unsigned 32-bit number. Conversion does not change your document."
+        let alert=TTAlert();alert.messageText="Number Conversion";alert.informativeText="Convert an unsigned 32-bit number. Conversion does not change your document."
         let captured=activeEditor();let revision=captured?.revision;let selection=captured?.selectionRanges
         let input=NSTextField(string:captured?.selectedText ?? "")
         let from=NSPopUpButton();let to=NSPopUpButton()
@@ -57,7 +57,7 @@ final class UtilityController: NSObject {
         do {
             let bases=[2,8,10,16]
             let output=try RadixConversion.convert(input.stringValue,from:bases[from.indexOfSelectedItem],to:bases[to.indexOfSelectedItem])
-            let result=NSAlert();result.messageText="Converted Number";result.informativeText=output
+            let result=TTAlert();result.messageText="Converted Number";result.informativeText=output
             result.addButton(withTitle:"Copy");result.addButton(withTitle:"Cancel");result.addButton(withTitle:"Insert into Editor")
             let action=result.runModal()
             if action == .alertFirstButtonReturn { NSPasteboard.general.clearContents();NSPasteboard.general.setString(output,forType:.string) }

@@ -1,6 +1,61 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
+/// Shared app-owned modal layout. macOS may stack NSAlert actions vertically;
+/// keep their original response indices while presenting one horizontal row.
+final class TTAlert: NSAlert {
+    private var sizeConstraints: [NSLayoutConstraint] = []
+    @objc private func finishHorizontalAction(_ sender:NSButton) {
+        window.makeFirstResponder(nil)
+        NSApp.stopModal(withCode:NSApplication.ModalResponse(rawValue:NSApplication.ModalResponse.alertFirstButtonReturn.rawValue+sender.tag))
+    }
+    override func runModal() -> NSApplication.ModalResponse {
+        NSLayoutConstraint.deactivate(sizeConstraints); sizeConstraints.removeAll()
+        if buttons.isEmpty {_ = addButton(withTitle:"OK")}
+        let modal=window, initialFocus=window.initialFirstResponder
+        let accessory=accessoryView
+        let accessorySize=accessory?.frame.size ?? .zero
+        accessory?.removeFromSuperview()
+        let title=NSTextField(wrappingLabelWithString:messageText);title.font = .boldSystemFont(ofSize:15)
+        let detail=NSTextField(wrappingLabelWithString:informativeText);detail.font = .systemFont(ofSize:13)
+        let actions=NSStackView();actions.orientation = .horizontal;actions.spacing=8
+        var actionWidth:CGFloat=0
+        for (index,button) in buttons.enumerated().reversed() {
+            button.removeFromSuperview();button.translatesAutoresizingMaskIntoConstraints=false
+            button.target=self;button.action=#selector(finishHorizontalAction(_:));button.tag=index
+            button.bezelStyle = .rounded;button.controlSize = .regular
+            button.keyEquivalent=button.title == "Cancel" ? "\u{1b}" : (index == 0 ? "\r" : "")
+            let width=max(84,ceil((button.title as NSString).size(withAttributes:[.font:NSFont.systemFont(ofSize:13)]).width)+30)
+            sizeConstraints.append(button.widthAnchor.constraint(equalToConstant:width))
+            actions.addArrangedSubview(button);actionWidth+=width
+        }
+        actionWidth+=CGFloat(max(0,buttons.count-1))*8
+        let width=max(420,accessorySize.width,actionWidth)
+        let body=NSStackView();body.orientation = .vertical;body.alignment = .leading;body.spacing=14
+        body.addArrangedSubview(title);if !informativeText.isEmpty {body.addArrangedSubview(detail)}
+        if let accessory {
+            accessory.translatesAutoresizingMaskIntoConstraints=false
+            sizeConstraints.append(accessory.widthAnchor.constraint(equalToConstant:max(1,accessorySize.width)))
+            sizeConstraints.append(accessory.heightAnchor.constraint(equalToConstant:max(1,accessorySize.height)))
+            body.addArrangedSubview(accessory)
+        }
+        let footer=NSView();footer.addSubview(actions);actions.translatesAutoresizingMaskIntoConstraints=false
+        NSLayoutConstraint.activate([actions.trailingAnchor.constraint(equalTo:footer.trailingAnchor),actions.topAnchor.constraint(equalTo:footer.topAnchor),actions.bottomAnchor.constraint(equalTo:footer.bottomAnchor),footer.heightAnchor.constraint(equalToConstant:32)])
+        body.addArrangedSubview(footer)
+        let root=NSView();root.addSubview(body);body.translatesAutoresizingMaskIntoConstraints=false
+        NSLayoutConstraint.activate([body.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:24),body.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-24),body.topAnchor.constraint(equalTo:root.topAnchor,constant:24),body.bottomAnchor.constraint(equalTo:root.bottomAnchor,constant:-24),body.widthAnchor.constraint(equalToConstant:width),title.widthAnchor.constraint(equalTo:body.widthAnchor),footer.widthAnchor.constraint(equalTo:body.widthAnchor)])
+        if !informativeText.isEmpty {detail.widthAnchor.constraint(equalTo:body.widthAnchor).isActive=true}
+        NSLayoutConstraint.activate(sizeConstraints)
+        modal.contentView=root
+        root.layoutSubtreeIfNeeded();modal.setContentSize(root.fittingSize)
+        modal.center();modal.initialFirstResponder=initialFocus ?? accessory
+        modal.makeKeyAndOrderFront(nil)
+        if let initialFocus {modal.makeFirstResponder(initialFocus)}
+        defer {modal.orderOut(nil)}
+        return NSApp.runModal(for:modal)
+    }
+}
+
 extension AutomationDefinition.Step.Kind {
     var label: String {
         switch self {
@@ -132,7 +187,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         sets += [AutomationRuleSet(name:"Trim and remove empty lines",steps:[.init(kind:.trimWhitespace),.init(kind:.removeBlankLines)]),
                  AutomationRuleSet(name:"Sort unique lines",steps:[.init(kind:.sortLines),.init(kind:.deduplicateLines)]),
                  AutomationRuleSet(name:"Recipe ingredient cleanup",steps:AutomationDefinition.shoppingRecipeSteps)]
-        let picker = NSAlert(); picker.messageText = "Load Rules"
+        let picker = TTAlert(); picker.messageText = "Load Rules"
         picker.informativeText = "Copy rules from any saved automation or template, or import a rule file. Only this draft’s processing steps are replaced; its name, input, output and shortcuts stay unchanged."
         picker.addButton(withTitle:"Load Selected"); picker.addButton(withTitle:"Cancel"); picker.addButton(withTitle:"Import File…")
         let choices = NSPopUpButton(frame:NSRect(x:0,y:0,width:540,height:28),pullsDown:false)
@@ -150,7 +205,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
                 selected = sets[choices.indexOfSelectedItem]
             } else { return }
             try selected.validate()
-            let confirm = NSAlert(); confirm.messageText = "Replace this draft’s rules?"; confirm.informativeText = "Load \(selected.steps.count) processing steps from ‘\(selected.name)’. Canceling the builder will still preserve the saved automation."
+            let confirm = TTAlert(); confirm.messageText = "Replace this draft’s rules?"; confirm.informativeText = "Load \(selected.steps.count) processing steps from ‘\(selected.name)’. Canceling the builder will still preserve the saved automation."
             confirm.addButton(withTitle:"Replace Rules"); confirm.addButton(withTitle:"Cancel")
             if confirm.runModal() == .alertFirstButtonReturn { draft.steps = selected.steps; reload(0) }
         } catch { NSAlert(error:error).runModal() }
@@ -193,7 +248,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
 
 private final class RuleFields: NSObject {
     private let initial:AutomationDefinition.Step
-    private let alert = NSAlert(), kind = NSPopUpButton(), find = NSTextField(), replacement = NSTextField()
+    private let alert = TTAlert(), kind = NSPopUpButton(), find = NSTextField(), replacement = NSTextField()
     private let guidance = NSTextField(wrappingLabelWithString:"")
     private let askFind = NSButton(checkboxWithTitle:"Ask for this text when running",target:nil,action:nil)
     private let askReplacement = NSButton(checkboxWithTitle:"Ask for replacement when running",target:nil,action:nil)

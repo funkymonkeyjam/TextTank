@@ -58,7 +58,7 @@ final class WorkspaceBrowserController:NSObject,NSOutlineViewDataSource,NSOutlin
         guard let document=monitor.document else{status.stringValue="No document is being monitored.";return}
         guard !document.isDocumentEdited else{NSAlert(error:WorkspaceError.invalid("The document has unsaved edits. Use Save As to keep them, or explicitly Revert to Saved; monitoring will not discard them.")).runModal();return}
         let revision=document.editor.revision
-        let alert=NSAlert();alert.messageText="Reload Monitored File?";alert.informativeText="Replace the clean editor contents with the current disk bytes. This clears its Undo history."
+        let alert=TTAlert();alert.messageText="Reload Monitored File?";alert.informativeText="Replace the clean editor contents with the current disk bytes. This clears its Undo history."
         alert.addButton(withTitle:"Reload");alert.addButton(withTitle:"Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else{return}
         do{try monitor.reload(expectedRevision:revision)}catch{NSAlert(error:error).runModal()}

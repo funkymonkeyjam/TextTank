@@ -107,7 +107,7 @@ final class MacroController: NSObject, NSMenuDelegate {
     private func choosePlayback(_ macro:RecordedMacro) {
         guard !playing,recordingEditor == nil,let editor=editorProvider() else { return }
         let revision=editor.revision;let selectionStart=editor.selectionStart;let selectionEnd=editor.selectionEnd
-        let alert=NSAlert();alert.messageText="Play \(macro.name)"
+        let alert=TTAlert();alert.messageText="Play \(macro.name)"
         alert.informativeText="Repeat count (1–10000). Playback changes the captured editor as one Undo group. Literal find stops on no match; earlier edits remain undoable. Clipboard commands operate on the current clipboard. No shell or external workflow runs."
         alert.addButton(withTitle:"Play");alert.addButton(withTitle:"Cancel")
         let count=NSTextField(string:"1");count.frame=NSRect(x:0,y:0,width:200,height:24)
@@ -147,7 +147,7 @@ final class MacroController: NSObject, NSMenuDelegate {
     }
     @objc private func saveLast() {
         guard var macro=lastRecording,loadingError == nil else {if let loadingError {showError(loadingError)};return}
-        let alert=NSAlert();alert.messageText="Name Recorded Macro";alert.addButton(withTitle:"Save");alert.addButton(withTitle:"Cancel")
+        let alert=TTAlert();alert.messageText="Name Recorded Macro";alert.addButton(withTitle:"Save");alert.addButton(withTitle:"Cancel")
         let name=NSTextField(string:macro.name);name.frame=NSRect(x:0,y:0,width:400,height:24);alert.accessoryView=name
         guard alert.runModal() == .alertFirstButtonReturn else{return}
         do {macro.name=name.stringValue;var proposed=library
@@ -158,7 +158,7 @@ final class MacroController: NSObject, NSMenuDelegate {
     @objc private func manage() {
         guard !playing,recordingEditor == nil else{return}
         if let loadingError {showError(MacroError.invalid("Saved macros could not be loaded and are preserved: \(loadingError.localizedDescription)"));return}
-        let alert=NSAlert();alert.messageText="Manage Saved Macros";alert.informativeText="Edit names or steps, or remove entries. Preserve id to rename. Only validated text, editor commands and literal find/replace steps are accepted. Saving never executes macros."
+        let alert=TTAlert();alert.messageText="Manage Saved Macros";alert.informativeText="Edit names or steps, or remove entries. Preserve id to rename. Only validated text, editor commands and literal find/replace steps are accepted. Saving never executes macros."
         alert.addButton(withTitle:"Save");alert.addButton(withTitle:"Cancel");alert.addButton(withTitle:"Import…");alert.addButton(withTitle:"Export…")
         let scroll=NSScrollView(frame:NSRect(x:0,y:0,width:650,height:400));scroll.hasVerticalScroller=true
         let text=NSTextView(frame:scroll.bounds);text.isRichText=false;text.isAutomaticQuoteSubstitutionEnabled=false;text.isAutomaticDashSubstitutionEnabled=false;text.font = .monospacedSystemFont(ofSize:12,weight:.regular);text.autoresizingMask=[.width];text.isVerticallyResizable=true;text.textContainer?.widthTracksTextView=true;scroll.documentView=text

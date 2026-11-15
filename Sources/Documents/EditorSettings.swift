@@ -61,7 +61,7 @@ final class SettingsController:NSObject {
         if let menu=NSApp.mainMenu { update(menu) }
     }
     @objc func showSettings(_ sender:Any?) {
-        let alert=NSAlert();alert.messageText="Editor Settings";alert.informativeText="Applies to open and new views. Shortcut keys use Command; uppercase adds Shift."
+        let alert=TTAlert();alert.messageText="Editor Settings";alert.informativeText="Applies to open and new views. Shortcut keys use Command; uppercase adds Shift."
         let width=NSTextField(string:String(value.tabWidth))
         let tabs=NSButton(checkboxWithTitle:"Indent with tabs",target:nil,action:nil);tabs.state=value.useTabs ? .on : .off
         let wrap=NSButton(checkboxWithTitle:"Wrap lines",target:nil,action:nil);wrap.state=value.wrap ? .on : .off
