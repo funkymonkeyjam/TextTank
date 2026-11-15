@@ -39,10 +39,15 @@ struct WorkspaceDirectoryListing {
 /// interprets document content or executes extensions/processes.
 final class WorkspaceBrowserStore {
     private(set) var state = WorkspaceBrowserState()
-    private(set) var loadError: Error?
+    let loadState: StoreLoadState
+    private(set) var loadError: Error? {
+        get { loadState.error }
+        set { loadState.error = newValue }
+    }
     let url: URL
     init(url: URL) {
         self.url = url
+        loadState = StoreLoadState(url: url, displayName: "Saved workspace")
         do {
             let data = try WorkspaceStore.readRegularFile(url, maximumBytes: 1024 * 1024)
             let decoded = try JSONDecoder().decode(WorkspaceBrowserState.self, from: data)
@@ -57,10 +62,9 @@ final class WorkspaceBrowserStore {
             )
         }
         try value.validate()
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700])
-        try WorkspaceStore.writePrivate(JSONEncoder().encode(value), to: url)
+        try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
+        try PrivateFileStore.write(
+            JSONEncoder().encode(value), to: url, maximumBytes: 1024 * 1024, temporaryPrefix: ".workspace-")
         state = value
         loadError = nil
     }

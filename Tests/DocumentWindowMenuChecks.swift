@@ -520,7 +520,7 @@ extension DocumentChecks {
             }
             // Closing saves the settings, which shows that Escape went through the close path.
             func savedSettings() -> String? {
-                defaults.data(forKey: "TextTank.FolderSearch.v1").flatMap { String(data: $0, encoding: .utf8) }
+                (try? Data(contentsOf: AppStorage.url(.folderSearch))).flatMap { String(data: $0, encoding: .utf8) }
             }
             let panel = try requireValue(folder.window, "fixture: the Find in Folder panel")
             folder.queryField.stringValue = "escape-marker-one"

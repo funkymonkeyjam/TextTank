@@ -177,7 +177,11 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         if window == nil { buildWindow() }
         refresh(nil)
         window?.makeKeyAndOrderFront(nil)
-        if let error = store.loadError { status.stringValue = error.localizedDescription }
+        if let error = store.loadError {
+            status.stringValue =
+                "Saved workspace unavailable. Choose Add Folder to review recovery options. "
+                + error.localizedDescription
+        }
     }
     private func buildWindow() {
         let panel = NSPanel(
@@ -270,6 +274,10 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         expanded.remove(WorkspaceBrowserState.identity(node.entry.url))
     }
     @objc func addFolder(_ sender: Any?) {
+        do { guard try StoreRecovery.ensureWritable(store.loadState) else { return } } catch {
+            TTAlert.present(error)
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true

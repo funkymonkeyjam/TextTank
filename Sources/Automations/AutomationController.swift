@@ -24,7 +24,11 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     private let storage: URL
     private var library = AutomationLibrary(workflows: [])
     /// An existing library that could not be read. It is never overwritten; see `persistLibrary`.
-    private var loadError: Error?
+    let loadState: StoreLoadState
+    private var loadError: Error? {
+        get { loadState.error }
+        set { loadState.error = newValue }
+    }
     /// No library existed and the first write of the presets failed. This does not block saving.
     private var installError: Error?
     private var installErrorReported = false
@@ -63,6 +67,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         self.editorProvider = editorProvider
         self.newDocument = newDocument
         storage = AppStorage.url(.automations)
+        loadState = StoreLoadState(url: storage, displayName: "Saved automations")
         super.init()
         var storageInfo = stat()
         if lstat(storage.path, &storageInfo) == 0 {
@@ -251,8 +256,8 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     }
     func manage() {
         guard idleOrExplain() else { return }
-        if let loadError {
-            showError(loadError)
+        do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
+            showError(error)
             return
         }
         busy = true
@@ -422,8 +427,8 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     /// Nothing already saved is replaced, including edited copies of the same presets.
     func restoreDefaultAutomations() {
         guard idleOrExplain() else { return }
-        if let loadError {
-            showError(loadError)
+        do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
+            showError(error)
             return
         }
         busy = true
@@ -471,11 +476,8 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     }
     func manageAdvanced() {
         guard idleOrExplain() else { return }
-        if let loadError {
-            showError(
-                AutomationError.invalid(
-                    "Saved automations could not be loaded: \(loadError.localizedDescription)\nThe original file is preserved. Export or repair it outside TextTank before replacing it."
-                ))
+        do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
+            showError(error)
             return
         }
         busy = true
@@ -550,7 +552,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     }
     /// Shared private persistence for edited workflows and explicitly selected destinations.
     func persistLibrary(_ proposed: AutomationLibrary) throws {
-        if let loadError { throw loadError } // Never overwrite an unreadable existing library.
+        try loadState.requireWritable() // Never overwrite an unreadable existing library.
         let data = try proposed.encoded()
         let directory = storage.deletingLastPathComponent()
         if FileManager.default.fileExists(atPath: directory.path) {

@@ -461,6 +461,56 @@ import AppKit
         check(
             try Data(contentsOf: damaged.storage) == corrupt,
             "F137 an unreadable RunCommands.json is left byte for byte")
+        var revealed: [URL] = []
+        let originalReveal = StoreRecovery.reveal
+        StoreRecovery.reveal = { revealed.append($0) }
+        defer { StoreRecovery.reveal = originalReveal }
+        func recovery(_ identifier: String) throws -> Bool {
+            let deadline = Date().addingTimeInterval(5)
+            var clicked = false
+            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+                guard let content = NSApp.modalWindow?.contentView else { return }
+                if Date() > deadline {
+                    NSApp.abortModal()
+                    return
+                }
+                guard
+                    let button = descendants(content).compactMap({ $0 as? NSButton }).first(where: {
+                        $0.identifier?.rawValue == identifier
+                    })
+                else { return }
+                clicked = true
+                button.performClick(nil)
+            }
+            RunLoop.main.add(timer, forMode: .modalPanel)
+            defer { timer.invalidate() }
+            let writable = try StoreRecovery.ensureWritable(damaged.loadState)
+            check(clicked, "fixture: explicit recovery choice dispatched")
+            return writable
+        }
+        check(
+            try !recovery("store.recover.cancel") && damaged.loadState.error != nil
+                && Data(contentsOf: damaged.storage) == corrupt && revealed.isEmpty,
+            "F198 Cancel preserves the load latch, bytes and Finder isolation")
+        check(
+            try !recovery("store.recover.reveal") && damaged.loadState.error != nil
+                && Data(contentsOf: damaged.storage) == corrupt && revealed == [damaged.storage],
+            "F198 Reveal calls only the injected fixture handler and preserves the load latch and bytes")
+        check(
+            try recovery("store.recover.move") && damaged.loadState.error == nil
+                && !FileManager.default.fileExists(atPath: damaged.storage.path),
+            "F198 explicit Move Aside clears the latch after renaming the entry")
+        let retained = try FileManager.default.contentsOfDirectory(
+            at: damaged.storage.deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("RunCommands.previous-") }
+        check(
+            try retained.count == 1 && Data(contentsOf: retained[0]) == corrupt,
+            "F198 recovery retains the exact unreadable bytes under a unique sibling name")
+        try damaged.persist([sample])
+        check(
+            ids(RunController().makeMenu()) == [sample.id.uuidString],
+            "F198 only an explicit move-aside permits a later save and reload")
         try controller.persist([sample])
         check(RunController.manageHelp.contains("never runs"), "F137 the dialog says saving runs nothing")
         try manageDialogChecks(controller, sample, other)

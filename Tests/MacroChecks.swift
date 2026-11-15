@@ -706,6 +706,16 @@ import Foundation
                                 && node.st_mode & S_IFMT == (kind == "symlink" ? S_IFLNK : S_IFIFO),
                             "F149 refusing a macro \(kind) leaves the original node in place")
                     }
+                    let dangling = isolatedSupport.url.appendingPathComponent("dangling-library")
+                    try FileManager.default.createDirectory(at: dangling, withIntermediateDirectories: true)
+                    let danglingPath = dangling.appendingPathComponent("Macros.json")
+                    try FileManager.default.createSymbolicLink(
+                        at: danglingPath, withDestinationURL: dangling.appendingPathComponent("absent.json"))
+                    setenv("TEXTTANK_SUPPORT_DIRECTORY", dangling.path, 1)
+                    let danglingController = MacroController(editorProvider: { nil })
+                    check(
+                        danglingController.loadingError != nil,
+                        "F198 a dangling macro link is a refused entry, not a missing library")
                     let corruptDirectory = isolatedSupport.url.appendingPathComponent("corrupt-library")
                     try FileManager.default.createDirectory(at: corruptDirectory, withIntermediateDirectories: true)
                     let corruptFile = corruptDirectory.appendingPathComponent("Macros.json")

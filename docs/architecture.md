@@ -127,3 +127,5 @@ its addressable-Data ceiling (Int.max), not the session cap, and still materiali
 the complete JSON snapshot in memory. Large-document memory behavior is not
 certified by the small fixture checks. Equal-revision recovery content compares
 UTF-8 text/identity bytes, not Swift's canonically equivalent String equality.
+
+Audit 23's shared failed-load latch now protects Settings, Macro, Automation, Run, Language, Workspace Browser and search preference saves at their persistence boundary. Configuration actions share the explicit error/path, Reveal, Move Aside and Cancel presentation (`StoreRecovery`); passive recent-file updates never open a recovery dialog. Moving aside renames the entry itself under an exclusive unique sibling name. Settings keeps its earlier stricter direct replacement policy for symbolic links and restores its failure latch if replacement fails. A dangling Macro link is a refused entry, rather than a missing store. DS-38/41/44/53: recovery is requested by an editing action, identifies retained data and its location, and never executes a macro, command, automation or external export.

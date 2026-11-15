@@ -6,7 +6,11 @@ final class MacroController: NSObject, NSMenuDelegate {
     private let editorProvider: () -> TTEditor?
     private var library = MacroLibrary(macros: [])
     private let storage: URL
-    private(set) var loadingError: Error?
+    let loadState: StoreLoadState
+    private(set) var loadingError: Error? {
+        get { loadState.error }
+        set { loadState.error = newValue }
+    }
     private var recordingEditor: TTEditor?
     private var recorded: [RecordedMacro.Step] = []
     private var lastRecording: RecordedMacro?
@@ -22,14 +26,12 @@ final class MacroController: NSObject, NSMenuDelegate {
     init(editorProvider: @escaping () -> TTEditor?) {
         self.editorProvider = editorProvider
         storage = AppStorage.url(.macros)
+        loadState = StoreLoadState(url: storage, displayName: "Saved macros")
         super.init()
         macroMenu.delegate = self
-        if FileManager.default.fileExists(atPath: storage.path) {
-            do {
-                library = try MacroLibrary.decode(
-                    PrivateFileStore.read(storage, maximumBytes: MacroLibrary.maximumBytes))
-            } catch { loadingError = error }
-        }
+        do {
+            library = try MacroLibrary.decode(PrivateFileStore.read(storage, maximumBytes: MacroLibrary.maximumBytes))
+        } catch  where error.isFileNotFound {} catch { loadingError = error }
     }
     func menu() -> NSMenu {
         rebuild()
@@ -314,8 +316,9 @@ final class MacroController: NSObject, NSMenuDelegate {
         while try !session.advance(budget: 100, shouldCancel: shouldCancel) {}
     }
     @objc private func saveLast() {
-        guard var macro = lastRecording, loadingError == nil else {
-            if let loadingError { TTAlert.present(loadingError) }
+        guard var macro = lastRecording else { return }
+        do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
+            TTAlert.present(error)
             return
         }
         let alert = TTAlert()
@@ -342,10 +345,8 @@ final class MacroController: NSObject, NSMenuDelegate {
     }
     @objc private func manage() {
         guard !playing, recordingEditor == nil else { return }
-        if let loadingError {
-            TTAlert.present(
-                MacroError.invalid(
-                    "Saved macros could not be loaded and are preserved: \(loadingError.localizedDescription)"))
+        do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
+            TTAlert.present(error)
             return
         }
         let alert = TTAlert()
@@ -405,7 +406,7 @@ final class MacroController: NSObject, NSMenuDelegate {
     }
     /// One guarded save boundary for the manager, recording commands and native checks.
     func persist(_ proposed: MacroLibrary) throws {
-        if let loadingError { throw loadingError }
+        try loadState.requireWritable()
         let data = try proposed.encoded()
         try PrivateFileStore.prepareDirectory(storage.deletingLastPathComponent())
         try PrivateFileStore.write(

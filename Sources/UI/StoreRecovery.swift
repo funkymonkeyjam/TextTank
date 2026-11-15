@@ -5,7 +5,7 @@ import AppKit
 /// loading an unreadable file never opens Finder, renames data, or retries a write.
 enum StoreRecovery {
     static var reveal: (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
-    static func ensureWritable(_ state: StoreLoadState) throws -> Bool {
+    static func ensureWritable(_ state: StoreLoadState, allowSymbolicLink: Bool = true) throws -> Bool {
         guard let error = state.error else { return true }
         let alert = TTAlert()
         alert.alertStyle = .warning
@@ -22,7 +22,7 @@ enum StoreRecovery {
         enum Choice { case move, reveal, cancel }
         switch alert.choice([Choice.move, .reveal, .cancel]) {
         case .move:
-            try state.moveAside()
+            try state.moveAside(allowSymbolicLink: allowSymbolicLink)
             return true
         case .reveal:
             reveal(state.url)

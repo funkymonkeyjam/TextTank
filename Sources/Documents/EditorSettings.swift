@@ -54,10 +54,15 @@ enum SettingsError: Error, LocalizedError {
 }
 final class SettingsController: NSObject {
     private(set) var value = EditorSettings()
-    private(set) var loadError: Error?
+    let loadState: StoreLoadState
+    private(set) var loadError: Error? {
+        get { loadState.error }
+        set { loadState.error = newValue }
+    }
     let url: URL
     init(url: URL? = nil) {
         self.url = url ?? AppStorage.url(.settings)
+        loadState = StoreLoadState(url: self.url, displayName: "Editor settings")
         super.init()
         do {
             value = try EditorSettings.decode(WorkspaceStore.readRegularFile(self.url, maximumBytes: 1024 * 1024))
@@ -80,27 +85,20 @@ final class SettingsController: NSObject {
     @discardableResult func save(_ settings: EditorSettings, replacingUnreadable: Bool = false) throws -> URL? {
         try settings.validate()
         if loadError != nil && !replacingUnreadable { throw SettingsError.unreadable }
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700])
+        try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
         let data = try JSONEncoder().encode(settings)
+        let priorError = loadError
         var backup: URL?
         if loadError != nil {
-            var info = stat()
-            // A symlink or other non-regular entry is never moved: writePrivate refuses it below.
-            if lstat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG {
-                let aside = url.deletingLastPathComponent().appendingPathComponent(
-                    url.deletingPathExtension().lastPathComponent + ".unreadable-" + UUID().uuidString + ".json")
-                // RENAME_EXCL: never replace an existing entry, even one created concurrently.
-                guard renamex_np(url.path, aside.path, UInt32(RENAME_EXCL)) == 0 else {
-                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-                }
-                backup = aside
-            }
+            do { backup = try loadState.moveAside(allowSymbolicLink: false, tag: "unreadable") } catch PrivateFileError
+                .unsafeLocation
+            { throw WorkspaceError.unsafeLocation }
         }
-        do { try WorkspaceStore.writePrivate(data, to: url) } catch {
+        do { try PrivateFileStore.write(data, to: url, maximumBytes: 1024 * 1024, temporaryPrefix: ".settings-") } catch
+        {
             // Put the original back so a failed replacement leaves the folder as it was.
             if let backup { _ = renamex_np(backup.path, url.path, UInt32(RENAME_EXCL)) }
+            loadError = priorError
             throw error
         }
         let previous = value
@@ -207,18 +205,10 @@ final class SettingsController: NSObject {
                         updated.shortcuts[id] = key.stringValue
                     }
                 }
-                var replacing = false
+                let replacing = false
                 if loadError != nil {
                     // Save and Reset Defaults both arrive here; neither may silently replace the unread file.
-                    let confirm = TTAlert()
-                    confirm.alertStyle = .warning
-                    confirm.messageText = "Replace unreadable settings?"
-                    confirm.informativeText =
-                        "The saved settings file could not be read, so this window started from defaults. Saving now replaces that file. A backup copy of the original will be kept next to it.\n\n\(url.path)"
-                    confirm.addButton(withTitle: "Cancel", role: .cancel)
-                    confirm.addButton(withTitle: "Replace and Keep Backup")
-                    guard confirm.runModal() == .alertSecondButtonReturn else { return }
-                    replacing = true
+                    guard try StoreRecovery.ensureWritable(loadState, allowSymbolicLink: false) else { return }
                 }
                 if let backup = try save(updated, replacingUnreadable: replacing) {
                     let message =
