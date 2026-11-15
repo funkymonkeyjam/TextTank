@@ -47,7 +47,7 @@ final class StoreLoadState {
         self.displayName = displayName
     }
     func requireWritable() throws { if let error { throw error } }
-    @discardableResult func moveAside(allowSymbolicLink: Bool = true) throws -> URL? {
+    @discardableResult func moveAside(allowSymbolicLink: Bool = true, tag: String = "previous") throws -> URL? {
         let directory = try PrivateFileStore.directoryDescriptor(for: url)
         defer { close(directory) }
         var info = stat()
@@ -64,7 +64,8 @@ final class StoreLoadState {
             throw PrivateFileError.unsafeLocation
         }
         let name =
-            url.deletingPathExtension().lastPathComponent + ".previous-" + UUID().uuidString + "." + url.pathExtension
+            url.deletingPathExtension().lastPathComponent + "." + tag + "-" + UUID().uuidString + "."
+            + url.pathExtension
         guard renameatx_np(directory, url.lastPathComponent, directory, name, UInt32(RENAME_EXCL)) == 0 else {
             throw FileOperationFailure(errno, operation: "move saved entry aside", path: url.path)
         }
@@ -326,5 +327,16 @@ enum PrivateFileStore {
             return descriptor
         }
         return nil
+    }
+}
+
+/// Codable model comparisons use deterministic bytes, including exact Unicode spelling.
+/// Failed encodes are conservatively unequal; the caller's validation reports the real error.
+enum PersistedValue {
+    static func equal<Value: Encodable>(_ lhs: Value, _ rhs: Value) -> Bool {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let left = try? encoder.encode(lhs), let right = try? encoder.encode(rhs) else { return false }
+        return left == right
     }
 }

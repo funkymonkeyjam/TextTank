@@ -8,6 +8,22 @@ import Foundation
             check(catalog.profiles.count == 96, "all 96 source definitions retained")
             check(catalog.sourceCommit == "61246e5741fd7c59352f3feb5ccc7e33e4594d15", "reference source pinned")
             check(try LanguageCatalog.decode(catalog.encoded()) == catalog, "catalog roundtrip")
+            var oversizedCatalog = catalog
+            oversizedCatalog.profiles[0].keywordLists = Dictionary(
+                uniqueKeysWithValues: (0..<17).map {
+                    (String($0), String(repeating: "a", count: 1024 * 1024))
+                })
+            rejects("G358 catalog writer refuses bytes its 16 MiB reader cannot load") {
+                _ = try oversizedCatalog.encoded()
+            }
+            var accented = catalog
+            accented.profiles[0].title = "\u{00e9}"
+            var decomposed = accented
+            decomposed.profiles[0].title = "e\u{0301}"
+            let exact = try LanguageOverrides(changing: accented, to: decomposed).applied(to: accented)
+            check(
+                Array(exact.profiles[0].title.utf8) == Array(decomposed.profiles[0].title.utf8),
+                "language differences preserve canonically equivalent Unicode byte changes")
             check(catalog.detect(filename: "HELLO.PY", text: "") == "python", "case-insensitive extension detection")
             check(
                 catalog.detect(filename: "CMakeLists.txt", text: "") == "cmake", "special filename beats txt extension")

@@ -28,7 +28,11 @@ final class LanguageController: NSObject, NSMenuDelegate {
     private var menuEntries: [(title: String, id: String)]?
     private var generation = 0
     /// Why the stored LanguageProfiles.json, or the bundled catalog, could not be used.
-    private(set) var loadError: Error?
+    let loadState: StoreLoadState
+    private(set) var loadError: Error? {
+        get { loadState.error }
+        set { loadState.error = newValue }
+    }
     /// True when the stored file is the one that failed. The bundled catalog is then in use, the
     /// file is left exactly as it is, and nothing is saved until it has been moved aside.
     private(set) var storageDamaged = false
@@ -54,6 +58,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
         self.languageProvider = languageProvider
         self.setLanguage = setLanguage
         storage = AppStorage.url(.languages)
+        loadState = StoreLoadState(url: storage, displayName: "Language profiles")
         super.init()
         load(bundledCatalog)
     }
@@ -70,11 +75,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
             return
         }
         bundled = defaults
-        guard FileManager.default.fileExists(atPath: storage.path) else {
-            catalog = defaults
-            return
-        }
-        do { catalog = try LanguageCatalog.load(stored: Self.readRegular(storage), over: defaults) } catch {
+        do {
+            catalog = try LanguageCatalog.load(stored: Self.readRegular(storage, parent: .strict), over: defaults)
+        } catch  where error.isFileNotFound { catalog = defaults } catch {
             // The bundled languages keep working; the unreadable file is never overwritten.
             catalog = defaults
             loadError = error
@@ -135,13 +138,8 @@ final class LanguageController: NSObject, NSMenuDelegate {
     /// Until this has run, `persist` refuses to write.
     @discardableResult func quarantineDamagedStorage() throws -> URL {
         guard storageDamaged else { throw LanguageError.invalid("The language profiles file is not damaged.") }
-        let stamp = DateFormatter()
-        stamp.locale = Locale(identifier: "en_US_POSIX")
-        stamp.dateFormat = "yyyyMMdd-HHmmss"
-        let destination = storage.deletingLastPathComponent().appendingPathComponent(
-            "LanguageProfiles.damaged-\(stamp.string(from: Date()))-\(UUID().uuidString.prefix(8)).json")
-        guard renamex_np(storage.path, destination.path, UInt32(RENAME_EXCL)) == 0 else {
-            throw FileOperationFailure(errno, operation: "rename language profiles", path: storage.path)
+        guard let destination = try loadState.moveAside(tag: "damaged") else {
+            throw LanguageError.invalid("The language profiles entry no longer exists.")
         }
         storageDamaged = false
         loadError = nil
@@ -151,24 +149,11 @@ final class LanguageController: NSObject, NSMenuDelegate {
     private func ensureWritable() throws -> Bool {
         guard let loadError else { return true }
         guard storageDamaged else { throw loadError }
-        let alert = TTAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "The saved language profiles could not be read"
-        alert.informativeText =
-            "\(loadError.localizedDescription)\n\n\(storage.path)\n\nThe built-in languages are in use and the file has not been changed. To edit languages, move the file aside: it is renamed next to the original, not deleted, and your imported languages and style changes stay in it."
-        alert.addButton(withTitle: "Move Damaged File Aside and Use Defaults")
-        alert.addButton(withTitle: "Reveal in Finder")
-        alert.addButton(withTitle: "Cancel", role: .cancel)
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            try quarantineDamagedStorage()
-            return true
-        case .alertSecondButtonReturn:
-            NSWorkspace.shared.activateFileViewerSelecting([storage])
-            return false
-        default: return false
-        }
+        guard try StoreRecovery.ensureWritable(loadState) else { return false }
+        storageDamaged = false
+        return true
     }
+
     @objc private func importUDL() {
         do {
             guard try ensureWritable() else { return }
@@ -556,53 +541,32 @@ final class LanguageController: NSObject, NSMenuDelegate {
     /// Saves what `proposed` changes in the bundled catalog. Never shows UI and never moves files:
     /// while the stored file is unreadable it throws and leaves that file byte for byte as it is.
     func persist(_ proposed: LanguageCatalog) throws {
-        if let loadError { throw loadError }
+        try loadState.requireWritable()
         guard let bundled else { throw LanguageError.invalid("The language catalog is missing from the application.") }
         try proposed.validate()
         let overrides = LanguageOverrides(changing: bundled, to: proposed)
         // What is written must read back as exactly the profiles that were asked for.
         let merged = try overrides.applied(to: bundled)
-        guard merged.profiles == proposed.profiles else {
+        guard PersistedValue.equal(merged.profiles, proposed.profiles) else {
             throw LanguageError.invalid("Language profiles could not be stored without loss; nothing was saved.")
         }
-        let bytes = try overrides.encoded(), directory = storage.deletingLastPathComponent()
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        guard
-            try FileManager.default.attributesOfItem(atPath: directory.path)[.type] as? FileAttributeType
-                == .typeDirectory
-        else { throw LanguageError.invalid("Language storage must be a regular directory.") }
-        if FileManager.default.fileExists(atPath: storage.path) { _ = try Self.readRegular(storage) }
-        let temp = directory.appendingPathComponent(".languages-" + UUID().uuidString)
-        let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode_t(0o600))
-        guard fd >= 0 else {
-            throw FileOperationFailure(errno, operation: "create language settings beside", path: storage.path)
-        }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        defer {
-            try? handle.close()
-            try? FileManager.default.removeItem(at: temp)
-        }
-        try handle.write(contentsOf: bytes)
-        try handle.synchronize()
-        try handle.close()
-        guard rename(temp.path, storage.path) == 0 else {
-            throw FileOperationFailure(errno, operation: "rename language profiles", path: storage.path)
-        }
+        let bytes = try overrides.encoded()
+        try PrivateFileStore.prepareDirectory(storage.deletingLastPathComponent())
+        // Re-read an existing entry so a late unsafe substitution cannot be overwritten.
+        do { _ = try Self.readRegular(storage, parent: .strict) } catch  where error.isFileNotFound {}
+        try PrivateFileStore.write(
+            bytes, to: storage, maximumBytes: LanguageCatalog.maximumBytes,
+            temporaryPrefix: ".languages-")
         catalog = merged
     }
-    private static func readRegular(_ url: URL) throws -> Data {
-        let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-        guard fd >= 0 else { throw FileOperationFailure(errno, operation: "read language profiles", path: url.path) }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        defer { try? handle.close() }
-        var info = stat()
-        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= 16 * 1024 * 1024 else {
+    private static func readRegular(_ url: URL, parent: PrivateFileStore.ParentPolicy = .selectedInput) throws -> Data {
+        do {
+            return try PrivateFileStore.read(url, maximumBytes: LanguageCatalog.maximumBytes, parent: parent)
+        } catch PrivateFileError.unsafeLocation {
             throw LanguageError.invalid("Language input must be a regular file up to 16 MiB.")
+        } catch PrivateFileError.tooLarge {
+            throw LanguageError.invalid("Language input exceeds 16 MiB.")
         }
-        let bytes = try handle.read(upToCount: 16 * 1024 * 1024 + 1) ?? Data()
-        guard bytes.count <= 16 * 1024 * 1024 else { throw LanguageError.invalid("Language input exceeds 16 MiB.") }
-        return bytes
     }
 }
 

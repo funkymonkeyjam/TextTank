@@ -181,7 +181,9 @@ struct LanguageCatalog: Codable, Equatable {
         try validate()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(self)
+        let data = try encoder.encode(self)
+        guard data.count <= Self.maximumBytes else { throw LanguageError.invalid("Language catalog exceeds 16 MiB.") }
+        return data
     }
     /// The catalog a stored LanguageProfiles.json stands for. The current format holds only the
     /// user's changes (`LanguageOverrides`); a file written before that is a full copy of the
@@ -432,31 +434,33 @@ extension LanguageOverrides {
                 continue
             }
             let original = bundled.profiles[index]
-            if profile == original { continue }
+            if PersistedValue.equal(profile, original) { continue }
             var change = Profile(id: profile.id), cleared: [String] = []
-            if profile.title != original.title { change.title = profile.title }
-            if profile.lexer != original.lexer { change.lexer = profile.lexer }
-            if profile.extensions != original.extensions { change.extensions = profile.extensions }
-            if profile.keywordLists != original.keywordLists { change.keywordLists = profile.keywordLists }
-            if profile.referenceKeywordClasses != original.referenceKeywordClasses {
+            if !PersistedValue.equal(profile.title, original.title) { change.title = profile.title }
+            if !PersistedValue.equal(profile.lexer, original.lexer) { change.lexer = profile.lexer }
+            if !PersistedValue.equal(profile.extensions, original.extensions) { change.extensions = profile.extensions }
+            if !PersistedValue.equal(profile.keywordLists, original.keywordLists) {
+                change.keywordLists = profile.keywordLists
+            }
+            if !PersistedValue.equal(profile.referenceKeywordClasses, original.referenceKeywordClasses) {
                 change.referenceKeywordClasses = profile.referenceKeywordClasses
             }
-            if profile.properties != original.properties { change.properties = profile.properties }
-            if profile.styles != original.styles { change.styles = profile.styles }
-            if profile.functionPattern != original.functionPattern {
+            if !PersistedValue.equal(profile.properties, original.properties) { change.properties = profile.properties }
+            if !PersistedValue.equal(profile.styles, original.styles) { change.styles = profile.styles }
+            if !PersistedValue.equal(profile.functionPattern, original.functionPattern) {
                 change.functionPattern = profile.functionPattern
                 if profile.functionPattern == nil { cleared.append("functionPattern") }
             }
-            if profile.udl != original.udl {
+            if !PersistedValue.equal(profile.udl, original.udl) {
                 change.udl = profile.udl
                 if profile.udl == nil { cleared.append("udl") }
             }
-            if profile.comments != original.comments {
+            if !PersistedValue.equal(profile.comments, original.comments) {
                 change.comments = profile.comments
                 if profile.comments == nil, !fullCopy { cleared.append("comments") }
             }
             if !cleared.isEmpty { change.cleared = cleared }
-            if change != Profile(id: profile.id) { changed.append(change) }
+            if !PersistedValue.equal(change, Profile(id: profile.id)) { changed.append(change) }
         }
         let kept = Set(catalog.profiles.map(\.id))
         let removed = fullCopy ? [] : bundled.profiles.map(\.id).filter { !kept.contains($0) }
@@ -464,6 +468,6 @@ extension LanguageOverrides {
         let natural = bundled.profiles.map(\.id).filter { kept.contains($0) } + added.map(\.id)
         self.init(
             basedOnSourceCommit: bundled.sourceCommit, changed: changed, added: added, removed: removed,
-            order: stored == natural ? nil : stored)
+            order: PersistedValue.equal(stored, natural) ? nil : stored)
     }
 }
