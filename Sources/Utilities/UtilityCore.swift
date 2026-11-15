@@ -53,20 +53,28 @@ enum TextUtility: String, CaseIterable {
         case .base64Decode, .base64DecodeLines:
             return try Self.text(Self.permissiveBase64(input, whitespaceReset: self == .base64DecodeLines))
         case .quotedPrintableEncode:
-            var output = ""
+            // CRLF soft breaks are the documented reference behaviour (docs/research/utility-audit.md).
+            var output = [UInt8]()
+            output.reserveCapacity(input.utf8.count + input.utf8.count / 8)
             var column = 0
             for b in input.utf8 {
-                let token =
-                    ((b > 32 && b < 127 && b != 61) || [9, 10, 13, 32].contains(b))
-                    ? String(UnicodeScalar(b)) : String(format: "=%02X", b)
-                column = b == 10 ? token.utf8.count : column + token.utf8.count
+                let literal = (b > 32 && b < 127 && b != 61) || b == 9 || b == 10 || b == 13 || b == 32
+                let width = literal ? 1 : 3
+                column = b == 10 ? width : column + width
                 if column >= 76 {
-                    output += "=\r\n"
-                    column = token.utf8.count
+                    output.append(61)
+                    output.append(13)
+                    output.append(10)
+                    column = width
                 }
-                output += token
+                if literal {
+                    output.append(b)
+                } else {
+                    output.append(61)
+                    Self.appendHex(b, to: &output, digits: Self.upperHexDigits)
+                }
             }
-            return output
+            return String(decoding: output, as: UTF8.self)
         case .quotedPrintableDecode:
             let bytes = Array(input.utf8)
             var output = Data()
@@ -77,12 +85,17 @@ enum TextUtility: String, CaseIterable {
                     i += 1
                     continue
                 }
-                guard i + 2 < bytes.count else { throw UtilityFailure.malformed("quoted-printable") }
-                if bytes[i + 1] == 13 && bytes[i + 2] == 10 {
-                    i += 3
+                // A soft line break is "=" then CRLF, LF or CR; a lone trailing "=" is malformed.
+                guard i + 1 < bytes.count else { throw UtilityFailure.malformed("quoted-printable") }
+                if bytes[i + 1] == 10 {
+                    i += 2
                     continue
                 }
-                guard let hi = Self.hex(bytes[i + 1]), let lo = Self.hex(bytes[i + 2]) else {
+                if bytes[i + 1] == 13 {
+                    i += (i + 2 < bytes.count && bytes[i + 2] == 10) ? 3 : 2
+                    continue
+                }
+                guard i + 2 < bytes.count, let hi = Self.hex(bytes[i + 1]), let lo = Self.hex(bytes[i + 2]) else {
                     throw UtilityFailure.malformed("quoted-printable")
                 }
                 output.append(hi * 16 + lo)
@@ -94,32 +107,11 @@ enum TextUtility: String, CaseIterable {
             guard let data = Data(base64Encoded: decoded.filter { !$0.isWhitespace }) else {
                 throw UtilityFailure.malformed("SAML Base64")
             }
-            let bytes = Array(data)
-            if bytes.starts(with: Array("<?xml".utf8)) || bytes.starts(with: Array("<saml".utf8)) {
-                return try Self.text(data)
-            }
-            var stream = z_stream()
-            guard inflateInit2_(&stream, -MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
-                throw UtilityFailure.malformed("SAML deflate")
-            }
-            defer { inflateEnd(&stream) }
-            var output = [UInt8](repeating: 0, count: 16 * 1024 * 1024 + 1)
-            let status = bytes.withUnsafeBytes { source in
-                output.withUnsafeMutableBytes { destination in
-                    stream.next_in = UnsafeMutablePointer(mutating: source.bindMemory(to: UInt8.self).baseAddress)
-                    stream.avail_in = uInt(source.count)
-                    stream.next_out = destination.bindMemory(to: UInt8.self).baseAddress
-                    stream.avail_out = uInt(destination.count)
-                    return inflate(&stream, Z_FINISH)
-                }
-            }
-            guard status == Z_STREAM_END, stream.avail_in == 0, stream.total_out <= 16 * 1024 * 1024 else {
-                throw UtilityFailure.malformed("SAML deflate or output limit")
-            }
-            let inflated = Data(output.prefix(Int(stream.total_out)))
-            guard inflated.starts(with: Array("<?xml".utf8)) || inflated.starts(with: Array("<saml".utf8)) else {
-                throw UtilityFailure.malformed("SAML XML")
-            }
+            // Direct XML first: nothing accepted before this rule is decoded differently, and a
+            // deflate stream would have to be valid UTF-8 text starting with "<" to be mistaken.
+            if Self.looksLikeXML(data), let direct = try? Self.text(data) { return direct }
+            let inflated = try Self.inflateRaw(data, limit: 16 * 1024 * 1024)
+            guard Self.looksLikeXML(inflated) else { throw UtilityFailure.malformed("SAML XML") }
             return try Self.text(inflated)
         case .base64Encode: return Data(input.utf8).base64EncodedString().replacingOccurrences(of: "=", with: "")
         case .base64EncodePadded: return Data(input.utf8).base64EncodedString()
@@ -150,17 +142,25 @@ enum TextUtility: String, CaseIterable {
             .urlEncodeFullLines:
             var reserved = Set("<>\"#%{}|\\^~[]`;/?:@=& ".utf8)
             if self == .urlEncodeExtended || self == .urlEncodeExtendedLines { reserved.formUnion("!*'()+$,".utf8) }
-            return input.utf8.map { b in
-                if [.urlEncodeLines, .urlEncodeExtendedLines, .urlEncodeFullLines].contains(self)
-                    && (b == 10 || b == 13)
-                {
-                    return String(UnicodeScalar(b))
+            let byLine = [.urlEncodeLines, .urlEncodeExtendedLines, .urlEncodeFullLines].contains(self)
+            let full = self == .urlEncodeFull || self == .urlEncodeFullLines
+            // One decision per byte value, made once.
+            let escaped = (0..<256).map { value -> Bool in
+                let b = UInt8(value)
+                if byLine && (b == 10 || b == 13) { return false }
+                return full || b < 32 || b >= 127 || reserved.contains(b)
+            }
+            var output = [UInt8]()
+            output.reserveCapacity(input.utf8.count * (full ? 3 : 1))
+            for b in input.utf8 {
+                if escaped[Int(b)] {
+                    output.append(37)
+                    Self.appendHex(b, to: &output, digits: Self.upperHexDigits)
+                } else {
+                    output.append(b)
                 }
-                if self == .urlEncodeFull || self == .urlEncodeFullLines || b < 32 || b >= 127 || reserved.contains(b) {
-                    return String(format: "%%%02X", b)
-                }
-                return String(UnicodeScalar(b))
-            }.joined()
+            }
+            return String(decoding: output, as: UTF8.self)
         case .urlDecode:
             let bytes = Array(input.utf8)
             var result = Data()
@@ -178,7 +178,11 @@ enum TextUtility: String, CaseIterable {
                 }
             }
             return try Self.text(result)
-        case .hexEncode: return input.utf8.map { String(format: "%02X", $0) }.joined()
+        case .hexEncode:
+            var output = [UInt8]()
+            output.reserveCapacity(input.utf8.count * 2)
+            for b in input.utf8 { Self.appendHex(b, to: &output, digits: Self.upperHexDigits) }
+            return String(decoding: output, as: UTF8.self)
         case .hexDecode:
             // TextTank accepts whitespace between complete byte pairs. A split
             // pair is invalid; odd digits never silently truncate the selection.
@@ -206,7 +210,7 @@ enum TextUtility: String, CaseIterable {
     // Don HO, Paul Nankervis. Invalid separators remain literal; whitespace
     // either joins blocks or resets them for by-line decoding.
     private static func permissiveBase64(_ input: String, whitespaceReset: Bool) throws -> Data {
-        let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".utf8)
+        let values = base64Values
         var output = Data()
         var field: UInt32 = 0
         var symbols = 0
@@ -218,7 +222,8 @@ enum TextUtility: String, CaseIterable {
             symbols = 0
         }
         for b in input.utf8 {
-            if let n = alphabet.firstIndex(of: b) {
+            let n = values[Int(b)]
+            if n >= 0 {
                 field |= UInt32(n) << (18 - symbols * 6)
                 symbols += 1
                 if symbols == 4 { flush() }
@@ -232,6 +237,59 @@ enum TextUtility: String, CaseIterable {
             }
         }
         flush()
+        return output
+    }
+    /// Value of each Base64 symbol by byte, or -1 for a byte outside the alphabet.
+    private static let base64Values: [Int8] = {
+        var table = [Int8](repeating: -1, count: 256)
+        for (value, symbol) in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".utf8.enumerated() {
+            table[Int(symbol)] = Int8(value)
+        }
+        return table
+    }()
+    static let upperHexDigits = Array("0123456789ABCDEF".utf8)
+    static let lowerHexDigits = Array("0123456789abcdef".utf8)
+    static func appendHex(_ byte: UInt8, to output: inout [UInt8], digits: [UInt8]) {
+        output.append(digits[Int(byte >> 4)])
+        output.append(digits[Int(byte & 15)])
+    }
+    /// Detection only: an optional UTF-8 BOM and XML whitespace, then "<". The caller returns
+    /// every byte unchanged, so a leading U+FEFF stays content.
+    private static func looksLikeXML(_ bytes: Data) -> Bool {
+        var index = bytes.startIndex
+        if bytes.starts(with: [0xEF, 0xBB, 0xBF]) { index += 3 }
+        while index < bytes.endIndex, [9, 10, 13, 32].contains(bytes[index]) { index += 1 }
+        return index < bytes.endIndex && bytes[index] == 0x3C
+    }
+    /// Complete raw-deflate stream only: no trailing input, and at most `limit` output bytes.
+    /// The output grows in 64 KiB steps instead of being allocated at the limit.
+    private static func inflateRaw(_ input: Data, limit: Int) throws -> Data {
+        var stream = z_stream()
+        guard inflateInit2_(&stream, -MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
+            throw UtilityFailure.malformed("SAML deflate")
+        }
+        defer { inflateEnd(&stream) }
+        var output = Data()
+        var chunk = [UInt8](repeating: 0, count: 64 * 1024)
+        let finished: Bool = input.withUnsafeBytes { source in
+            stream.next_in = UnsafeMutablePointer(mutating: source.bindMemory(to: UInt8.self).baseAddress)
+            stream.avail_in = uInt(source.count)
+            while true {
+                let (status, produced): (Int32, Int) = chunk.withUnsafeMutableBufferPointer { destination in
+                    stream.next_out = destination.baseAddress
+                    stream.avail_out = uInt(destination.count)
+                    let status = inflate(&stream, Z_NO_FLUSH)
+                    return (status, destination.count - Int(stream.avail_out))
+                }
+                output.append(contentsOf: chunk[0..<produced])
+                if output.count > limit { return false }
+                if status == Z_STREAM_END { return true }
+                // Z_OK means progress was made. Z_BUF_ERROR, with a whole empty chunk to write
+                // into, means the input ended before the stream did.
+                guard status == Z_OK else { return false }
+            }
+        }
+        guard finished, stream.avail_in == 0 else { throw UtilityFailure.malformed("SAML deflate or output limit") }
         return output
     }
     private static func hex(_ b: UInt8) -> UInt8? {
@@ -259,7 +317,10 @@ enum UtilityFailure: LocalizedError {
 }
 
 struct RadixConversion {
+    /// Whitespace and line breaks around the number are ignored: a selected line brings its
+    /// line ending along. Anything inside the number is still rejected.
     static func convert(_ input: String, from: Int, to: Int) throws -> String {
+        let input = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard [2, 8, 10, 16].contains(from), [2, 8, 10, 16].contains(to), !input.isEmpty,
             input.utf8.allSatisfy({ b in
                 if (48...57).contains(b) { return Int(b - 48) < from }
@@ -279,12 +340,20 @@ struct HexEncodingOptions {
         guard (0...65536).contains(bytesPerLine), ["\n", "\r", "\r\n"].contains(lineEnding),
             text.utf8.count <= 16 * 1024 * 1024
         else { throw UtilityFailure.malformed("hex options or input size") }
-        var output = ""
+        let digits = uppercase ? TextUtility.upperHexDigits : TextUtility.lowerHexDigits
+        let ending = Array(lineEnding.utf8), count = text.utf8.count
+        var output = [UInt8]()
+        output.reserveCapacity(count * 3 + (bytesPerLine > 0 ? count / bytesPerLine * ending.count : 0))
+        // A space goes between two bytes on a line, never after the last one. A completed
+        // line keeps its line ending, including the last line.
         for (index, byte) in text.utf8.enumerated() {
-            output += String(format: uppercase ? "%02X" : "%02x", byte)
-            let lineBreak = bytesPerLine > 0 && (index + 1) % bytesPerLine == 0
-            if lineBreak { output += lineEnding } else if insertSpaces { output += " " }
+            TextUtility.appendHex(byte, to: &output, digits: digits)
+            if bytesPerLine > 0 && (index + 1) % bytesPerLine == 0 {
+                output.append(contentsOf: ending)
+            } else if insertSpaces && index + 1 < count {
+                output.append(32)
+            }
         }
-        return output
+        return String(decoding: output, as: UTF8.self)
     }
 }
