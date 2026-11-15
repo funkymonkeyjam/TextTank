@@ -1808,6 +1808,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     private let statusDetails = StatusBadgeRow()
     private let documentTabs = DocumentTabStrip()
     private var statusTimer: Timer?
+    /// Nil when the caller supplies timer ticks itself. The normal window polls every 0.2 s;
+    /// checks can drive the exact same tick path without depending on run-loop scheduling speed.
+    var statusTimerInterval: TimeInterval? = 0.2
     /// True while the recurring refresh is scheduled, which is only while the window is on screen.
     var statusTimerActive: Bool { statusTimer != nil }
     #if TESTING
@@ -2004,25 +2007,29 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     /// Starts the recurring status refresh when the window comes on screen and stops it when the
     /// window leaves, so a hidden tab has no timer at all.
     func visibilityChanged() {
-        let visible = window?.isVisible == true && !statusClosed
+        let visible = window?.isVisible == true && !statusClosed && statusTimerInterval != nil
         if !visible {
             statusTimer?.invalidate()
             statusTimer = nil
             return
         }
         guard statusTimer == nil else { return }
-        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            guard self.window?.isVisible == true else {
-                self.visibilityChanged()
-                return
-            }
-            self.refreshStatusDetails(recurring: true)
-            self.statusTickRevision = (self.document as? TextDocument)?.editor.revision
+        let timer = Timer(timeInterval: statusTimerInterval ?? 0.2, repeats: true) { [weak self] _ in
+            self?.statusTimerTick()
         }
         timer.tolerance = 0.05
         RunLoop.main.add(timer, forMode: .default)
         statusTimer = timer
+    }
+    /// One polling tick. Kept separate from Timer so checks can insert an edit before every tick
+    /// and an idle tick after the last edit, even on a busy runner.
+    func statusTimerTick() {
+        guard window?.isVisible == true else {
+            visibilityChanged()
+            return
+        }
+        refreshStatusDetails(recurring: true)
+        statusTickRevision = (document as? TextDocument)?.editor.revision
     }
     /// A failed recovery write is shown in red with a tooltip as well as in words, and stays
     /// until the document reports a successful write.

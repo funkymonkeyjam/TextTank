@@ -1418,24 +1418,36 @@ import AppKit
                     controller.statusRefreshCount >= idleRefreshes + 2
                         && hiddenController.statusRefreshCount == hiddenRefreshes,
                     "the visible tab's safety-net timer keeps running while idle and the hidden tab's does not run")
-                // Continuous typing: an edit every 50 ms for a second, across five timer ticks.
+                // Drive continuous edits and the real polling path deterministically. A slow
+                // runner may stall a 50 ms RunLoop.run call for longer than a polling interval,
+                // which would simulate an idle pause rather than continuous typing.
                 spinUntil("the bar to settle before typing") { badges().contains("7 chars") }
                 let captures = controller.statusMetricsCaptureCount
-                let typingUntil = Date().addingTimeInterval(1.0)
+                let pollingInterval = controller.statusTimerInterval
+                controller.statusTimerInterval = nil
+                controller.visibilityChanged()
+                defer {
+                    controller.statusTimerInterval = pollingInterval
+                    controller.visibilityChanged()
+                }
                 var typed = 0
-                while Date() < typingUntil {
+                for _ in 0..<20 {
                     _ = visible.editor.replaceSelection("k")
                     typed += 1
-                    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                    controller.statusTimerTick()
                 }
                 check(
                     typed >= 5 && controller.statusMetricsCaptureCount == captures,
                     "continuous typing starts no whole-document capture (\(typed) edits, \(controller.statusMetricsCaptureCount - captures) captures)"
                 )
+                // A tick with no intervening edit is the first idle interval.
+                controller.statusTimerTick()
                 spinUntil("the count after typing stops") { badges().contains("\(7 + typed) chars") }
                 check(
                     badges().contains("\(7 + typed) chars") && controller.statusMetricsCaptureCount == captures + 1,
                     "one capture after typing stops brings the character count up to date")
+                controller.statusTimerInterval = pollingInterval
+                controller.visibilityChanged()
                 // Minimising takes the window off screen without any order call, and restoring it
                 // brings it back the same way.
                 controller.window!.miniaturize(nil)
