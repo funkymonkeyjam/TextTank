@@ -92,7 +92,13 @@ extern NSNotificationName const TTEditorStateDidChangeNotification;
 @property(nonatomic, copy, nullable) void (^onChange)(void);
 @property(nonatomic, copy, nullable) void (^onFocus)(void);
 + (NSArray<NSString *> *)availableLanguages;
+/// Called while recording with one step per recordable action: kind "insertText" or "command".
+/// Anything that changed the text or the selection and cannot be replayed arrives as kind
+/// "unsupported" with a "name" for the person (a mouse click or drop, typing in Overtype, a
+/// completion list, native Undo, an unmapped Scintilla message); the recording must be discarded.
 @property(nonatomic, copy, nullable) void (^onMacroStep)(NSDictionary<NSString *, id> *step);
+/// The symbolic command names a recorded step may carry; the only names playback dispatches.
++ (NSArray<NSString *> *)macroCommandNames;
 - (void)startRecording;
 - (void)stopRecording;
 - (BOOL)executeMacroStep:(NSDictionary<NSString *, id> *)step;

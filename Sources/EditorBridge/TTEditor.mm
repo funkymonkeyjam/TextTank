@@ -33,12 +33,47 @@ static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
 // Scintilla's document canvas can be much wider than the viewport. Exposing its
 // full NSView frame makes accessibility clients aim outside the visible editor.
 // Preserve native text/input behavior while describing its visible screen region.
+// Scintilla records keyboard and message input only. The mouse and a drop change the caret or
+// the text with no macro notification, so the state is compared around each such event and a
+// difference is reported as an unrecordable action (F59).
+struct TTInteractionState { NSUInteger revision; sptr_t selections, anchor, caret; };
+@interface TTEditor (MacroInteraction)
+- (TTInteractionState)interactionState;
+- (void)noteUnrecordedInteractionSince:(TTInteractionState)before;
+@end
 @interface TTContentView : SCIContentView
 @end
 @implementation TTContentView
 - (NSRect)accessibilityFrame {
     if (!self.window) return NSZeroRect;
     return [self.window convertRectToScreen:[self convertRect:self.visibleRect toView:nil]];
+}
+- (TTEditor *)recordingEditor {
+    for (NSView *view = self.superview; view; view = view.superview) if ([view isKindOfClass:TTEditor.class]) return (TTEditor *)view;
+    return nil;
+}
+// super always runs, so every Scintilla mouse behaviour is kept; a click that changes nothing
+// (the caret's own position, a window-activating click) leaves a recording alone.
+- (void)mouseDown:(NSEvent *)event {
+    TTEditor *editor = [self recordingEditor]; const TTInteractionState before = [editor interactionState];
+    [super mouseDown:event];
+    [editor noteUnrecordedInteractionSince:before];
+}
+- (void)mouseDragged:(NSEvent *)event {
+    TTEditor *editor = [self recordingEditor]; const TTInteractionState before = [editor interactionState];
+    [super mouseDragged:event];
+    [editor noteUnrecordedInteractionSince:before];
+}
+- (void)mouseUp:(NSEvent *)event {
+    TTEditor *editor = [self recordingEditor]; const TTInteractionState before = [editor interactionState];
+    [super mouseUp:event];
+    [editor noteUnrecordedInteractionSince:before];
+}
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    TTEditor *editor = [self recordingEditor]; const TTInteractionState before = [editor interactionState];
+    const BOOL accepted = [super performDragOperation:sender];
+    [editor noteUnrecordedInteractionSince:before];
+    return accepted;
 }
 @end
 @interface TTScintillaView : ScintillaView
@@ -107,9 +142,40 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
         @"charLeftExtend":@(SCI_CHARLEFTEXTEND), @"charRightExtend":@(SCI_CHARRIGHTEXTEND), @"lineUpExtend":@(SCI_LINEUPEXTEND), @"lineDownExtend":@(SCI_LINEDOWNEXTEND),
         @"homeExtend":@(SCI_HOMEEXTEND), @"lineEndExtend":@(SCI_LINEENDEXTEND), @"documentStartExtend":@(SCI_DOCUMENTSTARTEXTEND), @"documentEndExtend":@(SCI_DOCUMENTENDEXTEND),
         @"wordLeftExtend":@(SCI_WORDLEFTEXTEND), @"wordRightExtend":@(SCI_WORDRIGHTEXTEND),
-        @"deleteBack":@(SCI_DELETEBACK), @"deleteForward":@(SCI_CLEAR), @"newLine":@(SCI_NEWLINE), @"tab":@(SCI_TAB), @"backTab":@(SCI_BACKTAB)
+        @"deleteBack":@(SCI_DELETEBACK), @"deleteForward":@(SCI_CLEAR), @"newLine":@(SCI_NEWLINE), @"tab":@(SCI_TAB), @"backTab":@(SCI_BACKTAB),
+        // G367: the rest of the standard Mac key map (Home, Command-Left, Page Up and Down, Escape,
+        // Option- and Command-Delete and the Control chords). One name per message, and every name
+        // is also in RecordedMacro.Step.commands; the checks compare the two lists.
+        @"vcHome":@(SCI_VCHOME), @"vcHomeExtend":@(SCI_VCHOMEEXTEND),
+        @"pageUp":@(SCI_PAGEUP), @"pageUpExtend":@(SCI_PAGEUPEXTEND), @"pageDown":@(SCI_PAGEDOWN), @"pageDownExtend":@(SCI_PAGEDOWNEXTEND),
+        @"paraUp":@(SCI_PARAUP), @"paraUpExtend":@(SCI_PARAUPEXTEND), @"paraDown":@(SCI_PARADOWN), @"paraDownExtend":@(SCI_PARADOWNEXTEND),
+        @"wordPartLeft":@(SCI_WORDPARTLEFT), @"wordPartLeftExtend":@(SCI_WORDPARTLEFTEXTEND), @"wordPartRight":@(SCI_WORDPARTRIGHT), @"wordPartRightExtend":@(SCI_WORDPARTRIGHTEXTEND),
+        @"homeDisplay":@(SCI_HOMEDISPLAY), @"lineEndDisplay":@(SCI_LINEENDDISPLAY),
+        @"deleteWordLeft":@(SCI_DELWORDLEFT), @"deleteWordRight":@(SCI_DELWORDRIGHT), @"deleteLineLeft":@(SCI_DELLINELEFT), @"deleteLineRight":@(SCI_DELLINERIGHT),
+        @"lineCut":@(SCI_LINECUT), @"lineCopy":@(SCI_LINECOPY), @"duplicateSelection":@(SCI_SELECTIONDUPLICATE),
+        @"moveLineUp":@(SCI_MOVESELECTEDLINESUP), @"moveLineDown":@(SCI_MOVESELECTEDLINESDOWN),
+        // Escape also drops additional selections, so it is replayed rather than ignored.
+        @"cancel":@(SCI_CANCEL)
     }; });
     return map;
+}
+/// A name the person can recognise for an action that cannot be recorded.
+static NSString *TTUnrecordableName(unsigned int message) {
+    switch (message) {
+        case SCI_UNDO: return @"Undo";
+        case SCI_REDO: return @"Redo";
+        case SCI_EDITTOGGLEOVERTYPE: return @"Switching Overtype";
+        case SCI_REPLACESEL: return @"Typing in Overtype mode or into several selections";
+        case SCI_AUTOCSHOW: return @"The completion list";
+        case SCI_GOTOLINE: return @"Go to Line";
+        case SCI_SETSELECTIONMODE: case SCI_LINEDOWNRECTEXTEND: case SCI_LINEUPRECTEXTEND: case SCI_CHARLEFTRECTEXTEND:
+        case SCI_CHARRIGHTRECTEXTEND: case SCI_HOMERECTEXTEND: case SCI_VCHOMERECTEXTEND: case SCI_LINEENDRECTEXTEND:
+        case SCI_PAGEUPRECTEXTEND: case SCI_PAGEDOWNRECTEXTEND: return @"Rectangular selection";
+        default: return [NSString stringWithFormat:@"An editing action (Scintilla message %u)", message];
+    }
+}
+static NSDictionary *TTUnrecordableStep(unsigned int message) {
+    return @{@"kind":@"unsupported", @"message":@(message), @"name":TTUnrecordableName(message)};
 }
 
 NSErrorDomain const TTEditorErrorDomain = @"TextTank.Editor";
@@ -139,6 +205,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @property(nonatomic,strong) TTEmptyLineNumbersView *emptyLineNumbers;
 @property(nonatomic, readwrite) NSUInteger revision;
 @property(nonatomic) BOOL macroRecording;
+/// While recording: sees mouse events bound for the margins, which have no subclass hook.
+@property(nonatomic, strong) id macroMouseMonitor;
+@property(nonatomic) BOOL marginMouseDown;
+@property(nonatomic) BOOL interactionPending;
+@property(nonatomic) TTInteractionState pendingInteraction;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxStyles;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxFonts;
 /// Digit count the line-number margin was last sized for; see -updateLineNumberMargin:.
@@ -264,6 +335,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         const NSInteger open = [[TTOpenGroups() objectForKey:key] integerValue] - _ownGroups;
         if (open > 0) [TTOpenGroups() setObject:@(open) forKey:key]; else [TTOpenGroups() removeObjectForKey:key];
     }
+    if (_macroMouseMonitor) [NSEvent removeMonitor:_macroMouseMonitor];
     _engine.delegate = nil;
 }
 /// Every undo group of the bridge goes through this pair. `revision` still advances with each
@@ -733,7 +805,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     dispatch_once(&once, ^{ editing = [NSSet setWithArray:@[
         @"undo", @"redo", @"cut", @"paste", @"duplicateLine", @"deleteLine", @"transposeLine", @"indent", @"unindent",
         @"upper", @"lower", @"duplicateSelection", @"deleteWordLeft", @"deleteWordRight", @"deleteLineLeft", @"deleteLineRight",
-        @"moveLineUp", @"moveLineDown", @"joinLines", @"trimTrailing", @"deleteBack", @"deleteForward", @"newLine", @"tab", @"backTab"]]; });
+        @"moveLineUp", @"moveLineDown", @"joinLines", @"trimTrailing", @"deleteBack", @"deleteForward", @"newLine", @"tab", @"backTab", @"lineCut"]]; });
     return [identifier isKindOfClass:NSString.class] && [editing containsObject:identifier];
 }
 - (void)executeCommand:(NSString *)identifier {
@@ -839,8 +911,56 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     NSNumber *message = commands[identifier] ?: TTMacroCommands()[identifier];
     if (message) [_engine message:message.unsignedIntValue];
 }
-- (void)startRecording { [self assertThread]; _macroRecording = YES; [_engine message:SCI_STARTRECORD]; }
-- (void)stopRecording { [self assertThread]; _macroRecording = NO; [_engine message:SCI_STOPRECORD]; }
++ (NSArray<NSString *> *)macroCommandNames { return [TTMacroCommands().allKeys sortedArrayUsingSelector:@selector(compare:)]; }
+- (TTInteractionState)interactionState {
+    return {_revision, [_engine message:SCI_GETSELECTIONS], [_engine message:SCI_GETANCHOR], [_engine message:SCI_GETCURRENTPOS]};
+}
+- (void)noteUnrecordedInteractionSince:(TTInteractionState)before {
+    if (!_macroRecording || !_onMacroStep) return;
+    const TTInteractionState now = [self interactionState];
+    if (now.revision == before.revision && now.selections == before.selections && now.anchor == before.anchor && now.caret == before.caret) return;
+    _onMacroStep(@{@"kind":@"unsupported", @"message":@0, @"name":@"A mouse click, mouse selection or drag and drop"});
+}
+- (void)settlePendingInteraction {
+    if (!_interactionPending) return;
+    _interactionPending = NO;
+    [self noteUnrecordedInteractionSince:_pendingInteraction];
+}
+/// A margin click selects lines through SCIMarginView, which the bridge cannot subclass. The
+/// event is seen here before it is dispatched; the comparison runs once it has been handled.
+- (void)observeMarginMouseEvent:(NSEvent *)event {
+    if (!_macroRecording || !self.window || event.window != self.window) return;
+    if (event.type == NSEventTypeLeftMouseDown || event.type == NSEventTypeRightMouseDown) {
+        NSView *hit = [_engine hitTest:[self convertPoint:event.locationInWindow fromView:nil]];
+        NSView *content = _engine.content;
+        _marginMouseDown = hit != nil && hit != content && ![hit isDescendantOf:content];
+    }
+    if (!_marginMouseDown) return;
+    [self settlePendingInteraction];
+    _pendingInteraction = [self interactionState];
+    _interactionPending = YES;
+    __weak TTEditor *weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf settlePendingInteraction]; });
+}
+- (void)startRecording {
+    [self assertThread]; _macroRecording = YES; _interactionPending = NO; _marginMouseDown = NO;
+    if (!_macroMouseMonitor) {
+        __weak TTEditor *weakSelf = self;
+        _macroMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp | NSEventMaskRightMouseDown handler:^NSEvent *(NSEvent *event) {
+            [weakSelf observeMarginMouseEvent:event];
+            return event;
+        }];
+    }
+    [_engine message:SCI_STARTRECORD];
+}
+- (void)stopRecording {
+    [self assertThread];
+    // A margin click still waiting for its comparison is settled before the recording can be saved.
+    [self settlePendingInteraction];
+    _macroRecording = NO;
+    if (_macroMouseMonitor) { [NSEvent removeMonitor:_macroMouseMonitor]; _macroMouseMonitor = nil; }
+    [_engine message:SCI_STOPRECORD];
+}
 - (void)beginUndoGroup { [self assertThread]; [self openUndoGroup]; }
 - (void)endUndoGroup { [self assertThread]; [self closeUndoGroup]; }
 - (BOOL)executeMacroStep:(NSDictionary<NSString *, id> *)step {
@@ -987,7 +1107,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     sptr_t caret=[_engine message:SCI_GETCURRENTPOS],start=[_engine message:SCI_WORDSTARTPOSITION wParam:caret lParam:1];
     NSMutableArray *safe=[NSMutableArray array];for(NSString *word in words) if([word rangeOfCharacterFromSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]].location==NSNotFound && [word rangeOfString:@"\0"].location==NSNotFound) [safe addObject:word];
     NSString *list=[[safe sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@" "];
-    if(list.length)[_engine message:SCI_AUTOCSHOW wParam:caret-start lParam:(sptr_t)list.UTF8String];
+    if(!list.length)return;
+    // G371: once the list is open Scintilla records Tab, Return and the arrow keys as caret
+    // commands although they drive the list, and accepting an entry edits with no notification.
+    if (_macroRecording && _onMacroStep) _onMacroStep(TTUnrecordableStep(SCI_AUTOCSHOW));
+    [_engine message:SCI_AUTOCSHOW wParam:caret-start lParam:(sptr_t)list.UTF8String];
 }
 - (BOOL)find:(NSString *)text matchCase:(BOOL)matchCase backwards:(BOOL)backwards {
     [self assertThread];
@@ -1020,11 +1144,17 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     // that silently omits their changes.
     if (_macroRecording && _onMacroStep && code == SCN_MODIFIED &&
         (type & (SC_PERFORMED_UNDO | SC_PERFORMED_REDO))) {
-        _onMacroStep(@{@"kind":@"unsupported", @"message":@(type & SC_PERFORMED_UNDO ? SCI_UNDO : SCI_REDO)});
+        _onMacroStep(TTUnrecordableStep(type & SC_PERFORMED_UNDO ? SCI_UNDO : SCI_REDO));
     }
-    if (code == SCN_MACRORECORD && _onMacroStep) {
+    // Scrolling by a line edits nothing and moves no caret; like zoom it is neither recorded nor a
+    // reason to discard.
+    const BOOL viewOnly = code == SCN_MACRORECORD && (notification->message == SCI_LINESCROLLUP || notification->message == SCI_LINESCROLLDOWN ||
+        notification->message == SCI_SCROLLTOSTART || notification->message == SCI_SCROLLTOEND || notification->message == SCI_VERTICALCENTRECARET);
+    if (code == SCN_MACRORECORD && _onMacroStep && !viewOnly) {
         NSDictionary *step = nil;
-        if (notification->message == SCI_REPLACESEL && notification->lParam && self.selectionCount == 1) {
+        // G371: a typed character is replayed as an insertion, which is not what Overtype did.
+        if (notification->message == SCI_REPLACESEL && [_engine message:SCI_GETOVERTYPE]) {
+        } else if (notification->message == SCI_REPLACESEL && notification->lParam && self.selectionCount == 1) {
             const char *utf8 = (const char *)notification->lParam;
             NSString *text = TTStringFromUTF8(utf8, std::strlen(utf8));
             if (text.length) step = @{@"kind":@"insertText", @"text":text};
@@ -1035,7 +1165,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
                 }
             }
         }
-        _onMacroStep(step ?: @{@"kind":@"unsupported", @"message":@(notification->message)});
+        _onMacroStep(step ?: TTUnrecordableStep(notification->message));
     }
     if (code == SCN_FOCUSIN) { if (_onFocus) _onFocus(); [self scheduleStateNotification]; }
     if (code == SCN_MODIFYATTEMPTRO && _onReadOnlyAttempt) _onReadOnlyAttempt();

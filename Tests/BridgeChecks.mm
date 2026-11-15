@@ -4,6 +4,19 @@
 #import "ScintillaView.h"
 #import <objc/runtime.h>
 #import "Checks.h"
+// Stands in for the system's drag information so a real drop runs through the content view.
+@interface TTFakeDrop : NSObject
+@property(nonatomic,strong) NSPasteboard *draggingPasteboard;
+@property(nonatomic) NSPoint draggingLocation;
+@property(nonatomic) NSDragOperation draggingSourceOperationMask;
+@property(nonatomic,strong) id draggingSource;
+@end
+@implementation TTFakeDrop
+@end
+static NSEvent *TTMouse(NSEventType type, NSView *content, NSPoint point, NSTimeInterval time) {
+    return [NSEvent mouseEventWithType:type location:[content convertPoint:point toView:nil] modifierFlags:0 timestamp:time
+                          windowNumber:content.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1];
+}
 int main() {
     @autoreleasepool {
         [NSApplication sharedApplication];
@@ -908,6 +921,135 @@ int main() {
         check([ed attributedTextForSelection:YES].length==0, "an empty selection exports an empty styled string");
         ed.text=@"";
         check([ed attributedTextForSelection:NO].length==0, "an empty document exports an empty styled string");
+        });
+        // Package 12: what the bridge reports while a macro is being recorded.
+        ttchecks::section("macro recording fidelity", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *host=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,600,400) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+        host.contentView=ed;
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        NSView *content=sv.content;
+        NSMutableArray<NSDictionary *> *steps=[NSMutableArray array];
+        ed.onMacroStep=^(NSDictionary *step){ [steps addObject:step]; };
+        NSString *doc=@"alpha beta\n  gamma delta\nlast line\n";
+        auto reset=[&]{ [ed executeCommand:@"streamSelection"]; ed.text=doc; [ed resetUndoHistory]; [ed setSelectionAnchor:14 caret:14]; [steps removeAllObjects]; };
+        // G367: every message the vendored Mac key map (macMapDefault in ScintillaCocoa.mm) can send
+        // and Scintilla reports for recording. Undo, Redo and the zoom keys are not reported at all.
+        // The list is copied by hand because the map is a file-static array in Vendor.
+        struct Key { unsigned int message; const char *name; };
+        const Key recordable[]={
+            {SCI_DOCUMENTEND,"documentEnd"},{SCI_DOCUMENTENDEXTEND,"documentEndExtend"},{SCI_DOCUMENTSTART,"documentStart"},{SCI_DOCUMENTSTARTEXTEND,"documentStartExtend"},
+            {SCI_VCHOME,"vcHome"},{SCI_VCHOMEEXTEND,"vcHomeExtend"},{SCI_LINEEND,"lineEnd"},{SCI_LINEENDEXTEND,"lineEndExtend"},
+            {SCI_LINEDOWN,"lineDown"},{SCI_LINEDOWNEXTEND,"lineDownExtend"},{SCI_LINEUP,"lineUp"},{SCI_LINEUPEXTEND,"lineUpExtend"},
+            {SCI_PARAUP,"paraUp"},{SCI_PARAUPEXTEND,"paraUpExtend"},{SCI_PARADOWN,"paraDown"},{SCI_PARADOWNEXTEND,"paraDownExtend"},
+            {SCI_CHARLEFT,"charLeft"},{SCI_CHARLEFTEXTEND,"charLeftExtend"},{SCI_WORDLEFT,"wordLeft"},{SCI_WORDLEFTEXTEND,"wordLeftExtend"},
+            {SCI_CHARRIGHT,"charRight"},{SCI_CHARRIGHTEXTEND,"charRightExtend"},{SCI_WORDRIGHT,"wordRight"},{SCI_WORDRIGHTEXTEND,"wordRightExtend"},
+            {SCI_WORDPARTLEFT,"wordPartLeft"},{SCI_WORDPARTLEFTEXTEND,"wordPartLeftExtend"},{SCI_WORDPARTRIGHT,"wordPartRight"},{SCI_WORDPARTRIGHTEXTEND,"wordPartRightExtend"},
+            {SCI_HOMEDISPLAY,"homeDisplay"},{SCI_LINEENDDISPLAY,"lineEndDisplay"},
+            {SCI_PAGEUP,"pageUp"},{SCI_PAGEUPEXTEND,"pageUpExtend"},{SCI_PAGEDOWN,"pageDown"},{SCI_PAGEDOWNEXTEND,"pageDownExtend"},
+            {SCI_CLEAR,"deleteForward"},{SCI_DELWORDRIGHT,"deleteWordRight"},{SCI_DELLINERIGHT,"deleteLineRight"},
+            {SCI_CANCEL,"cancel"},{SCI_DELETEBACK,"deleteBack"},{SCI_DELWORDLEFT,"deleteWordLeft"},{SCI_DELLINELEFT,"deleteLineLeft"},
+            {SCI_SELECTALL,"selectAll"},{SCI_TAB,"tab"},{SCI_BACKTAB,"backTab"},
+            {SCI_LINEDELETE,"deleteLine"},{SCI_LINETRANSPOSE,"transposeLine"},{SCI_SELECTIONDUPLICATE,"duplicateSelection"},
+            {SCI_LOWERCASE,"lower"},{SCI_UPPERCASE,"upper"}};
+        NSMutableArray<NSString *> *wrong=[NSMutableArray array];
+        for(const Key &key:recordable){
+            reset(); [ed startRecording]; [sv message:key.message]; [ed stopRecording];
+            NSString *name=@(key.name);
+            BOOL ok=steps.count==1 && [steps[0][@"kind"] isEqual:@"command"] && [steps[0][@"command"] isEqual:name];
+            reset();
+            if(!ok || ![ed executeMacroStep:@{@"kind":@"command",@"command":name}]) [wrong addObject:name];
+        }
+        if(wrong.count) printf("key-map commands not recorded or not replayed: %s\n",[wrong componentsJoinedByString:@" "].UTF8String);
+        check(wrong.count==0, "every recordable key-map message records as its command and that command replays");
+        // These five put text on the general pasteboard when executed, so by default only their names are checked.
+        const Key clipboard[]={{SCI_CUT,"cut"},{SCI_COPY,"copy"},{SCI_PASTE,"paste"},{SCI_LINECUT,"lineCut"},{SCI_LINECOPY,"lineCopy"}};
+        BOOL named=YES; for(const Key &key:clipboard) named=named && [TTEditor.macroCommandNames containsObject:@(key.name)];
+        check(named, "the clipboard key-map commands have symbolic names");
+        if(getenv("TEXTTANK_TEST_PASTEBOARD")){
+            [wrong removeAllObjects];
+            for(const Key &key:clipboard){
+                reset(); [ed setSelectionAnchor:0 caret:5]; [ed startRecording]; [sv message:key.message]; [ed stopRecording];
+                if(!(steps.count==1 && [steps[0][@"command"] isEqual:@(key.name)])) [wrong addObject:@(key.name)];
+            }
+            check(wrong.count==0, "the clipboard key-map messages record as their commands");
+        } else printf("SKIP recording cut, copy, paste, line cut and line copy: set TEXTTANK_TEST_PASTEBOARD=1 to run them against the general pasteboard\n");
+        [wrong removeAllObjects];
+        for(unsigned int message:{SCI_LINESCROLLDOWN,SCI_LINESCROLLUP}){
+            reset(); NSUInteger revision=ed.revision; [ed startRecording]; [sv message:message]; [ed stopRecording];
+            if(steps.count!=0 || ed.revision!=revision || ed.selectionCaret!=14) [wrong addObject:@(message).stringValue];
+        }
+        check(wrong.count==0, "scrolling by a line is neither recorded nor a reason to discard");
+        [wrong removeAllObjects];
+        for(unsigned int message:{SCI_LINEDOWNRECTEXTEND,SCI_LINEUPRECTEXTEND,SCI_CHARLEFTRECTEXTEND,SCI_CHARRIGHTRECTEXTEND,SCI_VCHOMERECTEXTEND,SCI_LINEENDRECTEXTEND,SCI_PAGEUPRECTEXTEND,SCI_PAGEDOWNRECTEXTEND,SCI_EDITTOGGLEOVERTYPE}){
+            reset(); [ed startRecording]; [sv message:message]; [ed stopRecording];
+            if(!(steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"] && [steps[0][@"message"] isEqual:@(message)] && [steps[0][@"name"] length]>0)) [wrong addObject:@(message).stringValue];
+            if(message==SCI_EDITTOGGLEOVERTYPE) [sv message:SCI_SETOVERTYPE wParam:0];
+        }
+        if(wrong.count) printf("messages not reported as unrecordable: %s\n",[wrong componentsJoinedByString:@" "].UTF8String);
+        check(wrong.count==0, "rectangular extension and the Overtype key stay unrecordable and are named");
+        // The bridge's command table is the only source of message numbers at playback.
+        reset();
+        check([ed executeMacroStep:@{@"kind":@"command",@"command":@"charRight",@"message":@(SCI_CLEARALL),@"wParam":@7,@"lParam":@9}] && [ed.text isEqual:doc] && ed.selectionCaret==15, "a message number and parameters carried by a step are ignored; only the named command runs");
+        check(![ed executeMacroStep:@{@"kind":@"unsupported",@"message":@(SCI_CLEARALL),@"name":@"charRight"}] && ![ed executeMacroStep:@{@"kind":@"command",@"command":@"2004"}] && ![ed executeMacroStep:@{@"kind":@"command",@"command":@(SCI_CLEARALL)}] && [ed.text isEqual:doc] && ed.selectionCaret==15, "a step that names no symbolic command dispatches nothing");
+        // G371: the completion list.
+        reset(); [ed setSelectionAnchor:0 caret:0]; [ed startRecording];
+        [ed showCompletions:@[]]; [ed showCompletions:@[@"has space",@"tab\there"]];
+        check(steps.count==0 && ![sv message:SCI_AUTOCACTIVE], "an empty or wholly filtered completion list shows nothing and reports nothing");
+        [ed showCompletions:@[@"return"]];
+        check(steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"] && [steps[0][@"name"] isEqual:@"The completion list"] && [sv message:SCI_AUTOCACTIVE], "showing a completion list while recording is reported once as unrecordable");
+        [sv message:SCI_AUTOCCANCEL]; [ed stopRecording]; [steps removeAllObjects];
+        [ed showCompletions:@[@"return"]];
+        check(steps.count==0 && [sv message:SCI_AUTOCACTIVE], "a completion list outside a recording reports nothing");
+        [sv message:SCI_AUTOCCANCEL];
+        [ed startRecording]; [ed showCallTip:@"tip"]; [ed stopRecording];
+        check(steps.count==0, "a call tip edits nothing and is not reported");
+        [sv message:SCI_CALLTIPCANCEL];
+        // G371: typing in Overtype replaces characters, which an insertion step would not replay.
+        reset(); [ed setSelectionAnchor:0 caret:0]; [ed startRecording]; [sv insertText:@"x"]; [ed stopRecording];
+        check(steps.count==1 && [steps[0][@"kind"] isEqual:@"insertText"] && [steps[0][@"text"] isEqual:@"x"], "typing with Overtype off records an insertion");
+        reset(); [ed setSelectionAnchor:0 caret:0]; [sv message:SCI_SETOVERTYPE wParam:1]; [ed startRecording]; [sv insertText:@"x"]; [ed stopRecording];
+        check(steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"] && [ed.text hasPrefix:@"xlpha"], "typing with Overtype already on is reported as unrecordable");
+        [sv message:SCI_SETOVERTYPE wParam:0];
+        // F59: the mouse and a drop go through the content view with no macro notification.
+        NSTimeInterval clock=NSProcessInfo.processInfo.systemUptime;
+        const NSPoint far=NSMakePoint(60,8), below=NSMakePoint(30,26);
+        auto click=[&](NSPoint point){ clock+=5; [content mouseDown:TTMouse(NSEventTypeLeftMouseDown,content,point,clock)]; [content mouseUp:TTMouse(NSEventTypeLeftMouseUp,content,point,clock+0.05)]; };
+        reset(); click(far);
+        const NSInteger clicked=ed.selectionCaret;
+        check(clicked>0 && clicked<10 && ed.selectionAnchor==clicked && steps.count==0, "Fixture: a synthesized click places the caret in the first line, and reports nothing outside a recording");
+        [ed startRecording]; click(far);
+        check(steps.count==0 && ed.selectionCaret==clicked, "a click that leaves the caret where it is does not disturb a recording");
+        click(below);
+        check(ed.selectionCaret!=clicked && steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"] && [steps[0][@"name"] containsString:@"mouse"], "a click that moves the caret while recording is reported as unrecordable");
+        [ed stopRecording];
+        reset(); click(far); [ed startRecording];
+        clock+=5;
+        [content mouseDown:TTMouse(NSEventTypeLeftMouseDown,content,far,clock)];
+        const NSUInteger afterDown=steps.count;
+        [content mouseDragged:TTMouse(NSEventTypeLeftMouseDragged,content,NSMakePoint(far.x+40,far.y),clock+0.05)];
+        [content mouseUp:TTMouse(NSEventTypeLeftMouseUp,content,NSMakePoint(far.x+40,far.y),clock+0.1)];
+        check(afterDown==0 && ed.selectionAnchor!=ed.selectionCaret && steps.count>=1 && [steps[0][@"kind"] isEqual:@"unsupported"], "a mouse selection made by dragging while recording is reported as unrecordable");
+        [ed stopRecording];
+        reset();
+        TTFakeDrop *drop=[TTFakeDrop new];
+        drop.draggingPasteboard=[NSPasteboard pasteboardWithUniqueName];
+        [drop.draggingPasteboard declareTypes:@[NSPasteboardTypeString] owner:nil];
+        [drop.draggingPasteboard setString:@"DROP" forType:NSPasteboardTypeString];
+        drop.draggingLocation=[content convertPoint:far toView:nil];
+        drop.draggingSourceOperationMask=NSDragOperationCopy;
+        id<NSDraggingInfo> info=(id<NSDraggingInfo>)drop;
+        [ed startRecording];
+        const NSUInteger dropRevision=ed.revision;
+        [(id<NSDraggingDestination>)content draggingEntered:info]; [(id<NSDraggingDestination>)content draggingUpdated:info];
+        const BOOL accepted=[(id<NSDraggingDestination>)content performDragOperation:info];
+        check(accepted && [ed.text containsString:@"DROP"] && ed.revision!=dropRevision, "Fixture: the synthesized drop inserted its text");
+        check(steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"], "text dropped into the editor while recording is reported as unrecordable");
+        [ed stopRecording]; [steps removeAllObjects];
+        [(id<NSDraggingDestination>)content draggingUpdated:info]; [(id<NSDraggingDestination>)content performDragOperation:info];
+        check(steps.count==0, "a drop outside a recording reports nothing");
+        [drop.draggingPasteboard releaseGlobally];
+        ed.onMacroStep=nil;
         });
         return ttchecks::finish("BridgeChecks", "IME, VoiceOver, UI focus and permission tests not covered");
     }
