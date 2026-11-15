@@ -900,6 +900,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     // SCI_STYLECLEARALL, so a style the other view no longer defines is dropped here too.
     _syntaxStyles = [[NSMutableDictionary alloc] initWithDictionary:other.syntaxStyles copyItems:YES];
     _syntaxFonts = [[NSMutableDictionary alloc] initWithDictionary:other.syntaxFonts copyItems:YES];
+    // Whether the bare cpp palette applies follows the document's lexer, which was installed
+    // through the other view; a stale flag here would paint cpp colours under another language.
+    _cppDefaults = other.cppDefaults;
     [self applyPalette];
 }
 - (void)adoptViewStateFrom:(TTEditor *)other {
