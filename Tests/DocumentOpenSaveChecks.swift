@@ -282,9 +282,9 @@ extension DocumentChecks {
                     "\(label): the document keeps the opened path and resolves its real location once")
                 check(try document.diskState() == .unchanged, "\(label): external-change check reads the real file")
                 check(
-                    DocumentMonitor.inspect(url, expected: document.originalDiskFingerprint) != .unchanged
+                    DocumentMonitor.inspect(url, expected: document.originalDiskFingerprint).status != .unchanged
                         && DocumentMonitor.inspect(document.diskURL!, expected: document.originalDiskFingerprint)
-                            == .unchanged,
+                            .status == .unchanged,
                     "\(label): monitoring the resolved location reports unchanged")
                 edit(document, "saved \(label)\n")
                 // NSDocument reads fileURL from its file-presenter queue. Only the thread doing

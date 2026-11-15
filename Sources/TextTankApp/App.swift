@@ -52,7 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     lazy var languages: LanguageController = {
         let controller = LanguageController(
             editorProvider: { [weak self] in self?.currentEditor },
-            languageProvider: { [weak self] in self?.currentDocument?.languageIdentifier ?? "normal" },
+            languageProvider: { [weak self] in
+                self?.currentDocument?.languageIdentifier ?? LanguageProfile.plainTextID
+            },
             setLanguage: { [weak self] id in self?.currentDocument?.languageIdentifier = id })
         controller.siblingViews = { editor in
             for document in NSDocumentController.shared.documents {
@@ -172,6 +174,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let alert = TTAlert()
             alert.alertStyle = .warning
             alert.messageText = "Settings could not be read"
+            alert.informativeText = message
+            _ = alert.runModal()
+        }
+        if let message = languages.loadFailureMessage {
+            let alert = TTAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Language profiles could not be read"
             alert.informativeText = message
             _ = alert.runModal()
         }
@@ -592,16 +601,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
-    private var diskBytes: Data?
+    /// SHA-256 of the bytes last read or saved. No copy of the file is kept.
+    private var diskDigest: String?
+    /// Settled metadata of a file known to hold those bytes, when there is one. While the file
+    /// still has exactly this metadata it need not be read again; nil means read and hash.
+    private var diskSignature: FileSignature?
+    /// A sample taken by a caller that read the bytes through its own descriptor.
+    private var capturedSample: FileSample?
     private var savePayload: Data?
     private var savepointMatchesDisk = true
     #if TESTING
         var afterWriteForTesting: (() throws -> Void)?
         /// Runs while NSDocument is inside an in-progress write, as the bytes are produced.
         var duringWriteForTesting: (() -> Void)?
+        var hasSettledDiskSignature: Bool { diskSignature != nil }
     #endif
-    var originalDiskFingerprint: String? { diskBytes.map(WorkspaceStore.fingerprint) }
-    var languageIdentifier = "null"
+    var originalDiskFingerprint: String? { diskDigest }
+    var languageIdentifier = LanguageProfile.plainTextID { didSet { languageResolved = true } }
+    /// False until the first load has chosen a language, or the person or a restored session has.
+    /// Reload and Revert then keep that choice instead of detecting again.
+    private var languageResolved = false
     /// Status-line text for a recovered draft: what it is a draft of and when it was written.
     /// Cleared when the draft is saved under a name of its own.
     private(set) var recoveredOrigin: String?
@@ -661,15 +680,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         return url
     }
-    /// The document's own file through the no-follow reader. ELOOP and ENOTDIR mean the
-    /// resolved path has since become a link, or its folder is no longer a real folder.
-    private func readDiskBytes() throws -> Data {
+    /// Runs a no-follow read of the document's own file at its resolved location. ELOOP and
+    /// ENOTDIR mean the resolved path has since become a link, or its folder is no longer a
+    /// real folder.
+    private func onDiskFile<T>(_ read: (URL) throws -> T) throws -> T {
         guard let url = diskURL else {
             throw NSError(
                 domain: "TextTank", code: 2,
                 userInfo: [NSLocalizedDescriptionKey: "Save the document before reloading its disk bytes."])
         }
-        do { return try WorkspaceStore.readRegularFile(url, maximumBytes: Int.max) } catch let error as POSIXError
+        do { return try read(url) } catch let error as POSIXError
             where error.code == .ELOOP || error.code == .ENOTDIR
         {
             throw NSError(
@@ -683,10 +703,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     enum DiskState: Equatable { case unchanged, changed, missing }
     func diskState() throws -> DiskState {
-        guard fileURL != nil, let diskBytes else { return .unchanged }
-        do { return try readDiskBytes() == diskBytes ? .unchanged : .changed } catch let error as NSError
-            where error.domain == NSPOSIXErrorDomain && error.code == 2
-        { return .missing }
+        try diskState(trustingSettledMetadata: false)
+    }
+    /// The state of the document's own file at its resolved location. An explicit check always
+    /// hashes the file, in steps, without holding it in memory. A save may instead trust settled
+    /// metadata that is unchanged since the bytes were last read: that is the file last read.
+    /// Right after a save the metadata is too new to rely on, so the hash still runs.
+    private func diskState(trustingSettledMetadata: Bool) throws -> DiskState {
+        guard fileURL != nil, let diskDigest else { return .unchanged }
+        do {
+            return try onDiskFile { url -> DiskState in
+                if trustingSettledMetadata, let diskSignature,
+                    try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max) == diskSignature
+                {
+                    return .unchanged
+                }
+                let sample = try WorkspaceStore.sample(ofRegularFileAt: url, maximumBytes: Int.max)
+                guard sample.digest == diskDigest else { return .changed }
+                diskSignature = sample.signature
+                return .unchanged
+            }
+        } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == 2 { return .missing }
     }
     @objc func toggleReadOnly(_ sender: NSMenuItem) {
         // Read-only belongs to the Scintilla document, so this covers a split view's other pane.
@@ -728,9 +765,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 domain: "TextTank", code: 3,
                 userInfo: [NSLocalizedDescriptionKey: "Reload would discard unsaved changes."])
         }
-        let bytes = try readDiskBytes()
+        let (bytes, sample) = try onDiskFile { try WorkspaceStore.readRegularFileSample($0, maximumBytes: Int.max) }
         let decoded = try FileCodec.decode(bytes, encoding: encoding)
-        loadDecoded(decoded, bytes: bytes)
+        loadDecoded(decoded, sample: sample)
         updateChangeCount(.changeCleared)
         flushRecovery()
     }
@@ -881,7 +918,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     override func read(from url: URL, ofType typeName: String) throws {
         readingURL = url
         defer { readingURL = nil }
+        // AppKit reads the file itself. Settled metadata that is the same on both sides of
+        // that read belongs to the bytes it read; anything else leaves the next check to hash.
+        let now = WorkspaceStore.currentSecond()
+        let before = try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max)
         try super.read(from: url, ofType: typeName)
+        if let before, before.isSettled(at: now),
+            (try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max)) == before
+        {
+            diskSignature = before
+        }
+    }
+    /// Reads bytes the caller captured from `url` through the regular-file descriptor guard.
+    /// Naming the file lets a UTF-32-looking signature offer the explicit UTF-16 LE open.
+    /// `encoding` is the person's explicit choice, as in `read(from:ofType:as:)`.
+    func read(
+        captured data: Data, sample: FileSample, from url: URL, ofType typeName: String,
+        as encoding: FileEncoding? = nil
+    ) throws {
+        let outerEncoding = openEncoding
+        readingURL = url
+        capturedSample = sample
+        if let encoding { openEncoding = encoding }
+        defer {
+            readingURL = nil
+            capturedSample = nil
+            openEncoding = outerEncoding
+        }
+        try read(from: data, ofType: typeName)
     }
     override func read(from data: Data, ofType typeName: String) throws {
         let decoded: DecodedFile
@@ -898,7 +962,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 throw ExplicitEncodingOpener(url: readingURL, typeName: typeName, encoding: .utf16LE).error()
             }
         }
-        loadDecoded(decoded, bytes: data)
+        loadDecoded(
+            decoded, sample: capturedSample ?? FileSample(digest: WorkspaceStore.fingerprint(data), signature: nil))
     }
     /// The same strict decode with an encoding the person chose, for callers that already hold
     /// the bytes. A failure throws the codec's error and loads nothing.
@@ -970,7 +1035,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         doc.flushRecovery()
         return doc
     }
-    private func loadDecoded(_ decoded: DecodedFile, bytes: Data) {
+    private func loadDecoded(_ decoded: DecodedFile, sample: FileSample) {
         (NSApp.delegate as? AppDelegate)?.macros.editorWillReset(editor, reason: "The recording document was reloaded.")
         loading = true
         let locked = editor.readOnly
@@ -983,11 +1048,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editor.resetUndoHistory()
         format = decoded.format
         savedFormat = format
-        diskBytes = bytes
+        diskDigest = sample.digest
+        diskSignature = sample.signature
         savepointMatchesDisk = true
         editor.setSavePoint()
         editor.readOnly = locked
         loading = false
+        guard !languageResolved else { return }
+        languageResolved = true
         if let app = NSApp.delegate as? AppDelegate,
             let id = app.languages.detect(filename: fileURL?.lastPathComponent ?? "", text: decoded.text),
             app.languages.applyToDocument(identifier: id, through: editor)
@@ -1122,7 +1190,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A missing file is simply written again. A changed one is refused, except for Save As:
         // there the save panel has already asked the person to replace that file. Any other
         // failure (the path became a link, a folder or unreadable) still stops the save.
-        if inPlace, diskBytes != nil, try diskState() == .changed, saveOperation != .saveAsOperation {
+        if inPlace, diskDigest != nil, try diskState(trustingSettledMetadata: true) == .changed,
+            saveOperation != .saveAsOperation
+        {
             throw NSError(
                 domain: "TextTank", code: 1,
                 userInfo: [
@@ -1143,7 +1213,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try afterWriteForTesting?()
         #endif
         if saveOperation != .saveToOperation {
-            diskBytes = submitted
+            // The baseline is what was submitted. The file's metadata is not recorded here:
+            // another writer may already have replaced it, and only a hash can tell.
+            diskDigest = WorkspaceStore.fingerprint(submitted)
+            diskSignature = nil
             savedFormat = submittedFormat
             if editor.revision == submittedRevision && format == submittedFormat {
                 savepointMatchesDisk = true
@@ -1795,7 +1868,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         ]
         let language =
             (NSApp.delegate as? AppDelegate)?.languages.profile(identifier: doc.languageIdentifier)?.title
-            ?? (doc.languageIdentifier == "null" ? "Plain Text" : doc.languageIdentifier)
+            ?? (doc.languageIdentifier == LanguageProfile.plainTextID ? "Plain Text" : doc.languageIdentifier)
         let eol =
             cachedEndings.isEmpty ? ([0: "CRLF", 1: "CR", 2: "LF"][info["eol"]?.intValue ?? 2] ?? "LF") : cachedEndings
         let indentation =
@@ -1917,18 +1990,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             add("Smaller", #selector(statusOption(_:)), self, "zoomOut")
             if let languages = app?.languages {
                 menu.addItem(.separator())
-                let languageMenu = languages.menu()
-                if let style = languageMenu.items.first(where: { $0.title == "Syntax Style Settings…" }) {
-                    menu.addItem(style.copy() as! NSMenuItem)
-                }
+                menu.addItem(languages.styleSettingsMenuItem())
             }
         case "language":
             if let languages = app?.languages {
-                let source = languages.menu()
-                for item in source.items where item.representedObject is String {
-                    let copy = item.copy() as! NSMenuItem
-                    copy.state = (copy.representedObject as? String) == doc.languageIdentifier ? .on : .off
-                    menu.addItem(copy)
+                for item in languages.languageMenuItems() {
+                    item.state = (item.representedObject as? String) == doc.languageIdentifier ? .on : .off
+                    menu.addItem(item)
                 }
             }
         case "bookmarks":

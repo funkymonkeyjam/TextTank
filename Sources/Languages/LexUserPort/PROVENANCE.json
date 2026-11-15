@@ -34,15 +34,35 @@
     }
   ],
   "native_changes": [
-    "Remove unused windows.h; replace decimal _itoa with bounded snprintf",
-    "Local WordList facade supplies StartAt/reordering without changing pinned dependency ABI",
+    "Remove unused windows.h; the userDefine.nesting.NN property keys are formatted whole by nestingProperty (snprintf into a 32-byte buffer) in place of _itoa into a two-digit placeholder",
+    "Local UDLWordList view supplies SetWordAt/StartAt without changing the pinned dependency ABI; the lexer owns one view per word list, clears them all when WordListSet changes a list and rebuilds them before the next lex, with a 256-entry first-byte table as upstream WordList has",
+    "Upstream's multi-part keyword reorder loop is moved unchanged from the start-of-document block of ColouriseUserDoc into ReorderMultiPartKeywords and run over all 15 lists when any list changes, so lexes that start past offset 0 use the same order; the earlier stable_sort is removed",
     "Port MatchIgnoreCase2 to local helper",
-    "Own 15 UDL keyword lists rather than indexing upstream 9-list LexerBase storage",
-    "Per-lexer generated cache identifiers replace pointer truncation; Release erases cache entries"
+    "Own 15 UDL keyword lists in a DefaultLexer subclass with its own PropSetSimple, rather than indexing upstream 9-list LexerBase storage; upstream's empty FoldUserDoc, four-entry word-list description and LexerModule lmUserDefine are omitted, and DescribeWordListSets names the 15 lists",
+    "Per-lexer generated cache identifiers replace pointer truncation; Release erases cache entries",
+    "ScintillaEditView::setUserLexer's quoted-keyword encoding (white space inside double or single quotes becomes \\v or \\b) is re-implemented in Swift as UserDefinedLanguage.words",
+    "UserConstants.h is a heading line followed by the SCLEX_USER and SCE_USER lines of SciLexer.h, verbatim",
+    "LexUser.patch is the complete difference between the pinned lexilla/lexers/LexUser.cxx and the ported LexUser.cxx; scripts/check-user-lexer-port.py verifies it and the hashes under port and patch"
   ],
   "limitations": [
     "Native semantic fixtures cover keywords, ignore-case, comments and delimiters; complete UDL feature matrix remains open",
     "Case matching retains upstream byte-oriented behavior; Unicode case equivalence is not certified",
-    "Imported style RGB is retained; native dynamic semantic palette adapts light/dark; exact UDL colorStyle/font face/size parity remains open"
-  ]
+    "Imported chromatic style RGB is retained; a style with no fgColor, with colorStyle lacking the foreground bit, or with a near-black or near-white fgColor follows the light/dark text colour instead; bgColor is not applied; exact UDL colorStyle/font face/size parity remains open",
+    "A keyword that is the last word of a document with no final line break is left unstyled until a line break or space follows it; the lexing loop that decides this is unchanged from the pinned upstream source, and Notepad++'s behaviour on Windows has not been observed"
+  ],
+  "port": [
+    {
+      "path": "LexUser.cxx",
+      "sha256": "aa9372407d94070167639b959d0b521ce31eabb65e743c8c40dd8830f134e2be"
+    },
+    {
+      "path": "UserConstants.h",
+      "sha256": "7a4aa0a3c17460f2815d034635cff40e1fdd0b1fd58925ac2742f6591983d603"
+    }
+  ],
+  "patch": {
+    "path": "LexUser.patch",
+    "applies_to": "lexilla/lexers/LexUser.cxx",
+    "sha256": "7ae9838c46260a47a32605d2c7b6ac3f962dced02d3cc1c83ce488b1706c9598"
+  }
 }

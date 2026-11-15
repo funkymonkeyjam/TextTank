@@ -11,9 +11,11 @@ def q(x):
  if isinstance(x,list):return '('+', '.join(q(v) for v in x)+')'
  return json.dumps(str(x))
 files=[]; builds=[]
+cxx_flags=' '.join(Path('scripts/user-lexer-flags.txt').read_text().split())
 for path in sorted([*Path('Sources').rglob('*.swift'),*Path('Sources').rglob('*.mm'),*Path('Sources').rglob('*.cxx')]):
- f=add(str(path),'PBXFileReference',lastKnownFileType='sourcecode.swift' if path.suffix=='.swift' else 'sourcecode.cpp.objcpp',path=str(path),sourceTree='<group>');files.append(f)
- builds.append(add('build:'+str(path),'PBXBuildFile',fileRef=f))
+ f=add(str(path),'PBXFileReference',lastKnownFileType={'.swift':'sourcecode.swift','.cxx':'sourcecode.cpp.cpp'}.get(path.suffix,'sourcecode.cpp.objcpp'),path=str(path),sourceTree='<group>');files.append(f)
+ # Plain C++ (the ported user lexer) is compiled with the flags its test object gets in scripts/build-user-lexer.sh.
+ builds.append(add('build:'+str(path),'PBXBuildFile',fileRef=f,**({'settings':{'COMPILER_FLAGS':cxx_flags}} if path.suffix=='.cxx' else {})))
 resources=[]
 for path in sorted(Path('Resources').rglob('*')):
  if path.is_file() and path.name!='Info.plist':

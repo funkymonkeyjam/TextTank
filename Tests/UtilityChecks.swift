@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import zlib
 @main struct UtilityChecks {
     static func main() {
         Checks.run("UtilityChecks") {
@@ -46,6 +47,150 @@ import AppKit
                     == "<saml:Status>C</saml:Status>", "SAML direct XML")
             for x in ["=", "=A", "=GG", "=FF"] { rejectsMalformed(.quotedPrintableDecode, x) }
             for x in ["%", "!!!", "YWJj", "sylOzM2xC04sySy2c9bRL4Zx7AA"] { rejectsMalformed(.samlDecode, x) }
+            // F89: a soft line break is "=" followed by CRLF, LF or CR, as found in an LF document.
+            check(try TextUtility.quotedPrintableDecode.apply("caf=C3=\n=A9=3D") == "café=", "QP LF soft break")
+            check(try TextUtility.quotedPrintableDecode.apply("caf=C3=\r=A9=3D") == "café=", "QP CR soft break")
+            for ending in ["\n", "\r", "\r\n"] {
+                check(
+                    try TextUtility.quotedPrintableDecode.apply("abc=" + ending) == "abc",
+                    "QP soft break \(ending.debugDescription) at the end of the input")
+            }
+            check(
+                try TextUtility.quotedPrintableDecode.apply("a=\r\n\nb") == "a\nb",
+                "QP CRLF is one soft break; the LF after it stays literal")
+            for x in ["=\n=G", "a=", "=\nG=", "=\r=4"] { rejectsMalformed(.quotedPrintableDecode, x) }
+            let longLine = String(repeating: "a", count: 80)
+            check(
+                try TextUtility.quotedPrintableEncode.apply(longLine)
+                    == String(repeating: "a", count: 75) + "=\r\n" + String(repeating: "a", count: 5),
+                "QP encoder keeps its CRLF soft break at 76 columns")
+            check(
+                try TextUtility.quotedPrintableEncode.apply("a \tb\n\u{7f}\0=é")
+                    == "a \tb\n=7F=00=3D=C3=A9", "QP encoder byte classes are unchanged")
+            // F100: any XML root is accepted, directly or deflated; the bytes come back unchanged.
+            func base64(_ text: String) -> String { Data(text.utf8).base64EncodedString() }
+            func rawDeflate(_ bytes: [UInt8]) throws -> Data {
+                var stream = z_stream()
+                try require(
+                    deflateInit2_(
+                        &stream, Z_BEST_SPEED, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY, ZLIB_VERSION,
+                        Int32(MemoryLayout<z_stream>.size)) == Z_OK, "fixture: deflate starts")
+                defer { deflateEnd(&stream) }
+                var output = [UInt8](repeating: 0, count: Int(deflateBound(&stream, uLong(bytes.count))))
+                var input = bytes
+                let (status, produced): (Int32, Int) = input.withUnsafeMutableBufferPointer { source in
+                    output.withUnsafeMutableBufferPointer { destination in
+                        stream.next_in = source.baseAddress
+                        stream.avail_in = uInt(source.count)
+                        stream.next_out = destination.baseAddress
+                        stream.avail_out = uInt(destination.count)
+                        let status = deflate(&stream, Z_FINISH)
+                        return (status, destination.count - Int(stream.avail_out))
+                    }
+                }
+                try require(status == Z_STREAM_END, "fixture: deflate finishes")
+                return Data(output.prefix(produced))
+            }
+            let response = "<Response xmlns=\"urn:oasis:names:tc:SAML:2.0:protocol\"/>"
+            for xml in [response, "<ns2:AuthnRequest/>", "<md:EntityDescriptor/>"] {
+                check(try TextUtility.samlDecode.apply(base64(xml)) == xml, "SAML direct \(xml.prefix(12)) root")
+            }
+            check(
+                try TextUtility.samlDecode.apply(rawDeflate(Array(response.utf8)).base64EncodedString()) == response,
+                "SAML deflated default-namespace root")
+            let padded = "\u{feff}\n <saml:Status>C</saml:Status>"
+            check(try TextUtility.samlDecode.apply(base64(padded)) == padded, "SAML keeps a leading BOM and whitespace")
+            check(
+                try TextUtility.samlDecode.apply(rawDeflate(Array(padded.utf8)).base64EncodedString()) == padded,
+                "SAML deflated payload keeps a leading BOM and whitespace")
+            rejectsMalformed(.samlDecode, (try rawDeflate(Array(response.utf8)) + Data([0])).base64EncodedString())
+            rejectsMalformed(.samlDecode, try rawDeflate(Array("abc".utf8)).base64EncodedString())
+            rejectsMalformed(.samlDecode, Data([0x3C, 0xFF]).base64EncodedString())
+            rejectsMalformed(.samlDecode, try rawDeflate([0x3C, 0xFF]).base64EncodedString())
+            let limit = 16 * 1024 * 1024
+            let atLimit = [UInt8(60)] + [UInt8](repeating: 97, count: limit - 1)
+            check(
+                try TextUtility.samlDecode.apply(rawDeflate(atLimit).base64EncodedString()).utf8.count == limit,
+                "SAML inflate accepts exactly 16 MiB")
+            rejects("SAML inflate rejects 16 MiB + 1") {
+                _ = try TextUtility.samlDecode.apply(rawDeflate(atLimit + [97]).base64EncodedString())
+            }
+            // F101: the table encoders give the bytes the per-byte format calls gave.
+            let everyByte =
+                String(decoding: (0..<128).map { UInt8($0) }, as: UTF8.self) + "é👩🏽‍💻\u{feff}\r\n" + "\u{7ff}\u{ffff}"
+            func formatted(_ format: String, _ text: String, keep: (UInt8) -> Bool = { _ in false }) -> String {
+                text.utf8.map { keep($0) ? String(UnicodeScalar($0)) : String(format: format, $0) }.joined()
+            }
+            let rfc1738 = Set("<>\"#%{}|\\^~[]`;/?:@=& ".utf8), extended = rfc1738.union("!*'()+$,".utf8)
+            func literal(_ reserved: Set<UInt8>, lines: Bool) -> (UInt8) -> Bool {
+                { b in (lines && (b == 10 || b == 13)) || !(b < 32 || b >= 127 || reserved.contains(b)) }
+            }
+            for (utility, keep): (TextUtility, (UInt8) -> Bool) in [
+                (.urlEncode, literal(rfc1738, lines: false)), (.urlEncodeLines, literal(rfc1738, lines: true)),
+                (.urlEncodeExtended, literal(extended, lines: false)),
+                (.urlEncodeExtendedLines, literal(extended, lines: true)), (.urlEncodeFull, { _ in false }),
+                (.urlEncodeFullLines, { $0 == 10 || $0 == 13 })
+            ] {
+                check(
+                    try utility.apply(everyByte) == formatted("%%%02X", everyByte, keep: keep),
+                    "\(utility) is byte-identical for every byte value")
+            }
+            check(try TextUtility.hexEncode.apply(everyByte) == formatted("%02X", everyByte), "hex encode every byte")
+            check(
+                try HexEncodingOptions(uppercase: false, bytesPerLine: 0).encode(everyByte)
+                    == formatted("%02x", everyByte), "lowercase hex encode every byte")
+            check(
+                try TextUtility.quotedPrintableDecode.apply(TextUtility.quotedPrintableEncode.apply(everyByte))
+                    == everyByte, "QP roundtrip for every byte value")
+            let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+            check(
+                try alphabet.enumerated().allSatisfy { index, symbol in
+                    try TextUtility.base64Decode.apply("AAA" + String(symbol))
+                        == "\0\0" + String(UnicodeScalar(UInt8(index)))
+                }, "Base64 decode table gives every symbol its value")
+            check(
+                try TextUtility.base64Decode.apply(TextUtility.base64Encode.apply(everyByte)) == everyByte
+                    && TextUtility.base64DecodeLines.apply("Zg\tZm8 -") == "f\tfo -",
+                "permissive Base64 keeps roundtrips and literal separators")
+            let bulk = String(repeating: "caf\u{e9} \u{1F98B}\n", count: 48 * 1024)
+            func seconds(_ work: () throws -> Void) rethrows -> Double {
+                let start = ProcessInfo.processInfo.systemUptime
+                try work()
+                return ProcessInfo.processInfo.systemUptime - start
+            }
+            var reference = "", produced = ""
+            let slow = seconds { reference = formatted("%02X", bulk) }
+            let fast = try seconds { produced = try TextUtility.hexEncode.apply(bulk) }
+            check(produced == reference, "bulk hex encode matches the per-byte reference")
+            check(
+                fast * 3 < slow,
+                "hex encode of \(bulk.utf8.count) bytes does not make one format call per byte (\(fast) s against \(slow) s)"
+            )
+            // F102: separators go between bytes; a completed line keeps its line ending.
+            check(
+                try HexEncodingOptions(insertSpaces: true, bytesPerLine: 0).encode("AB") == "41 42",
+                "hex with spaces has no trailing space")
+            check(
+                try HexEncodingOptions(insertSpaces: true, bytesPerLine: 2, lineEnding: "\n").encode("ABC")
+                    == "41 42\n43", "hex with spaces has no trailing space on a partial last line")
+            check(
+                try TextUtility.hexDecode.apply(
+                    HexEncodingOptions(insertSpaces: true, bytesPerLine: 3, lineEnding: "\r\n").encode(everyByte))
+                    == everyByte, "spaced and wrapped hex still decodes to the same text")
+            for (value, expected) in [("255\n", "FF"), (" 255\r\n", "FF"), ("\t10 ", "A")] {
+                check(
+                    try RadixConversion.convert(value, from: 10, to: 16) == expected,
+                    "number conversion ignores surrounding whitespace in \(value.debugDescription)")
+            }
+            for value in ["2 5", "\n", "25\n5"] {
+                rejects("radix conversion rejects \(value.debugDescription)") {
+                    _ = try RadixConversion.convert(value, from: 10, to: 16)
+                }
+            }
+            check(
+                UtilityController.numberConversionNote.contains("Insert into Editor")
+                    && !UtilityController.numberConversionNote.contains("does not change"),
+                "the number conversion note agrees with its Insert button")
             check(try RadixConversion.convert("4294967295", from: 10, to: 16) == "FFFFFFFF", "32-bit upper bound")
             check(try RadixConversion.convert("101010", from: 2, to: 8) == "52", "binary octal")
             for value in ["-1", "4294967296", "12x", ""] {

@@ -4,6 +4,9 @@ cd "$(dirname "$0")/.."
 source scripts/suite-lib.sh
 suite_begin
 suite_require_build
+# G331/F324: the port's recorded hashes, its patch against the pinned upstream file and its build
+# flags. Set TEXTTANK_NOTEPAD_SOURCE to an upstream checkout to compare with the source files too.
+suite_run user-lexer-port harness/logs/user-lexer-port.log python3 scripts/check-user-lexer-port.py
 suite_build "language-checks language-controller-checks comment-checks" scripts/build-user-lexer.sh
 suite_build "language-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache Sources/Languages/LanguageCore.swift Sources/Languages/UserDefinedLanguage.swift "$SUITE_SUPPORT" Tests/LanguageChecks.swift -o build/tests/language-checks
 suite_run language-checks harness/logs/language-checks.log build/tests/language-checks

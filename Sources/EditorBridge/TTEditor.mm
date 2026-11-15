@@ -282,6 +282,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @property(nonatomic) NSInteger ownGroups;
 - (void)deliverDeferredChange;
 - (BOOL)undoGroupOpen;
+@property(nonatomic) BOOL cppDefaults;
 @end
 @implementation TTEditor
 - (instancetype)initWithFrame:(NSRect)frame {
@@ -377,9 +378,13 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [_engine message:SCI_SETCARETFORE wParam:foreground];
     [_engine message:SCI_SETSELFORE wParam:1 lParam:dark ? 0xFFFFFF : 0x101010];
     [_engine message:SCI_SETSELBACK wParam:1 lParam:dark ? 0x725038 : 0xF1D4AF];
-    for (int style : {1, 2, 3}) [_engine message:SCI_STYLESETFORE wParam:style lParam:dark ? 0x9BC18E : 0x47804B];
-    for (int style : {5, 11, 17}) [_engine message:SCI_STYLESETFORE wParam:style lParam:dark ? 0xDBA6C9 : 0xA04470];
-    for (int style : {6, 7, 13}) [_engine message:SCI_STYLESETFORE wParam:style lParam:dark ? 0x8ACFE8 : 0x255EA0];
+    // These style numbers mean comment, keyword and string in the cpp lexer only. Every other
+    // lexer keeps the default colour until a language profile supplies its own styles.
+    if (_cppDefaults) {
+        for (int style : {1, 2, 3}) [_engine message:SCI_STYLESETFORE wParam:style lParam:dark ? 0x9BC18E : 0x47804B];
+        for (int style : {5, 11, 17}) [_engine message:SCI_STYLESETFORE wParam:style lParam:dark ? 0xDBA6C9 : 0xA04470];
+        for (int style : {6, 7, 13}) [_engine message:SCI_STYLESETFORE wParam:style lParam:dark ? 0x8ACFE8 : 0x255EA0];
+    }
     NSDictionary *styles=[_syntaxStyles copy];
     for(NSNumber *index in styles) {NSDictionary *s=styles[index];[self setSyntaxStyle:index.integerValue foreground:s[@"foreground"] background:s[@"background"] bold:[s[@"bold"] boolValue] italic:[s[@"italic"] boolValue]];}
     NSDictionary *fonts=[_syntaxFonts copy];for(NSNumber *index in fonts){NSDictionary *f=fonts[index];[self setSyntaxFont:index.integerValue name:f[@"name"] size:[f[@"size"] doubleValue]];}
@@ -1118,15 +1123,21 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     return NO;
 }
 + (NSArray<NSString *> *)availableLanguages {
-    NSMutableArray<NSString *> *names = [NSMutableArray array];
-    for (int index = 0; index < GetLexerCount(); ++index) {
-        char name[128] = {};
-        GetLexerName(index, name, sizeof(name));
-        NSString *value = [NSString stringWithUTF8String:name];
-        if (value) [names addObject:value];
-    }
-    [names addObject:@"user"];
-    return [names sortedArrayUsingSelector:@selector(compare:)];
+    // The linked lexers never change while the app runs, and this is asked on every language switch.
+    static NSArray<NSString *> *languages;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSMutableArray<NSString *> *names = [NSMutableArray array];
+        for (int index = 0; index < GetLexerCount(); ++index) {
+            char name[128] = {};
+            GetLexerName(index, name, sizeof(name));
+            NSString *value = [NSString stringWithUTF8String:name];
+            if (value) [names addObject:value];
+        }
+        [names addObject:@"user"];
+        languages = [names sortedArrayUsingSelector:@selector(compare:)];
+    });
+    return languages;
 }
 /// Installs the lexer and its defaults without lexing; every caller colourises exactly once afterwards.
 - (void)installLexer:(NSString *)language {
@@ -1134,8 +1145,13 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     auto lexer = [language isEqualToString:@"user"] ? TextTankCreateUserLexer() : CreateLexer(language.UTF8String);
     if (!lexer) lexer = CreateLexer("null");
     [_engine message:SCI_SETILEXER wParam:0 lParam:(sptr_t)lexer];
+    // The null lexer assumes every style byte is already 0 and only marks the document as styled,
+    // so the previous language's styles and fold levels have to be cleared for it.
+    if ([language isEqualToString:@"null"]) [_engine message:SCI_CLEARDOCUMENTSTYLE];
     [_engine message:SCI_SETPROPERTY wParam:(uptr_t)"fold" lParam:(sptr_t)"1"];
-    [_engine message:SCI_SETKEYWORDS wParam:0 lParam:(sptr_t)"if else for while return class struct import func let var true false null int void const static public private"];
+    // A bare cpp lexer, with no language profile, keeps a small C-like keyword list and palette.
+    _cppDefaults = [language isEqualToString:@"cpp"];
+    if (_cppDefaults) [_engine message:SCI_SETKEYWORDS wParam:0 lParam:(sptr_t)"if else for while return class struct import func let var true false null int void const static public private"];
     [self applyPalette];
 }
 - (void)setLanguage:(NSString *)language {
@@ -1202,9 +1218,18 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (void)setSyntaxStyle:(NSInteger)index foreground:(NSColor *)foreground background:(NSColor *)background bold:(BOOL)bold italic:(BOOL)italic {
     [self assertThread]; if(index<0 || index>255)return;
     NSMutableDictionary *configuration=[@{@"foreground":foreground,@"bold":@(bold),@"italic":@(italic)} mutableCopy];if(background)configuration[@"background"]=background;_syntaxStyles[@(index)]=configuration;
-    auto packed=[](NSColor *color)->sptr_t {NSColor *c=[color colorUsingColorSpace:NSColorSpace.sRGBColorSpace];return ((NSInteger)lround(c.redComponent*255))|((NSInteger)lround(c.greenComponent*255)<<8)|((NSInteger)lround(c.blueComponent*255)<<16);};
-    [_engine message:SCI_STYLESETFORE wParam:index lParam:packed(foreground)];
-    if(background)[_engine message:SCI_STYLESETBACK wParam:index lParam:packed(background)];
+    // A dynamic colour is resolved for this view's appearance, the one applyPalette chose the base
+    // palette from, not for whatever appearance happens to be current on the thread. The dynamic
+    // colour itself stays in _syntaxStyles so the next appearance change resolves it again.
+    __block NSColor *front=nil,*back=nil;
+    [self.effectiveAppearance performAsCurrentDrawingAppearance:^{
+        front=[foreground colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+        back=[background colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    }];
+    auto packed=[](NSColor *c)->sptr_t {return ((NSInteger)lround(c.redComponent*255))|((NSInteger)lround(c.greenComponent*255)<<8)|((NSInteger)lround(c.blueComponent*255)<<16);};
+    // A colour with no RGB form (a pattern, say) leaves the style's colour alone instead of turning it black.
+    if(front)[_engine message:SCI_STYLESETFORE wParam:index lParam:packed(front)];
+    if(back)[_engine message:SCI_STYLESETBACK wParam:index lParam:packed(back)];
     [_engine message:SCI_STYLESETBOLD wParam:index lParam:bold];[_engine message:SCI_STYLESETITALIC wParam:index lParam:italic];
     // The filler line numbers are drawn in this style's colour and no notification follows.
     if (index == STYLE_LINENUMBER) _emptyLineNumbers.needsDisplay = YES;

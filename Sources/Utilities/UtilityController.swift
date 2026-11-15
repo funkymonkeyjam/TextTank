@@ -106,14 +106,17 @@ final class UtilityController: NSObject {
             editor.endUndoGroup()
         } catch { NSAlert(error: error).runModal() }
     }
+    static let numberConversionNote =
+        "Convert an unsigned 32-bit number. Your document changes only if you then choose Insert into Editor."
     @objc private func convertNumber(_ sender: Any?) {
         let alert = TTAlert()
         alert.messageText = "Number Conversion"
-        alert.informativeText = "Convert an unsigned 32-bit number. Conversion does not change your document."
+        alert.informativeText = Self.numberConversionNote
         let captured = activeEditor()
         let revision = captured?.revision
         let selection = captured?.selectionRanges
-        let input = NSTextField(string: captured?.selectedText ?? "")
+        let input = NSTextField(
+            string: (captured?.selectedText ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
         let from = NSPopUpButton()
         let to = NSPopUpButton()
         for field in [from, to] {

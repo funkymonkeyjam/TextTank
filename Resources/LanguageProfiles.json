@@ -706,6 +706,168 @@
           "name": "USER KEYWORDS 8",
           "foreground": "333380",
           "fontStyle": 1
+        },
+        {
+          "id": 0,
+          "name": "DEFAULT",
+          "foreground": "000000",
+          "fontStyle": 1
+        },
+        {
+          "id": 9,
+          "name": "COMMENT",
+          "foreground": "008000",
+          "fontStyle": 0
+        },
+        {
+          "id": 5,
+          "name": "NUMBER",
+          "foreground": "FF0000",
+          "fontStyle": 0
+        },
+        {
+          "id": 6,
+          "name": "DOUBLE STRING",
+          "foreground": "8000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 7,
+          "name": "SINGLE STRING",
+          "foreground": "8000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 1,
+          "name": "TAG",
+          "foreground": "0000FF",
+          "fontStyle": 0
+        },
+        {
+          "id": 11,
+          "name": "TAG END",
+          "foreground": "0000FF",
+          "fontStyle": 0
+        },
+        {
+          "id": 2,
+          "name": "TAG UNKNOWN",
+          "foreground": "000000",
+          "fontStyle": 0
+        },
+        {
+          "id": 3,
+          "name": "ATTRIBUTE",
+          "foreground": "FF0000",
+          "fontStyle": 0
+        },
+        {
+          "id": 4,
+          "name": "ATTRIBUTE UNKNOWN",
+          "foreground": "000000",
+          "fontStyle": 0
+        },
+        {
+          "id": 21,
+          "name": "SGML DEFAULT",
+          "foreground": "000000",
+          "fontStyle": 0
+        },
+        {
+          "id": 22,
+          "name": "SGML COMMAND",
+          "foreground": "0000DD",
+          "fontStyle": 1
+        },
+        {
+          "id": 23,
+          "name": "SGML 1ST PARAM",
+          "foreground": "0000DD",
+          "fontStyle": 0
+        },
+        {
+          "id": 24,
+          "name": "SGML DOUBLESTRING",
+          "foreground": "8000FF",
+          "fontStyle": 0
+        },
+        {
+          "id": 25,
+          "name": "SGML SIMPLESTRING",
+          "foreground": "8000FF",
+          "fontStyle": 0
+        },
+        {
+          "id": 31,
+          "name": "SGML BLOCK DEFAULT",
+          "foreground": "000000",
+          "fontStyle": 0
+        },
+        {
+          "id": 17,
+          "name": "CDATA",
+          "foreground": "FF8000",
+          "fontStyle": 0
+        },
+        {
+          "id": 19,
+          "name": "VALUE",
+          "foreground": "FF8000",
+          "fontStyle": 0
+        },
+        {
+          "id": 10,
+          "name": "ENTITY",
+          "foreground": "000000",
+          "fontStyle": 2
+        },
+        {
+          "id": 192,
+          "name": "USER TAGS1",
+          "foreground": "0000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 193,
+          "name": "USER TAGS2",
+          "foreground": "0000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 194,
+          "name": "USER TAGS3",
+          "foreground": "0000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 195,
+          "name": "USER TAGS4",
+          "foreground": "0000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 196,
+          "name": "USER ATTRIBUTES1",
+          "foreground": "FF0000",
+          "fontStyle": 0
+        },
+        {
+          "id": 197,
+          "name": "USER ATTRIBUTES2",
+          "foreground": "FF0000",
+          "fontStyle": 1
+        },
+        {
+          "id": 198,
+          "name": "USER ATTRIBUTES3",
+          "foreground": "FF0000",
+          "fontStyle": 1
+        },
+        {
+          "id": 199,
+          "name": "USER ATTRIBUTES4",
+          "foreground": "FF0000",
+          "fontStyle": 1
         }
       ],
       "functionPattern": null,
@@ -6696,127 +6858,115 @@
       },
       "styles": [
         {
-          "id": 41,
+          "id": 11,
           "name": "DEFAULT",
           "foreground": "000000",
           "fontStyle": 0
         },
         {
-          "id": 45,
+          "id": 4,
           "name": "NUMBER",
           "foreground": "FF0000",
           "fontStyle": 0
         },
         {
-          "id": 46,
-          "name": "WORD",
-          "foreground": "000000",
-          "fontStyle": 0
-        },
-        {
-          "id": 47,
+          "id": 5,
           "name": "KEYWORD",
           "foreground": "000080",
           "fontStyle": 3
         },
         {
-          "id": 48,
+          "id": 6,
           "name": "DOUBLE STRING",
           "foreground": "808080",
           "fontStyle": 0
         },
         {
-          "id": 49,
+          "id": 7,
           "name": "SINGLE STRING",
           "foreground": "808080",
           "fontStyle": 0
         },
         {
-          "id": 53,
+          "id": 20,
           "name": "TEMPLATE LIT. (CLIENT)",
           "foreground": "808080",
           "fontStyle": 0
         },
         {
-          "id": 68,
-          "name": "TEMPLATE LIT. (SERVER)",
-          "foreground": "808080",
-          "fontStyle": 0
-        },
-        {
-          "id": 50,
+          "id": 10,
           "name": "SYMBOLS",
           "foreground": "000000",
           "fontStyle": 1
         },
         {
-          "id": 52,
+          "id": 14,
           "name": "REGEX",
           "foreground": "8000FF",
           "fontStyle": 0
         },
         {
-          "id": 42,
+          "id": 1,
           "name": "COMMENT",
           "foreground": "008000",
           "fontStyle": 0
         },
         {
-          "id": 43,
+          "id": 2,
           "name": "COMMENT LINE",
           "foreground": "008000",
           "fontStyle": 0
         },
         {
-          "id": 44,
+          "id": 3,
           "name": "COMMENT DOC",
           "foreground": "008080",
           "fontStyle": 0
         },
         {
-          "id": 200,
+          "id": 128,
           "name": "USER KEYWORDS 1",
           "foreground": "003333",
           "fontStyle": 1
         },
         {
-          "id": 201,
+          "id": 129,
           "name": "USER KEYWORDS 2",
           "foreground": "003333",
           "fontStyle": 1
         },
         {
-          "id": 202,
+          "id": 130,
           "name": "USER KEYWORDS 3",
           "foreground": "003333",
           "fontStyle": 1
         },
         {
-          "id": 203,
+          "id": 131,
           "name": "USER KEYWORDS 4",
           "foreground": "003333",
           "fontStyle": 1
         },
         {
-          "id": 204,
+          "id": 132,
           "name": "USER KEYWORDS 5",
           "foreground": "003333",
           "fontStyle": 1
         },
         {
-          "id": 205,
+          "id": 133,
           "name": "USER KEYWORDS 6",
           "foreground": "003333",
           "fontStyle": 1
         },
         {
-          "id": 206,
+          "id": 134,
           "name": "USER KEYWORDS 7",
           "foreground": "003333",
           "fontStyle": 1
         },
         {
-          "id": 207,
+          "id": 135,
           "name": "USER KEYWORDS 8",
           "foreground": "003333",
           "fontStyle": 1
@@ -7172,7 +7322,92 @@
         "lexer.json.allow.comments": "1",
         "lexer.json.escape.sequence": "1"
       },
-      "styles": [],
+      "styles": [
+        {
+          "id": 0,
+          "name": "DEFAULT",
+          "foreground": "000000",
+          "fontStyle": 0
+        },
+        {
+          "id": 1,
+          "name": "NUMBER",
+          "foreground": "FF8000",
+          "fontStyle": 0
+        },
+        {
+          "id": 2,
+          "name": "STRING",
+          "foreground": "800000",
+          "fontStyle": 0
+        },
+        {
+          "id": 3,
+          "name": "STRING EOL",
+          "foreground": "808080",
+          "fontStyle": 0
+        },
+        {
+          "id": 4,
+          "name": "PROPERTY NAME",
+          "foreground": "8000FF",
+          "fontStyle": 0
+        },
+        {
+          "id": 5,
+          "name": "ESCAPE SEQUENCE",
+          "foreground": "0000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 6,
+          "name": "LINE COMMENT",
+          "foreground": "008000",
+          "fontStyle": 0
+        },
+        {
+          "id": 7,
+          "name": "BLOCK COMMENT",
+          "foreground": "008000",
+          "fontStyle": 0
+        },
+        {
+          "id": 8,
+          "name": "OPERATOR",
+          "foreground": "000000",
+          "fontStyle": 0
+        },
+        {
+          "id": 9,
+          "name": "URI",
+          "foreground": "0000FF",
+          "fontStyle": 0
+        },
+        {
+          "id": 10,
+          "name": "COMPACT IRI",
+          "foreground": "0000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 11,
+          "name": "KEYWORD",
+          "foreground": "18AF8A",
+          "fontStyle": 1
+        },
+        {
+          "id": 12,
+          "name": "LD KEYWORD",
+          "foreground": "FF0000",
+          "fontStyle": 0
+        },
+        {
+          "id": 13,
+          "name": "ERROR",
+          "foreground": "000000",
+          "fontStyle": 0
+        }
+      ],
       "functionPattern": null,
       "comments": {
         "line": "//",
@@ -7213,7 +7448,170 @@
         "fold.compact": "0",
         "fold.comment": "1"
       },
-      "styles": [],
+      "styles": [
+        {
+          "id": 0,
+          "name": "DEFAULT",
+          "foreground": "000000",
+          "fontStyle": 1
+        },
+        {
+          "id": 9,
+          "name": "COMMENT",
+          "foreground": "008000",
+          "fontStyle": 0
+        },
+        {
+          "id": 5,
+          "name": "NUMBER",
+          "foreground": "FF0000",
+          "fontStyle": 0
+        },
+        {
+          "id": 6,
+          "name": "DOUBLE STRING",
+          "foreground": "8000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 7,
+          "name": "SINGLE STRING",
+          "foreground": "8000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 1,
+          "name": "TAG",
+          "foreground": "0000FF",
+          "fontStyle": 0
+        },
+        {
+          "id": 11,
+          "name": "TAG END",
+          "foreground": "0000FF",
+          "fontStyle": 0
+        },
+        {
+          "id": 2,
+          "name": "TAG UNKNOWN",
+          "foreground": "000000",
+          "fontStyle": 0
+        },
+        {
+          "id": 3,
+          "name": "ATTRIBUTE",
+          "foreground": "FF0000",
+          "fontStyle": 0
+        },
+        {
+          "id": 4,
+          "name": "ATTRIBUTE UNKNOWN",
+          "foreground": "000000",
+          "fontStyle": 0
+        },
+        {
+          "id": 21,
+          "name": "SGML DEFAULT",
+          "foreground": "000000",
+          "fontStyle": 0
+        },
+        {
+          "id": 22,
+          "name": "SGML COMMAND",
+          "foreground": "0000DD",
+          "fontStyle": 1
+        },
+        {
+          "id": 23,
+          "name": "SGML 1ST PARAM",
+          "foreground": "0000DD",
+          "fontStyle": 0
+        },
+        {
+          "id": 24,
+          "name": "SGML DOUBLESTRING",
+          "foreground": "8000FF",
+          "fontStyle": 0
+        },
+        {
+          "id": 25,
+          "name": "SGML SIMPLESTRING",
+          "foreground": "8000FF",
+          "fontStyle": 0
+        },
+        {
+          "id": 31,
+          "name": "SGML BLOCK DEFAULT",
+          "foreground": "000000",
+          "fontStyle": 0
+        },
+        {
+          "id": 17,
+          "name": "CDATA",
+          "foreground": "FF8000",
+          "fontStyle": 0
+        },
+        {
+          "id": 19,
+          "name": "VALUE",
+          "foreground": "FF8000",
+          "fontStyle": 0
+        },
+        {
+          "id": 10,
+          "name": "ENTITY",
+          "foreground": "000000",
+          "fontStyle": 2
+        },
+        {
+          "id": 192,
+          "name": "USER TAGS1",
+          "foreground": "0000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 193,
+          "name": "USER TAGS2",
+          "foreground": "0000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 194,
+          "name": "USER TAGS3",
+          "foreground": "0000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 195,
+          "name": "USER TAGS4",
+          "foreground": "0000FF",
+          "fontStyle": 1
+        },
+        {
+          "id": 196,
+          "name": "USER ATTRIBUTES1",
+          "foreground": "FF0000",
+          "fontStyle": 0
+        },
+        {
+          "id": 197,
+          "name": "USER ATTRIBUTES2",
+          "foreground": "FF0000",
+          "fontStyle": 1
+        },
+        {
+          "id": 198,
+          "name": "USER ATTRIBUTES3",
+          "foreground": "FF0000",
+          "fontStyle": 1
+        },
+        {
+          "id": 199,
+          "name": "USER ATTRIBUTES4",
+          "foreground": "FF0000",
+          "fontStyle": 1
+        }
+      ],
       "functionPattern": null,
       "comments": {
         "line": "//",

@@ -38,6 +38,11 @@ final class MacroController: NSObject, NSMenuDelegate {
         return macroMenu
     }
     func menuNeedsUpdate(_ menu: NSMenu) { rebuild() }
+    /// No item in this menu has a key equivalent, so a key press never needs it brought up to date.
+    func menuHasKeyEquivalent(
+        _ menu: NSMenu, for event: NSEvent, target: AutoreleasingUnsafeMutablePointer<AnyObject?>,
+        action: UnsafeMutablePointer<Selector?>
+    ) -> Bool { false }
     private func rebuild() {
         macroMenu.removeAllItems()
         macroMenu.autoenablesItems = false

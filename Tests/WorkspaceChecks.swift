@@ -158,6 +158,111 @@ import Darwin
             rejects("read resource limit enforced", where: tooLarge) {
                 _ = try WorkspaceStore.readRegularFile(destination, maximumBytes: 2)
             }
+            // F138: the streamed fingerprint is the fingerprint of the bytes, through the same open.
+            for count in [0, 100, 64 * 1024, 128 * 1024, 200_000] {
+                let sized = root.appendingPathComponent("sized-\(count)")
+                try Data((0..<count).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ count) }).write(to: sized)
+                check(
+                    try WorkspaceStore.fingerprint(ofRegularFileAt: sized)
+                        == WorkspaceStore.fingerprint(WorkspaceStore.readRegularFile(sized)),
+                    "streamed fingerprint of \(count) bytes equals the fingerprint of the bytes read")
+            }
+            rejects("streamed fingerprint enforces the read limit", where: tooLarge) {
+                _ = try WorkspaceStore.fingerprint(ofRegularFileAt: destination, maximumBytes: 2)
+            }
+            rejects("streamed fingerprint refuses a FIFO", where: unsafeLocation) {
+                _ = try WorkspaceStore.fingerprint(ofRegularFileAt: fifo)
+            }
+            rejects("streamed fingerprint refuses a symbolic link", where: posix(.ELOOP)) {
+                _ = try WorkspaceStore.fingerprint(ofRegularFileAt: referenceLink)
+            }
+            rejects("streamed fingerprint reports a missing file", where: posix(.ENOENT)) {
+                _ = try WorkspaceStore.fingerprint(ofRegularFileAt: root.appendingPathComponent("absent"))
+            }
+            let oversized = root.appendingPathComponent("oversized")
+            try Data().write(to: oversized)
+            try require(
+                truncate(oversized.path, off_t(WorkspaceStore.maximumSessionBytes) + 1) == 0,
+                "fixture: sparse file one byte over the inspection limit")
+            var oversizedReference = session
+            oversizedReference.documents[0].originalURL = oversized
+            check(
+                oversizedReference.inspectReferencedFiles()[0].status
+                    == .unreadable(WorkspaceError.tooLarge.localizedDescription),
+                "an original over the limit is reported as too large without being read")
+            try FileManager.default.removeItem(at: oversized)
+            var cancelledReference = session
+            cancelledReference.documents[0].originalURL = original
+            check(
+                cancelledReference.inspectReferencedFiles()[0].status == .unchanged
+                    && cancelledReference.inspectReferencedFiles(isCancelled: { true })[0].status
+                        == .unreadable("the check was cancelled"),
+                "a cancelled check reports the original as not inspected, never as unchanged")
+            rejects("a cancelled streamed fingerprint throws", where: { $0 is CancellationError }) {
+                _ = try WorkspaceStore.fingerprint(ofRegularFileAt: original, isCancelled: { true })
+            }
+            // The prompt is built from the session alone, so a FIFO or absent original is never opened.
+            var promptSession = session
+            promptSession.documents[0].originalURL = fifo
+            let unread = promptSession.restorePrompt()
+            check(
+                unread.message == "Restore 1 Documents from Renamed session?" && unread.detail.hasSuffix("\n\nfifo")
+                    && unread.detail.contains("have not been read") && !unread.detail.contains("cannot be inspected"),
+                "the first restore prompt names the documents and claims nothing about the originals")
+            let inspected = promptSession.restorePrompt(inspections: promptSession.inspectReferencedFiles())
+            check(
+                inspected.message == unread.message
+                    && inspected.detail
+                        == "Snapshots open as new unsaved documents. Existing tabs and original files are kept.\n\n"
+                        + "fifo: Original file cannot be inspected: "
+                        + WorkspaceError.unsafeLocation.localizedDescription,
+                "the checked restore prompt has one status line per document, worded as before")
+            // F86/F227: metadata stands in for the digest only when it is settled and unchanged.
+            let watched = root.appendingPathComponent("watched.txt")
+            try Data("first".utf8).write(to: watched)
+            let later = WorkspaceStore.currentSecond() + 60
+            let fresh = try WorkspaceStore.sample(ofRegularFileAt: watched)
+            let settled = try WorkspaceStore.sample(ofRegularFileAt: watched, now: later)
+            check(
+                fresh.digest == WorkspaceStore.fingerprint(Data("first".utf8)) && fresh.signature == nil,
+                "a file written this second has no signature to rely on")
+            check(
+                try settled.digest == fresh.digest && settled.signature != nil
+                    && settled.signature == WorkspaceStore.signature(ofRegularFileAt: watched),
+                "a settled sample's signature is what a metadata-only look reports")
+            check(
+                try WorkspaceStore.readRegularFileSample(watched, now: later).sample == settled
+                    && WorkspaceStore.readRegularFileSample(watched).sample.signature == nil,
+                "reading the bytes gives the same sample as hashing the file")
+            var statBefore = stat()
+            try require(stat(watched.path, &statBefore) == 0, "fixture: stat the watched file")
+            let times = [statBefore.st_atimespec, statBefore.st_mtimespec]
+            let rewriter = try FileHandle(forWritingTo: watched)
+            try rewriter.write(contentsOf: Data("FIRST".utf8))
+            try rewriter.close()
+            try require(
+                utimensat(AT_FDCWD, watched.path, times, 0) == 0, "fixture: put the modification time back")
+            var statAfter = stat()
+            try require(stat(watched.path, &statAfter) == 0, "fixture: stat the rewritten file")
+            fixtureCheck(
+                statAfter.st_size == statBefore.st_size && statAfter.st_ino == statBefore.st_ino
+                    && statAfter.st_mtimespec.tv_sec == statBefore.st_mtimespec.tv_sec
+                    && statAfter.st_mtimespec.tv_nsec == statBefore.st_mtimespec.tv_nsec,
+                "the rewrite kept size, inode and the exact modification time")
+            check(
+                try WorkspaceStore.signature(ofRegularFileAt: watched) != settled.signature,
+                "a same-size rewrite with its modification time put back still changes the signature")
+            try Data("first".utf8).write(to: watched, options: .atomic)
+            check(
+                try WorkspaceStore.signature(ofRegularFileAt: watched) != settled.signature
+                    && WorkspaceStore.sample(ofRegularFileAt: watched, now: later).digest == settled.digest,
+                "an atomic replacement with the same bytes changes the signature, not the digest")
+            rejects("metadata-only look refuses a symbolic link", where: posix(.ELOOP)) {
+                _ = try WorkspaceStore.signature(ofRegularFileAt: referenceLink)
+            }
+            rejects("metadata-only look refuses a FIFO", where: unsafeLocation) {
+                _ = try WorkspaceStore.signature(ofRegularFileAt: fifo)
+            }
             let badParent = root.appendingPathComponent("not-directory")
             try Data("keep".utf8).write(to: badParent)
             rejects("partial-write path failure") {

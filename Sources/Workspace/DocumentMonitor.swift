@@ -15,9 +15,17 @@ enum DocumentMonitorStatus: Equatable {
     }
 }
 
-/// Background bounded disk reads; all document/editor access stays on main.
+/// Background bounded disk checks; all document/editor access stays on main.
 /// Monitoring never edits a document. Reload is a separate explicit action.
+/// Each poll looks at the file's metadata first and reads and hashes the file only when the
+/// metadata differs from the last settled sample. No descriptor is held between polls.
 final class DocumentMonitor {
+    static let maximumBytes = 32 * 1024 * 1024
+    /// Polls that had to read the file, and polls answered from metadata alone.
+    private(set) var fileReads = 0
+    private(set) var metadataOnlyPolls = 0
+    /// The last settled sample and the file it was taken from.
+    private var known: (url: URL, sample: FileSample)?
     private(set) weak var document: TextDocument?
     private(set) var status: DocumentMonitorStatus = .stopped
     var onStatus: ((DocumentMonitorStatus) -> Void)?
@@ -43,19 +51,43 @@ final class DocumentMonitor {
         generation = UUID()
         inFlight = false
         document = nil
+        known = nil
         publish(.stopped)
     }
+    /// The callback hears each change of status once. It has its own label in the browser,
+    /// so nothing depends on the same status being published again.
     private func publish(_ value: DocumentMonitorStatus) {
+        guard value != status else { return }
         status = value
         onStatus?(value)
     }
-    static func inspect(_ url: URL, expected: String?) -> DocumentMonitorStatus {
+    struct Inspection {
+        let status: DocumentMonitorStatus
+        /// A settled sample that a later poll may reuse, or nil.
+        let sample: FileSample?
+        let readFile: Bool
+    }
+    /// `known` is an earlier settled sample of the same file. While the file's metadata still
+    /// equals its signature, the file holds the bytes that gave its digest and is not read.
+    static func inspect(_ url: URL, expected: String?, known: FileSample? = nil, now: Int64? = nil) -> Inspection {
         do {
-            let data = try WorkspaceStore.readRegularFile(url, maximumBytes: 32 * 1024 * 1024)
-            return WorkspaceStore.fingerprint(data) == expected ? .unchanged : .changed
-        } catch let error as POSIXError where error.code == .ENOENT { return .missing } catch WorkspaceError.tooLarge {
-            return .unavailable("File exceeds the 32 MiB monitoring limit; editor text is preserved.")
-        } catch { return .unavailable(error.localizedDescription) }
+            if let known, let signature = known.signature,
+                try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: maximumBytes) == signature
+            {
+                return Inspection(
+                    status: known.digest == expected ? .unchanged : .changed, sample: known, readFile: false)
+            }
+            let sample = try WorkspaceStore.sample(ofRegularFileAt: url, maximumBytes: maximumBytes, now: now)
+            return Inspection(
+                status: sample.digest == expected ? .unchanged : .changed,
+                sample: sample.signature == nil ? nil : sample, readFile: true)
+        } catch let error as POSIXError where error.code == .ENOENT {
+            return Inspection(status: .missing, sample: nil, readFile: false)
+        } catch WorkspaceError.tooLarge {
+            return Inspection(
+                status: .unavailable("File exceeds the 32 MiB monitoring limit; editor text is preserved."),
+                sample: nil, readFile: false)
+        } catch { return Inspection(status: .unavailable(error.localizedDescription), sample: nil, readFile: false) }
     }
     func poll() {
         precondition(Thread.isMainThread)
@@ -71,24 +103,29 @@ final class DocumentMonitor {
             return
         }
         let baseline = document.originalDiskFingerprint, revision = document.editor.revision, token = generation
+        let reusable = known.flatMap { $0.url == url ? $0.sample : nil }
         inFlight = true
         // The document is main-thread only, so the worker's block holds it weakly: its last
         // reference must never be dropped on the worker.
         DispatchQueue.global(qos: .utility).async { [weak self, weak document] in
-            let result = Self.inspect(url, expected: baseline)
+            let result = Self.inspect(url, expected: baseline, known: reusable)
             DispatchQueue.main.async { [weak self, weak document] in
                 guard let self, self.generation == token else { return }
                 self.inFlight = false
-                guard let document, let current = self.document, current === document, current.diskURL == url,
+                self.known = result.sample.map { (url, $0) }
+                if result.readFile { self.fileReads += 1 } else if result.sample != nil { self.metadataOnlyPolls += 1 }
+                guard let document, let current = self.document, current === document,
                     current.editor.window != nil
                 else {
                     self.stop()
                     return
                 }
-                // A save/reload/edit during the disk read invalidates this sample.
-                // The next tick captures the new baseline; no stale result applies.
-                guard current.editor.revision == revision, current.originalDiskFingerprint == baseline else { return }
-                self.publish(result)
+                // A save, Save As, reload or edit during the disk check invalidates this
+                // sample. The next tick captures the new file and baseline; nothing stale applies.
+                guard current.diskURL == url, current.editor.revision == revision,
+                    current.originalDiskFingerprint == baseline
+                else { return }
+                self.publish(result.status)
             }
         }
     }

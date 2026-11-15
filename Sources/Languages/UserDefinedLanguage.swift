@@ -32,7 +32,7 @@ struct UserDefinedLanguage: Codable, Equatable {
             styles.allSatisfy({
                 Set($0.attributes.keys).isSubset(of: [
                     "name", "styleID", "fgColor", "bgColor", "colorStyle", "fontName", "fontStyle", "fontSize",
-                    "nesting"
+                    "nesting", Self.customColorAttribute
                 ])
             })
         else { throw LanguageError.invalid("Unknown UDL setting attributes.") }
@@ -45,6 +45,10 @@ struct UserDefinedLanguage: Codable, Equatable {
         for (i, key) in Self.keywordNames.enumerated() {
             let text = keywords[key] ?? ""
             if let property = direct[i] {
+                guard text.utf8.count <= LanguageProfile.userListPropertyLimit else {
+                    throw LanguageError.invalid(
+                        "UDL keyword group '\(key)' exceeds \(LanguageProfile.userListPropertyLimit) bytes.")
+                }
                 properties["userDefine." + property] = text
             } else {
                 lists[String(slot)] = try Self.words(text)
@@ -65,15 +69,39 @@ struct UserDefinedLanguage: Codable, Equatable {
         var converted: [LanguageProfile.Style] = []
         for style in styles {
             let id = Self.styleNames.firstIndex(of: style.name)!
-            guard let nesting = Int(style.attributes["nesting"] ?? "0"), (0...0x7ffffff).contains(nesting),
-                let font = Int(style.attributes["fontStyle"] ?? "0")
-            else { throw LanguageError.invalid("Invalid UDL style parameters.") }
+            func trimmed(_ key: String) -> String {
+                (style.attributes[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            // Notepad++ writes these attributes empty as readily as it omits them; both mean 0.
+            func number(_ key: String, _ range: ClosedRange<Int>) throws -> Int {
+                let raw = trimmed(key)
+                if raw.isEmpty { return 0 }
+                guard let value = Int(raw), range.contains(value) else {
+                    throw LanguageError.invalid(
+                        "Invalid UDL style parameters: style '\(style.name)': \(key) must be \(range.lowerBound)–\(range.upperBound)."
+                    )
+                }
+                return value
+            }
+            let nesting = try number("nesting", 0...0x7ffffff), font = try number("fontStyle", 0...7)
+            let color = trimmed("fgColor"), marker = style.attributes[Self.customColorAttribute]
+            guard color.isEmpty || LanguageProfile.isHexColor(color) else {
+                throw LanguageError.invalid(
+                    "Invalid UDL style parameters: style '\(style.name)': fgColor must be six hexadecimal digits.")
+            }
+            guard marker == nil || marker == "0" || marker == "1" else {
+                throw LanguageError.invalid(
+                    "Invalid UDL style parameters: style '\(style.name)': \(Self.customColorAttribute) must be 0 or 1.")
+            }
             properties[String(format: "userDefine.nesting.%02d", id)] = String(nesting)
+            // The stored attributes keep the file's own size; only the applied style is normalised.
+            // Absent, empty, zero, negative and non-finite sizes mean the editor's size.
+            let size = Double(trimmed("fontSize")).flatMap { $0.isFinite && $0 > 0 ? min(max($0, 6), 72) : nil }
             converted.append(
                 .init(
-                    id: id, name: style.name, foreground: style.attributes["fgColor"] ?? "000000", fontStyle: font,
-                    useCustomColor: true, fontName: style.attributes["fontName"].flatMap { $0.isEmpty ? nil : $0 },
-                    fontSize: style.attributes["fontSize"].flatMap { Double($0) }))
+                    id: id, name: style.name, foreground: color.isEmpty ? "000000" : color, fontStyle: font,
+                    useCustomColor: Self.usesCustomColor(color, colorStyle: trimmed("colorStyle"), marker: marker),
+                    fontName: style.attributes["fontName"].flatMap { $0.isEmpty ? nil : $0 }, fontSize: size))
         }
         let digest = SHA256.hash(data: Data(name.utf8)).map { String(format: "%02x", $0) }.joined()
         let profile = LanguageProfile(
@@ -85,6 +113,46 @@ struct UserDefinedLanguage: Codable, Equatable {
                 line: Self.simpleComment(keywords["Comments"] ?? "", code: "00"),
                 blockOpen: Self.simpleComment(keywords["Comments"] ?? "", code: "03"),
                 blockClose: Self.simpleComment(keywords["Comments"] ?? "", code: "04")))
+        try profile.validate()
+        return profile
+    }
+    /// TextTank's own WordsStyle attribute: the person's explicit "Use custom text color" choice in
+    /// Syntax Style Settings ("1" or "0"), so that it survives Edit Current UDL and export/import.
+    /// Notepad++ ignores attributes it does not know.
+    static let customColorAttribute = "texttankCustomColor"
+    /// Whether an imported style keeps its fixed RGB. A real colour does. No colour, a colour
+    /// the file marks as unused (`colorStyle` without the foreground bit) and the near-black or
+    /// near-white a light-theme UDL uses for ordinary text carry no colour information, so those
+    /// follow the appearance (nil) instead of pinning black text onto a dark background.
+    static func usesCustomColor(_ foreground: String, colorStyle: String, marker: String?) -> Bool? {
+        if let marker { return marker == "1" }
+        guard let value = UInt32(foreground, radix: 16), foreground.utf8.count == 6,
+            (Int(colorStyle) ?? 3) & 1 != 0
+        else { return nil }
+        let channels = [(value >> 16) & 255, (value >> 8) & 255, value & 255]
+        if channels.allSatisfy({ $0 <= 0x30 }) || channels.allSatisfy({ $0 >= 0xD0 }) { return nil }
+        return true
+    }
+    /// The profile for this definition when it replaces `existing` (Edit Current UDL, or importing
+    /// the same language again). Everything the XML can express comes from the XML. What it cannot
+    /// express is kept: the function pattern, an explicit adaptive-colour choice for a style whose
+    /// colour the XML did not change, and comment markers the person overrode in the profile editor.
+    func profile(preserving existing: LanguageProfile?) throws -> LanguageProfile {
+        var profile = try profile()
+        guard let existing else { return profile }
+        profile.id = existing.id
+        profile.functionPattern = existing.functionPattern
+        for index in profile.styles.indices {
+            guard let old = existing.styles.first(where: { $0.id == profile.styles[index].id }),
+                old.useCustomColor == false,
+                styles.first(where: { $0.name == profile.styles[index].name })?.attributes[Self.customColorAttribute]
+                    == nil, old.foreground.caseInsensitiveCompare(profile.styles[index].foreground) == .orderedSame
+            else { continue }
+            profile.styles[index].useCustomColor = false
+        }
+        if let derived = try? existing.udl?.profile().comments, existing.comments != derived {
+            profile.comments = existing.comments
+        }
         try profile.validate()
         return profile
     }
@@ -119,7 +187,9 @@ struct UserDefinedLanguage: Codable, Equatable {
                 }
             } else {
                 output.append(c)
-                if c > 32 { nonWhitespace = true }
+                // As upstream setUserLexer: only text inside quotes arms the multi-part marker, so
+                // leading spaces in a quoted group are dropped whatever came before the quote.
+                if quote != nil { nonWhitespace = true }
             }
             index += 1
         }
@@ -129,7 +199,9 @@ struct UserDefinedLanguage: Codable, Equatable {
         return result
     }
     static func decode(_ data: Data) throws -> [Self] {
-        guard data.count <= 2 * 1024 * 1024, let text = String(data: data, encoding: .utf8),
+        // XML has no U+0000, so a NUL byte means UTF-16 or UTF-32, which would hide a DTD from the
+        // text scan below. The scan stays: nothing else rejects a DOCTYPE that declares nothing.
+        guard data.count <= 2 * 1024 * 1024, !data.contains(0), let text = String(data: data, encoding: .utf8),
             text.range(of: "<!DOCTYPE", options: .caseInsensitive) == nil,
             text.range(of: "<!ENTITY", options: .caseInsensitive) == nil
         else {
@@ -201,6 +273,32 @@ private final class UDLParser: NSObject, XMLParserDelegate {
             parser.abortParsing()
         }
     }
+    // The parser honours the encoding a file declares (UTF-7, for one), so a DTD can reach it past
+    // the UTF-8 text scan in decode. Any declaration it reports ends the import.
+    private func rejectDeclaration(_ parser: XMLParser) {
+        error = LanguageError.invalid("UDL import accepts UTF-8 XML up to 2 MiB without DTD or external entities.")
+        parser.abortParsing()
+    }
+    func parser(_ parser: XMLParser, foundInternalEntityDeclarationWithName name: String, value: String?) {
+        rejectDeclaration(parser)
+    }
+    func parser(
+        _ parser: XMLParser, foundExternalEntityDeclarationWithName name: String, publicID: String?, systemID: String?
+    ) { rejectDeclaration(parser) }
+    func parser(_ parser: XMLParser, foundElementDeclarationWithName elementName: String, model: String) {
+        rejectDeclaration(parser)
+    }
+    func parser(
+        _ parser: XMLParser, foundAttributeDeclarationWithName attributeName: String, forElement elementName: String,
+        type: String?, defaultValue: String?
+    ) { rejectDeclaration(parser) }
+    func parser(
+        _ parser: XMLParser, foundUnparsedEntityDeclarationWithName name: String, publicID: String?,
+        systemID: String?, notationName: String?
+    ) { rejectDeclaration(parser) }
+    func parser(
+        _ parser: XMLParser, foundNotationDeclarationWithName name: String, publicID: String?, systemID: String?
+    ) { rejectDeclaration(parser) }
     func parser(_ parser: XMLParser, foundCharacters string: String) { if keyword != nil { text += string } }
     func parser(_ parser: XMLParser, foundCDATA data: Data) {
         if keyword != nil, let value = String(data: data, encoding: .utf8) { text += value }
