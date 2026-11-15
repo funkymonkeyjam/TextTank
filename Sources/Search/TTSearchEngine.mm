@@ -66,6 +66,12 @@ bool word(wchar_t c){return c=='_'||[[NSCharacterSet alphanumericCharacterSet]ch
         NSString *needle=mode==1?[self decodeExtended:query]:query;
         NSString *replacementText=mode==1?[self decodeExtended:replacement]:replacement;
         if(needle.length==0)throw std::runtime_error("Enter a nonempty search expression.");
+        // Literal and extended text is used as-is, so an unpaired surrogate (for example a lone
+        // \\uD83D escape) would delete matches in the editor or be written as U+FFFD by folder
+        // replace. Validate the whole decoded strings: a pair written as two escapes stays valid.
+        // Regex patterns and formats are not literal text; that path validates its own output.
+        if(mode!=2&&!validUnits(units(needle)))throw std::runtime_error("The search text contains an incomplete Unicode surrogate pair; write both \\u halves or the full character.");
+        if(mode!=2&&!validUnits(units(replacementText)))throw std::runtime_error("The replacement contains an incomplete Unicode surrogate pair; no edits were applied.");
         Budget budget{cancellation,std::chrono::steady_clock::now()+std::chrono::milliseconds((long long)(timeLimit*1000))};
         NSMutableArray *matches=[NSMutableArray array];bool truncated=false;size_t outputSize=0;
         if(mode==2) {

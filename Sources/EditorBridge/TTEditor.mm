@@ -11,6 +11,12 @@ extern "C" Scintilla::ILexer5 *TextTankCreateUserLexer();
 // NSString's UTF-8 constructors consume a leading EF BB BF as an external BOM.
 // Editor bytes are already decoded content, so U+FEFF must remain ordinary text.
 // A temporary ASCII prefix prevents that interpretation; remove only that prefix.
+// nil means the string cannot be encoded (it holds an unpaired surrogate). Callers must
+// reject the edit: messaging nil would replace the target with zero bytes, a silent deletion.
+// A nil string keeps its historical meaning of empty text.
+static NSData * _Nullable TTUTF8(NSString * _Nullable text) {
+    return text ? [text dataUsingEncoding:NSUTF8StringEncoding] : [NSData data];
+}
 static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
     NSMutableData *prefixed = [NSMutableData dataWithCapacity:length + 1];
     const unsigned char sentinel = 'x';
@@ -193,7 +199,8 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
 }
 - (void)setText:(NSString *)text {
     [self assertThread];
-    NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
+    // Unencodable text (an unpaired surrogate) leaves the document unchanged.
+    NSData *data = TTUTF8(text); if (!data) return;
     [_engine message:SCI_BEGINUNDOACTION];
     [_engine message:SCI_SETTARGETRANGE wParam:0 lParam:[_engine message:SCI_GETLENGTH]];
     [_engine message:SCI_REPLACETARGET wParam:data.length lParam:(sptr_t)data.bytes];
@@ -226,6 +233,13 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     NSNumber *value = modes[mode]; if (!value) return;
     [_engine message:SCI_BEGINUNDOACTION]; [_engine message:SCI_CONVERTEOLS wParam:value.integerValue];
     [_engine message:SCI_SETEOLMODE wParam:value.integerValue]; [_engine message:SCI_ENDUNDOACTION];
+}
+- (void)setLineEndingMode:(NSString *)mode {
+    [self assertThread];
+    NSDictionary *modes = @{@"LF":@(SC_EOL_LF), @"CRLF":@(SC_EOL_CRLF), @"CR":@(SC_EOL_CR)};
+    NSNumber *value = modes[mode]; if (!value) return;
+    // Mode only: existing bytes, undo history, revision and save point are untouched.
+    [_engine message:SCI_SETEOLMODE wParam:value.integerValue];
 }
 - (NSArray<NSDictionary<NSString *, NSNumber *> *> *)selectionRanges {
     [self assertThread]; NSMutableArray *ranges = [NSMutableArray array];
@@ -265,7 +279,13 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
 - (BOOL)replaceSelections:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision {
     [self assertThread]; NSArray *ranges=self.selectionRanges;
     if (revision!=self.revision || self.readOnly || ![texts isKindOfClass:NSArray.class] || texts.count!=ranges.count || ![self validSelectionRanges:ranges]) return NO;
-    for (id text in texts) if (![text isKindOfClass:NSString.class]) return NO;
+    // Encode everything before the first edit so an unencodable text rejects the whole batch.
+    NSMutableArray<NSData *> *encoded=[NSMutableArray arrayWithCapacity:texts.count];
+    for (id text in texts) {
+        if (![text isKindOfClass:NSString.class]) return NO;
+        NSData *bytes=TTUTF8(text); if (!bytes) return NO;
+        [encoded addObject:bytes];
+    }
     NSMutableArray *indices=[NSMutableArray array]; for (NSUInteger i=0;i<ranges.count;++i) [indices addObject:@(i)];
     [indices sortUsingComparator:^NSComparisonResult(NSNumber *a,NSNumber *b) {
         NSDictionary *ra=ranges[a.unsignedIntegerValue], *rb=ranges[b.unsignedIntegerValue];
@@ -274,7 +294,7 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     [_engine message:SCI_BEGINUNDOACTION];
     for (NSNumber *index in indices) {
         NSDictionary *range=ranges[index.unsignedIntegerValue]; NSInteger a=[range[@"anchor"] integerValue], c=[range[@"caret"] integerValue];
-        NSData *bytes=[texts[index.unsignedIntegerValue] dataUsingEncoding:NSUTF8StringEncoding];
+        NSData *bytes=encoded[index.unsignedIntegerValue];
         [_engine message:SCI_SETTARGETRANGE wParam:MIN(a,c) lParam:MAX(a,c)];
         [_engine message:SCI_REPLACETARGET wParam:bytes.length lParam:(sptr_t)bytes.bytes];
     }
@@ -354,15 +374,17 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     [_engine message:SCI_SETDOCPOINTER wParam:0 lParam:[other.engine message:SCI_GETDOCPOINTER]];
     self.revision = other.revision;
 }
-- (void)replaceSelection:(NSString *)text {
+- (BOOL)replaceSelection:(NSString *)text {
     [self assertThread];
-    NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
+    NSData *data = TTUTF8(text); if (!data) return NO;
+    const BOOL writable = !self.readOnly;
     [_engine message:SCI_BEGINUNDOACTION];
     [_engine message:SCI_TARGETFROMSELECTION];
     const sptr_t start = [_engine message:SCI_GETTARGETSTART];
     [_engine message:SCI_REPLACETARGET wParam:data.length lParam:(sptr_t)data.bytes];
     [_engine message:SCI_SETSEL wParam:start + data.length lParam:start + data.length];
     [_engine message:SCI_ENDUNDOACTION];
+    return writable;
 }
 - (void)executeCommand:(NSString *)identifier {
     [self assertThread];

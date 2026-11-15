@@ -196,6 +196,42 @@ int main() {
         check(![left setBookmarks:@[@1,@1]] && ![left setBookmarks:@[@1.5]], "Duplicate and fractional bookmark indices rejected");
         check([left setBookmarks:@[]] && left.bookmarkLines.count == 0, "Empty bookmark set explicitly clears bookmarks");
         check(!left.modified && left.revision == beforeRestoreRevision, "Selection and bookmark restore never changes authoritative bytes or text undo state");
+        // F126: the line-ending mode is metadata only and governs later insertions.
+        TTEditor *eol=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,300)];
+        ScintillaView *eolNative=(ScintillaView *)eol.subviews.firstObject;
+        check([eol.statusInfo[@"eol"] integerValue]==SC_EOL_LF, "New editor inserts LF by default");
+        eol.text=@"a\r\nb";[eol resetUndoHistory];[eol setSavePoint];NSUInteger eolRevision=eol.revision;
+        [eol setLineEndingMode:@"CRLF"];
+        check([eol.text isEqual:@"a\r\nb"] && eol.revision==eolRevision && !eol.modified && ![eolNative message:SCI_CANUNDO] && [eol.statusInfo[@"eol"] integerValue]==SC_EOL_CRLF, "Line-ending mode changes no bytes, revision, save point or undo history");
+        [eol setLineEndingMode:@"bogus"];
+        check([eol.statusInfo[@"eol"] integerValue]==SC_EOL_CRLF && eol.revision==eolRevision, "Unknown line-ending mode is ignored");
+        [eol setSelectionAnchor:4 caret:4];[eol executeCommand:@"newLine"];
+        check([eol.text isEqual:@"a\r\nb\r\n"], "Return in CRLF mode inserts CRLF");
+        eol.text=@"a\rb";[eol setLineEndingMode:@"CR"];[eol setSelectionAnchor:3 caret:3];[eol executeCommand:@"newLine"];
+        check([eol.text isEqual:@"a\rb\r"] && [eol.statusInfo[@"eol"] integerValue]==SC_EOL_CR, "Return in CR mode inserts CR");
+        eol.text=@"ab";[eol setLineEndingMode:@"LF"];[eol setSelectionAnchor:2 caret:2];[eol executeCommand:@"newLine"];
+        check([eol.text isEqual:@"ab\n"] && [eol.statusInfo[@"eol"] integerValue]==SC_EOL_LF, "Return in LF mode inserts LF");
+        // F20: text that cannot be encoded as UTF-8 is rejected, never applied as a deletion.
+        const unichar loneUnit[]={0xD83D};
+        NSString *lone=[NSString stringWithCharacters:loneUnit length:1];
+        check([lone dataUsingEncoding:NSUTF8StringEncoding]==nil, "Fixture: an unpaired surrogate has no UTF-8 encoding");
+        TTEditor *guarded=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,300)];
+        ScintillaView *guardedNative=(ScintillaView *)guarded.subviews.firstObject;
+        guarded.text=@"keep x keep";[guarded resetUndoHistory];[guarded setSavePoint];
+        [guarded setSelectionAnchor:5 caret:6];NSUInteger guardedRevision=guarded.revision;
+        BOOL (^untouched)(void)=^BOOL{ return [guarded.text isEqual:@"keep x keep"] && guarded.revision==guardedRevision && !guarded.modified && ![guardedNative message:SCI_CANUNDO] && guarded.selectionStart==5 && guarded.selectionEnd==6; };
+        check(![guarded replaceSelection:lone] && untouched(), "Unencodable selection replacement is rejected without deleting the selection");
+        check(![guarded replaceSelections:@[lone] expectedRevision:guardedRevision] && untouched(), "Unencodable multi-selection replacement is rejected before any edit");
+        check([guarded setSelectionRanges:@[@{@"anchor":@0,@"caret":@4},@{@"anchor":@5,@"caret":@6}]], "Fixture: two selections");
+        check(![guarded replaceSelections:@[@"ok",lone] expectedRevision:guardedRevision] && [guarded.text isEqual:@"keep x keep"] && guarded.revision==guardedRevision && ![guardedNative message:SCI_CANUNDO], "One unencodable text rejects the whole batch with no partial edit");
+        [guarded setSelectionAnchor:5 caret:6];
+        guarded.text=lone;
+        check(untouched(), "Unencodable whole-document text leaves the document unchanged");
+        check([guarded replaceSelection:@"y"] && [guarded.text isEqual:@"keep y keep"], "Encodable selection replacement reports success");
+        guarded.readOnly=YES;
+        check(![guarded replaceSelection:@"z"] && [guarded.text isEqual:@"keep y keep"], "Read-only selection replacement reports failure");
+        guarded.readOnly=NO;guarded.text=@"";
+        check(guarded.text.length==0, "Empty text still empties the document");
         NSLog(@"Bridge checks passed; IME, VoiceOver, UI focus and permission tests not covered.");
     }
     return 0;

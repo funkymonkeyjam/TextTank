@@ -55,7 +55,10 @@ enum FolderReplacement {
                 try write(encoded,to:temp)
                 // Copy permissions, ownership, ACLs, extended attributes and flags
                 // from the still-open source descriptor, without copying its data.
-                guard fcopyfile(source,temp,nil,copyfile_flags_t(COPYFILE_METADATA))==0,fsync(temp)==0 else{throw POSIXError(POSIXErrorCode(rawValue:errno) ?? .EIO)}
+                // COPYFILE_METADATA also copies the source's timestamps. The content is new, so
+                // stamp the current time: build tools, backups and other editors detect changes
+                // by modification time. The creation date and all other metadata are kept.
+                guard fcopyfile(source,temp,nil,copyfile_flags_t(COPYFILE_METADATA))==0,futimens(temp,nil)==0,fsync(temp)==0 else{throw POSIXError(POSIXErrorCode(rawValue:errno) ?? .EIO)}
                 let backupName=".texttank-backup-"+UUID().uuidString
                 let copy=openat(parent,backupName,O_CREAT|O_EXCL|O_WRONLY|O_NOFOLLOW,mode_t(0o600));guard copy>=0 else{throw POSIXError(.EIO)}
                 do{try write(original,to:copy);guard fsync(copy)==0 else{throw POSIXError(.EIO)};close(copy)}catch{close(copy);unlinkat(parent,backupName,0);throw error}

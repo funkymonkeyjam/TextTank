@@ -33,6 +33,14 @@ import Foundation
         var failed=false;do{_ = try search("text","(")}catch{failed=true};check(failed,"malformed Boost pattern rejected")
         failed=false;do{_ = try search("🥑",".")}catch{failed=true};check(failed,"regex splitting surrogate rejected before mutation")
         failed=false;do{_ = try search("🥑","(.).","$1")}catch{failed=true};check(failed,"replacement capture splitting surrogate rejected")
+        // F20/G343: extended escapes must not inject unpaired surrogates into matches or replacements.
+        for (text,query,replacement,label) in [("x😀y","\\uD83D","","lone high-surrogate query"),("x😀y","\\uDE00","","lone low-surrogate query"),("a","a","\\uD83D","lone high-surrogate replacement"),("a","a","\\uDE00","lone low-surrogate replacement"),("a","a","\\uDE00\\uD83D","reversed surrogate replacement")] {
+            failed=false;var message="";do{_ = try search(text,query,replacement,mode:.extended)}catch{failed=true;message=error.localizedDescription}
+            check(failed && message.contains("surrogate"),"extended \(label) rejected with an explanation")
+        }
+        check(try search("x😀y","\\uD83D\\uDE00",mode:.extended).hits.map(\.range)==[NSRange(location:1,length:2)],"extended surrogate pair written as two escapes matches the whole character")
+        let paired=try search("x😀y","x","\\uD83D\\uDE00",mode:.extended)
+        check(try SearchCore.replacing("x😀y",with:paired.hits)=="😀😀y","extended surrogate pair replacement stays valid")
         var options=SearchOptions();options.query="a";options.mode = .regularExpression
         let limited=try SearchCore.search("aaa",options:options,limit:2)
         check(limited.truncated && limited.hits.count==2,"result cap explicit")

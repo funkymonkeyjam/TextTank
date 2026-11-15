@@ -15,6 +15,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)replaceSelections:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision;
 @property(nonatomic) BOOL readOnly;
 - (void)convertLineEndings:(NSString *)mode;
+/// Sets only the ending inserted by later edits (LF, CRLF or CR). Never rewrites existing
+/// bytes and creates no undo step; convertLineEndings: is the only converting operation.
+- (void)setLineEndingMode:(NSString *)mode;
 - (void)configureTabWidth:(NSInteger)width useTabs:(BOOL)useTabs;
 
 @property(nonatomic, readonly) NSInteger selectionStart;
@@ -42,7 +45,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) BOOL wrap;
 - (void)shareDocumentWith:(TTEditor *)other;
 - (void)executeCommand:(NSString *)identifier;
-- (void)replaceSelection:(NSString *)text;
+/// Returns NO, changing nothing, when the text cannot be encoded as UTF-8 (an unpaired
+/// surrogate); also NO when the document is read-only.
+- (BOOL)replaceSelection:(NSString *)text;
 - (void)setSavePoint;
 - (void)resetUndoHistory;
 - (void)setLanguage:(NSString *)language;
