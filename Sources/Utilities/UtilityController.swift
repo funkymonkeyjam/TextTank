@@ -9,16 +9,27 @@ final class UtilityController: NSObject {
         let menu = NSMenu(title: "Text Utilities")
         for utility in TextUtility.allCases {
             let item = NSMenuItem(title: utility.title, action: #selector(run(_:)), keyEquivalent: "")
-            item.target = self; item.representedObject = utility.rawValue; menu.addItem(item)
+            item.target = self
+            item.representedObject = utility.rawValue
+            menu.addItem(item)
         }
-        let hex=NSMenuItem(title:"UTF-8 to Hex with Options…",action:#selector(hexOptions(_:)),keyEquivalent:"");hex.target=self;menu.addItem(hex)
-        let conversion=NSMenuItem(title:"Number Conversion…",action:#selector(convertNumber(_:)),keyEquivalent:"");conversion.target=self;menu.addItem(conversion)
+        let hex = NSMenuItem(title: "UTF-8 to Hex with Options…", action: #selector(hexOptions(_:)), keyEquivalent: "")
+        hex.target = self
+        menu.addItem(hex)
+        let conversion = NSMenuItem(
+            title: "Number Conversion…", action: #selector(convertNumber(_:)), keyEquivalent: "")
+        conversion.target = self
+        menu.addItem(conversion)
         menu.addItem(.separator())
-        for format in ["html","rtf"] {
-            for destination in ["clipboard","file"] {
+        for format in ["html", "rtf"] {
+            for destination in ["clipboard", "file"] {
                 let label = destination == "clipboard" ? "Copy" : "Export"
-                let item = NSMenuItem(title:"\(label) Styled Text as \(format.uppercased())" + (destination == "file" ? "…" : ""), action:#selector(exportStyled(_:)),keyEquivalent:"")
-                item.target=self;item.representedObject=["format":format,"destination":destination];menu.addItem(item)
+                let item = NSMenuItem(
+                    title: "\(label) Styled Text as \(format.uppercased())" + (destination == "file" ? "…" : ""),
+                    action: #selector(exportStyled(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = ["format": format, "destination": destination]
+                menu.addItem(item)
             }
         }
         return menu
@@ -27,81 +38,142 @@ final class UtilityController: NSObject {
         guard let raw = sender.representedObject as? String, let utility = TextUtility(rawValue: raw) else { return }
         do { try apply(utility) } catch { NSAlert(error: error).runModal() }
     }
-    @objc private func hexOptions(_ sender:Any?) {
-        guard let editor=activeEditor(),editor.window != nil,!editor.readOnly,editor.selectionCount == 1,editor.selectionStart != editor.selectionEnd else { NSAlert(error:UtilityFailure.selectionRequired).runModal();return }
-        let revision=editor.revision;let selection=editor.selectionRanges;let input=editor.selectedText
-        let alert=TTAlert();alert.messageText="Hex Encoding Options"
-        let spaces=NSButton(checkboxWithTitle:"Spaces between bytes",target:nil,action:nil)
-        let uppercase=NSButton(checkboxWithTitle:"Uppercase hexadecimal",target:nil,action:nil);uppercase.state = .on
-        let width=NSTextField(string:"16")
-        let eol=NSPopUpButton();eol.addItems(withTitles:["LF","CRLF","CR"])
-        let stack=NSStackView(views:[spaces,uppercase,NSTextField(labelWithString:"Bytes per line (0 = no wrapping)"),width,eol]);stack.orientation = .vertical;stack.alignment = .leading;stack.spacing=8;stack.frame=NSRect(x:0,y:0,width:340,height:160)
-        alert.accessoryView=stack;alert.addButton(withTitle:"Apply");alert.addButton(withTitle:"Cancel")
+    @objc private func hexOptions(_ sender: Any?) {
+        guard let editor = activeEditor(), editor.window != nil, !editor.readOnly, editor.selectionCount == 1,
+            editor.selectionStart != editor.selectionEnd
+        else {
+            NSAlert(error: UtilityFailure.selectionRequired).runModal()
+            return
+        }
+        let revision = editor.revision
+        let selection = editor.selectionRanges
+        let input = editor.selectedText
+        let alert = TTAlert()
+        alert.messageText = "Hex Encoding Options"
+        let spaces = NSButton(checkboxWithTitle: "Spaces between bytes", target: nil, action: nil)
+        let uppercase = NSButton(checkboxWithTitle: "Uppercase hexadecimal", target: nil, action: nil)
+        uppercase.state = .on
+        let width = NSTextField(string: "16")
+        let eol = NSPopUpButton()
+        eol.addItems(withTitles: ["LF", "CRLF", "CR"])
+        let stack = NSStackView(views: [
+            spaces, uppercase, NSTextField(labelWithString: "Bytes per line (0 = no wrapping)"), width, eol
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.frame = NSRect(x: 0, y: 0, width: 340, height: 160)
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Apply")
+        alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
-            guard editor.window != nil,editor.revision == revision,editor.selectionRanges == selection,!editor.readOnly else { throw UtilityFailure.selectionRequired }
-            let output=try HexEncodingOptions(insertSpaces:spaces.state == .on,uppercase:uppercase.state == .on,bytesPerLine:Int(width.stringValue) ?? -1,lineEnding:["\n","\r\n","\r"][eol.indexOfSelectedItem]).encode(input)
-            editor.beginUndoGroup();editor.replaceSelection(output);editor.endUndoGroup()
-        } catch { NSAlert(error:error).runModal() }
+            guard editor.window != nil, editor.revision == revision, editor.selectionRanges == selection,
+                !editor.readOnly
+            else { throw UtilityFailure.selectionRequired }
+            let output = try HexEncodingOptions(
+                insertSpaces: spaces.state == .on, uppercase: uppercase.state == .on,
+                bytesPerLine: Int(width.stringValue) ?? -1, lineEnding: ["\n", "\r\n", "\r"][eol.indexOfSelectedItem]
+            ).encode(input)
+            editor.beginUndoGroup()
+            editor.replaceSelection(output)
+            editor.endUndoGroup()
+        } catch { NSAlert(error: error).runModal() }
     }
-    @objc private func convertNumber(_ sender:Any?) {
-        let alert=TTAlert();alert.messageText="Number Conversion";alert.informativeText="Convert an unsigned 32-bit number. Conversion does not change your document."
-        let captured=activeEditor();let revision=captured?.revision;let selection=captured?.selectionRanges
-        let input=NSTextField(string:captured?.selectedText ?? "")
-        let from=NSPopUpButton();let to=NSPopUpButton()
-        for field in [from,to] { field.addItems(withTitles:["Binary (2)","Octal (8)","Decimal (10)","Hexadecimal (16)"]) }
-        from.selectItem(at:2);to.selectItem(at:3)
-        let stack=NSStackView(views:[input,NSTextField(labelWithString:"From"),from,NSTextField(labelWithString:"To"),to]);stack.orientation = .vertical;stack.alignment = .leading;stack.spacing=8;stack.frame=NSRect(x:0,y:0,width:350,height:160)
-        alert.accessoryView=stack;alert.addButton(withTitle:"Convert");alert.addButton(withTitle:"Cancel")
+    @objc private func convertNumber(_ sender: Any?) {
+        let alert = TTAlert()
+        alert.messageText = "Number Conversion"
+        alert.informativeText = "Convert an unsigned 32-bit number. Conversion does not change your document."
+        let captured = activeEditor()
+        let revision = captured?.revision
+        let selection = captured?.selectionRanges
+        let input = NSTextField(string: captured?.selectedText ?? "")
+        let from = NSPopUpButton()
+        let to = NSPopUpButton()
+        for field in [from, to] {
+            field.addItems(withTitles: ["Binary (2)", "Octal (8)", "Decimal (10)", "Hexadecimal (16)"])
+        }
+        from.selectItem(at: 2)
+        to.selectItem(at: 3)
+        let stack = NSStackView(views: [
+            input, NSTextField(labelWithString: "From"), from, NSTextField(labelWithString: "To"), to
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.frame = NSRect(x: 0, y: 0, width: 350, height: 160)
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Convert")
+        alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
-            let bases=[2,8,10,16]
-            let output=try RadixConversion.convert(input.stringValue,from:bases[from.indexOfSelectedItem],to:bases[to.indexOfSelectedItem])
-            let result=TTAlert();result.messageText="Converted Number";result.informativeText=output
-            result.addButton(withTitle:"Copy");result.addButton(withTitle:"Cancel");result.addButton(withTitle:"Insert into Editor")
-            let action=result.runModal()
-            if action == .alertFirstButtonReturn { NSPasteboard.general.clearContents();NSPasteboard.general.setString(output,forType:.string) }
-            else if action == .alertThirdButtonReturn {
-                guard let editor=activeEditor(),editor.window != nil,editor === captured,editor.revision == revision,editor.selectionRanges == selection,!editor.readOnly,editor.selectionCount == 1 else { throw UtilityFailure.selectionRequired }
-                editor.beginUndoGroup();editor.replaceSelection(output);editor.endUndoGroup()
+            let bases = [2, 8, 10, 16]
+            let output = try RadixConversion.convert(
+                input.stringValue, from: bases[from.indexOfSelectedItem], to: bases[to.indexOfSelectedItem])
+            let result = TTAlert()
+            result.messageText = "Converted Number"
+            result.informativeText = output
+            result.addButton(withTitle: "Copy")
+            result.addButton(withTitle: "Cancel")
+            result.addButton(withTitle: "Insert into Editor")
+            let action = result.runModal()
+            if action == .alertFirstButtonReturn {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(output, forType: .string)
+            } else if action == .alertThirdButtonReturn {
+                guard let editor = activeEditor(), editor.window != nil, editor === captured,
+                    editor.revision == revision, editor.selectionRanges == selection, !editor.readOnly,
+                    editor.selectionCount == 1
+                else { throw UtilityFailure.selectionRequired }
+                editor.beginUndoGroup()
+                editor.replaceSelection(output)
+                editor.endUndoGroup()
             }
-        } catch { NSAlert(error:error).runModal() }
+        } catch { NSAlert(error: error).runModal() }
     }
     /// Snapshot only: Scintilla remains authoritative. An ordinary nonempty
     /// selection is exported; no selection exports the complete document.
-    func exportData(format:String) throws -> (Data,String) {
+    func exportData(format: String) throws -> (Data, String) {
         precondition(Thread.isMainThread)
-        guard let editor=activeEditor(), editor.window != nil,editor.selectionCount == 1 else { throw UtilityFailure.selectionRequired }
-        let selected=editor.selectionStart != editor.selectionEnd
-        let bytes=selected ? editor.selectionEnd-editor.selectionStart : editor.text.utf8.count
-        guard bytes <= 16*1024*1024 else { throw UtilityFailure.tooLarge }
-        let snapshot=editor.attributedText(forSelection:selected)
+        guard let editor = activeEditor(), editor.window != nil, editor.selectionCount == 1 else {
+            throw UtilityFailure.selectionRequired
+        }
+        let selected = editor.selectionStart != editor.selectionEnd
+        let bytes = selected ? editor.selectionEnd - editor.selectionStart : editor.text.utf8.count
+        guard bytes <= 16 * 1024 * 1024 else { throw UtilityFailure.tooLarge }
+        let snapshot = editor.attributedText(forSelection: selected)
         guard format == "html" || format == "rtf" else { throw UtilityFailure.malformed("export format") }
-        let type:NSAttributedString.DocumentType = format == "html" ? .html : .rtf
-        let data=try snapshot.data(from:NSRange(location:0,length:snapshot.length),documentAttributes:[.documentType:type,.characterEncoding:String.Encoding.utf8.rawValue])
-        return (data,snapshot.string)
+        let type: NSAttributedString.DocumentType = format == "html" ? .html : .rtf
+        let data = try snapshot.data(
+            from: NSRange(location: 0, length: snapshot.length),
+            documentAttributes: [.documentType: type, .characterEncoding: String.Encoding.utf8.rawValue])
+        return (data, snapshot.string)
     }
-    @objc private func exportStyled(_ sender:NSMenuItem) {
-        guard let choice=sender.representedObject as? [String:String],let format=choice["format"] else { return }
+    @objc private func exportStyled(_ sender: NSMenuItem) {
+        guard let choice = sender.representedObject as? [String: String], let format = choice["format"] else { return }
         do {
-            let (data,plain)=try exportData(format:format)
+            let (data, plain) = try exportData(format: format)
             if choice["destination"] == "clipboard" {
-                let pasteboard=NSPasteboard.general;pasteboard.clearContents()
-                pasteboard.setData(data,forType:format == "html" ? .html : .rtf)
-                pasteboard.setString(plain,forType:.string)
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setData(data, forType: format == "html" ? .html : .rtf)
+                pasteboard.setString(plain, forType: .string)
             } else {
-                let panel=NSSavePanel();panel.nameFieldStringValue="TextTank-export."+format
-                guard panel.runModal() == .OK,let url=panel.url else { return }
-                try data.write(to:url,options:.atomic)
+                let panel = NSSavePanel()
+                panel.nameFieldStringValue = "TextTank-export." + format
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                try data.write(to: url, options: .atomic)
             }
-        } catch { NSAlert(error:error).runModal() }
+        } catch { NSAlert(error: error).runModal() }
     }
     func apply(_ utility: TextUtility) throws {
         precondition(Thread.isMainThread)
-        guard let editor = activeEditor(), editor.window != nil,editor.selectionCount == 1,
-              !editor.readOnly, editor.selectionStart != editor.selectionEnd else { throw UtilityFailure.selectionRequired }
+        guard let editor = activeEditor(), editor.window != nil, editor.selectionCount == 1,
+            !editor.readOnly, editor.selectionStart != editor.selectionEnd
+        else { throw UtilityFailure.selectionRequired }
         let transformed = try utility.apply(editor.selectedText)
-        editor.beginUndoGroup(); defer { editor.endUndoGroup() }
+        editor.beginUndoGroup()
+        defer { editor.endUndoGroup() }
         editor.replaceSelection(transformed)
     }
 }

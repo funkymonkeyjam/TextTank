@@ -19,7 +19,11 @@ enum UnicodeFixtures {
     static func lineBreaks(in text: String) -> Int {
         var count = 0, previousCR = false
         for byte in text.utf8 {
-            if byte == 13 { count += 1; previousCR = true; continue }
+            if byte == 13 {
+                count += 1
+                previousCR = true
+                continue
+            }
             if byte == 10 && !previousCR { count += 1 }
             previousCR = false
         }
@@ -32,6 +36,6 @@ enum UnicodeFixtures {
         ("mixed CRLF, CR and LF", mixedEndings),
         ("separators that are not line breaks", "b\u{2028}y\u{2029}\u{85}\na\u{0B}x\u{0C}"),
         ("embedded NUL", "b\0b\na\0a\n"),
-        ("astral letter", "\(astralLetter)b\n\(astralLetter)a\n"),
+        ("astral letter", "\(astralLetter)b\n\(astralLetter)a\n")
     ]
 }
