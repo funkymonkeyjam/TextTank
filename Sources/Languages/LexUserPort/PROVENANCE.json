@@ -43,6 +43,6 @@
   "limitations": [
     "Native semantic fixtures cover keywords, ignore-case, comments and delimiters; complete UDL feature matrix remains open",
     "Case matching retains upstream byte-oriented behavior; Unicode case equivalence is not certified",
-    "Imported style RGB is retained; native dynamic semantic palette adapts light/dark; exact UDL colorStyle/font face/size parity remains open"
+    "Imported chromatic style RGB is retained; a style with no fgColor, with colorStyle lacking the foreground bit, or with a near-black or near-white fgColor follows the light/dark text colour instead; bgColor is not applied; exact UDL colorStyle/font face/size parity remains open"
   ]
 }
