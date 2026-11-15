@@ -2,7 +2,21 @@
 #import <AppKit/AppKit.h>
 #import "../Search/TTSearchEngine.h"
 NS_ASSUME_NONNULL_BEGIN
+/// Posted by -retireInFavorOf: on the main thread. The object is the view about to leave its
+/// window; userInfo[TTEditorSuccessorKey] is the remaining view of the same document.
+extern NSNotificationName const TTEditorWillRetireNotification;
+extern NSString *const TTEditorSuccessorKey;
+
 /// Main-thread-only view. All positions remain inside the UTF-8 Scintilla model.
+///
+/// A split view is two TTEditor views on one Scintilla document (shareDocumentWith:). State
+/// lives at one of two levels, and setting document state through either view sets it for both:
+/// - Document: text, readOnly, tab width and tabs-or-spaces (configureTabWidth:useTabs:), the
+///   line-ending mode, the lexer with its keyword lists and properties (setLanguage:),
+///   bookmarks, search highlights, the undo history and the save point (modified).
+/// - View: wrap, zoom, selection and scroll position, syntax styles and fonts (setSyntaxStyle:,
+///   setSyntaxFont:), margins, whitespace and line-ending visibility, and overtype.
+/// revision is counted per view, but views of one document always report the same value.
 @interface TTEditor : NSView
 @property(nonatomic, copy) NSString *text;
 @property(nonatomic, readonly) NSString *selectedText;
@@ -44,6 +58,18 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)endUndoGroup;
 @property(nonatomic) BOOL wrap;
 - (void)shareDocumentWith:(TTEditor *)other;
+/// YES when both views show the same Scintilla document. A view shares with itself.
+- (BOOL)sharesDocumentWith:(nullable TTEditor *)other;
+/// View scope only: replaces this view's syntax styles and fonts with the other view's and
+/// redraws. Never touches the lexer, keyword lists, properties, text, undo or the revision.
+- (void)adoptSyntaxStylesFrom:(TTEditor *)other;
+/// View scope only: adoptSyntaxStylesFrom: plus zoom, wrap, whitespace and line-ending
+/// visibility and margin widths. Selection and scroll position are not copied.
+- (void)adoptViewStateFrom:(TTEditor *)other;
+/// Announces that this view is leaving its window while `successor` keeps showing the same
+/// document, so holders of results that do not depend on this view's selection can retarget
+/// them. Posts nothing unless the two views share a document.
+- (void)retireInFavorOf:(TTEditor *)successor;
 - (void)executeCommand:(NSString *)identifier;
 /// Returns NO, changing nothing, when the text cannot be encoded as UTF-8 (an unpaired
 /// surrogate); also NO when the document is read-only.

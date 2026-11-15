@@ -389,6 +389,70 @@ int main() {
             [board clearContents]; if (saved) [board setString:saved forType:NSPasteboardTypeString];
         } else printf("SKIP cut, copy and paste: set TEXTTANK_TEST_PASTEBOARD=1 to run them against the general pasteboard\n");
         });
+        // Audit package 11 (F21, G337, G338, G339, G340): what is document state and what is view state.
+        ttchecks::section("views of one document: styles, view state, read-only and retirement", [&] {
+        auto native=[](TTEditor *e){ return (ScintillaView *)e.subviews.firstObject; };
+        auto face=[&](TTEditor *e,int style){ char name[128]={}; [native(e) message:SCI_STYLEGETFONT wParam:style lParam:(sptr_t)name]; return [NSString stringWithUTF8String:name]; };
+        TTEditor *a=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,500,300)];
+        a.text=@"int value = 42; // comment\n"; [a resetUndoHistory]; [a setSavePoint];
+        [a setLanguage:@"cpp"];
+        [a setSyntaxStyle:5 foreground:[NSColor colorWithSRGBRed:0x12/255.0 green:0x34/255.0 blue:0x56/255.0 alpha:1] background:nil bold:YES italic:NO];
+        [a setSyntaxFont:5 name:@"Courier" size:19.25];
+        [a executeCommand:@"zoomIn"]; [a executeCommand:@"zoomIn"]; [a executeCommand:@"zoomIn"];
+        [a executeCommand:@"showWhitespace"]; [a executeCommand:@"toggleEOL"]; [a executeCommand:@"toggleLineNumbers"]; a.wrap=YES;
+        [a configureTabWidth:3 useTabs:NO];
+        const NSUInteger revision=a.revision;
+        TTEditor *b=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,500,300)];
+        TTEditor *unrelated=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,500,300)];
+        check([a sharesDocumentWith:a] && ![b sharesDocumentWith:a] && ![a sharesDocumentWith:nil], "a view shares its document with itself and not with a separate editor");
+        [b shareDocumentWith:a];
+        check([b sharesDocumentWith:a] && [a sharesDocumentWith:b] && ![unrelated sharesDocumentWith:a], "sharesDocumentWith: is true exactly for views of one Scintilla document");
+        check([native(b) message:SCI_STYLEGETFORE wParam:5]!=0x563412 && [native(b) message:SCI_GETZOOM]==0, "fixture: sharing a document alone copies no view styles or zoom");
+        [b adoptViewStateFrom:a];
+        check([native(b) message:SCI_STYLEGETFORE wParam:5]==0x563412 && [native(a) message:SCI_STYLEGETFORE wParam:5]==0x563412 && [native(b) message:SCI_STYLEGETBOLD wParam:5] && [face(b,5) isEqual:@"Courier"] && [native(b) message:SCI_STYLEGETSIZEFRACTIONAL wParam:5]==1925, "a new view adopts the source view's style colour, weight and font");
+        check([native(b) message:SCI_GETZOOM]==3 && [native(b) message:SCI_GETZOOM]==[native(a) message:SCI_GETZOOM], "a new view adopts the source view's zoom");
+        check(b.wrap && [native(b) message:SCI_GETVIEWWS]==SCWS_VISIBLEALWAYS && [native(b) message:SCI_GETVIEWEOL]==1 && [native(b) message:SCI_GETMARGINWIDTHN wParam:0]==0 && [native(b) message:SCI_GETMARGINWIDTHN wParam:2]==16, "a new view adopts wrap, whitespace and line-ending visibility and margin widths");
+        check([native(b) message:SCI_GETSTYLEAT wParam:0]==5 && [native(a) message:SCI_GETSTYLEAT wParam:0]==5, "adopting view state leaves the shared lexer and its keyword lists in place");
+        check(a.revision==revision && b.revision==revision && !a.modified && [a.text isEqual:@"int value = 42; // comment\n"], "adopting view state never edits the document or moves a revision");
+        check([b.statusInfo[@"tabWidth"] integerValue]==3 && ![b.statusInfo[@"useTabs"] boolValue] && [a.statusInfo[@"tabWidth"] integerValue]==3, "tab width and tabs-or-spaces are document state and are untouched by adopting view state");
+        // A language change through one view: the lexer is shared, the style tables are not.
+        a.text=@"import os\n"; [a resetUndoHistory]; [a setSavePoint];
+        [a setLanguage:@"python"];
+        check([native(b) message:SCI_STYLEGETFORE wParam:5]==0x563412, "fixture: the other view keeps the old language's styles until it is synchronised");
+        [a setSyntaxStyle:5 foreground:[NSColor colorWithSRGBRed:0xAB/255.0 green:0xCD/255.0 blue:0xEF/255.0 alpha:1] background:nil bold:NO italic:YES];
+        const NSUInteger before=a.revision;
+        [b adoptSyntaxStylesFrom:a];
+        check([native(b) message:SCI_STYLEGETFORE wParam:5]==0xEFCDAB && [native(b) message:SCI_STYLEGETITALIC wParam:5] && ![native(b) message:SCI_STYLEGETBOLD wParam:5], "after a language change the other view shows the new style definitions");
+        check(![face(b,5) isEqual:@"Courier"] && [face(b,5) isEqual:face(a,5)], "the other view drops the font override the old language had for that style");
+        check([native(b) message:SCI_GETSTYLEAT wParam:0]==5 && a.revision==before && b.revision==before && !a.modified, "synchronising styles does not re-install the lexer or edit the document");
+        check([native(b) message:SCI_GETZOOM]==3, "synchronising styles leaves the view's own zoom alone");
+        NSColor *dynamic=[NSColor colorWithName:nil dynamicProvider:^NSColor *(NSAppearance *appearance) {
+            BOOL dark=[[appearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua,NSAppearanceNameDarkAqua]] isEqualToString:NSAppearanceNameDarkAqua];
+            return dark ? [NSColor colorWithSRGBRed:1 green:0 blue:0 alpha:1] : [NSColor colorWithSRGBRed:0 green:0 blue:1 alpha:1];
+        }];
+        // AppKit makes the view's appearance current while it reports an appearance change; a
+        // direct call from a check has to do the same for a dynamic colour to resolve.
+        NSAppearance *light=[NSAppearance appearanceNamed:NSAppearanceNameAqua], *dark=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+        a.appearance=light;
+        [light performAsCurrentDrawingAppearance:^{ [a setSyntaxStyle:7 foreground:dynamic background:nil bold:NO italic:NO]; }];
+        [b adoptSyntaxStylesFrom:a];
+        b.appearance=dark;
+        [dark performAsCurrentDrawingAppearance:^{ [b viewDidChangeEffectiveAppearance]; }];
+        check([native(a) message:SCI_STYLEGETFORE wParam:7]==0xFF0000 && [native(b) message:SCI_STYLEGETFORE wParam:7]==0x0000FF, "an adopted dynamic colour resolves against the adopting view's own appearance");
+        // G340: read-only belongs to the document.
+        a.readOnly=YES;
+        check(b.readOnly && !unrelated.readOnly, "read-only set through one view is read-only in every view of that document");
+        b.readOnly=NO;
+        check(!a.readOnly, "read-only cleared through the other view is cleared for the document");
+        // G338: a view leaving a split announces the view that remains.
+        __block NSInteger posted=0; __block id successor=nil, retiring=nil;
+        id token=[NSNotificationCenter.defaultCenter addObserverForName:TTEditorWillRetireNotification object:nil queue:nil usingBlock:^(NSNotification *note) { posted++; retiring=note.object; successor=note.userInfo[TTEditorSuccessorKey]; }];
+        [b retireInFavorOf:unrelated]; [b retireInFavorOf:b];
+        check(posted==0, "a view cannot retire in favour of itself or of a view of another document");
+        [b retireInFavorOf:a];
+        check(posted==1 && retiring==b && successor==a, "retiring a view names the remaining view of the same document");
+        [NSNotificationCenter.defaultCenter removeObserver:token];
+        });
         return ttchecks::finish("BridgeChecks", "IME, VoiceOver, UI focus and permission tests not covered");
     }
 }

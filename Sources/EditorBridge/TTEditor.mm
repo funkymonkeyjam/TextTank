@@ -100,6 +100,9 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     return map;
 }
 
+NSNotificationName const TTEditorWillRetireNotification = @"TTEditorWillRetireNotification";
+NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
+
 @interface TTEditor () <ScintillaNotificationProtocol>
 @property(nonatomic, strong) ScintillaView *engine;
 @property(nonatomic,strong) TTEmptyLineNumbersView *emptyLineNumbers;
@@ -373,6 +376,33 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     // Each attached Scintilla view owns a reference, so either view may close first.
     [_engine message:SCI_SETDOCPOINTER wParam:0 lParam:[other.engine message:SCI_GETDOCPOINTER]];
     self.revision = other.revision;
+}
+- (BOOL)sharesDocumentWith:(TTEditor *)other {
+    [self assertThread];
+    return other != nil && [_engine message:SCI_GETDOCPOINTER] == [other.engine message:SCI_GETDOCPOINTER];
+}
+- (void)adoptSyntaxStylesFrom:(TTEditor *)other {
+    [self assertThread]; if (!other || other == self) return;
+    // The stored NSColor objects are copied as they are: dynamic colours must keep resolving
+    // against this view's own appearance in applyPalette. applyPalette starts from
+    // SCI_STYLECLEARALL, so a style the other view no longer defines is dropped here too.
+    _syntaxStyles = [[NSMutableDictionary alloc] initWithDictionary:other.syntaxStyles copyItems:YES];
+    _syntaxFonts = [[NSMutableDictionary alloc] initWithDictionary:other.syntaxFonts copyItems:YES];
+    [self applyPalette];
+}
+- (void)adoptViewStateFrom:(TTEditor *)other {
+    [self assertThread]; if (!other || other == self) return;
+    [self adoptSyntaxStylesFrom:other];
+    [_engine message:SCI_SETZOOM wParam:(uptr_t)[other.engine message:SCI_GETZOOM]];
+    [_engine message:SCI_SETWRAPMODE wParam:(uptr_t)[other.engine message:SCI_GETWRAPMODE]];
+    [_engine message:SCI_SETVIEWWS wParam:(uptr_t)[other.engine message:SCI_GETVIEWWS]];
+    [_engine message:SCI_SETVIEWEOL wParam:(uptr_t)[other.engine message:SCI_GETVIEWEOL]];
+    for (int margin = 0; margin < 3; ++margin) [_engine message:SCI_SETMARGINWIDTHN wParam:margin lParam:[other.engine message:SCI_GETMARGINWIDTHN wParam:margin]];
+}
+- (void)retireInFavorOf:(TTEditor *)successor {
+    [self assertThread];
+    if (!successor || successor == self || ![self sharesDocumentWith:successor]) return;
+    [NSNotificationCenter.defaultCenter postNotificationName:TTEditorWillRetireNotification object:self userInfo:@{TTEditorSuccessorKey: successor}];
 }
 - (BOOL)replaceSelection:(NSString *)text {
     [self assertThread];
