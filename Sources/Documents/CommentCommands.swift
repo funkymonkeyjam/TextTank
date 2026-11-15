@@ -13,7 +13,8 @@ enum CommentCommand: String, CaseIterable {
         }
     }
     struct Edit: Hashable { var start: Int, end: Int, text: String }
-    struct Plan { let text: String, selections: [[String: NSNumber]] }
+    /// `edits` are ascending, non-overlapping byte ranges of the input; applying them yields `text`.
+    struct Plan { let text: String, selections: [[String: NSNumber]], edits: [Edit] }
     func plan(text: String, selections: [[String: NSNumber]], profile: LanguageProfile) throws -> Plan {
         guard text.utf8.count <= 16 * 1024 * 1024 else {
             throw LanguageError.invalid("Comment commands currently accept documents up to 16 MiB.")
@@ -24,6 +25,18 @@ enum CommentCommand: String, CaseIterable {
         let bytes = Array(text.utf8)
         func boundary(_ offset: Int) -> Bool {
             offset >= 0 && offset <= bytes.count && (offset == bytes.count || bytes[offset] & 0xc0 != 0x80)
+        }
+        // Delimiters are matched as bytes, as Scintilla and the lexers see them. A valid UTF-8 needle
+        // cannot match from inside another scalar, so no boundary check is needed.
+        func find(_ needle: [UInt8], in range: Range<Int>, backwards: Bool = false) -> Int? {
+            guard !needle.isEmpty, range.count >= needle.count else { return nil }
+            let last = range.upperBound - needle.count
+            var at = backwards ? last : range.lowerBound
+            while at >= range.lowerBound && at <= last {
+                if bytes[at] == needle[0] && bytes[at..<at + needle.count].elementsEqual(needle) { return at }
+                at += backwards ? -1 : 1
+            }
+            return nil
         }
         var ranges: [(Int, Int)] = []
         for selection in selections {
@@ -47,8 +60,7 @@ enum CommentCommand: String, CaseIterable {
             for (start, end) in ranges {
                 if self == .blockComment {
                     guard start < end else { throw LanguageError.invalid("Select text to wrap in a block comment.") }
-                    let selected = String(decoding: bytes[start..<end], as: UTF8.self)
-                    guard !selected.contains(close) else {
+                    guard find(right, in: start..<end) == nil else {
                         throw LanguageError.invalid(
                             "Selection already contains a closing comment delimiter; nothing was changed.")
                     }
@@ -61,15 +73,13 @@ enum CommentCommand: String, CaseIterable {
                         && Array(bytes[max(start, end - right.count)..<end]) == right)
                     {
                         // Include an immediately enclosing block; never infer an unrelated earlier block.
-                        let prefix = String(decoding: bytes[..<start], as: UTF8.self),
-                            suffix = String(decoding: bytes[end...], as: UTF8.self)
-                        guard let opening = prefix.range(of: open, options: .backwards),
-                            let closing = suffix.range(of: close)
+                        guard let opening = find(left, in: 0..<start, backwards: true),
+                            let closing = find(right, in: end..<bytes.count)
                         else { throw LanguageError.invalid("No enclosing block comment found.") }
-                        a = prefix[..<opening.lowerBound].utf8.count
-                        b = end + suffix[..<closing.upperBound].utf8.count
-                        let interior = String(decoding: bytes[(a + left.count)..<(b - right.count)], as: UTF8.self)
-                        guard !interior.contains(close), !interior.contains(open) else {
+                        a = opening
+                        b = closing + right.count
+                        let interior = (a + left.count)..<(b - right.count)
+                        guard find(right, in: interior) == nil, find(left, in: interior) == nil else {
                             throw LanguageError.invalid(
                                 "Ambiguous nested comment boundaries; select the complete comment explicitly.")
                         }
@@ -94,6 +104,8 @@ enum CommentCommand: String, CaseIterable {
                 }
             }
             lines.append((start, bytes.count, bytes.count))
+            // Unicode case folding is kept for the line marker; the folded forms are compared as bytes.
+            let foldedMarker = Array((markers.line ?? "").lowercased().utf8)
             for line in lines {
                 // Only the unterminated final line has end==next; a caret at its end is still on it.
                 guard
@@ -110,9 +122,9 @@ enum CommentCommand: String, CaseIterable {
                 if let marker = markers.line, !marker.isEmpty {
                     let length = marker.utf8.count
                     let hasMarker =
-                        indent + length <= line.end
-                        && String(decoding: bytes[indent..<indent + length], as: UTF8.self).lowercased()
-                            == marker.lowercased()
+                        indent + length <= line.end && boundary(indent + length)
+                        && Array(String(decoding: bytes[indent..<indent + length], as: UTF8.self).lowercased().utf8)
+                            == foldedMarker
                     if hasMarker && self != .lineComment {
                         let end =
                             indent + length
@@ -124,17 +136,18 @@ enum CommentCommand: String, CaseIterable {
                             Edit(start: indent, end: indent, text: marker + (profile.id == "baanc" ? "" : " ")))
                     }
                 } else if let open = markers.blockOpen, !open.isEmpty, let close = markers.blockClose, !close.isEmpty {
-                    let content = String(decoding: bytes[indent..<line.end], as: UTF8.self)
-                    if content.hasPrefix(open), content.hasSuffix(close),
-                        content.utf8.count >= open.utf8.count + close.utf8.count, self != .lineComment
+                    let left = Array(open.utf8), right = Array(close.utf8)
+                    if line.end - indent >= left.count + right.count,
+                        bytes[indent..<indent + left.count].elementsEqual(left),
+                        bytes[(line.end - right.count)..<line.end].elementsEqual(right), self != .lineComment
                     {
-                        var a = indent + open.utf8.count, b = line.end - close.utf8.count
+                        var a = indent + left.count, b = line.end - right.count
                         if a < b, bytes[a] == 32 { a += 1 }
                         if b > a, bytes[b - 1] == 32 { b -= 1 }
                         edits.append(Edit(start: indent, end: a, text: ""))
                         edits.append(Edit(start: b, end: line.end, text: ""))
                     } else if self != .lineUncomment {
-                        guard !content.contains(close) else {
+                        guard find(right, in: indent..<line.end) == nil else {
                             throw LanguageError.invalid(
                                 "A selected line contains a closing delimiter; nothing was changed.")
                         }
@@ -177,7 +190,7 @@ enum CommentCommand: String, CaseIterable {
                 "caret": NSNumber(value: mapped($0["caret"]!.intValue))
             ]
         }
-        return Plan(text: String(decoding: result, as: UTF8.self), selections: restored)
+        return Plan(text: String(decoding: result, as: UTF8.self), selections: restored, edits: edits)
     }
     func apply(to editor: TTEditor, profile: LanguageProfile) throws {
         guard editor.window != nil, !editor.readOnly else {
@@ -189,12 +202,20 @@ enum CommentCommand: String, CaseIterable {
         guard editor.revision == revision, editor.selectionRanges == selections else {
             throw LanguageError.invalid("The document changed; comments were not applied.")
         }
-        editor.beginUndoGroup()
-        defer { editor.endUndoGroup() }
-        guard editor.setSelectionAnchor(0, caret: original.utf8.count) else {
-            throw LanguageError.invalid("Could not select the document.")
+        // Only the changed byte ranges are replaced, so bookmarks, folds and the viewport survive.
+        // The bridge rechecks revision and length and validates every offset before the first edit.
+        let edits = proposed.edits.map {
+            ["start": NSNumber(value: $0.start), "end": NSNumber(value: $0.end), "text": $0.text] as [String: Any]
         }
-        editor.replaceSelection(proposed.text)
-        _ = editor.setSelectionRanges(proposed.selections)
+        guard editor.applyEdits(edits, expectedRevision: revision, expectedLength: original.utf8.count) else {
+            throw LanguageError.invalid("The document changed; comments were not applied.")
+        }
+        // Selections that the edit collapsed onto one position cannot be restored as planned; the
+        // selections Scintilla carried through the edits are then already in place.
+        if !editor.setSelectionRanges(proposed.selections) {
+            let caret = editor.selectionCaret
+            _ = editor.setSelectionAnchor(caret, caret: caret)
+        }
+        editor.scrollCaretIntoView()
     }
 }
