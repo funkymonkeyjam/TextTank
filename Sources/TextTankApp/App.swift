@@ -324,13 +324,71 @@ final class TextDocument: NSDocument {
 
 }
 
+/// Informational badges retain native appearance colors and wrap at narrow widths.
+private final class StatusBadge: NSView {
+    let label: NSTextField
+    init(_ text:String) {
+        label=NSTextField(labelWithString:text)
+        super.init(frame:.zero)
+        label.font = .monospacedDigitSystemFont(ofSize:11,weight:.regular)
+        label.textColor = .secondaryLabelColor
+        label.lineBreakMode = .byTruncatingMiddle
+        label.toolTip=text
+        addSubview(label)
+        toolTip=text
+    }
+    required init?(coder:NSCoder) { fatalError("init(coder:) not used") }
+    var preferredWidth:CGFloat { ceil((label.stringValue as NSString).size(withAttributes:[.font:label.font!]).width)+24 }
+    override func layout() {super.layout();label.frame=NSRect(x:7,y:4,width:max(0,bounds.width-14),height:14)}
+    override func draw(_ dirtyRect:NSRect) {
+        let shape=NSBezierPath(roundedRect:bounds.insetBy(dx:0.5,dy:0.5),xRadius:4,yRadius:4)
+        NSColor.quaternaryLabelColor.withAlphaComponent(0.12).setFill();shape.fill()
+        NSColor.separatorColor.withAlphaComponent(0.25).setStroke();shape.lineWidth=1;shape.stroke()
+    }
+    override func viewDidChangeEffectiveAppearance() {super.viewDidChangeEffectiveAppearance();needsDisplay=true}
+}
+
+private final class StatusBadgeRow: NSView {
+    private var values:[String]=[]
+    private var badges:[StatusBadge]=[]
+    private var measuredWidth:CGFloat = -1
+    override var isFlipped:Bool {true}
+    func update(_ fields:[String]) {
+        guard fields != values else {return}
+        values=fields;badges.forEach{$0.removeFromSuperview()}
+        badges=fields.map{StatusBadge($0)};badges.forEach{addSubview($0)}
+        invalidateIntrinsicContentSize();needsLayout=true
+    }
+    private func rows() -> [[StatusBadge]] {
+        let width=max(1,bounds.width)
+        var result:[[StatusBadge]]=[],row:[StatusBadge]=[];var used:CGFloat=0
+        for badge in badges {
+            let size=min(width,badge.preferredWidth)
+            if !row.isEmpty && used+6+size > width {result.append(row);row=[];used=0}
+            if !row.isEmpty {used+=6};row.append(badge);used+=size
+        }
+        if !row.isEmpty {result.append(row)}
+        return result
+    }
+    override var intrinsicContentSize:NSSize {NSSize(width:NSView.noIntrinsicMetric,height:CGFloat(max(1,rows().count))*26-4)}
+    override func layout() {
+        super.layout()
+        if measuredWidth != bounds.width {measuredWidth=bounds.width;invalidateIntrinsicContentSize()}
+        for (index,row) in rows().enumerated() {
+            let width=row.reduce(CGFloat(0)){$0+min(bounds.width,$1.preferredWidth)}+CGFloat(max(0,row.count-1))*6
+            var x=bounds.width-width
+            for badge in row {let size=min(bounds.width,badge.preferredWidth);badge.frame=NSRect(x:x,y:CGFloat(index)*26,width:size,height:22);x+=size+6}
+        }
+    }
+}
+
 final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     let split = NSSplitView()
     let findField = NSSearchField()
     let replaceField = NSTextField()
     let caseBox = NSButton(checkboxWithTitle:"Match case",target:nil,action:nil)
     let status = NSTextField(labelWithString:"Ready · Incomplete preview")
-    let statusDetails = NSTextField(labelWithString:"")
+    private let statusDetails = StatusBadgeRow()
     private var statusTimer: Timer?
     private var statusRevision: UInt?
     private var cachedCharacterCount = 0
@@ -373,14 +431,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         let findButton = NSButton(title:"Next",target:self,action:#selector(findNext(_:)))
         let replaceButton = NSButton(title:"Replace Selection",target:self,action:#selector(replaceSelection(_:)))
         let search = NSStackView(views:[findField,replaceField,caseBox,findButton,replaceButton]); search.spacing = 8
-        let detailsScroll = NSScrollView()
-        detailsScroll.documentView=statusDetails; detailsScroll.hasHorizontalScroller=true
-        detailsScroll.autohidesScrollers=true; detailsScroll.drawsBackground=false
-        statusDetails.font = .monospacedDigitSystemFont(ofSize:11,weight:.regular)
-        statusDetails.textColor = .secondaryLabelColor
-        statusDetails.setAccessibilityLabel("Document details")
-        [search,split,status,detailsScroll].forEach { $0.translatesAutoresizingMaskIntoConstraints=false;root.addSubview($0) }
-        NSLayoutConstraint.activate([split.heightAnchor.constraint(greaterThanOrEqualToConstant:200),search.topAnchor.constraint(equalTo:root.topAnchor,constant:10),search.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),search.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),findField.widthAnchor.constraint(greaterThanOrEqualToConstant:200),replaceField.widthAnchor.constraint(greaterThanOrEqualToConstant:160),split.topAnchor.constraint(equalTo:search.bottomAnchor,constant:10),split.leadingAnchor.constraint(equalTo:root.leadingAnchor),split.trailingAnchor.constraint(equalTo:root.trailingAnchor),split.bottomAnchor.constraint(equalTo:detailsScroll.topAnchor,constant:-5),detailsScroll.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),detailsScroll.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),detailsScroll.heightAnchor.constraint(equalToConstant:22),detailsScroll.bottomAnchor.constraint(equalTo:status.topAnchor,constant:-2),status.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),status.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),status.bottomAnchor.constraint(equalTo:root.bottomAnchor,constant:-6)])
+        [search,split,status,statusDetails].forEach { $0.translatesAutoresizingMaskIntoConstraints=false;root.addSubview($0) }
+        NSLayoutConstraint.activate([split.heightAnchor.constraint(greaterThanOrEqualToConstant:200),search.topAnchor.constraint(equalTo:root.topAnchor,constant:10),search.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),search.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),findField.widthAnchor.constraint(greaterThanOrEqualToConstant:200),replaceField.widthAnchor.constraint(greaterThanOrEqualToConstant:160),split.topAnchor.constraint(equalTo:search.bottomAnchor,constant:10),split.leadingAnchor.constraint(equalTo:root.leadingAnchor),split.trailingAnchor.constraint(equalTo:root.trailingAnchor),split.bottomAnchor.constraint(equalTo:statusDetails.topAnchor,constant:-5),statusDetails.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),statusDetails.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),statusDetails.bottomAnchor.constraint(equalTo:status.topAnchor,constant:-2),status.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-12),status.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:12),status.bottomAnchor.constraint(equalTo:root.bottomAnchor,constant:-6)])
         status.font = .systemFont(ofSize:11); status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
         statusTimer=Timer.scheduledTimer(withTimeInterval:0.2,repeats:true) { [weak self] _ in self?.refreshStatusDetails() }
@@ -415,8 +467,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         if editor.selectionCount > 1 {fields.append("\(editor.selectionCount) selections")}
         fields += [String(format:"Base %g pt",info["fontSize"]?.doubleValue ?? 14),indentation,(encoding[doc.format.encoding] ?? "UTF-8")+(doc.format.bom ? " BOM" : ""),eol,editor.wrap ? "Wrap" : "No Wrap"]
         if editor.readOnly {fields.append("Read Only")}
-        let value=fields.joined(separator:"   ·   ")
-        if statusDetails.stringValue != value {statusDetails.stringValue=value;statusDetails.sizeToFit();statusDetails.toolTip=value}
+        statusDetails.update(fields)
     }
     func toolbarAllowedItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     func toolbarDefaultItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier] {
