@@ -10,7 +10,7 @@ The management commands are in the Automations menu:
 
 - **Manage Automations…** lists the saved automations. Two automations may share a name; both are listed, and each keeps its own identifier.
 - **Choose Automation…** runs one from a list.
-- **Review Reminder Export History…** shows recorded Reminders exports.
+- **Review Reminder Export History…** shows recorded Reminders exports, newest first. A record file that cannot be read is named there and left unchanged; a new export then asks before sending, because the unreadable file may record the same items. **Clear Confirmed History…** in that dialog removes, after a confirmation, TextTank's record of exports whose every item was confirmed. Exports with unsent, failed or uncertain items are kept, Reminders itself is not changed, and a cleared list no longer triggers the already-sent warning. Nothing is removed automatically.
 - **Restore Default Automations…** adds fresh copies of the automations a new installation starts with (Clean up recipe list and Add to Reminders), under new identifiers. Nothing already saved is replaced, including edited copies of the same automations.
 
 ### Creating an automation

@@ -12,6 +12,17 @@ A field added to a version-1 type must therefore be one of two things. Either it
 
 `Tests/Fixtures/persistence/` holds one file per format as written by the build of 15 November 2026. The "persisted format golden fixtures" section of document-checks decodes each one through the production reader and compares every value, so a field added without a decoder for old files fails acceptance. Do not rewrite those files to make a check pass; add a new fixture beside them when a format gains a version.
 
+## Reminders export journal
+
+Each export batch is one version-1 JSON file in `ReminderExports`. A row is recorded as uncertain, and that record is synced, before the row is handed to Reminders; it becomes confirmed or failed only afterwards, and an uncertain row is never resent automatically.
+
+- The first write of an export replaces the file atomically (private temporary file, fsync, rename) in a slotted layout: one row per line, each ending in a space-padded slot for its status, reminder identifier and message. JSON permits that whitespace, so the file decodes like the compact form earlier builds wrote, which still loads.
+- After that a row's barrier and outcome are each one in-place write into its slot followed by fsync, so the cost of a row does not grow with the batch. A slot never crosses a 4096-byte boundary, so an update touches one storage block. An in-place write is not an atomic replacement: if a block were torn by a power failure the file would no longer decode, and an undecodable journal is preserved, reported by name and never resent. An outcome too long for its slot is written by another atomic replacement.
+- Before every write the journal path must still name the file that was validated or written by this export. A journal folder that was moved or replaced fails the write instead of redirecting it.
+- Journal reads and writes of an export run on `ReminderJournalFile`, an actor, off the main thread. Calls into the reminder store stay on the main actor.
+- A journal failure after an item was sent throws `ReminderConnectorError.journalFailed` carrying the in-memory batch; the write is not retried and the file is not touched again.
+- `storedBatches()` is strict and fails on any unreadable file. `scanBatches()` returns the readable batches and one issue per unreadable file, as `RecoveryStore.scan()` does. `deleteConfirmedBatches(ids:)` holds the export lock, revalidates each named batch and removes only fully confirmed ones. Nothing is pruned automatically.
+
 ## Source layout
 
 First-party Swift under `Sources/` and `Tests/` is laid out by the `swift-format` that ships with the toolchain, using the committed `.swift-format`. That configuration enables layout only (line breaks, indentation, spacing, 120 columns, one statement per line); every rule that rewrites tokens is off, so formatting never changes what the code says. `Sources/Search/Boost` and `Vendor` are never formatted, and neither are the Objective-C++ bridge files, the Python scripts or the shell scripts.
