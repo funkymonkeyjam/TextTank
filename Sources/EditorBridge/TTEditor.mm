@@ -259,7 +259,7 @@ NSErrorDomain const TTEditorErrorDomain = @"TextTank.Editor";
     if (!self.readOnly) return YES;
     if (error) *error = [NSError errorWithDomain:TTEditorErrorDomain code:TTEditorErrorReadOnly userInfo:@{
         NSLocalizedDescriptionKey:@"This document is read-only. Nothing was changed.",
-        NSLocalizedRecoverySuggestionErrorKey:@"Turn off Read Only to edit this document."}];
+        NSLocalizedRecoverySuggestionErrorKey:@"Turn off Read Only in the File menu to edit this document."}];
     return NO;
 }
 - (void)configureTabWidth:(NSInteger)width useTabs:(BOOL)useTabs {

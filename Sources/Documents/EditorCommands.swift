@@ -88,10 +88,14 @@ enum EditorTransform: String, CaseIterable {
         return rows.map { $0.0 + $0.1 }.joined()
     }
     func apply(to editor: TTEditor) throws {
-        guard !editor.readOnly, editor.selectionCount == 1 else {
+        try editor.requireWritable()
+        guard editor.selectionCount == 1 else {
             throw NSError(
                 domain: "TextTank", code: 4,
-                userInfo: [NSLocalizedDescriptionKey: "Choose one selection in a writable document."])
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "This command works on a single selection. Collapse multiple selections and try again."
+                ])
         }
         let selection = editor.selectionStart != editor.selectionEnd
         let source = selection ? editor.selectedText : editor.text

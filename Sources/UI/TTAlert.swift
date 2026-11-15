@@ -4,6 +4,17 @@ import AppKit
 /// Shared app-owned modal layout. macOS may stack NSAlert actions vertically;
 /// keep their original response indices while presenting one horizontal row.
 final class TTAlert: NSAlert {
+    /// States why a command the person chose did nothing. Only for an explicit action, never
+    /// from menu validation or a timer.
+    static func explain(_ message: String, detail: String = "") {
+        let alert = TTAlert()
+        alert.messageText = message
+        alert.informativeText = detail
+        _ = alert.runModal()
+    }
+    static func explain(_ error: Error) {
+        explain(error.localizedDescription, detail: (error as NSError).localizedRecoverySuggestion ?? "")
+    }
     private var sizeConstraints: [NSLayoutConstraint] = []
     @objc private func finishHorizontalAction(_ sender: NSButton) {
         window.makeFirstResponder(nil)

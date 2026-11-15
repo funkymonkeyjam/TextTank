@@ -245,6 +245,37 @@ import Foundation
                 check(
                     try controller.finishRecording()?.steps.count == 1,
                     "view-only zoom does not invalidate valid edit recording")
+                // G369: playback states the read-only reason before any dialog or step.
+                editor.text = "locked"
+                editor.resetUndoHistory()
+                editor.setSavePoint()
+                _ = editor.setSelectionAnchor(0, caret: 0)
+                let lockedRevision = editor.revision
+                let replacing = RecordedMacro(
+                    id: UUID(), name: "Replace", steps: [.init(kind: .replaceSelection, text: "x")])
+                editor.readOnly = true
+                rejects(
+                    "playback into a read-only document states that it is read-only",
+                    message: "This document is read-only"
+                ) { try controller.play(replacing, on: editor) }
+                rejects(
+                    "the playback dialog is not offered for a read-only document", message: "This document is read-only"
+                ) { _ = try controller.playbackEditor() }
+                check(
+                    editor.text == "locked" && editor.revision == lockedRevision && !editor.modified,
+                    "refused playback leaves text, revision and save point unchanged")
+                // F207: a recorded replacement is not appended when the editor refused it.
+                controller.startRecording()
+                editor.executeCommand("charRight")
+                if editor.replaceSelection("never") { controller.recordReplace(text: "never", editor: editor) }
+                check(
+                    try controller.finishRecording()?.steps.map(\.kind) == [.command],
+                    "a replacement the read-only editor refused is not recorded as a macro step")
+                editor.readOnly = false
+                check(try controller.playbackEditor() === editor, "a writable document is offered for playback")
+                _ = editor.setSelectionAnchor(0, caret: 0)
+                try controller.play(replacing, on: editor)
+                check(editor.text == "xlocked", "a recorded replacement plays once the document is writable")
                 editor.text = "a\nb\nc"
                 editor.resetUndoHistory()
                 _ = editor.setSelectionAnchor(0, caret: 0)

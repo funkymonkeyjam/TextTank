@@ -552,6 +552,9 @@ final class TextDocument: NSDocument {
     override init() {
         super.init()
         hasUndoManager = false
+        // Typing or a key command that Scintilla refuses in a read-only document; the status bar
+        // shows Read Only. Menu commands state the reason in words before they reach the engine.
+        editor.onReadOnlyAttempt = { NSSound.beep() }
         editor.onChange = { [weak self] in
             guard let self, !self.loading else { return }
             self.updateChangeCount(
@@ -659,6 +662,7 @@ final class TextDocument: NSDocument {
         cancelRecoveryTimers()
         recoveryGeneration += 1
         recoveryClosed = true
+        editor.onReadOnlyAttempt = nil
         editor.readOnly = true
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.prepareForClose() }
         // NSDocument only reaches close after the user has chosen Save or Discard.
@@ -789,6 +793,11 @@ final class TextDocument: NSDocument {
     }
     @objc func convertEncoding(_ sender: NSMenuItem) {
         guard let code = sender.representedObject as? String else { return }
+        do { try convertEncoding(to: code) } catch { presentError(error) }
+    }
+    /// A read-only document keeps its format, as the status-bar menu already promises.
+    func convertEncoding(to code: String) throws {
+        try editor.requireWritable()
         let target: FileFormat
         switch code {
         case "utf8bom": target = FileFormat(encoding: .utf8, bom: true)
@@ -798,12 +807,10 @@ final class TextDocument: NSDocument {
         case "latin1": target = FileFormat(encoding: .latin1, bom: false)
         default: target = FileFormat(encoding: .utf8, bom: false)
         }
-        do {
-            _ = try FileCodec.encode(editor.text, format: target)
-            format = target
-            flushRecovery()
-            windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.refreshStatusDetails() }
-        } catch { presentError(error) }
+        _ = try FileCodec.encode(editor.text, format: target)
+        format = target
+        flushRecovery()
+        windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.refreshStatusDetails() }
     }
     override func printOperation(withSettings printSettings: [NSPrintInfo.AttributeKey: Any]) throws -> NSPrintOperation
     {
@@ -1500,8 +1507,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             alert.window.initialFirstResponder = input
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             // The engine's own line model decides which lines exist; a folded target is revealed.
-            guard editor.window != nil, let line = Int(input.stringValue), editor.goToLine(line) else {
-                NSSound.beep()
+            guard editor.window != nil else { return }
+            guard let line = Int(input.stringValue), editor.goToLine(line) else {
+                TTAlert.explain(
+                    Int(input.stringValue) == nil
+                        ? "Enter a whole line number" : "There is no line \(input.stringValue)",
+                    detail: "Enter a line number from 1 to \(editor.statusInfo["lines"]?.intValue ?? 1).")
                 return
             }
             window?.makeFirstResponder(editor)
@@ -1509,8 +1520,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             if id.hasPrefix("width."), let width = Int(id.dropFirst(6)) {
                 editor.configureTabWidth(width, useTabs: info["useTabs"]?.boolValue ?? true)
             } else {
-                (NSApp.delegate as? AppDelegate)?.macros.willExecuteCommand(id, on: editor)
-                editor.executeCommand(id)
+                do { try perform(command: id) } catch { TTAlert.explain(error) }
             }
         }
         refreshStatusDetails()
@@ -1564,6 +1574,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         }
         primaryEditor.onFocus = nil
         secondary?.onFocus = nil
+        primaryEditor.onReadOnlyAttempt = nil
+        secondary?.onReadOnlyAttempt = nil
         secondary?.readOnly = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
@@ -1582,13 +1594,20 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             }
             return
         }
+        do { try perform(command: id) } catch { NSAlert(error: error).runModal() }
+    }
+    /// Runs one editor command on the active editor. A command that edits text is refused with the
+    /// read-only reason before anything else happens, so a macro recording is left as it was.
+    func perform(command id: String) throws {
         let editor = activeEditor
         if id.hasPrefix("transform."), let transform = EditorTransform(rawValue: String(id.dropFirst(10))) {
+            try editor.requireWritable()
             (NSApp.delegate as? AppDelegate)?.macros.invalidateRecording(
                 reason: "This text transform is not yet recorded.")
-            do { try transform.apply(to: editor) } catch { NSAlert(error: error).runModal() }
+            try transform.apply(to: editor)
             return
         }
+        if TTEditor.commandModifiesText(id) { try editor.requireWritable() }
         (NSApp.delegate as? AppDelegate)?.macros.willExecuteCommand(id, on: editor)
         editor.executeCommand(id)
     }
@@ -1620,10 +1639,20 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             text: query, matchCase: caseBox.state == .on, backwards: backwards, editor: editor)
     }
     @objc func replaceSelection(_ sender: Any?) {
+        do { try replaceSelectionFromBar() } catch { TTAlert.explain(error) }
+    }
+    /// A macro step is recorded only after the editor accepted the replacement.
+    func replaceSelectionFromBar() throws {
         let editor = activeEditor
         window?.makeFirstResponder(nil)
+        try editor.requireWritable()
         let text = replaceField.stringValue
-        editor.replaceSelection(text)
+        guard editor.replaceSelection(text) else {
+            throw NSError(
+                domain: "TextTank", code: 7,
+                userInfo: [NSLocalizedDescriptionKey: "The replacement text could not be written. Nothing was changed."]
+            )
+        }
         (NSApp.delegate as? AppDelegate)?.macros.recordReplace(text: text, editor: editor)
     }
     @objc func clone(_ sender: Any?) {
@@ -1631,6 +1660,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         let clone = TTEditor(frame: split.bounds)
         clone.shareDocument(with: primaryEditor)
         clone.readOnly = primaryEditor.readOnly
+        clone.onReadOnlyAttempt = { NSSound.beep() }
         if let app = NSApp.delegate as? AppDelegate, let doc = document as? TextDocument {
             app.settings.apply(to: clone)
             clone.menu = app.automations.contextMenu()
@@ -1658,17 +1688,26 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     @objc func toggleWrap(_ sender: Any?) { activeEditor.wrap.toggle() }
     @objc func comment(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let command = CommentCommand(rawValue: raw),
-            let app = NSApp.delegate as? AppDelegate, let document = document as? TextDocument,
-            let profile = app.languages.profile(identifier: document.languageIdentifier)
-        else {
-            NSSound.beep()
+            let app = NSApp.delegate as? AppDelegate, let document = document as? TextDocument
+        else { return }
+        guard let profile = app.languages.profile(identifier: document.languageIdentifier) else {
+            TTAlert.explain(
+                "Comments are not available for this language",
+                detail: "Choose a language with comment syntax in the Language menu, then try again.")
             return
         }
-        app.macros.invalidateRecording(reason: "Language-specific comments are not yet recorded.")
-        do { try command.apply(to: activeEditor, profile: profile) } catch { NSAlert(error: error).runModal() }
+        do {
+            try activeEditor.requireWritable()
+            app.macros.invalidateRecording(reason: "Language-specific comments are not yet recorded.")
+            try command.apply(to: activeEditor, profile: profile)
+        } catch { NSAlert(error: error).runModal() }
     }
     @objc func columnInsert(_ sender: Any?) {
         let editor = activeEditor
+        do { try editor.requireWritable() } catch {
+            TTAlert.explain(error)
+            return
+        }
         let revision = editor.revision, selections = editor.selectionRanges
         let alert = TTAlert()
         alert.messageText = "Insert into Each Selection"
@@ -1694,7 +1733,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         var values = Array(repeating: text.stringValue, count: editor.selectionCount)
         if number.state == .on {
             guard let first = Int(start.stringValue), let increment = Int(step.stringValue) else {
-                NSSound.beep()
+                TTAlert.explain(
+                    "Start and Increment must be whole numbers", detail: "No column insertion was applied.")
                 return
             }
             values = []
@@ -1704,7 +1744,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
                 if i + 1 < editor.selectionCount {
                     let (next, overflow) = value.addingReportingOverflow(increment)
                     guard !overflow else {
-                        NSSound.beep()
+                        TTAlert.explain(
+                            "The number sequence is too large", detail: "No column insertion was applied.")
                         return
                     }
                     value = next
@@ -1727,8 +1768,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
     }
     @objc func convertEOL(_ sender: NSMenuItem) {
         guard let mode = sender.representedObject as? String else { return }
+        do { try convertLineEndings(to: mode) } catch { TTAlert.explain(error) }
+    }
+    /// Refused with the read-only reason before a macro recording is touched.
+    func convertLineEndings(to mode: String) throws {
+        let editor = activeEditor
+        try editor.requireWritable()
         (NSApp.delegate as? AppDelegate)?.macros.invalidateRecording(
             reason: "Line-ending conversion is not yet recorded.")
-        activeEditor.convertLineEndings(mode)
+        guard editor.convertLineEndings(mode) else {
+            throw NSError(
+                domain: "TextTank", code: 8,
+                userInfo: [NSLocalizedDescriptionKey: "Line endings could not be converted. Nothing was changed."])
+        }
     }
 }

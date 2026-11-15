@@ -157,8 +157,22 @@ final class MacroController: NSObject, NSMenuDelegate {
             choosePlayback(macro)
         }
     }
+    /// The editor a macro may play into, checked before the playback dialog opens: nil while
+    /// recording or playing, and the read-only error for a read-only document.
+    func playbackEditor() throws -> TTEditor? {
+        guard !playing, recordingEditor == nil, let editor = editorProvider() else { return nil }
+        try editor.requireWritable()
+        return editor
+    }
     private func choosePlayback(_ macro: RecordedMacro) {
-        guard !playing, recordingEditor == nil, let editor = editorProvider() else { return }
+        let editor: TTEditor
+        do {
+            guard let target = try playbackEditor() else { return }
+            editor = target
+        } catch {
+            showError(error)
+            return
+        }
         let revision = editor.revision
         let selectionStart = editor.selectionStart
         let selectionEnd = editor.selectionEnd
@@ -381,7 +395,8 @@ private final class MacroPlayback {
         searchPlayback: ((RecordedMacro.Search, TTEditor) throws -> Void)?
     ) throws {
         try macro.validate()
-        guard editor.window != nil, editor.selectionCount == 1, !editor.readOnly, repeats > 0, repeats <= 10000,
+        try editor.requireWritable()
+        guard editor.window != nil, editor.selectionCount == 1, repeats > 0, repeats <= 10000,
             macro.steps.count <= 100000 / repeats
         else { throw MacroError.invalid("Macro playback is unavailable for this editor or repeat count.") }
         self.macro = macro
@@ -416,7 +431,10 @@ private final class MacroPlayback {
                 guard editor.find(step.text!, matchCase: step.matchCase!, backwards: step.backwards!) else {
                     throw MacroError.invalid("Macro stopped: literal find did not match. Prior edits remain undoable.")
                 }
-            case .replaceSelection: editor.replaceSelection(step.text!)
+            case .replaceSelection:
+                guard editor.replaceSelection(step.text!) else {
+                    throw MacroError.invalid("The editor rejected a macro step. Prior edits remain undoable.")
+                }
             case .insertText, .command:
                 let data = try JSONEncoder().encode(step)
                 let dictionary = try JSONSerialization.jsonObject(with: data) as! [String: Any]

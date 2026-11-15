@@ -193,9 +193,10 @@ enum CommentCommand: String, CaseIterable {
         return Plan(text: String(decoding: result, as: UTF8.self), selections: restored, edits: edits)
     }
     func apply(to editor: TTEditor, profile: LanguageProfile) throws {
-        guard editor.window != nil, !editor.readOnly else {
-            throw LanguageError.invalid("The comment command requires a writable open document.")
+        guard editor.window != nil else {
+            throw LanguageError.invalid("The comment command requires an open document.")
         }
+        try editor.requireWritable()
         let original = editor.text, revision = editor.revision, selections = editor.selectionRanges
         let proposed = try plan(text: original, selections: selections, profile: profile)
         guard proposed.text != original else { return }

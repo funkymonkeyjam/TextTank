@@ -13,7 +13,26 @@ final class AutomationController: NSObject, NSMenuDelegate {
     private var library = AutomationLibrary(workflows: [])
     private var loadError: Error?
     private var busy = false
-    private var exportInProgress = false
+    /// Internal, not private, so that a check can hold an export open without EventKit.
+    var exportInProgress = false
+    /// Says why an automation command cannot start while a Reminders export is running.
+    private func requireNoExport() throws {
+        if exportInProgress {
+            throw AutomationError.invalid(
+                "A Reminders export is in progress. Try again when it has finished. Nothing was changed.")
+        }
+    }
+    /// The same for commands that do not throw. `busy` alone stays a silent guard: it is only
+    /// set while one of this controller's own dialogs is open, which is itself the visible reason,
+    /// and a second dialog must never be stacked on the first.
+    private func idleOrExplain() -> Bool {
+        guard !busy else { return false }
+        do { try requireNoExport() } catch {
+            showError(error)
+            return false
+        }
+        return true
+    }
     private var exportTask: Task<Void, Never>?
     private lazy var automationMenu: NSMenu = {
         let m = NSMenu(title: "Automations")
@@ -94,7 +113,8 @@ final class AutomationController: NSObject, NSMenuDelegate {
     }
     /// Every menu, shortcut, toolbar and palette resolves the current saved definition by UUID.
     func runSavedAutomation(id: UUID) throws {
-        guard !busy, !exportInProgress else { return }
+        guard !busy else { return }
+        try requireNoExport()
         guard let workflow = library.workflows.first(where: { $0.id == id }) else {
             throw AutomationError.invalid("This automation no longer exists.")
         }
@@ -128,7 +148,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
         menu.addItem(manage)
     }
     func showPalette() {
-        guard !busy, !exportInProgress else { return }
+        guard idleOrExplain() else { return }
         guard !library.workflows.isEmpty else {
             manage()
             return
@@ -180,7 +200,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
     @objc private func manageAction() { manage() }
     @objc private func paletteAction() { showPalette() }
     func manage() {
-        guard !busy, !exportInProgress else { return }
+        guard idleOrExplain() else { return }
         if let loadError {
             showError(loadError)
             return
@@ -296,7 +316,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
         } catch { showError(error) }
     }
     private func createAutomation() {
-        guard !busy, !exportInProgress else { return }
+        guard idleOrExplain() else { return }
         busy = true
         defer { busy = false }
         let definition = AutomationDefinition(
@@ -309,7 +329,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
         } catch { showError(error) }
     }
     @objc func addRecipeButtons() {
-        guard !busy, !exportInProgress else { return }
+        guard idleOrExplain() else { return }
         if let loadError {
             showError(loadError)
             return
@@ -366,7 +386,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
         return stack
     }
     func manageAdvanced() {
-        guard !busy, !exportInProgress else { return }
+        guard idleOrExplain() else { return }
         if let loadError {
             showError(
                 AutomationError.invalid(
@@ -491,6 +511,8 @@ final class AutomationController: NSObject, NSMenuDelegate {
         let selections = editor?.selectionRanges
         if workflow.input == .selection || workflow.output == .editor {
             guard let editor else { throw AutomationError.invalid("This automation requires an open editor document.") }
+            // Before any parameter prompt or preview: a read-only document can never take the result.
+            if workflow.output == .editor { try editor.requireWritable() }
             guard editor.selectionCount == 1 || (workflow.input == .selection && workflow.output == .editor) else {
                 throw AutomationError.invalid(
                     "Multiple selections require selection input and editor output. Other outputs are not changed.")
@@ -537,11 +559,11 @@ final class AutomationController: NSObject, NSMenuDelegate {
                 }
                 outputs.append(output)
             }
+            try editor.requireWritable() // Read Only may have been switched on while a preview was open.
             guard editor.window != nil, editor.selectionRanges == selections,
                 editor.replaceSelections(outputs, expectedRevision: revision)
             else {
-                throw AutomationError.invalid(
-                    "The document or selections changed, closed or became read-only. Nothing was replaced.")
+                throw AutomationError.invalid("The document or selections changed or closed. Nothing was replaced.")
             }
             return
         }
@@ -586,7 +608,8 @@ final class AutomationController: NSObject, NSMenuDelegate {
         }
         switch workflow.output {
         case .editor:
-            guard let editor, editor.window != nil, !editor.readOnly, editor.revision == revision else {
+            try editor?.requireWritable() // Read Only may have been switched on while a dialog was open.
+            guard let editor, editor.window != nil, editor.revision == revision else {
                 throw AutomationError.invalid(
                     "The original document changed or closed. Run the automation again with the current text.")
             }
@@ -783,7 +806,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
         alert.runModal()
     }
     @objc private func reminderHistory() {
-        guard !busy, !exportInProgress else { return }
+        guard idleOrExplain() else { return }
         exportInProgress = true
         exportTask = Task { @MainActor in
             defer {
