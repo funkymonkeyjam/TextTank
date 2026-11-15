@@ -38,6 +38,44 @@ static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
 + (Class)contentViewClass { return TTContentView.class; }
 @end
 
+// Extend the number gutter through the unused viewport without editing the document.
+@interface TTEmptyLineNumbersView : NSView
+@property(nonatomic,weak) ScintillaView *engine;
+@end
+@implementation TTEmptyLineNumbersView
+- (BOOL)isFlipped { return YES; }
+- (NSView *)hitTest:(NSPoint)point { return nil; }
+- (BOOL)isAccessibilityElement { return NO; }
+- (void)drawRect:(NSRect)dirtyRect {
+    ScintillaView *engine = self.engine;
+    if (!engine) return;
+    const NSInteger width = [engine message:SCI_GETMARGINWIDTHN wParam:0];
+    const NSInteger height = [engine message:SCI_TEXTHEIGHT wParam:0];
+    if (width <= 0 || height <= 0) return;
+    const NSInteger count = [engine message:SCI_GETLINECOUNT];
+    const NSInteger displayed = [engine message:SCI_VISIBLEFROMDOCLINE wParam:count];
+    const NSInteger first = [engine message:SCI_GETFIRSTVISIBLELINE];
+    CGFloat y = (displayed - first) * height;
+    NSInteger number = count + 1;
+    if (y < 0) { NSInteger skip = (NSInteger)floor(-y / height); y += skip * height; number += skip; }
+    std::vector<char> face((size_t)[engine message:SCI_STYLEGETFONT wParam:STYLE_LINENUMBER lParam:0] + 1);
+    [engine message:SCI_STYLEGETFONT wParam:STYLE_LINENUMBER lParam:(sptr_t)face.data()];
+    CGFloat size = [engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_LINENUMBER] / 100.0 + [engine message:SCI_GETZOOM];
+    NSFont *font = [NSFont fontWithName:[NSString stringWithUTF8String:face.data()] size:MAX(1,size)] ?: [NSFont monospacedSystemFontOfSize:MAX(1,size) weight:NSFontWeightRegular];
+    NSInteger rgb = [engine message:SCI_STYLEGETFORE wParam:STYLE_LINENUMBER];
+    NSColor *color = [NSColor colorWithSRGBRed:(rgb & 255)/255.0 green:((rgb >> 8)&255)/255.0 blue:((rgb >> 16)&255)/255.0 alpha:1];
+    NSDictionary *attributes = @{NSFontAttributeName:font, NSForegroundColorAttributeName:color};
+    [NSGraphicsContext saveGraphicsState];
+    NSRectClip(NSIntersectionRect(self.bounds,NSMakeRect(0,0,width,self.bounds.size.height)));
+    for (; y < self.bounds.size.height; y += height, ++number) {
+        NSString *label = [NSString stringWithFormat:@"%ld",(long)number];
+        NSSize textSize = [label sizeWithAttributes:attributes];
+        [label drawAtPoint:NSMakePoint(width - textSize.width - 3,y + MAX(0,(height-textSize.height)/2)) withAttributes:attributes];
+    }
+    [NSGraphicsContext restoreGraphicsState];
+}
+@end
+
 static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     static NSDictionary<NSString *, NSNumber *> *map;
     static dispatch_once_t once;
@@ -58,6 +96,7 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
 
 @interface TTEditor () <ScintillaNotificationProtocol>
 @property(nonatomic, strong) ScintillaView *engine;
+@property(nonatomic,strong) TTEmptyLineNumbersView *emptyLineNumbers;
 @property(nonatomic, readwrite) NSUInteger revision;
 @property(nonatomic) BOOL macroRecording;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxStyles;
@@ -100,12 +139,19 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
         // position the inner content. Start at zero so this real size transition also
         // invokes backend Resize, which initializes the document viewport.
         _engine.frame = self.bounds;
+        NSRulerView *ruler = _engine.scrollView.verticalRulerView;
+        _emptyLineNumbers = [[TTEmptyLineNumbersView alloc] initWithFrame:ruler.bounds];
+        _emptyLineNumbers.engine = _engine;
+        _emptyLineNumbers.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        [ruler addSubview:_emptyLineNumbers];
     }
     return self;
 }
 - (void)layout {
     [super layout];
     _engine.frame = self.bounds;
+    _emptyLineNumbers.frame = _engine.scrollView.verticalRulerView.bounds;
+    _emptyLineNumbers.needsDisplay = YES;
 }
 - (void)viewDidChangeEffectiveAppearance {
     [super viewDidChangeEffectiveAppearance];
@@ -519,6 +565,7 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     return YES;
 }
 - (void)notification:(SCNotification *)notification {
+    _emptyLineNumbers.needsDisplay = YES;
     // Native responder Undo/Redo bypasses the application command dispatcher and
     // Scintilla does not emit MacroRecord for these operations. Never save a macro
     // that silently omits their changes.
