@@ -18,7 +18,10 @@ final class TTAlert: NSAlert {
         accessory?.removeFromSuperview()
         let title=NSTextField(wrappingLabelWithString:messageText);title.font = .boldSystemFont(ofSize:15)
         let detail=NSTextField(wrappingLabelWithString:informativeText);detail.font = .systemFont(ofSize:13)
-        let actions=NSStackView();actions.orientation = .horizontal;actions.alignment = .centerY;actions.distribution = .fill;actions.spacing=8
+        // Stack spacing uses alignment rectangles. Older macOS rounded buttons
+        // extend their frames beyond those rectangles, so reserve their insets too.
+        let actionSpacing:CGFloat=24
+        let actions=NSStackView();actions.orientation = .horizontal;actions.alignment = .centerY;actions.distribution = .fill;actions.spacing=actionSpacing
         actions.detachesHiddenViews=false
         var actionWidth:CGFloat=0
         for (index,button) in buttons.enumerated().reversed() {
@@ -30,7 +33,7 @@ final class TTAlert: NSAlert {
             sizeConstraints.append(button.widthAnchor.constraint(equalToConstant:width))
             actions.addArrangedSubview(button);actions.setVisibilityPriority(.mustHold,for:button);actionWidth+=width
         }
-        actionWidth+=CGFloat(max(0,buttons.count-1))*8
+        actionWidth+=CGFloat(max(0,buttons.count-1))*actionSpacing
         let width=max(420,accessorySize.width,actionWidth)
         let body=NSStackView();body.orientation = .vertical;body.alignment = .leading;body.spacing=14
         body.addArrangedSubview(title);if !informativeText.isEmpty {body.addArrangedSubview(detail)}
