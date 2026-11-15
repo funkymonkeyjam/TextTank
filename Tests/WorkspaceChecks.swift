@@ -42,9 +42,38 @@ import Darwin
                         "G360 uncreated absolute roots are accepted without creating them")
                 }
             }
+            Checks.section("F149 exact private mode under a restrictive process umask") {
+                let owned = root.appendingPathComponent("restrictive-mode")
+                try PrivateFileStore.prepareDirectory(owned)
+                let file = owned.appendingPathComponent("private.json"), bytes = Data("keep private and readable".utf8)
+                do {
+                    // This is the isolated check executable's process, never its parent shell.
+                    let previous = umask(0o777)
+                    defer { umask(previous) }
+                    try PrivateFileStore.write(bytes, to: file, maximumBytes: 100)
+                }
+                check(
+                    (try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber)?
+                        .intValue == 0o600, "F149 restrictive umask cannot produce an unreadable 0000 committed store")
+                check(
+                    (try? PrivateFileStore.read(file, maximumBytes: 100)) == bytes,
+                    "F149 a private write still reads back under the caller's restrictive umask")
+            }
             Checks.section("F149 shared private byte I/O") {
                 let owned = root.appendingPathComponent("private-store")
                 try PrivateFileStore.prepareDirectory(owned)
+                rejects(
+                    "F206 a failed open retains errno even when directory cleanup changes it",
+                    where: { $0.posixCode == .ENOENT }
+                ) {
+                    _ = try PrivateFileStore.openRegularFile(
+                        owned.appendingPathComponent("missing"), maximumBytes: 100,
+                        closeDirectory: { descriptor in
+                            let result = close(descriptor)
+                            errno = EIO
+                            return result
+                        })
+                }
                 let file = owned.appendingPathComponent("value.json")
                 let before = Data("old exact bytes".utf8), after = Data("new exact bytes".utf8)
                 try PrivateFileStore.write(before, to: file, maximumBytes: 100)
@@ -57,6 +86,36 @@ import Darwin
                         })
                 }
                 check(try Data(contentsOf: file) == before, "F149 failed sync preserves the prior bytes")
+                for phase in ["permissions", "close"] {
+                    rejects(
+                        "F206 failed private-file \(phase) prevents commit and retains operation/path/errno",
+                        where: {
+                            guard let failure = $0 as? FileOperationFailure else { return false }
+                            return failure.errorNumber == EIO && failure.path == file.path
+                                && failure.operation.contains(phase == "permissions" ? "permissions" : "close")
+                        }
+                    ) {
+                        if phase == "permissions" {
+                            try PrivateFileStore.write(
+                                after, to: file, maximumBytes: 100,
+                                setMode: { _, _ in
+                                    errno = EIO
+                                    return -1
+                                })
+                        } else {
+                            try PrivateFileStore.write(
+                                after, to: file, maximumBytes: 100,
+                                closeFile: { descriptor in
+                                    _ = close(descriptor)
+                                    errno = EIO
+                                    return -1
+                                })
+                        }
+                    }
+                    check(
+                        try Data(contentsOf: file) == before,
+                        "F149 failed private-file \(phase) preserves original bytes")
+                }
                 check(
                     try FileManager.default.contentsOfDirectory(atPath: owned.path) == ["value.json"],
                     "F149 failed sync cleans its own temporary file")
@@ -85,6 +144,34 @@ import Darwin
                 rejects("F149 shared writes enforce the same caller's byte bound") {
                     try PrivateFileStore.write(after, to: file, maximumBytes: 1)
                 }
+                let moving = root.appendingPathComponent("moving-store"),
+                    moved = root.appendingPathComponent("moved-store")
+                try PrivateFileStore.prepareDirectory(moving)
+                let movingFile = moving.appendingPathComponent("value.json")
+                try PrivateFileStore.write(before, to: movingFile, maximumBytes: 100)
+                rejects("F149 a replaced containing directory cannot commit through a stale descriptor") {
+                    try PrivateFileStore.write(
+                        after, to: movingFile, maximumBytes: 100,
+                        beforeCommit: {
+                            try FileManager.default.moveItem(at: moving, to: moved)
+                            try FileManager.default.createDirectory(at: moving, withIntermediateDirectories: true)
+                        })
+                }
+                check(
+                    try Data(contentsOf: moved.appendingPathComponent("value.json")) == before
+                        && !FileManager.default.fileExists(atPath: movingFile.path),
+                    "F149 folder replacement preserves the prior file and writes nothing into the new folder")
+                let retained = try requireValue(
+                    try PrivateFileStore.write(after, to: file, maximumBytes: 100, retainingDescriptor: true),
+                    "fixture: a journal retains its newly committed descriptor")
+                defer { close(retained) }
+                var byte: UInt8 = 0x5A
+                check(
+                    pwrite(retained, &byte, 1, 0) == 1 && fsync(retained) == 0,
+                    "F149 a retained journal descriptor supports its in-place synchronized outcomes")
+                check(
+                    try Data(contentsOf: file).first == byte,
+                    "F149 retained-descriptor outcomes belong to the committed file")
             }
             let unsafeLocation: (Error) -> Bool = {
                 if case WorkspaceError.unsafeLocation = $0 { return true }

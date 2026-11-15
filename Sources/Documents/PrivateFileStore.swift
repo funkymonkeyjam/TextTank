@@ -58,26 +58,37 @@ enum PrivateFileStore {
     static func directoryDescriptor(for url: URL) throws -> Int32 {
         try validateLocalURL(url)
         let descriptor = open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard descriptor >= 0 else {
+            throw FileOperationFailure(errno, operation: "open file or containing folder", path: url.path)
+        }
         return descriptor
     }
     static func openRegularFile(
-        _ url: URL, maximumBytes: Int, parent: ParentPolicy = .strict
+        _ url: URL, maximumBytes: Int, parent: ParentPolicy = .strict,
+        closeDirectory: (Int32) -> Int32 = { close($0) }
     ) throws -> (descriptor: Int32, info: stat) {
         try validateLocalURL(url)
         guard maximumBytes >= 0 else { throw PrivateFileError.tooLarge(limit: maximumBytes, url: url) }
         let descriptor: Int32
         if parent == .strict {
             let directory = try directoryDescriptor(for: url)
-            defer { close(directory) }
+            defer { _ = closeDirectory(directory) }
             descriptor = openat(directory, url.lastPathComponent, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            // Capture before the directory defer: cleanup is permitted to change errno.
+            guard descriptor >= 0 else {
+                throw FileOperationFailure(errno, operation: "open file for reading", path: url.path)
+            }
         } else {
             descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            guard descriptor >= 0 else {
+                throw FileOperationFailure(errno, operation: "open file for reading", path: url.path)
+            }
         }
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         do {
             var info = stat()
-            guard fstat(descriptor, &info) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            guard fstat(descriptor, &info) == 0 else {
+                throw FileOperationFailure(errno, operation: "inspect file", path: url.path)
+            }
             guard info.st_mode & S_IFMT == S_IFREG else { throw PrivateFileError.unsafeLocation }
             guard info.st_size >= 0, info.st_size <= maximumBytes else {
                 throw PrivateFileError.tooLarge(limit: maximumBytes, url: url)
@@ -105,7 +116,7 @@ enum PrivateFileStore {
             let count = buffer.withUnsafeMutableBytes { Darwin.read(opened.descriptor, $0.baseAddress, request) }
             if count < 0 {
                 if errno == EINTR { continue }
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                throw FileOperationFailure(errno, operation: "read file", path: url.path)
             }
             if count == 0 { break }
             guard count <= remaining else { throw PrivateFileError.tooLarge(limit: maximumBytes, url: url) }
@@ -121,40 +132,57 @@ enum PrivateFileStore {
         if lstat(directory.path, &info) == 0 {
             guard info.st_mode & S_IFMT == S_IFDIR else { throw PrivateFileError.unsafeLocation }
         } else if errno != ENOENT {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            throw FileOperationFailure(errno, operation: "inspect settings folder", path: directory.path)
         }
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let descriptor = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard descriptor >= 0 else {
+            throw FileOperationFailure(errno, operation: "open settings folder", path: directory.path)
+        }
         defer { close(descriptor) }
-        guard fchmod(descriptor, mode_t(0o700)) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard fchmod(descriptor, mode_t(0o700)) == 0 else {
+            throw FileOperationFailure(errno, operation: "set private folder permissions", path: directory.path)
+        }
     }
     /// The optional synchronizer is a narrow failure seam: a failed sync must not commit.
     /// Data and its 0600 metadata reach fsync before the same-directory atomic rename.
-    static func write(
+    @discardableResult static func write(
         _ data: Data, to url: URL, maximumBytes: Int, temporaryPrefix: String = ".texttank-",
-        temporarySuffix: String = "", synchronize: (Int32) -> Int32 = { fsync($0) }
-    ) throws {
+        temporarySuffix: String = "", synchronize: (Int32) -> Int32 = { fsync($0) },
+        beforeCommit: () throws -> Void = {}, retainingDescriptor: Bool = false,
+        setMode: (Int32, mode_t) -> Int32 = { fchmod($0, $1) }, closeFile: (Int32) -> Int32 = { close($0) }
+    ) throws -> Int32? {
         guard data.count <= maximumBytes else { throw PrivateFileError.tooLarge(limit: maximumBytes, url: url) }
         guard !temporaryPrefix.contains("/"), !temporarySuffix.contains("/"),
             !temporaryPrefix.contains("\0"), !temporarySuffix.contains("\0")
         else { throw PrivateFileError.unsafeLocation }
         let directory = try directoryDescriptor(for: url)
         defer { close(directory) }
+        var directoryInfo = stat()
+        guard fstat(directory, &directoryInfo) == 0 else {
+            throw FileOperationFailure(errno, operation: "inspect containing folder", path: url.path)
+        }
         var info = stat()
         if fstatat(directory, url.lastPathComponent, &info, AT_SYMLINK_NOFOLLOW) == 0 {
             guard info.st_mode & S_IFMT == S_IFREG else { throw PrivateFileError.unsafeLocation }
         } else if errno != ENOENT {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            throw FileOperationFailure(errno, operation: "inspect existing file", path: url.path)
         }
         let temporary = temporaryPrefix + UUID().uuidString + temporarySuffix
         let descriptor = openat(
             directory, temporary, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard descriptor >= 0 else {
+            throw FileOperationFailure(errno, operation: "create temporary file beside", path: url.path)
+        }
+        var descriptorOpen = true
         defer {
-            close(descriptor)
+            if descriptorOpen { close(descriptor) }
             unlinkat(directory, temporary, 0)
+        }
+        // open's mode is filtered by umask. Restore exactly owner read/write, never broader.
+        guard setMode(descriptor, mode_t(0o600)) == 0 else {
+            throw FileOperationFailure(errno, operation: "set private file permissions", path: url.path)
         }
         try data.withUnsafeBytes { bytes in
             var offset = 0
@@ -162,15 +190,39 @@ enum PrivateFileStore {
                 let count = Darwin.write(descriptor, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
                 if count < 0 {
                     if errno == EINTR { continue }
-                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    throw FileOperationFailure(errno, operation: "write private file", path: url.path)
                 }
-                guard count > 0 else { throw POSIXError(.EIO) }
+                guard count > 0 else {
+                    throw FileOperationFailure(EIO, operation: "write private file", path: url.path)
+                }
                 offset += count
             }
         }
-        guard synchronize(descriptor) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        guard renameat(directory, temporary, directory, url.lastPathComponent) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        guard synchronize(descriptor) == 0 else {
+            throw FileOperationFailure(errno, operation: "synchronize private file", path: url.path)
         }
+        if !retainingDescriptor {
+            let result = closeFile(descriptor)
+            descriptorOpen = false
+            guard result == 0 else {
+                throw FileOperationFailure(errno, operation: "close private file", path: url.path)
+            }
+        }
+        try beforeCommit()
+        var currentDirectory = stat()
+        guard lstat(url.deletingLastPathComponent().path, &currentDirectory) == 0 else {
+            throw FileOperationFailure(errno, operation: "revalidate containing folder", path: url.path)
+        }
+        guard currentDirectory.st_mode & S_IFMT == S_IFDIR,
+            currentDirectory.st_dev == directoryInfo.st_dev, currentDirectory.st_ino == directoryInfo.st_ino
+        else { throw PrivateFileError.unsafeLocation }
+        guard renameat(directory, temporary, directory, url.lastPathComponent) == 0 else {
+            throw FileOperationFailure(errno, operation: "replace file", path: url.path)
+        }
+        if retainingDescriptor {
+            descriptorOpen = false // Ownership transfers to the slotted journal, which closes it.
+            return descriptor
+        }
+        return nil
     }
 }

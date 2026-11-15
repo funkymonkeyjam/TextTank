@@ -252,6 +252,8 @@ enum WorkspaceStore {
         switch error {
         case PrivateFileError.unsafeLocation: return WorkspaceError.unsafeLocation
         case PrivateFileError.tooLarge(let limit, let url): return WorkspaceError.fileTooLarge(limit: limit, url: url)
+        case let failure as FileOperationFailure:
+            return POSIXError(POSIXErrorCode(rawValue: failure.errorNumber) ?? .EIO)
         default: return error
         }
     }
