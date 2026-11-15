@@ -4,6 +4,12 @@ Scintilla owns authoritative UTF-8 bytes and undo. TTEditor bridges Cocoa throug
 
 Pinned clean engines precede explicit audit/port of Notepad++ UDL and Boost regex deltas. Native app target in TextTank.xcodeproj; scripts build exact dependencies before xcodebuild.
 
+## Search semantics
+
+`TTSearchEngine` searches immutable text snapshots and reports UTF-16 ranges. Regular expressions run over Unicode code points, not UTF-16 units, so `.`, classes and quantifiers take a whole astral character and a match never splits a surrogate pair; this departs on purpose from the Windows reference, which walks UTF-16 units. The regex carries its own UTF-8 locale (the process locale is never changed), so case folding, `\w`, `\b` and `\s` follow Unicode as literal mode and Whole word do; `\d` and `[[:digit:]]` stay `0-9`. Replacement output that would contain half a surrogate pair is refused.
+
+Selection scope searches a range of the whole document rather than an extracted substring. Whole word, `^`, `\b`, `\A` and lookbehind see the text before the range, and `$` matches at the range end only where a line really ends. Known limit: Boost cannot read past the range end, so lookahead, `\b` and `\z` there are relative to the range, and a match is cut off at the range end. Whole word in regex mode filters finished matches and does not retry a rejected one. A regex search decodes the document up to the end of the range, so its memory follows the document, not the selection.
+
 ## Persisted formats
 
 Every file and defaults value the app writes is a versioned Codable value type: editor settings, Find options, Find-in-Folder settings, the workspace browser state, the Run library, session snapshots, recovery snapshots, the Reminders journal, the macro library, the language catalog and the automation library. Their decoders are the synthesized ones, so every non-optional property is a required key, including properties that have a default value.

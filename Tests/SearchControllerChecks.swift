@@ -335,6 +335,60 @@ final class OffscreenWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             } else {
                 check(false, "an invalid expression is reported as a failure carrying the shown reason")
             }
+            // F37: Selection scope searches a range of the document, so Whole word and anchors see
+            // the text around the selection, and hits are applied at their document offsets.
+            @MainActor func selectionReplaceAll(
+                _ text: String, select: NSRange, query: String, regex: Bool = false, whole: Bool = false
+            ) async {
+                editor.text = text
+                editor.resetUndoHistory()
+                editor.setSavePoint()
+                _ = editor.setSelectionAnchor(select.location, caret: NSMaxRange(select))
+                controller.scope.selectItem(at: 1)
+                controller.mode.selectItem(at: regex ? 2 : 0)
+                controller.caseButton.state = .on
+                controller.wordButton.state = whole ? .on : .off
+                controller.queryField.stringValue = query
+                controller.replacementField.stringValue = "X"
+                controller.replaceAll(nil)
+                await finished()
+            }
+            await selectionReplaceAll("foobar foo", select: NSRange(location: 0, length: 3), query: "foo", whole: true)
+            check(
+                editor.text == "foobar foo" && !editor.modified
+                    && controller.lastOutcome == .replaced(changed: 0, stale: 0),
+                "Selection scope Whole word does not replace the start of a longer word")
+            await selectionReplaceAll("foobar foo", select: NSRange(location: 7, length: 3), query: "foo", whole: true)
+            check(
+                editor.text == "foobar X" && controller.lastOutcome == .replaced(changed: 1, stale: 0),
+                "Selection scope Whole word replaces the selected whole word in place")
+            editor.executeCommand("undo")
+            check(editor.text == "foobar foo" && !editor.modified, "Selection scope replace all is one Undo")
+            // "🥑é " is 7 bytes and 4 UTF-16 units: a double-applied or byte offset would miss.
+            await selectionReplaceAll(
+                "🥑é foo foo foo", select: NSRange(location: 11, length: 7), query: "foo", whole: true)
+            check(
+                editor.text == "🥑é foo X X" && controller.lastOutcome == .replaced(changed: 2, stale: 0),
+                "Selection scope hits after a non-ASCII prefix land on the selected occurrences only")
+            await selectionReplaceAll("ax ax", select: NSRange(location: 4, length: 1), query: "^x", regex: true)
+            check(editor.text == "ax ax", "Selection scope line-start anchor does not match in the middle of a line")
+            await selectionReplaceAll("xa\nxa", select: NSRange(location: 3, length: 1), query: "^x", regex: true)
+            check(editor.text == "xa\nXa", "Selection scope line-start anchor matches at a real line start")
+            await selectionReplaceAll("ab ab", select: NSRange(location: 4, length: 1), query: "(?<=a)b", regex: true)
+            check(editor.text == "ab aX", "Selection scope lookbehind sees the character before the selection")
+            await selectionReplaceAll("l1\nl2 foo\nl3 foo\n", select: NSRange(location: 11, length: 6), query: "foo")
+            editor.executeCommand("undo")
+            _ = editor.setBookmarks([])
+            _ = editor.setSelectionAnchor(11, caret: 17)
+            controller.bookmark(nil)
+            await finished()
+            check(
+                editor.bookmarkLines.map(\.intValue) == [2] && editor.text == "l1\nl2 foo\nl3 foo\n",
+                "Selection scope bookmarks the line of the selected hit, not a shifted one")
+            _ = editor.setBookmarks([])
+            controller.scope.selectItem(at: 0)
+            controller.wordButton.state = .off
+            controller.caseButton.state = .off
             Checks.summary { "PASS SearchControllerChecks: \(Checks.count) assertions" }
         }
     }

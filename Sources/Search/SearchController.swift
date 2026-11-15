@@ -33,7 +33,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     let table = NSTableView()
     private var options = SearchOptions(), generation = UUID(), cancellation: TTSearchCancellation?
     private var task: Task<Void, Never>?
-    private struct Buffer { let editor: TTEditor, text: String, revision: UInt, offset: Int, anchor: Int, caret: Int }
+    private struct Buffer { let editor: TTEditor, text: String, revision: UInt, anchor: Int, caret: Int }
     private struct Row { let buffer: Buffer, hit: SearchHit }
     private var rows: [Row] = []
     private var searchButtons: [NSButton] = []
@@ -200,16 +200,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     lastOutcome = .needsInput
                     return
                 }
-                buffers.append(
-                    Buffer(
-                        editor: e, text: text, revision: e.revision, offset: r.location, anchor: e.selectionAnchor,
-                        caret: e.selectionCaret))
-            } else {
-                buffers.append(
-                    Buffer(
-                        editor: e, text: text, revision: e.revision, offset: 0, anchor: e.selectionAnchor,
-                        caret: e.selectionCaret))
             }
+            buffers.append(
+                Buffer(
+                    editor: e, text: text, revision: e.revision, anchor: e.selectionAnchor, caret: e.selectionCaret))
         }
         let selectionRanges = buffers.map { b -> NSRange in
             if scope.indexOfSelectedItem == 1 {
@@ -231,19 +225,22 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         lastOutcome = nil
         rows = []
         table.reloadData()
-        let bookmarkSnapshots = buffers.map { ($0.text, $0.offset) }
         let needsBookmarks = action == .bookmark
-        let snapshots = zip(buffers, selectionRanges).map { ($0.0.text as NSString).substring(with: $0.1) }
+        // Selection scope searches a range of the whole text, not an extracted substring, so word
+        // boundaries, anchors and lookbehind see the document around the selection (F37). Hits are
+        // already at document offsets.
+        let snapshots = zip(buffers, selectionRanges).map { ($0.0.text, $0.1) }
         task = Task { @MainActor [weak self] in
             do {
                 let computed = try await Task.detached(priority: .userInitiated) {
-                    let reports = try snapshots.map { try SearchCore.search($0, options: opts, cancellation: flag) }
+                    let reports = try snapshots.map {
+                        try SearchCore.search($0.0, options: opts, range: $0.1, cancellation: flag)
+                    }
                     let lines =
                         needsBookmarks
-                        ? try zip(bookmarkSnapshots, reports).map { snapshot, report in
+                        ? try zip(snapshots, reports).map { snapshot, report in
                             try SearchCore.bookmarkLines(
-                                in: snapshot.0, locations: report.hits.map { $0.range.location + snapshot.1 },
-                                cancellation: flag)
+                                in: snapshot.0, locations: report.hits.map { $0.range.location }, cancellation: flag)
                         } : []
                     return (reports, lines)
                 }.value
@@ -251,13 +248,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 guard let self, self.generation == token, !flag.cancelled else { return }
                 defer { self.finish() }
                 self.rows = zip(buffers, reports).flatMap { b, r in
-                    r.hits.map {
-                        Row(
-                            buffer: b,
-                            hit: SearchHit(
-                                range: NSRange(location: $0.range.location + b.offset, length: $0.range.length),
-                                replacement: $0.replacement))
-                    }
+                    r.hits.map { Row(buffer: b, hit: $0) }
                 }
                 self.table.reloadData()
                 let truncated = reports.contains { $0.truncated }
