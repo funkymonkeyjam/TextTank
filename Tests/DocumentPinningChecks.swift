@@ -906,6 +906,49 @@ extension DocumentChecks {
                         + (item.submenu.map { walk($0, here) } ?? [])
                 }
             }
+            func snapshot(_ menu: NSMenu, path: [Int] = []) -> [[String: String]] {
+                menu.items.enumerated().flatMap { index, item -> [[String: String]] in
+                    let position = path + [index]
+                    let row: [String: String] = [
+                        "position": position.map(String.init).joined(separator: "."),
+                        "title": item.title,
+                        "action": item.action.map(NSStringFromSelector) ?? "",
+                        "key": item.keyEquivalent,
+                        "modifiers": String(item.keyEquivalentModifierMask.rawValue),
+                        "target": item.target == nil ? "responder" : "explicit",
+                        "object": item.representedObject.map { String(describing: $0) } ?? ""
+                    ]
+                    return [row] + (item.submenu.map { snapshot($0, path: position) } ?? [])
+                }
+            }
+            let menuSnapshot = snapshot(bar)
+            let menuSnapshotData = try JSONSerialization.data(withJSONObject: menuSnapshot, options: [.sortedKeys])
+            let expectedMenu = try JSONSerialization.jsonObject(
+                with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("menu-tree-wave-3.json")))
+            let expectedMenuData = try JSONSerialization.data(withJSONObject: expectedMenu, options: [.sortedKeys])
+            check(
+                menuSnapshotData == expectedMenuData,
+                "F191 the complete menu tree preserves order, titles, actions, shortcuts, dispatch roles and represented objects"
+            )
+            let helperMenu = NSMenu()
+            let helperItem = helperMenu.addItem(
+                title: "Fixture command", action: #selector(EditorWindowController.command(_:)),
+                keyEquivalent: "j", modifiers: [.control, .shift], target: controller,
+                representedObject: "upper", isEnabled: false, state: .on)
+            check(
+                helperMenu.items.count == 1 && helperMenu.items.first === helperItem
+                    && helperItem.title == "Fixture command"
+                    && helperItem.action == #selector(EditorWindowController.command(_:))
+                    && helperItem.keyEquivalent == "j" && helperItem.keyEquivalentModifierMask == [.control, .shift]
+                    && helperItem.target === controller && helperItem.representedObject as? String == "upper"
+                    && !helperItem.isEnabled && helperItem.state == .on,
+                "F191 the shared menu helper preserves explicit dispatch, shortcut, identity and validation metadata")
+            let helperDefault = helperMenu.addItem(title: "Fixture heading", action: nil)
+            check(
+                helperDefault.target == nil && helperDefault.action == nil && helperDefault.keyEquivalent.isEmpty
+                    && helperDefault.keyEquivalentModifierMask == .command && helperDefault.representedObject == nil
+                    && helperDefault.isEnabled && helperDefault.state == .off,
+                "F191 the shared menu helper keeps NSMenuItem defaults when options are omitted")
             let items = walk(bar, "")
             check(
                 bar.items.map(\.title) == [

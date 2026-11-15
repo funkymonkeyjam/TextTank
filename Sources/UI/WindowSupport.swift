@@ -1,6 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
+extension NSMenu {
+    /// Adds one item without hiding its dispatch, shortcut or validation metadata in positional
+    /// arguments. Defaults match NSMenuItem; explicit targets stay explicit and nil uses the responder chain.
+    @discardableResult func addItem(
+        title: String, action: Selector?, keyEquivalent: String = "",
+        modifiers: NSEvent.ModifierFlags = [.command], target: AnyObject? = nil,
+        representedObject: Any? = nil, isEnabled: Bool = true, state: NSControl.StateValue = .off
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+        item.keyEquivalentModifierMask = modifiers
+        item.target = target
+        item.representedObject = representedObject
+        item.isEnabled = isEnabled
+        item.state = state
+        addItem(item)
+        return item
+    }
+}
+
 /// An auxiliary tool window: Find and Replace, Find in Folder, the Function List, a Run result.
 ///
 /// A panel cannot become main, so the document window stays main while the tool window is key
