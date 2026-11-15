@@ -114,3 +114,12 @@ relative, empty or NUL-containing values fall back to the normal support path.
 Selecting a URL does not create or read a store. An isolated root does not
 implicitly import the person's shared search defaults. Controllers capture
 their URL at construction; a later controller can follow a changed override.
+
+WorkspaceStore is a compatibility facade over the same private byte helper;
+its512MiB session ceiling, error identities, file signatures and cancellable
+streamed hashing stay unchanged. Recovery reads now use a no-follow regular-file
+descriptor rather than a check followed by Data(contentsOf:). Recovery retains
+its addressable-Data ceiling (Int.max), not the session cap, and still materializes
+the complete JSON snapshot in memory. Large-document memory behavior is not
+certified by the small fixture checks. Equal-revision recovery content compares
+UTF-8 text/identity bytes, not Swift's canonically equivalent String equality.

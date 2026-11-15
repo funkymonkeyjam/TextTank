@@ -40,6 +40,9 @@ enum RecoveryError: Error, LocalizedError {
 /// Atomic replacement preserves the previous complete snapshot if writing fails.
 /// Does not restore to an original file: callers must present recovered text for review.
 final class RecoveryStore {
+    /// Recovery has no smaller product ceiling than an addressable Data value. Do not import
+    /// the session store's 512 MiB cap: large pending documents were already recoverable.
+    static let maximumSnapshotBytes = Int.max
     let directory: URL
     private let lock = NSLock()
     /// What this instance last wrote for each id, with the identity of the file it left on disk.
@@ -76,8 +79,8 @@ final class RecoveryStore {
             let existing = try read(destination, expectedID: snapshot.id)
             guard existing.revision <= snapshot.revision else { throw RecoveryError.staleRevision }
             if existing.revision == snapshot.revision {
-                guard existing.text == snapshot.text, existing.format == snapshot.format,
-                    existing.originalURL == snapshot.originalURL
+                guard existing.text.utf8.elementsEqual(snapshot.text.utf8), existing.format == snapshot.format,
+                    existing.originalURL.map({ Data($0.utf8) }) == snapshot.originalURL.map({ Data($0.utf8) })
                 else { throw RecoveryError.staleRevision }
                 remember(snapshot.id, revision: snapshot.revision)
                 return
@@ -204,28 +207,11 @@ final class RecoveryStore {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
     }
     private func privateAtomicWrite(_ data: Data, to destination: URL) throws {
-        let temporary = directory.appendingPathComponent(UUID().uuidString + ".pending")
-        // Create an empty private file before adding any document content. The containing
-        // directory is already 0700, including during initial file creation.
-        guard
-            FileManager.default.createFile(
-                atPath: temporary.path, contents: nil, attributes: [.posixPermissions: 0o600])
-        else {
-            throw CocoaError(.fileWriteNoPermission)
-        }
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        let handle = try FileHandle(forWritingTo: temporary)
-        defer { try? handle.close() }
-        try handle.write(contentsOf: data)
-        try handle.synchronize()
-        try handle.close()
-        if FileManager.default.fileExists(atPath: destination.path) {
-            // Keep the new private metadata, rather than inheriting older broad permissions.
-            _ = try FileManager.default.replaceItemAt(
-                destination, withItemAt: temporary, options: .usingNewMetadataOnly)
-        } else {
-            try FileManager.default.moveItem(at: temporary, to: destination)
-        }
+        do {
+            try PrivateFileStore.write(
+                data, to: destination, maximumBytes: Self.maximumSnapshotBytes,
+                temporaryPrefix: "", temporarySuffix: ".pending")
+        } catch PrivateFileError.unsafeLocation { throw RecoveryError.unsafeLocation }
     }
     private func checkDirectoryIfPresent() throws {
         guard directory.isFileURL else { throw RecoveryError.unsafeLocation }
@@ -237,13 +223,15 @@ final class RecoveryStore {
         }
     }
     private func read(_ url: URL, expectedID: UUID) throws -> RecoverySnapshot {
-        let properties = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-        guard properties.isRegularFile == true, properties.isSymbolicLink != true else {
+        let data: Data
+        do { data = try PrivateFileStore.read(url, maximumBytes: Self.maximumSnapshotBytes) } catch PrivateFileError
+            .unsafeLocation
+        { throw RecoveryError.unsafeLocation } catch  where error.posixCode == .ELOOP {
             throw RecoveryError.unsafeLocation
         }
         snapshotReads += 1
         let snapshot: RecoverySnapshot
-        do { snapshot = try JSONDecoder().decode(RecoverySnapshot.self, from: Data(contentsOf: url)) } catch {
+        do { snapshot = try JSONDecoder().decode(RecoverySnapshot.self, from: data) } catch {
             throw RecoveryError.invalidSnapshot
         }
         guard snapshot.id == expectedID else { throw RecoveryError.invalidSnapshot }

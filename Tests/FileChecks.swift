@@ -123,6 +123,28 @@ import Darwin
                 replacedMode == 0o600 && correctedDirectoryMode == 0o700,
                 "replacement repairs old broad recovery metadata")
             check(parentModeBefore == parentModeAfter, "recovery privacy does not chmod parent")
+            check(
+                RecoveryStore.maximumSnapshotBytes > 512 * 1024 * 1024,
+                "F149 recovery does not inherit the smaller session byte ceiling")
+            Checks.section("F149 byte-exact recovery revision identity") {
+                let exactID = UUID()
+                let exact = RecoverySnapshot(
+                    id: exactID, text: "caf\u{E9}", format: FileFormat(), originalURL: nil, revision: 1)
+                try store.save(exact)
+                let saved = try Data(contentsOf: store.fileURL(for: exactID))
+                let canonicalTwin = RecoverySnapshot(
+                    id: exactID, text: "cafe\u{301}", format: FileFormat(), originalURL: nil, revision: 1)
+                rejects(
+                    "F149 equal-revision recovery text must match UTF8 bytes, not canonical String equality",
+                    expecting: RecoveryError.staleRevision
+                ) {
+                    try store.save(canonicalTwin)
+                }
+                check(
+                    try Data(contentsOf: store.fileURL(for: exactID)) == saved,
+                    "F149 refusing byte-distinct equal-revision recovery preserves saved bytes")
+                try store.remove(id: exactID, throughRevision: 1)
+            }
             rejects("stale write", expecting: RecoveryError.staleRevision) { try store.save(first) }
             rejects("stale cleanup", expecting: RecoveryError.staleRevision) {
                 try store.remove(id: id, throughRevision: 1)
