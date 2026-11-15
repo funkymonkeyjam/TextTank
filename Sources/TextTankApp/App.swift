@@ -1978,7 +1978,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
                 let editor = note.object as? TTEditor
             else { return }
             if editor === self.primaryEditor || editor === self.secondary {
-                self.refreshStatusDetails(recurring: true)
+                self.refreshStatusDetails(source: .editorEvent)
             } else {
                 // Another document changed: only its title in this window's tab strip can differ.
                 self.documentTabs.refresh()
@@ -2028,7 +2028,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             visibilityChanged()
             return
         }
-        refreshStatusDetails(recurring: true)
+        refreshStatusDetails(source: .pollingTick)
         statusTickRevision = (document as? TextDocument)?.editor.revision
     }
     /// A failed recovery write is shown in red with a tooltip as well as in words, and stays
@@ -2062,10 +2062,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             ? "Crash-recovery copies of this document are not being written. Save the document to keep your work. This message clears when a recovery copy is written again."
             : nil
     }
-    /// Updates every badge now. `recurring` is the timer and the editor-event path: there the
-    /// whole-document capture waits until the revision has been the same for one timer tick, so
-    /// continuous typing copies nothing. A direct call captures at once.
-    func refreshStatusDetails(for suppliedDocument: TextDocument? = nil, recurring: Bool = false) {
+    enum StatusRefreshSource {
+        case explicit, editorEvent, pollingTick
+    }
+    /// Updates the cheap badges immediately. Only a polling tick can recognize an idle interval;
+    /// a queued editor event after the tick observed an edit is not an idle observation (V32-01).
+    /// Explicit action refreshes keep their immediate metrics capture.
+    func refreshStatusDetails(for suppliedDocument: TextDocument? = nil, source: StatusRefreshSource = .explicit) {
         guard let doc = suppliedDocument ?? document as? TextDocument else { return }
         statusRefreshCount += 1
         // Any refresh in a window on screen restarts a missing timer, the editor-event path included.
@@ -2073,7 +2076,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         documentTabs.refresh()
         let editor = activeEditor, info = editor.statusInfo
         let revision = doc.editor.revision
-        if statusRevision != revision && !statusMetricsPending && (!recurring || statusTickRevision == revision) {
+        let allowsMetricsCapture =
+            source == .explicit || (source == .pollingTick && statusTickRevision == revision)
+        if statusRevision != revision && !statusMetricsPending && allowsMetricsCapture {
             // Capture the authoritative bytes in one copy on main; the scan happens off-main.
             // One in-flight task bounds work for rapid edits.
             let bytes = doc.editor.utf8Data

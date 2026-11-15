@@ -1418,11 +1418,10 @@ import AppKit
                     controller.statusRefreshCount >= idleRefreshes + 2
                         && hiddenController.statusRefreshCount == hiddenRefreshes,
                     "the visible tab's safety-net timer keeps running while idle and the hidden tab's does not run")
-                // Drive continuous edits and the real polling path deterministically. A slow
-                // runner may stall a 50 ms RunLoop.run call for longer than a polling interval,
-                // which would simulate an idle pause rather than continuous typing.
+                // V32-01: every edit must deliver the bridge's actual queued state notice.
+                // Drive both orderings around the real polling path: notice before tick and
+                // notice after tick. A tight edit/tick loop alone misses the production adapter.
                 spinUntil("the bar to settle before typing") { badges().contains("7 chars") }
-                let captures = controller.statusMetricsCaptureCount
                 let pollingInterval = controller.statusTimerInterval
                 controller.statusTimerInterval = nil
                 controller.visibilityChanged()
@@ -1430,18 +1429,48 @@ import AppKit
                     controller.statusTimerInterval = pollingInterval
                     controller.visibilityChanged()
                 }
+                var notices = 0
+                let observer = NotificationCenter.default.addObserver(
+                    forName: .TTEditorStateDidChange, object: visible.editor, queue: nil
+                ) { _ in notices += 1 }
+                defer { NotificationCenter.default.removeObserver(observer) }
+                // Empty the queued notices from the fixture before taking the baseline.
+                var ready = false
+                DispatchQueue.main.async { ready = true }
+                spinUntil("the prior editor notices to drain") { ready }
+                let captures = controller.statusMetricsCaptureCount
                 var typed = 0
-                for _ in 0..<20 {
-                    _ = visible.editor.replaceSelection("k")
-                    typed += 1
-                    controller.statusTimerTick()
+                for noticeBeforeTick in [true, false] {
+                    let order = noticeBeforeTick ? "notice before tick" : "notice after tick"
+                    for index in 0..<10 {
+                        let beforeNotice = notices
+                        _ = visible.editor.replaceSelection("k")
+                        typed += 1
+                        if !noticeBeforeTick { controller.statusTimerTick() }
+                        let beforeEventRefresh = controller.statusRefreshCount
+                        spinUntil("real bridge \(order) \(index + 1)") { notices > beforeNotice }
+                        let info = visible.editor.statusInfo
+                        check(
+                            controller.statusRefreshCount > beforeEventRefresh
+                                && badge("status.position.0")
+                                    == "Ln \(info["line"]?.intValue ?? 1), Col \(info["column"]?.intValue ?? 1)",
+                            "a real bridge \(order) refreshes the cheap position badge immediately")
+                        if noticeBeforeTick { controller.statusTimerTick() }
+                    }
+                    check(
+                        controller.statusMetricsCaptureCount == captures,
+                        "continuous typing with real bridge \(order) starts no whole-document capture")
                 }
                 check(
                     typed >= 5 && controller.statusMetricsCaptureCount == captures,
                     "continuous typing starts no whole-document capture (\(typed) edits, \(controller.statusMetricsCaptureCount - captures) captures)"
                 )
-                // A tick with no intervening edit is the first idle interval.
+                // All real notices have run. Only this unchanged-revision polling observation
+                // represents the first idle interval and may begin a whole-document capture.
                 controller.statusTimerTick()
+                check(
+                    controller.statusMetricsCaptureCount == captures + 1,
+                    "the first eligible idle polling tick starts exactly one metrics capture")
                 spinUntil("the count after typing stops") { badges().contains("\(7 + typed) chars") }
                 check(
                     badges().contains("\(7 + typed) chars") && controller.statusMetricsCaptureCount == captures + 1,
