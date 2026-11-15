@@ -8,7 +8,11 @@ final class RunController: NSObject, NSMenuItemValidation {
     /// applied to the document. Neither is ever part of a macro recording.
     var onUnrecordableAction: () -> Void = {}
     private var commands: [ConfiguredRun] = []
-    private var loadError: Error?
+    let loadState: StoreLoadState
+    private var loadError: Error? {
+        get { loadState.error }
+        set { loadState.error = newValue }
+    }
     private var execution: RunExecution?
     private let menu = NSMenu(title: "Run")
     private var resultWindow: NSWindow?
@@ -24,6 +28,7 @@ final class RunController: NSObject, NSMenuItemValidation {
     let storage: URL
     override init() {
         storage = AppStorage.url(.commands)
+        loadState = StoreLoadState(url: storage, displayName: "Run commands")
         super.init()
         retirementObserver = NotificationCenter.default.addObserver(
             forName: .TTEditorWillRetire, object: nil, queue: nil
@@ -74,11 +79,11 @@ final class RunController: NSObject, NSMenuItemValidation {
         }
     }
     func persist(_ updated: [ConfiguredRun]) throws {
+        try loadState.requireWritable()
         let data = try ConfiguredRun.encodeLibrary(updated)
-        try FileManager.default.createDirectory(
-            at: storage.deletingLastPathComponent(), withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700])
-        try WorkspaceStore.writePrivate(data, to: storage)
+        try PrivateFileStore.prepareDirectory(storage.deletingLastPathComponent())
+        try PrivateFileStore.write(
+            data, to: storage, maximumBytes: ConfiguredRun.maximumLibraryBytes, temporaryPrefix: ".commands-")
         commands = updated
         loadError = nil
         rebuild()
@@ -109,7 +114,7 @@ final class RunController: NSObject, NSMenuItemValidation {
     static let manageHelp =
         "Each entry is one saved command: name, executable (an absolute path), arguments, shellMode and extensionMode. Edit an entry to change it, or remove an entry to delete it. Keep id to keep a command's identity. Saving never runs a command."
     @objc private func manage(_ sender: Any?) {
-        if let error = loadError {
+        do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
             TTAlert.present(error)
             return
         }
@@ -158,7 +163,7 @@ final class RunController: NSObject, NSMenuItemValidation {
     static let configureHelp =
         "Runs only when explicitly selected. Arguments stay separate; use {file}, {directory}, or {selection} as a complete argument. A selection that begins with - is read by the tool as an option, so put -- or the tool's own pattern flag (for example -e) before {selection} where the tool supports it. The command starts in the saved document's folder, or in your home folder. Shell mode deliberately executes the argument as shell code."
     @objc private func configure(_ sender: Any?) {
-        if let error = loadError {
+        do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
             TTAlert.present(error)
             return
         }

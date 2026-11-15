@@ -449,6 +449,9 @@ import AppKit
         try corrupt.write(to: controller.storage)
         let damaged = RunController()
         check(ids(damaged.makeMenu()).isEmpty, "an unreadable library loads no commands")
+        rejects("F198 the direct Run persistence boundary cannot overwrite an unreadable library") {
+            try damaged.persist([sample])
+        }
         rejects("F137 Manage Commands cannot save over an unreadable library") {
             try damaged.replaceLibrary(json: try JSONEncoder().encode([sample]))
         }
