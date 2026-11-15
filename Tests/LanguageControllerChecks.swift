@@ -86,6 +86,83 @@ import AppKit
   let onePass=max(before,after)
   check(applyTime<3*onePass,"applying a profile costs about one lexing pass (apply \(String(format:"%.3f",applyTime)) s, one pass \(String(format:"%.3f",onePass)) s)")
   check(controller.apply(identifier:"python",to:lexEditor) && sci(SCI_GETSTYLEAT,0)==11 && sci(SCI_GETSTYLEAT,UInt(lastLine+8))==11 && sci(SCI_GETENDSTYLED)==lexSource.utf8.count && lexEditor.revision==lexRevision,"switching profile replaces the previous lexer's styles across the whole document")
+  // F248: the number of profiles that load is asserted, not only printed. A Lexilla upgrade
+  // that gains or loses a lexer fails here on purpose; update the literal in the same change.
+  let expectedMissing:Set<String>=["objc","searchResult"]
+  if !check(Set(missing)==expectedMissing && missing.count==expectedMissing.count,"exactly the known profiles have no linked lexer") { print("NOTE missing profiles: \(missing)") }
+  check(supported==catalog.profiles.count-expectedMissing.count && catalog.profiles.count==96,"every other catalog profile applies (\(supported) of \(catalog.profiles.count))")
+  func message(_ target:TTEditor,_ number:UInt32,_ w:UInt=0,_ l:Int=0)->Int {
+   let view=target.subviews.first!
+   return unsafeBitCast(view.method(for:messageSelector),to:ScintillaMessage.self)(view,messageSelector,number,w,l)
+  }
+  func styles(_ target:TTEditor)->[Int] { (0..<target.text.utf8.count).map{message(target,SCI_GETSTYLEAT,UInt($0))} }
+  var hosts:[NSWindow]=[]
+  func hostedEditor()->TTEditor {
+   let host=NSWindow(contentRect:NSRect(x:0,y:0,width:600,height:400),styleMask:[.titled],backing:.buffered,defer:false),made=TTEditor(frame:NSRect(x:0,y:0,width:600,height:400))
+   host.contentView=made;hosts.append(host);return made
+  }
+  // A keyword of each high-use language is styled differently from a plain identifier, so a
+  // lexer that silently became the null lexer, or lost its keyword list, is caught.
+  let families=hostedEditor()
+  for (id,keyword) in [("cpp","return"),("python","return"),("javascript","return"),("java","if"),("swift","class"),("rust","as"),("sql","abs"),("bash","alias"),("json","true")] {
+   families.text="\(keyword) zzzplain\n"
+   let applied=controller.apply(identifier:id,to:families)
+   let keywordStyle=message(families,SCI_GETSTYLEAT,0),plainStyle=message(families,SCI_GETSTYLEAT,UInt(keyword.utf8.count+1))
+   if !check(applied && keywordStyle != plainStyle && keywordStyle != 0,"\(id): a keyword is styled apart from a plain identifier") { print("NOTE \(id) keyword style \(keywordStyle), plain style \(plainStyle)") }
+  }
+  // G330: the TextTank-authored parts of the user-defined-language lexer. Expected styles
+  // are Notepad++'s UDL 2.1 behaviour: style 4 is KEYWORDS1, 13 FOLDER IN CODE1, 1 COMMENTS.
+  let SCI_GETFOLDLEVEL:UInt32=2223,foldHeader=0x2000,foldBase=0x400,keyword1=4
+  func userProfile(_ name:String,keywords:[String:String],prefix:[String:String]=[:])throws->LanguageProfile {
+   let language=UserDefinedLanguage(name:name,extensions:"sample",version:"2.1",global:["caseIgnored":"no","forcePureLC":"0","decimalSeparator":"0"],prefix:prefix,keywords:keywords,styles:[.init(name:"DEFAULT",attributes:["fgColor":"000000","fontStyle":"0"]),.init(name:"KEYWORDS1",attributes:["fgColor":"0000FF","fontStyle":"1"])])
+   let made=try language.profile();var next=try requireValue(controller.catalog,"fixture: catalog")
+   next.profiles.removeAll{$0.id==made.id};next.profiles.append(made);try controller.persist(next);return made
+  }
+  let prefixed=try userProfile("Pin prefix",keywords:["Keywords1":"pre"],prefix:["Keywords1":"yes"]),exact=try userProfile("Pin exact",keywords:["Keywords1":"pre"])
+  let udlEditor=hostedEditor();udlEditor.text="prefix pre other"
+  check(controller.apply(identifier:prefixed.id,to:udlEditor) && styles(udlEditor)[0..<6].allSatisfy{$0==keyword1} && styles(udlEditor)[7..<10].allSatisfy{$0==keyword1} && styles(udlEditor)[11] != keyword1,"prefix-mode keyword styles every word that starts with it")
+  check(controller.apply(identifier:exact.id,to:udlEditor) && styles(udlEditor)[0] != keyword1 && styles(udlEditor)[7..<10].allSatisfy{$0==keyword1},"without prefix mode a keyword matches only the whole word")
+  let multipart=try userProfile("Pin multi-part",keywords:["Keywords1":"'else if'"])
+  udlEditor.text="else if x else y"
+  let multipartApplied=controller.apply(identifier:multipart.id,to:udlEditor),multipartStyles=styles(udlEditor)
+  if !check(multipartApplied && multipartStyles[0..<7].allSatisfy{$0==keyword1} && multipartStyles[10..<14].allSatisfy{$0 != keyword1},"a quoted multi-part keyword matches only the whole sequence, including its space") { print("NOTE multi-part styles \(multipartStyles)") }
+  let folding=try userProfile("Pin folding",keywords:["Folders in code1, open":"begin","Folders in code1, close":"end"])
+  udlEditor.text="begin\n  body\nend\nplain\n"
+  let foldApplied=controller.apply(identifier:folding.id,to:udlEditor)
+  let levels=(0..<4).map{message(udlEditor,SCI_GETFOLDLEVEL,UInt($0))}
+  if !check(foldApplied && levels[0] & foldHeader != 0 && levels[0] & 0xFFF == foldBase && levels[1] & 0xFFF == foldBase+1 && levels[1] & foldHeader == 0 && levels[3] & 0xFFF == foldBase && levels[3] & foldHeader == 0 && styles(udlEditor)[0]==13,"fold open and close keywords make a fold header and a nested body") { print("NOTE fold levels \(levels.map{String($0,radix:16)}) style \(styles(udlEditor)[0])") }
+  // An edit followed by an incremental restyle gives the same styles as lexing the result afresh.
+  let incremental=try userProfile("Pin incremental",keywords:["Keywords1":"hello","Comments":"00// 01 02 03/* 04*/","Folders in code1, open":"begin","Folders in code1, close":"end"])
+  let live=hostedEditor(),fresh=hostedEditor()
+  live.text="hello one\nbegin /* open\nstill comment */ hello\nend hello // tail\nhello last\n"
+  check(controller.apply(identifier:incremental.id,to:live) && message(live,SCI_GETENDSTYLED)==live.text.utf8.count,"fixture: multi-line UDL document is fully styled")
+  for (offset,insertion) in [(10,"hello "),(31,"/* reopened\n"),(0,"// "),(3,"\n")] {
+   _ = live.setSelectionAnchor(offset,caret:offset);live.replaceSelection(insertion)
+   _ = message(live,SCI_COLOURISE,UInt(message(live,SCI_GETENDSTYLED)),-1)
+   fresh.text=live.text;_ = controller.apply(identifier:incremental.id,to:fresh)
+   let liveLevels=(0..<7).map{message(live,SCI_GETFOLDLEVEL,UInt($0))},freshLevels=(0..<7).map{message(fresh,SCI_GETFOLDLEVEL,UInt($0))}
+   if !check(styles(live)==styles(fresh) && liveLevels==freshLevels && styles(live).contains(keyword1) && styles(live).contains(1),"incremental restyle after inserting \(insertion.debugDescription) at \(offset) equals a full relex") { print("NOTE live \(styles(live))\nNOTE fresh \(styles(fresh))") }
+  }
+  // Two documents with different UDLs, lexed alternately, keep their own keyword lists. The
+  // fixtures end with a line break on purpose: a keyword that is the very last word of a
+  // document with no final line break is left unstyled today, and whether Notepad++ does the
+  // same has not been checked, so that case is neither pinned nor called a defect here.
+  let alpha=try userProfile("Pin alpha",keywords:["Keywords1":"alpha"]),beta=try userProfile("Pin beta",keywords:["Keywords1":"beta"])
+  let editorA=hostedEditor(),editorB=hostedEditor();editorA.text="alpha beta\n";editorB.text="alpha beta\n"
+  check(controller.apply(identifier:alpha.id,to:editorA) && controller.apply(identifier:beta.id,to:editorB),"fixture: two UDL lexers coexist")
+  var separate=true
+  for _ in 0..<3 {
+   _ = message(editorA,SCI_COLOURISE,0,-1);_ = message(editorB,SCI_COLOURISE,0,-1)
+   separate=separate && styles(editorA)[0]==keyword1 && styles(editorA)[6] != keyword1 && styles(editorB)[0] != keyword1 && styles(editorB)[6]==keyword1
+  }
+  check(separate,"two coexisting user lexers keep separate keyword lists when lexed alternately")
+  let alphaChanged=try userProfile("Pin alpha",keywords:["Keywords1":"beta gamma"])
+  check(alphaChanged.id==alpha.id && controller.apply(identifier:alpha.id,to:editorA) && styles(editorA)[0] != keyword1 && styles(editorA)[6]==keyword1,"a changed keyword list restyles a live user lexer")
+  _ = message(editorB,SCI_COLOURISE,0,-1)
+  check(styles(editorB)[0] != keyword1 && styles(editorB)[6]==keyword1 && editorA.text=="alpha beta\n","changing one user lexer's keywords leaves the other lexer and the text alone")
+  editorA.setLanguage("null");_ = message(editorB,SCI_COLOURISE,0,-1)
+  check(styles(editorB)[6]==keyword1,"releasing one user lexer leaves the other's keyword cache intact")
+  withExtendedLifetime(hosts) {}
   print("LEXER CONFIGURATION: \(supported) available; missing \(missing). This proves loading and text integrity, not every lexical semantic.")
   Checks.summary { "PASS LanguageControllerChecks: \(Checks.count) native assertions" }
   }
