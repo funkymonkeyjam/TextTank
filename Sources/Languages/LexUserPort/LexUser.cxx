@@ -22,11 +22,9 @@ Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 #include <vector>
 #include <assert.h>
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <cstring>
 #include <cstdio>
-#include <memory>
 #include <string_view>
 #include "UserConstants.h"
 
@@ -40,32 +38,39 @@ Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 #include "LexerModule.h"
 #include "PropSetSimple.h"
 #include "DefaultLexer.h"
-#include "LexerBase.h"
-#include "LexerSimple.h"
 
 using namespace Lexilla;
 
-// Native port additions: immutable upstream WordList facade; no ABI/layout changes.
-static void _itoa(int value,char *output,int) {std::snprintf(output,3,"%d",value);}
+// Native port additions (TextTank). Everything between here and the CL_CURRENT defines is local.
+//
+// UDLWordList is a reorderable view of one upstream WordList. Upstream Notepad++ reorders its own
+// patched WordList in place (SetWordAt); the pinned Lexilla WordList has no SetWordAt and is not
+// modified, so the reordering happens on this view instead. The view holds pointers into the
+// WordList's storage, which WordList::Set frees whenever the list changes: the owner
+// (TextTankUDLLexer) clears every view in WordListSet and rebuilds them before the next lex.
 class UDLWordList {
-    std::vector<const char*> words;
+    std::vector<const char*> words;     // always ends with "", which the reorder loop reads at Length()
+    int starts[256];                    // index of the first word starting with each byte, or -1
 public:
-    explicit UDLWordList(const WordList &source) {
+    UDLWordList() {Clear();}
+    void Clear() {words.assign(1,"");std::fill(std::begin(starts),std::end(starts),-1);}
+    // The source is already in strcmp order (WordList::Set sorts it); no sort is needed here.
+    void Assign(const WordList &source) {
+        words.clear();
+        words.reserve(static_cast<size_t>(source.Length())+1);
         for(int i=0;i<source.Length();++i) words.push_back(source.WordAt(i));
-        // Upstream moves longer multi-part entries before their exact prefixes.
-        std::stable_sort(words.begin(),words.end(),[](const char*a,const char*b) {
-            size_t n=std::strlen(a),m=std::strlen(b);
-            bool multiA=std::strchr(a,'\v')||std::strchr(a,'\b'),multiB=std::strchr(b,'\v')||std::strchr(b,'\b');
-            if(n<m && std::strncmp(a,b,n)==0 && multiB) return false;
-            if(m<n && std::strncmp(a,b,m)==0 && multiA) return true;
-            return std::strcmp(a,b)<0;
-        });
         words.push_back("");
+    }
+    // Call after reordering. The reorder only swaps a word with a longer word it is a prefix of,
+    // so words stay grouped by first byte and one start index per byte is enough, as upstream.
+    void BuildStarts() {
+        std::fill(std::begin(starts),std::end(starts),-1);
+        for(int i=Length()-1;i>=0;--i) starts[static_cast<unsigned char>(words[i][0])]=i;
     }
     int Length() const {return static_cast<int>(words.size())-1;}
     const char *WordAt(int n) const {return n>=0 && n<(int)words.size()?words[n]:"";}
     void SetWordAt(int n,const char *word){if(n>=0 && n<Length())words[n]=word;}
-    int StartAt(int c) const {for(int i=0;i<Length();++i)if(static_cast<unsigned char>(words[i][0])==c)return i;return -1;}
+    int StartAt(int c) const {return c>=0 && c<256?starts[c]:-1;}
 };
 static bool MatchIgnoreCase2(StyleContext &sc,const char *word) {
     for(int i=0;word[i];++i) {
@@ -1257,12 +1262,74 @@ static void readLastNested(vector<nestedInfo> & lastNestedGroup, int & newState,
     }
 }
 
-static void ColouriseUserDoc(Sci_PositionU startPos, Sci_Position length, int initStyle, WordList *sourceLists[], Accessor &styler)
+// Native port: the property key is userDefine.nesting.NN with a zero-padded two-digit style id,
+// exactly as UserDefinedLanguage.swift writes it and as upstream reads it.
+static int nestingProperty(Accessor & styler, int style)
 {
-    std::array<std::unique_ptr<UDLWordList>,15> ownedLists;
-    UDLWordList *kwLists[15];
-    for(int i=0;i<15;++i){ownedLists[i]=std::make_unique<UDLWordList>(*sourceLists[i]);kwLists[i]=ownedLists[i].get();}
+    char key[32];
+    std::snprintf(key, sizeof key, "userDefine.nesting.%02d", style);
+    return styler.GetPropertyInt(key, 0);
+}
 
+// Native port: this is upstream's reorder loop from the BOF block of ColouriseUserDoc, moved into a
+// function and otherwise unchanged. It is one loop over all MAPPER_TOTAL lists with a single
+// isMultiPart flag that is never reset, so once any multi-part word has been seen it also swaps
+// plain prefix pairs (for/foreach) in every list; that is upstream's behaviour and is kept.
+// Each swap moves a longer word ahead of a word it starts with, so the loop reaches a fixed point.
+static void ReorderMultiPartKeywords(UDLWordList * kwLists[])
+{
+    // in keyword list objects, put longer multi-part string first,
+    // e.g. "else if" should go in front of "else"
+    bool equal = true;
+    bool isMultiPart = false;
+    bool switchPerformed = true;
+
+    while (switchPerformed)
+    {
+        switchPerformed = false;
+        for (int i=0; i<MAPPER_TOTAL; ++i)  // for each keyword list object
+        {
+            for (int j=0; j<kwLists[i]->Length(); ++j)   // for each keyword within object
+            {
+                equal = true;
+                int z = 0;
+                for (; kwLists[i]->WordAt(j)[z]; ++z)    // for each letter within keyword
+                {
+                    if (kwLists[i]->WordAt(j+1)[z] == '\v' || kwLists[i]->WordAt(j+1)[z] == '\b')
+                        isMultiPart = true;
+
+                    if (kwLists[i]->WordAt(j)[z] != kwLists[i]->WordAt(j+1)[z])
+                    {
+                        equal = false;
+                        break;
+                    }
+                }
+                if (!isMultiPart)   // is next word multi part keyword?
+                {
+                    for (int k=0; kwLists[i]->WordAt(j+1)[k]; ++k)
+                    {
+                        if (kwLists[i]->WordAt(j+1)[k] == '\v' || kwLists[i]->WordAt(j+1)[k] == '\b')
+                        {
+                            isMultiPart = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (equal && isMultiPart && kwLists[i]->WordAt(j+1)[z])  // perform switch only if next word is longer !
+                {
+                    const char * temp = kwLists[i]->WordAt(j);
+                    kwLists[i]->SetWordAt(j, kwLists[i]->WordAt(j+1));
+                    kwLists[i]->SetWordAt(j+1, temp);
+                    switchPerformed = true;
+                }
+            }
+        }
+    }
+}
+
+static void ColouriseUserDoc(Sci_PositionU startPos, Sci_Position length, int initStyle, UDLWordList *kwLists[], Accessor &styler)
+{
     bool foldComments = styler.GetPropertyInt("userDefine.allowFoldOfComments", 0) != 0;
     bool ignoreCase   = styler.GetPropertyInt("userDefine.isCaseIgnored",       0) != 0;
     bool foldCompact  = styler.GetPropertyInt("userDefine.foldCompact",         0) != 0;
@@ -1284,17 +1351,18 @@ static void ColouriseUserDoc(Sci_PositionU startPos, Sci_Position length, int in
     prefixes[13] = styler.GetPropertyInt("userDefine.prefixKeywords7", 0) != 0;
     prefixes[14] = styler.GetPropertyInt("userDefine.prefixKeywords8", 0) != 0;
 
-    char nestingBuffer[] = "userDefine.nesting.00";     // "00" is only a placeholder, the actual number is set by _itoa
-    _itoa(SCE_USER_STYLE_COMMENT,       (nestingBuffer+20), 10);    int commentNesting      = styler.GetPropertyInt(nestingBuffer, 0);
-    _itoa(SCE_USER_STYLE_COMMENTLINE,   (nestingBuffer+20), 10);    int lineCommentNesting  = styler.GetPropertyInt(nestingBuffer, 0);
-    _itoa(SCE_USER_STYLE_DELIMITER1,    (nestingBuffer+19), 10);    int delim1Nesting       = styler.GetPropertyInt(nestingBuffer, 0);  // one byte difference
-    _itoa(SCE_USER_STYLE_DELIMITER2,    (nestingBuffer+19), 10);    int delim2Nesting       = styler.GetPropertyInt(nestingBuffer, 0);  // for two-digit numbers
-    _itoa(SCE_USER_STYLE_DELIMITER3,    (nestingBuffer+19), 10);    int delim3Nesting       = styler.GetPropertyInt(nestingBuffer, 0);
-    _itoa(SCE_USER_STYLE_DELIMITER4,    (nestingBuffer+19), 10);    int delim4Nesting       = styler.GetPropertyInt(nestingBuffer, 0);
-    _itoa(SCE_USER_STYLE_DELIMITER5,    (nestingBuffer+19), 10);    int delim5Nesting       = styler.GetPropertyInt(nestingBuffer, 0);
-    _itoa(SCE_USER_STYLE_DELIMITER6,    (nestingBuffer+19), 10);    int delim6Nesting       = styler.GetPropertyInt(nestingBuffer, 0);
-    _itoa(SCE_USER_STYLE_DELIMITER7,    (nestingBuffer+19), 10);    int delim7Nesting       = styler.GetPropertyInt(nestingBuffer, 0);
-    _itoa(SCE_USER_STYLE_DELIMITER8,    (nestingBuffer+19), 10);    int delim8Nesting       = styler.GetPropertyInt(nestingBuffer, 0);
+    // Native port: one helper formats the whole userDefine.nesting.NN key (upstream patches two
+    // digits into a placeholder buffer with _itoa).
+    int commentNesting      = nestingProperty(styler, SCE_USER_STYLE_COMMENT);
+    int lineCommentNesting  = nestingProperty(styler, SCE_USER_STYLE_COMMENTLINE);
+    int delim1Nesting       = nestingProperty(styler, SCE_USER_STYLE_DELIMITER1);
+    int delim2Nesting       = nestingProperty(styler, SCE_USER_STYLE_DELIMITER2);
+    int delim3Nesting       = nestingProperty(styler, SCE_USER_STYLE_DELIMITER3);
+    int delim4Nesting       = nestingProperty(styler, SCE_USER_STYLE_DELIMITER4);
+    int delim5Nesting       = nestingProperty(styler, SCE_USER_STYLE_DELIMITER5);
+    int delim6Nesting       = nestingProperty(styler, SCE_USER_STYLE_DELIMITER6);
+    int delim7Nesting       = nestingProperty(styler, SCE_USER_STYLE_DELIMITER7);
+    int delim8Nesting       = nestingProperty(styler, SCE_USER_STYLE_DELIMITER8);
 
     commentNesting  |= SCE_USER_MASK_NESTING_FOLDERS_IN_COMMENT_OPEN
                     |  SCE_USER_MASK_NESTING_FOLDERS_IN_COMMENT_MIDDLE
@@ -1384,54 +1452,9 @@ static void ColouriseUserDoc(Sci_PositionU startPos, Sci_Position length, int in
 
     if (startPos == 0)
     {
-        // in keyword list objects, put longer multi-part string first,
-        // e.g. "else if" should go in front of "else"
-        bool equal = true;
-        bool isMultiPart = false;
-        bool switchPerformed = true;
-
-        while (switchPerformed)
-        {
-            switchPerformed = false;
-            for (int i=0; i<MAPPER_TOTAL; ++i)  // for each keyword list object
-            {
-                for (int j=0; j<kwLists[i]->Length(); ++j)   // for each keyword within object
-                {
-                    equal = true;
-                    int z = 0;
-                    for (; kwLists[i]->WordAt(j)[z]; ++z)    // for each letter within keyword
-                    {
-                        if (kwLists[i]->WordAt(j+1)[z] == '\v' || kwLists[i]->WordAt(j+1)[z] == '\b')
-                            isMultiPart = true;
-
-                        if (kwLists[i]->WordAt(j)[z] != kwLists[i]->WordAt(j+1)[z])
-                        {
-                            equal = false;
-                            break;
-                        }
-                    }
-                    if (!isMultiPart)   // is next word multi part keyword?
-                    {
-                        for (int k=0; kwLists[i]->WordAt(j+1)[k]; ++k)
-                        {
-                            if (kwLists[i]->WordAt(j+1)[k] == '\v' || kwLists[i]->WordAt(j+1)[k] == '\b')
-                            {
-                                isMultiPart = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (equal && isMultiPart && kwLists[i]->WordAt(j+1)[z])  // perform switch only if next word is longer !
-                    {
-                        const char * temp = kwLists[i]->WordAt(j);
-                        kwLists[i]->SetWordAt(j, kwLists[i]->WordAt(j+1));
-                        kwLists[i]->SetWordAt(j+1, temp);
-                        switchPerformed = true;
-                    }
-                }
-            }
-        }
+        // Native port: upstream reorders the keyword lists here ("else if" ahead of "else").
+        // That loop is ReorderMultiPartKeywords above, run when a list changes rather than at BOF,
+        // so that lexes that start past offset 0 see the same order.
 
         // if this is BOF, re-generate stuff in global map objects (udlKeywordsMap and nestedMap)
         const char * sFoldersInCode1Open     = styler.pprops->Get("userDefine.foldersInCode1Open");
@@ -2356,55 +2379,63 @@ static void ColouriseUserDoc(Sci_PositionU startPos, Sci_Position length, int in
     sc.Complete();
 }
 
-static void FoldUserDoc(Sci_PositionU /* startPos */, Sci_Position /* length */, int /*initStyle*/, WordList *[],  Accessor & /* styler */)
-{
-    // this function will not be used in final version of the code.
-    // it should remain commented out as it is useful for debugging purposes !!!
-    // perhaps ifdef block would be a wiser choice, but commenting out works just fine for the time being
+// Native port: upstream ends with an empty FoldUserDoc, a four-entry word-list description and the
+// LexerModule lmUserDefine. None of them is used here: the lexer below is created directly by
+// TextTankCreateUserLexer, owns fifteen word lists and describes them itself.
+static_assert(MAPPER_TOTAL == 15, "the user lexer owns one word list per mapper entry");
 
-    // int lineCurrent = styler.GetLine(startPos);
-    // vector<int>::iterator iter = foldVectorStatic->begin() + lineCurrent;
-
-    // for (; iter != foldVectorStatic->end(); ++iter)
-    // {
-        // styler.SetLevel(lineCurrent++, *iter);
-    // }
-}
-
-static const char * const userDefineWordLists[] = {
-            "Primary keywords and identifiers",
-            "Secondary keywords and identifiers",
-            "Documentation comment keywords",
-            "Fold header keywords",
-            0,
-        };
-
-extern const LexerModule lmUserDefine(SCLEX_USER, ColouriseUserDoc, "user", FoldUserDoc, userDefineWordLists);
+// One name per word list, in list order (see maskMapper); the names are those of the UDL file format.
+static const char userDefineWordListSets[] =
+    "Operators2\n"
+    "Folders in code2, open\nFolders in code2, middle\nFolders in code2, close\n"
+    "Folders in comment, open\nFolders in comment, middle\nFolders in comment, close\n"
+    "Keywords1\nKeywords2\nKeywords3\nKeywords4\nKeywords5\nKeywords6\nKeywords7\nKeywords8";
 
 // Cache ownership is per lexer, not pointer-to-int aliases from a Windows buffer manager.
-class TextTankUDLLexer final : public LexerSimple {
+class TextTankUDLLexer final : public DefaultLexer {
+    PropSetSimple props;
     int cacheID;
-    std::array<std::unique_ptr<WordList>,15> udlLists;
+    WordList udlLists[MAPPER_TOTAL];
+    UDLWordList orderedLists[MAPPER_TOTAL];     // views of udlLists; see UDLWordList
+    bool orderedListsStale=true;
     static int nextID;
-public:
-    TextTankUDLLexer() : LexerSimple(&lmUserDefine),cacheID(++nextID) {
-        for(auto &list:udlLists)list=std::make_unique<WordList>();
-        const auto id=std::to_string(cacheID);
-        LexerSimple::PropertySet("userDefine.currentBufferID",id.c_str());
-        LexerSimple::PropertySet("userDefine.udlName",id.c_str());
+    // All fifteen views are rebuilt together because the reorder's flag is shared between lists.
+    void RebuildOrderedLists() {
+        UDLWordList *lists[MAPPER_TOTAL];
+        for(int i=0;i<MAPPER_TOTAL;++i){orderedLists[i].Assign(udlLists[i]);lists[i]=&orderedLists[i];}
+        ReorderMultiPartKeywords(lists);
+        for(auto &list:orderedLists)list.BuildStarts();
+        orderedListsStale=false;
     }
+public:
+    TextTankUDLLexer() : DefaultLexer("user",SCLEX_USER),cacheID(++nextID) {
+        const auto id=std::to_string(cacheID);
+        props.Set("userDefine.currentBufferID",id);
+        props.Set("userDefine.udlName",id);
+    }
+    // Same contract as LexerBase: 0 when the value changed, -1 when it did not.
     Sci_Position SCI_METHOD PropertySet(const char *key,const char *value) override {
         if(std::strcmp(key,"userDefine.currentBufferID")==0 || std::strcmp(key,"userDefine.udlName")==0)return -1;
-        return LexerSimple::PropertySet(key,value);
+        return props.Set(key,value)?0:-1;
     }
+    const char *SCI_METHOD PropertyGet(const char *key) override {return props.Get(key);}
+    const char *SCI_METHOD DescribeWordListSets() override {return userDefineWordListSets;}
     Sci_Position SCI_METHOD WordListSet(int n,const char *words) override {
-        if(n<0||n>=15)return -1;
-        return udlLists[n]->Set(words)?0:-1;
+        if(n<0||n>=MAPPER_TOTAL)return -1;
+        if(!udlLists[n].Set(words))return -1;
+        // Set freed the storage the views point into. Drop every view now so nothing can read
+        // it, and rebuild them once, at the next lex, however many lists are set before then.
+        for(auto &list:orderedLists)list.Clear();
+        orderedListsStale=true;
+        return 0;
     }
     void SCI_METHOD Lex(Sci_PositionU start,Sci_Position length,int style,Scintilla::IDocument *document) override {
-        WordList *lists[15];for(int i=0;i<15;++i)lists[i]=udlLists[i].get();
+        if(orderedListsStale)RebuildOrderedLists();
+        UDLWordList *lists[MAPPER_TOTAL];for(int i=0;i<MAPPER_TOTAL;++i)lists[i]=&orderedLists[i];
         Accessor accessor(document,&props);ColouriseUserDoc(start,length,style,lists,accessor);accessor.Flush();
     }
+    // Deliberately empty, as upstream's FoldUserDoc is: ColouriseUserDoc sets every fold level
+    // itself (styler.SetLevel) while it styles. A second fold pass here would overwrite them.
     void SCI_METHOD Fold(Sci_PositionU,Sci_Position,int,Scintilla::IDocument *) override {}
     void SCI_METHOD Release() override {nestedMap.erase(cacheID);udlKeywordsMap.erase(cacheID);delete this;}
 };
