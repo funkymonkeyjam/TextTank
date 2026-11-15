@@ -227,6 +227,27 @@ import AppKit
                 check(transformed.editor.text == "a\nb\n", "native line sorting changes authoritative buffer")
                 transformed.editor.executeCommand("undo")
                 check(transformed.editor.text == "b\na\n", "native line sorting one Undo")
+                // G368: a whole-document transform keeps bookmarks and the caret line.
+                let indented = (0..<60).map { "  row \($0)\n" }.joined()
+                transformed.editor.text = indented
+                transformed.editor.resetUndoHistory()
+                try require(transformed.editor.setBookmarks([7, 40]), "fixture: bookmarks before a transform")
+                try require(transformed.editor.goToLine(41), "fixture: caret on line 41 before a transform")
+                try EditorTransform.trimLeading.apply(to: transformed.editor)
+                check(
+                    transformed.editor.text == indented.replacingOccurrences(of: "  row", with: "row")
+                        && transformed.editor.bookmarkLines == [7, 40]
+                        && transformed.editor.statusInfo["line"]?.intValue == 41,
+                    "whole-document transform keeps bookmarks and the caret line")
+                transformed.editor.executeCommand("undo")
+                check(
+                    transformed.editor.text == indented && transformed.editor.statusInfo["line"]?.intValue == 41,
+                    "whole-document transform is one Undo, which also returns the caret to its line")
+                // Scintilla's Undo deletes and reinserts the replaced span, and undo history does not
+                // record markers, so bookmarks inside a span that covers every line collapse on Undo.
+                knownDefect(
+                    "G368", "bookmarks inside a transform that changed every line survive its Undo",
+                    fixed: transformed.editor.bookmarkLines == [7, 40])
                 transformed.close()
                 let bomDocument = TextDocument()
                 let doubleBOM = Data([0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF, 0x61])
@@ -473,6 +494,25 @@ import AppKit
                     "explicit encoding reinterpretation reads disk bytes")
                 check(!document.isDocumentEdited && !document.editor.modified, "successful reload resets dirty state")
                 check(try document.diskState() == .unchanged, "reload updates external-change baseline")
+                // G368: a reload after a small external change keeps bookmarks and the caret line.
+                let monitored = (0..<60).map { "row \($0)\n" }.joined()
+                try Data(monitored.utf8).write(to: saved)
+                try document.reload(using: .utf8, discard: true)
+                try require(document.editor.setBookmarks([5, 40]), "fixture: bookmarks on the reloaded text")
+                try require(document.editor.goToLine(41), "fixture: caret on line 41")
+                let externallyEdited = monitored.replacingOccurrences(of: "row 10\n", with: "row 1X\n")
+                try Data(externallyEdited.utf8).write(to: saved)
+                check(try document.diskState() == .changed, "fixture: one character changed on disk")
+                try document.reload(using: .utf8, discard: true)
+                check(
+                    document.editor.text == externallyEdited && document.editor.bookmarkLines == [5, 40]
+                        && document.editor.statusInfo["line"]?.intValue == 41,
+                    "reload after a one-character disk change keeps bookmarks and the caret line")
+                check(
+                    try !document.editor.modified && !document.isDocumentEdited && document.diskState() == .unchanged,
+                    "bookmark-preserving reload still resets dirty state and the disk baseline")
+                document.editor.executeCommand("undo")
+                check(document.editor.text == externallyEdited, "bookmark-preserving reload still clears undo")
                 document.editor.readOnly = true
                 try Data("locked reload".utf8).write(to: saved)
                 try document.reload(using: .utf8)

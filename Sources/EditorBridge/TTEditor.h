@@ -43,7 +43,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)setSelectionAnchor:(NSInteger)anchor caret:(NSInteger)caret;
 /// Moves the caret to the start of a one-based line in the engine's own line model, unfolding
 /// it if hidden, and scrolls it into view. NO, changing nothing, when the line does not exist.
-- (BOOL)goToLine:(NSInteger)line;
+- (BOOL)goToLine:(NSInteger)line NS_SWIFT_NAME(goToLine(_:));
 - (void)scrollCaretIntoView;
 /// Zero-based display line at the top of this view.
 @property(nonatomic, readonly) NSInteger firstVisibleLine;

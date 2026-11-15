@@ -526,10 +526,12 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     editor.resetUndoHistory()
                     editor.setSavePoint()
                     _ = editor.setSelectionAnchor(0, caret: 0)
+                    try require(editor.setBookmarks([0]), "fixture: sample \(sample) bookmark")
                     try restarted.runSavedAutomation(id: preservedWorkflow.id)
                     check(
                         editor.text.utf8.elementsEqual(expected.utf8),
                         "sample \(sample) native exact literal expected bytes")
+                    check(editor.bookmarkLines == [0], "sample \(sample) document automation keeps the bookmark")
                     check(
                         editor.window === window && window.contentView === editor
                             && NSApp.windows.count == sampleWindows, "sample \(sample) uses same editor and window")

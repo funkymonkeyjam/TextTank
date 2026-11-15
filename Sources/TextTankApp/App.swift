@@ -760,7 +760,9 @@ final class TextDocument: NSDocument {
         loading = true
         let locked = editor.readOnly
         editor.readOnly = false
-        editor.text = decoded.text
+        // One minimal-span edit: bookmarks, folds and the caret outside the changed bytes survive a
+        // reload. An empty buffer (first open) takes this as a plain insert.
+        _ = editor.replaceDocumentText(decoded.text)
         editor.setLineEndingMode(LineEnding.detect(in: decoded.text).rawValue)
         editor.resetUndoHistory()
         format = decoded.format
@@ -1490,26 +1492,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             alert.messageText = "Go to Line"
             let input = NSTextField(string: String(info["line"]?.intValue ?? 1))
             input.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+            input.identifier = NSUserInterfaceItemIdentifier("goToLine.line")
+            input.setAccessibilityLabel("Line number")
             alert.accessoryView = input
             alert.addButton(withTitle: "Go")
             alert.addButton(withTitle: "Cancel")
             alert.window.initialFirstResponder = input
             guard alert.runModal() == .alertFirstButtonReturn else { return }
-            guard editor.window != nil, let line = Int(input.stringValue), line >= 1,
-                line <= (editor.statusInfo["lines"]?.intValue ?? 1)
-            else {
+            // The engine's own line model decides which lines exist; a folded target is revealed.
+            guard editor.window != nil, let line = Int(input.stringValue), editor.goToLine(line) else {
                 NSSound.beep()
                 return
             }
-            let text = editor.text, ns = text as NSString
-            let breaks = try! NSRegularExpression(pattern: "\\r\\n|\\r|\\n")
-            let matches = breaks.matches(in: text, range: NSRange(location: 0, length: ns.length))
-            guard line == 1 || matches.indices.contains(line - 2) else {
-                NSSound.beep()
-                return
-            }
-            let offset = line == 1 ? 0 : ns.substring(to: NSMaxRange(matches[line - 2].range)).utf8.count
-            _ = editor.setSelectionAnchor(offset, caret: offset)
             window?.makeFirstResponder(editor)
         default:
             if id.hasPrefix("width."), let width = Int(id.dropFirst(6)) {

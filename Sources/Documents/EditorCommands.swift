@@ -91,6 +91,11 @@ enum EditorTransform: String, CaseIterable {
         guard output != source else { return }
         editor.beginUndoGroup()
         defer { editor.endUndoGroup() }
-        if selection { editor.replaceSelection(output) } else { editor.text = output }
+        // The whole-document case replaces only the span that differs, keeping bookmarks and the caret line.
+        guard selection ? editor.replaceSelection(output) : editor.replaceDocumentText(output) else {
+            throw NSError(
+                domain: "TextTank", code: 6,
+                userInfo: [NSLocalizedDescriptionKey: "The document could not be changed."])
+        }
     }
 }

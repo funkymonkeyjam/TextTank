@@ -593,7 +593,9 @@ final class AutomationController: NSObject, NSMenuDelegate {
             guard editor.selectionCount == 1, editor.selectionStart == start, editor.selectionEnd == end else {
                 throw AutomationError.invalid("The editor selection changed. No text was replaced.")
             }
-            if workflow.input == .document { editor.text = output } else { editor.replaceSelection(output) }
+            // Document input replaces only the span that differs, keeping bookmarks and the caret line.
+            guard workflow.input == .document ? editor.replaceDocumentText(output) : editor.replaceSelection(output)
+            else { throw AutomationError.invalid("The automation result could not be written to the editor.") }
         case .clipboard:
             NSPasteboard.general.clearContents()
             guard NSPasteboard.general.setString(output, forType: .string) else {

@@ -1096,6 +1096,60 @@ extension DocumentChecks {
                 columnDialog(text: "ab", numbered: false, start: "1", step: "1", confirm: false)
                     && document.editor.text == "x\nx\nx\n" && document.editor.revision == untouched,
                 "Cancel in Insert into Each Selection inserts nothing")
+            // F12: Go to Line through its real dialog, on the engine's own line model.
+            func goToLineDialog(_ entry: String, confirm: Bool = true) -> Bool {
+                var acted = false, timedOut = false
+                let deadline = Date().addingTimeInterval(10)
+                let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+                    MainActor.assumeIsolated {
+                        guard let content = NSApp.modalWindow?.contentView else { return }
+                        if Date() > deadline {
+                            timedOut = true
+                            NSApp.abortModal()
+                            return
+                        }
+                        guard !acted else { return }
+                        let views = descendants(content)
+                        guard
+                            let field = views.compactMap({ $0 as? NSTextField }).first(where: {
+                                $0.identifier?.rawValue == "goToLine.line"
+                            }),
+                            let press = views.compactMap({ $0 as? NSButton }).first(where: {
+                                $0.title == (confirm ? "Go" : "Cancel")
+                            })
+                        else { return }
+                        acted = true
+                        field.stringValue = entry
+                        press.performClick(nil)
+                    }
+                }
+                RunLoop.main.add(timer, forMode: .modalPanel)
+                let item = NSMenuItem(title: "Go to Line…", action: nil, keyEquivalent: "")
+                item.representedObject = "goToLine"
+                controller.perform(NSSelectorFromString("statusOption:"), with: item)
+                timer.invalidate()
+                return acted && !timedOut
+            }
+            document.editor.text = "é\r\nbb\rccc\n"
+            document.editor.resetUndoHistory()
+            document.editor.setSavePoint()
+            let goRevision = document.editor.revision
+            check(
+                goToLineDialog("3") && document.editor.selectionCaret == 7 && document.editor.selectionAnchor == 7,
+                "Go to Line places the caret at the start of the one-based line across CRLF and CR")
+            check(
+                goToLineDialog("4") && document.editor.selectionCaret == 11,
+                "Go to Line reaches the empty line after the final line break")
+            check(
+                goToLineDialog("5") && goToLineDialog("0") && goToLineDialog("two") && goToLineDialog("-1")
+                    && document.editor.selectionCaret == 11,
+                "Go to Line leaves the caret alone for lines that do not exist and for non-numbers")
+            check(
+                goToLineDialog("1", confirm: false) && document.editor.selectionCaret == 11,
+                "Cancel in Go to Line leaves the caret alone")
+            check(
+                goToLineDialog("1") && document.editor.selectionCaret == 0 && document.editor.revision == goRevision
+                    && !document.editor.modified, "Go to Line never edits the document")
             document.editor.text = ""
             document.close()
         }
