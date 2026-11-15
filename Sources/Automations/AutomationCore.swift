@@ -851,39 +851,17 @@ enum AutomationFileInput {
         if limit >= 1024, limit % 1024 == 0 { return "\(limit / 1024) KiB" }
         return "\(limit) bytes"
     }
-    static func readData(_ url: URL, limit: Int) throws -> Data {
+    static func readData(_ url: URL, limit: Int, parent: PrivateFileStore.ParentPolicy = .selectedInput) throws -> Data
+    {
         guard url.isFileURL else { throw AutomationError.invalid("Choose a local text file.") }
-        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-        // The system's own reason: a missing file, a symbolic link (not followed) and a permission
-        // problem are different things to fix.
-        guard descriptor >= 0 else { throw FileOperationFailure(errno, operation: "read input file", path: url.path) }
-        defer { close(descriptor) }
-        var info = stat()
-        guard fstat(descriptor, &info) == 0 else {
-            throw FileOperationFailure(errno, operation: "read input file", path: url.path)
-        }
-        guard info.st_mode & S_IFMT == S_IFREG else {
+        do { return try PrivateFileStore.read(url, maximumBytes: limit, parent: parent) } catch PrivateFileError
+            .unsafeLocation
+        {
             throw AutomationError.invalid("Automation input must be a regular file, not a folder, pipe or device.")
-        }
-        guard info.st_size <= limit else {
+        } catch PrivateFileError.tooLarge {
             throw AutomationError.invalid(
                 "This file is larger than the \(describe(limit: limit)) limit for this input.")
         }
-        var data = Data(), chunk = [UInt8](repeating: 0, count: 65536)
-        while true {
-            let count = Darwin.read(descriptor, &chunk, chunk.count)
-            if count < 0 {
-                if errno == EINTR { continue }
-                throw FileOperationFailure(errno, operation: "read input file", path: url.path)
-            }
-            if count == 0 { break }
-            guard data.count <= limit - count else {
-                throw AutomationError.invalid(
-                    "This file is larger than the \(describe(limit: limit)) limit for this input.")
-            }
-            data.append(contentsOf: chunk.prefix(count))
-        }
-        return data
     }
 }
 

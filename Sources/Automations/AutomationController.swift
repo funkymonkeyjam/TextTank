@@ -68,7 +68,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         if lstat(storage.path, &storageInfo) == 0 {
             do {
                 library = try AutomationLibrary.decode(
-                    AutomationFileInput.readData(storage, limit: AutomationLibrary.maximumBytes))
+                    AutomationFileInput.readData(storage, limit: AutomationLibrary.maximumBytes, parent: .strict))
             } catch { loadError = error }
         } else if errno != ENOENT {
             loadError = FileOperationFailure(errno, operation: "inspect saved automations", path: storage.path)
@@ -570,22 +570,8 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 throw AutomationError.invalid("Automation storage must be a regular file.")
             }
         }
-        let temporary = directory.appendingPathComponent(".automations-" + UUID().uuidString)
-        let descriptor = open(temporary.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-        guard descriptor >= 0 else {
-            throw FileOperationFailure(errno, operation: "create automation settings beside", path: storage.path)
-        }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer {
-            try? handle.close()
-            try? FileManager.default.removeItem(at: temporary)
-        }
-        try handle.write(contentsOf: data)
-        try handle.synchronize()
-        try handle.close()
-        guard rename(temporary.path, storage.path) == 0 else {
-            throw FileOperationFailure(errno, operation: "replace saved automations", path: storage.path)
-        }
+        try PrivateFileStore.write(
+            data, to: storage, maximumBytes: AutomationLibrary.maximumBytes, temporaryPrefix: ".automations-")
         installError = nil
         library = proposed
         rebuild()
