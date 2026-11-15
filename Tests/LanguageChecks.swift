@@ -95,14 +95,17 @@ import Foundation
                 ("#! /bin/sh\n", "bash"), ("#!/opt/pythonapps/bin/ruby\n", "ruby"),
                 ("#!/usr/bin/env PYTHONPATH=/x ipython\r\nprint(1)", "python"),
                 ("#!/usr/local/bin/ts-node", "javascript.js"),
-                ("#!/usr/bin/python-3\n", "python")
+                ("#!/usr/bin/python-3\n", "python"), ("#!/usr/local/bin/python3.12m\n", "python"),
+                ("#!/usr/bin/python3.13t\n", "python"), ("#!/usr/bin/python3.7dm\n", "python")
             ] {
                 check(
                     catalog.detect(filename: "script", text: line) == expected,
                     "shebang \(line.debugDescription) detects \(expected)")
             }
-            for line in ["#!/opt/node/bin/unknowninterp\n", "#!/shared/bin/foo\n", "#!\n/bin/sh\n", "#!/usr/bin/env\n"]
-            {
+            for line in [
+                "#!/opt/node/bin/unknowninterp\n", "#!/shared/bin/foo\n", "#!\n/bin/sh\n", "#!/usr/bin/env\n",
+                "#!/usr/bin/pythonm\n", "#!/usr/bin/bashd\n", "#!/usr/bin/python3x\n"
+            ] {
                 check(
                     catalog.detect(filename: "script", text: line) == nil,
                     "shebang \(line.debugDescription) names no known interpreter")
@@ -306,6 +309,17 @@ import Foundation
             }
             rejects("UDL UTF-16 BE without BOM carrying a DTD", message: "DTD") {
                 _ = try UserDefinedLanguage.decode(dtd.data(using: .utf16BigEndian)!)
+            }
+            // Nothing is declared here, so only the NUL test stands between this and the parser.
+            for (label, encoding) in [("LE", String.Encoding.utf16LittleEndian), ("BE", .utf16BigEndian)] {
+                rejects("UDL UTF-16 \(label) without BOM with an empty DOCTYPE") {
+                    _ = try UserDefinedLanguage.decode(
+                        "<?xml version=\"1.0\"?><!DOCTYPE N><NotepadPlus/>".data(using: encoding)!)
+                }
+                rejects("UDL UTF-16 \(label) without BOM and without a DOCTYPE") {
+                    _ = try UserDefinedLanguage.decode(
+                        String(decoding: udl, as: UTF8.self).data(using: encoding)!)
+                }
             }
             let utf7 = Data(
                 ("<?xml version=\"1.0\" encoding=\"UTF-7\"?>+ADwAIQ-DOCTYPE NotepadPlus +AFsAPAAh-ENTITY a +ACI-x+ACIAPgBdAD4-"

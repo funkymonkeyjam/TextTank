@@ -166,7 +166,7 @@ struct LanguageCatalog: Codable, Equatable {
         "rbash": "bash", "sh": "bash", "zsh": "bash", "dash": "bash", "ksh": "bash", "ash": "bash"
     ]
     /// The interpreter a `#!` line names: the basename of the command, or of the command `env`
-    /// runs, lowercased and without a version suffix. Only the first 512 characters are read.
+    /// runs, lowercased and without a version suffix (digits, dots and CPython build flags). Only the first 512 characters are read.
     static func interpreter(shebang text: String) -> String? {
         guard text.hasPrefix("#!") else { return nil }
         let first = text.prefix(512).split(whereSeparator: \.isNewline).first ?? ""
@@ -179,6 +179,9 @@ struct LanguageCatalog: Codable, Equatable {
             name = basename(command)
         }
         var stem = Substring(name)
+        // CPython build flags after the version, as in python3.12m or python3.13t.
+        let flags = stem.reversed().prefix { "dmut".contains($0) }.count
+        if flags > 0, flags <= 3, stem.dropLast(flags).last?.isNumber == true { stem.removeLast(flags) }
         while let last = stem.last, last.isASCII, last.isNumber || last == "." { stem.removeLast() }
         if stem.count < name.count, stem.last == "-" { stem.removeLast() }
         return stem.isEmpty ? nil : String(stem)
