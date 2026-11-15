@@ -529,6 +529,7 @@ import AppKit
         check(secondController.window!.isVisible && !firstController.window!.isVisible,"next-tab command restores document visibility")
         first.close();second.close()
         }
+        pinning(root:root,app:app,sessionDelegate:sessionDelegate) { name,line,body in section(name,line:line,body) }
         section("clean quit") {
         let termination = AppDelegate().applicationShouldTerminate(app)
         check(termination == .terminateNow,"clean application quit does not wait for async reply")

@@ -86,16 +86,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for document in documents { document.close() }
             return .terminateNow
         }
-        DispatchQueue.main.async {
-            NSDocumentController.shared.reviewUnsavedDocuments(withAlertTitle: "Quit TextTank?", cancellable: true, delegate: self, didReviewAllSelector: #selector(self.reviewed(_:didReviewAll:contextInfo:)), contextInfo: nil)
-        }
+        DispatchQueue.main.async { self.requestUnsavedReview(self) }
         return .terminateLater
     }
+    /// The two AppKit calls of the dirty-quit path. They are properties only so that a check
+    /// can observe the request and the reply without presenting the review or ending the process.
+    var requestUnsavedReview:(AppDelegate)->Void = { delegate in
+        NSDocumentController.shared.reviewUnsavedDocuments(withAlertTitle: "Quit TextTank?", cancellable: true, delegate: delegate, didReviewAllSelector: #selector(AppDelegate.reviewed(_:didReviewAll:contextInfo:)), contextInfo: nil)
+    }
+    var replyToTerminate:(Bool)->Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
     @objc func reviewed(_ controller: NSDocumentController, didReviewAll: Bool, contextInfo: UnsafeMutableRawPointer?) {
         if didReviewAll { for document in NSDocumentController.shared.documents { document.close() } }
-        NSApp.reply(toApplicationShouldTerminate: didReviewAll)
+        replyToTerminate(didReviewAll)
     }
-    private func buildMenus() {
+    func buildMenus() {
         let bar = NSMenu(); NSApp.mainMenu = bar
         func menu(_ title: String) -> NSMenu { let item = NSMenuItem(); item.title = title; let m = NSMenu(title: title); item.submenu = m; bar.addItem(item); return m }
         func item(_ m: NSMenu, _ title: String, _ action: Selector, _ key: String = "", _ object: String? = nil) {
@@ -188,6 +192,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func recoveryIssueText(_ issues:[RecoveryIssue]) -> String {
         "These files were left untouched and are not recovered automatically.\n\n"+issues.map { $0.url.path+"\n"+$0.message }.joined(separator:"\n\n")
     }
+    /// The Recover branch of the launch prompt. Documents are opened one at a time, so the
+    /// snapshots before one that fails stay open when the error is shown.
+    @discardableResult func openRecovered(_ snapshots:[RecoverySnapshot]) throws -> [TextDocument] {
+        var opened=[TextDocument]()
+        for snapshot in snapshots { opened.append(try TextDocument.openRecovered(snapshot)) }
+        return opened
+    }
     private func restoreRecovery() {
         do {
             let scan = try TextDocument.recovery.scan()
@@ -202,7 +213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle:"Recover");alert.addButton(withTitle:"Later");alert.addButton(withTitle:"Discard…")
             switch alert.runModal() {
             case .alertFirstButtonReturn:
-                for snapshot in snapshots { try TextDocument.openRecovered(snapshot) }
+                try openRecovered(snapshots)
             case .alertThirdButtonReturn:
                 let confirm=TTAlert();confirm.alertStyle = .warning;confirm.messageText="Discard \(snapshots.count) recovery snapshots?"
                 confirm.informativeText="The unsaved text in these snapshots will be permanently deleted. Original files are not changed. This cannot be undone."
