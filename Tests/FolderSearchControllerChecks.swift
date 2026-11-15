@@ -10,35 +10,72 @@ import AppKit
                 url: url, line: 1, columnUTF16: 4, utf16Range: .init(location: 3, length: 4),
                 utf8Range: .init(location: 5, length: 4), preview: "🥑 Test",
                 previewMatchRange: .init(location: 3, length: 4), isMatchTruncatedInPreview: false)
-            check(
-                FolderSearchController.validatedRange(match, text: "🥑 Test", query: "Test", matchCase: true)
-                    == NSRange(location: 5, length: 4), "Unicode UTF8 selection validated")
-            check(
-                FolderSearchController.validatedRange(match, text: "🥑 TEST", query: "Test", matchCase: false) != nil,
-                "case insensitive live match validated")
-            check(
-                FolderSearchController.validatedRange(match, text: "🥑 changed", query: "Test", matchCase: true) == nil,
-                "changed buffer result rejected")
-            check(
-                FolderSearchController.validatedRange(match, text: "x", query: "Test", matchCase: true) == nil,
-                "shorter buffer result rejected")
+            // F52: these checks call the one function Open Result itself uses. They used to call
+            // a literal-only validator the app never ran.
+            func hits(_ text: String, _ query: String, matchCase: Bool = true, wholeWord: Bool = false) -> [SearchHit]?
+            {
+                var options = SearchOptions()
+                options.query = query
+                options.matchCase = matchCase
+                options.wholeWord = wholeWord
+                return try? SearchCore.search(text, options: options).hits
+            }
+            @MainActor func select(
+                _ match: FolderSearchMatch, _ editor: TTEditor, _ found: [SearchHit]?, snapshot: String? = nil,
+                revision: UInt? = nil
+            ) -> Bool {
+                FolderSearchController.selectResult(
+                    match, in: editor, snapshot: snapshot ?? editor.text, revision: revision ?? editor.revision,
+                    hits: found)
+            }
             let document = TextDocument()
             document.editor.text = "🥑 Test"
             document.makeWindowControllers()
-            let beforeNavigation = document.editor.revision
+            let editor = document.editor
+            let beforeNavigation = editor.revision
+            check(select(match, editor, hits("🥑 Test", "Test")), "result navigates current native buffer")
             check(
-                FolderSearchController.selectResult(match, in: document, query: "Test", matchCase: true),
-                "result navigates current native buffer")
-            check(document.editor.selectedText == "Test", "native selection uses validated UTF8 byte range")
+                editor.selectedText == "Test" && editor.selectionAnchor == 5 && editor.selectionCaret == 9,
+                "native selection uses validated UTF8 byte range")
             check(
-                document.editor.revision == beforeNavigation && document.isDocumentEdited,
+                editor.revision == beforeNavigation && document.isDocumentEdited,
                 "navigation preserves dirty content and revision")
-            document.editor.text = "🥑 changed"
-            _ = document.editor.setSelectionAnchor(0, caret: 4)
+            editor.text = "🥑 TEST"
+            _ = editor.setSelectionAnchor(0, caret: 0)
             check(
-                !FolderSearchController.selectResult(match, in: document, query: "Test", matchCase: true)
-                    && document.editor.selectionAnchor == 0 && document.editor.selectionCaret == 4,
-                "stale result leaves native selection unchanged")
+                select(match, editor, hits("🥑 TEST", "Test", matchCase: false)) && editor.selectedText == "TEST",
+                "case insensitive live match validated")
+            check(
+                !select(match, editor, hits("🥑 TEST", "Test")) && editor.selectedText == "TEST",
+                "a result of a case-sensitive search is stale once only the case differs")
+            editor.text = "🥑 Tests"
+            _ = editor.setSelectionAnchor(0, caret: 4)
+            check(
+                !select(match, editor, hits("🥑 Tests", "Test", wholeWord: true)) && editor.selectionAnchor == 0
+                    && editor.selectionCaret == 4,
+                "a whole-word result is stale once the word has grown")
+            editor.text = "🥑 changed"
+            _ = editor.setSelectionAnchor(0, caret: 4)
+            check(
+                !select(match, editor, hits("🥑 changed", "Test")) && editor.selectionAnchor == 0
+                    && editor.selectionCaret == 4, "stale result leaves native selection unchanged")
+            editor.text = "x"
+            check(!select(match, editor, hits("x", "Test")), "shorter buffer result rejected")
+            editor.text = "🥑 Test"
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            let current = hits("🥑 Test", "Test")
+            check(
+                !select(match, editor, current, snapshot: "🥑 Test ")
+                    && !select(match, editor, current, revision: editor.revision &- 1)
+                    && !select(match, editor, nil) && editor.selectionCaret == 0,
+                "a changed buffer, a changed revision or a failed search selects nothing")
+            let shifted = FolderSearchMatch(
+                url: url, line: 1, columnUTF16: 4, utf16Range: .init(location: 3, length: 4),
+                utf8Range: .init(location: 3, length: 4), preview: "🥑 Test",
+                previewMatchRange: .init(location: 3, length: 4), isMatchTruncatedInPreview: false)
+            check(
+                !select(shifted, editor, current) && editor.selectionCaret == 0,
+                "a result whose recorded byte range no longer fits the text selects nothing")
             let suite = "TextTankFolderNative-" + UUID().uuidString
             let isolated = try requireValue(UserDefaults(suiteName: suite), "fixture: isolated defaults suite")
             defer { isolated.removePersistentDomain(forName: suite) }
@@ -114,6 +151,171 @@ import AppKit
             check(
                 isolated.data(forKey: "TextTank.FolderSearch.v1") == corrupt,
                 "native corrupt settings stay preserved after attempted save")
+            // F111 and G370: while a replacement runs, Return in the query field must not cancel it
+            // and a result must not be opened. The first commit is held open to make the window.
+            final class CommitGate: @unchecked Sendable {
+                private let lock = NSLock(), release = DispatchSemaphore(value: 0)
+                private var held = false
+                var isHolding: Bool {
+                    lock.lock()
+                    defer { lock.unlock() }
+                    return held
+                }
+                func holdFirst() {
+                    lock.lock()
+                    let first = !held
+                    held = true
+                    lock.unlock()
+                    if first { release.wait() }
+                }
+                func open() { release.signal() }
+            }
+            let busyRoot = support.appendingPathComponent("busy-flow")
+            try FileManager.default.createDirectory(at: busyRoot, withIntermediateDirectories: true)
+            let busyFiles = ["a.txt", "b.txt", "c.txt"].map { busyRoot.appendingPathComponent($0) }
+            for file in busyFiles { try Data("needle here\n".utf8).write(to: file) }
+            try Data([0xFF]).write(to: busyRoot.appendingPathComponent("broken.txt"))
+            try Data("needle".utf8).write(to: busyRoot.appendingPathComponent("one.log"))
+            try Data("needle".utf8).write(to: busyRoot.appendingPathComponent("two.log"))
+            try Data("needle".utf8).write(to: busyRoot.appendingPathComponent(".hidden.txt"))
+            let busySuite = "TextTankFolderBusy-" + UUID().uuidString
+            let busyDefaults = try requireValue(UserDefaults(suiteName: busySuite), "fixture: isolated defaults suite")
+            defer { busyDefaults.removePersistentDomain(forName: busySuite) }
+            let busy = FolderSearchController(defaults: busyDefaults)
+            busy.workspaceRoots = { [busyRoot] }
+            busy.scope.selectItem(at: 1)
+            busy.mode.selectItem(at: 0)
+            busy.filterField.stringValue = "*.txt"
+            busy.queryField.stringValue = "needle"
+            busy.replacementField.stringValue = "pin"
+            var openedResults: [URL] = [], confirmations: [String] = []
+            busy.openResultDocument = { url, completion in
+                openedResults.append(url)
+                completion(
+                    nil,
+                    NSError(
+                        domain: "TextTank.Checks", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "not opened in checks"]))
+            }
+            busy.confirmReplacement = { explanation in
+                confirmations.append(explanation)
+                return true
+            }
+            let gate = CommitGate()
+            busy.replacementBeforeCommit = { _ in gate.holdFirst() }
+            @MainActor func pressReturn() -> Bool {
+                NSApp.sendAction(busy.queryField.action!, to: busy.queryField.target, from: busy.queryField)
+            }
+            try require(pressReturn(), "fixture: busy-flow search dispatched")
+            await waitUntil("the busy-flow search to finish") { !busy.isSearching }
+            try require(busy.numberOfRows(in: busy.table) == 3, "fixture: three files matched on disk")
+            // F42: what the filters left out is counted; only the file that could not be read is listed.
+            check(
+                busy.status.stringValue
+                    == "3 matches · 3 files searched · 1 not searched (errors) · 3 excluded by filters or settings",
+                "the status separates files that could not be searched from files the filters left out")
+            check(
+                busy.details.string.contains("Not searched (1):")
+                    && busy.details.string.contains("broken.txt: not valid text")
+                    && busy.details.string.contains("Excluded by filters or settings (3): 2 filename filter · 1 hidden")
+                    && !busy.details.string.contains("one.log") && !busy.details.string.contains(".hidden.txt"),
+                "the details list the unreadable file and summarise the exclusions by reason")
+            check(
+                busy.lastOutcome
+                    == .searched(matches: 3, filesSearched: 3, skipped: 4, cancelled: false, limitReached: false),
+                "the search outcome still counts every skipped entry")
+            var flood = FolderSearchReport()
+            for number in 0..<250 {
+                flood.skip(URL(fileURLWithPath: "/tmp/unreadable-\(number)"), .unreadable("denied"), listing: false)
+            }
+            for _ in 0..<60_000 { flood.skip(url, .filenameFiltered, listing: false) }
+            let floodLines = FolderSearchController.skipDetails(flood).components(separatedBy: "\n")
+            check(
+                flood.skipped.count == 250 && floodLines.count == 203 && floodLines[0] == "Not searched (250):"
+                    && floodLines[201] == "… and 50 more not listed."
+                    && floodLines[202] == "Excluded by filters or settings (60000): 60000 filename filter",
+                "sixty thousand filtered files are one line and the problem list is capped")
+            busy.activateResult(row: 0)
+            await waitUntil("the idle result activation to report") {
+                busy.lastOutcome == .failed("not opened in checks")
+            }
+            check(openedResults.map(\.lastPathComponent) == ["a.txt"], "an idle result opens its file")
+            let documentsBefore = NSDocumentController.shared.documents.count
+            check(
+                NSApp.sendAction(NSSelectorFromString("replaceMatchedFiles:"), to: busy, from: nil)
+                    && confirmations.count == 1 && confirmations[0].contains(".texttank-backup"),
+                "Replace Matched Files asks once, with the explanation, through the confirmation seam")
+            await waitUntil("the replacement to reach its first commit") { gate.isHolding }
+            busy.queryField.stringValue = "other"
+            let pressed = pressReturn()
+            check(
+                pressed && busy.status.stringValue.hasPrefix("Replacement in progress.") && busy.isSearching
+                    && busy.numberOfRows(in: busy.table) == 3,
+                "Return during a replacement is refused and the results stay")
+            check(
+                try FolderSearchSettings.load(busyDefaults).options.query == "needle",
+                "a refused Return saves nothing")
+            busy.activateResult(row: 1)
+            check(
+                openedResults.count == 1 && NSDocumentController.shared.documents.count == documentsBefore
+                    && busy.status.stringValue == "Replacement in progress; open results after it finishes.",
+                "a result is not opened while a replacement is running")
+            gate.open()
+            await waitUntil("the held replacement to finish") { !busy.isSearching }
+            check(
+                try busyFiles.allSatisfy { try Data(contentsOf: $0) == Data("pin here\n".utf8) }
+                    && busy.lastReplacementOutcomes.count == 3
+                    && busy.lastReplacementOutcomes.allSatisfy { $0.status == .replaced },
+                "every file is replaced and none is cancelled by the refused Return")
+            check(
+                busy.lastOutcome == .replaced(replaced: 3, notReplaced: 0)
+                    && busy.status.stringValue.hasPrefix("3 files replaced")
+                    && busy.details.string.contains("a.txt: replaced"),
+                "the replacement report is shown when the held replacement ends")
+            busy.queryField.stringValue = "pin"
+            let started = pressReturn(), restarted = pressReturn()
+            check(started && restarted && busy.isSearching, "Return while a search is running starts the search again")
+            await waitUntil("the restarted search to finish") { !busy.isSearching }
+            check(
+                busy.lastOutcome
+                    == .searched(matches: 3, filesSearched: 3, skipped: 10, cancelled: false, limitReached: false)
+                    && busy.numberOfRows(in: busy.table) == 3,
+                "the restarted search completes; recovery copies are excluded, not searched")
+            busy.activateResult(row: 2)
+            check(
+                openedResults.map(\.lastPathComponent) == ["a.txt", "c.txt"],
+                "results open again after the replacement")
+            // F111: closing the window during a replacement cancels it, but the controller stays busy
+            // until the file being committed is done, so nothing can search or open underneath it.
+            let closeGate = CommitGate()
+            busy.replacementBeforeCommit = { _ in closeGate.holdFirst() }
+            busy.replacementField.stringValue = "tack"
+            try require(
+                NSApp.sendAction(NSSelectorFromString("replaceMatchedFiles:"), to: busy, from: nil),
+                "fixture: second replacement dispatched")
+            await waitUntil("the second replacement to reach its first commit") { closeGate.isHolding }
+            busy.windowWillClose(Notification(name: NSWindow.willCloseNotification))
+            let pressedAfterClose = pressReturn()
+            busy.activateResult(row: 0)
+            check(
+                pressedAfterClose && busy.isSearching
+                    && busy.status.stringValue == "Replacement in progress; open results after it finishes."
+                    && openedResults.count == 2,
+                "closing the window during a replacement does not let a search or a result through")
+            closeGate.open()
+            await waitUntil("the replacement interrupted by closing to end") { !busy.isSearching }
+            check(
+                try busy.lastReplacementOutcomes.count == 3 && busy.numberOfRows(in: busy.table) == 0
+                    && busyFiles.allSatisfy {
+                        let bytes = try Data(contentsOf: $0)
+                        return bytes == Data("pin here\n".utf8) || bytes == Data("tack here\n".utf8)
+                    },
+                "the interrupted replacement keeps its outcomes, drops its stale results and leaves whole files")
+            let searchedAgain = pressReturn()
+            check(searchedAgain && busy.isSearching, "searching works again once the interrupted replacement ended")
+            await waitUntil("the search after the interrupted replacement to finish") { !busy.isSearching }
+            // Keep the confirmation-alert flow below last. Once its modal session has ended, the next
+            // wait of a second or so ends the process with status 0 and no summary line.
             // F253: Replace Matched Files through the controller, which is the only place that works
             // out which result files are open. One result is open with unsaved edits.
             let replaceRoot = support.appendingPathComponent("replace-flow")

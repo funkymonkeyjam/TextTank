@@ -27,6 +27,10 @@ struct FolderSearchRequest: Sendable {
     var maximumTotalBytes = 256 * 1024 * 1024
     var maximumResults = 10000
     var previewUTF16Length = 240
+    /// Also list every policy exclusion in `FolderSearchReport.skipped`, for checks and
+    /// diagnostics. Off by default: a filtered dependency folder then costs one counter per
+    /// reason, not up to `maximumEntries` list entries.
+    var listsPolicyExclusions = false
 }
 struct FolderSearchMatch: Equatable, Sendable {
     let url: URL
@@ -42,10 +46,42 @@ struct FolderSearchMatch: Equatable, Sendable {
     var sourceSHA256: String? = nil
     var sourceRoot: URL? = nil
 }
-enum FolderSearchSkipReason: Equatable, Sendable {
+enum FolderSearchSkipReason: Hashable, Sendable {
     case symbolicLink, hidden, nonRecursiveDirectory, extensionFiltered, filenameFiltered, folderFiltered,
         duplicateScope, notRegularFile, fileTooLarge
+    /// A recovery copy, journal or temporary file written by folder replacement.
+    case recoveryArtifact
     case invalidEncoding(String), unreadable(String)
+    /// True when the entry was meant to be searched and was not, which makes coverage incomplete.
+    /// Every other reason is a policy exclusion the request asked for.
+    var affectsCoverage: Bool {
+        switch self {
+        case .invalidEncoding, .unreadable, .fileTooLarge: return true
+        default: return false
+        }
+    }
+    /// Policy exclusions in the order they are summarised.
+    static let policyExclusions: [FolderSearchSkipReason] = [
+        .filenameFiltered, .extensionFiltered, .folderFiltered, .hidden, .symbolicLink, .nonRecursiveDirectory,
+        .duplicateScope, .notRegularFile, .recoveryArtifact
+    ]
+    /// Wording for the results window.
+    var explanation: String {
+        switch self {
+        case .symbolicLink: return "symbolic link"
+        case .hidden: return "hidden"
+        case .nonRecursiveDirectory: return "subfolder (subfolders are off)"
+        case .extensionFiltered: return "extension filter"
+        case .filenameFiltered: return "filename filter"
+        case .folderFiltered: return "folder filter"
+        case .duplicateScope: return "already searched under another folder"
+        case .notRegularFile: return "not a regular file"
+        case .recoveryArtifact: return "TextTank recovery copy"
+        case .fileTooLarge: return "larger than the per-file limit"
+        case .invalidEncoding(let detail): return "not valid text: \(detail)"
+        case .unreadable(let detail): return detail
+        }
+    }
 }
 struct FolderSearchSkipped: Equatable, Sendable {
     let url: URL
@@ -54,7 +90,18 @@ struct FolderSearchSkipped: Equatable, Sendable {
 enum FolderSearchLimit: String, Sendable { case entries, files, totalBytes, results }
 struct FolderSearchReport: Sendable {
     var matches: [FolderSearchMatch] = []
+    /// Entries that should have been searched and were not. Policy exclusions are listed here
+    /// only when the request sets `listsPolicyExclusions`; they are always counted below.
     var skipped: [FolderSearchSkipped] = []
+    /// How many entries each policy exclusion left out.
+    var excludedCounts: [FolderSearchSkipReason: Int] = [:]
+    var excludedTotal: Int { excludedCounts.values.reduce(0, +) }
+    /// Entries in `skipped` that make coverage incomplete.
+    var notSearched: [FolderSearchSkipped] { skipped.filter { $0.reason.affectsCoverage } }
+    mutating func skip(_ url: URL, _ reason: FolderSearchSkipReason, listing: Bool) {
+        if !reason.affectsCoverage { excludedCounts[reason, default: 0] += 1 }
+        if reason.affectsCoverage || listing { skipped.append(.init(url: url, reason: reason)) }
+    }
     var entriesVisited = 0
     var filesConsidered = 0
     var filesSearched = 0
@@ -64,13 +111,7 @@ struct FolderSearchReport: Sendable {
     var reachedLimit: FolderSearchLimit?
     /// Policy exclusions are expected; unreadable/oversized files make coverage incomplete.
     var isComplete: Bool {
-        !wasCancelled && reachedLimit == nil
-            && !skipped.contains { item in
-                switch item.reason {
-                case .invalidEncoding, .unreadable, .fileTooLarge: return true
-                default: return false
-                }
-            }
+        !wasCancelled && reachedLimit == nil && !skipped.contains { $0.reason.affectsCoverage }
     }
 }
 struct FolderSearchProgress: Sendable {
@@ -79,21 +120,11 @@ struct FolderSearchProgress: Sendable {
     let matches: Int
     let currentURL: URL
 }
+/// The engine token is an atomic flag, so it is the only cancellation state.
 final class FolderSearchCancellation: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cancelled = false
     let engineToken = TTSearchCancellation()
-    func cancel() {
-        lock.lock()
-        cancelled = true
-        lock.unlock()
-        engineToken.cancel()
-    }
-    var isCancelled: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return cancelled
-    }
+    func cancel() { engineToken.cancel() }
+    var isCancelled: Bool { engineToken.cancelled }
 }
 enum FolderSearchError: LocalizedError {
     case invalidRequest(String)
@@ -118,7 +149,18 @@ enum FolderSearch {
     ) async throws -> FolderSearchReport {
         if Task.isCancelled { cancellation.cancel() }
         let work = Task.detached(priority: .userInitiated) {
-            try run(request, cancellation: cancellation, progress: progress)
+            try run(request, filters: try validate(request), cancellation: cancellation, progress: progress)
+        }
+        return try await withTaskCancellationHandler(
+            operation: { try await work.value }, onCancel: { cancellation.cancel() })
+    }
+    /// One root of a request that `validate` has already accepted.
+    private static func searchValidated(
+        _ request: FolderSearchRequest, filters: FolderSearchFilters, cancellation: FolderSearchCancellation,
+        progress: (@Sendable (FolderSearchProgress) -> Void)?
+    ) async throws -> FolderSearchReport {
+        let work = Task.detached(priority: .userInitiated) {
+            try run(request, filters: filters, cancellation: cancellation, progress: progress)
         }
         return try await withTaskCancellationHandler(
             operation: { try await work.value }, onCancel: { cancellation.cancel() })
@@ -133,8 +175,9 @@ enum FolderSearch {
         guard !directories.isEmpty, directories.count <= 100 else {
             throw FolderSearchError.invalidRequest("Choose between one and 100 workspace folders.")
         }
-        try validate(template)
-        _ = try FolderSearchFilters(template.filenameFilters)
+        // Filters are parsed and the expression is compiled once for all roots, off the caller's
+        // thread. An error here is the whole search's error, not one unreadable root each.
+        let filters = try await Task.detached(priority: .userInitiated) { try validate(template) }.value
         var report = FolderSearchReport(), roots: [URL] = []
         for directory in directories {
             if cancellation.isCancelled || Task.isCancelled {
@@ -144,21 +187,20 @@ enum FolderSearch {
             guard directory.isFileURL, !directory.path.contains("\0"),
                 (directory.host ?? "").isEmpty || directory.host == "localhost"
             else { throw FolderSearchError.invalidRequest("Workspace search roots must be local directories.") }
-            let fd = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK)
-            guard fd >= 0 else {
+            let canonical: URL
+            do {
+                let opened = try openCanonicalDirectory(directory)
+                close(opened.fd)
+                canonical = URL(fileURLWithPath: opened.path, isDirectory: true)
+            } catch CanonicalDirectoryFailure.unresolved {
+                report.skipped.append(
+                    .init(url: directory, reason: .unreadable("Workspace root could not be resolved.")))
+                continue
+            } catch {
                 report.skipped.append(
                     .init(url: directory, reason: .unreadable("Workspace root is unavailable or is a symbolic link.")))
                 continue
             }
-            var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-            let result = fcntl(fd, F_GETPATH, &path)
-            close(fd)
-            guard result == 0 else {
-                report.skipped.append(
-                    .init(url: directory, reason: .unreadable("Workspace root could not be resolved.")))
-                continue
-            }
-            let canonical = URL(fileURLWithPath: String(cString: path), isDirectory: true)
             if !roots.contains(canonical) { roots.append(canonical) }
         }
         roots.sort { $0.path.count == $1.path.count ? $0.path < $1.path : $0.path.count < $1.path.count }
@@ -194,8 +236,8 @@ enum FolderSearch {
             }
             let baseline = report
             do {
-                let part = try await search(
-                    request, cancellation: cancellation,
+                let part = try await searchValidated(
+                    request, filters: filters, cancellation: cancellation,
                     progress: { p in
                         progress?(
                             .init(
@@ -205,6 +247,7 @@ enum FolderSearch {
                     })
                 report.matches += part.matches
                 report.skipped += part.skipped
+                report.excludedCounts.merge(part.excludedCounts, uniquingKeysWith: +)
                 report.entriesVisited += part.entriesVisited
                 report.filesConsidered += part.filesConsidered
                 report.filesSearched += part.filesSearched
@@ -220,7 +263,83 @@ enum FolderSearch {
         }
         return report
     }
-    private static func validate(_ request: FolderSearchRequest) throws {
+    /// Why a search root could not be opened and resolved.
+    enum CanonicalDirectoryFailure: Error {
+        case unavailable(POSIXErrorCode), unresolved(POSIXErrorCode)
+        var posix: POSIXError {
+            switch self {
+            case .unavailable(let code), .unresolved(let code): return POSIXError(code)
+            }
+        }
+    }
+    /// Opens a directory, refusing a symbolic link as the directory itself, and asks the kernel
+    /// for its canonical path. The caller closes the descriptor. Search, workspace search and
+    /// replacement all anchor their descriptor walks to this one result.
+    static func openCanonicalDirectory(_ directory: URL) throws -> (fd: Int32, path: String) {
+        let fd = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK)
+        guard fd >= 0 else { throw CanonicalDirectoryFailure.unavailable(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(fd, F_GETPATH, &path) == 0 else {
+            let code = POSIXErrorCode(rawValue: errno) ?? .EIO
+            close(fd)
+            throw CanonicalDirectoryFailure.unresolved(code)
+        }
+        return (fd, String(cString: path))
+    }
+    /// The components of `path` below `prefix` (which ends in "/"), compared and split as UTF-8
+    /// bytes, which is what the kernel resolves. Characters must not be used here: a combining
+    /// mark at the start of a name fuses with the "/" before it. Nil when the path is not below
+    /// the prefix or a component is empty of meaning (".", "..") or holds NUL.
+    static func relativeComponents(of path: String, under prefix: String) -> [String]? {
+        guard prefix.utf8.last == 0x2F, path.utf8.starts(with: prefix.utf8) else { return nil }
+        let components = path.utf8.dropFirst(prefix.utf8.count).split(separator: 0x2F).map {
+            String(decoding: $0, as: UTF8.self)
+        }
+        guard !components.isEmpty, components.allSatisfy({ $0 != "." && $0 != ".." && !$0.utf8.contains(0) }) else {
+            return nil
+        }
+        return components
+    }
+    /// Names folder replacement gives its own files. They are never search results or
+    /// replacement targets, whatever the hidden-file setting.
+    static let recoveryArtifactPrefixes = [".texttank-backup-", ".texttank-replacement-", ".texttank-report-"]
+    static func isRecoveryArtifact(_ name: String) -> Bool {
+        recoveryArtifactPrefixes.contains { name.utf8.starts(with: $0.utf8) }
+    }
+    static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+    private static func searchOptions(_ request: FolderSearchRequest) -> SearchOptions {
+        var options = SearchOptions()
+        options.query = request.query
+        options.mode = request.mode
+        options.matchCase = request.matchCase
+        options.wholeWord = request.wholeWord
+        options.dotMatchesNewline = request.dotMatchesNewline
+        return options
+    }
+    /// Line, column and UTF-8 span of each match, in one forward pass. Nil when `stop` answers
+    /// true or a range is out of order, outside the text or splits a character; the caller then
+    /// skips this one file. Ranges must be ascending, as the engine reports them.
+    static func located(_ ranges: [NSRange], in text: String, stop: () -> Bool) -> [(
+        line: Int, columnUTF16: Int, utf8Range: SearchSpan
+    )]? {
+        var cursor = SearchCore.UTFCursor(text, tracksLines: true)
+        var output: [(line: Int, columnUTF16: Int, utf8Range: SearchSpan)] = []
+        output.reserveCapacity(ranges.count)
+        for range in ranges {
+            guard range.location >= 0, range.length >= 0, range.length <= Int.max - range.location,
+                cursor.advance(to: range.location, stop: stop)
+            else { return nil }
+            let startByte = cursor.byteOffset, line = cursor.line, column = cursor.columnUTF16
+            guard cursor.advance(to: NSMaxRange(range), stop: stop) else { return nil }
+            output.append((line, column, .init(location: startByte, length: cursor.byteOffset - startByte)))
+        }
+        return output
+    }
+    /// Validates the request and returns its parsed filters. The expression is compiled here, on
+    /// empty text, so one that cannot compile is a single error before any file is read.
+    @discardableResult private static func validate(_ request: FolderSearchRequest) throws -> FolderSearchFilters {
         guard request.directory.isFileURL,
             (request.directory.host ?? "").isEmpty || request.directory.host == "localhost",
             !request.directory.path.contains("\0"), !request.query.isEmpty
@@ -231,7 +350,7 @@ enum FolderSearch {
             throw FolderSearchError.invalidRequest(
                 "Search limits must be positive and preview length must be 16–8192 UTF-16 units.")
         }
-        _ = try FolderSearchFilters(request.filenameFilters)
+        let filters = try FolderSearchFilters(request.filenameFilters)
         guard
             request.extensions.allSatisfy({
                 !$0.isEmpty && !$0.contains("/") && !$0.contains("\\") && !$0.contains("\0") && !$0.contains(".")
@@ -240,22 +359,27 @@ enum FolderSearch {
             throw FolderSearchError.invalidRequest(
                 "Extension filters must be exact extensions without dots or path separators.")
         }
+        // A fresh token: the caller's may already be cancelled, and a cancelled search reports
+        // cancellation, not an invalid request.
+        do {
+            _ = try SearchCore.search(
+                "", options: searchOptions(request), cancellation: TTSearchCancellation(), limit: 1)
+        } catch { throw FolderSearchError.invalidRequest(error.localizedDescription) }
+        return filters
     }
     private static func run(
-        _ request: FolderSearchRequest, cancellation: FolderSearchCancellation,
+        _ request: FolderSearchRequest, filters: FolderSearchFilters, cancellation: FolderSearchCancellation,
         progress: (@Sendable (FolderSearchProgress) -> Void)?
     ) throws -> FolderSearchReport {
-        try validate(request)
-        let filters = try FolderSearchFilters(request.filenameFilters)
-        let rootFD = open(request.directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
-        guard rootFD >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        defer { close(rootFD) }
         // Normalize platform aliases only after rejecting a symlink root itself.
-        var canonicalPath = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        guard fcntl(rootFD, F_GETPATH, &canonicalPath) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        let root = URL(fileURLWithPath: String(cString: canonicalPath), isDirectory: true)
+        let rootFD: Int32, root: URL
+        do {
+            let opened = try openCanonicalDirectory(request.directory)
+            rootFD = opened.fd
+            root = URL(fileURLWithPath: opened.path, isDirectory: true)
+        } catch let failure as CanonicalDirectoryFailure { throw failure.posix }
+        defer { close(rootFD) }
+        let listing = request.listsPolicyExclusions, options = searchOptions(request)
         var report = FolderSearchReport()
         if cancellation.isCancelled {
             report.wasCancelled = true
@@ -287,45 +411,49 @@ enum FolderSearch {
             report.entriesVisited += 1
             let values: URLResourceValues
             do { values = try url.resourceValues(forKeys: keys) } catch {
-                report.skipped.append(.init(url: url, reason: .unreadable(error.localizedDescription)))
+                report.skip(url, .unreadable(error.localizedDescription), listing: listing)
                 continue
             }
             if values.isSymbolicLink == true {
-                report.skipped.append(.init(url: url, reason: .symbolicLink))
+                report.skip(url, .symbolicLink, listing: listing)
+                continue
+            }
+            if values.isDirectory != true && isRecoveryArtifact(url.lastPathComponent) {
+                report.skip(url, .recoveryArtifact, listing: listing)
                 continue
             }
             if !request.includeHidden && (values.isHidden == true || url.lastPathComponent.hasPrefix(".")) {
                 if values.isDirectory == true { iterator.skipDescendants() }
-                report.skipped.append(.init(url: url, reason: .hidden))
+                report.skip(url, .hidden, listing: listing)
                 continue
             }
             if values.isDirectory == true {
                 let depth = url.pathComponents.count - root.pathComponents.count
                 if filters.excludesFolder(url.lastPathComponent, depth: depth) {
                     iterator.skipDescendants()
-                    report.skipped.append(.init(url: url, reason: .folderFiltered))
+                    report.skip(url, .folderFiltered, listing: listing)
                     continue
                 }
                 if !request.recursive {
                     iterator.skipDescendants()
-                    report.skipped.append(.init(url: url, reason: .nonRecursiveDirectory))
+                    report.skip(url, .nonRecursiveDirectory, listing: listing)
                 }
                 continue
             }
             guard values.isRegularFile == true else {
-                report.skipped.append(.init(url: url, reason: .notRegularFile))
+                report.skip(url, .notRegularFile, listing: listing)
                 continue
             }
             if !filters.acceptsFile(url.lastPathComponent) {
-                report.skipped.append(.init(url: url, reason: .filenameFiltered))
+                report.skip(url, .filenameFiltered, listing: listing)
                 continue
             }
             if !extensionFilter.isEmpty && !extensionFilter.contains(url.pathExtension.lowercased()) {
-                report.skipped.append(.init(url: url, reason: .extensionFiltered))
+                report.skip(url, .extensionFiltered, listing: listing)
                 continue
             }
             if request.excludingSearchedFiles.contains(url.path) {
-                report.skipped.append(.init(url: url, reason: .duplicateScope))
+                report.skip(url, .duplicateScope, listing: listing)
                 continue
             }
             if report.filesConsidered >= request.maximumFiles {
@@ -334,7 +462,7 @@ enum FolderSearch {
             }
             report.filesConsidered += 1
             if (values.fileSize ?? 0) > request.maximumFileBytes {
-                report.skipped.append(.init(url: url, reason: .fileTooLarge))
+                report.skip(url, .fileTooLarge, listing: listing)
                 continue
             }
             let remaining = request.maximumTotalBytes - report.bytesRead
@@ -355,15 +483,15 @@ enum FolderSearch {
                     report.reachedLimit = .totalBytes
                     break
                 }
-                report.skipped.append(.init(url: url, reason: .fileTooLarge))
+                report.skip(url, .fileTooLarge, listing: listing)
                 continue
             } catch {
-                report.skipped.append(.init(url: url, reason: .unreadable(error.localizedDescription)))
+                report.skip(url, .unreadable(error.localizedDescription), listing: listing)
                 continue
             }
             let decoded: DecodedFile
             do { decoded = try FileCodec.decode(bytes) } catch {
-                report.skipped.append(.init(url: url, reason: .invalidEncoding(error.localizedDescription)))
+                report.skip(url, .invalidEncoding(error.localizedDescription), listing: listing)
                 continue
             }
             if cancellation.isCancelled {
@@ -372,15 +500,8 @@ enum FolderSearch {
             }
             report.filesSearched += 1
             report.searchedFiles.insert(url.path)
-            let fingerprint = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            let fingerprint = sha256Hex(bytes)
             let text = decoded.text as NSString
-            var cursor = UTFPositionCursor(decoded.text)
-            var options = SearchOptions()
-            options.query = request.query
-            options.mode = request.mode
-            options.matchCase = request.matchCase
-            options.wholeWord = request.wholeWord
-            options.dotMatchesNewline = request.dotMatchesNewline
             let hits: SearchReport
             do {
                 hits = try SearchCore.search(
@@ -391,37 +512,36 @@ enum FolderSearch {
                     report.wasCancelled = true
                     break
                 }
-                report.skipped.append(.init(url: url, reason: .unreadable("Search: " + error.localizedDescription)))
+                report.skip(url, .unreadable("Search: " + error.localizedDescription), listing: listing)
                 continue
             }
-            for hit in hits.hits {
+            // One bad range fails this file only, as a failed search of it does, and before any
+            // of its matches is listed. The engine never reports one; this keeps it that way.
+            guard
+                let positions = located(
+                    hits.hits.map(\.range), in: decoded.text, stop: { cancellation.isCancelled })
+            else {
+                if cancellation.isCancelled {
+                    report.wasCancelled = true
+                    break searchLoop
+                }
+                report.skip(
+                    url, .unreadable("Search: matching produced a range that is not on character boundaries."),
+                    listing: listing)
+                continue
+            }
+            for (hit, position) in zip(hits.hits, positions) {
                 if cancellation.isCancelled {
                     report.wasCancelled = true
                     break searchLoop
                 }
                 let match = hit.range
-                guard cursor.advance(to: match.location, cancellation: cancellation) else {
-                    if cancellation.isCancelled {
-                        report.wasCancelled = true
-                        break searchLoop
-                    }
-                    throw FolderSearchError.invalidRequest("Matching produced an invalid Unicode range.")
-                }
-                let startByte = cursor.byteOffset, line = cursor.line, column = cursor.columnUTF16
-                guard cursor.advance(to: NSMaxRange(match), cancellation: cancellation) else {
-                    if cancellation.isCancelled {
-                        report.wasCancelled = true
-                        break searchLoop
-                    }
-                    throw FolderSearchError.invalidRequest("Matching split a Unicode character.")
-                }
                 let snippet = preview(text, match: match, maximum: request.previewUTF16Length)
                 report.matches.append(
                     .init(
-                        url: url, line: line, columnUTF16: column,
+                        url: url, line: position.line, columnUTF16: position.columnUTF16,
                         utf16Range: .init(location: match.location, length: match.length),
-                        utf8Range: .init(location: startByte, length: cursor.byteOffset - startByte),
-                        preview: snippet.text, previewMatchRange: snippet.range,
+                        utf8Range: position.utf8Range, preview: snippet.text, previewMatchRange: snippet.range,
                         isMatchTruncatedInPreview: snippet.truncated, sourceSHA256: fingerprint, sourceRoot: root))
                 if report.matches.count >= request.maximumResults {
                     report.reachedLimit = .results
@@ -459,9 +579,7 @@ enum FolderSearch {
         onBytes: (Int) -> Void
     ) throws -> Data {
         let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        guard url.path.hasPrefix(prefix) else { throw ReadFailure.invalidRelativePath }
-        let components = String(url.path.dropFirst(prefix.count)).split(separator: "/").map(String.init)
-        guard !components.isEmpty, components.allSatisfy({ $0 != ".." && $0 != "." && !$0.contains("\0") }) else {
+        guard let components = relativeComponents(of: url.path, under: prefix) else {
             throw ReadFailure.invalidRelativePath
         }
         var directoryFD = dup(rootFD)
@@ -509,43 +627,5 @@ enum FolderSearch {
             .init(location: match.location - start, length: max(0, matchedEnd - match.location)),
             NSMaxRange(match) > end
         )
-    }
-    /// Monotonic matches permit streaming scalar conversion: no full UTF-16-to-byte
-    /// table and no repeated whole-buffer prefix copies for each result.
-    private struct UTFPositionCursor {
-        let text: String
-        var index: String.UnicodeScalarView.Index
-        var utf16Offset = 0
-        var byteOffset = 0
-        var line = 1
-        var columnUTF16 = 1
-        init(_ text: String) {
-            self.text = text
-            index = text.unicodeScalars.startIndex
-        }
-        mutating func advance(to target: Int, cancellation: FolderSearchCancellation) -> Bool {
-            var count = 0
-            guard target >= utf16Offset else { return false }
-            while utf16Offset < target && index < text.unicodeScalars.endIndex {
-                if count % 4096 == 0 && cancellation.isCancelled { return false }
-                count += 1
-                let scalar = text.unicodeScalars[index], value = scalar.value
-                let width = value > 0xFFFF ? 2 : 1
-                if utf16Offset + width > target { return false }
-                let next = text.unicodeScalars.index(after: index)
-                utf16Offset += width
-                byteOffset += value < 0x80 ? 1 : (value < 0x800 ? 2 : (value < 0x10000 ? 3 : 4))
-                if value == 10
-                    || (value == 13 && (next == text.unicodeScalars.endIndex || text.unicodeScalars[next].value != 10))
-                {
-                    line += 1
-                    columnUTF16 = 1
-                } else {
-                    columnUTF16 += width
-                }
-                index = next
-            }
-            return utf16Offset == target
-        }
     }
 }

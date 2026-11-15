@@ -281,20 +281,22 @@ extension DocumentChecks {
                 same(
                     EditorTransform.invertCase.transform(EditorTransform.invertCase.transform("stra\u{DF}e")),
                     "stra\u{DF}e"), "Invert Case applied twice restores the original text for \u{DF}")
-            knownDefect(
-                "G354", "a filename glob typed precomposed matches a decomposed file name",
-                fixed: FolderSearchFilters.matches("caf\(UnicodeFixtures.nfd).txt", "caf\(UnicodeFixtures.nfc).*"))
+            // Repaired by G344: this was a G354 known-defect line.
+            check(
+                FolderSearchFilters.matches("caf\(UnicodeFixtures.nfd).txt", "caf\(UnicodeFixtures.nfc).*"),
+                "a filename glob typed precomposed matches a decomposed file name")
             var word = SearchOptions()
             word.query = "cat"
             word.wholeWord = true
             word.matchCase = true
-            knownDefect(
-                "G354", "literal whole-word search does not match inside a word that continues with an astral letter",
-                fixed: try SearchCore.search("\(UnicodeFixtures.astralLetter)cat cat", options: word).hits.count == 1)
+            // Repaired by G349: both were G354 known-defect lines.
+            check(
+                try SearchCore.search("\(UnicodeFixtures.astralLetter)cat cat", options: word).hits.count == 1,
+                "literal whole-word search does not match inside a word that continues with an astral letter")
             word.mode = .regularExpression
-            knownDefect(
-                "G354", "regex whole-word search does not match inside a word that continues with an astral letter",
-                fixed: try SearchCore.search("\(UnicodeFixtures.astralLetter)cat cat", options: word).hits.count == 1)
+            check(
+                try SearchCore.search("\(UnicodeFixtures.astralLetter)cat cat", options: word).hits.count == 1,
+                "regex whole-word search does not match inside a word that continues with an astral letter")
             var half = SearchOptions()
             half.query = "\\uD83D"
             half.mode = .extended

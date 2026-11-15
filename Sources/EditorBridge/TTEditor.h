@@ -63,6 +63,11 @@ extern NSNotificationName const TTEditorStateDidChangeNotification;
 /// history is emptied and the result is the save point. NO, changing nothing, when read-only
 /// or unencodable.
 - (BOOL)loadDocumentText:(NSString *)text;
+/// Replaces ascending, non-overlapping byte ranges (NSRange values) under one undo action,
+/// without driving the selection per range. Revision, read-only state, bounds, UTF-8
+/// lead-byte alignment and encodability are all checked before the first edit; NO changes
+/// nothing. Afterwards there is one caret, just after the first replacement, scrolled into view.
+- (BOOL)replaceRanges:(NSArray<NSValue *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision;
 @property(nonatomic) BOOL readOnly;
 /// The one read-only guard: every command that edits text calls it before anything else,
 /// including before any dialog, so the reason is always the same and always stated first.
