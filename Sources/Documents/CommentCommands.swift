@@ -49,7 +49,8 @@ enum CommentCommand:String,CaseIterable {
             }
             lines.append((start,bytes.count,bytes.count))
             for line in lines {
-                guard ranges.contains(where:{a,b in a==b ? a>=line.start && (a<line.next || line.start==bytes.count):a<line.next && b>line.start}) else{continue}
+                // Only the unterminated final line has end==next; a caret at its end is still on it.
+                guard ranges.contains(where:{a,b in a==b ? a>=line.start && (a<line.next || line.end==line.next):a<line.next && b>line.start}) else{continue}
                 var indent=line.start
                 while indent<line.end && (bytes[indent]==32 || bytes[indent]==9){indent+=1}
                 if indent==line.end && profile.id != "baanc"{continue}

@@ -34,6 +34,14 @@ import AppKit
   rejects("split UTF8 rejected"){_ = try CommentCommand.toggleLine.plan(text:"🥑",selections:selection(1,2),profile:python)}
   let overlap=selection(0,1)+selection(1,2)
   check(try CommentCommand.toggleLine.plan(text:"abc\n",selections:overlap,profile:python).text=="# abc\n","shared selected line commented only once")
+  // F3: a caret at the end of an unterminated last line is on that line.
+  let eof=try CommentCommand.toggleLine.plan(text:"x = 1",selections:selection(5,5),profile:python)
+  check(eof.text=="# x = 1" && eof.selections[0]["anchor"]!.intValue==7 && eof.selections[0]["caret"]!.intValue==7,"toggle at end of unterminated last line comments it and maps the caret")
+  check(try CommentCommand.lineComment.plan(text:"x = 1",selections:selection(5,5),profile:python).text=="# x = 1","comment at end of unterminated last line")
+  check(try CommentCommand.lineUncomment.plan(text:"# x = 1",selections:selection(7,7),profile:python).text=="x = 1","uncomment at end of unterminated last line")
+  check(try CommentCommand.toggleLine.plan(text:"abc\n",selections:selection(4,4),profile:python).text=="abc\n","caret on empty line after final LF leaves previous line alone")
+  check(try CommentCommand.toggleLine.plan(text:"abc\r\n",selections:selection(5,5),profile:python).text=="abc\r\n","caret on empty line after final CRLF leaves previous line alone")
+  check(try CommentCommand.toggleLine.plan(text:"a\nb",selections:selection(1,1),profile:python).text=="# a\nb","caret at end of terminated line touches only that line")
   _ = NSApplication.shared
   let window=NSWindow(contentRect:NSRect(x:0,y:0,width:600,height:400),styleMask:[.titled],backing:.buffered,defer:false),editor=TTEditor(frame:NSRect(x:0,y:0,width:600,height:400));window.contentView=editor
   editor.text=text;editor.resetUndoHistory();editor.setSavePoint();_ = editor.setSelectionRanges(selection(end,0))
@@ -44,6 +52,10 @@ import AppKit
   rejects("read-only comment rejects"){try CommentCommand.toggleLine.apply(to:editor,profile:python)}
   check(editor.text==text && editor.selectionRanges==originalSelection,"read-only comment preserves selection and bytes")
   editor.readOnly=false
+  editor.text="x = 1";editor.resetUndoHistory();editor.setSavePoint();_ = editor.setSelectionAnchor(5,caret:5)
+  try CommentCommand.toggleLine.apply(to:editor,profile:python)
+  check(editor.text=="# x = 1" && editor.selectionAnchor==7 && editor.selectionCaret==7,"native toggle at end of unterminated last line")
+  editor.executeCommand("undo");check(editor.text=="x = 1" && !editor.modified,"native end-of-file toggle is one Undo")
   print("PASS CommentCommandChecks: \(count) assertions")
  }
 }
