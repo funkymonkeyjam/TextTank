@@ -2,11 +2,42 @@
 import Foundation
 import Darwin
 
+/// Path selection is computed and has no filesystem side effects. In particular, invalid
+/// overrides never create a relative store, and checks can repoint the directory in process.
+enum AppStorage {
+    enum Location: String {
+        case settings = "Settings.json", macros = "Macros.json", automations = "Automations.json"
+        case languages = "LanguageProfiles.json", commands = "RunCommands.json", workspace = "WorkspaceBrowser.json"
+        case recovery = "Recovery", reminders = "ReminderExports"
+        case find = "FindPreferences.json", folderSearch = "FolderSearchPreferences.json"
+        var isDirectory: Bool { self == .recovery || self == .reminders }
+    }
+    static func resolve(override: String?, fallback: URL) -> URL {
+        guard let override, override.hasPrefix("/"), !override.contains("\0") else { return fallback }
+        return URL(fileURLWithPath: override, isDirectory: true)
+    }
+    static var defaultDirectory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("TextTank", isDirectory: true)
+    }
+    private static var override: String? { ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"] }
+    static var supportDirectory: URL { resolve(override: override, fallback: defaultDirectory) }
+    /// An isolated/portable store never imports from the person's shared defaults implicitly.
+    static var permitsLegacyDefaults: Bool {
+        guard let override else { return true }
+        return !override.hasPrefix("/") || override.contains("\0")
+    }
+    static func url(_ location: Location, under directory: URL? = nil) -> URL {
+        (directory ?? supportDirectory).appendingPathComponent(location.rawValue, isDirectory: location.isDirectory)
+    }
+}
+
 enum PrivateFileError: LocalizedError {
     case unsafeLocation, tooLarge(limit: Int, url: URL)
     var errorDescription: String? {
         switch self {
-        case .unsafeLocation: return "This action requires a regular local file in a real directory. The file was not changed."
+        case .unsafeLocation:
+            return "This action requires a regular local file in a real directory. The file was not changed."
         case .tooLarge(let limit, let url):
             return "“\(url.lastPathComponent)” exceeds this action’s limit of \(limit) bytes. The file was not changed."
         }
@@ -118,7 +149,8 @@ enum PrivateFileStore {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
         let temporary = temporaryPrefix + UUID().uuidString + temporarySuffix
-        let descriptor = openat(directory, temporary, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
+        let descriptor = openat(
+            directory, temporary, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
         guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer {
             close(descriptor)

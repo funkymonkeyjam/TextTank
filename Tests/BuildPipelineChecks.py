@@ -26,6 +26,11 @@ def module(name, filename):
 
 
 class BuildPipelineChecks(unittest.TestCase):
+    def test_support_override_has_one_source(self):
+        owners = [str(path.relative_to(ROOT)) for path in (ROOT / 'Sources').rglob('*.swift')
+                  if 'TEXTTANK_SUPPORT_DIRECTORY' in path.read_text()]
+        self.assertEqual(owners, ['Sources/Documents/PrivateFileStore.swift'])
+
     def test_nested_source_archive_never_binds_to_an_unrelated_outer_git_tree(self):
         recording = module('record_validation', 'record-validation.py')
         package = module('package_review', 'package_review.py')

@@ -646,14 +646,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// type and nearly all are named "Plain Text"; choosing one would only switch the type name
     /// and, for some, add that type's extension. The text is written the same way for all.
     override var shouldRunSavePanelWithAccessoryView: Bool { false }
-    static let recovery: RecoveryStore = {
-        let env = ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]
-        let root =
-            env.map { URL(fileURLWithPath: $0, isDirectory: true) }
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TextTank", isDirectory: true)
-        return RecoveryStore(directory: root.appendingPathComponent("Recovery", isDirectory: true))
-    }()
+    static let recovery = RecoveryStore(directory: AppStorage.url(.recovery))
     var recoveryID = UUID()
     /// Offset for recovery metadata changes; adding the editor revision gives the store revision.
     var recoveryBase: UInt64 = 0

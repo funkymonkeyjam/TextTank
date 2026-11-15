@@ -62,14 +62,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     init(editorProvider: @escaping () -> TTEditor?, newDocument: @escaping (String) -> Void) {
         self.editorProvider = editorProvider
         self.newDocument = newDocument
-        let base: URL
-        if let isolated = ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"] {
-            base = URL(fileURLWithPath: isolated, isDirectory: true)
-        } else {
-            base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("TextTank", isDirectory: true)
-        }
-        storage = base.appendingPathComponent("Automations.json")
+        storage = AppStorage.url(.automations)
         super.init()
         var storageInfo = stat()
         if lstat(storage.path, &storageInfo) == 0 {
@@ -867,8 +860,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             }
             do {
                 let connector = RemindersConnector(
-                    storageURL: self.storage.deletingLastPathComponent().appendingPathComponent(
-                        "ReminderExports", isDirectory: true))
+                    storageURL: AppStorage.url(.reminders, under: self.storage.deletingLastPathComponent()))
                 try await connector.requestAccess()
                 let destinations = try connector.destinations()
                 let writable = destinations.filter { $0.writable }
@@ -1063,8 +1055,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             }
             do {
                 let connector = RemindersConnector(
-                    storageURL: self.storage.deletingLastPathComponent().appendingPathComponent(
-                        "ReminderExports", isDirectory: true))
+                    storageURL: AppStorage.url(.reminders, under: self.storage.deletingLastPathComponent()))
                 let history = try connector.scanBatches()
                 let batches = Self.historyOrder(history.batches)
                 guard !batches.isEmpty || !history.issues.isEmpty else {

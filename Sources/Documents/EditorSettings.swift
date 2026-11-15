@@ -57,11 +57,7 @@ final class SettingsController: NSObject {
     private(set) var loadError: Error?
     let url: URL
     init(url: URL? = nil) {
-        let support =
-            ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TextTank")
-        self.url = url ?? support.appendingPathComponent("Settings.json")
+        self.url = url ?? AppStorage.url(.settings)
         super.init()
         do {
             value = try EditorSettings.decode(WorkspaceStore.readRegularFile(self.url, maximumBytes: 1024 * 1024))

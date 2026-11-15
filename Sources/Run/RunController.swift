@@ -23,11 +23,7 @@ final class RunController: NSObject, NSMenuItemValidation {
     private var retirementObserver: NSObjectProtocol?
     let storage: URL
     override init() {
-        let support =
-            ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TextTank")
-        storage = support.appendingPathComponent("RunCommands.json")
+        storage = AppStorage.url(.commands)
         super.init()
         retirementObserver = NotificationCenter.default.addObserver(
             forName: .TTEditorWillRetire, object: nil, queue: nil

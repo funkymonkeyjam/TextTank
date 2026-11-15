@@ -10,6 +10,38 @@ import Darwin
             ).resolvingSymlinksInPath()
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: root) }
+            Checks.section("G360/F140 support path selection") {
+                let fallback = root.appendingPathComponent("fallback", isDirectory: true)
+                for value in [nil, "", "relative/folder", "/bad\0path"] as [String?] {
+                    check(
+                        AppStorage.resolve(override: value, fallback: fallback) == fallback,
+                        "F140 empty, relative, absent or invalid overrides choose the supplied default without I/O")
+                }
+                check(
+                    !FileManager.default.fileExists(atPath: fallback.path),
+                    "F140 selecting a default path creates or reads no store")
+                let before = ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]
+                defer {
+                    if let before {
+                        setenv("TEXTTANK_SUPPORT_DIRECTORY", before, 1)
+                    } else {
+                        unsetenv("TEXTTANK_SUPPORT_DIRECTORY")
+                    }
+                }
+                for name in ["first-root", "second-root"] {
+                    let chosen = root.appendingPathComponent(name, isDirectory: true)
+                    setenv("TEXTTANK_SUPPORT_DIRECTORY", chosen.path, 1)
+                    check(
+                        AppStorage.url(.commands) == chosen.appendingPathComponent("RunCommands.json"),
+                        "G360 a new path lookup follows the current absolute override")
+                    check(
+                        !AppStorage.permitsLegacyDefaults,
+                        "G360 an isolated root cannot implicitly read shared defaults")
+                    check(
+                        !FileManager.default.fileExists(atPath: chosen.path),
+                        "G360 uncreated absolute roots are accepted without creating them")
+                }
+            }
             Checks.section("F149 shared private byte I/O") {
                 let owned = root.appendingPathComponent("private-store")
                 try PrivateFileStore.prepareDirectory(owned)

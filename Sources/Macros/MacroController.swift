@@ -21,13 +21,7 @@ final class MacroController: NSObject, NSMenuDelegate {
     private lazy var macroMenu = NSMenu(title: "Macros")
     init(editorProvider: @escaping () -> TTEditor?) {
         self.editorProvider = editorProvider
-        let base =
-            ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"].map {
-                URL(fileURLWithPath: $0, isDirectory: true)
-            }
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TextTank", isDirectory: true)
-        storage = base.appendingPathComponent("Macros.json")
+        storage = AppStorage.url(.macros)
         super.init()
         macroMenu.delegate = self
         if FileManager.default.fileExists(atPath: storage.path) {

@@ -107,3 +107,10 @@ unbounded, symlink-following Macro load policy (F149; conflicting G358 clause).
 A failed load blocks saving; refusal leaves the original file or link and target
 bytes untouched. `PrivateFileStore` supplies the bounded no-follow byte I/O and
 private fsync-before-rename write mechanism; model validation stays in MacroCore.
+
+`AppStorage` is the computed, side-effect-free source of support/store URLs. A
+nonempty absolute `TEXTTANK_SUPPORT_DIRECTORY` remains supported in every build;
+relative, empty or NUL-containing values fall back to the normal support path.
+Selecting a URL does not create or read a store. An isolated root does not
+implicitly import the person's shared search defaults. Controllers capture
+their URL at construction; a later controller can follow a changed override.

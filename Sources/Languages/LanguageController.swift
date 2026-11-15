@@ -53,13 +53,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
         self.editorProvider = editorProvider
         self.languageProvider = languageProvider
         self.setLanguage = setLanguage
-        let base =
-            ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"].map {
-                URL(fileURLWithPath: $0, isDirectory: true)
-            }
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TextTank", isDirectory: true)
-        storage = base.appendingPathComponent("LanguageProfiles.json")
+        storage = AppStorage.url(.languages)
         super.init()
         load(bundledCatalog)
     }

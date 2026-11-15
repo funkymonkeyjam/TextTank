@@ -34,11 +34,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     private let recordsSystemRecent: Bool
     init(storeURL: URL? = nil, recordsSystemRecent: Bool = true) {
         self.recordsSystemRecent = recordsSystemRecent
-        let support =
-            ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TextTank")
-        store = WorkspaceBrowserStore(url: storeURL ?? support.appendingPathComponent("WorkspaceBrowser.json"))
+        store = WorkspaceBrowserStore(url: storeURL ?? AppStorage.url(.workspace))
         super.init()
         monitor.onStatus = { [weak self] value in self?.monitorStatus.stringValue = value.message }
         // AppKit has no notification for a document joining or leaving the document list.
