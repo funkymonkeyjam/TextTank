@@ -367,25 +367,26 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         // boundaries, anchors and lookbehind see the document around the selection (F37). Hits are
         // already at document offsets.
         let snapshots = buffers.map {
-            ($0.text, $0.range ?? NSRange(location: 0, length: ($0.text as NSString).length))
+            (text: $0.text, scope: $0.range ?? NSRange(location: 0, length: ($0.text as NSString).length))
         }
         task = Task { @MainActor [weak self] in
             do {
                 let computed = try await Task.detached(priority: .userInitiated) {
                     let reports = try snapshots.map {
-                        try SearchCore.search($0.0, options: opts, range: $0.1, cancellation: flag)
+                        try SearchCore.search($0.text, options: opts, range: $0.scope, cancellation: flag)
                     }
                     let lines =
                         needsBookmarks
                         ? try zip(snapshots, reports).map { snapshot, report in
                             try SearchCore.bookmarkLines(
-                                in: snapshot.0, locations: report.hits.map { $0.range.location }, cancellation: flag)
+                                in: snapshot.text, locations: report.hits.map { $0.range.location }, cancellation: flag)
                         } : []
-                    return (reports, lines)
+                    return (reports: reports, bookmarkLines: lines)
                 }.value
                 guard let self, self.generation == token, !flag.cancelled else { return }
                 let replaced = self.complete(
-                    action, options: opts, key: key, buffers: buffers, reports: computed.0, bookmarkLines: computed.1,
+                    action, options: opts, key: key, buffers: buffers, reports: computed.reports,
+                    bookmarkLines: computed.bookmarkLines,
                     scopeIndex: scopeIndex, active: active, freshScope: freshScope)
                 if let editor = replaced {
                     // F45: a single Replace then moves to the next match. The text has changed, so

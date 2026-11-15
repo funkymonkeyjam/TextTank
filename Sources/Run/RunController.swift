@@ -2,11 +2,14 @@
 import AppKit
 
 final class RunController: NSObject, NSMenuItemValidation {
-    var editor: () -> TTEditor? = { nil }, file: () -> URL? = { nil }
+    var editor: () -> TTEditor? = { nil }
+    var file: () -> URL? = { nil }
     /// Called when a configured command is actually started and again before its result is
     /// applied to the document. Neither is ever part of a macro recording.
     var onUnrecordableAction: () -> Void = {}
-    private var commands: [ConfiguredRun] = [], loadError: Error?, execution: RunExecution?
+    private var commands: [ConfiguredRun] = []
+    private var loadError: Error?
+    private var execution: RunExecution?
     private let menu = NSMenu(title: "Run")
     private var resultWindow: NSWindow?
     private weak var applyButton: NSButton?

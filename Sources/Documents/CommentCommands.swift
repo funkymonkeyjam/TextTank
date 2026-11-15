@@ -38,18 +38,19 @@ enum CommentCommand: String, CaseIterable {
             }
             return nil
         }
-        var ranges: [(Int, Int)] = []
+        var ranges: [(lower: Int, upper: Int)] = []
         for selection in selections {
-            guard let a = selection["anchor"]?.intValue, let c = selection["caret"]?.intValue, boundary(a), boundary(c)
+            guard let anchor = selection["anchor"]?.intValue, let caret = selection["caret"]?.intValue,
+                boundary(anchor), boundary(caret)
             else { throw LanguageError.invalid("Invalid Unicode selection boundary.") }
-            ranges.append((min(a, c), max(a, c)))
+            ranges.append((lower: min(anchor, caret), upper: max(anchor, caret)))
         }
         guard !ranges.isEmpty else { throw LanguageError.invalid("No editor selection.") }
         var edits: [Edit] = []
         if self == .blockComment || self == .blockUncomment {
-            let ordered = ranges.sorted { $0.0 < $1.0 }
+            let ordered = ranges.sorted { $0.lower < $1.lower }
             for index in 1..<max(1, ordered.count) {
-                guard ordered[index].0 >= ordered[index - 1].1 else {
+                guard ordered[index].lower >= ordered[index - 1].upper else {
                     throw LanguageError.invalid("Overlapping block selections were not changed.")
                 }
             }
@@ -109,10 +110,10 @@ enum CommentCommand: String, CaseIterable {
             for line in lines {
                 // Only the unterminated final line has end==next; a caret at its end is still on it.
                 guard
-                    ranges.contains(where: { a, b in
-                        a == b
-                            ? a >= line.start && (a < line.next || line.end == line.next)
-                            : a < line.next && b > line.start
+                    ranges.contains(where: { range in
+                        range.lower == range.upper
+                            ? range.lower >= line.start && (range.lower < line.next || line.end == line.next)
+                            : range.lower < line.next && range.upper > line.start
                     })
                 else { continue }
                 var indent = line.start

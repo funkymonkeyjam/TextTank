@@ -51,7 +51,7 @@ enum EditorTransform: String, CaseIterable {
         // with retained rows for deletion. A terminal newline is not an empty row.
         // Rows are slices of the text found by scanning its UTF-8 bytes for CR, LF and CR LF,
         // so nothing is copied or allocated per character.
-        typealias Row = (content: Substring, separator: Substring)
+        struct Row { var content: Substring, separator: Substring }
         var rows: [Row] = []
         let utf8 = text.utf8
         var rowStart = utf8.startIndex, i = utf8.startIndex
@@ -63,11 +63,11 @@ enum EditorTransform: String, CaseIterable {
             }
             var next = utf8.index(after: i)
             if byte == 13, next < utf8.endIndex, utf8[next] == 10 { next = utf8.index(after: next) }
-            rows.append((text[rowStart..<i], text[i..<next]))
+            rows.append(Row(content: text[rowStart..<i], separator: text[i..<next]))
             rowStart = next
             i = next
         }
-        if rowStart < utf8.endIndex || rows.isEmpty { rows.append((text[rowStart...], "")) }
+        if rowStart < utf8.endIndex || rows.isEmpty { rows.append(Row(content: text[rowStart...], separator: "")) }
         switch self {
         case .trimLeading, .trimBoth:
             rows = rows.map { row in
@@ -75,7 +75,7 @@ enum EditorTransform: String, CaseIterable {
                 if self == .trimBoth {
                     while let last = content.last, last == " " || last == "\t" { content = content.dropLast() }
                 }
-                return (content, row.separator)
+                return Row(content: content, separator: row.separator)
             }
         case .removeEmptyLines: rows = rows.filter { !$0.content.isEmpty }
         case .uniqueLines:
@@ -107,7 +107,7 @@ enum EditorTransform: String, CaseIterable {
                 let keys = rows.map { String($0.content) }
                 order.sort { keys[$0] == keys[$1] ? $0 < $1 : LineOrder.codePointAscending(keys[$0], keys[$1]) }
             }
-            rows = zip(order, rows).map { (rows[$0.0].content, $0.1.separator) }
+            rows = zip(order, rows).map { index, row in Row(content: rows[index].content, separator: row.separator) }
         }
         var output = ""
         output.reserveCapacity(utf8.count)
