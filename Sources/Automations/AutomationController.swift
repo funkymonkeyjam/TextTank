@@ -122,8 +122,8 @@ final class AutomationController: NSObject, NSMenuDelegate {
         guard !library.workflows.isEmpty else { createAutomation(); return }
         busy = true; defer { busy = false }
         let choose = NSAlert(); choose.messageText = "Manage Automations"
-        choose.informativeText = "Rename an automation, choose its input and output, and turn its preview or toolbar button on or off. Advanced configuration edits the ordered processing steps."
-        for title in ["Edit", "Cancel", "Advanced Configuration…", "Add Recipe Buttons…", "Create Automation…", "Delete Automation"] { choose.addButton(withTitle:title) }
+        choose.informativeText = "Rename an automation, choose its input and output, and turn its preview or toolbar button on or off. Edit Rules opens a visual rule list with sample testing. JSON is optional for advanced users."
+        for title in ["Edit", "Cancel", "Advanced JSON…", "Add Recipe Buttons…", "Create Automation…", "Delete Automation"] { choose.addButton(withTitle:title) }
         let selection = NSPopUpButton(frame:NSRect(x:0,y:0,width:550,height:28),pullsDown:false)
         for workflow in library.workflows { selection.addItem(withTitle:workflow.name); selection.lastItem?.representedObject = workflow.id.uuidString }
         choose.accessoryView = selection
@@ -143,7 +143,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
         var workflow = library.workflows[index]
         let edit = NSAlert(); edit.messageText = "Edit Automation"
         edit.informativeText = "The name changes its labels, not its behavior. Editor changes can be undone. Reminders always requires an explicit destination and Send."
-        edit.addButton(withTitle:"Save"); edit.addButton(withTitle:"Cancel"); edit.addButton(withTitle:"Edit Processing Steps…")
+        edit.addButton(withTitle:"Save"); edit.addButton(withTitle:"Cancel"); edit.addButton(withTitle:"Edit Rules & Test…")
         let name = NSTextField(string:workflow.name)
         let shortcut = NSTextField(string:workflow.shortcut ?? ""); shortcut.placeholderString = "Lowercase letter for Command-Option; blank for none"
         let input = NSPopUpButton(); let output = NSPopUpButton()
@@ -155,7 +155,7 @@ final class AutomationController: NSObject, NSMenuDelegate {
         edit.accessoryView = settingsView(rows:[("Name",name),("Input",input),("Output",output),("Shortcut",shortcut)],options:[preview,pinned])
         while true {
             let response = edit.runModal()
-            if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 { if let revised = AutomationStepEditor.edit(workflow) { workflow.steps = revised.steps }; continue }
+            if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 { edit.window.makeFirstResponder(nil); workflow.name = name.stringValue; if let revised = AutomationStepEditor.edit(workflow) { workflow.steps = revised.steps }; continue }
             guard response == .alertFirstButtonReturn else { return }; break
         }
         do {

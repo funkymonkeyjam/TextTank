@@ -15,21 +15,14 @@
   "remaining_execution_plan": "docs/ONE-SHOT-BUILD-PLAN.md",
   "user_validation": "User confirmed successful live ingredient transfer to Reminders; see docs/parity/user-validation-2026-11-14.json",
   "active_run": {
-    "base_commit": "4927107",
-    "integrator": "document lifecycle, bridge/catalog/settings, build/integration",
-    "workers": {
-      "reference": "reference normalization and utilities",
-      "search": "search engine and controllers",
-      "automation": "workflows, connectors, macros"
-    },
-    "next_action": "Verify committed candidate in clean checkout, observe exact remote CI, verify packaged launch; then resume required open capability ledger without waiving gaps.",
-    "status": "candidate verification and packaging",
-    "checkpoint": "Integrated suite passed expanded source; final88 document regression independently passed after column/clone repairs. Final clean candidate build/test/CI/package still being bound."
+    "status": "low-code automation review candidate",
+    "checkpoint": "Four supplied recipes exact; native same-editor/one Undo49 assertions; core113; recipe fixtures25. Physical sample4 preview/save/toolbar/Undo observed.",
+    "next_action": "Package committed source and observe CI; full application parity remains open."
   },
   "remote_source_checkpoint": {
-    "local": "a5dc5f3d020d2d599f3be73b0e8e8b4cb2697202",
-    "remote": "6c9b3be41f02a7b6aa9d06bb47ec806ccb171218",
-    "tree": "ee448991ed7d9d9c6fd74c6d1368e963e9c9b6d9"
+    "local": "f75ddf0e5316c3c2dce1b49065d70e3fbe417704",
+    "remote": "9201fbfeaf384c076f1218546ae9216490b6c21d",
+    "tree": "7791584babbe79a88c9c44e465037f5d7e80d4b2"
   },
   "known_external_validation_limits": [
     "Official release binary bytes unavailable through current shell DNS and UTF8-only connector; metadata is not downloaded artifact evidence",

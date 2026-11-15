@@ -131,6 +131,84 @@ import Darwin
         let started = ProcessInfo.processInfo.systemUptime
         rejects("FIFO input rejects without blocking") { _ = try AutomationFileInput.read(fifo) }
         try check(ProcessInfo.processInfo.systemUptime - started < 1,"FIFO rejection below one second")
+        // Friendly literal rules must never reinterpret typed punctuation as regex.
+        let literalKinds: [AutomationDefinition.Step.Kind] = [.removeLinesEqualTo,.removeLinesContaining,.removeLinesStartingWith]
+        for kind in literalKinds {
+            var rule = AutomationDefinition.example
+            rule.steps = [.init(kind:kind,find:"Note")]
+            let source = "Note\r\n Note\r\nnote\r\nNote: optional\r\n2 eggs\r\n2 eggs\r\n½–¾ cup café\r\n"
+            let expected: String
+            switch kind {
+            case .removeLinesEqualTo: expected = "\r\n Note\r\nnote\r\nNote: optional\r\n2 eggs\r\n2 eggs\r\n½–¾ cup café\r\n"
+            case .removeLinesContaining: expected = "\r\n\r\nnote\r\n\r\n2 eggs\r\n2 eggs\r\n½–¾ cup café\r\n"
+            default: expected = "\r\n Note\r\nnote\r\n\r\n2 eggs\r\n2 eggs\r\n½–¾ cup café\r\n"
+            }
+            try check(rule.transform(source) == expected,"\(kind.rawValue) case-sensitive literal rows preserve CRLF quantities and duplicates")
+            rule.steps = [.init(kind:kind,find:"[x].*")]
+            let punctuationInput: String
+            switch kind {
+            case .removeLinesEqualTo: punctuationInput = "[x].*\n[x] pepper\n2 eggs\n"
+            case .removeLinesContaining: punctuationInput = "before [x].* after\n[x] pepper\n2 eggs\n"
+            default: punctuationInput = "[x].* annotation\n[x] pepper\n2 eggs\n"
+            }
+            try check(rule.transform(punctuationInput) == "\n[x] pepper\n2 eggs\n","\(kind.rawValue) brackets dots and stars remain literal data")
+            rule.steps = [.init(kind:kind,find:"drop")]
+            try check(rule.transform("drop\r\nkeep\nkeep\rdrop") == "\r\nkeep\nkeep\r","\(kind.rawValue) clears matching content but retains exact mixed separators")
+            try check(rule.transform("drop") == "","\(kind.rawValue) removes final unterminated matching row")
+            try check(rule.transform("keep") == "keep","\(kind.rawValue) preserves missing final newline")
+            rule.steps = [.init(kind:kind,find:"")]
+            rejects("\(kind.rawValue) rejects empty search text") { try rule.validate() }
+            rule.steps = [.init(kind:kind)]
+            rejects("\(kind.rawValue) requires search text") { try rule.validate() }
+            rule.steps = [.init(kind:kind,find:"x",replacement:"")]
+            rejects("\(kind.rawValue) rejects replacement parameter") { try rule.validate() }
+            rule.steps = [.init(kind:kind,find:"x",askForReplacement:true)]
+            rejects("\(kind.rawValue) rejects replacement prompt") { try rule.validate() }
+            rule.steps = [.init(kind:kind,find:"saved",askForFind:true)]
+            let promptedRule = try rule.resolvingParameters { _,label,value in
+                try check(label == "Find" && value == "saved","\(kind.rawValue) prompts with saved literal default")
+                return "drop"
+            }
+            try check(promptedRule?.transform("drop\nkeep\n") == "\nkeep\n" && rule.steps[0].find == "saved","\(kind.rawValue) runtime text changes only invocation")
+            try check(rule.resolvingParameters { _,_,_ in nil } == nil,"\(kind.rawValue) prompt cancellation yields no runnable rule")
+        }
+        var trimming = AutomationDefinition.example; trimming.steps = [.init(kind:.trimWhitespace)]
+        try check(trimming.transform(" \t½ cup café \t\r\n\t2 eggs\t\n \t \r👩🏽‍💻  \r\n") == "½ cup café\r\n2 eggs\n\r👩🏽‍💻\r\n","trim removes only line-edge whitespace and preserves mixed separators and Unicode")
+        try check(trimming.transform(" 2  eggs\u{0} \t") == "2  eggs\u{0}","trim preserves interior spacing and NUL content")
+        try check(trimming.transform("") == "" && trimming.transform("\r\n\n\r") == "\r\n\n\r","trim preserves empty input and empty-line boundaries")
+        trimming.steps = [.init(kind:.trimWhitespace,find:"x")]
+        rejects("trim rejects unexpected find") { try trimming.validate() }
+        trimming.steps = [.init(kind:.trimWhitespace,replacement:"x")]
+        rejects("trim rejects unexpected replacement") { try trimming.validate() }
+        trimming.steps = [.init(kind:.trimWhitespace,askForFind:true)]
+        rejects("trim rejects meaningless runtime find prompt") { try trimming.validate() }
+        var friendly = AutomationDefinition.example
+        friendly.steps = [.init(kind:.removeLinesStartingWith,find:"Serves:"),.init(kind:.trimWhitespace),.init(kind:.removeLinesEqualTo,find:"Ingredients"),.init(kind:.removeLinesContaining,find:"(advertisement)"),.init(kind:.removeBlankLines)]
+        let friendlyLibrary = AutomationLibrary(workflows:[friendly])
+        try check(AutomationLibrary.decode(friendlyLibrary.encoded()) == friendlyLibrary,"all friendly rules persist without changing schema or stable IDs")
+        try check(friendly.transform("Serves: 4\r\n Ingredients \r\n ½ cup flour \r\n2 eggs\r\n2 eggs\r\ninline (advertisement)\r\n") == "½ cup flour\r\n2 eggs\r\n2 eggs\r\n","ordered friendly-rule recipe pipeline preserves ingredient quantities and duplicates")
+        // Sample testing is a pure, bounded transform, even for external-output definitions.
+        var sampleOnly = friendly; sampleOnly.input = .file; sampleOnly.output = .reminders
+        try check(sampleOnly.testSample("Serves: 4\n Ingredients \n ½ cup flour \n2 eggs\n2 eggs\n") == "½ cup flour\n2 eggs\n2 eggs\n","sample test uses supplied text only regardless file input or reminder output")
+        var emptyRules = AutomationDefinition.example; emptyRules.steps = []
+        try check(emptyRules.testSample(String(repeating:"a",count:65536)).utf8.count == 65536,"sample accepts exact 64 KiB boundary")
+        rejects("sample rejects oversized source before transformation") { _ = try emptyRules.testSample(String(repeating:"a",count:65537)) }
+        let cancelledSample = AutomationRunControl(); cancelledSample.cancel()
+        rejects("sample cancellation applies even with zero rules") { _ = try emptyRules.testSample("preserved",control:cancelledSample) }
+        var expanding = AutomationDefinition.example
+        expanding.steps = Array(repeating:.init(kind:.replaceLiteral,find:"a",replacement:"aa"),count:100)
+        let expansionStarted = ProcessInfo.processInfo.systemUptime
+        rejects("sample repeated expansion fails before an oversized intermediate") { _ = try expanding.testSample(String(repeating:"a",count:65536)) }
+        try check(ProcessInfo.processInfo.systemUptime-expansionStarted < 2,"sample exponential expansion rejects promptly")
+        expanding.steps = [.init(kind:.replaceLiteral,find:"a",replacement:String(repeating:"b",count:1048577))]
+        rejects("sample oversized replacement rejected before allocation") { _ = try expanding.testSample("a") }
+        expanding.steps = [.init(kind:.replaceLiteral,find:"a",replacement:String(repeating:"b",count:100))]
+        rejects("sample single-step multiplicative expansion preflight") { _ = try expanding.testSample(String(repeating:"a",count:65536)) }
+        expanding.steps = [.init(kind:.replaceLiteral,find:"a",replacement:"aa")]
+        try check(expanding.testSample("a")=="aa","sample permits ordinary growing replacement")
+        let cancelDuring = AutomationRunControl()
+        cancelDuring.onProgress = { completed,total in if completed==total {cancelDuring.cancel()} }
+        rejects("sample observes cancellation between completed steps") { _ = try expanding.testSample("a",control:cancelDuring) }
         print("PASS AutomationChecks: \(count) assertions (pure core; native UI and external outputs not covered)")
     }
 }

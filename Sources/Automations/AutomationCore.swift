@@ -7,6 +7,7 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
     enum Output: String, Codable { case editor, clipboard, newDocument, file, reminders }
     struct Step: Codable, Equatable {
         enum Kind: String, Codable, CaseIterable { case removeListMarkers, removeBlankLines, sortLines, deduplicateLines, replaceLiteral
+            case removeLinesEqualTo, removeLinesContaining, removeLinesStartingWith, trimWhitespace
             case removeMatchingLines, removeMarkdownHeadings, removeMarkdownFormatting, removeCheckboxMarkers, removeNoteReferences, keepMarkedListRows }
         var kind: Kind
         var find: String?
@@ -52,9 +53,13 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
             }
         }
         for step in steps {
-            if step.askForFind == true && step.kind != .replaceLiteral && step.kind != .removeMatchingLines { throw AutomationError.invalid("This step does not accept a find parameter.") }
+            if step.askForFind == true && ![Step.Kind.replaceLiteral, .removeMatchingLines, .removeLinesEqualTo, .removeLinesContaining, .removeLinesStartingWith].contains(step.kind) { throw AutomationError.invalid("This step does not accept a find parameter.") }
             if step.askForReplacement == true && step.kind != .replaceLiteral { throw AutomationError.invalid("This step does not accept a replacement parameter.") }
             switch step.kind {
+            case .removeLinesEqualTo, .removeLinesContaining, .removeLinesStartingWith:
+                guard let find = step.find, !find.isEmpty, step.replacement == nil else {
+                    throw AutomationError.invalid("This line rule needs nonempty text and no replacement.")
+                }
             case .removeMatchingLines:
                 guard let pattern = step.find, !pattern.isEmpty, pattern.count <= 500, step.replacement == nil else {
                     throw AutomationError.invalid("removeMatchingLines requires a nonempty regex find (up to 500 characters) and no replacement.")
@@ -96,6 +101,15 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         for (index,step) in steps.enumerated() {
             try control?.checkpoint(completed:index,total:steps.count)
             switch step.kind {
+            case .removeLinesEqualTo, .removeLinesContaining, .removeLinesStartingWith:
+                result = try Self.mapLines(result, control:control) { line in
+                    let needle = step.find!
+                    let matches = step.kind == .removeLinesEqualTo ? line == needle :
+                        (step.kind == .removeLinesContaining ? line.contains(needle) : line.hasPrefix(needle))
+                    return matches ? "" : line
+                }
+            case .trimWhitespace:
+                result = try Self.mapLines(result, control:control) { $0.trimmingCharacters(in: .whitespaces) }
             case .removeMatchingLines:
                 let regex = try NSRegularExpression(pattern: step.find!)
                 var timedOut = false
@@ -173,6 +187,30 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         }
         try control?.checkpoint(completed:steps.count,total:steps.count)
         return result
+    }
+    /// Draft-only test harness: never resolves inputs/parameters or invokes an output.
+    func testSample(_ input:String, control:AutomationRunControl? = nil) throws -> String {
+        try validate()
+        guard input.utf8.count <= 65536 else { throw AutomationError.invalid("Use a sample of at most 64 KiB.") }
+        var text = input
+        let started = ProcessInfo.processInfo.systemUptime
+        for step in steps {
+            try control?.checkCancellation()
+            guard ProcessInfo.processInfo.systemUptime - started < 2 else { throw AutomationError.invalid("Sample test exceeded two seconds. Simplify the rules or use a smaller sample.") }
+            if step.kind == .replaceLiteral, let find = step.find, let replacement = step.replacement {
+                // Conservative bound before allocating expanded replacement text.
+                let possibleMatches = text.utf8.count / max(1,find.utf8.count)
+                guard replacement.utf8.count <= 1_048_576,
+                      possibleMatches <= (1_048_576 - min(text.utf8.count,1_048_576)) / max(1,replacement.utf8.count) else {
+                    throw AutomationError.invalid("This replacement could exceed the 1 MiB sample-result limit. Use a smaller sample or replacement.")
+                }
+            }
+            var single = self; single.steps = [step]
+            text = try single.transform(text,control:control)
+            guard text.utf8.count <= 1_048_576 else { throw AutomationError.invalid("Sample result exceeds 1 MiB.") }
+        }
+        try control?.checkCancellation()
+        return text
     }
     private static func removeInlineMarkdown(_ line: String) -> String {
         var result = inlineLinksToLabels(line)

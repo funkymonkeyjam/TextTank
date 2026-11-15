@@ -132,6 +132,28 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         saved.workflows[0].pinToToolbar = false
         try restarted.persistLibrary(saved)
         try check(restarted.toolbarIdentifiers().count == 1,"toolbar pin setting hides only configured workflow")
+        // Four literal user examples run through a persisted named automation.
+        // No connector or new-document output is invoked by recipe cleanup.
+        let preservedWorkflow=saved.workflows[0]
+        saved.workflows[0].name="My ingredient cleanup"
+        saved.workflows[0].input = .document; saved.workflows[0].output = .editor
+        saved.workflows[0].previewBeforeApply=false
+        saved.workflows[0].steps=AutomationDefinition.shoppingRecipeSteps
+        try restarted.persistLibrary(saved)
+        let sampleWindows=NSApp.windows.count
+        for sample in 1...4 {
+            let input=try String(contentsOfFile:"Tests/Fixtures/recipe-user-sample\(sample)-input.txt",encoding:.utf8)
+            let expected=try String(contentsOfFile:"Tests/Fixtures/recipe-user-sample\(sample)-expected.txt",encoding:.utf8)
+            editor.text=input;editor.resetUndoHistory();editor.setSavePoint()
+            _ = editor.setSelectionAnchor(0,caret:0)
+            try restarted.runSavedAutomation(id:preservedWorkflow.id)
+            try check(editor.text.utf8.elementsEqual(expected.utf8),"sample \(sample) native exact literal expected bytes")
+            try check(editor.window === window && window.contentView === editor && NSApp.windows.count==sampleWindows,"sample \(sample) uses same editor and window")
+            editor.executeCommand("undo")
+            try check(editor.text.utf8.elementsEqual(input.utf8) && !editor.modified,"sample \(sample) one Undo restores original bytes and savepoint")
+        }
+        try check(newDocumentCalls==0,"all four samples avoid new-document output")
+        saved.workflows[0]=preservedWorkflow;try restarted.persistLibrary(saved)
         let now = Date()
         let confirmed = ReminderBatch(id:UUID(),destinationID:"list-a",destinationTitle:"Shopping",destinationSource:"Local",rows:[ReminderRow(id:UUID(),title:"2 eggs",status:.confirmed,reminderID:"fake-1")],createdAt:now)
         let uncertain = ReminderBatch(id:UUID(),destinationID:"list-a",destinationTitle:"Shopping",destinationSource:"Local",rows:[ReminderRow(id:UUID(),title:"2 eggs",status:.uncertain)],createdAt:now.addingTimeInterval(1))

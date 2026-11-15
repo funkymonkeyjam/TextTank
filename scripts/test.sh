@@ -27,6 +27,7 @@ build/tests/macro-checks | tee harness/logs/macro-checks.log
 scripts/test-macros.sh
 
 scripts/test-automation-ui.sh
+scripts/test-user-recipes.sh
 
 scripts/test-workspace.sh
 
