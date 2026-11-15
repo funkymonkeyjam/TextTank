@@ -144,6 +144,13 @@ extension DocumentChecks {
             opened[0].editor.replaceSelection("edited ");opened[0].flushRecovery()
             let secondWrite=try TextDocument.recovery.load(id:named.id)
             check(secondWrite.revision > firstWrite.revision && secondWrite.text == opened[0].editor.text && opened[0].lastRecoveryError == nil,"an edit after recovery is flushed at a higher revision with the edited text")
+            // An empty snapshot is the case where setting the text does not advance the editor's
+            // own revision, so only the +1 on the snapshot revision makes the first write later.
+            let emptyNamed=RecoverySnapshot(id:UUID(),text:"",format:FileFormat(),originalURL:namedURL.absoluteString,revision:9)
+            try TextDocument.recovery.save(emptyNamed)
+            let emptyOpened=try sessionDelegate.openRecovered([emptyNamed])
+            let emptyWrite=try TextDocument.recovery.load(id:emptyNamed.id)
+            check(emptyOpened[0].lastRecoveryError == nil && emptyWrite.revision > 9 && emptyWrite.originalURL == nil && emptyOpened[0].isDocumentEdited,"an empty named snapshot is rewritten at a later revision on recovery, not rejected as stale")
             check(try Data(contentsOf:namedURL) == originalBytes,"launch recovery never writes the original file")
             let good=RecoverySnapshot(id:UUID(),text:"before the bad one",format:FileFormat(),originalURL:nil,revision:1)
             let overflowing=RecoverySnapshot(id:UUID(),text:"x",format:FileFormat(),originalURL:nil,revision:UInt64.max)
