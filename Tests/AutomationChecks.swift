@@ -78,9 +78,12 @@ import Darwin
         rejects("optional ingredient cannot be guessed as heading") { _ = try filtered.transform("Salt (optional)\n▢2 eggs\n") }
         check(try filtered.transform("# Any heading\n▢salt\n") == "▢salt\n", "explicit Markdown heading accepted")
         let plain = try String(contentsOf:fixtures.appendingPathComponent("recipe-plain-copy-derived.txt"),encoding:.utf8)
-        check(try AutomationDefinition.example.transform(plain) == cleaned.replacingOccurrences(of:"chopped\"",with:"chopped"), "configured optional heading removed from derived copy")
+        // G380: the derived plain copy has its own stored expected bytes.
+        let plainExpected = try String(contentsOf:fixtures.appendingPathComponent("recipe-plain-copy-expected.txt"),encoding:.utf8)
+        fixtureCheck(plainExpected != cleaned && plainExpected.split(separator:"\n").count == cleaned.split(separator:"\n").count, "plain-copy expected fixture differs from the Markdown expected fixture only within a row")
+        check(try AutomationDefinition.example.transform(plain) == plainExpected, "configured optional heading removed from derived copy")
         let explicit = plain.replacingOccurrences(of:"Garnish (optional)",with:"# Garnish (optional)")
-        check(try AutomationDefinition.example.transform(explicit) == cleaned.replacingOccurrences(of:"chopped\"",with:"chopped"), "plain copied28 rows retain quantities after explicit heading markup")
+        check(try AutomationDefinition.example.transform(explicit) == plainExpected, "plain copied28 rows retain quantities after explicit heading markup")
         let native = try String(contentsOf:fixtures.appendingPathComponent("recipe-browser-plain-input.txt"),encoding:.utf8)
         let nativeExpected = try String(contentsOf:fixtures.appendingPathComponent("recipe-browser-cleaned-expected.txt"),encoding:.utf8)
         check(try AutomationDefinition.example.transform(native) == nativeExpected, "observed native browser copy cleans28 exactly: \(try AutomationDefinition.example.transform(native).debugDescription)")

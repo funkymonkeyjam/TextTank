@@ -33,19 +33,24 @@ enum UserRecipeFixtures {
             var renamed=definition;renamed.name="Scott's chosen label"
             check(try renamed.transform(input).utf8.elementsEqual(expected.utf8),"sample \(number) configurable name does not affect behavior")
         }
-        for (inputName,expectedName,isPlain) in [
-            ("recipe-markdown-input.txt","recipe-cleaned-expected.txt",false),
-            ("recipe-browser-plain-input.txt","recipe-browser-cleaned-expected.txt",false),
-            ("recipe-plain-copy-derived.txt","recipe-cleaned-expected.txt",true)
+        // G380: each input has its own stored expected bytes; nothing is adjusted at run time.
+        for (inputName,expectedName) in [
+            ("recipe-markdown-input.txt","recipe-cleaned-expected.txt"),
+            ("recipe-browser-plain-input.txt","recipe-browser-cleaned-expected.txt"),
+            ("recipe-plain-copy-derived.txt","recipe-plain-copy-expected.txt")
         ] {
             let input=try String(contentsOf:UserRecipeFixtures.directory.appendingPathComponent(inputName),encoding:.utf8)
-            var expected=try String(contentsOf:UserRecipeFixtures.directory.appendingPathComponent(expectedName),encoding:.utf8)
-            // The historical Markdown source has a literal final quote; its derived
-            // plain-copy fixture omits that quote, as the existing regression records.
-            if isPlain { expected=expected.replacingOccurrences(of:"chopped\"",with:"chopped") }
+            let expected=try String(contentsOf:UserRecipeFixtures.directory.appendingPathComponent(expectedName),encoding:.utf8)
             check(try definition.transform(input).utf8.elementsEqual(expected.utf8),"prior confirmed cleanup exact compatibility: \(inputName)")
         }
         check(try definition.transform("Ingredients\nCups\nMetric\nGarnish (optional)\nSauce:\n2 eggs (optional)\n")=="2 eggs (optional)\n","configured structural headings removed without blanket parenthetical stripping")
+        // G380: behaviour on text that is none of the four samples. The byte-exact sample pairs
+        // above are regression anchors only, because the preset's rules were written from them.
+        check(try definition.transform("Dressing\n2 eggs\n")=="Dressing\n2 eggs\n","an unknown heading without a colon is kept, not guessed at")
+        check(try definition.transform("For the sauce:\n2 eggs\n")=="2 eggs\n","an unmarked letter-leading line that ends in a colon is cleared")
+        check(try definition.transform("2 cups stock:\n1 egg\n")=="2 cups stock:\n1 egg\n","a digit-leading line that ends in a colon is kept as an ingredient")
+        check(try definition.transform("1 can (14 oz) tomatoes\n3 (6-inch) tortillas\n")=="1 can (14 oz) tomatoes\n3 (6-inch) tortillas\n","parenthetical quantities are kept")
+        check(try definition.transform("Sauce: 2 tbsp soy\n")=="Sauce: 2 tbsp soy\n","a colon in the middle of a line does not make it a heading")
         let (_,first)=try UserRecipeFixtures.pair(1)
         fixtureCheck(first.components(separatedBy:"1/2 teaspoon black pepper").count==3,"duplicate ingredient rows preserved")
         let (_,third)=try UserRecipeFixtures.pair(3)
