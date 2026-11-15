@@ -826,12 +826,53 @@ extension DocumentChecks {
                     && catalog.profiles[0].styles.map(\.name) == ["DEFAULT", "KEYWORDS1"]
                     && catalog.profiles[0].udl == language,
                 "golden language catalog decodes to the recorded user-defined profile")
+            // Audit package 18: the user's LanguageProfiles.json now holds only changes to the bundled
+            // catalog. The full-copy fixture above stays, because files in that form are still read.
+            let goldenOverrides = LanguageOverrides(
+                basedOnSourceCommit: "golden-fixture",
+                changed: [
+                    .init(
+                        id: "python", title: "Golden Python", extensions: ["py", "gold"],
+                        styles: [
+                            .init(
+                                id: 5, name: "KEYWORDS", foreground: "123456", fontStyle: 3, useCustomColor: true,
+                                fontName: "Menlo-Regular", fontSize: 13.5)
+                        ], cleared: ["comments"])
+                ], added: [try language.profile()], removed: ["cobol"], order: [try language.profile().id, "python"])
+            let overridesBytes = try golden("LanguageOverrides.json") { try goldenOverrides.encoded() }
+            let base = LanguageCatalog(
+                sourceCommit: "base", sourceHashes: [:], limitations: [],
+                profiles: ["cobol", "python", "ruby"].map {
+                    LanguageProfile(
+                        id: $0, title: $0, lexer: $0, extensions: [$0], keywordLists: ["0": "keyword"],
+                        referenceKeywordClasses: [:], properties: [:], styles: [], functionPattern: nil, udl: nil,
+                        comments: .init(line: "#", blockOpen: nil, blockClose: nil))
+                })
+            let overlaid = try LanguageCatalog.load(stored: overridesBytes, over: base),
+                storedOverrides = try JSONDecoder().decode(LanguageOverrides.self, from: overridesBytes)
+            let goldenID = "udl.1d20011f4d4db78bc77f4d6d"
+            check(
+                storedOverrides.overridesVersion == 1 && storedOverrides.basedOnSourceCommit == "golden-fixture"
+                    && storedOverrides.changed == goldenOverrides.changed && storedOverrides.removed == ["cobol"]
+                    && storedOverrides.order == [goldenID, "python"] && storedOverrides.added.map(\.id) == [goldenID]
+                    && storedOverrides.added[0].udl == language
+                    && storedOverrides.added[0].keywordLists["7"] == "alpha beta",
+                "golden language overrides decode to the recorded changes")
+            check(
+                overlaid.profiles.map(\.id) == [goldenID, "python", "ruby"]
+                    && overlaid.profiles[1].title == "Golden Python"
+                    && overlaid.profiles[1].extensions == ["py", "gold"]
+                    && overlaid.profiles[1].styles == goldenOverrides.changed[0].styles
+                    && overlaid.profiles[1].comments == nil && overlaid.profiles[1].keywordLists == ["0": "keyword"]
+                    && overlaid.profiles[0] == storedOverrides.added[0] && overlaid.profiles[2] == base.profiles[2]
+                    && overlaid.sourceCommit == "base",
+                "golden language overrides merge over a bundled catalog: changed, cleared, removed, added and ordered")
             let present = Set(try FileManager.default.contentsOfDirectory(atPath: folder.path))
             check(
                 present == [
                     "Settings.json", "SearchOptions.json", "FolderSearchSettings.json", "WorkspaceBrowser.json",
                     "RunLibrary.json", "Session.texttanksession", "RecoverySnapshot.json", "ReminderBatch.json",
-                    "MacroLibrary.json", "Automations.json", "LanguageCatalog.json"
+                    "MacroLibrary.json", "Automations.json", "LanguageCatalog.json", "LanguageOverrides.json"
                 ], "every committed persistence fixture is decoded by a check")
             check(!writing, "persistence fixtures were not rewritten by this run")
         }

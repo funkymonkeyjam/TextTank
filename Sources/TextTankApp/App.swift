@@ -36,7 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     lazy var languages = LanguageController(
         editorProvider: { [weak self] in self?.currentEditor },
         languageProvider: { [weak self] in
-            (self?.lastDocumentController?.document as? TextDocument)?.languageIdentifier ?? "normal"
+            (self?.lastDocumentController?.document as? TextDocument)?.languageIdentifier
+                ?? LanguageProfile.plainTextID
         },
         setLanguage: { [weak self] id in
             (self?.lastDocumentController?.document as? TextDocument)?.languageIdentifier = id
@@ -107,6 +108,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let alert = TTAlert()
             alert.alertStyle = .warning
             alert.messageText = "Settings could not be read"
+            alert.informativeText = message
+            _ = alert.runModal()
+        }
+        if let message = languages.loadFailureMessage {
+            let alert = TTAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Language profiles could not be read"
             alert.informativeText = message
             _ = alert.runModal()
         }
@@ -472,7 +480,10 @@ final class TextDocument: NSDocument {
         var afterWriteForTesting: (() throws -> Void)?
     #endif
     var originalDiskFingerprint: String? { diskBytes.map(WorkspaceStore.fingerprint) }
-    var languageIdentifier = "null"
+    var languageIdentifier = LanguageProfile.plainTextID { didSet { languageResolved = true } }
+    /// False until the first load has chosen a language, or the person or a restored session has.
+    /// Reload and Revert then keep that choice instead of detecting again.
+    private var languageResolved = false
     private var loading = false
     /// Set only while an explicit open-with-encoding is reading the file.
     private var openEncoding: FileEncoding?
@@ -770,6 +781,8 @@ final class TextDocument: NSDocument {
         editor.setSavePoint()
         editor.readOnly = locked
         loading = false
+        guard !languageResolved else { return }
+        languageResolved = true
         if let app = NSApp.delegate as? AppDelegate,
             let id = app.languages.detect(filename: fileURL?.lastPathComponent ?? "", text: decoded.text),
             app.languages.apply(identifier: id, to: editor)
@@ -1337,7 +1350,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         ]
         let language =
             (NSApp.delegate as? AppDelegate)?.languages.profile(identifier: doc.languageIdentifier)?.title
-            ?? (doc.languageIdentifier == "null" ? "Plain Text" : doc.languageIdentifier)
+            ?? (doc.languageIdentifier == LanguageProfile.plainTextID ? "Plain Text" : doc.languageIdentifier)
         let eol =
             cachedEndings.isEmpty ? ([0: "CRLF", 1: "CR", 2: "LF"][info["eol"]?.intValue ?? 2] ?? "LF") : cachedEndings
         let indentation =
@@ -1446,18 +1459,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
             add("Smaller", #selector(statusOption(_:)), self, "zoomOut")
             if let languages = app?.languages {
                 menu.addItem(.separator())
-                let languageMenu = languages.menu()
-                if let style = languageMenu.items.first(where: { $0.title == "Syntax Style Settings…" }) {
-                    menu.addItem(style.copy() as! NSMenuItem)
-                }
+                menu.addItem(languages.styleSettingsMenuItem())
             }
         case "language":
             if let languages = app?.languages {
-                let source = languages.menu()
-                for item in source.items where item.representedObject is String {
-                    let copy = item.copy() as! NSMenuItem
-                    copy.state = (copy.representedObject as? String) == doc.languageIdentifier ? .on : .off
-                    menu.addItem(copy)
+                for item in languages.languageMenuItems() {
+                    item.state = (item.representedObject as? String) == doc.languageIdentifier ? .on : .off
+                    menu.addItem(item)
                 }
             }
         case "bookmarks":
@@ -1602,13 +1610,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         statusTimer?.invalidate()
         if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }
         if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
-    }
-    @objc func language(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? String {
-            activeEditor.setLanguage(id)
-            (document as? TextDocument)?.languageIdentifier = id
-            refreshStatusDetails()
-        }
     }
     @objc func showFind(_ sender: Any?) {
         _ = activeEditor

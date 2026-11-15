@@ -62,13 +62,14 @@ final class WorkspaceController: NSObject {
             NSDocumentController.shared.addDocument(document)
             document.makeWindowControllers()
             document.loadUnsavedSnapshot(text: snapshot.text, format: snapshot.format)
-            let requestedLanguage = snapshot.language ?? "null"
+            // Sessions written before the single plain-text identifier say "null" or nothing.
+            let requestedLanguage = LanguageProfile.canonicalID(snapshot.language)
             if let app = NSApp.delegate as? AppDelegate,
                 app.languages.apply(identifier: requestedLanguage, to: document.editor)
             {
                 document.languageIdentifier = requestedLanguage
             } else {
-                document.languageIdentifier = "null"
+                document.languageIdentifier = LanguageProfile.plainTextID
                 document.editor.setLanguage("null")
             }
             _ = document.editor.setBookmarks(snapshot.bookmarks.map { NSNumber(value: $0) })

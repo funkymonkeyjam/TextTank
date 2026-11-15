@@ -4,6 +4,8 @@ import Darwin
 @main struct WorkspaceBrowserChecks {
     static func main() {
         Checks.run("WorkspaceBrowserChecks") {
+            // F148: there is no bundle here, so the suite names the bundled language catalog itself.
+            LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(
                 "TextTankBrowser-" + UUID().uuidString)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -127,6 +129,41 @@ import Darwin
             check(
                 detected.languageIdentifier == "python",
                 "workspace filename assigned before extension language detection")
+            // G373: a language chosen by hand survives Reload and Revert; only the first load detects.
+            func firstColor(_ editor: TTEditor) -> NSColor? {
+                editor.attributedText(forSelection: false).attribute(.foregroundColor, at: 0, effectiveRange: nil)
+                    as? NSColor
+            }
+            let scriptURL = folder.appendingPathComponent("manual-choice.py")
+            try Data("return 42;".utf8).write(to: scriptURL)
+            let manual = try controller.open(scriptURL)
+            let manualReference = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200)),
+                pythonReference = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+            manualReference.text = "return 42;"
+            pythonReference.text = "return 42;"
+            check(
+                manual.languageIdentifier == "python"
+                    && app.languages.apply(identifier: "javascript", to: manual.editor)
+                    && app.languages.apply(identifier: "javascript", to: manualReference)
+                    && app.languages.apply(identifier: "python", to: pythonReference),
+                "fixture: a Python file is switched to JavaScript by hand")
+            manual.languageIdentifier = "javascript"
+            check(
+                firstColor(manualReference) != nil && firstColor(manualReference) != firstColor(pythonReference),
+                "fixture: the two languages colour the sample differently")
+            try manual.reload(using: .utf8)
+            check(
+                manual.languageIdentifier == "javascript" && manual.editor.text == "return 42;"
+                    && firstColor(manual.editor) == firstColor(manualReference),
+                "Reload with an encoding keeps the manually chosen language and its styling")
+            try manual.revert(toContentsOf: scriptURL, ofType: "Plain Text")
+            check(
+                manual.languageIdentifier == "javascript" && firstColor(manual.editor) == firstColor(manualReference),
+                "Revert keeps the manually chosen language and its styling")
+            let untouched = try controller.open(python)
+            try untouched.reload(using: .utf8)
+            check(untouched.languageIdentifier == "python", "a detected language is kept across Reload as well")
+            manual.close()
             let sessionText = "return 42;"
             let snapshot = SessionDocument(
                 id: UUID(), originalURL: nil, text: sessionText, format: FileFormat(), isDirty: true,
@@ -158,8 +195,26 @@ import Darwin
                 WorkspaceSession(id: UUID(), name: "Unavailable language", documents: [missing], activeDocumentID: nil))[
                     0]
             check(
-                fallback.languageIdentifier == "null" && fallback.editor.text == sessionText,
+                fallback.languageIdentifier == LanguageProfile.plainTextID && fallback.editor.text == sessionText,
                 "unknown session language safely falls back to plain text")
+            // F96: one plain-text identifier. Sessions written before it existed say "null" or nothing.
+            var legacy = snapshot
+            for stored in ["null", nil] as [String?] {
+                legacy.language = stored
+                let plain = try WorkspaceController().restore(
+                    WorkspaceSession(id: UUID(), name: "Legacy plain", documents: [legacy], activeDocumentID: nil))[0]
+                check(
+                    plain.languageIdentifier == LanguageProfile.plainTextID
+                        && app.languages.profile(identifier: plain.languageIdentifier)?.lexer == "null"
+                        && (plain.windowControllers.first as? EditorWindowController)?.status.stringValue.contains(
+                            "unavailable") == false
+                        && plain.editor.text == sessionText,
+                    "a session that stored \(stored ?? "no language") restores as the Plain Text profile")
+            }
+            check(
+                TextDocument().languageIdentifier == LanguageProfile.plainTextID
+                    && app.languages.profile(identifier: TextDocument().languageIdentifier)?.title != nil,
+                "a new document's language is a real profile, so style and function commands accept it")
             controller.window?.close()
             Checks.summary { "WorkspaceBrowserChecks: \(Checks.count) assertions passed" }
         }

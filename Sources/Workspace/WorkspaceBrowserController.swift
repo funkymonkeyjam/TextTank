@@ -54,6 +54,11 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         menu.addItem(recent)
         return menu
     }
+    /// No item in this menu has a key equivalent, so a key press never needs it brought up to date.
+    func menuHasKeyEquivalent(
+        _ menu: NSMenu, for event: NSEvent, target: AutoreleasingUnsafeMutablePointer<AnyObject?>,
+        action: UnsafeMutablePointer<Selector?>
+    ) -> Bool { false }
     func menuNeedsUpdate(_ menu: NSMenu) {
         guard menu === rootMenu, let submenu = menu.items.last?.submenu else { return }
         menu.items.first { $0.action == #selector(toggleMonitor(_:)) }?.state = monitor.document == nil ? .off : .on

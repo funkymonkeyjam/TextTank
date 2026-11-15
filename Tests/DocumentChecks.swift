@@ -27,6 +27,8 @@ import AppKit
     }
     @MainActor static func main() {
         Checks.run("DocumentChecks") {
+            // F148: there is no bundle here, so the suite names the bundled language catalog itself.
+            LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(
                 "TextTankDocumentChecks-" + UUID().uuidString)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

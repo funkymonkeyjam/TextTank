@@ -12,8 +12,11 @@ import AppKit
                     defer: false), editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
             window.contentView = editor
             var selected = "python"
+            // F148: the check executable has no bundle, so it names the bundled catalog itself.
+            let bundledURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")
             let controller = LanguageController(
-                editorProvider: { editor }, languageProvider: { selected }, setLanguage: { selected = $0 })
+                editorProvider: { editor }, languageProvider: { selected }, setLanguage: { selected = $0 },
+                bundledCatalog: bundledURL)
             let catalog = try requireValue(controller.catalog, "fixture: language catalog loaded")
             let text = "# café\nclass Example:\n    def work(self):\n        return 1\n"
             editor.text = text
@@ -54,7 +57,8 @@ import AppKit
             custom.profiles[0].title = "My plain language"
             try controller.persist(custom)
             let restored = LanguageController(
-                editorProvider: { editor }, languageProvider: { selected }, setLanguage: { selected = $0 })
+                editorProvider: { editor }, languageProvider: { selected }, setLanguage: { selected = $0 },
+                bundledCatalog: bundledURL)
             check(restored.catalog == custom, "custom profile persistence and reload exact")
             let menu = controller.menu()
             let pythonItem = menu.items.first { ($0.representedObject as? String) == "python" }!
@@ -141,7 +145,8 @@ import AppKit
                 read.fontName == chosenFont && read.fontSize == 21.5 && read.foreground == "FF0000",
                 "focused shared size field commits independently of font name")
             let styledRestored = LanguageController(
-                editorProvider: { editor }, languageProvider: { user.id }, setLanguage: { _ in })
+                editorProvider: { editor }, languageProvider: { user.id }, setLanguage: { _ in },
+                bundledCatalog: bundledURL)
             check(styledRestored.catalog == custom, "font and color preferences persist exactly")
             // F220: applying a profile lexes the document once, with the final lists and properties.
             typealias ScintillaMessage = @convention(c) (AnyObject, Selector, UInt32, UInt, Int) -> Int
@@ -368,6 +373,418 @@ import AppKit
             editorA.setLanguage("null")
             _ = message(editorB, SCI_COLOURISE, 0, -1)
             check(styles(editorB)[6] == keyword1, "releasing one user lexer leaves the other's keyword cache intact")
+            // ---- Package 18 ----
+            let SCI_STYLEGETFORE: UInt32 = 2481, STYLE_DEFAULT: UInt = 32
+            let bundledCatalog = try LanguageCatalog.decode(Data(contentsOf: bundledURL))
+            func plainController(_ language: String = "python") -> LanguageController {
+                LanguageController(
+                    editorProvider: { nil }, languageProvider: { language }, setLanguage: { _ in },
+                    bundledCatalog: bundledURL)
+            }
+            func siblings(_ support: URL) -> [String] {
+                ((try? FileManager.default.contentsOfDirectory(atPath: support.path)) ?? []).sorted()
+            }
+            func components(_ color: NSColor) -> [Double] {
+                let c = color.usingColorSpace(.sRGB)!
+                return [c.redComponent, c.greenComponent, c.blueComponent].map { Double($0) }
+            }
+            func close(_ a: [Double], _ b: [Double], _ tolerance: Double = 0.012) -> Bool {
+                zip(a, b).allSatisfy { abs($0 - $1) <= tolerance }
+            }
+            func colors(_ target: TTEditor, at offset: Int) -> (text: [Double], back: [Double]) {
+                let output = target.attributedText(forSelection: false)
+                return (
+                    components(output.attribute(.foregroundColor, at: offset, effectiveRange: nil) as! NSColor),
+                    components(output.attribute(.backgroundColor, at: offset, effectiveRange: nil) as! NSColor)
+                )
+            }
+            func contrast(_ a: [Double], _ b: [Double]) -> Double {
+                func luminance(_ c: [Double]) -> Double {
+                    let l = c.map { $0 <= 0.03928 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
+                    return 0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2]
+                }
+                let x = luminance(a), y = luminance(b)
+                return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+            }
+            // F148: with no bundled catalog there is no silent fallback to the working directory.
+            try withIsolatedSupportDirectory("LanguageNoBundle") { _ in
+                let orphan = LanguageController(
+                    editorProvider: { nil }, languageProvider: { "python" }, setLanguage: { _ in }, bundledCatalog: nil)
+                check(
+                    orphan.catalog == nil && orphan.loadError != nil && !orphan.storageDamaged
+                        && FileManager.default.fileExists(atPath: "Resources/LanguageProfiles.json"),
+                    "a missing bundled catalog is an error, not a read from the working directory")
+                rejects("nothing is saved without a bundled catalog") { try orphan.persist(bundledCatalog) }
+                rejects("there is nothing to move aside when the bundled catalog failed") {
+                    try orphan.quarantineDamagedStorage()
+                }
+            }
+            // F76: a stored file that cannot be read leaves the bundled languages working, is never
+            // overwritten, and can be moved aside explicitly.
+            var customCatalog = bundledCatalog
+            customCatalog.profiles[0].title = "Recovered plain language"
+            func damagedCase(_ name: String, _ write: (URL) throws -> Void) throws {
+                try withIsolatedSupportDirectory("LanguageDamaged") { support in
+                    let stored = support.appendingPathComponent("LanguageProfiles.json")
+                    try write(stored)
+                    let before = try? Data(contentsOf: stored)
+                    let damaged = plainController()
+                    let probe = hostedEditor()
+                    probe.text = "import os\n"
+                    check(
+                        damaged.loadFailureMessage?.contains(stored.path) == true
+                            && plainController("normal").loadFailureMessage != nil,
+                        "\(name): the failure is reported with the file's path")
+                    check(
+                        damaged.catalog == bundledCatalog && damaged.storageDamaged && damaged.loadError != nil
+                            && damaged.detect(filename: "a.py", text: "") == "python"
+                            && damaged.apply(identifier: "python", to: probe)
+                            && damaged.menu().items.contains { ($0.representedObject as? String) == "python" },
+                        "\(name): the bundled languages still work")
+                    rejects("\(name): persist refuses to write over the unreadable file") {
+                        try damaged.persist(customCatalog)
+                    }
+                    check(
+                        (try? Data(contentsOf: stored)) == before && siblings(support) == ["LanguageProfiles.json"],
+                        "\(name): the stored file is byte for byte unchanged")
+                    let moved = try damaged.quarantineDamagedStorage()
+                    let names = siblings(support)
+                    check(
+                        names.count == 1 && names[0].hasPrefix("LanguageProfiles.damaged-")
+                            && names[0] == moved.lastPathComponent && (try? Data(contentsOf: moved)) == before
+                            && !damaged.storageDamaged && damaged.loadError == nil,
+                        "\(name): the file is moved aside once, under a new name, with its bytes")
+                    try damaged.persist(customCatalog)
+                    check(
+                        damaged.loadFailureMessage == nil && plainController().loadFailureMessage == nil,
+                        "\(name): nothing is reported once the file is moved aside")
+                    check(
+                        plainController().catalog == customCatalog && siblings(support).count == 2
+                            && (try? Data(contentsOf: moved)) == before,
+                        "\(name): after moving aside, changes save and reload")
+                    rejects("\(name): a healthy store cannot be moved aside") {
+                        try damaged.quarantineDamagedStorage()
+                    }
+                }
+            }
+            try damagedCase("garbage bytes") { try Data([0x00, 0xFF, 0x7B, 0x22]).write(to: $0) }
+            try damagedCase("truncated JSON") { try bundledCatalog.encoded().prefix(4000).write(to: $0) }
+            try damagedCase("catalog version 2") {
+                var future = bundledCatalog
+                future.version = 2
+                let encoder = JSONEncoder()
+                try encoder.encode(future).write(to: $0)
+            }
+            try damagedCase("file over 16 MiB") {
+                try Data(repeating: 0x20, count: 16 * 1024 * 1024 + 1).write(to: $0)
+            }
+            try withIsolatedSupportDirectory("LanguageSymlink") { support in
+                try withIsolatedSupportDirectory("LanguageSymlinkTarget") { elsewhere in
+                    let target = elsewhere.appendingPathComponent("Real.json"),
+                        stored = support.appendingPathComponent("LanguageProfiles.json")
+                    let targetBytes = try customCatalog.encoded()
+                    try targetBytes.write(to: target)
+                    try FileManager.default.createSymbolicLink(at: stored, withDestinationURL: target)
+                    setenv("TEXTTANK_SUPPORT_DIRECTORY", support.path, 1)
+                    let linked = plainController()
+                    check(
+                        linked.storageDamaged && linked.catalog == bundledCatalog,
+                        "a symbolic link in place of the stored file is not followed")
+                    rejects("persist refuses to write through a symbolic link") { try linked.persist(customCatalog) }
+                    let moved = try linked.quarantineDamagedStorage()
+                    try linked.persist(customCatalog)
+                    check(
+                        (try? Data(contentsOf: target)) == targetBytes
+                            && (try? FileManager.default.destinationOfSymbolicLink(atPath: moved.path)) == target.path
+                            && (try? FileManager.default.attributesOfItem(atPath: stored.path)[.type]
+                                as? FileAttributeType)
+                                == .typeRegular,
+                        "the link itself is moved aside and its target is never written")
+                }
+            }
+            // F77, G365: what is stored is the user's changes only, and a full copy written by an
+            // earlier build keeps every customisation through the move to that format.
+            try withIsolatedSupportDirectory("LanguageOverrides") { support in
+                let stored = support.appendingPathComponent("LanguageProfiles.json")
+                var fork = try requireValue(controller.catalog, "fixture: customised catalog")
+                let pythonIndex = try requireValue(fork.profiles.firstIndex { $0.id == "python" }, "fixture: python")
+                fork.profiles[pythonIndex].styles[0].foreground = "654321"
+                fork.profiles[pythonIndex].styles[0].useCustomColor = true
+                fork.profiles[pythonIndex].functionPattern = "(?m)^custom (\\w+)"
+                var expected = fork
+                // A fork from before `comments` existed, and before a language the app has since gained.
+                for index in fork.profiles.indices where fork.profiles[index].udl == nil {
+                    fork.profiles[index].comments = nil
+                }
+                fork.profiles.removeAll { $0.id == "cobol" }
+                try fork.encoded().write(to: stored)
+                let migrated = plainController()
+                check(
+                    migrated.loadError == nil && !migrated.storageDamaged && migrated.catalog == expected,
+                    "a full-copy LanguageProfiles.json loads with every customisation, missing comments and languages filled in"
+                )
+                check(
+                    migrated.profile(identifier: "python")?.styles[0].foreground == "654321"
+                        && migrated.profile(identifier: "python")?.comments?.line == "#"
+                        && migrated.profile(identifier: user.id)?.styles.first { $0.name == "KEYWORDS1" }?.fontSize
+                            == 19.25
+                        && migrated.profile(identifier: "cobol") != nil
+                        && migrated.catalog?.profiles[0].title == "My plain language",
+                    "edited built-in profiles, imported UDLs and their styles survive migration")
+                let fullSize = try Data(contentsOf: stored).count
+                let loaded = try requireValue(migrated.catalog, "fixture: migrated catalog")
+                try migrated.persist(loaded)
+                let written = try Data(contentsOf: stored)
+                let overrides = try JSONDecoder().decode(LanguageOverrides.self, from: written)
+                check(
+                    written.count < fullSize / 4 && overrides.changed.map(\.id) == ["normal", "python"]
+                        && overrides.changed[1].keywordLists == nil && overrides.removed.isEmpty
+                        && overrides.added.count == loaded.profiles.count - 96
+                        && overrides.basedOnSourceCommit == bundledCatalog.sourceCommit,
+                    "saving writes only the changes (\(written.count) bytes, was \(fullSize))")
+                check(
+                    plainController().catalog == loaded
+                        && (try? FileManager.default.attributesOfItem(atPath: stored.path)[.posixPermissions] as? Int)
+                            == 0o600,
+                    "the changes reload as exactly the same catalog from a private file")
+                expected = loaded
+                expected.profiles.removeAll { $0.id == "ada" }
+                expected.profiles[expected.profiles.firstIndex { $0.id == "python" }!].comments = nil
+                try migrated.persist(expected)
+                check(
+                    plainController().catalog == expected && plainController().profile(identifier: "ada") == nil
+                        && plainController().profile(identifier: "python")?.comments == nil,
+                    "a deleted built-in profile and removed comment markers stay that way after a restart")
+                try FileManager.default.removeItem(at: stored)
+                try FileManager.default.copyItem(
+                    at: TestPaths.fixtures.appendingPathComponent("persistence/LanguageCatalog.json"), to: stored)
+                let goldenProfiles = try LanguageCatalog.decode(Data(contentsOf: stored)).profiles
+                let golden = plainController()
+                check(
+                    golden.loadError == nil && golden.catalog?.profiles.count == 96 + goldenProfiles.count
+                        && goldenProfiles.allSatisfy { golden.profile(identifier: $0.id) == $0 },
+                    "the golden full-copy catalog loads with its profiles intact over the bundled languages")
+                try golden.persist(try requireValue(golden.catalog, "fixture: golden catalog"))
+                check(
+                    goldenProfiles.allSatisfy { plainController().profile(identifier: $0.id) == $0 }
+                        && plainController().catalog?.profiles.count == 96 + goldenProfiles.count,
+                    "the golden catalog's profiles survive being saved as overrides")
+            }
+            // F241, F305: one decode, an indexed lookup, and a menu rebuilt only when the catalog changed.
+            let languageMenu = controller.menu(), firstItems = languageMenu.items
+            controller.menuNeedsUpdate(languageMenu)
+            check(
+                languageMenu.items.count == firstItems.count
+                    && zip(languageMenu.items, firstItems).allSatisfy { $0 === $1 },
+                "the Language menu is not rebuilt while the catalog is unchanged")
+            var noTarget: AnyObject?, noAction: Selector?
+            let keyDown = try requireValue(
+                NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: 0,
+                    context: nil,
+                    characters: "k", charactersIgnoringModifiers: "k", isARepeat: false, keyCode: 40),
+                "fixture: key event")
+            check(
+                !controller.menuHasKeyEquivalent(languageMenu, for: keyDown, target: &noTarget, action: &noAction)
+                    && languageMenu.items.allSatisfy { $0.keyEquivalent.isEmpty },
+                "the Language menu has no key equivalents and says so without rebuilding")
+            let menuProfile = try userProfile("Pin menu refresh", keywords: ["Keywords1": "menu"])
+            check(
+                !languageMenu.items.contains { ($0.representedObject as? String) == menuProfile.id },
+                "fixture: an open menu object is refreshed by its delegate, not behind its back")
+            controller.menuNeedsUpdate(languageMenu)
+            check(
+                languageMenu.items.contains { ($0.representedObject as? String) == menuProfile.id }
+                    && controller.languageMenuItems().map { $0.representedObject as? String }
+                        == languageMenu.items.filter { $0.representedObject is String }.map {
+                            $0.representedObject as? String
+                        },
+                "an imported language appears in the Language menu at the next update")
+            let styleItem = controller.styleSettingsMenuItem()
+            check(
+                styleItem.target === controller && styleItem.action == #selector(LanguageController.styleSettings)
+                    && styleItem.title == languageMenu.items[3].title,
+                "the style settings item is made directly, not found by its title")
+            check(
+                controller.profile(identifier: menuProfile.id) == menuProfile
+                    && controller.profile(identifier: "python")?.id == "python"
+                    && controller.profile(identifier: "no-such-language") == nil,
+                "profile lookup by identifier follows catalog changes")
+            // F22, and the plain-text observation: a profile's lexer gets no C colours, and switching
+            // to Plain Text leaves nothing of the previous language behind.
+            let scoped = hostedEditor()
+            scoped.text = "select zzzname from t\n"
+            check(
+                controller.apply(identifier: "sql", to: scoped) && message(scoped, SCI_GETSTYLEAT, 7) == 11
+                    && message(scoped, SCI_STYLEGETFORE, 11) == message(scoped, SCI_STYLEGETFORE, STYLE_DEFAULT)
+                    && message(scoped, SCI_STYLEGETFORE, 5) != message(scoped, SCI_STYLEGETFORE, STYLE_DEFAULT),
+                "an SQL identifier has the default colour, not the C keyword colour")
+            scoped.text = "def work():\n    return 'text'  # note\n"
+            check(
+                controller.apply(identifier: "python", to: scoped) && Set(styles(scoped)).count > 3,
+                "fixture: Python styles the sample")
+            let plainApplied = controller.apply(identifier: LanguageProfile.plainTextID, to: scoped)
+            let plainColors = Set((0..<32).map { message(scoped, SCI_STYLEGETFORE, UInt($0)) })
+            if !check(
+                plainApplied && Set(styles(scoped)) == [0] && plainColors.count == 1
+                    && message(scoped, SCI_GETENDSTYLED) == scoped.text.utf8.count,
+                "switching to Plain Text removes the previous language's styles and colours")
+            {
+                print("NOTE plain styles \(Set(styles(scoped))) colours \(plainColors)")
+            }
+            for id in ["jsp", "json5", "asp"] {
+                let sample = id == "json5" ? "{\"key\": 12}\n" : "<p class=\"x\">text</p>\n"
+                scoped.text = sample
+                let applied = controller.apply(identifier: id, to: scoped)
+                let used = Set(styles(scoped))
+                check(
+                    applied
+                        && used.contains {
+                            message(scoped, SCI_STYLEGETFORE, UInt($0))
+                                != message(scoped, SCI_STYLEGETFORE, STYLE_DEFAULT)
+                        },
+                    "\(id) is coloured by its own profile styles")
+            }
+            // F299: adaptive colours are resolved for the editor's own appearance.
+            func calibrated(_ r: Double, _ g: Double, _ b: Double) -> [Double] {
+                components(NSColor(calibratedRed: r, green: g, blue: b, alpha: 1))
+            }
+            let darkKeyword = calibrated(0.65, 0.82, 1), lightKeyword = calibrated(0.08, 0.24, 0.55)
+            let adaptive = hostedEditor()
+            adaptive.text = "return value;\n"
+            adaptive.appearance = NSAppearance(named: .aqua)
+            check(
+                controller.apply(identifier: "cpp", to: adaptive) && message(adaptive, SCI_GETSTYLEAT, 0) == 5
+                    && close(colors(adaptive, at: 0).text, lightKeyword),
+                "an adaptive keyword colour is the light variant in a light editor")
+            adaptive.appearance = NSAppearance(named: .darkAqua)
+            adaptive.viewDidChangeEffectiveAppearance()
+            check(
+                close(colors(adaptive, at: 0).text, darkKeyword),
+                "an appearance change re-resolves adaptive colours for the dark editor")
+            check(
+                controller.apply(identifier: "cpp", to: adaptive) && close(colors(adaptive, at: 0).text, darkKeyword),
+                "applying a profile to a dark editor resolves adaptive colours as dark")
+            adaptive.appearance = NSAppearance(named: .aqua)
+            adaptive.viewDidChangeEffectiveAppearance()
+            check(close(colors(adaptive, at: 0).text, lightKeyword), "and back to the light variant")
+            // F82: an imported UDL's black default text is readable in both appearances, and its
+            // real colours stay exactly as imported.
+            let readable = try userProfile("Pin readable", keywords: ["Keywords1": "hello"])
+            check(
+                readable.styles.first { $0.name == "DEFAULT" }?.useCustomColor == nil
+                    && readable.styles.first { $0.name == "KEYWORDS1" }?.useCustomColor == true,
+                "fixture: black default text is adaptive, blue keywords are fixed")
+            for name in [NSAppearance.Name.darkAqua, .aqua] {
+                let themed = hostedEditor()
+                themed.appearance = NSAppearance(named: name)
+                themed.text = "hello ordinary\n"
+                let applied = controller.apply(identifier: readable.id, to: themed)
+                let ordinary = colors(themed, at: 6), keyword = colors(themed, at: 0)
+                if !check(
+                    applied && contrast(ordinary.text, ordinary.back) >= 4.5 && close(keyword.text, [0, 0, 1], 0.004),
+                    "imported UDL text is readable and its blue is exact in \(name == .darkAqua ? "dark" : "light") appearance"
+                ) {
+                    print("NOTE contrast \(contrast(ordinary.text, ordinary.back)) keyword \(keyword.text)")
+                }
+            }
+            // F84: a blank font or size field means "follow the editor", and can be saved and restored.
+            let inherit = LanguageProfile.Style(id: 4, name: "KEYWORDS1", foreground: "0000FF", fontStyle: 0)
+            func entered(_ original: LanguageProfile.Style, font: String, size: String, bold: Bool = false) throws
+                -> LanguageProfile.Style
+            {
+                try LanguageController.readStyle(
+                    original, font: NSTextField(string: font), size: NSTextField(string: size), color: .red,
+                    custom: true, bold: bold, italic: false, window: settingsWindow)
+            }
+            let untouched = try entered(inherit, font: "", size: "", bold: true)
+            check(
+                untouched.fontName == nil && untouched.fontSize == nil && untouched.fontStyle == 1
+                    && untouched.foreground == "FF0000",
+                "saving a style with blank font fields keeps it following the editor")
+            var pinned = inherit
+            pinned.fontName = chosenFont
+            pinned.fontSize = 19.25
+            let cleared = try entered(pinned, font: "  ", size: "")
+            check(
+                cleared.fontName == nil && cleared.fontSize == nil,
+                "clearing both fields returns a style to the editor font")
+            let sizeOnly = try entered(pinned, font: "", size: "16"),
+                nameOnly = try entered(pinned, font: chosenFont, size: "")
+            check(
+                sizeOnly.fontName == nil && sizeOnly.fontSize == 16 && nameOnly.fontName == chosenFont
+                    && nameOnly.fontSize == nil, "font name and size can be set independently")
+            for (font, size) in [
+                ("No Such Font Installed 123", ""), ("", "5"), ("", "abc"), (chosenFont, "73"), ("", "nan")
+            ] {
+                rejects(
+                    "style font \(font.debugDescription) size \(size.debugDescription) is rejected",
+                    where: { $0 is LanguageError }
+                ) { _ = try entered(pinned, font: font, size: size) }
+            }
+            var fonts = try requireValue(controller.catalog, "fixture: catalog for font checks")
+            let fontProfile = try requireValue(fonts.profiles.firstIndex { $0.id == user.id }, "fixture: styled UDL"),
+                fontStyle = try requireValue(
+                    fonts.profiles[fontProfile].styles.firstIndex { $0.name == "KEYWORDS1" }, "fixture: styled keyword")
+            let fontEditor = hostedEditor()
+            fontEditor.text = "HELLO ordinary\n"
+            _ = controller.apply(identifier: user.id, to: fontEditor)
+            func pointSize(_ target: TTEditor) -> Double {
+                Double(
+                    (target.attributedText(forSelection: false).attribute(.font, at: 0, effectiveRange: nil) as! NSFont)
+                        .pointSize)
+            }
+            let basePointSize = Double(
+                (fontEditor.attributedText(forSelection: false).attribute(.font, at: 6, effectiveRange: nil) as! NSFont)
+                    .pointSize)
+            check(
+                abs(pointSize(fontEditor) - 19.25) < 0.01 && abs(basePointSize - 14) < 0.01,
+                "fixture: keyword pinned to 19.25 pt beside 14 pt text")
+            let clearedStyle = try entered(fonts.profiles[fontProfile].styles[fontStyle], font: "", size: "")
+            fonts.profiles[fontProfile].styles[fontStyle] = clearedStyle
+            var mirrored = try requireValue(fonts.profiles[fontProfile].udl, "fixture: embedded UDL")
+            mirrored.styles[mirrored.styles.firstIndex { $0.name == "KEYWORDS1" }!].attributes["fontName"] = chosenFont
+            mirrored.styles[mirrored.styles.firstIndex { $0.name == "KEYWORDS1" }!].attributes["fontSize"] = "19.25"
+            LanguageController.mirror(clearedStyle, into: &mirrored)
+            fonts.profiles[fontProfile].udl = mirrored
+            try controller.persist(fonts)
+            check(
+                controller.apply(identifier: user.id, to: fontEditor)
+                    && abs(pointSize(fontEditor) - basePointSize) < 0.01,
+                "a cleared style renders in the editor's own size again")
+            let reimported = try UserDefinedLanguage.decode(mirrored.encodedXML())[0].profile(),
+                reimportedKeyword = reimported.styles.first { $0.name == "KEYWORDS1" }
+            check(
+                reimportedKeyword?.fontName == nil && reimportedKeyword?.fontSize == nil
+                    && reimportedKeyword?.foreground == "FF0000" && reimportedKeyword?.useCustomColor == true
+                    && mirrored.styles.first { $0.name == "KEYWORDS1" }?.attributes["fontName"] == nil,
+                "the cleared font and the colour choice reach the exported UDL and survive re-import")
+            var blackChoice = LanguageProfile.Style(
+                id: 0, name: "DEFAULT", foreground: "000000", fontStyle: 0, useCustomColor: true)
+            LanguageController.mirror(blackChoice, into: &mirrored)
+            check(
+                try mirrored.profile().styles.first { $0.name == "DEFAULT" }?.useCustomColor == true,
+                "an explicit custom black survives regenerating the profile from the UDL")
+            blackChoice.useCustomColor = false
+            LanguageController.mirror(blackChoice, into: &mirrored)
+            check(
+                try mirrored.profile().styles.first { $0.name == "DEFAULT" }?.useCustomColor == false,
+                "an explicit adaptive choice survives regenerating the profile from the UDL")
+            // F97: one picker row per style, in order, whatever the names are.
+            let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 300, height: 28), pullsDown: false)
+            LanguageController.populateStylePicker(
+                picker,
+                styles: ["A", "B", "A", "", ""].enumerated().map {
+                    .init(id: $0.offset + 10, name: $0.element, foreground: "000000", fontStyle: 0)
+                })
+            check(
+                picker.numberOfItems == 5 && picker.indexOfSelectedItem == 0,
+                "style picker keeps duplicate and empty names as separate rows")
+            picker.selectItem(at: 2)
+            check(
+                picker.indexOfSelectedItem == 2
+                    && picker.itemTitles == ["A", "B", "A (style 12)", "Style 13", "Style 14"],
+                "the selected row is the style's index (\(picker.itemTitles))")
             withExtendedLifetime(hosts) {}
             print(
                 "LEXER CONFIGURATION: \(supported) available; missing \(missing). This proves loading and text integrity, not every lexical semantic."
