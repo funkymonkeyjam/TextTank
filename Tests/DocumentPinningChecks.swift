@@ -1178,7 +1178,9 @@ extension DocumentChecks {
                     separator: "\n")
                 ok.performClick(nil)
             }
-            func columnDialog(text: String, numbered: Bool, start: String, step: String, confirm: Bool = true) -> Bool {
+            @MainActor func columnDialog(
+                text: String, numbered: Bool, start: String, step: String, confirm: Bool = true
+            ) -> Bool {
                 var acted = false, timedOut = false
                 var dialog: NSWindow?
                 explanation = ""
@@ -1219,7 +1221,7 @@ extension DocumentChecks {
                 timer.invalidate()
                 return acted && !timedOut
             }
-            func threeSelections() throws -> UInt {
+            @MainActor func threeSelections() throws -> UInt {
                 document.editor.text = "x\nx\nx\n"
                 document.editor.resetUndoHistory()
                 document.editor.setSavePoint()

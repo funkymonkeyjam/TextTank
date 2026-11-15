@@ -998,16 +998,19 @@ final class Audit24RecoverySpy: NSObject {
         for title in ["Save", "Cancel", "Reset Defaults"] { alert.addButton(withTitle: title) }
         for index in [2, 1, 0] {
             var aligned = false
+            // The fixture and action are main-actor isolated. Timer transports only this
+            // Sendable actor-bound function, not the non-Sendable dialog object itself.
+            let chooseButton: @MainActor @Sendable () -> Void = {
+                let frames = alert.buttons.map { $0.convert($0.bounds, to: alert.window.contentView) }
+                print("ACTION_GEOMETRY", index, frames)
+                fflush(stdout)
+                aligned =
+                    frames.allSatisfy { abs($0.midY - frames[0].midY) < 1 } && frames[2].maxX < frames[1].minX
+                    && frames[1].maxX < frames[0].minX
+                alert.buttons[index].performClick(nil)
+            }
             let timer = Timer(timeInterval: 0.1, repeats: false) { _ in
-                MainActor.assumeIsolated {
-                    let frames = alert.buttons.map { $0.convert($0.bounds, to: alert.window.contentView) }
-                    print("ACTION_GEOMETRY", index, frames)
-                    fflush(stdout)
-                    aligned =
-                        frames.allSatisfy { abs($0.midY - frames[0].midY) < 1 } && frames[2].maxX < frames[1].minX
-                        && frames[1].maxX < frames[0].minX
-                    alert.buttons[index].performClick(nil)
-                }
+                MainActor.assumeIsolated { chooseButton() }
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             let response = alert.runModal()
