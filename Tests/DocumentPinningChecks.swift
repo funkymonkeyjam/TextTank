@@ -446,6 +446,46 @@ extension DocumentChecks {
             document.editor.executeCommand("undo")
             check(document.editor.text == "x\nx\nx\n" && !document.editor.modified,"column insertion is one Undo back to the save point")
             check(!EditorWindowController.applyColumn(["1","2","3"],to:document.editor,revision:columnRevision,selections:columnSelections),"a column insertion captured before an edit is refused afterwards")
+            // Insert into Each Selection through its real dialog: plain text, then sequential numbers.
+            func columnDialog(text:String,numbered:Bool,start:String,step:String,confirm:Bool=true)->Bool {
+                var acted=false,timedOut=false
+                let deadline=Date().addingTimeInterval(10)
+                let timer=Timer(timeInterval:0.02,repeats:true) { _ in MainActor.assumeIsolated {
+                    guard let content=NSApp.modalWindow?.contentView else { return }
+                    if Date() > deadline { timedOut=true;NSApp.abortModal();return }
+                    guard !acted else { return }
+                    let views=descendants(content)
+                    func find<T:NSView>(_ identifier:String,_ type:T.Type)->T? { views.compactMap{ $0 as? T }.first{ $0.identifier?.rawValue == identifier } }
+                    guard let textField=find("column.text",NSTextField.self),let number=find("column.number",NSButton.self),let startField=find("column.start",NSTextField.self),
+                          let stepField=find("column.step",NSTextField.self),let press=find(confirm ? "column.insert" : "column.cancel",NSButton.self) else { return }
+                    acted=true
+                    textField.stringValue=text;number.state=numbered ? .on : .off;startField.stringValue=start;stepField.stringValue=step
+                    press.performClick(nil)
+                } }
+                RunLoop.main.add(timer,forMode:.modalPanel)
+                controller.columnInsert(nil)
+                timer.invalidate()
+                return acted && !timedOut
+            }
+            func threeSelections()throws->UInt {
+                document.editor.text="x\nx\nx\n";document.editor.resetUndoHistory();document.editor.setSavePoint()
+                try require(document.editor.setSelectionRanges([["anchor":0,"caret":1],["anchor":2,"caret":3],["anchor":4,"caret":5]]),"fixture: three selected columns")
+                return document.editor.revision
+            }
+            _ = try threeSelections()
+            check(columnDialog(text:"ab",numbered:false,start:"1",step:"1") && document.editor.text == "ab\nab\nab\n","Insert into Each Selection puts the typed text in every selection")
+            document.editor.executeCommand("undo")
+            check(document.editor.text == "x\nx\nx\n" && !document.editor.modified,"the dialog's insertion is one Undo back to the save point")
+            _ = try threeSelections()
+            check(columnDialog(text:"ignored",numbered:true,start:"8",step:"-4") && document.editor.text == "8\n4\n0\n","sequential numbers start at Start and add Increment per selection, in selection order")
+            _ = try threeSelections()
+            check(columnDialog(text:"",numbered:true,start:"007",step:"0") && document.editor.text == "7\n7\n7\n","a zero increment repeats the start value, written without leading zeros")
+            var untouched=try threeSelections()
+            check(columnDialog(text:"",numbered:true,start:"one",step:"1") && document.editor.text == "x\nx\nx\n" && document.editor.revision == untouched,"a start value that is not a whole number inserts nothing")
+            untouched=try threeSelections()
+            check(columnDialog(text:"",numbered:true,start:String(Int.max),step:"1") && document.editor.text == "x\nx\nx\n" && document.editor.revision == untouched,"a sequence that would overflow inserts nothing")
+            untouched=try threeSelections()
+            check(columnDialog(text:"ab",numbered:false,start:"1",step:"1",confirm:false) && document.editor.text == "x\nx\nx\n" && document.editor.revision == untouched,"Cancel in Insert into Each Selection inserts nothing")
             document.editor.text="";document.close()
         }
     }

@@ -1025,7 +1025,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate {
         let number=NSButton(checkboxWithTitle:"Insert sequential numbers",target:nil,action:nil)
         let start=NSTextField(string:"1"),step=NSTextField(string:"1")
         let stack=NSStackView(views:[text,number,NSTextField(labelWithString:"Start"),start,NSTextField(labelWithString:"Increment"),step]);stack.orientation = .vertical;stack.alignment = .leading;stack.frame=NSRect(x:0,y:0,width:400,height:180)
-        alert.accessoryView=stack;alert.addButton(withTitle:"Insert");alert.addButton(withTitle:"Cancel")
+        alert.accessoryView=stack;alert.addButton(withTitle:"Insert").identifier=NSUserInterfaceItemIdentifier("column.insert");alert.addButton(withTitle:"Cancel").identifier=NSUserInterfaceItemIdentifier("column.cancel")
+        for (control,name) in [(text as NSView,"text"),(number,"number"),(start,"start"),(step,"step")] { control.identifier=NSUserInterfaceItemIdentifier("column."+name) }
         guard alert.runModal() == .alertFirstButtonReturn else{return}
         var values=Array(repeating:text.stringValue,count:editor.selectionCount)
         if number.state == .on {
