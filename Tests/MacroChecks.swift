@@ -91,6 +91,25 @@ import AppKit
         controller.searchPlayback = { captured,target in observed = captured; target.replaceSelection("called") }
         try controller.play(searchMacro,on:editor)
         try check(observed == search,"search playback uses captured parameters through adapter")
+        // G366: with the real Find-window playback, a recorded Next that finds nothing stops the macro
+        // before the following step can edit the line the caret was left on.
+        let finder=SearchController()
+        controller.searchPlayback = { captured,target in
+            var options=SearchOptions();options.query=captured.query;options.replacement=captured.replacement;options.mode=SearchOptions.Mode(rawValue:captured.mode) ?? .normal
+            options.matchCase=captured.matchCase;options.wholeWord=captured.wholeWord;options.dotMatchesNewline=captured.dotMatchesNewline;options.wrap=captured.wrap
+            try finder.playRecorded(options:options,action:captured.action,on:target)
+        }
+        let todoSource="TODO a\nkeep\nTODO b\nTODO c\ntail one\ntail two\n"
+        let findNext=RecordedMacro.Search(query:"TODO",replacement:"",mode:0,matchCase:true,wholeWord:false,dotMatchesNewline:false,wrap:false,action:"next")
+        let deleteTodo=RecordedMacro(id:UUID(),name:"Delete found lines",steps:[.init(kind:.search,search:findNext),.init(kind:.command,command:"deleteLine")])
+        for untilEnd in [false,true] {
+            let label=untilEnd ? "until-end":"repeat-500"
+            editor.text=todoSource;editor.resetUndoHistory();editor.setSavePoint();_ = editor.setSelectionAnchor(0,caret:0)
+            var stopped="";do{try controller.play(deleteTodo,on:editor,repeats:untilEnd ? 1:500,untilEnd:untilEnd)}catch{stopped=error.localizedDescription}
+            try check(stopped.contains("recorded search did not match"),"\(label) playback stops at the first recorded search with no match")
+            try check(editor.text=="keep\ntail one\ntail two\n","\(label) playback removes exactly the matching lines and leaves the rest")
+            editor.executeCommand("undo");try check(editor.text==todoSource && !editor.modified,"\(label) stopped playback is one Undo")
+        }
         #endif
         print("PASS MacroChecks: \(checks) assertions; persistence/security checks; native integration only when TEXTTANK_NATIVE_MACRO_TEST is defined")
     }

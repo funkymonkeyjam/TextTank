@@ -108,7 +108,7 @@ final class MacroController: NSObject, NSMenuDelegate {
         guard !playing,recordingEditor == nil,let editor=editorProvider() else { return }
         let revision=editor.revision;let selectionStart=editor.selectionStart;let selectionEnd=editor.selectionEnd
         let alert=TTAlert();alert.messageText="Play \(macro.name)"
-        alert.informativeText="Repeat count (1–10000). Playback changes the captured editor as one Undo group. Literal find stops on no match; earlier edits remain undoable. Clipboard commands operate on the current clipboard. No shell or external workflow runs."
+        alert.informativeText="Repeat count (1–10000). Playback changes the captured editor as one Undo group. Find steps (literal find and Find-window Next or Previous) stop the macro on no match; earlier edits remain undoable. Replace All with no matches is skipped. Clipboard commands operate on the current clipboard. No shell or external workflow runs."
         alert.addButton(withTitle:"Play");alert.addButton(withTitle:"Cancel")
         let count=NSTextField(string:"1");count.frame=NSRect(x:0,y:0,width:200,height:24)
         let untilEnd = NSButton(checkboxWithTitle:"Repeat until end of document",target:nil,action:nil)

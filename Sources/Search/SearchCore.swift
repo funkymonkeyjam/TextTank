@@ -43,11 +43,13 @@ enum SearchCore {
         let rows=result["matches"] as? [[String:Any]] ?? []
         return SearchReport(hits:rows.map{SearchHit(range:($0["range"] as! NSValue).rangeValue,replacement:$0["replacement"] as! String)},truncated:result["truncated"] as? Bool ?? false)
     }
-    static func byteRange(_ range:NSRange,in text:String)->NSRange? {
-        let units=Array(text.utf16)
-        func boundary(_ i:Int)->Bool { i==0 || i==units.count || !(units[i]>=0xDC00 && units[i]<=0xDFFF && units[i-1]>=0xD800 && units[i-1]<=0xDBFF) }
-        guard range.location>=0,range.length>=0,range.location<=units.count,range.length<=units.count-range.location,boundary(range.location),boundary(NSMaxRange(range)),let swiftRange=Range(range,in:text) else{return nil}
-        return NSRange(location:text[..<swiftRange.lowerBound].utf8.count,length:text[swiftRange].utf8.count)
+    /// Scalar-granular like byteRanges: nil for surrogate splits, negative and out-of-range input.
+    static func byteRange(_ range:NSRange,in text:String)->NSRange? { byteRanges([range],in:text)?.first }
+    /// The hits whose byte range is exactly the byte selection. All hits are converted in one
+    /// linear pass, so a single Replace costs the same for one match as for a hundred thousand.
+    static func hits(_ hits:[SearchHit],selectedBy selection:NSRange,in text:String)->[SearchHit] {
+        guard let ranges=byteRanges(hits.map(\.range),in:text) else{return []}
+        return zip(hits,ranges).filter{$0.1==selection}.map(\.0)
     }
     /// Linear offset conversion for sorted nonoverlapping matches; avoids copying
     /// a document prefix separately for every replacement.

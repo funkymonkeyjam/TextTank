@@ -113,14 +113,16 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
                 self.status.stringValue="\(self.rows.count) matches in \(buffers.count) document(s)"+(truncated ? " · result limit reached":"")
                 switch action {
                 case .all:break
-                case .next,.previous:self.navigate(backwards:action == .previous,wrap:opts.wrap)
-                    if currentDocumentScope,let editor=buffers.first?.editor {self.onCommand?(opts,action == .previous ? "previous":"next",editor)}
+                case .next,.previous:
+                    // A miss is not recorded: playback stops on a recorded search that finds nothing.
+                    let moved=self.navigate(backwards:action == .previous,wrap:opts.wrap)
+                    if moved,currentDocumentScope,let editor=buffers.first?.editor {self.onCommand?(opts,action == .previous ? "previous":"next",editor)}
                 case .replaceAll,.replaceOne:
                     guard !truncated else{self.status.stringValue="Result limit reached; replacements were not applied. Narrow the scope.";return}
                     var changed=0,stale=0
                     for buffer in buffers {
                         let hits=self.rows.filter{$0.buffer.editor===buffer.editor}.map{$0.hit}
-                        let chosen=action == .replaceOne ? hits.filter{SearchCore.byteRange($0.range,in:buffer.text)==NSRange(location:min(buffer.anchor,buffer.caret),length:abs(buffer.anchor-buffer.caret))}:hits
+                        let chosen=action == .replaceOne ? SearchCore.hits(hits,selectedBy:NSRange(location:min(buffer.anchor,buffer.caret),length:abs(buffer.anchor-buffer.caret)),in:buffer.text):hits
                         if chosen.isEmpty{continue}
                         if (selectionScope || action == .replaceOne) && (buffer.editor.selectionAnchor != buffer.anchor || buffer.editor.selectionCaret != buffer.caret){stale+=1;continue}
                         if Self.apply(chosen,text:buffer.text,revision:buffer.revision,to:buffer.editor){changed+=chosen.count}else{stale+=1}
@@ -150,12 +152,14 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
             }catch{guard let self,self.generation==token else{return};self.status.stringValue=error.localizedDescription;self.finish()}
         }
     }
-    /// Macro playback is bounded and has no disk or connector side effects.
+    /// Macro playback is bounded and has no disk or connector side effects. Next and Previous throw
+    /// when they do not land on a match, so the steps after them never run at a stale caret;
+    /// Replace All with no match is a deliberate no-op.
     func playRecorded(options:SearchOptions,action:String,on editor:TTEditor)throws {
         let text=editor.text,revision=editor.revision
         let report=try SearchCore.search(text,options:options,timeLimit:0.1)
         guard !report.truncated else{throw NSError(domain:"TextTank.Search",code:4,userInfo:[NSLocalizedDescriptionKey:"Macro search reached the result limit; no edits were applied."])}
-        guard let selection=SearchCore.utf16Range(NSRange(location:editor.selectionStart,length:editor.selectionEnd-editor.selectionStart),in:text) else{return}
+        guard let selection=SearchCore.utf16Range(NSRange(location:editor.selectionStart,length:editor.selectionEnd-editor.selectionStart),in:text) else{throw Self.recordedSearchStopped("the selection is not on a character boundary")}
         if action=="replaceAll" || action=="replaceOne" {
             let hits=action=="replaceAll" ? report.hits:report.hits.filter{$0.range==selection}
             if !hits.isEmpty && !Self.apply(hits,text:text,revision:revision,to:editor){throw NSError(domain:"TextTank.Search",code:5,userInfo:[NSLocalizedDescriptionKey:"Macro replacement encountered a stale buffer or unsupported multiple selection."])}
@@ -164,9 +168,12 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
             let continuing=lastNavigation.map{$0.0===editor && $0.1==revision && $0.2==selection} ?? false
             let candidates=report.hits.filter{h in backwards ? NSMaxRange(h.range)<=selection.location && !(continuing && h.range==selection):h.range.location>=NSMaxRange(selection) && !(continuing && h.range==selection)}
             let hit=(backwards ? candidates.last:candidates.first) ?? (options.wrap ? (backwards ? report.hits.last:report.hits.first):nil)
-            if let hit,let bytes=SearchCore.byteRange(hit.range,in:text),editor.setSelectionAnchor(bytes.location,caret:NSMaxRange(bytes)){lastNavigation=(editor,revision,hit.range)}
+            guard let hit else{throw Self.recordedSearchStopped("recorded search did not match")}
+            guard let bytes=SearchCore.byteRange(hit.range,in:text),editor.setSelectionAnchor(bytes.location,caret:NSMaxRange(bytes)) else{throw Self.recordedSearchStopped("the match could not be selected")}
+            lastNavigation=(editor,revision,hit.range)
         }else{throw NSError(domain:"TextTank.Search",code:6,userInfo:[NSLocalizedDescriptionKey:"Unrecognized recorded search action."])}
     }
+    private static func recordedSearchStopped(_ reason:String)->NSError {NSError(domain:"TextTank.Search",code:7,userInfo:[NSLocalizedDescriptionKey:"Macro stopped: \(reason). Prior edits remain undoable."])}
     @discardableResult static func highlight(_ hits:[SearchHit],text:String,revision:UInt,in editor:TTEditor)->Bool {
         guard editor.window != nil,editor.revision==revision,editor.text==text,let ranges=SearchCore.byteRanges(hits.map(\.range),in:text) else{return false}
         return editor.setSearchHighlights(ranges.filter{$0.length>0}.map{NSValue(range:$0)})
@@ -181,14 +188,16 @@ final class SearchController:NSWindowController,NSWindowDelegate,NSTableViewData
         }
         return true
     }
-    private func navigate(backwards:Bool,wrap:Bool){
-        guard let e=currentEditor(),let selection=SearchCore.utf16Range(NSRange(location:e.selectionStart,length:e.selectionEnd-e.selectionStart),in:e.text) else{return}
+    /// True only when the selection moved to a match.
+    private func navigate(backwards:Bool,wrap:Bool)->Bool {
+        guard let e=currentEditor(),let selection=SearchCore.utf16Range(NSRange(location:e.selectionStart,length:e.selectionEnd-e.selectionStart),in:e.text) else{return false}
         let available=rows.filter{$0.buffer.editor===e}
         let continuing=lastNavigation.map{$0.0===e && $0.1==e.revision && $0.2==selection} ?? false
         let candidates=available.filter{r in backwards ? NSMaxRange(r.hit.range)<=selection.location && !(continuing && r.hit.range==selection):r.hit.range.location>=NSMaxRange(selection) && !(continuing && r.hit.range==selection)}
-        if let row=backwards ? candidates.last:candidates.first {select(row)}else if wrap,let row=backwards ? available.last:available.first{select(row)}else{status.stringValue="No further matches."}
+        if let row=backwards ? candidates.last:candidates.first {return select(row)}else if wrap,let row=backwards ? available.last:available.first{return select(row)}
+        status.stringValue="No further matches.";return false
     }
-    private func select(_ row:Row){let b=row.buffer;guard b.editor.window != nil,b.editor.revision==b.revision,b.editor.text==b.text,let range=SearchCore.byteRange(row.hit.range,in:b.text),b.editor.setSelectionAnchor(range.location,caret:NSMaxRange(range)) else{status.stringValue="Result is stale; search again. Selection unchanged.";return};lastNavigation=(b.editor,b.revision,row.hit.range);b.editor.window?.makeKeyAndOrderFront(nil);b.editor.window?.makeFirstResponder(b.editor)}
+    @discardableResult private func select(_ row:Row)->Bool {let b=row.buffer;guard b.editor.window != nil,b.editor.revision==b.revision,b.editor.text==b.text,let range=SearchCore.byteRange(row.hit.range,in:b.text),b.editor.setSelectionAnchor(range.location,caret:NSMaxRange(range)) else{status.stringValue="Result is stale; search again. Selection unchanged.";return false};lastNavigation=(b.editor,b.revision,row.hit.range);b.editor.window?.makeKeyAndOrderFront(nil);b.editor.window?.makeFirstResponder(b.editor);return true}
     func numberOfRows(in tableView:NSTableView)->Int{rows.count}
     func tableView(_ tableView:NSTableView,objectValueFor tableColumn:NSTableColumn?,row:Int)->Any?{guard rows.indices.contains(row) else{return nil};let r=rows[row];let match=(r.buffer.text as NSString).substring(with:r.hit.range);return "\(r.buffer.editor.window?.title ?? "Document") · \(r.hit.range.location) · \(String(match.prefix(160)).replacingOccurrences(of:"\n",with:" ↵ "))"}
     @objc private func openResult(_ sender:Any?){guard rows.indices.contains(table.clickedRow) else{return};select(rows[table.clickedRow])}

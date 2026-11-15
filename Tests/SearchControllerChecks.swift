@@ -1,4 +1,6 @@
 import AppKit
+/// Find-window navigation fronts the document window; checks must never put one on screen.
+final class OffscreenWindow:NSWindow {override func makeKeyAndOrderFront(_ sender:Any?){}}
 @main struct SearchControllerChecks {
     @MainActor static func main()async throws {
         _=NSApplication.shared
@@ -59,6 +61,55 @@ import AppKit
         controller.bookmark(nil);editor.text="new content";_ = editor.setBookmarks([0])
         for _ in 0..<200 {if !controller.status.stringValue.hasPrefix("Searching"){break};try await Task.sleep(nanoseconds:10_000_000)}
         check(controller.status.stringValue.contains("1 changed") && editor.bookmarkLines.map{$0.intValue}==[0],"stale bookmark completion preserves current markers")
+        // G366: a recorded Next/Previous that finds nothing stops the macro instead of returning normally.
+        func stops(_ work:()throws->Void)->String? {do{try work();return nil}catch{return error.localizedDescription}}
+        var miss=SearchOptions();miss.query="TODO";miss.mode = .normal;miss.matchCase=true;miss.wrap=false
+        editor.text="TODO one\nTODO two\ntail\n";editor.resetUndoHistory();editor.setSavePoint()
+        let tail=editor.text.utf8.count;_ = editor.setSelectionAnchor(tail,caret:tail);let missRevision=editor.revision
+        var message=stops{try controller.playRecorded(options:miss,action:"next",on:editor)}
+        check(message?.contains("recorded search did not match")==true && editor.selectionAnchor==tail && editor.selectionCaret==tail && editor.text=="TODO one\nTODO two\ntail\n" && editor.revision==missRevision && !editor.modified,"recorded Next past the last match stops with selection, text and revision unchanged")
+        _ = editor.setSelectionAnchor(0,caret:0)
+        message=stops{try controller.playRecorded(options:miss,action:"previous",on:editor)}
+        check(message?.contains("recorded search did not match")==true && editor.selectionAnchor==0 && editor.selectionCaret==0 && editor.revision==missRevision && !editor.modified,"recorded Previous before the first match stops with selection and revision unchanged")
+        miss.wrap=true;_ = editor.setSelectionAnchor(tail,caret:tail)
+        check(stops{try controller.playRecorded(options:miss,action:"next",on:editor)}==nil && editor.selectionStart==0 && editor.selectedText=="TODO","recorded Next with Wrap on still wraps to the first match")
+        _ = editor.setSelectionAnchor(0,caret:0)
+        check(stops{try controller.playRecorded(options:miss,action:"previous",on:editor)}==nil && editor.selectionStart==9 && editor.selectedText=="TODO","recorded Previous with Wrap on still wraps to the last match")
+        miss.query="absent";_ = editor.setSelectionAnchor(3,caret:3)
+        message=stops{try controller.playRecorded(options:miss,action:"next",on:editor)}
+        check(message?.contains("recorded search did not match")==true && editor.selectionCaret==3 && editor.revision==missRevision,"recorded Next with Wrap on and no match anywhere stops")
+        miss.replacement="x"
+        check(stops{try controller.playRecorded(options:miss,action:"replaceAll",on:editor)}==nil && editor.revision==missRevision && !editor.modified && editor.selectionCaret==3,"recorded Replace All with no match is skipped without an edit")
+        check(stops{try controller.playRecorded(options:miss,action:"replaceOne",on:editor)}==nil && editor.revision==missRevision && !editor.modified,"recorded Replace keeps its saved-macro semantics when the selection is not a match")
+        // G366: the Find window records Next/Previous only when it actually moved to a match.
+        let offscreen=OffscreenWindow(contentRect:NSRect(x:0,y:0,width:600,height:400),styleMask:.titled,backing:.buffered,defer:false);window.contentView=nil;offscreen.contentView=editor
+        var recorded:[String]=[]
+        controller.onCommand={_,action,_ in recorded.append(action)}
+        func settle()async throws {for _ in 0..<1000 {if !controller.status.stringValue.hasPrefix("Searching"){break};try await Task.sleep(nanoseconds:10_000_000)}}
+        controller.queryField.stringValue="TODO";controller.replacementField.stringValue="";controller.mode.selectItem(at:0);controller.scope.selectItem(at:0);controller.wrapButton.state = .off;controller.caseButton.state = .on
+        _ = editor.setSelectionAnchor(0,caret:0);controller.next(nil);try await settle()
+        check(recorded==["next"] && editor.selectionStart==0 && editor.selectedText=="TODO","Find-window Next that lands on a match is recorded")
+        _ = editor.setSelectionAnchor(tail,caret:tail);controller.next(nil);try await settle()
+        check(recorded==["next"] && controller.status.stringValue=="No further matches." && editor.selectionCaret==tail,"Find-window Next that finds nothing is not recorded")
+        _ = editor.setSelectionAnchor(0,caret:0);controller.previous(nil);try await settle()
+        check(recorded==["next"] && controller.status.stringValue=="No further matches.","Find-window Previous that finds nothing is not recorded")
+        _ = editor.setSelectionAnchor(tail,caret:tail);controller.previous(nil);try await settle()
+        check(recorded==["next","previous"] && editor.selectionStart==9,"Find-window Previous that lands on a match is recorded")
+        // F34: single Replace on a many-hit buffer converts the hits once, and replaces only the selected hit.
+        let hitLine="é needle 0123456789 0123456789 0123456\n",hitCount=20000,chosenHit=12345,hitBytes=hitLine.utf8.count
+        let big=String(repeating:hitLine,count:hitCount);editor.text=big;editor.resetUndoHistory();editor.setSavePoint()
+        controller.queryField.stringValue="needle";controller.replacementField.stringValue="pin";recorded=[]
+        _ = editor.setSelectionAnchor(chosenHit*hitBytes+3,caret:chosenHit*hitBytes+9)
+        let replaceStart=Date();controller.replaceOne(nil)
+        for _ in 0..<60000 {if !controller.status.stringValue.hasPrefix("Searching"){break};try await Task.sleep(nanoseconds:10_000_000)}
+        let replaceElapsed=Date().timeIntervalSince(replaceStart)
+        let expectedBig=String(repeating:hitLine,count:chosenHit)+"é pin 0123456789 0123456789 0123456\n"+String(repeating:hitLine,count:hitCount-chosenHit-1)
+        check(controller.status.stringValue.hasPrefix("Replaced 1 matches; 0 changed") && editor.text==expectedBig && recorded==["replaceOne"],"single Replace on a \(hitCount)-hit buffer replaces exactly the selected hit")
+        check(replaceElapsed<10,"single Replace on a \(hitCount)-hit buffer stays within its time bound (\(String(format:"%.2f",replaceElapsed)) s)")
+        editor.executeCommand("undo");check(editor.text==big && !editor.modified,"many-hit single Replace is one Undo back to the save point")
+        _ = editor.setSelectionAnchor(chosenHit*hitBytes+3,caret:chosenHit*hitBytes+8);recorded=[];controller.replaceOne(nil)
+        for _ in 0..<60000 {if !controller.status.stringValue.hasPrefix("Searching"){break};try await Task.sleep(nanoseconds:10_000_000)}
+        check(controller.status.stringValue.hasPrefix("Replaced 0 matches") && editor.text==big && !editor.modified && recorded.isEmpty,"single Replace with a selection that is not exactly a hit changes and records nothing")
         print("PASS SearchControllerChecks: \(checks) assertions")
     }
 }
