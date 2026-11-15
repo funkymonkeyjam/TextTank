@@ -498,7 +498,13 @@ extension DocumentChecks {
             }
             let key = WindowFrames.defaultsKey("TextTank.Document")
             let (first, _, firstWindow) = try tab("p21-frame-1")
-            let placed = NSRect(x: 180, y: 160, width: 880, height: 610)
+            // A restored title bar must fit a connected screen. The former fixed rectangle
+            // reached y=770, outside the 768-point CI screen, and was correctly rejected.
+            let screen = NSScreen.screens[0].visibleFrame
+            let placed = NSRect(
+                x: screen.minX + 20, y: screen.minY + 20,
+                width: min(880, screen.width - 40), height: min(610, screen.height - 40))
+            check(WindowFrames.isUsable(placed), "fixture: the saved frame fits the connected screen")
             firstWindow.setFrame(placed, display: true)
             let left = firstWindow.frame
             check(
@@ -508,7 +514,9 @@ extension DocumentChecks {
             let (second, _, secondWindow) = try tab("p21-frame-2")
             check(
                 secondWindow.frame == left, "the first document window of a later launch opens where the last was left")
-            let moved = NSRect(x: 220, y: 120, width: 940, height: 660)
+            let moved = NSRect(
+                x: screen.minX + 30, y: screen.minY + 30,
+                width: min(940, screen.width - 60), height: min(660, screen.height - 60))
             secondWindow.setFrame(moved, display: true)
             let shared = secondWindow.frame
             defaults.set(WindowFrames.description(of: firstWindow), forKey: key)

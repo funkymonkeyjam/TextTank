@@ -442,11 +442,20 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                             && before.1.width == before.2.width
                         modal.setContentSize(NSSize(width: 1300, height: 980))
                         modal.layoutIfNeeded()
+                        // The window manager clamps a window to its screen (1024×768 in CI),
+                        // or to its minimum height without a screen. Drive the same root layout
+                        // at the requested content size so the growth assertions do not depend
+                        // on the display attached to the machine running this layout check.
+                        let root = modal.contentView!, actualFrame = root.frame
+                        root.setFrameSize(NSSize(width: 1300, height: 980))
+                        root.layoutSubtreeIfNeeded()
                         grew =
                             rules.frame.width > before.0.width + 200 && rules.frame.height > before.0.height + 50
                             && pane.frame.width > before.1.width + 100 && pane.frame.height > before.1.height + 50
                             && sample.frame.width > before.1.width
                         unambiguous = !(modal.contentView?.hasAmbiguousLayout ?? true)
+                        root.frame = actualFrame
+                        root.layoutSubtreeIfNeeded()
                         // A rule edit with nothing tested yet leaves the opening instruction alone.
                         remove.performClick(nil)
                         untouchedStatus = status.stringValue
