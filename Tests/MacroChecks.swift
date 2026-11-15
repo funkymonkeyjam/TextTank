@@ -117,6 +117,479 @@ import Foundation
                     && item("saveLast", in: restarted)?.isEnabled == false,
                 "a restarted controller has no last recording to play or save")
         }
+        /// Navigation from the Find window fronts the document window; checks never put one on screen.
+        final class QuietWindow: NSWindow { override func makeKeyAndOrderFront(_ sender: Any?) {} }
+        /// Stands in for the system's drag information, so a real drop runs through a content view.
+        final class FakeDrop: NSObject {
+            @objc let draggingPasteboard = NSPasteboard.withUniqueName()
+            @objc var draggingLocation = NSPoint.zero
+            @objc let draggingSourceOperationMask = NSDragOperation.copy
+            @objc let draggingSource: Any? = nil
+        }
+        /// Package 12: a recording either reproduces what was done or is discarded with a named reason.
+        static func fidelityChecks(editor: TTEditor, window: NSWindow) throws {
+            let controller = MacroController(editorProvider: { editor })
+            var reasons: [String] = []
+            controller.onInvalidated = { reasons.append($0) }
+            func load(_ text: String, caret: Int = 0) {
+                editor.executeCommand("streamSelection")
+                editor.text = text
+                editor.resetUndoHistory()
+                editor.setSavePoint()
+                _ = editor.setSelectionAnchor(caret, caret: caret)
+            }
+            let content = try requireValue(
+                descendants(editor).first { $0.className == "TTContentView" }, "fixture: the editor's content view")
+            let input = try requireValue(content as? NSTextInputClient, "fixture: the content view takes text input")
+            func type(_ text: String) {
+                input.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+            /// A real key event through the content view, so Scintilla's own Mac key map chooses the message.
+            func key(_ scalar: Int, code: UInt16, _ flags: NSEvent.ModifierFlags = []) throws {
+                let characters = String(UnicodeScalar(UInt32(scalar))!)
+                let event = try requireValue(
+                    NSEvent.keyEvent(
+                        with: .keyDown, location: .zero, modifierFlags: flags,
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                        context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                        isARepeat: false, keyCode: code), "fixture: a key event")
+                content.keyDown(with: event)
+            }
+            let home = NSHomeFunctionKey, left = NSLeftArrowFunctionKey, down = NSDownArrowFunctionKey
+            let pageDown = NSPageDownFunctionKey
+            var clock = ProcessInfo.processInfo.systemUptime
+            /// A click in the content view. Clicks are five seconds apart so none is a double click.
+            func click(at point: NSPoint, in view: NSView) throws {
+                clock += 5
+                for (type, time) in [(NSEvent.EventType.leftMouseDown, clock), (.leftMouseUp, clock + 0.05)] {
+                    let event = try requireValue(
+                        NSEvent.mouseEvent(
+                            with: type, location: view.convert(point, to: nil), modifierFlags: [], timestamp: time,
+                            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                            pressure: 1), "fixture: a mouse event")
+                    if type == .leftMouseDown { view.mouseDown(with: event) } else { view.mouseUp(with: event) }
+                }
+            }
+            func commands(_ macro: RecordedMacro?) -> [String] { macro?.steps.compactMap(\.command) ?? [] }
+
+            // G367: the canonical "prefix each line" macro, recorded with the standard Mac keys.
+            let lines = "one\ntwo\nthree"
+            load(lines, caret: 2)
+            controller.startRecording()
+            try key(home, code: 115)
+            type("// ")
+            try key(down, code: 125, [.numericPad, .function])
+            let prefix = try requireValue(try controller.finishRecording(), "fixture: the prefix recording is saveable")
+            check(
+                prefix.steps.first == .init(kind: .command, command: "vcHome")
+                    && prefix.steps.last == .init(kind: .command, command: "lineDown")
+                    && prefix.steps.compactMap(\.text).joined() == "// " && editor.text == "// one\ntwo\nthree"
+                    && reasons.isEmpty, "Home, typing and Down record as vcHome, the typed text and lineDown")
+            load(lines, caret: 2)
+            try controller.play(prefix, on: editor, repeats: 3)
+            check(editor.text == "// one\n// two\n// three", "the recorded prefix macro prefixes each line on replay")
+            editor.executeCommand("undo")
+            check(editor.text == lines && !editor.modified, "the replayed prefix macro is one Undo")
+            load("alpha beta\ngamma", caret: 10)
+            controller.startRecording()
+            try key(left, code: 123, [.command, .numericPad, .function])
+            try key(pageDown, code: 121, [.function])
+            try key(0x1B, code: 53)
+            try key(0x7F, code: 51, [.option])
+            check(
+                commands(try controller.finishRecording()) == ["vcHome", "pageDown", "cancel", "deleteWordLeft"]
+                    && reasons.isEmpty,
+                "Command-Left, Page Down, Escape and Option-Delete are recorded instead of discarding the recording")
+            // Parity: one allow-list, in the bridge and in the persisted format.
+            let bridgeNames = Set(TTEditor.macroCommandNames())
+            check(
+                bridgeNames.union(["indent", "unindent"]) == RecordedMacro.Step.commands,
+                "the bridge's command table and the macro format's command list name the same commands")
+            let clipboard: Set<String> = ["cut", "copy", "paste", "lineCut", "lineCopy"]
+            let usePasteboard = ProcessInfo.processInfo.environment["TEXTTANK_TEST_PASTEBOARD"] != nil
+            var refused: [String] = []
+            for name in RecordedMacro.Step.commands.sorted() where usePasteboard || !clipboard.contains(name) {
+                load("alpha beta\ngamma", caret: 3)
+                if !editor.executeMacroStep(["kind": "command", "command": name]) { refused.append(name) }
+            }
+            if !refused.isEmpty { print("commands the bridge refused: \(refused)") }
+            check(refused.isEmpty, "every command a macro file may name is accepted by the bridge")
+            for name in RecordedMacro.Step.commands.sorted() {
+                rejects("a \(name) step carrying text is refused by validation") {
+                    try RecordedMacro.Step(kind: .command, text: "x", command: name).validate()
+                }
+            }
+            // No message number or parameter from a file reaches Scintilla.
+            let smuggled = Data(
+                #"{"version":1,"macros":[{"version":1,"id":"11111111-2222-4333-8444-555555555556","name":"n","steps":[{"kind":"command","command":"charRight","message":2004,"wParam":1,"lParam":2}]}]}"#
+                    .utf8)
+            let decoded = try MacroLibrary.decode(smuggled)
+            check(
+                !String(decoding: try decoded.encoded(), as: UTF8.self).contains("2004"),
+                "a message number in a macro file is dropped on decode")
+            load("keep", caret: 0)
+            try controller.play(decoded.macros[0], on: editor)
+            check(
+                editor.text == "keep" && editor.selectionCaret == 1 && !editor.modified,
+                "a step that carried SCI_CLEARALL as a number runs only its named command")
+            rejects("a file cannot name the bridge's unsupported marker as a step kind", where: { $0 is DecodingError })
+            {
+                _ = try MacroLibrary.decode(
+                    Data(
+                        String(decoding: smuggled, as: UTF8.self).replacingOccurrences(
+                            of: "\"command\",", with: "\"unsupported\","
+                        ).utf8))
+            }
+
+            // F67 and G367: a named reason, at once, and the previous recording survives.
+            load("alpha beta", caret: 0)
+            controller.startRecording()
+            editor.executeCommand("charRight")
+            let kept = try requireValue(try controller.finishRecording(), "fixture: a good recording to keep")
+            controller.startRecording()
+            check(
+                controller.discardReason == nil && item("stopRecording", in: controller)?.title == "Stop Recording",
+                "a live recording offers Stop Recording and has no discard reason")
+            editor.executeCommand("charRight")
+            editor.executeCommand("rectangularSelection")
+            check(
+                reasons.count == 1 && reasons[0].contains("Rectangular selection")
+                    && reasons[0].contains("is not recordable yet") && controller.discardReason == reasons[0],
+                "an unrecordable action is reported at the moment it happens, by name")
+            check(
+                item("stopRecording", in: controller)?.title == "Stop Recording (Already Discarded)"
+                    && item("stopRecording", in: controller)?.isEnabled == true,
+                "the menu says the recording in progress is already discarded and can still be stopped")
+            editor.executeCommand("charRight")
+            controller.invalidateRecording(reason: "a second reason")
+            check(reasons.count == 1, "a discarded recording reports once; later reasons are not announced")
+            var stopMessage = ""
+            do { _ = try controller.finishRecording() } catch { stopMessage = error.localizedDescription }
+            check(
+                stopMessage.contains("Recording was discarded") && stopMessage.contains("Rectangular selection")
+                    && !stopMessage.contains("correct format"),
+                "Stop names the action that discarded the recording, not a decoding error")
+            check(
+                item("playLast", in: controller)?.isEnabled == true
+                    && item("saveLast", in: controller)?.isEnabled == true && controller.discardReason == nil,
+                "the previous recording is still offered after a discarded one")
+            load("alpha beta", caret: 0)
+            try controller.play(kept, on: editor)
+            controller.startRecording()
+            rejects("a recording with no steps is not saved", message: "No supported editing actions") {
+                _ = try controller.finishRecording()
+            }
+            check(
+                item("playLast", in: controller)?.isEnabled == true,
+                "the previous recording is still offered after an empty one")
+            controller.startRecording()
+            editor.executeCommand("charLeft")
+            let newer = try requireValue(try controller.finishRecording(), "fixture: a newer good recording")
+            check(
+                newer.id != kept.id && newer.steps != kept.steps, "a new successful recording replaces the previous one"
+            )
+            reasons = []
+
+            // F59: the mouse.
+            load("alpha beta\n  gamma delta\nlast line\n", caret: 0)
+            let near = NSPoint(x: 60, y: 8), below = NSPoint(x: 30, y: 26)
+            try click(at: near, in: content)
+            let clicked = editor.selectionCaret
+            try require(clicked > 0 && clicked < 10, "fixture: a synthesized click places the caret in the first line")
+            controller.startRecording()
+            editor.executeCommand("charRight")
+            editor.executeCommand("charLeft")
+            try click(at: near, in: content)
+            check(
+                try controller.finishRecording()?.steps.count == 2 && reasons.isEmpty,
+                "a click that changes neither caret nor text leaves the recording saveable")
+            controller.startRecording()
+            editor.executeCommand("charRight")
+            try click(at: below, in: content)
+            check(
+                reasons.count == 1 && reasons[0].contains("mouse") && editor.selectionCaret != clicked,
+                "a click that moves the caret discards the recording at once and says the mouse did it")
+            type("bar")
+            rejects("a mouse caret move cannot silently save a partial recording", message: "mouse") {
+                _ = try controller.finishRecording()
+            }
+            // A margin click selects a line through a view the bridge cannot subclass; the event is
+            // delivered through the application so the recording's event monitor sees it.
+            reasons = []
+            let margin = try requireValue(
+                descendants(editor).first { $0.className == "SCIMarginView" }, "fixture: the editor's margin view")
+            load("alpha beta\n  gamma delta\nlast line\n", caret: 0)
+            controller.startRecording()
+            editor.executeCommand("charRight")
+            clock += 5
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try requireValue(
+                    NSEvent.mouseEvent(
+                        with: type, location: margin.convert(NSPoint(x: 6, y: 26), to: nil), modifierFlags: [],
+                        timestamp: clock, windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                        clickCount: 1, pressure: 1), "fixture: a margin mouse event")
+                NSApp.postEvent(event, atStart: false)
+            }
+            var delivered = 0
+            while delivered < 2,
+                let event = NSApp.nextEvent(
+                    matching: [.leftMouseDown, .leftMouseUp], until: Date().addingTimeInterval(5), inMode: .default,
+                    dequeue: true)
+            {
+                // The application runs its event monitors and hands the event to the window, which
+                // drops a mouse event while it is off screen; the margin view is given it here.
+                NSApp.sendEvent(event)
+                if event.type == .leftMouseDown { margin.mouseDown(with: event) } else { margin.mouseUp(with: event) }
+                delivered += 1
+            }
+            try require(
+                delivered == 2 && editor.selectionAnchor != editor.selectionCaret,
+                "fixture: the margin click was delivered and selected a line")
+            _ = spinUntil(timeout: 5, "the margin click to be compared") { !reasons.isEmpty }
+            check(
+                reasons.count == 1 && reasons[0].contains("mouse"),
+                "a margin click that selects a line discards the recording")
+            rejects("a margin selection cannot silently save a partial recording", message: "mouse") {
+                _ = try controller.finishRecording()
+            }
+            // A split view shares the recorded document. Text dropped into it edits that document
+            // through another view, and a drop moves no focus, so nothing else would notice.
+            reasons = []
+            load("alpha beta\n  gamma delta\nlast line\n", caret: 0)
+            let split = TTEditor(frame: NSRect(x: 0, y: 0, width: 500, height: 300))
+            let splitWindow = QuietWindow(
+                contentRect: split.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            splitWindow.isReleasedWhenClosed = false
+            splitWindow.contentView = split
+            split.shareDocument(with: editor)
+            split.onFocus = { controller.editorDidFocus(split) }
+            let splitContent = try requireValue(
+                descendants(split).first { $0.className == "TTContentView" }, "fixture: the split view's content view")
+            let drop = FakeDrop()
+            drop.draggingPasteboard.declareTypes([.string], owner: nil)
+            drop.draggingPasteboard.setString("DROP", forType: .string)
+            defer { drop.draggingPasteboard.releaseGlobally() }
+            drop.draggingLocation = splitContent.convert(near, to: nil)
+            let dropInfo = unsafeBitCast(drop, to: NSDraggingInfo.self)
+            controller.startRecording()
+            editor.executeCommand("charRight")
+            let beforeDrop = editor.revision
+            _ = splitContent.draggingEntered(dropInfo)
+            _ = splitContent.draggingUpdated(dropInfo)
+            try require(
+                splitContent.performDragOperation(dropInfo) && editor.text.contains("DROP")
+                    && editor.revision != beforeDrop,
+                "fixture: the drop into the split view edited the recorded document")
+            check(
+                reasons.count == 1 && reasons[0].contains("drag and drop"),
+                "text dropped into a split view of the recorded document discards the recording at once")
+            rejects("a drop into a split view cannot silently save a partial recording", message: "drag and drop") {
+                _ = try controller.finishRecording()
+            }
+            split.onFocus = nil
+            splitWindow.contentView = nil
+            reasons = []
+            // Application-layer find and replace change the selection and the text outside Scintilla's
+            // recording and are recorded by the caller afterwards; they must stay recordable.
+            load("egg and egg", caret: 0)
+            controller.startRecording()
+            let found = editor.find("egg", matchCase: true, backwards: false)
+            controller.recordFind(text: "egg", matchCase: true, backwards: false, matched: found, editor: editor)
+            if editor.replaceSelection("milk") { controller.recordReplace(text: "milk", editor: editor) }
+            let literal = try controller.finishRecording()
+            check(
+                literal?.steps == [
+                    .init(kind: .findLiteral, text: "egg", matchCase: true, backwards: false),
+                    .init(kind: .replaceSelection, text: "milk")
+                ] && editor.text == "milk and egg" && reasons.isEmpty,
+                "a live recording keeps exactly the literal find and the replacement made through the application")
+
+            // F68: a find that matched nothing is not a step.
+            load("alpha beta", caret: 0)
+            controller.startRecording()
+            editor.executeCommand("charRight")
+            let missed = editor.find("absent", matchCase: false, backwards: false)
+            controller.recordFind(text: "absent", matchCase: false, backwards: false, matched: missed, editor: editor)
+            check(
+                try !missed && controller.finishRecording()?.steps == [.init(kind: .command, command: "charRight")],
+                "a literal find that did not match is left out of the recording")
+            controller.startRecording()
+            controller.recordFind(text: "absent", matchCase: false, backwards: false, matched: false, editor: editor)
+            rejects("a recording of only an unmatched find saves nothing", message: "No supported editing actions") {
+                _ = try controller.finishRecording()
+            }
+
+            // G371: completion and call tips.
+            load("ret", caret: 3)
+            controller.startRecording()
+            type("x")
+            editor.showCompletions(["return"])
+            check(
+                reasons.count == 1 && reasons[0].contains("completion list"),
+                "the completion list discards the recording when it opens")
+            rejects("completion popup invalidates recording", message: "completion list") {
+                _ = try controller.finishRecording()
+            }
+            editor.executeCommand("cancel")
+            reasons = []
+            load("call(", caret: 0)
+            controller.startRecording()
+            editor.showCallTip("call(argument)")
+            editor.executeCommand("charRight")
+            check(
+                try controller.finishRecording()?.steps.count == 1 && reasons.isEmpty,
+                "a call tip leaves the recording saveable")
+
+            // F277: application-layer caret jumps.
+            load("one\ntwo\nthree", caret: 0)
+            controller.startRecording()
+            editor.executeCommand("newLine")
+            check(
+                controller.unrecordedJump(in: editor, reason: "Go to Line is not recorded in macros yet.") {
+                    editor.goToLine(3)
+                } && reasons.count == 1 && reasons[0].hasPrefix("Go to Line is not record"),
+                "Go to Line discards the recording at the point of mutation and is named")
+            rejects("Go to Line cannot silently save partial recording", message: "Go to Line") {
+                _ = try controller.finishRecording()
+            }
+            reasons = []
+            load("one\ntwo\nthree", caret: 0)
+            controller.startRecording()
+            editor.executeCommand("charRightExtend")
+            check(
+                controller.unrecordedJump(in: editor, reason: "Clear Selection is not recorded in macros yet.") {
+                    editor.setSelectionAnchor(editor.selectionCaret, caret: editor.selectionCaret)
+                } && reasons == ["Clear Selection is not recorded in macros yet."] && editor.selectionAnchor == 1,
+                "a jump that changes the selection discards the recording with the caller's reason")
+            rejects("Clear Selection cannot silently save partial recording", message: "Clear Selection") {
+                _ = try controller.finishRecording()
+            }
+            reasons = []
+            load("one\ntwo\nthree", caret: 4)
+            controller.startRecording()
+            editor.executeCommand("newLine")
+            let caret = editor.selectionCaret
+            check(
+                try !controller.unrecordedJump(in: editor, reason: "unused") { editor.goToLine(99) }
+                    && controller.unrecordedJump(in: editor, reason: "unused") {
+                        editor.setSelectionAnchor(caret, caret: caret)
+                    } && reasons.isEmpty && controller.finishRecording()?.steps.count == 1,
+                "a refused jump and a jump to where the caret already is leave the recording saveable")
+            load("one\ntwo\nthree", caret: 4)
+            controller.startRecording()
+            editor.executeCommand("newLine")
+            check(
+                try controller.unrecordedJump(in: editor, reason: "unused") { editor.goToLine(3) }
+                    && editor.selectionCaret == caret && reasons.isEmpty
+                    && controller.finishRecording()?.steps.count == 1,
+                "Go to Line to the line start the caret is already on leaves the recording saveable")
+
+            // The recorded Find-window path changes the selection outside Scintilla's recording too.
+            let suite = "TextTankMacroFidelity-" + UUID().uuidString
+            let defaults = try requireValue(UserDefaults(suiteName: suite), "fixture: isolated defaults suite")
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let finder = SearchController(defaults: defaults)
+            finder.currentEditor = { editor }
+            finder.openEditors = { [editor] }
+            finder.onCommand = { options, action, target in
+                controller.recordSearch(
+                    .init(
+                        query: options.query, replacement: options.replacement, mode: options.mode.rawValue,
+                        matchCase: options.matchCase, wholeWord: options.wholeWord,
+                        dotMatchesNewline: options.dotMatchesNewline, wrap: options.wrap, action: action),
+                    editor: target)
+            }
+            finder.onUnrecordableCommand = { controller.invalidateRecording(reason: $0) }
+            let quiet = QuietWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered,
+                defer: false)
+            window.contentView = NSView()
+            quiet.contentView = editor
+            defer {
+                quiet.contentView = NSView()
+                window.contentView = editor
+            }
+            load("TODO a\nTODO b\n", caret: 0)
+            finder.queryField.stringValue = "TODO"
+            finder.mode.selectItem(at: 0)
+            finder.scope.selectItem(at: 0)
+            controller.startRecording()
+            finder.next(nil)
+            _ = spinUntil("the Find-window search to finish") { !finder.isSearching }
+            let searched = try controller.finishRecording()
+            check(
+                searched?.steps.map(\.kind) == [.search] && searched?.steps[0].search?.action == "next"
+                    && editor.selectedText == "TODO" && reasons.isEmpty,
+                "a Find-window Next on the current document is still recorded as a search step")
+            // G372: text typed while the search runs makes the result stale; nothing is recorded as done.
+            load("TODO a\nTODO b\n", caret: 0)
+            controller.startRecording()
+            finder.next(nil)
+            type("x")
+            _ = spinUntil("the stale Find-window search to finish") { !finder.isSearching }
+            check(
+                finder.lastOutcome == .staleResult && editor.text == "xTODO a\nTODO b\n" && editor.selectionCaret == 1
+                    && reasons.count == 1 && reasons[0].contains("document changed while the search was running"),
+                "a search overtaken by typing moves nothing and discards the recording with that reason")
+            rejects("a search overtaken by typing cannot save a partial recording") {
+                _ = try controller.finishRecording()
+            }
+            reasons = []
+            // A result row moves the caret with no recordable step.
+            load("TODO a\nTODO b\n", caret: 0)
+            finder.findAll(nil)
+            _ = spinUntil("the Find All search to finish") { !finder.isSearching }
+            controller.startRecording()
+            editor.executeCommand("charRight")
+            finder.open(row: 1)
+            check(
+                editor.selectionStart == 7 && reasons.count == 1 && reasons[0].contains("search result"),
+                "opening a search result row discards the recording")
+            rejects("a result-row jump cannot save a partial recording") { _ = try controller.finishRecording() }
+            reasons = []
+
+            // The package 4 golden library decodes and plays unchanged.
+            let golden = try MacroLibrary.decode(
+                Data(contentsOf: URL(fileURLWithPath: "Tests/Fixtures/persistence/MacroLibrary.json")))
+            controller.searchPlayback = { captured, target in
+                var options = SearchOptions()
+                options.query = captured.query
+                options.replacement = captured.replacement
+                options.mode = SearchOptions.Mode(rawValue: captured.mode) ?? .normal
+                options.matchCase = captured.matchCase
+                options.wholeWord = captured.wholeWord
+                options.dotMatchesNewline = captured.dotMatchesNewline
+                options.wrap = captured.wrap
+                try finder.playRecorded(options: options, action: captured.action, on: target)
+            }
+            load("aaa x", caret: 0)
+            try controller.play(try requireValue(golden.macros.first, "fixture: the golden macro"), on: editor)
+            check(editor.text == "cbféb y", "the golden saved macro library decodes and plays as before")
+            editor.executeCommand("undo")
+            check(editor.text == "aaa x" && !editor.modified, "the golden macro replay is one Undo")
+
+            // F222: until-end compares the caret with the byte length, never a copy of the document.
+            let advance = RecordedMacro(
+                id: UUID(), name: "Advance", steps: [.init(kind: .command, command: "charRight")])
+            load("é\n👩🏽‍💻\r\nz", caret: 0)
+            try controller.play(advance, on: editor, untilEnd: true)
+            check(
+                editor.selectionCaret == editor.byteLength && editor.byteLength == editor.text.utf8.count
+                    && editor.revision > 0, "until-end playback over non-ASCII text stops at the byte length")
+            let rows = 20000
+            load(String(repeating: String(repeating: "x", count: 149) + "\n", count: rows), caret: 0)
+            let lineDown = RecordedMacro(
+                id: UUID(), name: "Down", steps: [.init(kind: .command, command: "lineDown")])
+            let scale = max(1, Double(ProcessInfo.processInfo.environment["TEXTTANK_PERF_BUDGET_SCALE"] ?? "") ?? 1)
+            let started = ProcessInfo.processInfo.systemUptime
+            try controller.play(lineDown, on: editor, untilEnd: true)
+            let elapsed = ProcessInfo.processInfo.systemUptime - started
+            print(String(format: "until-end line-down over 3 MB: %.2f s", elapsed))
+            check(
+                editor.selectionCaret == editor.byteLength && elapsed < 20 * scale,
+                "until-end playback over a 3 MB document does not copy the document every repetition")
+            load("", caret: 0)
+        }
     #endif
     static func main() {
         Checks.run("MacroChecks") {
@@ -262,6 +735,37 @@ import Foundation
                 check(
                     try controller.finishRecording()?.steps.count == 1,
                     "view-only zoom does not invalidate valid edit recording")
+                // G369: playback states the read-only reason before any dialog or step.
+                editor.text = "locked"
+                editor.resetUndoHistory()
+                editor.setSavePoint()
+                _ = editor.setSelectionAnchor(0, caret: 0)
+                let lockedRevision = editor.revision
+                let replacing = RecordedMacro(
+                    id: UUID(), name: "Replace", steps: [.init(kind: .replaceSelection, text: "x")])
+                editor.readOnly = true
+                rejects(
+                    "playback into a read-only document states that it is read-only",
+                    message: "This document is read-only"
+                ) { try controller.play(replacing, on: editor) }
+                rejects(
+                    "the playback dialog is not offered for a read-only document", message: "This document is read-only"
+                ) { _ = try controller.playbackEditor() }
+                check(
+                    editor.text == "locked" && editor.revision == lockedRevision && !editor.modified,
+                    "refused playback leaves text, revision and save point unchanged")
+                // F207: a recorded replacement is not appended when the editor refused it.
+                controller.startRecording()
+                editor.executeCommand("charRight")
+                if editor.replaceSelection("never") { controller.recordReplace(text: "never", editor: editor) }
+                check(
+                    try controller.finishRecording()?.steps.map(\.kind) == [.command],
+                    "a replacement the read-only editor refused is not recorded as a macro step")
+                editor.readOnly = false
+                check(try controller.playbackEditor() === editor, "a writable document is offered for playback")
+                _ = editor.setSelectionAnchor(0, caret: 0)
+                try controller.play(replacing, on: editor)
+                check(editor.text == "xlocked", "a recorded replacement plays once the document is writable")
                 editor.text = "a\nb\nc"
                 editor.resetUndoHistory()
                 _ = editor.setSelectionAnchor(0, caret: 0)
@@ -348,6 +852,7 @@ import Foundation
                     editor.executeCommand("undo")
                     check(editor.text == todoSource && !editor.modified, "\(label) stopped playback is one Undo")
                 }
+                Checks.section("Recording fidelity") { try fidelityChecks(editor: editor, window: window) }
                 Checks.section("Macros menu save and playback") {
                     try menuFlowChecks(editor: editor, support: isolatedSupport.url)
                 }

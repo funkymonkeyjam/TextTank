@@ -123,7 +123,7 @@ extension DocumentChecks {
             editor.setSavePoint()
             editor.readOnly = true
             let lockedRevision = editor.revision
-            rejects("transform refuses a read-only document", message: "Choose one selection in a writable document") {
+            rejects("transform refuses a read-only document", message: "This document is read-only") {
                 try EditorTransform.sortAscending.apply(to: editor)
             }
             check(
@@ -133,7 +133,7 @@ extension DocumentChecks {
             try require(
                 editor.setSelectionRanges([["anchor": 0, "caret": 1], ["anchor": 2, "caret": 3]]),
                 "fixture: two selections")
-            rejects("transform refuses multiple selections", message: "Choose one selection in a writable document") {
+            rejects("transform refuses multiple selections", message: "This command works on a single selection") {
                 try EditorTransform.reverseLines.apply(to: editor)
             }
             check(
@@ -277,11 +277,10 @@ extension DocumentChecks {
                 fixed: same(
                     try automation.transform("\(UnicodeFixtures.nfc)\n\(UnicodeFixtures.nfd)\n"),
                     "\(UnicodeFixtures.nfc)\n\(UnicodeFixtures.nfd)\n"))
-            knownDefect(
-                "G354", "Invert Case applied twice restores the original text for \u{DF}",
-                fixed: same(
+            check(
+                same(
                     EditorTransform.invertCase.transform(EditorTransform.invertCase.transform("stra\u{DF}e")),
-                    "stra\u{DF}e"))
+                    "stra\u{DF}e"), "Invert Case applied twice restores the original text for \u{DF}")
             knownDefect(
                 "G354", "a filename glob typed precomposed matches a decomposed file name",
                 fixed: FolderSearchFilters.matches("caf\(UnicodeFixtures.nfd).txt", "caf\(UnicodeFixtures.nfc).*"))
@@ -1000,6 +999,60 @@ extension DocumentChecks {
             document.editor.text = "b\na\n"
             controller.command(sort)
             check(document.editor.text == "a\nb\n", "a transform menu item runs its transform on the active editor")
+            // G369: every command that edits text states the one read-only reason first and changes nothing.
+            document.editor.text = "b\r\na\n"
+            document.editor.resetUndoHistory()
+            document.editor.setSavePoint()
+            _ = document.editor.setSelectionAnchor(0, caret: 1)
+            let lockedFormat = document.format, lockedRevision = document.editor.revision,
+                lockedEdited = document.isDocumentEdited
+            document.editor.readOnly = true
+            let unchangedWhileLocked = { () -> Bool in
+                same(document.editor.text, "b\r\na\n") && document.editor.revision == lockedRevision
+                    && !document.editor.modified && document.format == lockedFormat
+                    && document.isDocumentEdited == lockedEdited
+                    && document.editor.selectionAnchor == 0 && document.editor.selectionCaret == 1
+            }
+            for id in ["upper", "deleteLine", "paste", "undo", "trimTrailing", "joinLines", "transform.sortAscending"] {
+                rejects(
+                    "the \(id) command states that the document is read-only", message: "This document is read-only"
+                ) { try controller.perform(command: id) }
+            }
+            check(unchangedWhileLocked(), "editing commands refused as read-only change nothing")
+            try controller.perform(command: "selectAll")
+            check(
+                document.editor.selectionStart == 0 && document.editor.selectionEnd == 5,
+                "a command that edits nothing still runs in a read-only document")
+            _ = document.editor.setSelectionAnchor(0, caret: 1)
+            rejects("Convert Line Endings states that the document is read-only", message: "This document is read-only")
+            { try controller.convertLineEndings(to: "LF") }
+            check(
+                unchangedWhileLocked() && document.editor.statusInfo["eol"]?.intValue == 2,
+                "a refused line-ending conversion changes neither the text nor the insertion ending")
+            rejects(
+                "Convert to an encoding states that the document is read-only", message: "This document is read-only"
+            ) { try document.convertEncoding(to: "utf16LE") }
+            check(
+                unchangedWhileLocked(), "a refused encoding conversion keeps the format and does not dirty the document"
+            )
+            controller.replaceField.stringValue = "forbidden"
+            rejects(
+                "Replace Selection in the bar states that the document is read-only",
+                message: "This document is read-only"
+            ) { try controller.replaceSelectionFromBar() }
+            check(unchangedWhileLocked(), "a refused Replace Selection changes neither the text nor the selection")
+            document.editor.readOnly = false
+            try controller.replaceSelectionFromBar()
+            check(
+                same(document.editor.text, "forbidden\r\na\n"),
+                "Replace Selection in the bar replaces the selection once the document is writable")
+            try controller.convertLineEndings(to: "LF")
+            check(
+                same(document.editor.text, "forbidden\na\n"),
+                "Convert Line Endings converts once the document is writable")
+            rejects("an unknown line-ending name is refused with a reason", message: "could not be converted") {
+                try controller.convertLineEndings(to: "bogus")
+            }
             // Column insert: the success path of applyColumn, with one Undo.
             document.editor.text = "x\nx\nx\n"
             document.editor.resetUndoHistory()
@@ -1023,18 +1076,34 @@ extension DocumentChecks {
                     ["1", "2", "3"], to: document.editor, revision: columnRevision, selections: columnSelections),
                 "a column insertion captured before an edit is refused afterwards")
             // Insert into Each Selection through its real dialog: plain text, then sequential numbers.
+            // F207: a dialog that cannot do what was asked says why in a second alert. The helpers
+            // below answer the dialog, then record that alert's text here and dismiss it.
+            var explanation = ""
+            @MainActor func dismissExplanation(_ modal: NSWindow, after dialog: NSWindow?) {
+                guard modal !== dialog, let content = modal.contentView,
+                    let ok = descendants(content).compactMap({ $0 as? NSButton }).first(where: { $0.title == "OK" })
+                else { return }
+                explanation = descendants(content).compactMap { ($0 as? NSTextField)?.stringValue }.joined(
+                    separator: "\n")
+                ok.performClick(nil)
+            }
             func columnDialog(text: String, numbered: Bool, start: String, step: String, confirm: Bool = true) -> Bool {
                 var acted = false, timedOut = false
+                var dialog: NSWindow?
+                explanation = ""
                 let deadline = Date().addingTimeInterval(10)
                 let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                     MainActor.assumeIsolated {
-                        guard let content = NSApp.modalWindow?.contentView else { return }
+                        guard let modal = NSApp.modalWindow, let content = modal.contentView else { return }
                         if Date() > deadline {
                             timedOut = true
                             NSApp.abortModal()
                             return
                         }
-                        guard !acted else { return }
+                        guard !acted else {
+                            dismissExplanation(modal, after: dialog)
+                            return
+                        }
                         let views = descendants(content)
                         func find<T: NSView>(_ identifier: String, _ type: T.Type) -> T? {
                             views.compactMap { $0 as? T }.first { $0.identifier?.rawValue == identifier }
@@ -1046,6 +1115,7 @@ extension DocumentChecks {
                             let press = find(confirm ? "column.insert" : "column.cancel", NSButton.self)
                         else { return }
                         acted = true
+                        dialog = modal
                         textField.stringValue = text
                         number.state = numbered ? .on : .off
                         startField.stringValue = start
@@ -1091,16 +1161,134 @@ extension DocumentChecks {
                 columnDialog(text: "", numbered: true, start: "one", step: "1") && document.editor.text == "x\nx\nx\n"
                     && document.editor.revision == untouched, "a start value that is not a whole number inserts nothing"
             )
+            check(
+                explanation.contains("Start and Increment must be whole numbers"),
+                "a start value that is not a whole number is explained instead of a beep")
             untouched = try threeSelections()
             check(
                 columnDialog(text: "", numbered: true, start: String(Int.max), step: "1")
                     && document.editor.text == "x\nx\nx\n" && document.editor.revision == untouched,
                 "a sequence that would overflow inserts nothing")
+            check(
+                explanation.contains("The number sequence is too large"),
+                "a sequence that would overflow is explained instead of a beep")
             untouched = try threeSelections()
             check(
                 columnDialog(text: "ab", numbered: false, start: "1", step: "1", confirm: false)
                     && document.editor.text == "x\nx\nx\n" && document.editor.revision == untouched,
                 "Cancel in Insert into Each Selection inserts nothing")
+            check(explanation.isEmpty, "Cancel in Insert into Each Selection shows no explanation")
+            // F12: Go to Line through its real dialog, on the engine's own line model.
+            func goToLineDialog(_ entry: String, confirm: Bool = true) -> Bool {
+                var acted = false, timedOut = false
+                var dialog: NSWindow?
+                explanation = ""
+                let deadline = Date().addingTimeInterval(10)
+                let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+                    MainActor.assumeIsolated {
+                        guard let modal = NSApp.modalWindow, let content = modal.contentView else { return }
+                        if Date() > deadline {
+                            timedOut = true
+                            NSApp.abortModal()
+                            return
+                        }
+                        guard !acted else {
+                            dismissExplanation(modal, after: dialog)
+                            return
+                        }
+                        let views = descendants(content)
+                        guard
+                            let field = views.compactMap({ $0 as? NSTextField }).first(where: {
+                                $0.identifier?.rawValue == "goToLine.line"
+                            }),
+                            let press = views.compactMap({ $0 as? NSButton }).first(where: {
+                                $0.title == (confirm ? "Go" : "Cancel")
+                            })
+                        else { return }
+                        acted = true
+                        dialog = modal
+                        field.stringValue = entry
+                        press.performClick(nil)
+                    }
+                }
+                RunLoop.main.add(timer, forMode: .modalPanel)
+                let item = NSMenuItem(title: "Go to Line…", action: nil, keyEquivalent: "")
+                item.representedObject = "goToLine"
+                controller.perform(NSSelectorFromString("statusOption:"), with: item)
+                timer.invalidate()
+                return acted && !timedOut
+            }
+            document.editor.text = "é\r\nbb\rccc\n"
+            document.editor.resetUndoHistory()
+            document.editor.setSavePoint()
+            let goRevision = document.editor.revision
+            check(
+                goToLineDialog("3") && document.editor.selectionCaret == 7 && document.editor.selectionAnchor == 7,
+                "Go to Line places the caret at the start of the one-based line across CRLF and CR")
+            check(
+                goToLineDialog("4") && document.editor.selectionCaret == 11 && explanation.isEmpty,
+                "Go to Line reaches the empty line after the final line break, with nothing to explain")
+            for entry in ["5", "0", "two", "-1"] {
+                check(
+                    goToLineDialog(entry) && document.editor.selectionCaret == 11
+                        && explanation.contains(
+                            entry == "two" ? "Enter a whole line number" : "There is no line \(entry)")
+                        && explanation.contains("Enter a line number from 1 to 4."),
+                    "Go to Line \(entry) says that line does not exist and names the valid range")
+            }
+            check(
+                goToLineDialog("5") && goToLineDialog("0") && goToLineDialog("two") && goToLineDialog("-1")
+                    && document.editor.selectionCaret == 11,
+                "Go to Line leaves the caret alone for lines that do not exist and for non-numbers")
+            check(
+                goToLineDialog("1", confirm: false) && document.editor.selectionCaret == 11,
+                "Cancel in Go to Line leaves the caret alone")
+            check(
+                goToLineDialog("1") && document.editor.selectionCaret == 0 && document.editor.revision == goRevision
+                    && !document.editor.modified, "Go to Line never edits the document")
+            // F277: Go to Line and Clear Selection have no recordable step. A macro recording is
+            // discarded when one of them moves the caret or the selection, and only then.
+            let recorder = MacroController(editorProvider: { document.editor })
+            var discarded: [String] = []
+            recorder.onInvalidated = { discarded.append($0) }
+            document.editor.text = "one\ntwo\nthree\n"
+            document.editor.resetUndoHistory()
+            document.editor.setSavePoint()
+            _ = document.editor.setSelectionAnchor(0, caret: 0)
+            recorder.startRecording()
+            document.editor.executeCommand("charRight")
+            check(
+                !EditorWindowController.goToLine(9, in: document.editor, macros: recorder)
+                    && EditorWindowController.clearSelection(in: document.editor, macros: recorder)
+                    && discarded.isEmpty && document.editor.selectionCaret == 1,
+                "a line that does not exist and an already empty selection leave a recording alone")
+            check(
+                try recorder.finishRecording()?.steps.count == 1,
+                "the recording is still saveable after a refused Go to Line and a no-op Clear Selection")
+            recorder.startRecording()
+            document.editor.executeCommand("charRightExtend")
+            check(
+                EditorWindowController.clearSelection(in: document.editor, macros: recorder)
+                    && document.editor.selectionAnchor == document.editor.selectionCaret
+                    && discarded == ["Clear Selection is not recorded in macros yet."],
+                "Clear Selection of a real selection discards the recording when it clears")
+            rejects("Clear Selection cannot silently save a partial recording", message: "Clear Selection") {
+                _ = try recorder.finishRecording()
+            }
+            recorder.startRecording()
+            document.editor.executeCommand("charRight")
+            check(
+                EditorWindowController.goToLine(3, in: document.editor, macros: recorder)
+                    && document.editor.selectionCaret == 8 && discarded.count == 2
+                    && discarded.last?.contains("Go to Line") == true,
+                "Go to Line discards the recording when the caret moves")
+            rejects("Go to Line cannot silently save a partial recording", message: "Go to Line") {
+                _ = try recorder.finishRecording()
+            }
+            check(
+                EditorWindowController.goToLine(1, in: document.editor, macros: nil)
+                    && document.editor.selectionCaret == 0 && discarded.count == 2,
+                "Go to Line outside a recording moves the caret and reports nothing")
             document.editor.text = ""
             document.close()
         }

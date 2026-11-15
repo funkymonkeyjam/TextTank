@@ -117,6 +117,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         doc.showWindows()
         doc.windowControllers.first?.window?.makeFirstResponder(doc.editor)
     }
+    /// The reason often arrives inside an editor callback, and for a click while the button is
+    /// still down. A modal alert then would swallow the mouse-up and leave the editor dragging,
+    /// so the alert waits for a later turn with no button pressed.
+    private func explainDiscardedRecording(_ reason: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard NSEvent.pressedMouseButtons == 0 else {
+                self?.explainDiscardedRecording(reason)
+                return
+            }
+            TTAlert.explain(
+                "Macro recording was discarded",
+                detail: reason + " Choose Stop Recording, then Start Recording to record again."
+                    + " The previous recording is kept.")
+        }
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenus()
         settings.apply()
@@ -129,6 +144,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         searchController.onUnrecordableCommand = { [weak self] reason in
             self?.macros.invalidateRecording(reason: reason)
+        }
+        folderSearch.onUnrecordableCommand = { [weak self] reason in
+            self?.macros.invalidateRecording(reason: reason)
+        }
+        languages.onUnrecordableCommand = { [weak self] reason in
+            self?.macros.invalidateRecording(reason: reason)
+        }
+        // F67: the person hears and reads at once that the recording can no longer be saved.
+        macros.onInvalidated = { [weak self] reason in
+            NSSound.beep()
+            self?.explainDiscardedRecording(reason)
         }
         macros.searchPlayback = { [weak self] search, editor in
             guard let self else { throw MacroError.invalid("Search controller unavailable.") }
@@ -720,6 +746,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     override init() {
         super.init()
         hasUndoManager = false
+        // Typing or a key command that Scintilla refuses in a read-only document; the status bar
+        // shows Read Only. Menu commands state the reason in words before they reach the engine.
+        editor.onReadOnlyAttempt = { NSSound.beep() }
         editor.onChange = { [weak self] in
             guard let self, !self.loading else { return }
             self.updateChangeCount(
@@ -828,6 +857,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cancelRecoveryTimers()
         recoveryGeneration += 1
         recoveryClosed = true
+        editor.onReadOnlyAttempt = nil
         editor.readOnly = true
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.prepareForClose() }
         // NSDocument only reaches close after the user has chosen Save or Discard.
@@ -911,7 +941,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func loadUnsavedSnapshot(text: String, format snapshotFormat: FileFormat) {
         loading = true
         format = snapshotFormat
-        editor.text = text
+        // A new document: writable and empty, so the load cannot be refused.
+        _ = editor.loadDocumentText(text)
         editor.setLineEndingMode(LineEnding.detect(in: text).rawValue)
         editor.resetUndoHistory()
         savepointMatchesDisk = false
@@ -940,7 +971,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         loading = true
         let locked = editor.readOnly
         editor.readOnly = false
-        editor.text = decoded.text
+        // One minimal-span edit: bookmarks, folds and the caret outside the changed bytes survive a
+        // reload. An empty buffer (first open) takes this as a plain insert.
+        // No undo record is kept: the history is emptied below, as for every open and reload.
+        _ = editor.loadDocumentText(decoded.text)
         editor.setLineEndingMode(LineEnding.detect(in: decoded.text).rawValue)
         editor.resetUndoHistory()
         format = decoded.format
@@ -987,6 +1021,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc func convertEncoding(_ sender: NSMenuItem) {
         guard let code = sender.representedObject as? String else { return }
+        do { try convertEncoding(to: code) } catch { presentError(error) }
+    }
+    /// A read-only document keeps its format, as the status-bar menu already promises.
+    func convertEncoding(to code: String) throws {
+        try editor.requireWritable()
         let target: FileFormat
         switch code {
         case "utf8bom": target = FileFormat(encoding: .utf8, bom: true)
@@ -996,12 +1035,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "latin1": target = FileFormat(encoding: .latin1, bom: false)
         default: target = FileFormat(encoding: .utf8, bom: false)
         }
-        do {
-            _ = try FileCodec.encode(editor.text, format: target)
-            format = target
-            flushRecovery()
-            windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.refreshStatusDetails() }
-        } catch { presentError(error) }
+        _ = try FileCodec.encode(editor.text, format: target)
+        format = target
+        flushRecovery()
+        windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.refreshStatusDetails() }
+    }
+    /// Printing lays the whole document out on the main thread before the print panel appears.
+    /// At and above this many UTF-8 bytes the person is told so first and can cancel.
+    static var largePrintBytes = 4 * 1024 * 1024
+    /// Asks whether to go on with a slow print; returns false to cancel. Replaced in checks.
+    var confirmLargePrint: (_ message: String, _ detail: String) -> Bool = { message, detail in
+        let alert = TTAlert()
+        alert.messageText = message
+        alert.informativeText = detail
+        alert.addButton(withTitle: "Print")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+    /// The warning shown before printing a large document, or nil when none is needed. Reads only
+    /// the document's size.
+    func largePrintWarning() -> (message: String, detail: String)? {
+        let bytes = editor.byteLength
+        guard bytes >= Self.largePrintBytes else { return nil }
+        let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        return (
+            "This document is large (\(size)). Preparing it for printing can take a while.",
+            "TextTank will not respond until the pages are laid out, and the print panel appears only after that. The document itself is not changed. To print part of it, copy that part into a new document."
+        )
+    }
+    /// False when the person cancelled a large print. Nothing has been laid out by then.
+    func shouldBeginPrinting() -> Bool {
+        guard let warning = largePrintWarning() else { return true }
+        return confirmLargePrint(warning.message, warning.detail)
+    }
+    override func printDocument(_ sender: Any?) {
+        guard shouldBeginPrinting() else { return }
+        super.printDocument(sender)
     }
     override func printOperation(withSettings printSettings: [NSPrintInfo.AttributeKey: Any]) throws -> NSPrintOperation
     {
@@ -1138,6 +1207,31 @@ final class ExplicitEncodingOpener: NSObject {
 }
 
 /// Borderless native buttons preserve keyboard and accessibility activation.
+/// What the status bar shows about the whole text: its Unicode scalar count and the line endings
+/// it contains ("" for none, "Mixed EOL" for more than one kind). One pass over the UTF-8 bytes,
+/// safe on any queue; the bytes are valid UTF-8, so every byte that is not a continuation byte
+/// starts one scalar.
+enum StatusMetrics {
+    static func scan(_ utf8: Data) -> (characters: Int, endings: String) {
+        var count = 0, cr = false, lf = false, crlf = false, priorCR = false
+        utf8.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+            for byte in bytes {
+                if byte & 0xC0 != 0x80 { count += 1 }
+                if byte == 13 {
+                    if priorCR { cr = true }
+                    priorCR = true
+                } else {
+                    if byte == 10 { if priorCR { crlf = true } else { lf = true } } else if priorCR { cr = true }
+                    priorCR = false
+                }
+            }
+        }
+        if priorCR { cr = true }
+        let endings = [crlf ? "CRLF" : nil, lf ? "LF" : nil, cr ? "CR" : nil].compactMap { $0 }
+        return (count, endings.count > 1 ? "Mixed EOL" : endings.first ?? "")
+    }
+}
+
 private final class StatusBadge: NSButton {
     var activate: ((StatusBadge) -> Void)?
     init(_ text: String) {
@@ -1265,6 +1359,7 @@ private final class DocumentTabWindow: NSWindow {
         super.makeKeyAndOrderFront(sender)
         contentView?.layoutSubtreeIfNeeded()
         if let sharedFrame { setFrame(sharedFrame, display: true) }
+        (windowController as? EditorWindowController)?.visibilityChanged()
         (windowController as? EditorWindowController)?.refreshStatusDetails()
         if let controller = windowController as? EditorWindowController { makeFirstResponder(controller.activeEditor) }
     }
@@ -1278,6 +1373,23 @@ private final class DocumentTabWindow: NSWindow {
             returnTo = nil
         }
         super.sendEvent(event)
+    }
+    // The recurring status refresh runs only while the tab is on screen.
+    override func orderOut(_ sender: Any?) {
+        super.orderOut(sender)
+        (windowController as? EditorWindowController)?.visibilityChanged()
+    }
+    override func orderFront(_ sender: Any?) {
+        super.orderFront(sender)
+        (windowController as? EditorWindowController)?.visibilityChanged()
+    }
+    override func orderFrontRegardless() {
+        super.orderFrontRegardless()
+        (windowController as? EditorWindowController)?.visibilityChanged()
+    }
+    override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        super.order(place, relativeTo: otherWin)
+        (windowController as? EditorWindowController)?.visibilityChanged()
     }
     override func close() {
         let wasVisible = isVisible
@@ -1431,11 +1543,33 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     private let statusDetails = StatusBadgeRow()
     private let documentTabs = DocumentTabStrip()
     private var statusTimer: Timer?
+    /// True while the recurring refresh is scheduled, which is only while the window is on screen.
+    var statusTimerActive: Bool { statusTimer != nil }
+    #if TESTING
+        /// Drops the timer without any visibility change, as a lost timer would look.
+        func stopStatusTimerForChecks() {
+            statusTimer?.invalidate()
+            statusTimer = nil
+        }
+    #endif
+    private var statusClosed = false
+    private var stateObserver: NSObjectProtocol?
+    private var visibilityObservers: [NSObjectProtocol] = []
     private(set) var statusRefreshCount = 0
+    /// Whole-document captures started for the character count and line-ending badges.
+    private(set) var statusMetricsCaptureCount = 0
     private var statusRevision: UInt?
+    /// The revision the previous timer tick saw; a recurring refresh captures the document only
+    /// once the revision has stayed the same for a whole tick.
+    private var statusTickRevision: UInt?
     private var statusMetricsPending = false
     private var cachedCharacterCount = 0
-    private var cachedSelectionKey = ""
+    private struct SelectionKey: Equatable {
+        let editor: ObjectIdentifier
+        let revision: UInt, generation: UInt
+        let count: Int, anchor: Int, caret: Int
+    }
+    private var cachedSelectionKey: SelectionKey?
     private var cachedSelectedCount = 0
     private var cachedEndings = "LF"
     var secondary: TTEditor?
@@ -1553,15 +1687,63 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
         statusDetails.onActivate = { [weak self] key, view in self?.showStatusOptions(key, at: view) }
-        statusTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            guard let self, self.window?.isVisible == true else { return }
-            self.refreshStatusDetails()
+        // Editor events make the bar follow an edit or a selection change in the same turn of
+        // the run loop; the timer started by visibilityChanged() covers state no event reports.
+        stateObserver = NotificationCenter.default.addObserver(
+            forName: .TTEditorStateDidChange, object: nil, queue: nil
+        ) { [weak self] note in
+            guard let self, !self.statusClosed, self.window?.isVisible == true,
+                let editor = note.object as? TTEditor
+            else { return }
+            if editor === self.primaryEditor || editor === self.secondary {
+                self.refreshStatusDetails(recurring: true)
+            } else {
+                // Another document changed: only its title in this window's tab strip can differ.
+                self.documentTabs.refresh()
+            }
         }
+        // Minimising and restoring a window changes isVisible without any order call.
+        visibilityObservers = [
+            NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification,
+            NSWindow.didBecomeKeyNotification, NSWindow.didChangeOcclusionStateNotification
+        ].map {
+            NotificationCenter.default.addObserver(forName: $0, object: window, queue: nil) { [weak self] _ in
+                self?.visibilityChanged()
+            }
+        }
+        visibilityChanged()
         refreshStatusDetails(for: document)
         // The first document window opens where the last one was left. A later tab takes the
         // frame of the visible tab when it is shown, which replaces whatever is applied here.
         // This comes last: the title bar and toolbar set up above change the window's height.
         WindowFrames.track(window, as: "TextTank.Document")
+    }
+    private func removeVisibilityObservers() {
+        visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        visibilityObservers = []
+    }
+    /// Starts the recurring status refresh when the window comes on screen and stops it when the
+    /// window leaves, so a hidden tab has no timer at all.
+    func visibilityChanged() {
+        let visible = window?.isVisible == true && !statusClosed
+        if !visible {
+            statusTimer?.invalidate()
+            statusTimer = nil
+            return
+        }
+        guard statusTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard self.window?.isVisible == true else {
+                self.visibilityChanged()
+                return
+            }
+            self.refreshStatusDetails(recurring: true)
+            self.statusTickRevision = (self.document as? TextDocument)?.editor.revision
+        }
+        timer.tolerance = 0.05
+        RunLoop.main.add(timer, forMode: .default)
+        statusTimer = timer
     }
     /// A failed recovery write is shown in red with a tooltip as well as in words, and stays
     /// until the document reports a successful write.
@@ -1573,31 +1755,25 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             ? "Crash-recovery copies of this document are not being written. Save the document to keep your work. This message clears when a recovery copy is written again."
             : nil
     }
-    func refreshStatusDetails(for suppliedDocument: TextDocument? = nil) {
+    /// Updates every badge now. `recurring` is the timer and the editor-event path: there the
+    /// whole-document capture waits until the revision has been the same for one timer tick, so
+    /// continuous typing copies nothing. A direct call captures at once.
+    func refreshStatusDetails(for suppliedDocument: TextDocument? = nil, recurring: Bool = false) {
         guard let doc = suppliedDocument ?? document as? TextDocument else { return }
         statusRefreshCount += 1
+        // Any refresh in a window on screen restarts a missing timer, the editor-event path included.
+        if statusTimer == nil { visibilityChanged() }
         documentTabs.refresh()
         let editor = activeEditor, info = editor.statusInfo
-        if statusRevision != doc.editor.revision && !statusMetricsPending {
-            // Capture authoritative bytes once on main; scans/temporary allocations
-            // happen off-main. One in-flight task bounds work for rapid edits.
-            let revision = doc.editor.revision, text = doc.editor.text
+        let revision = doc.editor.revision
+        if statusRevision != revision && !statusMetricsPending && (!recurring || statusTickRevision == revision) {
+            // Capture the authoritative bytes in one copy on main; the scan happens off-main.
+            // One in-flight task bounds work for rapid edits.
+            let bytes = doc.editor.utf8Data
             statusMetricsPending = true
+            statusMetricsCaptureCount += 1
             DispatchQueue.global(qos: .utility).async { [weak self, weak doc] in
-                let count = text.unicodeScalars.count
-                var cr = false, lf = false, crlf = false, priorCR = false
-                for byte in text.utf8 {
-                    if byte == 13 {
-                        if priorCR { cr = true }
-                        priorCR = true
-                    } else {
-                        if byte == 10 { if priorCR { crlf = true } else { lf = true } } else if priorCR { cr = true }
-                        priorCR = false
-                    }
-                }
-                if priorCR { cr = true }
-                let endings = [crlf ? "CRLF" : nil, lf ? "LF" : nil, cr ? "CR" : nil].compactMap { $0 }
-                let eol = endings.count > 1 ? "Mixed EOL" : endings.first ?? ""
+                let (count, eol) = StatusMetrics.scan(bytes)
                 DispatchQueue.main.async { [weak self, weak doc] in
                     guard let self else { return }
                     self.statusMetricsPending = false
@@ -1621,12 +1797,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         let indentation =
             (info["useTabs"]?.boolValue == true ? "Tabs" : "Spaces") + ": \(info["tabWidth"]?.intValue ?? 4)"
         var fields = [
-            doc.displayName + (doc.isDocumentEdited ? " *" : ""), "\(doc.editor.bookmarkLines.count) Bookmarks",
+            doc.displayName + (doc.isDocumentEdited ? " *" : ""), "\(doc.editor.bookmarkCount) Bookmarks",
             language,
             "Ln \(info["line"]?.intValue ?? 1), Col \(info["column"]?.intValue ?? 1)", "\(cachedCharacterCount) chars",
             "\(info["lines"]?.intValue ?? 1) lines"
         ]
-        let selectionKey = "\(ObjectIdentifier(editor))-\(doc.editor.revision)-\(editor.selectionRanges)"
+        // The generation changes with every edit, every bridge call that can move a selection
+        // and every selection update Scintilla reports; the main range is compared as well.
+        let selectionKey = SelectionKey(
+            editor: ObjectIdentifier(editor), revision: revision, generation: editor.selectionGeneration,
+            count: editor.selectionCount, anchor: editor.selectionAnchor, caret: editor.selectionCaret)
         if cachedSelectionKey != selectionKey {
             cachedSelectedCount = editor.selectedCharacterCount
             cachedSelectionKey = selectionKey
@@ -1764,20 +1944,34 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         }
         return menu
     }
+    /// F277: neither jump has a recordable step, so a recording is discarded when the caret or the
+    /// selection actually moves, and not for a cancelled dialog, a line that does not exist or a
+    /// selection that was already empty.
+    static func goToLine(_ line: Int, in editor: TTEditor, macros: MacroController?) -> Bool {
+        guard let macros else { return editor.goToLine(line) }
+        return macros.unrecordedJump(in: editor, reason: "Go to Line is not recorded in macros yet.") {
+            editor.goToLine(line)
+        }
+    }
+    @discardableResult static func clearSelection(in editor: TTEditor, macros: MacroController?) -> Bool {
+        let clear = { editor.setSelectionAnchor(editor.selectionCaret, caret: editor.selectionCaret) }
+        guard let macros else { return clear() }
+        return macros.unrecordedJump(
+            in: editor, reason: "Clear Selection is not recorded in macros yet.", clear)
+    }
     @objc private func statusOption(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
         let editor = activeEditor, info = editor.statusInfo
         switch id {
         case "tabs", "spaces": editor.configureTabWidth(info["tabWidth"]?.intValue ?? 4, useTabs: id == "tabs")
         case "wrap.on", "wrap.off": editor.wrap = id == "wrap.on"
-        case "clearSelection": _ = editor.setSelectionAnchor(editor.selectionCaret, caret: editor.selectionCaret)
+        case "clearSelection": Self.clearSelection(in: editor, macros: (NSApp.delegate as? AppDelegate)?.macros)
         case "goToLine": goToLine(sender)
         default:
             if id.hasPrefix("width."), let width = Int(id.dropFirst(6)) {
                 editor.configureTabWidth(width, useTabs: info["useTabs"]?.boolValue ?? true)
             } else {
-                (NSApp.delegate as? AppDelegate)?.macros.willExecuteCommand(id, on: editor)
-                editor.executeCommand(id)
+                do { try perform(command: id) } catch { TTAlert.explain(error) }
             }
         }
         refreshStatusDetails()
@@ -1789,31 +1983,33 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         alert.messageText = "Go to Line"
         let input = NSTextField(string: String(editor.statusInfo["line"]?.intValue ?? 1))
         input.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        input.identifier = NSUserInterfaceItemIdentifier("goToLine.line")
         input.setAccessibilityLabel("Line number")
         alert.accessoryView = input
         alert.addButton(withTitle: "Go")
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = input
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        guard let line = Int(input.stringValue), Self.goToLine(line, in: editor) else {
-            NSSound.beep()
+        // The engine's own line model decides which lines exist; a folded target is revealed.
+        guard editor.window != nil else { return }
+        guard let line = Int(input.stringValue),
+            Self.goToLine(line, in: editor, macros: (NSApp.delegate as? AppDelegate)?.macros)
+        else {
+            TTAlert.explain(
+                Int(input.stringValue) == nil
+                    ? "Enter a whole line number" : "There is no line \(input.stringValue)",
+                detail: "Enter a line number from 1 to \(editor.statusInfo["lines"]?.intValue ?? 1).")
             return
         }
         window?.makeFirstResponder(editor)
         refreshStatusDetails()
     }
-    /// Puts the caret at the start of a line, counted from 1. False, with nothing changed, for a
-    /// line the document does not have or a view that has left its window.
+    /// Puts the caret at the start of a line, counted from 1, on the engine's own line model.
+    /// False, with nothing changed, for a line the document does not have or a view that has
+    /// left its window. Does not touch a macro recording; the dialog passes the recorder.
     static func goToLine(_ line: Int, in editor: TTEditor) -> Bool {
-        guard editor.window != nil, line >= 1, line <= (editor.statusInfo["lines"]?.intValue ?? 1) else {
-            return false
-        }
-        let text = editor.text, ns = text as NSString
-        let breaks = try! NSRegularExpression(pattern: "\\r\\n|\\r|\\n")
-        let matches = breaks.matches(in: text, range: NSRange(location: 0, length: ns.length))
-        guard line == 1 || matches.indices.contains(line - 2) else { return false }
-        let offset = line == 1 ? 0 : ns.substring(to: NSMaxRange(matches[line - 2].range)).utf8.count
-        return editor.setSelectionAnchor(offset, caret: offset)
+        guard editor.window != nil else { return false }
+        return goToLine(line, in: editor, macros: nil)
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         toolbarDefaultItemIdentifiers(toolbar)
@@ -1852,8 +2048,14 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     }
     @objc func closeTab(_ sender: Any?) { window?.performClose(sender) }
     func prepareForClose() {
+        statusClosed = true
         statusTimer?.invalidate()
         statusTimer = nil
+        if let stateObserver {
+            NotificationCenter.default.removeObserver(stateObserver)
+            self.stateObserver = nil
+        }
+        removeVisibilityObservers()
         if let automationObserver {
             NotificationCenter.default.removeObserver(automationObserver)
             self.automationObserver = nil
@@ -1863,6 +2065,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         // TextDocument.close has already made the shared document read-only for both panes.
         primaryEditor.onFocus = nil
         secondary?.onFocus = nil
+        primaryEditor.onReadOnlyAttempt = nil
+        secondary?.onReadOnlyAttempt = nil
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
     override func windowDidLoad() { super.windowDidLoad() }
@@ -1880,19 +2084,28 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             }
             return
         }
+        do { try perform(command: id) } catch { NSAlert(error: error).runModal() }
+    }
+    /// Runs one editor command on the active editor. A command that edits text is refused with the
+    /// read-only reason before anything else happens, so a macro recording is left as it was.
+    func perform(command id: String) throws {
         let editor = activeEditor
         if id.hasPrefix("transform."), let transform = EditorTransform(rawValue: String(id.dropFirst(10))) {
+            try editor.requireWritable()
             (NSApp.delegate as? AppDelegate)?.macros.invalidateRecording(
                 reason: "This text transform is not yet recorded.")
-            do { try transform.apply(to: editor) } catch { NSAlert(error: error).runModal() }
+            try transform.apply(to: editor)
             return
         }
+        if TTEditor.commandModifiesText(id) { try editor.requireWritable() }
         (NSApp.delegate as? AppDelegate)?.macros.willExecuteCommand(id, on: editor)
         editor.executeCommand(id)
     }
     deinit {
         statusTimer?.invalidate()
         focusObservation?.invalidate()
+        if let stateObserver { NotificationCenter.default.removeObserver(stateObserver) }
+        visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
         if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
     }
     @objc func language(_ sender: NSMenuItem) {
@@ -1916,15 +2129,26 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         window?.makeFirstResponder(nil)
         let query = findField.stringValue
         guard !query.isEmpty else { return }
-        if !editor.find(query, matchCase: caseBox.state == .on, backwards: backwards) { NSSound.beep() }
+        let matched = editor.find(query, matchCase: caseBox.state == .on, backwards: backwards)
+        if !matched { NSSound.beep() }
         (NSApp.delegate as? AppDelegate)?.macros.recordFind(
-            text: query, matchCase: caseBox.state == .on, backwards: backwards, editor: editor)
+            text: query, matchCase: caseBox.state == .on, backwards: backwards, matched: matched, editor: editor)
     }
     @objc func replaceSelection(_ sender: Any?) {
+        do { try replaceSelectionFromBar() } catch { TTAlert.explain(error) }
+    }
+    /// A macro step is recorded only after the editor accepted the replacement.
+    func replaceSelectionFromBar() throws {
         let editor = activeEditor
         window?.makeFirstResponder(nil)
+        try editor.requireWritable()
         let text = replaceField.stringValue
-        editor.replaceSelection(text)
+        guard editor.replaceSelection(text) else {
+            throw NSError(
+                domain: "TextTank", code: 7,
+                userInfo: [NSLocalizedDescriptionKey: "The replacement text could not be written. Nothing was changed."]
+            )
+        }
         (NSApp.delegate as? AppDelegate)?.macros.recordReplace(text: text, editor: editor)
     }
     @objc func clone(_ sender: Any?) {
@@ -1937,6 +2161,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         clone.shareDocument(with: source)
         clone.adoptViewState(from: source)
         wire(clone)
+        clone.onReadOnlyAttempt = { NSSound.beep() }
         secondary = clone
         split.addArrangedSubview(clone)
         split.adjustSubviews()
@@ -1970,17 +2195,26 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     @objc func toggleWrap(_ sender: Any?) { activeEditor.wrap.toggle() }
     @objc func comment(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let command = CommentCommand(rawValue: raw),
-            let app = NSApp.delegate as? AppDelegate, let document = document as? TextDocument,
-            let profile = app.languages.profile(identifier: document.languageIdentifier)
-        else {
-            NSSound.beep()
+            let app = NSApp.delegate as? AppDelegate, let document = document as? TextDocument
+        else { return }
+        guard let profile = app.languages.profile(identifier: document.languageIdentifier) else {
+            TTAlert.explain(
+                "Comments are not available for this language",
+                detail: "Choose a language with comment syntax in the Language menu, then try again.")
             return
         }
-        app.macros.invalidateRecording(reason: "Language-specific comments are not yet recorded.")
-        do { try command.apply(to: activeEditor, profile: profile) } catch { NSAlert(error: error).runModal() }
+        do {
+            try activeEditor.requireWritable()
+            app.macros.invalidateRecording(reason: "Language-specific comments are not yet recorded.")
+            try command.apply(to: activeEditor, profile: profile)
+        } catch { NSAlert(error: error).runModal() }
     }
     @objc func columnInsert(_ sender: Any?) {
         let editor = activeEditor
+        do { try editor.requireWritable() } catch {
+            TTAlert.explain(error)
+            return
+        }
         let revision = editor.revision, selections = editor.selectionRanges
         let alert = TTAlert()
         alert.messageText = "Insert into Each Selection"
@@ -2006,7 +2240,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         var values = Array(repeating: text.stringValue, count: editor.selectionCount)
         if number.state == .on {
             guard let first = Int(start.stringValue), let increment = Int(step.stringValue) else {
-                NSSound.beep()
+                TTAlert.explain(
+                    "Start and Increment must be whole numbers", detail: "No column insertion was applied.")
                 return
             }
             values = []
@@ -2016,7 +2251,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
                 if i + 1 < editor.selectionCount {
                     let (next, overflow) = value.addingReportingOverflow(increment)
                     guard !overflow else {
-                        NSSound.beep()
+                        TTAlert.explain(
+                            "The number sequence is too large", detail: "No column insertion was applied.")
                         return
                     }
                     value = next
@@ -2039,8 +2275,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     }
     @objc func convertEOL(_ sender: NSMenuItem) {
         guard let mode = sender.representedObject as? String else { return }
+        do { try convertLineEndings(to: mode) } catch { TTAlert.explain(error) }
+    }
+    /// Refused with the read-only reason before a macro recording is touched.
+    func convertLineEndings(to mode: String) throws {
+        let editor = activeEditor
+        try editor.requireWritable()
         (NSApp.delegate as? AppDelegate)?.macros.invalidateRecording(
             reason: "Line-ending conversion is not yet recorded.")
-        activeEditor.convertLineEndings(mode)
+        guard editor.convertLineEndings(mode) else {
+            throw NSError(
+                domain: "TextTank", code: 8,
+                userInfo: [NSLocalizedDescriptionKey: "Line endings could not be converted. Nothing was changed."])
+        }
     }
 }

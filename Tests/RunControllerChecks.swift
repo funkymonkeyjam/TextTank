@@ -113,8 +113,46 @@ import AppKit
                 "Cancel Running Command is disabled while nothing is running; the other Run items stay enabled")
             let stale = button()
             document.editor.text = "new edit"
-            controller.apply(stale)
-            check(document.editor.text == "new edit", "stale extension result preserves newer edits")
+            // F207: a result that can no longer be applied says why instead of beeping.
+            rejects("a stale extension result says the document changed", expecting: RunFailure.documentChanged) {
+                try controller.applyResult(stale)
+            }
+            check(
+                document.editor.text == "new edit" && !stale.isEnabled, "stale extension result preserves newer edits")
+            try controller.applyResult(stale)
+            check(document.editor.text == "new edit", "a dropped extension result cannot be applied by a second click")
+            controller.show(
+                .success(result), command: sample, target: document.editor, revision: document.editor.revision,
+                selection: false, anchor: 0, caret: 0)
+            let locked = button()
+            document.editor.readOnly = true
+            rejects(
+                "an extension result for a read-only document says it is read-only",
+                message: "This document is read-only"
+            ) { try controller.applyResult(locked) }
+            check(
+                document.editor.text == "new edit" && !locked.isEnabled,
+                "a read-only document is not changed by an extension result")
+            controller.editor = { document.editor }
+            rejects("an extension is not started for a read-only document", message: "This document is read-only") {
+                try controller.start(sample)
+            }
+            document.editor.readOnly = false
+            // A second command while one runs is refused with the reason, and the first still finishes.
+            let slow = ConfiguredRun(name: "Slow", executable: "/bin/sleep", arguments: ["30"])
+            try controller.start(slow)
+            rejects("a command started while another runs says one is already running", expecting: RunFailure.busy) {
+                try controller.start(slow)
+            }
+            controller.perform(NSSelectorFromString("cancel:"), with: nil)
+            var finished = false
+            spinUntil(timeout: 20, "the cancelled command to finish") {
+                if !finished { finished = (try? controller.start(sample)) != nil }
+                return finished
+            }
+            spinUntil(timeout: 20, "the extension sample to finish") {
+                NSApp.windows.contains { $0.title == sample.name && $0.isVisible }
+            }
             // G338: a result captured through a split pane follows the document when the pane closes.
             let pane = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
             pane.shareDocument(with: document.editor)
@@ -143,7 +181,10 @@ import AppKit
                 selection: false, anchor: 0, caret: 0)
             let closed = button()
             document.close()
-            controller.apply(closed)
+            rejects("an extension result for a closed document says it is closed", expecting: RunFailure.documentClosed)
+            {
+                try controller.applyResult(closed)
+            }
             check(document.editor.text == "new edit", "detached editor cannot receive extension result")
             let spent = try requireValue(
                 NSApp.windows.last { $0.title == sample.name && $0.isVisible } as? NSPanel,

@@ -57,6 +57,16 @@ int main(int argc,char **argv){@autoreleasepool{
    find=std::min(find,c-b);replace=std::min(replace,d-c);undo=std::min(undo,e-d);
   }
   restored=[editor.text isEqual:fixture];
+  // Audit package 22 (F221, F218): a whole-document read is one copy out of the engine's
+  // buffer, and the status bar's capture is one copy of the raw bytes. Logged on the development
+  // Mac: text 0.00004 s at 1 MiB and 0.0006 s at 10 MiB (0.0076 s and 0.054 s before, when a read
+  // made four copies), so the budget of 0.002 s per MiB fails if the extra copies come back.
+  double read=1e9,capture=1e9;BOOL sameSize=YES;
+  for(int attempt=0;attempt<5;++attempt){@autoreleasepool{
+   double r=seconds();NSString *copy=editor.text;double s=seconds();NSData *bytes=editor.utf8Data;double t=seconds();
+   read=std::min(read,s-r);capture=std::min(capture,t-s);
+   sameSize=sameSize && copy.length==fixture.length && bytes.length==fixture.length && editor.byteLength==(NSInteger)fixture.length;
+  }}
   NSString *size=[NSString stringWithFormat:@"%d MiB",mib];
   check(found && restored,[[size stringByAppendingString:@" find, replace and Undo restore the exact text"] UTF8String]);
   check(load<=60 && find<=10,[[size stringByAppendingString:@" load within 60 s and find within 10 s"] UTF8String]);
@@ -66,6 +76,10 @@ int main(int argc,char **argv){@autoreleasepool{
   within(find,0.0001+0.0001*mib,[size stringByAppendingString:@" find of the last token"],"s");
   within(replace,0.00005,[size stringByAppendingString:@" replace of one selection"],"s");
   within(undo,0.00005,[size stringByAppendingString:@" Undo of one replacement"],"s");
+  printf("read,%d,text_seconds=%.6f,utf8_capture_seconds=%.6f\n",mib,read,capture);fflush(stdout);
+  check(sameSize,[[size stringByAppendingString:@" text, raw bytes and byte length agree in size"] UTF8String]);
+  within(read,0.002*mib,[size stringByAppendingString:@" whole-document text read"],"s");
+  within(capture,0.002*mib,[size stringByAppendingString:@" raw UTF-8 capture"],"s");
   // Peak resident size is cumulative for the process, so the ceiling grows with the largest
   // fixture loaded so far: a fixed allowance plus thirty times the fixture's UTF-8 size.
   within((double)peak,150.0*1024*1024+30.0*mib*1024*1024,[size stringByAppendingString:@" peak resident memory"],"bytes");

@@ -2,7 +2,21 @@
 #import <AppKit/AppKit.h>
 #import "TTEditor.h"
 #import "ScintillaView.h"
+#import <objc/runtime.h>
 #import "Checks.h"
+// Stands in for the system's drag information so a real drop runs through the content view.
+@interface TTFakeDrop : NSObject
+@property(nonatomic,strong) NSPasteboard *draggingPasteboard;
+@property(nonatomic) NSPoint draggingLocation;
+@property(nonatomic) NSDragOperation draggingSourceOperationMask;
+@property(nonatomic,strong) id draggingSource;
+@end
+@implementation TTFakeDrop
+@end
+static NSEvent *TTMouse(NSEventType type, NSView *content, NSPoint point, NSTimeInterval time) {
+    return [NSEvent mouseEventWithType:type location:[content convertPoint:point toView:nil] modifierFlags:0 timestamp:time
+                          windowNumber:content.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1];
+}
 int main() {
     @autoreleasepool {
         [NSApplication sharedApplication];
@@ -202,6 +216,113 @@ int main() {
         check(![left setBookmarks:@[@1,@1]] && ![left setBookmarks:@[@1.5]], "Duplicate and fractional bookmark indices rejected");
         check([left setBookmarks:@[]] && left.bookmarkLines.count == 0, "Empty bookmark set explicitly clears bookmarks");
         check(!left.modified && left.revision == beforeRestoreRevision, "Selection and bookmark restore never changes authoritative bytes or text undo state");
+        });
+        ttchecks::section("selection commands", [&] {
+        // G407: Clear Additional Selections keeps the main selection where it is.
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        ed.text=@"zero\none two\nthree four\n"; [ed resetUndoHistory]; [ed setSavePoint];
+        require([ed setSelectionRanges:@[@{@"anchor":@12,@"caret":@9},@{@"anchor":@0,@"caret":@4},@{@"anchor":@19,@"caret":@23}]] && ed.selectionCount==3, "fixture: three selections, the main one reversed");
+        NSUInteger revision=ed.revision;
+        [ed executeCommand:@"clearAdditionalSelections"];
+        check(ed.selectionCount==1 && ed.selectionAnchor==12 && ed.selectionCaret==9, "clearAdditionalSelections keeps the main selection and its direction");
+        check([ed.text isEqual:@"zero\none two\nthree four\n"] && ed.revision==revision && !ed.modified, "clearAdditionalSelections edits nothing");
+        require([ed setSelectionAnchor:5 caret:8], "fixture: one ordinary selection");
+        [ed executeCommand:@"clearAdditionalSelections"];
+        check(ed.selectionCount==1 && ed.selectionAnchor==5 && ed.selectionCaret==8, "clearAdditionalSelections leaves a single selection unchanged");
+        ed.text=@"abcd\nabcd\nabcd\n"; require([ed setSelectionAnchor:1 caret:1], "fixture: caret in the first row");
+        [ed executeCommand:@"rectangularSelection"]; [ed executeCommand:@"lineDown"]; [ed executeCommand:@"charRight"];
+        check([sv message:SCI_SELECTIONISRECTANGLE]==1 && ed.selectionCount>=2, "rectangularSelection keeps keyboard column mode: plain arrows grow a rectangle");
+        sptr_t main=[sv message:SCI_GETMAINSELECTION];
+        sptr_t mainAnchor=[sv message:SCI_GETSELECTIONNANCHOR wParam:main], mainCaret=[sv message:SCI_GETSELECTIONNCARET wParam:main];
+        [ed executeCommand:@"clearAdditionalSelections"];
+        check(ed.selectionCount==1 && ed.selectionAnchor==mainAnchor && ed.selectionCaret==mainCaret && mainCaret!=0, "clearAdditionalSelections on a rectangle keeps its main range");
+        check([sv message:SCI_SELECTIONISRECTANGLE]==0 && [sv message:SCI_GETMOVEEXTENDSSELECTION]==0, "clearAdditionalSelections leaves rectangular and extend modes");
+        // G408: Stream Selection is a deterministic return to normal and never turns extend mode on.
+        TTEditor *fresh=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *freshNative=(ScintillaView *)fresh.subviews.firstObject;
+        fresh.text=@"abcdef\nabcdef\n"; require([fresh setSelectionAnchor:0 caret:0], "fixture: caret at the start");
+        [fresh executeCommand:@"streamSelection"]; [fresh executeCommand:@"charRight"];
+        check([freshNative message:SCI_GETMOVEEXTENDSSELECTION]==0 && fresh.selectionCount==1 && fresh.selectionAnchor==1 && fresh.selectionCaret==1, "streamSelection on a fresh editor does not make arrow keys extend the selection");
+        [fresh executeCommand:@"rectangularSelection"]; [fresh executeCommand:@"lineDown"]; [fresh executeCommand:@"charRight"];
+        check([freshNative message:SCI_SELECTIONISRECTANGLE]==1 && fresh.selectionCount>=2, "rectangularSelection after streamSelection still starts column mode");
+        [fresh executeCommand:@"streamSelection"]; [fresh executeCommand:@"charRight"];
+        check([freshNative message:SCI_GETMOVEEXTENDSSELECTION]==0 && [freshNative message:SCI_GETSELECTIONMODE]==SC_SEL_STREAM, "streamSelection after column mode returns to stream selection with extend mode off");
+        TTEditor *ranged=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *rangedNative=(ScintillaView *)ranged.subviews.firstObject;
+        ranged.text=@"abcdef";
+        BOOL firstSet=[ranged setSelectionRanges:@[@{@"anchor":@0,@"caret":@0}]]; sptr_t firstExtend=[rangedNative message:SCI_GETMOVEEXTENDSSELECTION];
+        BOOL secondSet=[ranged setSelectionRanges:@[@{@"anchor":@0,@"caret":@0}]]; sptr_t secondExtend=[rangedNative message:SCI_GETMOVEEXTENDSSELECTION];
+        check(firstSet && secondSet && firstExtend==0 && secondExtend==0, "setSelectionRanges never turns extend mode on, on the first call or the second");
+        [ranged executeCommand:@"charRight"];
+        check(ranged.selectionCount==1 && ranged.selectionAnchor==1 && ranged.selectionCaret==1, "an arrow key after setSelectionRanges moves the caret without selecting");
+        });
+        ttchecks::section("read-only guard", [&] {
+        // G369, F207: one guard with one message, and bridge edits that report refusal.
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        ed.text=@"one\r\ntwo\n"; [ed resetUndoHistory]; [ed setSavePoint]; require([ed setSelectionAnchor:0 caret:3], "fixture: selection");
+        __block int attempts=0; ed.onReadOnlyAttempt=^{ ++attempts; };
+        NSError *error=nil;
+        check([ed requireWritable:&error] && error==nil && [ed requireWritable:NULL], "requireWritable accepts a writable document");
+        [ed executeCommand:@"upper"]; [ed executeCommand:@"undo"];
+        check(attempts==0 && [ed.text isEqual:@"one\r\ntwo\n"], "Editing a writable document reports no read-only attempt");
+        ed.readOnly=YES; NSUInteger revision=ed.revision; sptr_t eol=[sv message:SCI_GETEOLMODE];
+        check(![ed requireWritable:&error] && [error.domain isEqual:TTEditorErrorDomain] && error.code==TTEditorErrorReadOnly && [error.localizedDescription containsString:@"read-only"], "requireWritable rejects a read-only document with the one read-only error");
+        check(![ed requireWritable:NULL], "requireWritable rejects a read-only document without an error pointer");
+        check(![ed convertLineEndings:@"LF"] && [sv message:SCI_GETEOLMODE]==eol, "convertLineEndings reports failure on a read-only document and keeps the insertion ending");
+        check(![ed replaceSelection:@"x"] && ed.selectionAnchor==0 && ed.selectionCaret==3, "replaceSelection on a read-only document reports failure and leaves the selection alone");
+        check(![ed executeMacroStep:@{@"kind":@"insertText",@"text":@"x"}], "A macro text step on a read-only document is rejected");
+        check(attempts==0, "Bridge edits refused up front do not also report a read-only attempt");
+        [ed executeCommand:@"deleteLine"];
+        check(attempts==1, "A command Scintilla refuses on a read-only document reports the attempt");
+        [sv insertText:@"x"];
+        check(attempts>1, "Typing into a read-only document reports the attempt");
+        [ed executeCommand:@"undo"]; [ed executeCommand:@"charRight"]; [ed executeCommand:@"copy"];
+        check([ed.text isEqual:@"one\r\ntwo\n"] && ed.revision==revision && !ed.modified, "Refused edits leave text, revision and save point unchanged");
+        ed.readOnly=NO;
+        check([ed convertLineEndings:@"LF"] && [ed.text isEqual:@"one\ntwo\n"], "convertLineEndings reports success on a writable document");
+        check(![ed convertLineEndings:@"bogus"], "convertLineEndings reports failure for an unknown mode");
+        BOOL editing=YES, viewing=NO;
+        for (NSString *name in @[@"undo",@"redo",@"cut",@"paste",@"duplicateLine",@"deleteLine",@"transposeLine",@"indent",@"unindent",@"upper",@"lower",@"duplicateSelection",@"deleteWordLeft",@"deleteWordRight",@"deleteLineLeft",@"deleteLineRight",@"moveLineUp",@"moveLineDown",@"joinLines",@"trimTrailing",@"deleteBack",@"deleteForward",@"newLine",@"tab",@"backTab"]) editing = editing && [TTEditor commandModifiesText:name];
+        for (NSString *name in @[@"copy",@"selectAll",@"zoomIn",@"zoomOut",@"charLeft",@"lineDownExtend",@"documentEnd",@"foldAll",@"unfoldAll",@"showWhitespace",@"toggleEOL",@"toggleLineNumbers",@"toggleOvertype",@"bookmarkToggle",@"bookmarkNext",@"gotoMatchingBrace",@"selectMatchingBrace",@"streamSelection",@"rectangularSelection",@"clearAdditionalSelections",@"addNextOccurrence",@"selectAllOccurrences",@"",@"noSuchCommand"]) viewing = viewing || [TTEditor commandModifiesText:name];
+        check(editing && !viewing, "commandModifiesText names the editing commands and no view, selection or navigation command");
+        });
+        ttchecks::section("line-number margin width", [&] {
+        // F28: the margin fits the largest number drawn at the current zoom, and is never under 48.
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        auto margin=[&](ScintillaView *view) { return [view message:SCI_GETMARGINWIDTHN wParam:0]; };
+        auto needed=[&](ScintillaView *view, const char *digits) { return [view message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER lParam:(sptr_t)digits] + 3; };
+        ed.text=@"one\ntwo\n";
+        check(margin(sv)==48, "Line-number margin is 48 px for a small document at the default font");
+        NSString *large=[@"" stringByPaddingToLength:100000 withString:@"\n" startingAtIndex:0];
+        ed.text=large;
+        check(needed(sv,"100000")>48 && margin(sv)>=needed(sv,"100000"), "Line-number margin widens to fit six digits");
+        TTEditor *clone=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *cloneNative=(ScintillaView *)clone.subviews.firstObject;
+        [clone shareDocumentWith:ed];
+        check(margin(cloneNative)>=needed(cloneNative,"100000"), "A clone of a large document widens its own line-number margin");
+        ed.text=@"one\ntwo\n";
+        check(margin(sv)==48 && margin(cloneNative)==48, "Line-number margin returns to 48 px when the document is small again");
+        clone=nil;
+        ed.text=[@"" stringByPaddingToLength:1200 withString:@"\n" startingAtIndex:0];
+        check(margin(sv)==48, "Line-number margin stays 48 px for four digits at the default font");
+        for (int i=0;i<6;++i) [ed executeCommand:@"zoomIn"];
+        check(needed(sv,"9999")>48 && margin(sv)>=needed(sv,"9999"), "Line-number margin widens with zoom");
+        for (int i=0;i<6;++i) [ed executeCommand:@"zoomOut"];
+        check(margin(sv)==48, "Line-number margin returns to 48 px at the default zoom");
+        [ed executeCommand:@"toggleLineNumbers"];
+        for (int i=0;i<6;++i) [ed executeCommand:@"zoomIn"];
+        ed.text=large;
+        [ed setSyntaxFont:STYLE_LINENUMBER name:@"Menlo" size:20];
+        check(margin(sv)==0, "A hidden line-number margin stays hidden through zoom, added lines and a font change");
+        for (int i=0;i<6;++i) [ed executeCommand:@"zoomOut"];
+        [ed executeCommand:@"toggleLineNumbers"];
+        check(margin(sv)>=needed(sv,"100000"), "Showing line numbers again sizes the margin for the current document and font");
+        ed.text=@"one\n";
+        [ed setSyntaxFont:STYLE_LINENUMBER name:@"Menlo" size:40];
+        check(needed(sv,"99")>48 && margin(sv)>=needed(sv,"99"), "Line-number margin follows a larger line-number font");
         });
         ttchecks::section("line-ending mode", [&] {
         // F126: the line-ending mode is metadata only and governs later insertions.
@@ -492,6 +613,610 @@ int main() {
         check(margin != nil && [titles([margin menuForEvent:click]) isEqual:engineTitles], "the margin keeps the engine's menu");
         editor.menu = [[NSMenu alloc] initWithTitle:@"Empty"];
         check([titles([native.content menuForEvent:click]) isEqual:engineTitles], "an empty assigned menu adds nothing, not even a separator");
+        });
+        // Audit package 7 (F4, G368, G374, F12): targeted edits instead of whole-buffer rewrites.
+        auto numbered = [](NSInteger count) {
+            NSMutableString *text=[NSMutableString string];
+            for (NSInteger i=0;i<count;++i) [text appendFormat:@"line %ld\n",(long)i];
+            return text;
+        };
+        auto hosted = [](TTEditor *editor) {
+            NSWindow *window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,600,400) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+            window.contentView=editor; return window;
+        };
+        ttchecks::section("applyEdits", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *host=hosted(ed); (void)host;
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        NSString *original=numbered(400);
+        ed.text=original;[ed resetUndoHistory];[ed setSavePoint];
+        check([ed setBookmarks:@[@0,@3,@300]], "Fixture: bookmarks on lines 0, 3 and 300");
+        NSInteger line1=[sv message:SCI_POSITIONFROMLINE wParam:1],line2=[sv message:SCI_POSITIONFROMLINE wParam:2],line3=[sv message:SCI_POSITIONFROMLINE wParam:3];
+        [ed setSelectionAnchor:line1 caret:line1];
+        check(ed.firstVisibleLine==0, "Fixture: the view starts at the top");
+        NSArray *edits=@[@{@"start":@(line1),@"end":@(line1),@"text":@"# "},@{@"start":@(line2),@"end":@(line2),@"text":@"# "},@{@"start":@(line3),@"end":@(line3+4),@"text":@"LINE"}];
+        NSUInteger revision=ed.revision; NSInteger length=[sv message:SCI_GETLENGTH];
+        check([ed applyEdits:edits expectedRevision:revision expectedLength:length], "applyEdits accepts ordered in-bounds edits");
+        NSString *expected=[original stringByReplacingOccurrencesOfString:@"line 1\nline 2\nline 3\n" withString:@"# line 1\n# line 2\nLINE 3\n"];
+        check([ed.text isEqual:expected] && ed.modified && ed.revision!=revision, "applyEdits replaces exactly the given byte ranges");
+        check([ed.bookmarkLines isEqual:@[@0,@3,@300]], "applyEdits keeps every bookmark on its line");
+        check(ed.firstVisibleLine==0, "applyEdits does not scroll the view");
+        [ed executeCommand:@"undo"];
+        check([ed.text isEqual:original] && !ed.modified && ![sv message:SCI_CANUNDO], "One Undo reverts all applied edits and restores the save point");
+        check([ed.bookmarkLines isEqual:@[@0,@3,@300]], "Bookmarks survive the Undo of applied edits");
+        [ed setSelectionAnchor:line1 caret:line2];
+        revision=ed.revision;
+        BOOL (^untouched)(void)=^BOOL{ return [ed.text isEqual:original] && ed.revision==revision && !ed.modified && ![sv message:SCI_CANUNDO] && ed.selectionAnchor==line1 && ed.selectionCaret==line2 && [ed.bookmarkLines isEqual:@[@0,@3,@300]]; };
+        check(![ed applyEdits:edits expectedRevision:revision+1 expectedLength:length] && untouched(), "applyEdits rejects a stale revision untouched");
+        check(![ed applyEdits:edits expectedRevision:revision expectedLength:length-1] && untouched(), "applyEdits rejects an unexpected document length untouched");
+        check(![ed applyEdits:@[@{@"start":@0,@"end":@(length+1),@"text":@""}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects an out-of-range end untouched");
+        check(![ed applyEdits:@[@{@"start":@(-1),@"end":@0,@"text":@""}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects a negative start untouched");
+        check(![ed applyEdits:@[@{@"start":@4,@"end":@2,@"text":@""}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects a reversed range untouched");
+        check(![ed applyEdits:@[@{@"start":@0,@"end":@1,@"text":@"ok"},@{@"start":@0.5,@"end":@3,@"text":@""}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects a fractional offset before any edit");
+        check(![ed applyEdits:@[@{@"start":@0,@"end":@4,@"text":@"a"},@{@"start":@3,@"end":@5,@"text":@"b"}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects overlapping edits before any edit");
+        check(![ed applyEdits:@[@{@"start":@8,@"end":@9,@"text":@"a"},@{@"start":@1,@"end":@2,@"text":@"b"}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects unordered edits before any edit");
+        const unichar loneUnit[]={0xD83D};
+        check(![ed applyEdits:@[@{@"start":@0,@"end":@1,@"text":@"ok"},@{@"start":@2,@"end":@3,@"text":[NSString stringWithCharacters:loneUnit length:1]}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects unencodable text before any edit");
+        check(![ed applyEdits:@[@{@"start":@0,@"end":@1}] expectedRevision:revision expectedLength:length] && ![ed applyEdits:(NSArray *)@"x" expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects malformed input untouched");
+        ed.readOnly=YES;
+        check(![ed applyEdits:edits expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects a read-only document untouched");
+        ed.readOnly=NO;
+        ed.text=@"a😀b";[ed resetUndoHistory];[ed setSavePoint];
+        check(![ed applyEdits:@[@{@"start":@1,@"end":@3,@"text":@""}] expectedRevision:ed.revision expectedLength:6] && ![ed applyEdits:@[@{@"start":@2,@"end":@5,@"text":@""}] expectedRevision:ed.revision expectedLength:6] && [ed.text isEqual:@"a😀b"] && !ed.modified && ![sv message:SCI_CANUNDO], "applyEdits rejects offsets inside a UTF-8 sequence untouched");
+        check([ed applyEdits:@[@{@"start":@0,@"end":@0,@"text":@"<"},@{@"start":@0,@"end":@1,@"text":@"A"},@{@"start":@1,@"end":@5,@"text":@"é"},@{@"start":@6,@"end":@6,@"text":@">"}] expectedRevision:ed.revision expectedLength:6] && [ed.text isEqual:@"<Aéb>"], "Touching edits apply in list order, including an insertion at the start of the next edit");
+        [ed executeCommand:@"undo"];
+        check([ed.text isEqual:@"a😀b"] && !ed.modified, "Touching edits undo as one step");
+        NSUInteger emptyRevision=ed.revision;
+        check([ed applyEdits:@[] expectedRevision:emptyRevision expectedLength:6] && ed.revision==emptyRevision && !ed.modified && ![sv message:SCI_CANUNDO], "An empty edit list succeeds without an undo step");
+        });
+        ttchecks::section("replaceDocumentText", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *host=hosted(ed); (void)host;
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        auto bytes = [](NSString *text) { return [text dataUsingEncoding:NSUTF8StringEncoding]; };
+        NSString *original=numbered(400);
+        ed.text=original;[ed resetUndoHistory];[ed setSavePoint];
+        check([ed setBookmarks:@[@40,@300]] && [ed goToLine:301], "Fixture: bookmarks on lines 40 and 300, caret on line 300");
+        NSInteger caret=ed.selectionCaret, top=ed.firstVisibleLine; NSUInteger revision=ed.revision;
+        check(top>200 && [ed.statusInfo[@"line"] integerValue]==301, "Fixture: the view is scrolled to the caret");
+        NSString *changed=[original stringByReplacingOccurrencesOfString:@"line 10\n" withString:@"line 1X\n"];
+        check([ed replaceDocumentText:changed] && [ed.text isEqual:changed], "replaceDocumentText produces the new text");
+        check([ed.bookmarkLines isEqual:@[@40,@300]], "A one-character replacement keeps bookmarks");
+        check(ed.selectionCaret==caret && ed.selectionAnchor==caret && ed.firstVisibleLine==top, "A one-character replacement keeps the caret and the first visible line");
+        check(ed.revision!=revision && ed.modified, "A real replacement advances the revision and dirties the document");
+        check([sv message:SCI_GETTARGETSTART]==[sv message:SCI_POSITIONFROMLINE wParam:10]+6 && [sv message:SCI_GETTARGETEND]-[sv message:SCI_GETTARGETSTART]==1, "Only the differing span is replaced");
+        [ed executeCommand:@"undo"];
+        check([bytes(ed.text) isEqual:bytes(original)] && !ed.modified && ![sv message:SCI_CANUNDO], "One Undo restores the exact original bytes and the save point");
+        check([ed.bookmarkLines isEqual:@[@40,@300]], "Bookmarks survive the Undo of a document replacement");
+        revision=ed.revision;
+        check([ed replaceDocumentText:[original copy]] && ed.revision==revision && !ed.modified && ![sv message:SCI_CANUNDO], "Identical text changes neither revision, dirty state nor undo history");
+        // Reordering every line: bookmarks keep their line numbers; the caret keeps its line and column.
+        NSMutableArray *lines=[[original componentsSeparatedByString:@"\n"] mutableCopy];[lines removeLastObject];
+        NSString *reversed=[[[lines reverseObjectEnumerator].allObjects componentsJoinedByString:@"\n"] stringByAppendingString:@"\n"];
+        [ed setSelectionAnchor:[sv message:SCI_POSITIONFROMLINE wParam:300]+2 caret:[sv message:SCI_POSITIONFROMLINE wParam:300]+2];
+        check([ed replaceDocumentText:reversed] && [bytes(ed.text) isEqual:bytes(reversed)], "A full-content replacement produces the new text");
+        check([ed.bookmarkLines isEqual:@[@40,@300]], "A full-content replacement keeps bookmarks on their line numbers");
+        check(ed.selectionCount==1 && ed.selectionCaret==[sv message:SCI_POSITIONFROMLINE wParam:300]+2 && ed.selectionAnchor==ed.selectionCaret, "A caret inside the replaced span keeps its line and column");
+        check(ed.firstVisibleLine==top, "A full-content replacement keeps the first visible line");
+        [ed executeCommand:@"undo"];
+        check([bytes(ed.text) isEqual:bytes(original)] && !ed.modified, "A full-content replacement is one Undo");
+        check([ed setBookmarks:@[@40,@300,@399]] && [ed replaceDocumentText:@"only\ntwo"] && [ed.bookmarkLines isEqual:@[@1]] && [ed.text isEqual:@"only\ntwo"], "Bookmarks beyond a shorter replacement are clamped to its last line");
+        check([ed.statusInfo[@"line"] integerValue]==2 && ed.selectionCaret<=8, "The caret is clamped into a shorter replacement");
+        ed.text=@"a\nb\nc";[ed setBookmarks:@[@1]];[ed setSelectionAnchor:3 caret:2];
+        check([ed replaceDocumentText:@"new\nlines\na\nb\nc"] && [ed.bookmarkLines isEqual:@[@3]] && ed.selectionAnchor==13 && ed.selectionCaret==12, "Lines inserted above move bookmarks and the selection with their text");
+        check([ed replaceDocumentText:@"a\nb\nc"] && [ed.bookmarkLines isEqual:@[@1]] && ed.selectionAnchor==3 && ed.selectionCaret==2, "Lines removed above move bookmarks and the selection back");
+        check([ed replaceDocumentText:@"a\nb\nc\nd\n"] && [ed.bookmarkLines isEqual:@[@1]] && ed.selectionAnchor==3 && ed.selectionCaret==2, "Text appended below leaves bookmarks and the selection alone");
+        [ed setSelectionRanges:@[@{@"anchor":@0,@"caret":@1},@{@"anchor":@6,@"caret":@7}]];
+        check([ed replaceDocumentText:@"a\nb\nXX\nd\n"] && [ed.selectionRanges isEqual:(@[@{@"anchor":@0,@"caret":@1},@{@"anchor":@7,@"caret":@8}])], "Multiple selections outside the span follow their text");
+        // Byte-exact cuts: inside a multi-byte character, and CR against CRLF.
+        ed.text=@"aé b";
+        check([ed replaceDocumentText:@"aè b"] && [bytes(ed.text) isEqual:bytes(@"aè b")] && [sv message:SCI_GETTARGETSTART]==1 && [sv message:SCI_GETTARGETEND]==3, "A difference in a trailing UTF-8 byte replaces the whole character");
+        ed.text=@"x€y";
+        check([ed replaceDocumentText:@"x₭y"] && [bytes(ed.text) isEqual:bytes(@"x₭y")] && [sv message:SCI_GETTARGETSTART]==1 && [sv message:SCI_GETTARGETEND]==4, "A difference in a middle UTF-8 byte replaces the whole character");
+        ed.text=@"aéb";
+        check([ed replaceDocumentText:@"a©b"] && [bytes(ed.text) isEqual:bytes(@"a©b")] && [sv message:SCI_GETTARGETSTART]==1 && [sv message:SCI_GETTARGETEND]==3, "A difference in a leading UTF-8 byte replaces the whole character");
+        ed.text=@"abc";[ed setSelectionAnchor:3 caret:3];
+        check([ed replaceDocumentText:@"wxyz"] && ed.selectionCaret==4 && ed.selectionAnchor==4, "A caret at the end of the replaced span stays after it");
+        ed.text=@"abc";[ed setSelectionAnchor:0 caret:0];
+        check([ed replaceDocumentText:@"Xabc"] && ed.selectionCaret==0 && [ed replaceDocumentText:@"wxyz"] && ed.selectionCaret==0, "A caret at the start of the replaced span stays before it");
+        ed.text=@"a\rb";
+        check([ed replaceDocumentText:@"a\r\nb"] && [bytes(ed.text) isEqual:bytes(@"a\r\nb")] && [sv message:SCI_GETTARGETSTART]==1 && [sv message:SCI_GETLINECOUNT]==2, "CR to CRLF is replaced as a whole line ending");
+        check([ed replaceDocumentText:@"a\rb"] && [bytes(ed.text) isEqual:bytes(@"a\rb")] && [sv message:SCI_GETTARGETSTART]==1 && [sv message:SCI_GETLINECOUNT]==2, "CRLF to CR is replaced as a whole line ending");
+        ed.text=@"a\nb";
+        check([ed replaceDocumentText:@"a\r\nb"] && [bytes(ed.text) isEqual:bytes(@"a\r\nb")] && [sv message:SCI_GETTARGETSTART]==1 && [sv message:SCI_GETTARGETEND]==3 && [sv message:SCI_GETLINECOUNT]==2, "LF to CRLF is replaced as a whole line ending");
+        check([ed replaceDocumentText:@"a\nb"] && [bytes(ed.text) isEqual:bytes(@"a\nb")] && [sv message:SCI_GETLINECOUNT]==2, "CRLF to LF round-trips byte-exact");
+        const unsigned char raw[]={'a',0,'b',0xEF,0xBB,0xBF,'c'};
+        NSString *odd=[[NSString alloc] initWithBytes:raw length:sizeof(raw) encoding:NSUTF8StringEncoding];
+        check([ed replaceDocumentText:odd] && [bytes(ed.text) isEqual:[NSData dataWithBytes:raw length:sizeof(raw)]], "Embedded NUL and U+FEFF content replace byte-exact");
+        check([ed replaceDocumentText:@""] && ed.text.length==0 && [ed replaceDocumentText:@"fresh"] && [ed.text isEqual:@"fresh"], "Replacing to and from an empty document works");
+        [ed resetUndoHistory];[ed setSavePoint];[ed setBookmarks:@[@0]];[ed setSelectionAnchor:1 caret:3];revision=ed.revision;
+        BOOL (^untouched)(void)=^BOOL{ return [ed.text isEqual:@"fresh"] && ed.revision==revision && !ed.modified && ![sv message:SCI_CANUNDO] && ed.selectionAnchor==1 && ed.selectionCaret==3 && [ed.bookmarkLines isEqual:@[@0]]; };
+        const unichar loneUnit[]={0xD83D};
+        check(![ed replaceDocumentText:[NSString stringWithCharacters:loneUnit length:1]] && untouched(), "Unencodable replacement text is rejected untouched");
+        ed.readOnly=YES;
+        check(![ed replaceDocumentText:@"other"] && untouched(), "A read-only document is left untouched");
+        ed.readOnly=NO;
+        TTEditor *clone=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *cloneHost=hosted(clone); (void)cloneHost;
+        ed.text=original;[ed setBookmarks:@[@40,@300]];
+        [clone shareDocumentWith:ed];[clone goToLine:201];NSInteger cloneTop=clone.firstVisibleLine,cloneCaret=clone.selectionCaret;
+        check([ed replaceDocumentText:changed] && [clone.text isEqual:changed] && [clone.bookmarkLines isEqual:@[@40,@300]] && clone.firstVisibleLine==cloneTop && clone.selectionCaret==cloneCaret, "A split view sharing the document keeps bookmarks, its own scroll position and caret");
+        });
+        ttchecks::section("goToLine", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *host=hosted(ed); (void)host;
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        ed.text=@"é one\r\ntwo\rthree\n";[ed resetUndoHistory];[ed setSavePoint];NSUInteger revision=ed.revision;
+        check([ed goToLine:3] && ed.selectionCaret==12 && ed.selectionAnchor==12 && [ed.statusInfo[@"line"] integerValue]==3, "goToLine uses one-based lines over CRLF, CR and LF and UTF-8 byte offsets");
+        check([ed goToLine:4] && ed.selectionCaret==18, "The empty line after a final line break is a line");
+        check(![ed goToLine:0] && ![ed goToLine:5] && ![ed goToLine:-3] && ed.selectionCaret==18, "Out-of-range lines are rejected without moving the caret");
+        check([ed goToLine:1] && ed.selectionCaret==0 && ed.revision==revision && !ed.modified, "goToLine never changes the document");
+        ed.text=numbered(400);
+        check([ed goToLine:350] && ed.firstVisibleLine>0 && ed.firstVisibleLine<=349 && [sv message:SCI_GETFIRSTVISIBLELINE]+[sv message:SCI_LINESONSCREEN]>349, "goToLine scrolls the target line into view");
+        [ed setLanguage:@"cpp"];
+        ed.text=@"void f() {\n  int a;\n  int b;\n}\nint tail;\n";
+        [ed executeCommand:@"foldAll"];
+        check(![sv message:SCI_GETLINEVISIBLE wParam:2], "Fixture: line 3 is hidden inside a collapsed fold");
+        check([ed goToLine:3] && [sv message:SCI_GETLINEVISIBLE wParam:2] && [ed.statusInfo[@"line"] integerValue]==3, "goToLine unfolds a hidden target line");
+        });
+        ttchecks::section("undo restores the selection", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *host=hosted(ed); (void)host;
+        ed.text=@"one two three four";[ed resetUndoHistory];[ed setSavePoint];
+        [ed setSelectionAnchor:7 caret:4];
+        check([ed replaceSelection:@"2"] && ed.selectionCaret==5, "Fixture: replacing the selection collapses the caret after the insert");
+        [ed executeCommand:@"undo"];
+        check([ed.text isEqual:@"one two three four"] && ed.selectionAnchor==7 && ed.selectionCaret==4, "Undo restores the reversed selection that was replaced");
+        [ed executeCommand:@"redo"];
+        check([ed.text isEqual:@"one 2 three four"] && ed.selectionCaret==5 && ed.selectionAnchor==5, "Redo restores the selection left by the edit");
+        [ed executeCommand:@"undo"];
+        NSArray *carets=@[@{@"anchor":@0,@"caret":@3},@{@"anchor":@8,@"caret":@13}];
+        [ed setSelectionRanges:carets];
+        check([ed replaceSelections:@[@"1",@"3"] expectedRevision:ed.revision] && [ed.text isEqual:@"1 two 3 four"], "Fixture: multi-selection replacement");
+        [ed executeCommand:@"undo"];
+        check([ed.text isEqual:@"one two three four"] && [ed.selectionRanges isEqual:carets] && !ed.modified, "Undo restores every selection of a multi-selection edit");
+        ed.text=numbered(400);[ed resetUndoHistory];
+        [ed goToLine:301];NSInteger top=ed.firstVisibleLine,caret=ed.selectionCaret;
+        check([ed applyEdits:@[@{@"start":@0,@"end":@4,@"text":@"LINE"}] expectedRevision:ed.revision expectedLength:(NSInteger)[ed.text lengthOfBytesUsingEncoding:NSUTF8StringEncoding]], "Fixture: an edit far from the caret");
+        [ed goToLine:1];
+        [ed executeCommand:@"undo"];
+        check(ed.selectionCaret==caret && ed.firstVisibleLine==top, "Undo restores the caret and scroll position the edit was made from");
+        });
+        // Audit package 22 (F33, F234): callbacks and overlay redraws only when they are needed.
+        auto lineNumberOverlay = [](TTEditor *editor) {
+            NSMutableArray<NSView *> *queue=[NSMutableArray arrayWithObject:editor];
+            while (queue.count) {
+                NSView *view=queue.firstObject;[queue removeObjectAtIndex:0];
+                if ([view.className isEqualToString:@"TTEmptyLineNumbersView"]) return view;
+                [queue addObjectsFromArray:view.subviews];
+            }
+            return (NSView *)nil;
+        };
+        ttchecks::section("change callback coalescing", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ed.text=@"a b c d";[ed resetUndoHistory];[ed setSavePoint];
+        __block int calls=0;__block BOOL dirtyAtCall=NO;
+        __weak TTEditor *weakEd=ed;
+        ed.onChange=^{++calls;dirtyAtCall=weakEd.modified;};
+        [ed setSelectionAnchor:0 caret:0];
+        check([ed replaceSelection:@"x"] && calls>=1 && dirtyAtCall, "a single edit outside a group reports the change, already dirty, before it returns");
+        calls=0;NSUInteger before=ed.revision;
+        [ed beginUndoGroup];
+        NSUInteger stale=ed.revision;
+        for (int i=0;i<50;++i) [ed replaceSelection:@"y"];
+        check(ed.revision>=before+50, "revision advances with every modification step inside an undo group");
+        [ed setSelectionRanges:@[@{@"anchor":@0,@"caret":@1}]];
+        check(![ed replaceSelections:@[@"z"] expectedRevision:stale] && [ed.text hasPrefix:@"xy"], "a revision captured before a grouped edit is stale after its first step");
+        [ed beginUndoGroup];[ed replaceSelection:@"n"];[ed endUndoGroup];
+        check(calls==0, "no change callback is delivered while an undo group is open, nested groups included");
+        [ed endUndoGroup];
+        check(calls==1 && dirtyAtCall, "one change callback is delivered when the outermost undo group ends");
+        calls=0;before=ed.revision;NSString *grouped=ed.text;
+        [ed executeCommand:@"undo"];
+        check(calls==1 && ed.revision>=before+50 && ![ed.text isEqual:grouped], "Undo of a multi-step group delivers one change callback and still advances revision per step");
+        calls=0;[ed executeCommand:@"redo"];
+        check(calls==1 && [ed.text isEqual:grouped], "Redo of a multi-step group delivers one change callback");
+        ed.text=@"one two three";calls=0;before=ed.revision;
+        [ed setSelectionRanges:@[@{@"anchor":@0,@"caret":@3},@{@"anchor":@4,@"caret":@7},@{@"anchor":@8,@"caret":@13}]];
+        check([ed replaceSelections:@[@"1",@"2",@"3"] expectedRevision:ed.revision] && calls==1 && ed.revision>=before+3, "a multi-selection replacement delivers one change callback");
+        NSMutableString *padded=[NSMutableString string];for(int i=0;i<100;++i)[padded appendString:@"text   \n"];
+        ed.text=padded;calls=0;before=ed.revision;
+        [ed executeCommand:@"trimTrailing"];
+        check(calls==1 && ed.revision>=before+100 && ![ed.text containsString:@" \n"], "trimming 100 lines delivers one change callback");
+        TTEditor *clone=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        [clone shareDocumentWith:ed];
+        calls=0;before=ed.revision;
+        [clone beginUndoGroup];
+        for (int i=0;i<10;++i) [clone replaceSelection:@"q"];
+        check(calls==0 && ed.revision>=before+10, "a group opened on the split clone holds back the primary view's callback while its revision advances");
+        [clone endUndoGroup];
+        check(calls==1, "ending the clone's group delivers the primary view's change callback once");
+        calls=0;[ed setSavePoint];
+        check(calls==1, "reaching the save point outside a group is reported at once");
+        // A group held open across turns of the run loop (interactive macro playback holds one
+        // for seconds, under a modal panel) must not hold the callback back for its whole life.
+        void (^turns)(NSRunLoopMode) = ^(NSRunLoopMode mode) {
+            NSDate *until=[NSDate dateWithTimeIntervalSinceNow:2];
+            const int start=calls;
+            while (calls==start && [until timeIntervalSinceNow]>0) [NSRunLoop.currentRunLoop runMode:mode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+        };
+        [ed resetUndoHistory];[ed replaceSelection:@"p"];calls=0;dirtyAtCall=NO;NSString *ungrouped=ed.text;
+        [ed beginUndoGroup];
+        for (int i=0;i<5;++i) [ed replaceSelection:@"r"];
+        check(calls==0, "edits in an open group are still coalesced within one turn of the run loop");
+        turns(NSDefaultRunLoopMode);
+        check(calls==1 && dirtyAtCall, "a group still open on the next turn of the run loop delivers the held change callback once");
+        for (int i=0;i<5;++i) [ed replaceSelection:@"s"];
+        check(calls==1, "later edits in the same open group are held until the following turn");
+        turns(NSModalPanelRunLoopMode);
+        check(calls==2, "the held callback is also delivered on a turn of a modal panel's run loop");
+        [ed endUndoGroup];
+        check(calls==2, "ending a group with nothing held back delivers no extra callback");
+        [ed executeCommand:@"undo"];
+        check(calls==3 && [ed.text isEqual:ungrouped], "the whole group is still one Undo step after callbacks were delivered inside it");
+        });
+        ttchecks::section("line-number overlay invalidation", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *host=hosted(ed); (void)host;
+        ed.text=@"first line\nsecond line\n";
+        NSView *overlay=lineNumberOverlay(ed);
+        require(overlay!=nil, "Fixture: the filler line-number view exists");
+        // NSView.needsDisplay cannot be read back in a window that is never on screen, so count
+        // the redraw requests the overlay receives instead.
+        static int redraws=0;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            SEL selector=@selector(setNeedsDisplay:);
+            void (*inherited)(id,SEL,BOOL)=(void (*)(id,SEL,BOOL))[NSView instanceMethodForSelector:selector];
+            class_addMethod(overlay.class, selector, imp_implementationWithBlock(^(NSView *view,BOOL flag){ if(flag)++redraws; inherited(view,selector,flag); }), "v@:c");
+        });
+        [host.contentView layoutSubtreeIfNeeded];
+        auto settle = [&] { redraws=0; };
+        [ed setSelectionAnchor:3 caret:3];
+        [ed resetUndoHistory];
+        settle();
+        [ed replaceSelection:@"x"];
+        check(redraws==0, "typing inside a line does not redraw the line-number overlay");
+        [ed setSelectionAnchor:0 caret:5];
+        check(redraws==0, "a selection change does not redraw the line-number overlay");
+        [ed replaceSelection:@"new\nline\n"];
+        check(redraws>0, "adding lines redraws the line-number overlay");
+        settle();[ed executeCommand:@"zoomIn"];
+        check(redraws>0, "zoom redraws the line-number overlay");
+        settle();ed.wrap=YES;
+        check(redraws>0, "a wrap change redraws the line-number overlay");
+        settle();[ed executeCommand:@"toggleLineNumbers"];
+        check(redraws>0, "hiding the line-number margin redraws the overlay");
+        [ed executeCommand:@"toggleLineNumbers"];
+        ed.wrap=NO;[ed setLanguage:@"cpp"];ed.text=@"void f() {\n  int a;\n  int b;\n}\nint tail;\n";
+        settle();[ed executeCommand:@"foldAll"];
+        check(redraws>0, "folding redraws the line-number overlay");
+        settle();[ed executeCommand:@"undo"];
+        check(redraws>0 && ![ed.text hasPrefix:@"void"], "Undo that restores lines redraws the line-number overlay");
+        });
+        // Audit package 22 (F221, F24, F218, F287, F32, F229): one-copy reads and cheap accessors.
+        ttchecks::section("text reads straight from the engine buffer", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        auto bytesOf = [](NSString *text) { return [text dataUsingEncoding:NSUTF8StringEncoding]; };
+        check(ed.text!=nil && ed.text.length==0 && [ed.text isEqual:@""] && ed.byteLength==0 && ed.utf8Data.length==0, "an empty document reads as an empty string with no bytes");
+        ed.text=@"﻿";
+        const unsigned char bom[]={0xEF,0xBB,0xBF};
+        check(ed.text.length==1 && [bytesOf(ed.text) isEqual:[NSData dataWithBytes:bom length:3]] && ed.byteLength==3, "a document that is exactly U+FEFF reads back as that one scalar");
+        const unsigned char nul[]={'a',0,'b',0xC3,0xA9,0};
+        NSString *withNul=[[NSString alloc] initWithBytes:nul length:sizeof(nul) encoding:NSUTF8StringEncoding];
+        ed.text=withNul;
+        check([bytesOf(ed.text) isEqual:[NSData dataWithBytes:nul length:sizeof(nul)]] && ed.byteLength==(NSInteger)sizeof(nul), "embedded and trailing NUL bytes read back exactly");
+        check([ed.utf8Data isEqual:[NSData dataWithBytes:nul length:sizeof(nul)]], "the raw UTF-8 accessor returns the exact bytes, NUL included");
+        NSString *multi=@"α one\r\nβ two 😀\nγ three";
+        ed.text=multi;[ed resetUndoHistory];
+        [ed setSelectionAnchor:8 caret:8];
+        check([ed replaceSelection:@"é"] && [ed.text isEqual:@"α one\r\néβ two 😀\nγ three"], "a read after an insert in the middle returns the whole text");
+        check([ed replaceSelection:@"ü"] && [ed.text isEqual:@"α one\r\néüβ two 😀\nγ three"], "the document stays editable at the same caret after a read");
+        check([ed.utf8Data isEqual:bytesOf(ed.text)] && ed.byteLength==(NSInteger)bytesOf(ed.text).length, "raw bytes and byte length agree with the decoded text after mid-buffer edits");
+        [ed executeCommand:@"undo"];[ed executeCommand:@"undo"];
+        check([ed.text isEqual:multi] && [ed.utf8Data isEqual:bytesOf(multi)], "Undo after interleaved reads restores the exact text");
+        ed.text=@"﻿ab cd";
+        [ed setSelectionRanges:@[@{@"anchor":@0,@"caret":@5},@{@"anchor":@6,@"caret":@8}]];
+        check([ed.selectedText isEqual:@"﻿ab\ncd"], "a multi-selection starting with U+FEFF joins with a line feed and keeps the scalar");
+        [ed setSelectionRanges:@[@{@"anchor":@6,@"caret":@8},@{@"anchor":@3,@"caret":@3}]];
+        check([ed.selectedText isEqual:@"cd\n"], "an empty additional selection contributes an empty row");
+        [ed setSelectionAnchor:3 caret:3];
+        check([ed.selectedText isEqual:@""], "an empty single selection reads as an empty string");
+        check([[ed attributedTextForSelection:NO].string isEqual:ed.text], "styled text of a document starting with U+FEFF has the same string as text");
+        });
+        ttchecks::section("selection generation, bookmark count and state notification", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ed.text=@"one two three\nfour\nfive\n";
+        NSArray *one=@[@{@"anchor":@0,@"caret":@3}],*two=@[@{@"anchor":@0,@"caret":@3},@{@"anchor":@4,@"caret":@7}];
+        [ed setSelectionRanges:one];NSUInteger generation=ed.selectionGeneration;
+        [ed setSelectionRanges:two];
+        check(ed.selectionGeneration!=generation, "selectionGeneration changes when a non-main selection is added");
+        generation=ed.selectionGeneration;[ed setSelectionRanges:one];
+        check(ed.selectionGeneration!=generation, "selectionGeneration changes when a non-main selection is removed");
+        generation=ed.selectionGeneration;[ed executeCommand:@"selectAll"];
+        check(ed.selectionGeneration!=generation, "selectionGeneration changes after a selection command");
+        generation=ed.selectionGeneration;[ed setSelectionAnchor:1 caret:1];[ed replaceSelection:@"x"];
+        check(ed.selectionGeneration!=generation, "selectionGeneration changes after an edit");
+        generation=ed.selectionGeneration;(void)ed.statusInfo;(void)ed.text;(void)ed.selectedCharacterCount;
+        check(ed.selectionGeneration==generation, "reading editor state leaves selectionGeneration alone");
+        check(ed.bookmarkCount==0, "a document without bookmarks counts none");
+        check([ed setBookmarks:@[@0,@2]] && ed.bookmarkCount==2 && ed.bookmarkCount==(NSInteger)ed.bookmarkLines.count, "bookmarkCount equals the number of bookmark lines");
+        __block int posts=0;__block BOOL insideEdit=NO,postedInsideEdit=NO;
+        id observer=[NSNotificationCenter.defaultCenter addObserverForName:TTEditorStateDidChangeNotification object:ed queue:nil usingBlock:^(NSNotification *note){ ++posts; if(insideEdit)postedInsideEdit=YES; }];
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        posts=0;insideEdit=YES;
+        for (int i=0;i<20;++i) [ed replaceSelection:@"y"];
+        [ed setSelectionAnchor:0 caret:2];ed.wrap=YES;ed.readOnly=YES;ed.readOnly=NO;
+        insideEdit=NO;
+        check(posts==0 && !postedInsideEdit, "the state notification is never posted from inside an editor call");
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        check(posts==1, "many changes in one turn of the run loop post one state notification");
+        posts=0;[[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        check(posts==0, "an idle editor posts no state notification");
+        [ed setSelectionAnchor:0 caret:0];
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        check(posts==1, "a selection-only change posts a state notification");
+        [NSNotificationCenter.defaultCenter removeObserver:observer];
+        });
+        ttchecks::section("loadDocumentText", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSString *original=numbered(50);
+        check([ed loadDocumentText:original] && [ed.text isEqual:original] && !ed.modified, "loading into an empty editor sets the text at the save point");
+        [ed executeCommand:@"undo"];
+        check([ed.text isEqual:original], "a load cannot be undone");
+        [ed setSelectionAnchor:0 caret:0];[ed replaceSelection:@"edit "];
+        check([ed setBookmarks:@[@10,@40]], "Fixture: bookmarks before a reload");
+        NSUInteger revision=ed.revision;
+        NSString *reloaded=[original stringByReplacingOccurrencesOfString:@"line 20\n" withString:@"line twenty\nextra\n"];
+        check([ed loadDocumentText:reloaded] && [ed.text isEqual:reloaded] && !ed.modified && ed.revision!=revision, "a reload replaces the text, advances revision and is the save point");
+        check([ed.bookmarkLines isEqual:@[@10,@41]], "a reload keeps bookmarks on their lines");
+        [ed executeCommand:@"undo"];
+        check([ed.text isEqual:reloaded] && !ed.modified, "Undo cannot cross a reload");
+        [ed setSelectionAnchor:0 caret:0];[ed replaceSelection:@"z"];[ed executeCommand:@"undo"];
+        check([ed.text isEqual:reloaded] && !ed.modified, "undo collection works again after a load");
+        ed.readOnly=YES;revision=ed.revision;
+        check(![ed loadDocumentText:@"other"] && [ed.text isEqual:reloaded] && ed.revision==revision, "a read-only document refuses a load unchanged");
+        ed.readOnly=NO;
+        unichar lone=0xD800;
+        check(![ed loadDocumentText:[NSString stringWithCharacters:&lone length:1]] && [ed.text isEqual:reloaded], "an unencodable load changes nothing");
+        [ed setSelectionAnchor:0 caret:0];[ed replaceSelection:@"k"];[ed executeCommand:@"undo"];
+        check([ed.text isEqual:reloaded], "undo collection is on after a refused load");
+        });
+        ttchecks::section("styled text export", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        [ed setLanguage:@"cpp"];
+        ed.text=@"// café \U0001F600\nint n = 42; /* αβ */ \"sü\"\nreturn n;\n";
+        // The implementation this replaces: one style query per byte, attributes resolved per run.
+        auto reference = [&](sptr_t start, sptr_t end) {
+            NSMutableAttributedString *result=[[NSMutableAttributedString alloc] initWithString:@""];
+            for (sptr_t p=start;p<end;) {
+                sptr_t style=[sv message:SCI_GETSTYLEAT wParam:p],q=p+1;
+                while (q<end && [sv message:SCI_GETSTYLEAT wParam:q]==style) ++q;
+                while (q<end && ([sv message:SCI_GETCHARAT wParam:q]&0xC0)==0x80) ++q;
+                std::vector<char> bytes((size_t)(q-p)+1);Sci_TextRangeFull range={{p,q},bytes.data()};
+                [sv message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&range];
+                NSString *text=[[NSString alloc] initWithBytes:bytes.data() length:(NSUInteger)(q-p) encoding:NSUTF8StringEncoding];
+                auto color=[](sptr_t c) { return [NSColor colorWithSRGBRed:(c&255)/255.0 green:((c>>8)&255)/255.0 blue:((c>>16)&255)/255.0 alpha:1]; };
+                CGFloat size=[sv message:SCI_STYLEGETSIZEFRACTIONAL wParam:style]/100.0;
+                std::vector<char> face((size_t)[sv message:SCI_STYLEGETFONT wParam:style lParam:0]+1);[sv message:SCI_STYLEGETFONT wParam:style lParam:(sptr_t)face.data()];
+                NSFont *font=[NSFont fontWithName:[NSString stringWithUTF8String:face.data()] size:size] ?: [NSFont monospacedSystemFontOfSize:MAX(1,size) weight:NSFontWeightRegular];
+                NSFontTraitMask traits=0;if ([sv message:SCI_STYLEGETBOLD wParam:style]) traits|=NSBoldFontMask;if ([sv message:SCI_STYLEGETITALIC wParam:style]) traits|=NSItalicFontMask;
+                if(traits)font=[[NSFontManager sharedFontManager] convertFont:font toHaveTrait:traits];
+                [result appendAttributedString:[[NSAttributedString alloc] initWithString:text attributes:@{NSFontAttributeName:font,NSForegroundColorAttributeName:color([sv message:SCI_STYLEGETFORE wParam:style]),NSBackgroundColorAttributeName:color([sv message:SCI_STYLEGETBACK wParam:style])}]];
+                p=q;
+            }
+            return result;
+        };
+        [ed setSyntaxStyle:5 foreground:NSColor.redColor background:NSColor.yellowColor bold:YES italic:NO];
+        [ed setSyntaxStyle:2 foreground:NSColor.blueColor background:nil bold:NO italic:YES];
+        NSAttributedString *whole=[ed attributedTextForSelection:NO];
+        NSRange first;[whole attributesAtIndex:0 effectiveRange:&first];
+        check([whole.string isEqual:ed.text] && first.length<whole.length, "Fixture: the styled export has the document text in more than one style run");
+        check([whole isEqualToAttributedString:reference(0,ed.byteLength)], "whole-document styled export equals the per-byte reference, fonts and colours included");
+        // Selection bounds on multi-byte scalars: from the e-acute (2 bytes) to after the emoji (4 bytes).
+        [ed setSelectionAnchor:6 caret:13];
+        NSAttributedString *part=[ed attributedTextForSelection:YES];
+        check([part.string isEqual:@"é \U0001F600"] && [part isEqualToAttributedString:reference(6,13)], "a selection bounded by multi-byte scalars exports exactly those scalars with their styles");
+        [ed setSelectionRanges:@[@{@"anchor":@14,@"caret":@17},@{@"anchor":@0,@"caret":@2}]];
+        NSAttributedString *mainOnly=[ed attributedTextForSelection:YES];
+        check([mainOnly.string isEqual:@"int"] && [mainOnly isEqualToAttributedString:reference(14,17)], "with several selections the styled export is the main selection only");
+        [ed setSelectionAnchor:3 caret:3];
+        check([ed attributedTextForSelection:YES].length==0, "an empty selection exports an empty styled string");
+        ed.text=@"";
+        check([ed attributedTextForSelection:NO].length==0, "an empty document exports an empty styled string");
+        });
+        // Package 12: what the bridge reports while a macro is being recorded.
+        ttchecks::section("macro recording fidelity", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *host=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,600,400) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+        host.contentView=ed;
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        NSView *content=sv.content;
+        NSMutableArray<NSDictionary *> *steps=[NSMutableArray array];
+        ed.onMacroStep=^(NSDictionary *step){ [steps addObject:step]; };
+        NSString *doc=@"alpha beta\n  gamma delta\nlast line\n";
+        auto reset=[&]{ [ed executeCommand:@"streamSelection"]; ed.text=doc; [ed resetUndoHistory]; [ed setSelectionAnchor:14 caret:14]; [steps removeAllObjects]; };
+        // G367: every message the vendored Mac key map (macMapDefault in ScintillaCocoa.mm) can send
+        // and Scintilla reports for recording. Undo, Redo and the zoom keys are not reported at all.
+        // The list is copied by hand because the map is a file-static array in Vendor.
+        struct Key { unsigned int message; const char *name; };
+        const Key recordable[]={
+            {SCI_DOCUMENTEND,"documentEnd"},{SCI_DOCUMENTENDEXTEND,"documentEndExtend"},{SCI_DOCUMENTSTART,"documentStart"},{SCI_DOCUMENTSTARTEXTEND,"documentStartExtend"},
+            {SCI_VCHOME,"vcHome"},{SCI_VCHOMEEXTEND,"vcHomeExtend"},{SCI_LINEEND,"lineEnd"},{SCI_LINEENDEXTEND,"lineEndExtend"},
+            {SCI_LINEDOWN,"lineDown"},{SCI_LINEDOWNEXTEND,"lineDownExtend"},{SCI_LINEUP,"lineUp"},{SCI_LINEUPEXTEND,"lineUpExtend"},
+            {SCI_PARAUP,"paraUp"},{SCI_PARAUPEXTEND,"paraUpExtend"},{SCI_PARADOWN,"paraDown"},{SCI_PARADOWNEXTEND,"paraDownExtend"},
+            {SCI_CHARLEFT,"charLeft"},{SCI_CHARLEFTEXTEND,"charLeftExtend"},{SCI_WORDLEFT,"wordLeft"},{SCI_WORDLEFTEXTEND,"wordLeftExtend"},
+            {SCI_CHARRIGHT,"charRight"},{SCI_CHARRIGHTEXTEND,"charRightExtend"},{SCI_WORDRIGHT,"wordRight"},{SCI_WORDRIGHTEXTEND,"wordRightExtend"},
+            {SCI_WORDPARTLEFT,"wordPartLeft"},{SCI_WORDPARTLEFTEXTEND,"wordPartLeftExtend"},{SCI_WORDPARTRIGHT,"wordPartRight"},{SCI_WORDPARTRIGHTEXTEND,"wordPartRightExtend"},
+            {SCI_HOMEDISPLAY,"homeDisplay"},{SCI_LINEENDDISPLAY,"lineEndDisplay"},
+            {SCI_PAGEUP,"pageUp"},{SCI_PAGEUPEXTEND,"pageUpExtend"},{SCI_PAGEDOWN,"pageDown"},{SCI_PAGEDOWNEXTEND,"pageDownExtend"},
+            {SCI_CLEAR,"deleteForward"},{SCI_DELWORDRIGHT,"deleteWordRight"},{SCI_DELLINERIGHT,"deleteLineRight"},
+            {SCI_CANCEL,"cancel"},{SCI_DELETEBACK,"deleteBack"},{SCI_DELWORDLEFT,"deleteWordLeft"},{SCI_DELLINELEFT,"deleteLineLeft"},
+            {SCI_SELECTALL,"selectAll"},{SCI_TAB,"tab"},{SCI_BACKTAB,"backTab"},
+            {SCI_LINEDELETE,"deleteLine"},{SCI_LINETRANSPOSE,"transposeLine"},{SCI_SELECTIONDUPLICATE,"duplicateSelection"},
+            {SCI_LOWERCASE,"lower"},{SCI_UPPERCASE,"upper"}};
+        NSMutableArray<NSString *> *wrong=[NSMutableArray array];
+        for(const Key &key:recordable){
+            reset(); [ed startRecording]; [sv message:key.message]; [ed stopRecording];
+            NSString *name=@(key.name);
+            BOOL ok=steps.count==1 && [steps[0][@"kind"] isEqual:@"command"] && [steps[0][@"command"] isEqual:name];
+            reset();
+            if(!ok || ![ed executeMacroStep:@{@"kind":@"command",@"command":name}]) [wrong addObject:name];
+        }
+        if(wrong.count) printf("key-map commands not recorded or not replayed: %s\n",[wrong componentsJoinedByString:@" "].UTF8String);
+        check(wrong.count==0, "every recordable key-map message records as its command and that command replays");
+        // These five put text on the general pasteboard when executed, so by default only their names are checked.
+        const Key clipboard[]={{SCI_CUT,"cut"},{SCI_COPY,"copy"},{SCI_PASTE,"paste"},{SCI_LINECUT,"lineCut"},{SCI_LINECOPY,"lineCopy"}};
+        BOOL named=YES; for(const Key &key:clipboard) named=named && [TTEditor.macroCommandNames containsObject:@(key.name)];
+        check(named, "the clipboard key-map commands have symbolic names");
+        if(getenv("TEXTTANK_TEST_PASTEBOARD")){
+            [wrong removeAllObjects];
+            for(const Key &key:clipboard){
+                reset(); [ed setSelectionAnchor:0 caret:5]; [ed startRecording]; [sv message:key.message]; [ed stopRecording];
+                if(!(steps.count==1 && [steps[0][@"command"] isEqual:@(key.name)])) [wrong addObject:@(key.name)];
+            }
+            check(wrong.count==0, "the clipboard key-map messages record as their commands");
+        } else printf("SKIP recording cut, copy, paste, line cut and line copy: set TEXTTANK_TEST_PASTEBOARD=1 to run them against the general pasteboard\n");
+        [wrong removeAllObjects];
+        for(unsigned int message:{SCI_LINESCROLLDOWN,SCI_LINESCROLLUP}){
+            reset(); NSUInteger revision=ed.revision; [ed startRecording]; [sv message:message]; [ed stopRecording];
+            if(steps.count!=0 || ed.revision!=revision || ed.selectionCaret!=14) [wrong addObject:@(message).stringValue];
+        }
+        check(wrong.count==0, "scrolling by a line is neither recorded nor a reason to discard");
+        [wrong removeAllObjects];
+        for(unsigned int message:{SCI_LINEDOWNRECTEXTEND,SCI_LINEUPRECTEXTEND,SCI_CHARLEFTRECTEXTEND,SCI_CHARRIGHTRECTEXTEND,SCI_VCHOMERECTEXTEND,SCI_LINEENDRECTEXTEND,SCI_PAGEUPRECTEXTEND,SCI_PAGEDOWNRECTEXTEND,SCI_EDITTOGGLEOVERTYPE}){
+            reset(); [ed startRecording]; [sv message:message]; [ed stopRecording];
+            if(!(steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"] && [steps[0][@"message"] isEqual:@(message)] && [steps[0][@"name"] length]>0)) [wrong addObject:@(message).stringValue];
+            if(message==SCI_EDITTOGGLEOVERTYPE) [sv message:SCI_SETOVERTYPE wParam:0];
+        }
+        if(wrong.count) printf("messages not reported as unrecordable: %s\n",[wrong componentsJoinedByString:@" "].UTF8String);
+        check(wrong.count==0, "rectangular extension and the Overtype key stay unrecordable and are named");
+        // The bridge's command table is the only source of message numbers at playback.
+        reset();
+        check([ed executeMacroStep:@{@"kind":@"command",@"command":@"charRight",@"message":@(SCI_CLEARALL),@"wParam":@7,@"lParam":@9}] && [ed.text isEqual:doc] && ed.selectionCaret==15, "a message number and parameters carried by a step are ignored; only the named command runs");
+        check(![ed executeMacroStep:@{@"kind":@"unsupported",@"message":@(SCI_CLEARALL),@"name":@"charRight"}] && ![ed executeMacroStep:@{@"kind":@"command",@"command":@"2004"}] && ![ed executeMacroStep:@{@"kind":@"command",@"command":@(SCI_CLEARALL)}] && [ed.text isEqual:doc] && ed.selectionCaret==15, "a step that names no symbolic command dispatches nothing");
+        // G371: the completion list.
+        reset(); [ed setSelectionAnchor:0 caret:0]; [ed startRecording];
+        [ed showCompletions:@[]]; [ed showCompletions:@[@"has space",@"tab\there"]];
+        check(steps.count==0 && ![sv message:SCI_AUTOCACTIVE], "an empty or wholly filtered completion list shows nothing and reports nothing");
+        [ed showCompletions:@[@"return"]];
+        check(steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"] && [steps[0][@"name"] isEqual:@"The completion list"] && [sv message:SCI_AUTOCACTIVE], "showing a completion list while recording is reported once as unrecordable");
+        [sv message:SCI_AUTOCCANCEL]; [ed stopRecording]; [steps removeAllObjects];
+        [ed showCompletions:@[@"return"]];
+        check(steps.count==0 && [sv message:SCI_AUTOCACTIVE], "a completion list outside a recording reports nothing");
+        [sv message:SCI_AUTOCCANCEL];
+        [ed startRecording]; [ed showCallTip:@"tip"]; [ed stopRecording];
+        check(steps.count==0, "a call tip edits nothing and is not reported");
+        [sv message:SCI_CALLTIPCANCEL];
+        // G371: typing in Overtype replaces characters, which an insertion step would not replay.
+        reset(); [ed setSelectionAnchor:0 caret:0]; [ed startRecording]; [sv insertText:@"x"]; [ed stopRecording];
+        check(steps.count==1 && [steps[0][@"kind"] isEqual:@"insertText"] && [steps[0][@"text"] isEqual:@"x"], "typing with Overtype off records an insertion");
+        reset(); [ed setSelectionAnchor:0 caret:0]; [sv message:SCI_SETOVERTYPE wParam:1]; [ed startRecording]; [sv insertText:@"x"]; [ed stopRecording];
+        check(steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"] && [ed.text hasPrefix:@"xlpha"], "typing with Overtype already on is reported as unrecordable");
+        [sv message:SCI_SETOVERTYPE wParam:0];
+        // F59: the mouse and a drop go through the content view with no macro notification.
+        NSTimeInterval clock=NSProcessInfo.processInfo.systemUptime;
+        const NSPoint far=NSMakePoint(60,8), below=NSMakePoint(30,26);
+        auto click=[&](NSPoint point){ clock+=5; [content mouseDown:TTMouse(NSEventTypeLeftMouseDown,content,point,clock)]; [content mouseUp:TTMouse(NSEventTypeLeftMouseUp,content,point,clock+0.05)]; };
+        reset(); click(far);
+        const NSInteger clicked=ed.selectionCaret;
+        check(clicked>0 && clicked<10 && ed.selectionAnchor==clicked && steps.count==0, "Fixture: a synthesized click places the caret in the first line, and reports nothing outside a recording");
+        [ed startRecording]; click(far);
+        check(steps.count==0 && ed.selectionCaret==clicked, "a click that leaves the caret where it is does not disturb a recording");
+        click(below);
+        check(ed.selectionCaret!=clicked && steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"] && [steps[0][@"name"] containsString:@"mouse"], "a click that moves the caret while recording is reported as unrecordable");
+        [ed stopRecording];
+        reset(); click(far); [ed startRecording];
+        clock+=5;
+        [content mouseDown:TTMouse(NSEventTypeLeftMouseDown,content,far,clock)];
+        const NSUInteger afterDown=steps.count;
+        [content mouseDragged:TTMouse(NSEventTypeLeftMouseDragged,content,NSMakePoint(far.x+40,far.y),clock+0.05)];
+        [content mouseUp:TTMouse(NSEventTypeLeftMouseUp,content,NSMakePoint(far.x+40,far.y),clock+0.1)];
+        check(afterDown==0 && ed.selectionAnchor!=ed.selectionCaret && steps.count>=1 && [steps[0][@"kind"] isEqual:@"unsupported"], "a mouse selection made by dragging while recording is reported as unrecordable");
+        [ed stopRecording];
+        reset();
+        TTFakeDrop *drop=[TTFakeDrop new];
+        drop.draggingPasteboard=[NSPasteboard pasteboardWithUniqueName];
+        [drop.draggingPasteboard declareTypes:@[NSPasteboardTypeString] owner:nil];
+        [drop.draggingPasteboard setString:@"DROP" forType:NSPasteboardTypeString];
+        drop.draggingLocation=[content convertPoint:far toView:nil];
+        drop.draggingSourceOperationMask=NSDragOperationCopy;
+        id<NSDraggingInfo> info=(id<NSDraggingInfo>)drop;
+        [ed startRecording];
+        const NSUInteger dropRevision=ed.revision;
+        [(id<NSDraggingDestination>)content draggingEntered:info]; [(id<NSDraggingDestination>)content draggingUpdated:info];
+        const BOOL accepted=[(id<NSDraggingDestination>)content performDragOperation:info];
+        check(accepted && [ed.text containsString:@"DROP"] && ed.revision!=dropRevision, "Fixture: the synthesized drop inserted its text");
+        check(steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"], "text dropped into the editor while recording is reported as unrecordable");
+        [ed stopRecording]; [steps removeAllObjects];
+        [(id<NSDraggingDestination>)content draggingUpdated:info]; [(id<NSDraggingDestination>)content performDragOperation:info];
+        check(steps.count==0, "a drop outside a recording reports nothing");
+        // F59 (repair): a split view shares the recorded document. A drop into it, or the removal that
+        // ends a drag out of it, edits that document through another view and moves no focus.
+        reset();
+        TTEditor *clone=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *cloneHost=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,600,400) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+        cloneHost.contentView=clone;
+        [clone shareDocumentWith:ed];
+        NSView *cloneContent=((ScintillaView *)clone.subviews.firstObject).content;
+        __block NSUInteger cloneFocus=0, cloneSteps=0;
+        clone.onFocus=^{ cloneFocus++; };
+        clone.onMacroStep=^(NSDictionary *step){ cloneSteps++; };
+        drop.draggingLocation=[cloneContent convertPoint:far toView:nil];
+        [(id<NSDraggingDestination>)cloneContent draggingEntered:info]; [(id<NSDraggingDestination>)cloneContent draggingUpdated:info]; [(id<NSDraggingDestination>)cloneContent performDragOperation:info];
+        check([ed.text containsString:@"DROP"] && steps.count==0, "Fixture: a drop into a shared view edits the document and reports nothing outside a recording");
+        reset(); [ed startRecording];
+        const NSUInteger sharedRevision=ed.revision;
+        [(id<NSDraggingDestination>)cloneContent draggingEntered:info]; [(id<NSDraggingDestination>)cloneContent draggingUpdated:info];
+        const BOOL sharedAccepted=[(id<NSDraggingDestination>)cloneContent performDragOperation:info];
+        check(sharedAccepted && [ed.text containsString:@"DROP"] && ed.revision!=sharedRevision && cloneFocus==0, "Fixture: the drop into the shared view edited the recorded document without moving focus");
+        check(steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"] && [steps[0][@"name"] containsString:@"drag and drop"] && cloneSteps==0, "text dropped into another view of the recorded document is reported to the recording editor as unrecordable");
+        [ed stopRecording];
+        NSDraggingSession *noSession=nil;
+        reset(); [clone setSelectionAnchor:0 caret:5]; [ed startRecording];
+        [(id<NSDraggingSource>)cloneContent draggingSession:noSession endedAtPoint:NSZeroPoint operation:NSDragOperationDelete];
+        check([ed.text hasPrefix:@" beta"] && steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"] && cloneSteps==0, "text dragged out of another view of the recorded document and removed there is reported as unrecordable");
+        [ed stopRecording];
+        reset(); [ed setSelectionAnchor:0 caret:5]; [ed startRecording];
+        [(id<NSDraggingSource>)content draggingSession:noSession endedAtPoint:NSZeroPoint operation:NSDragOperationDelete];
+        check([ed.text hasPrefix:@" beta"] && steps.count>=1 && [steps.lastObject[@"kind"] isEqual:@"unsupported"], "text dragged out of the recording editor and removed is not left as a saveable recording");
+        [ed stopRecording];
+        // An unrelated editor is never the recorded document: a drop there leaves the recording alone.
+        reset();
+        TTEditor *other=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *otherHost=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,600,400) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+        otherHost.contentView=other; other.text=doc;
+        NSView *otherContent=((ScintillaView *)other.subviews.firstObject).content;
+        drop.draggingLocation=[otherContent convertPoint:far toView:nil];
+        [ed startRecording];
+        [(id<NSDraggingDestination>)otherContent draggingEntered:info]; [(id<NSDraggingDestination>)otherContent draggingUpdated:info]; [(id<NSDraggingDestination>)otherContent performDragOperation:info];
+        check([other.text containsString:@"DROP"] && steps.count==0, "a drop into an unrelated editor does not disturb a recording");
+        [ed stopRecording];
+        // A step handler may clear itself while it runs (MacroController's discard does); what it
+        // captured must stay alive until it returns.
+        reset();
+        __weak NSObject *weakToken=nil; __block BOOL ran=NO, alive=NO;
+        @autoreleasepool {
+            NSObject *token=[NSObject new]; weakToken=token;
+            __weak TTEditor *weakEd=ed;
+            ed.onMacroStep=^(NSDictionary *step){ (void)token; weakEd.onMacroStep=nil; ran=YES; alive=weakToken!=nil; };
+        }
+        [ed startRecording]; [sv message:SCI_CHARRIGHT]; [ed stopRecording];
+        check(ran && alive, "a step handler that clears itself is kept alive until it returns");
+        // F277: Go to Line to where the caret already is moves nothing, so it reports nothing.
+        ed.onMacroStep=^(NSDictionary *step){ [steps addObject:step]; };
+        reset(); [ed goToLine:2]; [steps removeAllObjects];
+        const NSInteger lineStart=ed.selectionCaret;
+        [ed startRecording];
+        check([ed goToLine:2] && ed.selectionCaret==lineStart && ed.selectionAnchor==lineStart && steps.count==0, "Go to Line to the caret's own place reports nothing while recording");
+        check([ed goToLine:3] && ed.selectionCaret!=lineStart && steps.count==1 && [steps[0][@"kind"] isEqual:@"unsupported"], "Go to Line that moves the caret is still reported as unrecordable");
+        [ed stopRecording];
+        [ed setSelectionAnchor:lineStart caret:lineStart+2]; [steps removeAllObjects]; [ed startRecording];
+        check([ed goToLine:2] && ed.selectionAnchor==lineStart && ed.selectionCaret==lineStart && steps.count==1, "Go to Line that only clears a selection on its own line is still reported");
+        [ed stopRecording];
+        [drop.draggingPasteboard releaseGlobally];
+        ed.onMacroStep=nil;
         });
         return ttchecks::finish("BridgeChecks", "IME, VoiceOver, UI focus and permission tests not covered");
     }

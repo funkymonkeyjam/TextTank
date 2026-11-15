@@ -525,13 +525,63 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 try restarted.persistLibrary(saved)
                 _ = editor.setSelectionAnchor(0, caret: 0)
                 editor.readOnly = true
-                rejects("read-only editor rejects the automation") {
+                rejects("read-only editor rejects the automation as read-only", message: "This document is read-only") {
                     try restarted.runSavedAutomation(id: AutomationDefinition.example.id)
                 }
                 check(
                     editor.text == "- eggs\n- flour" && !editor.modified,
                     "read-only automation explicitly rejects without changes")
+                // G369: the read-only reason comes before any parameter prompt or preview.
+                let unprompted = saved
+                saved.workflows[0].steps = [
+                    .init(kind: .replaceLiteral, find: "eggs", replacement: "milk", askForFind: true)
+                ]
+                saved.workflows[0].previewBeforeApply = true
+                try restarted.persistLibrary(saved)
+                var prompted = false, refusal = ""
+                let lockedRun = drivingModal(
+                    timeout: 10,
+                    { _, _ in
+                        prompted = true
+                        NSApp.abortModal()
+                        return true
+                    }
+                ) {
+                    do { try restarted.runSavedAutomation(id: AutomationDefinition.example.id) } catch {
+                        refusal = error.localizedDescription
+                    }
+                }
+                check(
+                    !prompted && !lockedRun.timedOut && refusal.contains("This document is read-only"),
+                    "a read-only document refuses an automation before its prompts and preview")
+                check(
+                    editor.text == "- eggs\n- flour" && !editor.modified,
+                    "an automation refused before its prompts changes nothing")
+                saved = unprompted
+                try restarted.persistLibrary(saved)
                 editor.readOnly = false
+                // F207: while a Reminders export runs, automation commands say so instead of doing nothing.
+                restarted.exportInProgress = true
+                rejects(
+                    "running an automation during a Reminders export says an export is in progress",
+                    message: "A Reminders export is in progress"
+                ) { try restarted.runSavedAutomation(id: AutomationDefinition.example.id) }
+                var explained = ""
+                let managing = drivingModal(
+                    timeout: 10,
+                    { modal, views in
+                        explained = views.compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: "\n")
+                        NSApp.abortModal()
+                        return true
+                    }
+                ) { restarted.manage() }
+                check(
+                    managing.acted && !managing.timedOut && explained.contains("A Reminders export is in progress"),
+                    "Manage Automations during a Reminders export explains why it does not open")
+                check(
+                    editor.text == "- eggs\n- flour" && !editor.modified,
+                    "commands refused during a Reminders export change nothing")
+                restarted.exportInProgress = false
                 saved.workflows[0].pinToToolbar = false
                 try restarted.persistLibrary(saved)
                 check(restarted.toolbarIdentifiers().count == 1, "toolbar pin setting hides only configured workflow")
@@ -558,10 +608,12 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     editor.resetUndoHistory()
                     editor.setSavePoint()
                     _ = editor.setSelectionAnchor(0, caret: 0)
+                    try require(editor.setBookmarks([0]), "fixture: sample \(sample) bookmark")
                     try restarted.runSavedAutomation(id: preservedWorkflow.id)
                     check(
                         editor.text.utf8.elementsEqual(expected.utf8),
                         "sample \(sample) native exact literal expected bytes")
+                    check(editor.bookmarkLines == [0], "sample \(sample) document automation keeps the bookmark")
                     check(
                         editor.window === window && window.contentView === editor
                             && NSApp.windows.count == sampleWindows, "sample \(sample) uses same editor and window")

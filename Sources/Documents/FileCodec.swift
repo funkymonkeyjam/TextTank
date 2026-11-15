@@ -68,71 +68,99 @@ struct FileCodec {
         if data.starts(with: [0xFE, 0xFF]) { return try decode(data, encoding: .utf16BE) }
         return try decode(data, encoding: .utf8)
     }
+    /// Validates and decodes in place: the bytes are read where they are, with no intermediate
+    /// array, and each encoding builds its text in one pass.
     static func decode(_ data: Data, encoding: FileEncoding) throws -> DecodedFile {
-        var bytes = Array(data)
         let marker = bomBytes(encoding)
-        let hasBOM = !marker.isEmpty && bytes.starts(with: marker)
-        if hasBOM { bytes.removeFirst(marker.count) }
-        var scalars = String.UnicodeScalarView()
-        let text: String
-        switch encoding {
-        case .utf8:
-            // String(decoding:as:) preserves a leading U+FEFF on macOS 14.
-            // Its replacement behavior is rejected by exact UTF-8 byte comparison.
-            let decoded = String(decoding: bytes, as: UTF8.self)
-            guard decoded.utf8.elementsEqual(bytes) else { throw FileCodecError.invalidBytes(encoding) }
-            text = decoded
-        case .utf16LE, .utf16BE:
-            guard bytes.count % 2 == 0 else { throw FileCodecError.invalidBytes(encoding) }
-            let words: [UInt16] = stride(from: 0, to: bytes.count, by: 2).map { i in
-                encoding == .utf16LE
-                    ? UInt16(bytes[i]) | UInt16(bytes[i + 1]) << 8 : UInt16(bytes[i]) << 8 | UInt16(bytes[i + 1])
-            }
-            var i = 0
-            while i < words.count {
-                let w = words[i]
-                var scalar = UInt32(w)
-                if (0xD800...0xDBFF).contains(w) {
-                    guard i + 1 < words.count, (0xDC00...0xDFFF).contains(words[i + 1]) else {
-                        throw FileCodecError.invalidBytes(encoding)
+        let hasBOM = !marker.isEmpty && data.starts(with: marker)
+        let text: String = try data.withUnsafeBytes { (all: UnsafeRawBufferPointer) throws -> String in
+            let bytes = UnsafeRawBufferPointer(rebasing: all[(hasBOM ? marker.count : 0)...])
+            switch encoding {
+            case .utf8:
+                // String(decoding:as:) preserves a leading U+FEFF on macOS 14.
+                // Its replacement behavior is rejected by exact UTF-8 byte comparison.
+                var decoded = String(decoding: bytes, as: UTF8.self)
+                let exact = decoded.withUTF8 { utf8 in
+                    utf8.count == bytes.count
+                        && (bytes.isEmpty || memcmp(utf8.baseAddress!, bytes.baseAddress!, bytes.count) == 0)
+                }
+                guard exact else { throw FileCodecError.invalidBytes(encoding) }
+                return decoded
+            case .utf16LE, .utf16BE:
+                guard bytes.count % 2 == 0 else { throw FileCodecError.invalidBytes(encoding) }
+                // One pass reads each code unit in file byte order and rejects an unpaired
+                // surrogate, so the transcoding below never has anything to repair.
+                let little = encoding == .utf16LE
+                var valid = true
+                let words = [UInt16](unsafeUninitializedCapacity: bytes.count / 2) { buffer, initialized in
+                    var pendingHigh = false
+                    for i in 0..<bytes.count / 2 {
+                        let first = UInt16(bytes[2 * i]), second = UInt16(bytes[2 * i + 1])
+                        let word = little ? first | second << 8 : first << 8 | second
+                        let low = word & 0xFC00 == 0xDC00
+                        if pendingHigh != low { valid = false }
+                        pendingHigh = word & 0xFC00 == 0xD800
+                        buffer[i] = word
                     }
-                    scalar = 0x10000 + (UInt32(w - 0xD800) << 10) + UInt32(words[i + 1] - 0xDC00)
-                    i += 1
-                } else if (0xDC00...0xDFFF).contains(w) {
-                    throw FileCodecError.invalidBytes(encoding)
+                    if pendingHigh { valid = false }
+                    initialized = bytes.count / 2
                 }
-                guard let s = UnicodeScalar(scalar) else { throw FileCodecError.invalidBytes(encoding) }
-                scalars.append(s)
-                i += 1
-            }
-            text = String(scalars)
-        case .latin1, .windows1252:
-            for b in bytes {
-                let value: UInt32?
-                if encoding == .windows1252 && b >= 0x80 && b <= 0x9F {
-                    value = cp1252[Int(b - 0x80)]
-                } else {
-                    value = UInt32(b)
+                guard valid else { throw FileCodecError.invalidBytes(encoding) }
+                return String(decoding: words, as: UTF16.self)
+            case .latin1, .windows1252:
+                // Every byte maps to one scalar of at most three UTF-8 bytes.
+                var utf8: [UInt8] = []
+                utf8.reserveCapacity(bytes.count + bytes.count / 2)
+                for b in bytes {
+                    if b < 0x80 {
+                        utf8.append(b)
+                        continue
+                    }
+                    var value = UInt32(b)
+                    if encoding == .windows1252 && b <= 0x9F {
+                        guard let mapped = cp1252[Int(b - 0x80)] else { throw FileCodecError.invalidBytes(encoding) }
+                        value = mapped
+                    }
+                    if value < 0x800 {
+                        utf8.append(UInt8(0xC0 | value >> 6))
+                    } else {
+                        utf8.append(UInt8(0xE0 | value >> 12))
+                        utf8.append(UInt8(0x80 | (value >> 6) & 0x3F))
+                    }
+                    utf8.append(UInt8(0x80 | value & 0x3F))
                 }
-                guard let value, let scalar = UnicodeScalar(value) else { throw FileCodecError.invalidBytes(encoding) }
-                scalars.append(scalar)
+                return String(decoding: utf8, as: UTF8.self)
             }
-            text = String(scalars)
         }
         return DecodedFile(text: text, format: FileFormat(encoding: encoding, bom: hasBOM))
     }
     static func encode(_ text: String, format: FileFormat) throws -> Data {
         let marker = bomBytes(format.encoding)
         if format.bom && marker.isEmpty { throw FileCodecError.unsupportedBOM }
-        var bytes: [UInt8] = format.bom ? marker : []
+        let prefix = format.bom ? marker : []
         switch format.encoding {
-        case .utf8: bytes.append(contentsOf: text.utf8)
+        case .utf8:
+            // The text's own UTF-8 storage is copied once, straight into the result.
+            var source = text
+            return source.withUTF8 { utf8 in
+                var data = Data(capacity: prefix.count + utf8.count)
+                data.append(contentsOf: prefix)
+                data.append(utf8)
+                return data
+            }
         case .utf16LE, .utf16BE:
+            let little = format.encoding == .utf16LE
+            var bytes = prefix
+            bytes.reserveCapacity(prefix.count + 2 * text.utf16.count)
             for word in text.utf16 {
                 let low = UInt8(word & 255), high = UInt8(word >> 8)
-                bytes.append(contentsOf: format.encoding == .utf16LE ? [low, high] : [high, low])
+                bytes.append(little ? low : high)
+                bytes.append(little ? high : low)
             }
+            return Data(bytes)
         case .latin1, .windows1252:
+            var bytes = prefix
+            bytes.reserveCapacity(text.utf8.count)
             for scalar in text.unicodeScalars {
                 let value = scalar.value
                 if value < 0x80 || (value >= 0xA0 && value <= 0xFF) || (format.encoding == .latin1 && value <= 0xFF) {
@@ -143,8 +171,8 @@ struct FileCodec {
                     throw FileCodecError.unrepresentable(format.encoding)
                 }
             }
+            return Data(bytes)
         }
-        return Data(bytes)
     }
     private static func bomBytes(_ encoding: FileEncoding) -> [UInt8] {
         switch encoding {

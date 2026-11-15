@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+/// Function-list navigation fronts the document window; these checks never put one on screen.
+final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sender: Any?) {} }
 @main struct LanguageControllerChecks {
     static func main() {
         Checks.run("LanguageControllerChecks") {
@@ -85,6 +87,28 @@ import AppKit
             check(
                 !LanguageFunctionController.navigate(symbols[1], text: text, revision: revision, editor: editor)
                     && editor.selectionCaret == selection, "stale function list cannot move selection")
+            // F277: a function-list row moves the caret with no recordable macro step, and says so.
+            let quiet = QuietListWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered,
+                defer: false)
+            window.contentView = NSView()
+            quiet.contentView = editor
+            editor.text = text
+            let list = LanguageFunctionController(
+                editor: editor, text: text, revision: editor.revision, symbols: symbols)
+            var navigated = 0
+            list.onNavigate = { navigated += 1 }
+            list.open(row: symbols.count)
+            check(navigated == 0, "a function-list row that does not exist navigates nowhere")
+            list.open(row: 1)
+            check(
+                navigated == 1 && editor.selectedText == "work",
+                "a function-list row that moves the caret reports the jump")
+            editor.text = "changed"
+            list.open(row: 1)
+            check(navigated == 1, "a stale function-list row reports no jump")
+            quiet.contentView = NSView()
+            window.contentView = editor
             let source = "if return class 123 \"text\" // comment\n"
             editor.text = source
             editor.resetUndoHistory()

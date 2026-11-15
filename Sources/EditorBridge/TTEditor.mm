@@ -4,13 +4,14 @@
 #include "ILexer.h"
 #include "Lexilla.h"
 #include <vector>
+#include <string>
 #include <cstring>
 #include <cmath>
 extern "C" Scintilla::ILexer5 *TextTankCreateUserLexer();
 
 // NSString's UTF-8 constructors consume a leading EF BB BF as an external BOM.
 // Editor bytes are already decoded content, so U+FEFF must remain ordinary text.
-// A temporary ASCII prefix prevents that interpretation; remove only that prefix.
+// TTStringFromUTF8 restores the one scalar they strip.
 // nil means the string cannot be encoded (it holds an unpaired surrogate). Callers must
 // reject the edit: messaging nil would replace the target with zero bytes, a silent deletion.
 // A nil string keeps its historical meaning of empty text.
@@ -18,18 +19,47 @@ static NSData * _Nullable TTUTF8(NSString * _Nullable text) {
     return text ? [text dataUsingEncoding:NSUTF8StringEncoding] : [NSData data];
 }
 static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
-    NSMutableData *prefixed = [NSMutableData dataWithCapacity:length + 1];
-    const unsigned char sentinel = 'x';
-    [prefixed appendBytes:&sentinel length:1];
-    if (length) [prefixed appendBytes:bytes length:length];
-    NSString *decoded = [[NSString alloc] initWithData:prefixed encoding:NSUTF8StringEncoding];
+    if (!length) return @"";
+    NSString *decoded = [[NSString alloc] initWithBytes:bytes length:length encoding:NSUTF8StringEncoding];
     NSCAssert(decoded != nil, @"Scintilla content must remain valid UTF-8");
-    return decoded ? [decoded substringFromIndex:1] : @"";
+    if (!decoded) return @"";
+    // Foundation consumed exactly one leading EF BB BF (only at offset 0); put that scalar back.
+    // Every other read is this single decode, with no intermediate buffer.
+    const unsigned char *lead = (const unsigned char *)bytes;
+    if (length >= 3 && lead[0] == 0xEF && lead[1] == 0xBB && lead[2] == 0xBF) return [@"\uFEFF" stringByAppendingString:decoded];
+    return decoded;
 }
 
 // Scintilla's document canvas can be much wider than the viewport. Exposing its
 // full NSView frame makes accessibility clients aim outside the visible editor.
 // Preserve native text/input behavior while describing its visible screen region.
+// Scintilla records keyboard and message input only. The mouse and a drop change the caret or
+// the text with no macro notification, so the state is compared around each such event and a
+// difference is reported as an unrecordable action (F59).
+struct TTInteractionState { NSUInteger revision; sptr_t selections, anchor, caret; };
+@interface TTEditor (MacroInteraction)
+- (TTInteractionState)interactionState;
+- (void)reportMacroStep:(NSDictionary<NSString *, id> *)step;
+- (void)noteUnrecordedInteractionSince:(TTInteractionState)before;
+@end
+// Every editor that is recording. A split view shares the recorded document, and a drop into it
+// (or the removal that ends a drag out of it) edits that document with no focus change, so the
+// comparison covers each recording editor, whichever view handled the event. Main thread only.
+static NSHashTable<TTEditor *> *TTRecordingEditors() {
+    static NSHashTable *table;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ table = [NSHashTable weakObjectsHashTable]; });
+    return table;
+}
+static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
+    NSArray<TTEditor *> *recording = TTRecordingEditors().allObjects;
+    if (!recording.count) { handle(); return; }
+    std::vector<TTInteractionState> before;
+    for (TTEditor *editor in recording) before.push_back([editor interactionState]);
+    handle();
+    NSUInteger index = 0;
+    for (TTEditor *editor in recording) [editor noteUnrecordedInteractionSince:before[index++]];
+}
 @interface TTContentView : SCIContentView
 @end
 @implementation TTContentView
@@ -80,6 +110,27 @@ static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
     [NSMenu popUpContextMenu:menu withEvent:event forView:self];
     return YES;
 }
+// super always runs, so every Scintilla mouse behaviour is kept; a click that changes nothing
+// (the caret's own position, a window-activating click) leaves a recording alone.
+- (void)mouseDown:(NSEvent *)event {
+    TTAroundUnrecordedInteraction(^{ [super mouseDown:event]; });
+}
+- (void)mouseDragged:(NSEvent *)event {
+    TTAroundUnrecordedInteraction(^{ [super mouseDragged:event]; });
+}
+- (void)mouseUp:(NSEvent *)event {
+    TTAroundUnrecordedInteraction(^{ [super mouseUp:event]; });
+}
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    __block BOOL accepted = NO;
+    TTAroundUnrecordedInteraction(^{ accepted = [super performDragOperation:sender]; });
+    return accepted;
+}
+// A drag out that the destination asks to be removed deletes the dragged text here, after the mouse
+// events have ended.
+- (void)draggingSession:(NSDraggingSession *)session endedAtPoint:(NSPoint)screenPoint operation:(NSDragOperation)operation {
+    TTAroundUnrecordedInteraction(^{ [super draggingSession:session endedAtPoint:screenPoint operation:operation]; });
+}
 @end
 @interface TTScintillaView : ScintillaView
 @end
@@ -90,6 +141,9 @@ static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
 // Extend the number gutter through the unused viewport without editing the document.
 @interface TTEmptyLineNumbersView : NSView
 @property(nonatomic,weak) ScintillaView *engine;
+/// Font and colour of the last draw, rebuilt only when the face, size or colour changes.
+@property(nonatomic,copy) NSString *attributesKey;
+@property(nonatomic,strong) NSDictionary *attributes;
 @end
 @implementation TTEmptyLineNumbersView
 - (BOOL)isFlipped { return YES; }
@@ -110,10 +164,16 @@ static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
     std::vector<char> face((size_t)[engine message:SCI_STYLEGETFONT wParam:STYLE_LINENUMBER lParam:0] + 1);
     [engine message:SCI_STYLEGETFONT wParam:STYLE_LINENUMBER lParam:(sptr_t)face.data()];
     CGFloat size = [engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_LINENUMBER] / 100.0 + [engine message:SCI_GETZOOM];
-    NSFont *font = [NSFont fontWithName:[NSString stringWithUTF8String:face.data()] size:MAX(1,size)] ?: [NSFont monospacedSystemFontOfSize:MAX(1,size) weight:NSFontWeightRegular];
     NSInteger rgb = [engine message:SCI_STYLEGETFORE wParam:STYLE_LINENUMBER];
-    NSColor *color = [NSColor colorWithSRGBRed:(rgb & 255)/255.0 green:((rgb >> 8)&255)/255.0 blue:((rgb >> 16)&255)/255.0 alpha:1];
-    NSDictionary *attributes = @{NSFontAttributeName:font, NSForegroundColorAttributeName:color};
+    NSString *faceName = [NSString stringWithUTF8String:face.data()] ?: @"";
+    NSString *key = [NSString stringWithFormat:@"%@|%.2f|%ld", faceName, size, (long)rgb];
+    if (![key isEqualToString:_attributesKey]) {
+        NSFont *font = [NSFont fontWithName:faceName size:MAX(1,size)] ?: [NSFont monospacedSystemFontOfSize:MAX(1,size) weight:NSFontWeightRegular];
+        NSColor *color = [NSColor colorWithSRGBRed:(rgb & 255)/255.0 green:((rgb >> 8)&255)/255.0 blue:((rgb >> 16)&255)/255.0 alpha:1];
+        _attributes = @{NSFontAttributeName:font, NSForegroundColorAttributeName:color};
+        _attributesKey = key;
+    }
+    NSDictionary *attributes = _attributes;
     [NSGraphicsContext saveGraphicsState];
     NSRectClip(NSIntersectionRect(self.bounds,NSMakeRect(0,0,width,self.bounds.size.height)));
     for (; y < self.bounds.size.height; y += height, ++number) {
@@ -138,21 +198,90 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
         @"charLeftExtend":@(SCI_CHARLEFTEXTEND), @"charRightExtend":@(SCI_CHARRIGHTEXTEND), @"lineUpExtend":@(SCI_LINEUPEXTEND), @"lineDownExtend":@(SCI_LINEDOWNEXTEND),
         @"homeExtend":@(SCI_HOMEEXTEND), @"lineEndExtend":@(SCI_LINEENDEXTEND), @"documentStartExtend":@(SCI_DOCUMENTSTARTEXTEND), @"documentEndExtend":@(SCI_DOCUMENTENDEXTEND),
         @"wordLeftExtend":@(SCI_WORDLEFTEXTEND), @"wordRightExtend":@(SCI_WORDRIGHTEXTEND),
-        @"deleteBack":@(SCI_DELETEBACK), @"deleteForward":@(SCI_CLEAR), @"newLine":@(SCI_NEWLINE), @"tab":@(SCI_TAB), @"backTab":@(SCI_BACKTAB)
+        @"deleteBack":@(SCI_DELETEBACK), @"deleteForward":@(SCI_CLEAR), @"newLine":@(SCI_NEWLINE), @"tab":@(SCI_TAB), @"backTab":@(SCI_BACKTAB),
+        // G367: the rest of the standard Mac key map (Home, Command-Left, Page Up and Down, Escape,
+        // Option- and Command-Delete and the Control chords). One name per message, and every name
+        // is also in RecordedMacro.Step.commands; the checks compare the two lists.
+        @"vcHome":@(SCI_VCHOME), @"vcHomeExtend":@(SCI_VCHOMEEXTEND),
+        @"pageUp":@(SCI_PAGEUP), @"pageUpExtend":@(SCI_PAGEUPEXTEND), @"pageDown":@(SCI_PAGEDOWN), @"pageDownExtend":@(SCI_PAGEDOWNEXTEND),
+        @"paraUp":@(SCI_PARAUP), @"paraUpExtend":@(SCI_PARAUPEXTEND), @"paraDown":@(SCI_PARADOWN), @"paraDownExtend":@(SCI_PARADOWNEXTEND),
+        @"wordPartLeft":@(SCI_WORDPARTLEFT), @"wordPartLeftExtend":@(SCI_WORDPARTLEFTEXTEND), @"wordPartRight":@(SCI_WORDPARTRIGHT), @"wordPartRightExtend":@(SCI_WORDPARTRIGHTEXTEND),
+        @"homeDisplay":@(SCI_HOMEDISPLAY), @"lineEndDisplay":@(SCI_LINEENDDISPLAY),
+        @"deleteWordLeft":@(SCI_DELWORDLEFT), @"deleteWordRight":@(SCI_DELWORDRIGHT), @"deleteLineLeft":@(SCI_DELLINELEFT), @"deleteLineRight":@(SCI_DELLINERIGHT),
+        @"lineCut":@(SCI_LINECUT), @"lineCopy":@(SCI_LINECOPY), @"duplicateSelection":@(SCI_SELECTIONDUPLICATE),
+        @"moveLineUp":@(SCI_MOVESELECTEDLINESUP), @"moveLineDown":@(SCI_MOVESELECTEDLINESDOWN),
+        // Escape also drops additional selections, so it is replayed rather than ignored.
+        @"cancel":@(SCI_CANCEL)
     }; });
     return map;
+}
+/// A name the person can recognise for an action that cannot be recorded.
+static NSString *TTUnrecordableName(unsigned int message) {
+    switch (message) {
+        case SCI_UNDO: return @"Undo";
+        case SCI_REDO: return @"Redo";
+        case SCI_EDITTOGGLEOVERTYPE: return @"Switching Overtype";
+        case SCI_REPLACESEL: return @"Typing in Overtype mode or into several selections";
+        case SCI_AUTOCSHOW: return @"The completion list";
+        case SCI_GOTOLINE: return @"Go to Line";
+        case SCI_SETSELECTIONMODE: case SCI_LINEDOWNRECTEXTEND: case SCI_LINEUPRECTEXTEND: case SCI_CHARLEFTRECTEXTEND:
+        case SCI_CHARRIGHTRECTEXTEND: case SCI_HOMERECTEXTEND: case SCI_VCHOMERECTEXTEND: case SCI_LINEENDRECTEXTEND:
+        case SCI_PAGEUPRECTEXTEND: case SCI_PAGEDOWNRECTEXTEND: return @"Rectangular selection";
+        default: return [NSString stringWithFormat:@"An editing action (Scintilla message %u)", message];
+    }
+}
+static NSDictionary *TTUnrecordableStep(unsigned int message) {
+    return @{@"kind":@"unsupported", @"message":@(message), @"name":TTUnrecordableName(message)};
 }
 
 NSNotificationName const TTEditorWillRetireNotification = @"TTEditorWillRetireNotification";
 NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
 
-@interface TTEditor () <ScintillaNotificationProtocol>
+NSErrorDomain const TTEditorErrorDomain = @"TextTank.Editor";
+NSNotificationName const TTEditorStateDidChangeNotification = @"TTEditorStateDidChange";
+
+// Undo groups opened through the bridge, per Scintilla document, so a group opened on one view
+// of a split also holds back the change callback of the other view. Main thread only.
+static NSMapTable<NSNumber *, NSNumber *> *TTOpenGroups() {
+    static NSMapTable *table;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ table = [NSMapTable strongToStrongObjectsMapTable]; });
+    return table;
+}
+// Editors holding back a change callback.
+static NSHashTable *TTDeferredEditors() {
+    static NSHashTable *table;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ table = [NSHashTable weakObjectsHashTable]; });
+    return table;
+}
+
+struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
+@interface TTEditor () <ScintillaNotificationProtocol> {
+    TTLineNumberState _lineNumberState;
+}
 @property(nonatomic, strong) ScintillaView *engine;
 @property(nonatomic,strong) TTEmptyLineNumbersView *emptyLineNumbers;
 @property(nonatomic, readwrite) NSUInteger revision;
 @property(nonatomic) BOOL macroRecording;
+/// While recording: sees mouse events bound for the margins, which have no subclass hook.
+@property(nonatomic, strong) id macroMouseMonitor;
+@property(nonatomic) BOOL marginMouseDown;
+@property(nonatomic) BOOL interactionPending;
+@property(nonatomic) TTInteractionState pendingInteraction;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxStyles;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxFonts;
+/// Digit count the line-number margin was last sized for; see -updateLineNumberMargin:.
+@property(nonatomic) int marginDigits;
+@property(nonatomic, readwrite) NSUInteger selectionGeneration;
+/// A change callback is held back until the outermost undo group ends.
+@property(nonatomic) BOOL changeDeferred;
+@property(nonatomic) BOOL deferredFlushScheduled;
+@property(nonatomic) BOOL stateNotificationScheduled;
+/// Undo groups this view has open; released in dealloc so a lost view cannot hold callbacks back.
+@property(nonatomic) NSInteger ownGroups;
+- (void)deliverDeferredChange;
+- (BOOL)undoGroupOpen;
 @end
 @implementation TTEditor
 - (instancetype)initWithFrame:(NSRect)frame {
@@ -167,7 +296,7 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
         [_engine setFontName:@"Menlo" size:14 bold:NO italic:NO];
         [self applyPalette];
         [_engine message:SCI_SETMARGINTYPEN wParam:0 lParam:SC_MARGIN_NUMBER];
-        [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:48];
+        [self updateLineNumberMargin:YES];
         [_engine message:SCI_MARKERDEFINE wParam:1 lParam:SC_MARK_CIRCLE];
         [_engine message:SCI_MARKERSETBACK wParam:1 lParam:0x005B3A];
         [_engine message:SCI_SETMARGINTYPEN wParam:1 lParam:SC_MARGIN_SYMBOL];
@@ -176,6 +305,8 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
         [_engine message:SCI_SETMULTIPLESELECTION wParam:1];
         [_engine message:SCI_SETADDITIONALSELECTIONTYPING wParam:1];
         [_engine message:SCI_SETMULTIPASTE wParam:SC_MULTIPASTE_EACH];
+        // Undo and Redo put back the selection and scroll position of the view that made the edit.
+        [_engine message:SCI_SETUNDOSELECTIONHISTORY wParam:SC_UNDO_SELECTION_HISTORY_ENABLED | SC_UNDO_SELECTION_HISTORY_SCROLL];
         [_engine message:SCI_SETTABWIDTH wParam:4];
         [_engine message:SCI_SETPROPERTY wParam:(uptr_t)"fold" lParam:(sptr_t)"1"];
         for(int marker=SC_MARKNUM_FOLDEREND;marker<=SC_MARKNUM_FOLDEROPEN;++marker) {
@@ -204,6 +335,28 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
     _engine.frame = self.bounds;
     _emptyLineNumbers.frame = _engine.scrollView.verticalRulerView.bounds;
     _emptyLineNumbers.needsDisplay = YES;
+    // A taller view draws more filler numbers past the end of the document.
+    if ([self lineNumberDigits] != _marginDigits) [self updateLineNumberMargin:NO];
+}
+/// Digits of the largest number the gutter can show: the filler view numbers the rows past the
+/// end of the document, so that is the line count plus one screen of rows.
+- (int)lineNumberDigits {
+    sptr_t largest = [_engine message:SCI_GETLINECOUNT] + [_engine message:SCI_LINESONSCREEN] + 1;
+    int digits = 1;
+    while (largest >= 10) { largest /= 10; ++digits; }
+    return digits;
+}
+/// Sizes the line-number margin for the largest number drawn in the current font and zoom, and
+/// never below the 48 px every small document has. Width 0 is the hidden state: only `show`
+/// (init and toggle-on) may leave it, so zoom or an edit never brings back a hidden gutter.
+- (void)updateLineNumberMargin:(BOOL)show {
+    const sptr_t current = [_engine message:SCI_GETMARGINWIDTHN wParam:0];
+    if (!show && current == 0) return;
+    _marginDigits = [self lineNumberDigits];
+    const std::string widest((size_t)_marginDigits, '9');
+    // 3 is Scintilla's own padding right of the number; 2 keeps the first digit off the edge.
+    const sptr_t width = MAX((sptr_t)48, [_engine message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER lParam:(sptr_t)widest.c_str()] + 3 + 2);
+    if (width != current) [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:width];
 }
 - (void)viewDidChangeEffectiveAppearance {
     [super viewDidChangeEffectiveAppearance];
@@ -230,55 +383,171 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
     NSDictionary *styles=[_syntaxStyles copy];
     for(NSNumber *index in styles) {NSDictionary *s=styles[index];[self setSyntaxStyle:index.integerValue foreground:s[@"foreground"] background:s[@"background"] bold:[s[@"bold"] boolValue] italic:[s[@"italic"] boolValue]];}
     NSDictionary *fonts=[_syntaxFonts copy];for(NSNumber *index in fonts){NSDictionary *f=fonts[index];[self setSyntaxFont:index.integerValue name:f[@"name"] size:[f[@"size"] doubleValue]];}
+    // STYLECLEARALL put the line-number style back on the default font.
+    [self updateLineNumberMargin:NO];
     _engine.needsDisplay = YES;
+    _emptyLineNumbers.needsDisplay = YES;
 }
-- (void)dealloc { _engine.delegate = nil; }
+- (void)dealloc {
+    if (_ownGroups > 0) {
+        NSNumber *key = @([_engine message:SCI_GETDOCPOINTER]);
+        const NSInteger open = [[TTOpenGroups() objectForKey:key] integerValue] - _ownGroups;
+        if (open > 0) [TTOpenGroups() setObject:@(open) forKey:key]; else [TTOpenGroups() removeObjectForKey:key];
+    }
+    if (_macroMouseMonitor) [NSEvent removeMonitor:_macroMouseMonitor];
+    _engine.delegate = nil;
+}
+/// Every undo group of the bridge goes through this pair. `revision` still advances with each
+/// modification step inside a group; only the change callback waits, for the outermost end or
+/// the next turn of the main run loop, whichever comes first.
+- (void)openUndoGroup {
+    NSNumber *key = @([_engine message:SCI_GETDOCPOINTER]);
+    [TTOpenGroups() setObject:@([[TTOpenGroups() objectForKey:key] integerValue] + 1) forKey:key];
+    _ownGroups += 1;
+    [_engine message:SCI_BEGINUNDOACTION];
+}
+- (void)closeUndoGroup {
+    [_engine message:SCI_ENDUNDOACTION];
+    if (_ownGroups <= 0) return;
+    _ownGroups -= 1;
+    const sptr_t document = [_engine message:SCI_GETDOCPOINTER];
+    NSNumber *key = @(document);
+    const NSInteger open = [[TTOpenGroups() objectForKey:key] integerValue] - 1;
+    if (open > 0) { [TTOpenGroups() setObject:@(open) forKey:key]; return; }
+    [TTOpenGroups() removeObjectForKey:key];
+    for (TTEditor *editor in TTDeferredEditors().allObjects) {
+        if ([editor.engine message:SCI_GETDOCPOINTER] == document) [editor deliverDeferredChange];
+    }
+}
+- (BOOL)undoGroupOpen { return [[TTOpenGroups() objectForKey:@([_engine message:SCI_GETDOCPOINTER])] integerValue] > 0; }
+- (void)deliverDeferredChange {
+    if (!_changeDeferred) return;
+    _changeDeferred = NO;
+    [TTDeferredEditors() removeObject:self];
+    if (_onChange) _onChange();
+}
+- (void)deferChange {
+    _changeDeferred = YES;
+    [TTDeferredEditors() addObject:self];
+    if (_deferredFlushScheduled) return;
+    _deferredFlushScheduled = YES;
+    // The callback is never lost or held for long: if neither the end of the outermost group nor
+    // a last undo step delivers it first, the next turn of the main run loop does, whether or not
+    // a group is still open. Synchronous grouped work never spans a turn, so it stays coalesced;
+    // a group held open across turns (interactive macro playback, under a modal panel) reports
+    // at most once per turn, which keeps the edited mark and recovery snapshots going.
+    __weak TTEditor *weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        TTEditor *editor = weakSelf; if (!editor) return;
+        editor.deferredFlushScheduled = NO;
+        [editor deliverDeferredChange];
+    });
+}
+/// One change callback now, replacing any that was held back.
+- (void)deliverChange {
+    _changeDeferred = NO;
+    [TTDeferredEditors() removeObject:self];
+    if (_onChange) _onChange();
+}
+/// Posts TTEditorStateDidChangeNotification once per turn of the main run loop, never from
+/// inside the Scintilla notification (which can arrive while the view is drawing).
+- (void)scheduleStateNotification {
+    if (_stateNotificationScheduled) return;
+    _stateNotificationScheduled = YES;
+    __weak TTEditor *weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        TTEditor *editor = weakSelf; if (!editor) return;
+        editor.stateNotificationScheduled = NO;
+        [NSNotificationCenter.defaultCenter postNotificationName:TTEditorStateDidChangeNotification object:editor];
+    });
+}
+/// The selection, or view state shown beside it, may have changed through the bridge. Scintilla
+/// reports selection changes only when it next paints, which a hidden view never does.
+- (void)noteStateChange { _selectionGeneration++; [self scheduleStateNotification]; }
+/// Redraws the filler line numbers only when what they show can have changed: the line count,
+/// the rows the document occupies (folding, wrapping), the scroll position, the row height (zoom,
+/// font) or the margin width.
+- (void)invalidateLineNumbersIfChanged {
+    const sptr_t count = [_engine message:SCI_GETLINECOUNT];
+    const TTLineNumberState state = {count, (sptr_t)[_engine message:SCI_VISIBLEFROMDOCLINE wParam:count], (sptr_t)[_engine message:SCI_GETFIRSTVISIBLELINE],
+        (sptr_t)[_engine message:SCI_TEXTHEIGHT wParam:0], (sptr_t)[_engine message:SCI_GETMARGINWIDTHN wParam:0]};
+    if (memcmp(&state, &_lineNumberState, sizeof(state)) == 0) return;
+    _lineNumberState = state;
+    _emptyLineNumbers.needsDisplay = YES;
+}
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)becomeFirstResponder { return [self.window makeFirstResponder:self.engine.content]; }
 - (void)assertThread { NSAssert(NSThread.isMainThread, @"Editor calls require the main thread"); }
 - (NSString *)text {
     [self assertThread];
     const sptr_t length = [_engine message:SCI_GETLENGTH];
-    std::vector<char> bytes((size_t)length + 1);
-    [_engine message:SCI_GETTEXT wParam:bytes.size() lParam:(sptr_t)bytes.data()];
-    return TTStringFromUTF8(bytes.data(), (NSUInteger)length);
+    if (length <= 0) return @"";
+    // Decoded straight from Scintilla's buffer, by explicit length (documents hold NUL bytes).
+    // The pointer is valid only until the next message, and none is sent before the copy is done.
+    return TTStringFromUTF8((const void *)[_engine message:SCI_GETRANGEPOINTER wParam:0 lParam:length], (NSUInteger)length);
+}
+- (NSInteger)byteLength { [self assertThread]; return [_engine message:SCI_GETLENGTH]; }
+- (NSData *)utf8Data {
+    [self assertThread];
+    const sptr_t length = [_engine message:SCI_GETLENGTH];
+    if (length <= 0) return [NSData data];
+    // One copy into a buffer the NSData owns. SCI_GETTEXTRANGEFULL does not move Scintilla's gap,
+    // so a periodic capture never makes the next keystroke pay to move it back.
+    char *buffer = (char *)malloc((size_t)length + 1);
+    if (!buffer) return [NSData data];
+    Sci_TextRangeFull range = {{0, length}, buffer};
+    [_engine message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&range];
+    return [NSData dataWithBytesNoCopy:buffer length:(NSUInteger)length freeWhenDone:YES];
 }
 - (void)setText:(NSString *)text {
     [self assertThread];
     // Unencodable text (an unpaired surrogate) leaves the document unchanged.
     NSData *data = TTUTF8(text); if (!data) return;
-    [_engine message:SCI_BEGINUNDOACTION];
+    [self openUndoGroup];
     [_engine message:SCI_SETTARGETRANGE wParam:0 lParam:[_engine message:SCI_GETLENGTH]];
     [_engine message:SCI_REPLACETARGET wParam:data.length lParam:(sptr_t)data.bytes];
-    [_engine message:SCI_ENDUNDOACTION];
+    [self closeUndoGroup];
 }
 - (NSString *)selectedText {
     [self assertThread];
-    NSMutableData *joined = [NSMutableData data];
     const sptr_t count = [_engine message:SCI_GETSELECTIONS];
+    if (count == 1) {
+        const sptr_t start = [_engine message:SCI_GETSELECTIONNSTART wParam:0], end = [_engine message:SCI_GETSELECTIONNEND wParam:0];
+        if (end <= start) return @"";
+        return TTStringFromUTF8((const void *)[_engine message:SCI_GETRANGEPOINTER wParam:start lParam:end - start], (NSUInteger)(end - start));
+    }
+    NSMutableData *joined = [NSMutableData data];
     for (sptr_t selection = 0; selection < count; ++selection) {
         sptr_t start = [_engine message:SCI_GETSELECTIONNSTART wParam:selection];
         sptr_t end = [_engine message:SCI_GETSELECTIONNEND wParam:selection];
-        std::vector<char> bytes((size_t)(end-start) + 1);
-        Sci_TextRangeFull range = {{start, end}, bytes.data()};
-        [_engine message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&range];
         if (selection) [joined appendBytes:"\n" length:1];
-        [joined appendBytes:bytes.data() length:(NSUInteger)(end-start)];
+        // Copied before the next message can invalidate the pointer.
+        if (end > start) [joined appendBytes:(const void *)[_engine message:SCI_GETRANGEPOINTER wParam:start lParam:end - start] length:(NSUInteger)(end - start)];
     }
     return TTStringFromUTF8(joined.bytes, joined.length);
 }
 - (BOOL)readOnly { [self assertThread]; return [_engine message:SCI_GETREADONLY] != 0; }
-- (void)setReadOnly:(BOOL)value { [self assertThread]; [_engine message:SCI_SETREADONLY wParam:value]; }
+- (void)setReadOnly:(BOOL)value { [self assertThread]; [_engine message:SCI_SETREADONLY wParam:value]; [self scheduleStateNotification]; }
+- (BOOL)requireWritable:(NSError **)error {
+    [self assertThread];
+    if (!self.readOnly) return YES;
+    if (error) *error = [NSError errorWithDomain:TTEditorErrorDomain code:TTEditorErrorReadOnly userInfo:@{
+        NSLocalizedDescriptionKey:@"This document is read-only. Nothing was changed.",
+        NSLocalizedRecoverySuggestionErrorKey:@"Turn off Read Only in the File menu to edit this document."}];
+    return NO;
+}
 - (void)configureTabWidth:(NSInteger)width useTabs:(BOOL)useTabs {
     [self assertThread]; if (width < 1 || width > 32) return;
     [_engine message:SCI_SETTABWIDTH wParam:width]; [_engine message:SCI_SETUSETABS wParam:useTabs];
+    [self scheduleStateNotification];
 }
-- (void)convertLineEndings:(NSString *)mode {
-    [self assertThread]; if (self.readOnly) return;
+- (BOOL)convertLineEndings:(NSString *)mode {
+    [self assertThread]; if (self.readOnly) return NO;
     NSDictionary *modes = @{@"LF":@(SC_EOL_LF), @"CRLF":@(SC_EOL_CRLF), @"CR":@(SC_EOL_CR)};
-    NSNumber *value = modes[mode]; if (!value) return;
-    [_engine message:SCI_BEGINUNDOACTION]; [_engine message:SCI_CONVERTEOLS wParam:value.integerValue];
-    [_engine message:SCI_SETEOLMODE wParam:value.integerValue]; [_engine message:SCI_ENDUNDOACTION];
+    NSNumber *value = modes[mode]; if (!value) return NO;
+    [self openUndoGroup]; [_engine message:SCI_CONVERTEOLS wParam:value.integerValue];
+    [_engine message:SCI_SETEOLMODE wParam:value.integerValue]; [self closeUndoGroup];
+    return YES;
 }
 - (void)setLineEndingMode:(NSString *)mode {
     [self assertThread];
@@ -286,6 +555,7 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
     NSNumber *value = modes[mode]; if (!value) return;
     // Mode only: existing bytes, undo history, revision and save point are untouched.
     [_engine message:SCI_SETEOLMODE wParam:value.integerValue];
+    [self scheduleStateNotification];
 }
 - (NSArray<NSDictionary<NSString *, NSNumber *> *> *)selectionRanges {
     [self assertThread]; NSMutableArray *ranges = [NSMutableArray array];
@@ -315,12 +585,18 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
     }
     return YES;
 }
+/// Stream selection with sticky extend mode off. SCI_SETSELECTIONMODE is not used for this: it
+/// toggles extend mode (plain arrow keys then select) whenever the type is already stream.
+- (void)useStreamSelection {
+    [_engine message:SCI_CHANGESELECTIONMODE wParam:SC_SEL_STREAM];
+    [_engine message:SCI_SETMOVEEXTENDSSELECTION wParam:0];
+}
 - (BOOL)setSelectionRanges:(NSArray<NSDictionary<NSString *,NSNumber *> *> *)ranges {
     [self assertThread]; if (![self validSelectionRanges:ranges]) return NO;
-    [_engine message:SCI_SETSELECTIONMODE wParam:SC_SEL_STREAM];
+    [self useStreamSelection];
     [_engine message:SCI_SETSELECTION wParam:[ranges[0][@"caret"] integerValue] lParam:[ranges[0][@"anchor"] integerValue]];
     for (NSUInteger i=1;i<ranges.count;++i) [_engine message:SCI_ADDSELECTION wParam:[ranges[i][@"caret"] integerValue] lParam:[ranges[i][@"anchor"] integerValue]];
-    [_engine message:SCI_SETMAINSELECTION wParam:0]; return YES;
+    [_engine message:SCI_SETMAINSELECTION wParam:0]; [self noteStateChange]; return YES;
 }
 - (BOOL)replaceSelections:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision {
     [self assertThread]; NSArray *ranges=self.selectionRanges;
@@ -337,15 +613,154 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
         NSDictionary *ra=ranges[a.unsignedIntegerValue], *rb=ranges[b.unsignedIntegerValue];
         return [@(MIN([rb[@"anchor"] integerValue],[rb[@"caret"] integerValue])) compare:@(MIN([ra[@"anchor"] integerValue],[ra[@"caret"] integerValue]))];
     }];
-    [_engine message:SCI_BEGINUNDOACTION];
+    [self openUndoGroup];
     for (NSNumber *index in indices) {
         NSDictionary *range=ranges[index.unsignedIntegerValue]; NSInteger a=[range[@"anchor"] integerValue], c=[range[@"caret"] integerValue];
         NSData *bytes=encoded[index.unsignedIntegerValue];
         [_engine message:SCI_SETTARGETRANGE wParam:MIN(a,c) lParam:MAX(a,c)];
         [_engine message:SCI_REPLACETARGET wParam:bytes.length lParam:(sptr_t)bytes.bytes];
     }
-    [_engine message:SCI_ENDUNDOACTION]; return YES;
+    [self closeUndoGroup]; return YES;
 }
+- (BOOL)applyEdits:(NSArray<NSDictionary<NSString *, id> *> *)edits expectedRevision:(NSUInteger)revision expectedLength:(NSInteger)expectedLength {
+    [self assertThread];
+    const sptr_t length = [_engine message:SCI_GETLENGTH];
+    if (revision != self.revision || self.readOnly || length != expectedLength || ![edits isKindOfClass:NSArray.class]) return NO;
+    struct Edit { sptr_t start, end; NSData *bytes; };
+    std::vector<Edit> validated; validated.reserve(edits.count);
+    sptr_t previousEnd = 0;
+    for (id edit in edits) {
+        if (![edit isKindOfClass:NSDictionary.class]) return NO;
+        sptr_t bounds[2];
+        NSString *keys[2] = {@"start", @"end"};
+        for (int i = 0; i < 2; ++i) {
+            id value = edit[keys[i]]; if (![value isKindOfClass:NSNumber.class]) return NO;
+            NSInteger p = [value integerValue]; if ([value doubleValue] != (double)p || p < 0 || p > length) return NO;
+            if (p < length && ([_engine message:SCI_GETCHARAT wParam:p] & 0xC0) == 0x80) return NO;
+            bounds[i] = p;
+        }
+        if (bounds[0] > bounds[1] || bounds[0] < previousEnd) return NO;
+        id text = edit[@"text"]; if (![text isKindOfClass:NSString.class]) return NO;
+        NSData *bytes = TTUTF8(text); if (!bytes) return NO;
+        validated.push_back({bounds[0], bounds[1], bytes});
+        previousEnd = bounds[1];
+    }
+    // The revision is compared once, above: it advances with every replacement below.
+    [self openUndoGroup];
+    for (auto edit = validated.rbegin(); edit != validated.rend(); ++edit) {
+        [_engine message:SCI_SETTARGETRANGE wParam:edit->start lParam:edit->end];
+        [_engine message:SCI_REPLACETARGET wParam:edit->bytes.length lParam:(sptr_t)edit->bytes.bytes];
+    }
+    [self closeUndoGroup];
+    return YES;
+}
+- (BOOL)replaceDocumentText:(NSString *)text {
+    [self assertThread];
+    NSData *data = TTUTF8(text); if (!data || self.readOnly) return NO;
+    const sptr_t oldLength = [_engine message:SCI_GETLENGTH], newLength = (sptr_t)data.length;
+    // Valid until the next modification; it is not read after the replacement.
+    const unsigned char *before = (const unsigned char *)[_engine message:SCI_GETCHARACTERPOINTER];
+    const unsigned char *after = (const unsigned char *)data.bytes;
+    const sptr_t shorter = MIN(oldLength, newLength);
+    sptr_t prefix = 0, suffix = 0;
+    while (prefix < shorter && before[prefix] == after[prefix]) ++prefix;
+    if (prefix == oldLength && prefix == newLength) return YES;
+    while (suffix < shorter - prefix && before[oldLength - suffix - 1] == after[newLength - suffix - 1]) ++suffix;
+    // Cut only on character boundaries of both texts, and never between CR and LF.
+    auto continuation = [](const unsigned char *bytes, sptr_t length, sptr_t at) { return at < length && (bytes[at] & 0xC0) == 0x80; };
+    while (prefix > 0 && (continuation(before, oldLength, prefix) || continuation(after, newLength, prefix))) --prefix;
+    while (suffix > 0 && continuation(before, oldLength, oldLength - suffix)) --suffix;
+    auto lineFeed = [](const unsigned char *bytes, sptr_t length, sptr_t at) { return at < length && bytes[at] == '\n'; };
+    if (prefix > 0 && before[prefix - 1] == '\r' && (lineFeed(before, oldLength, prefix) || lineFeed(after, newLength, prefix))) --prefix;
+    if (suffix > 0 && before[oldLength - suffix] == '\n' &&
+        ((oldLength - suffix > 0 && before[oldLength - suffix - 1] == '\r') || (newLength - suffix > 0 && after[newLength - suffix - 1] == '\r'))) --suffix;
+    const sptr_t start = prefix, oldEnd = oldLength - suffix, newEnd = newLength - suffix;
+
+    NSArray<NSNumber *> *bookmarks = self.bookmarkLines;
+    const sptr_t firstLine = [_engine message:SCI_LINEFROMPOSITION wParam:start];
+    const sptr_t oldLastLine = [_engine message:SCI_LINEFROMPOSITION wParam:oldEnd];
+    const BOOL lastLineKept = [_engine message:SCI_POSITIONFROMLINE wParam:oldLastLine] == oldEnd;
+    const sptr_t topLine = [_engine message:SCI_GETFIRSTVISIBLELINE];
+    // Each selection end either follows its text (outside the span) or has nothing to follow.
+    BOOL selectionInside = NO;
+    const sptr_t selections = [_engine message:SCI_GETSELECTIONS], mainSelection = [_engine message:SCI_GETMAINSELECTION];
+    std::vector<sptr_t> expected; expected.reserve((size_t)selections * 2);
+    for (sptr_t i = 0; i < selections; ++i) {
+        for (sptr_t p : {(sptr_t)[_engine message:SCI_GETSELECTIONNANCHOR wParam:i], (sptr_t)[_engine message:SCI_GETSELECTIONNCARET wParam:i]}) {
+            if (p > start && p < oldEnd) selectionInside = YES;
+            expected.push_back(p <= start ? p : p + (newEnd - oldEnd));
+        }
+    }
+    const sptr_t caret = [_engine message:SCI_GETCURRENTPOS];
+    const sptr_t caretLine = [_engine message:SCI_LINEFROMPOSITION wParam:caret];
+    const sptr_t caretOffset = caret - [_engine message:SCI_POSITIONFROMLINE wParam:caretLine];
+
+    [self openUndoGroup];
+    [_engine message:SCI_SETTARGETRANGE wParam:start lParam:oldEnd];
+    [_engine message:SCI_REPLACETARGET wParam:newEnd - start lParam:(sptr_t)(after + start)];
+    [self closeUndoGroup];
+
+    const sptr_t newLastLine = [_engine message:SCI_LINEFROMPOSITION wParam:newEnd];
+    if (bookmarks.count) {
+        // Scintilla folds the markers of deleted lines onto the first line of the span. Put every
+        // bookmark back explicitly: untouched lines keep theirs, lines after the span follow
+        // their text, and lines inside it keep their line number, clamped to the new span.
+        const sptr_t shift = newLastLine - oldLastLine;
+        [_engine message:SCI_MARKERDELETEALL wParam:1];
+        for (NSNumber *bookmark in bookmarks) {
+            sptr_t line = bookmark.integerValue;
+            if (line > oldLastLine || (line == oldLastLine && lastLineKept)) line += shift;
+            else if (line > firstLine) line = line == oldLastLine ? newLastLine : MIN(line, newLastLine);
+            if (!([_engine message:SCI_MARKERGET wParam:line] & (1 << 1))) [_engine message:SCI_MARKERADD wParam:line lParam:1];
+        }
+    }
+    if (selectionInside) {
+        // A selection inside the replaced span has nothing to follow; keep the caret's line and column.
+        const sptr_t line = MIN(caretLine, newLastLine);
+        sptr_t position = MIN([_engine message:SCI_POSITIONFROMLINE wParam:line] + caretOffset, [_engine message:SCI_GETLINEENDPOSITION wParam:line]);
+        while (position > 0 && ([_engine message:SCI_GETCHARAT wParam:position] & 0xC0) == 0x80) --position;
+        [_engine message:SCI_SETEMPTYSELECTION wParam:position];
+    } else {
+        BOOL moved = [_engine message:SCI_GETSELECTIONS] != selections;
+        for (sptr_t i = 0; i < selections && !moved; ++i) {
+            moved = [_engine message:SCI_GETSELECTIONNANCHOR wParam:i] != expected[(size_t)i * 2] || [_engine message:SCI_GETSELECTIONNCARET wParam:i] != expected[(size_t)i * 2 + 1];
+        }
+        if (moved) {
+            [self useStreamSelection];
+            [_engine message:SCI_SETSELECTION wParam:expected[1] lParam:expected[0]];
+            for (sptr_t i = 1; i < selections; ++i) [_engine message:SCI_ADDSELECTION wParam:expected[(size_t)i * 2 + 1] lParam:expected[(size_t)i * 2]];
+            [_engine message:SCI_SETMAINSELECTION wParam:mainSelection];
+        }
+    }
+    if ([_engine message:SCI_GETFIRSTVISIBLELINE] != topLine) [_engine message:SCI_SETFIRSTVISIBLELINE wParam:topLine];
+    [self noteStateChange];
+    return YES;
+}
+- (BOOL)loadDocumentText:(NSString *)text {
+    [self assertThread];
+    if (self.readOnly || !TTUTF8(text)) return NO;
+    // No undo record is kept of a load: Scintilla would otherwise hold a second copy of the
+    // replaced and the inserted bytes only for the history to be emptied straight afterwards.
+    [_engine message:SCI_SETUNDOCOLLECTION wParam:0];
+    const BOOL loaded = [self replaceDocumentText:text];
+    [_engine message:SCI_SETUNDOCOLLECTION wParam:1];
+    [_engine message:SCI_EMPTYUNDOBUFFER];
+    return loaded;
+}
+- (BOOL)goToLine:(NSInteger)line {
+    [self assertThread];
+    if (line < 1 || line > [_engine message:SCI_GETLINECOUNT]) return NO;
+    [_engine message:SCI_ENSUREVISIBLE wParam:line - 1];
+    // Scintilla reports SCI_GOTOLINE for macro recording before it runs. When the caret is already
+    // there the jump moves nothing, so only the scroll is done and a recording is left alone (F277).
+    const sptr_t target = [_engine message:SCI_POSITIONFROMLINE wParam:line - 1];
+    if ([_engine message:SCI_GETSELECTIONS] == 1 && [_engine message:SCI_GETANCHOR] == target && [_engine message:SCI_GETCURRENTPOS] == target) [_engine message:SCI_SCROLLCARET];
+    else [_engine message:SCI_GOTOLINE wParam:line - 1];
+    [self noteStateChange];
+    return YES;
+}
+- (void)scrollCaretIntoView { [self assertThread]; [_engine message:SCI_SCROLLCARET]; }
+- (NSInteger)firstVisibleLine { [self assertThread]; return [_engine message:SCI_GETFIRSTVISIBLELINE]; }
 - (NSInteger)selectionCount { [self assertThread]; return [_engine message:SCI_GETSELECTIONS]; }
 - (NSInteger)selectionStart { [self assertThread]; return [_engine message:SCI_GETSELECTIONSTART]; }
 - (NSInteger)selectionEnd { [self assertThread]; return [_engine message:SCI_GETSELECTIONEND]; }
@@ -381,6 +796,7 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
     }
     [_engine message:SCI_SETSEL wParam:anchor lParam:caret];
     [_engine message:SCI_SCROLLCARET];
+    [self noteStateChange];
     return YES;
 }
 - (NSArray<NSNumber *> *)bookmarkLines {
@@ -392,6 +808,12 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
         line = [_engine message:SCI_MARKERNEXT wParam:line+1 lParam:(1 << 1)];
     }
     return lines;
+}
+- (NSInteger)bookmarkCount {
+    [self assertThread];
+    NSInteger count = 0;
+    for (sptr_t line = [_engine message:SCI_MARKERNEXT wParam:0 lParam:(1 << 1)]; line >= 0; line = [_engine message:SCI_MARKERNEXT wParam:line+1 lParam:(1 << 1)]) ++count;
+    return count;
 }
 - (BOOL)setBookmarks:(NSArray<NSNumber *> *)lines {
     [self assertThread];
@@ -406,19 +828,28 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
     }
     [_engine message:SCI_MARKERDELETEALL wParam:1];
     for (NSNumber *line in seen) [_engine message:SCI_MARKERADD wParam:line.integerValue lParam:1];
+    [self scheduleStateNotification];
     return YES;
 }
 - (BOOL)modified { [self assertThread]; return [_engine message:SCI_GETMODIFY] != 0; }
 - (void)setSavePoint { [self assertThread]; [_engine message:SCI_SETSAVEPOINT]; }
 - (void)resetUndoHistory { [self assertThread]; [_engine message:SCI_EMPTYUNDOBUFFER]; }
 - (BOOL)wrap { [self assertThread]; return [_engine message:SCI_GETWRAPMODE] != SC_WRAP_NONE; }
-- (void)setWrap:(BOOL)wrap { [self assertThread]; [_engine message:SCI_SETWRAPMODE wParam:wrap ? SC_WRAP_WORD : SC_WRAP_NONE]; }
+- (void)setWrap:(BOOL)wrap {
+    [self assertThread]; [_engine message:SCI_SETWRAPMODE wParam:wrap ? SC_WRAP_WORD : SC_WRAP_NONE];
+    // Rows are re-wrapped lazily, so the row count compared by -invalidateLineNumbersIfChanged may not have moved yet.
+    _emptyLineNumbers.needsDisplay = YES;
+    [self scheduleStateNotification];
+}
 - (void)shareDocumentWith:(TTEditor *)other {
     [self assertThread];
     // SCI_SETDOCPOINTER acquires the new document before releasing the old one.
     // Each attached Scintilla view owns a reference, so either view may close first.
     [_engine message:SCI_SETDOCPOINTER wParam:0 lParam:[other.engine message:SCI_GETDOCPOINTER]];
     self.revision = other.revision;
+    [self noteStateChange];
+    // The line count changed with no modification notification.
+    [self updateLineNumberMargin:NO];
 }
 - (BOOL)sharesDocumentWith:(TTEditor *)other {
     [self assertThread];
@@ -449,22 +880,46 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
 }
 - (BOOL)replaceSelection:(NSString *)text {
     [self assertThread];
-    NSData *data = TTUTF8(text); if (!data) return NO;
-    const BOOL writable = !self.readOnly;
-    [_engine message:SCI_BEGINUNDOACTION];
+    NSData *data = TTUTF8(text); if (!data || self.readOnly) return NO;
+    [self openUndoGroup];
     [_engine message:SCI_TARGETFROMSELECTION];
     const sptr_t start = [_engine message:SCI_GETTARGETSTART];
     [_engine message:SCI_REPLACETARGET wParam:data.length lParam:(sptr_t)data.bytes];
     [_engine message:SCI_SETSEL wParam:start + data.length lParam:start + data.length];
-    [_engine message:SCI_ENDUNDOACTION];
-    return writable;
+    [self closeUndoGroup];
+    return YES;
+}
++ (BOOL)commandModifiesText:(NSString *)identifier {
+    static NSSet<NSString *> *editing;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ editing = [NSSet setWithArray:@[
+        @"undo", @"redo", @"cut", @"paste", @"duplicateLine", @"deleteLine", @"transposeLine", @"indent", @"unindent",
+        @"upper", @"lower", @"duplicateSelection", @"deleteWordLeft", @"deleteWordRight", @"deleteLineLeft", @"deleteLineRight",
+        @"moveLineUp", @"moveLineDown", @"joinLines", @"trimTrailing", @"deleteBack", @"deleteForward", @"newLine", @"tab", @"backTab", @"lineCut"]]; });
+    return [identifier isKindOfClass:NSString.class] && [editing containsObject:identifier];
 }
 - (void)executeCommand:(NSString *)identifier {
     [self assertThread];
-    if ([identifier isEqualToString:@"rectangularSelection"] || [identifier isEqualToString:@"streamSelection"]) {
-        [_engine message:SCI_SETSELECTIONMODE wParam:[identifier isEqualToString:@"rectangularSelection"] ? SC_SEL_RECTANGLE : SC_SEL_STREAM]; return;
+    [self runCommand:identifier];
+    // Folding, the margin toggle and selection commands raise no synchronous notification.
+    [self invalidateLineNumbersIfChanged];
+    [self noteStateChange];
+}
+- (void)runCommand:(NSString *)identifier {
+    // Rectangular Selection is the keyboard column mode: its sticky extend mode lets plain arrow
+    // keys grow the rectangle, and choosing it again switches that off.
+    if ([identifier isEqualToString:@"rectangularSelection"]) { [_engine message:SCI_SETSELECTIONMODE wParam:SC_SEL_RECTANGLE]; return; }
+    if ([identifier isEqualToString:@"streamSelection"]) { [self useStreamSelection]; return; }
+    if ([identifier isEqualToString:@"clearAdditionalSelections"]) {
+        // SCI_CLEARSELECTIONS leaves one empty selection at position 0, but it is what resets the
+        // rectangular and extend modes, so clear first and then put the main range back.
+        // SCI_SETSELECTION neither scrolls nor touches those modes.
+        const sptr_t main = [_engine message:SCI_GETMAINSELECTION];
+        const sptr_t anchor = [_engine message:SCI_GETSELECTIONNANCHOR wParam:main], caret = [_engine message:SCI_GETSELECTIONNCARET wParam:main];
+        [_engine message:SCI_CLEARSELECTIONS];
+        [_engine message:SCI_SETSELECTION wParam:caret lParam:anchor];
+        return;
     }
-    if ([identifier isEqualToString:@"clearAdditionalSelections"]) { [_engine message:SCI_CLEARSELECTIONS]; return; }
     if ([identifier isEqualToString:@"addNextOccurrence"] || [identifier isEqualToString:@"selectAllOccurrences"]) {
         [_engine message:[identifier isEqualToString:@"addNextOccurrence"] ? SCI_MULTIPLESELECTADDNEXT : SCI_MULTIPLESELECTADDEACH]; return;
     }
@@ -480,7 +935,9 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
         [_engine message:SCI_SETVIEWEOL wParam:![_engine message:SCI_GETVIEWEOL]]; return;
     }
     if ([identifier isEqualToString:@"toggleLineNumbers"]) {
-        [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:[_engine message:SCI_GETMARGINWIDTHN wParam:0] ? 0 : 48]; return;
+        if ([_engine message:SCI_GETMARGINWIDTHN wParam:0]) [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:0];
+        else [self updateLineNumberMargin:YES];
+        return;
     }
     if ([identifier isEqualToString:@"toggleOvertype"]) {
         [_engine message:SCI_SETOVERTYPE wParam:![_engine message:SCI_GETOVERTYPE]]; return;
@@ -490,7 +947,7 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
         [_engine message:SCI_LINESJOIN]; return;
     }
     if ([identifier isEqualToString:@"trimTrailing"]) {
-        [_engine message:SCI_BEGINUNDOACTION];
+        [self openUndoGroup];
         for (sptr_t line = [_engine message:SCI_GETLINECOUNT]; line-- > 0;) {
             sptr_t start = [_engine message:SCI_POSITIONFROMLINE wParam:line];
             sptr_t end = [_engine message:SCI_GETLINEENDPOSITION wParam:line];
@@ -505,7 +962,7 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
                 [_engine message:SCI_REPLACETARGET wParam:0 lParam:(sptr_t)""];
             }
         }
-        [_engine message:SCI_ENDUNDOACTION]; return;
+        [self closeUndoGroup]; return;
     }
     if ([identifier isEqualToString:@"gotoMatchingBrace"] || [identifier isEqualToString:@"selectMatchingBrace"]) {
         sptr_t position = [_engine message:SCI_GETCURRENTPOS];
@@ -544,10 +1001,65 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
     NSNumber *message = commands[identifier] ?: TTMacroCommands()[identifier];
     if (message) [_engine message:message.unsignedIntValue];
 }
-- (void)startRecording { [self assertThread]; _macroRecording = YES; [_engine message:SCI_STARTRECORD]; }
-- (void)stopRecording { [self assertThread]; _macroRecording = NO; [_engine message:SCI_STOPRECORD]; }
-- (void)beginUndoGroup { [self assertThread]; [_engine message:SCI_BEGINUNDOACTION]; }
-- (void)endUndoGroup { [self assertThread]; [_engine message:SCI_ENDUNDOACTION]; }
++ (NSArray<NSString *> *)macroCommandNames { return [TTMacroCommands().allKeys sortedArrayUsingSelector:@selector(compare:)]; }
+- (TTInteractionState)interactionState {
+    return {_revision, [_engine message:SCI_GETSELECTIONS], [_engine message:SCI_GETANCHOR], [_engine message:SCI_GETCURRENTPOS]};
+}
+- (void)noteUnrecordedInteractionSince:(TTInteractionState)before {
+    if (!_macroRecording || !_onMacroStep) return;
+    const TTInteractionState now = [self interactionState];
+    if (now.revision == before.revision && now.selections == before.selections && now.anchor == before.anchor && now.caret == before.caret) return;
+    [self reportMacroStep:@{@"kind":@"unsupported", @"message":@0, @"name":@"A mouse click, mouse selection or drag and drop"}];
+}
+/// The handler may clear itself while it runs (a discard does), so it is held for the call.
+- (void)reportMacroStep:(NSDictionary<NSString *, id> *)step {
+    void (^handler)(NSDictionary<NSString *, id> *) = _onMacroStep;
+    if (handler) handler(step);
+}
+- (void)settlePendingInteraction {
+    if (!_interactionPending) return;
+    _interactionPending = NO;
+    [self noteUnrecordedInteractionSince:_pendingInteraction];
+}
+/// A margin click selects lines through SCIMarginView, which the bridge cannot subclass. The
+/// event is seen here before it is dispatched; the comparison runs once it has been handled.
+- (void)observeMarginMouseEvent:(NSEvent *)event {
+    if (!_macroRecording || !self.window || event.window != self.window) return;
+    if (event.type == NSEventTypeLeftMouseDown || event.type == NSEventTypeRightMouseDown) {
+        NSView *hit = [_engine hitTest:[self convertPoint:event.locationInWindow fromView:nil]];
+        NSView *content = _engine.content;
+        _marginMouseDown = hit != nil && hit != content && ![hit isDescendantOf:content];
+    }
+    if (!_marginMouseDown) return;
+    [self settlePendingInteraction];
+    _pendingInteraction = [self interactionState];
+    _interactionPending = YES;
+    __weak TTEditor *weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf settlePendingInteraction]; });
+}
+- (void)startRecording {
+    [self assertThread]; _macroRecording = YES; _interactionPending = NO; _marginMouseDown = NO;
+    [TTRecordingEditors() addObject:self];
+    if (!_macroMouseMonitor) {
+        __weak TTEditor *weakSelf = self;
+        _macroMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp | NSEventMaskRightMouseDown handler:^NSEvent *(NSEvent *event) {
+            [weakSelf observeMarginMouseEvent:event];
+            return event;
+        }];
+    }
+    [_engine message:SCI_STARTRECORD];
+}
+- (void)stopRecording {
+    [self assertThread];
+    // A margin click still waiting for its comparison is settled before the recording can be saved.
+    [self settlePendingInteraction];
+    _macroRecording = NO;
+    [TTRecordingEditors() removeObject:self];
+    if (_macroMouseMonitor) { [NSEvent removeMonitor:_macroMouseMonitor]; _macroMouseMonitor = nil; }
+    [_engine message:SCI_STOPRECORD];
+}
+- (void)beginUndoGroup { [self assertThread]; [self openUndoGroup]; }
+- (void)endUndoGroup { [self assertThread]; [self closeUndoGroup]; }
 - (BOOL)executeMacroStep:(NSDictionary<NSString *, id> *)step {
     [self assertThread];
     if (![step isKindOfClass:NSDictionary.class]) return NO;
@@ -556,7 +1068,8 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
     if ([kind isEqualToString:@"insertText"]) {
         id text = step[@"text"];
         if (![text isKindOfClass:NSString.class] || self.selectionCount != 1) return NO;
-        [self replaceSelection:text]; return YES;
+        [self noteStateChange];
+        return [self replaceSelection:text];
     }
     if ([kind isEqualToString:@"command"]) {
         id command = step[@"command"];
@@ -567,7 +1080,7 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
         if (!message && [command isEqualToString:@"indent"]) message = @(SCI_TAB);
         if (!message && [command isEqualToString:@"unindent"]) message = @(SCI_BACKTAB);
         if (!message) return NO;
-        [_engine message:message.unsignedIntValue]; return YES;
+        [_engine message:message.unsignedIntValue]; [self noteStateChange]; return YES;
     }
     return NO;
 }
@@ -617,26 +1130,40 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
 }
 - (NSAttributedString *)attributedTextForSelection:(BOOL)selection {
     [self assertThread]; [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
-    sptr_t start=selection ? self.selectionStart : 0,end=selection ? self.selectionEnd : [_engine message:SCI_GETLENGTH];
+    const sptr_t start=selection ? self.selectionStart : 0,end=selection ? self.selectionEnd : [_engine message:SCI_GETLENGTH];
     NSMutableAttributedString *result=[[NSMutableAttributedString alloc] initWithString:@""];
-    for (sptr_t p=start;p<end;) {
-        sptr_t style=[_engine message:SCI_GETSTYLEAT wParam:p],q=p+1;
-        while (q<end && [_engine message:SCI_GETSTYLEAT wParam:q]==style) ++q;
+    if (end<=start) return result;
+    const size_t length=(size_t)(end-start);
+    // One fetch of every byte with its style (two bytes per cell, then two terminating NULs),
+    // separated in place: text packed at the front of `cells`, styles in their own buffer.
+    std::vector<char> cells(2*length+2);
+    Sci_TextRangeFull range={{start,end},cells.data()};
+    [_engine message:SCI_GETSTYLEDTEXTFULL wParam:0 lParam:(sptr_t)&range];
+    std::vector<unsigned char> styles(length);
+    for (size_t i=0;i<length;++i) { styles[i]=(unsigned char)cells[2*i+1]; cells[i]=cells[2*i]; }
+    // The font and colours of a style are resolved once per call, not once per run.
+    NSDictionary *attributes[256]={};
+    auto color=[](sptr_t c) { return [NSColor colorWithSRGBRed:(c&255)/255.0 green:((c>>8)&255)/255.0 blue:((c>>16)&255)/255.0 alpha:1]; };
+    [result beginEditing];
+    for (size_t p=0;p<length;) {
+        const unsigned char style=styles[p];size_t q=p+1;
+        while (q<length && styles[q]==style) ++q;
         // Style runs normally align to scalar boundaries; extend malformed style
         // boundaries to avoid splitting a UTF8 character in exported text.
-        while (q<end && ([_engine message:SCI_GETCHARAT wParam:q]&0xC0)==0x80) ++q;
-        std::vector<char> bytes((size_t)(q-p)+1);Sci_TextRangeFull range={{p,q},bytes.data()};
-        [_engine message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&range];
-        NSString *text=TTStringFromUTF8(bytes.data(),q-p);
-        auto color=[](sptr_t c) { return [NSColor colorWithSRGBRed:(c&255)/255.0 green:((c>>8)&255)/255.0 blue:((c>>16)&255)/255.0 alpha:1]; };
-        CGFloat size=[_engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:style]/100.0;
-        std::vector<char> face((size_t)[_engine message:SCI_STYLEGETFONT wParam:style lParam:0]+1);[_engine message:SCI_STYLEGETFONT wParam:style lParam:(sptr_t)face.data()];
-        NSFont *font=[NSFont fontWithName:[NSString stringWithUTF8String:face.data()] size:size] ?: [NSFont monospacedSystemFontOfSize:MAX(1,size) weight:NSFontWeightRegular];
-        NSFontTraitMask traits=0;if ([_engine message:SCI_STYLEGETBOLD wParam:style]) traits|=NSBoldFontMask;if ([_engine message:SCI_STYLEGETITALIC wParam:style]) traits|=NSItalicFontMask;
-        if(traits)font=[[NSFontManager sharedFontManager] convertFont:font toHaveTrait:traits];
-        [result appendAttributedString:[[NSAttributedString alloc] initWithString:text attributes:@{NSFontAttributeName:font,NSForegroundColorAttributeName:color([_engine message:SCI_STYLEGETFORE wParam:style]),NSBackgroundColorAttributeName:color([_engine message:SCI_STYLEGETBACK wParam:style])}]];
+        while (q<length && (cells[q]&0xC0)==0x80) ++q;
+        if (!attributes[style]) {
+            CGFloat size=[_engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:style]/100.0;
+            std::vector<char> face((size_t)[_engine message:SCI_STYLEGETFONT wParam:style lParam:0]+1);[_engine message:SCI_STYLEGETFONT wParam:style lParam:(sptr_t)face.data()];
+            NSString *faceName=[NSString stringWithUTF8String:face.data()];
+            NSFont *font=(faceName ? [NSFont fontWithName:faceName size:size] : nil) ?: [NSFont monospacedSystemFontOfSize:MAX(1,size) weight:NSFontWeightRegular];
+            NSFontTraitMask traits=0;if ([_engine message:SCI_STYLEGETBOLD wParam:style]) traits|=NSBoldFontMask;if ([_engine message:SCI_STYLEGETITALIC wParam:style]) traits|=NSItalicFontMask;
+            if(traits)font=[[NSFontManager sharedFontManager] convertFont:font toHaveTrait:traits];
+            attributes[style]=@{NSFontAttributeName:font,NSForegroundColorAttributeName:color([_engine message:SCI_STYLEGETFORE wParam:style]),NSBackgroundColorAttributeName:color([_engine message:SCI_STYLEGETBACK wParam:style])};
+        }
+        [result appendAttributedString:[[NSAttributedString alloc] initWithString:TTStringFromUTF8(cells.data()+p,q-p) attributes:attributes[style]]];
         p=q;
     }
+    [result endEditing];
     return result;
 }
 - (void)setSyntaxStyle:(NSInteger)index foreground:(NSColor *)foreground background:(NSColor *)background bold:(BOOL)bold italic:(BOOL)italic {
@@ -646,6 +1173,8 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
     [_engine message:SCI_STYLESETFORE wParam:index lParam:packed(foreground)];
     if(background)[_engine message:SCI_STYLESETBACK wParam:index lParam:packed(background)];
     [_engine message:SCI_STYLESETBOLD wParam:index lParam:bold];[_engine message:SCI_STYLESETITALIC wParam:index lParam:italic];
+    // The filler line numbers are drawn in this style's colour and no notification follows.
+    if (index == STYLE_LINENUMBER) _emptyLineNumbers.needsDisplay = YES;
 }
 - (void)clearSearchHighlights {
     [self assertThread];[_engine message:SCI_SETINDICATORCURRENT wParam:20];[_engine message:SCI_INDICATORCLEARRANGE wParam:0 lParam:[_engine message:SCI_GETLENGTH]];
@@ -664,6 +1193,7 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
     NSFont *font=[NSFont fontWithName:name size:size];if(!font)return;
     _syntaxFonts[@(index)]=@{@"name":name,@"size":@(size)};
     [_engine message:SCI_STYLESETFONT wParam:index lParam:(sptr_t)name.UTF8String];[_engine message:SCI_STYLESETSIZEFRACTIONAL wParam:index lParam:(sptr_t)lround(size*100)];
+    if (index == STYLE_LINENUMBER || index == STYLE_DEFAULT) { [self updateLineNumberMargin:NO]; _emptyLineNumbers.needsDisplay = YES; }
 }
 - (void)showCallTip:(NSString *)text {
     [self assertThread];if([text rangeOfString:@"\0"].location!=NSNotFound)return;
@@ -674,7 +1204,11 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
     sptr_t caret=[_engine message:SCI_GETCURRENTPOS],start=[_engine message:SCI_WORDSTARTPOSITION wParam:caret lParam:1];
     NSMutableArray *safe=[NSMutableArray array];for(NSString *word in words) if([word rangeOfCharacterFromSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]].location==NSNotFound && [word rangeOfString:@"\0"].location==NSNotFound) [safe addObject:word];
     NSString *list=[[safe sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@" "];
-    if(list.length)[_engine message:SCI_AUTOCSHOW wParam:caret-start lParam:(sptr_t)list.UTF8String];
+    if(!list.length)return;
+    // G371: once the list is open Scintilla records Tab, Return and the arrow keys as caret
+    // commands although they drive the list, and accepting an entry edits with no notification.
+    if (_macroRecording && _onMacroStep) [self reportMacroStep:TTUnrecordableStep(SCI_AUTOCSHOW)];
+    [_engine message:SCI_AUTOCSHOW wParam:caret-start lParam:(sptr_t)list.UTF8String];
 }
 - (BOOL)find:(NSString *)text matchCase:(BOOL)matchCase backwards:(BOOL)backwards {
     [self assertThread];
@@ -692,20 +1226,32 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
     if (found < 0) return NO;
     [_engine message:SCI_SETSEL wParam:[_engine message:SCI_GETTARGETSTART] lParam:[_engine message:SCI_GETTARGETEND]];
     [_engine message:SCI_SCROLLCARET];
+    [self noteStateChange];
     return YES;
 }
 - (void)notification:(SCNotification *)notification {
-    _emptyLineNumbers.needsDisplay = YES;
+    const unsigned int code = notification->nmhdr.code;
+    const int type = notification->modificationType;
+    // Scintilla notifies after every paint, which includes every caret blink. The filler line
+    // numbers are compared, not redrawn, and for a modification only when its lines changed.
+    if (code == SCN_PAINTED || code == SCN_UPDATEUI || code == SCN_ZOOM ||
+        (code == SCN_MODIFIED && (notification->linesAdded != 0 || (type & SC_MOD_CHANGEFOLD)))) [self invalidateLineNumbersIfChanged];
     // Native responder Undo/Redo bypasses the application command dispatcher and
     // Scintilla does not emit MacroRecord for these operations. Never save a macro
     // that silently omits their changes.
-    if (_macroRecording && _onMacroStep && notification->nmhdr.code == SCN_MODIFIED &&
-        (notification->modificationType & (SC_PERFORMED_UNDO | SC_PERFORMED_REDO))) {
-        _onMacroStep(@{@"kind":@"unsupported", @"message":@(notification->modificationType & SC_PERFORMED_UNDO ? SCI_UNDO : SCI_REDO)});
+    if (_macroRecording && _onMacroStep && code == SCN_MODIFIED &&
+        (type & (SC_PERFORMED_UNDO | SC_PERFORMED_REDO))) {
+        [self reportMacroStep:TTUnrecordableStep(type & SC_PERFORMED_UNDO ? SCI_UNDO : SCI_REDO)];
     }
-    if (notification->nmhdr.code == SCN_MACRORECORD && _onMacroStep) {
+    // Scrolling by a line edits nothing and moves no caret; like zoom it is neither recorded nor a
+    // reason to discard.
+    const BOOL viewOnly = code == SCN_MACRORECORD && (notification->message == SCI_LINESCROLLUP || notification->message == SCI_LINESCROLLDOWN ||
+        notification->message == SCI_SCROLLTOSTART || notification->message == SCI_SCROLLTOEND || notification->message == SCI_VERTICALCENTRECARET);
+    if (code == SCN_MACRORECORD && _onMacroStep && !viewOnly) {
         NSDictionary *step = nil;
-        if (notification->message == SCI_REPLACESEL && notification->lParam && self.selectionCount == 1) {
+        // G371: a typed character is replayed as an insertion, which is not what Overtype did.
+        if (notification->message == SCI_REPLACESEL && [_engine message:SCI_GETOVERTYPE]) {
+        } else if (notification->message == SCI_REPLACESEL && notification->lParam && self.selectionCount == 1) {
             const char *utf8 = (const char *)notification->lParam;
             NSString *text = TTStringFromUTF8(utf8, std::strlen(utf8));
             if (text.length) step = @{@"kind":@"insertText", @"text":text};
@@ -716,15 +1262,32 @@ NSString *const TTEditorSuccessorKey = @"TTEditorSuccessor";
                 }
             }
         }
-        _onMacroStep(step ?: @{@"kind":@"unsupported", @"message":@(notification->message)});
+        [self reportMacroStep:step ?: TTUnrecordableStep(notification->message)];
     }
-    if (notification->nmhdr.code == SCN_FOCUSIN && _onFocus) _onFocus();
-    if (notification->nmhdr.code == SCN_MODIFIED &&
-        (notification->modificationType & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))) {
+    if (code == SCN_FOCUSIN) { if (_onFocus) _onFocus(); [self scheduleStateNotification]; }
+    if (code == SCN_MODIFYATTEMPTRO && _onReadOnlyAttempt) _onReadOnlyAttempt();
+    // Keep the line-number margin wide enough: zoom rescales its font, and added or removed lines
+    // change the digit count. A margin width is view state, so setting it here edits nothing.
+    // The filler numbers are drawn at the zoomed size, which the compared values need not show.
+    if (code == SCN_ZOOM) { [self updateLineNumberMargin:NO]; _emptyLineNumbers.needsDisplay = YES; [self scheduleStateNotification]; }
+    else if (code == SCN_MODIFIED && notification->linesAdded != 0 && [self lineNumberDigits] != _marginDigits) [self updateLineNumberMargin:NO];
+    if (code == SCN_UPDATEUI) {
+        if (notification->updated & SC_UPDATE_SELECTION) _selectionGeneration++;
+        if (notification->updated & (SC_UPDATE_SELECTION | SC_UPDATE_CONTENT)) [self scheduleStateNotification];
+    }
+    if (code == SCN_MODIFIED && (type & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))) {
+        // Every stale-result guard compares `revision`, so it advances with each step. The
+        // callback is delivered once per outermost undo group and once per multi-step Undo or Redo.
         _revision++;
-        if (_onChange) _onChange();
-    } else if (notification->nmhdr.code == SCN_SAVEPOINTLEFT || notification->nmhdr.code == SCN_SAVEPOINTREACHED) {
-        if (_onChange) _onChange();
+        _selectionGeneration++;
+        const BOOL earlierUndoStep = (type & SC_MULTISTEPUNDOREDO) && !(type & SC_LASTSTEPINUNDOREDO);
+        if (earlierUndoStep || [self undoGroupOpen]) [self deferChange]; else [self deliverChange];
+        [self scheduleStateNotification];
+    } else if (code == SCN_SAVEPOINTLEFT || code == SCN_SAVEPOINTREACHED) {
+        if ([self undoGroupOpen]) [self deferChange]; else [self deliverChange];
+        [self scheduleStateNotification];
+    } else if (code == SCN_MODIFIED && (type & SC_LASTSTEPINUNDOREDO) && _changeDeferred && ![self undoGroupOpen]) {
+        [self deliverDeferredChange];
     }
 }
 @end

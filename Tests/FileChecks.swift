@@ -21,6 +21,7 @@ import Darwin
                 kill(getpid(), SIGKILL)
                 fatalError("SIGKILL unexpectedly returned")
             }
+            codecAgainstReference()
             let samples = ["", "\0", "\0hello", "A\0B\r\nC\nD\rE", "½ cup — café 👩🏽‍💻 e\u{301}", "\u{FEFF}inside"]
             for encoding in [FileEncoding.utf8, .utf16LE, .utf16BE] {
                 for bom in [false, true] {
@@ -419,6 +420,216 @@ import Darwin
             try FileManager.default.removeItem(at: oldCorrupt)
             check(try cacheStore.loadAll().map(\.id) == [cacheID], "loadAll returns what scan lists")
             Checks.summary { "PASS FileChecks: \(Checks.count) assertions; codec and isolated recovery" }
+        }
+    }
+}
+
+/// Audit package 22 (F229): the codec that validates in place must accept, reject and decode
+/// exactly as the scalar-by-scalar implementation it replaced, which is kept here as the reference.
+private enum ReferenceCodec {
+    static let cp1252: [UInt32?] = [
+        0x20AC, nil, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+        0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, nil, 0x017D, nil,
+        nil, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+        0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, nil, 0x017E, 0x0178
+    ]
+    static func bom(_ encoding: FileEncoding) -> [UInt8] {
+        switch encoding {
+        case .utf8: return [0xEF, 0xBB, 0xBF]
+        case .utf16LE: return [0xFF, 0xFE]
+        case .utf16BE: return [0xFE, 0xFF]
+        default: return []
+        }
+    }
+    /// nil where the reference rejects the bytes.
+    static func decode(_ data: Data, encoding: FileEncoding) -> (text: String, bom: Bool)? {
+        var bytes = Array(data)
+        let marker = bom(encoding)
+        let hasBOM = !marker.isEmpty && bytes.starts(with: marker)
+        if hasBOM { bytes.removeFirst(marker.count) }
+        var scalars = String.UnicodeScalarView()
+        switch encoding {
+        case .utf8:
+            let decoded = String(decoding: bytes, as: UTF8.self)
+            return decoded.utf8.elementsEqual(bytes) ? (decoded, hasBOM) : nil
+        case .utf16LE, .utf16BE:
+            guard bytes.count % 2 == 0 else { return nil }
+            let words: [UInt16] = stride(from: 0, to: bytes.count, by: 2).map { i in
+                encoding == .utf16LE
+                    ? UInt16(bytes[i]) | UInt16(bytes[i + 1]) << 8 : UInt16(bytes[i]) << 8 | UInt16(bytes[i + 1])
+            }
+            var i = 0
+            while i < words.count {
+                let w = words[i]
+                var scalar = UInt32(w)
+                if (0xD800...0xDBFF).contains(w) {
+                    guard i + 1 < words.count, (0xDC00...0xDFFF).contains(words[i + 1]) else { return nil }
+                    scalar = 0x10000 + (UInt32(w - 0xD800) << 10) + UInt32(words[i + 1] - 0xDC00)
+                    i += 1
+                } else if (0xDC00...0xDFFF).contains(w) {
+                    return nil
+                }
+                guard let s = UnicodeScalar(scalar) else { return nil }
+                scalars.append(s)
+                i += 1
+            }
+        case .latin1, .windows1252:
+            for b in bytes {
+                let value: UInt32? =
+                    encoding == .windows1252 && b >= 0x80 && b <= 0x9F ? cp1252[Int(b - 0x80)] : UInt32(b)
+                guard let value, let scalar = UnicodeScalar(value) else { return nil }
+                scalars.append(scalar)
+            }
+        }
+        return (String(scalars), hasBOM)
+    }
+    /// nil where the reference refuses to encode.
+    static func encode(_ text: String, format: FileFormat) -> Data? {
+        let marker = bom(format.encoding)
+        if format.bom && marker.isEmpty { return nil }
+        var bytes: [UInt8] = format.bom ? marker : []
+        switch format.encoding {
+        case .utf8: bytes.append(contentsOf: text.utf8)
+        case .utf16LE, .utf16BE:
+            for word in text.utf16 {
+                let low = UInt8(word & 255), high = UInt8(word >> 8)
+                bytes.append(contentsOf: format.encoding == .utf16LE ? [low, high] : [high, low])
+            }
+        case .latin1, .windows1252:
+            for scalar in text.unicodeScalars {
+                let value = scalar.value
+                if value < 0x80 || (value >= 0xA0 && value <= 0xFF) || (format.encoding == .latin1 && value <= 0xFF) {
+                    bytes.append(UInt8(value))
+                } else if format.encoding == .windows1252, let index = cp1252.firstIndex(where: { $0 == value }) {
+                    bytes.append(UInt8(index + 0x80))
+                } else {
+                    return nil
+                }
+            }
+        }
+        return Data(bytes)
+    }
+}
+
+/// True when the codec and the reference agree on these bytes: both reject, or both give the
+/// same scalars and BOM flag.
+private func decodeAgrees(_ data: Data, _ encoding: FileEncoding) -> Bool {
+    let expected = ReferenceCodec.decode(data, encoding: encoding)
+    guard let actual = try? FileCodec.decode(data, encoding: encoding) else { return expected == nil }
+    guard let expected else { return false }
+    return actual.text.unicodeScalars.elementsEqual(expected.text.unicodeScalars) && actual.format.bom == expected.bom
+        && actual.format.encoding == encoding
+}
+private func encodeAgrees(_ text: String, _ format: FileFormat) -> Bool {
+    (try? FileCodec.encode(text, format: format)) == ReferenceCodec.encode(text, format: format)
+}
+
+private func codecAgainstReference() {
+    let encodings: [FileEncoding] = [.utf8, .utf16LE, .utf16BE, .windows1252, .latin1]
+    // Named edge cases first, so a failure says which rule moved.
+    let named: [(String, FileEncoding, [UInt8])] = [
+        ("empty file", .utf8, []), ("UTF-8 BOM only", .utf8, [0xEF, 0xBB, 0xBF]),
+        ("UTF-8 BOM then content U+FEFF", .utf8, [0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF, 0x61]),
+        ("UTF-8 literal U+FFFD", .utf8, [0x61, 0xEF, 0xBF, 0xBD, 0x62]),
+        ("UTF-8 truncated four-byte sequence", .utf8, [0xF0, 0x90, 0x80]),
+        ("UTF-8 truncated four-byte sequence after text", .utf8, [0x61, 0xF0, 0x9F, 0x98]),
+        ("UTF-8 truncated three-byte sequence", .utf8, [0xE2, 0x82]),
+        ("UTF-8 overlong NUL", .utf8, [0xC0, 0x80]), ("UTF-8 encoded surrogate", .utf8, [0xED, 0xB0, 0x80]),
+        ("UTF-8 above U+10FFFF", .utf8, [0xF4, 0x90, 0x80, 0x80]), ("UTF-8 NUL bytes", .utf8, [0, 0x61, 0]),
+        ("UTF-8 highest scalar", .utf8, [0xF4, 0x8F, 0xBF, 0xBF]),
+        ("UTF-16 LE odd length", .utf16LE, [0x61, 0, 0x62]), ("UTF-16 BE odd length", .utf16BE, [0, 0x61, 0]),
+        ("UTF-16 LE BOM only", .utf16LE, [0xFF, 0xFE]), ("UTF-16 BE BOM only", .utf16BE, [0xFE, 0xFF]),
+        ("UTF-16 LE BOM and odd length", .utf16LE, [0xFF, 0xFE, 0x61]),
+        ("UTF-16 LE BOM then content U+FEFF", .utf16LE, [0xFF, 0xFE, 0xFF, 0xFE, 0x61, 0]),
+        ("UTF-16 LE lone high surrogate at the end", .utf16LE, [0x61, 0, 0x3D, 0xD8]),
+        ("UTF-16 LE lone high surrogate before text", .utf16LE, [0x3D, 0xD8, 0x61, 0]),
+        ("UTF-16 LE lone low surrogate", .utf16LE, [0x00, 0xDE, 0x61, 0]),
+        ("UTF-16 LE reversed surrogate pair", .utf16LE, [0x00, 0xDE, 0x3D, 0xD8]),
+        ("UTF-16 LE two high surrogates", .utf16LE, [0x3D, 0xD8, 0x3D, 0xD8, 0x00, 0xDE]),
+        ("UTF-16 LE valid surrogate pair", .utf16LE, [0x3D, 0xD8, 0x00, 0xDE]),
+        ("UTF-16 BE valid surrogate pair", .utf16BE, [0xD8, 0x3D, 0xDE, 0x00]),
+        ("UTF-16 BE lone low surrogate at the end", .utf16BE, [0, 0x61, 0xDC, 0x00]),
+        ("UTF-16 BE bytes that are a pair only in LE order", .utf16BE, [0x3D, 0xD8, 0x00, 0xDE]),
+        ("UTF-16 LE NUL and U+FFFF", .utf16LE, [0, 0, 0xFF, 0xFF]),
+        ("cp1252 defined C1 bytes", .windows1252, [0x80, 0x9F, 0x8E]),
+        ("cp1252 hole 0x81", .windows1252, [0x41, 0x81]), ("cp1252 hole 0x8D", .windows1252, [0x8D]),
+        ("cp1252 hole 0x8F", .windows1252, [0x8F]), ("cp1252 hole 0x90", .windows1252, [0x90, 0x41]),
+        ("cp1252 hole 0x9D", .windows1252, [0x9D]), ("Latin-1 C1 bytes", .latin1, [0x80, 0x81, 0x9F, 0xFF, 0]),
+        ("Latin-1 bytes that look like a UTF-8 BOM", .latin1, [0xEF, 0xBB, 0xBF, 0x41])
+    ]
+    for (name, encoding, bytes) in named {
+        check(decodeAgrees(Data(bytes), encoding), "decoding matches the reference: \(name)")
+    }
+    // Deterministic pseudo-random bytes, weighted towards the values the rules turn on.
+    var state: UInt64 = 0x2545_F491_4F6C_DD1D
+    func next() -> UInt64 {
+        state ^= state << 13
+        state ^= state >> 7
+        state ^= state << 17
+        return state
+    }
+    let weighted: [UInt8] = [
+        0x00, 0x0A, 0x0D, 0x41, 0x7F, 0x80, 0x81, 0x8D, 0x90, 0x9D, 0x9F, 0xA0, 0xBB, 0xBF, 0xC0, 0xC2, 0xD8, 0xDB,
+        0xDC,
+        0xDF, 0xE0, 0xED, 0xEF, 0xF0, 0xF4, 0xF5, 0xFE, 0xFF, 0x3D, 0xBD
+    ]
+    for encoding in encodings {
+        var disagreements = 0, accepted = 0, rejected = 0, encodeDisagreements = 0
+        for round in 0..<4000 {
+            let length = Int(next() % 24)
+            var bytes: [UInt8] = []
+            if round % 5 == 0 { bytes = ReferenceCodec.bom(encoding) }
+            for _ in 0..<length {
+                let draw = next()
+                bytes.append(draw % 3 == 0 ? UInt8(truncatingIfNeeded: draw >> 8) : weighted[Int((draw >> 8) % 30)])
+            }
+            let data = Data(bytes)
+            if !decodeAgrees(data, encoding) { disagreements += 1 }
+            guard let decoded = try? FileCodec.decode(data, encoding: encoding) else {
+                rejected += 1
+                continue
+            }
+            accepted += 1
+            // Exact bytes back, and the same answer as the reference for every target encoding.
+            if (try? FileCodec.encode(decoded.text, format: decoded.format)) != data { encodeDisagreements += 1 }
+            for target in encodings {
+                for bom in [false, true] where !encodeAgrees(decoded.text, FileFormat(encoding: target, bom: bom)) {
+                    encodeDisagreements += 1
+                }
+            }
+        }
+        check(
+            disagreements == 0 && accepted > 100 && (rejected > 100 || encoding == .latin1),
+            "4000 pseudo-random \(encoding) files decode or are rejected exactly as the reference (\(accepted) accepted, \(rejected) rejected)"
+        )
+        check(
+            encodeDisagreements == 0,
+            "every accepted \(encoding) file encodes back to its exact bytes and to every encoding as the reference")
+    }
+    // A Data slice does not start at index 0; the codec must not assume it does.
+    let padded = Data([0x58, 0x58, 0xEF, 0xBB, 0xBF, 0xC3, 0xA9, 0x58])
+    let slice = padded[2..<7]
+    check(
+        (try? FileCodec.decode(slice, encoding: .utf8))?.text == "\u{E9}"
+            && (try? FileCodec.decode(slice))?.format == FileFormat(encoding: .utf8, bom: true),
+        "a Data slice with a non-zero start index decodes by its own bytes")
+    let wide = Data([0x58, 0xFF, 0xFE, 0x3D, 0xD8, 0x00, 0xDE])
+    check(
+        (try? FileCodec.decode(wide[1...], encoding: .utf16LE))?.text == "\u{1F600}",
+        "an odd-offset UTF-16 slice decodes without an aligned load")
+    // One larger document through every encoding, so the bulk paths are exercised too.
+    let block = "caf\u{E9} \u{20AC}5 na\u{EF}ve\r\n\tline two\n"
+    let large = String(repeating: block, count: 20_000)
+    for encoding in encodings {
+        for bom in [false, true] where !(bom && ReferenceCodec.bom(encoding).isEmpty) {
+            let format = FileFormat(encoding: encoding, bom: bom)
+            let text = encoding == .latin1 ? large.replacingOccurrences(of: "\u{20AC}", with: "E") : large
+            let bytes = try? FileCodec.encode(text, format: format)
+            let back = bytes.flatMap { try? FileCodec.decode($0, encoding: encoding) }
+            check(
+                bytes != nil && bytes == ReferenceCodec.encode(text, format: format) && back?.text == text
+                    && back?.format == format,
+                "a \(text.utf8.count)-byte document round-trips exactly as \(encoding) bom=\(bom)")
         }
     }
 }

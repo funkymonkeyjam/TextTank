@@ -127,9 +127,15 @@ final class RunController: NSObject, NSMenuItemValidation {
         item.action == #selector(cancel(_:)) ? isRunning : true
     }
     @objc private func run(_ sender: NSMenuItem) {
-        guard execution == nil, let id = sender.representedObject as? String,
+        guard let id = sender.representedObject as? String,
             let configured = commands.first(where: { $0.id.uuidString == id })
         else { return }
+        do { try start(configured) } catch { NSAlert(error: error).runModal() }
+    }
+    /// Starts one configured command. Throws, starting nothing, while another is running, when the
+    /// configuration cannot be resolved, or when an extension has no writable single selection.
+    func start(_ configured: ConfiguredRun) throws {
+        guard execution == nil else { throw RunFailure.busy }
         pending = nil
         applyButton?.isEnabled = false
         resultWindow?.close()
@@ -139,8 +145,9 @@ final class RunController: NSObject, NSMenuItemValidation {
             revision = target?.revision ?? 0
         let anchor = target?.selectionAnchor ?? 0, caret = target?.selectionCaret ?? 0
         do {
-            if configured.extensionMode && (target == nil || target?.selectionCount != 1 || target?.readOnly == true) {
-                throw RunFailure.invalid
+            if configured.extensionMode {
+                guard let target, target.selectionCount == 1 else { throw RunFailure.invalid }
+                try target.requireWritable()
             }
             let command = try configured.resolved(file: file(), selection: target?.selectedText ?? "")
             let input =
@@ -157,7 +164,7 @@ final class RunController: NSObject, NSMenuItemValidation {
                         anchor: anchor, caret: caret)
                 }
             }
-        } catch { NSAlert(error: error).runModal() }
+        }
     }
     func show(
         _ outcome: Result<RunResult, Error>, command: ConfiguredRun, target: TTEditor?, revision: UInt, selection: Bool,
@@ -217,15 +224,29 @@ final class RunController: NSObject, NSMenuItemValidation {
         }
     }
     @objc func apply(_ sender: NSButton) {
-        guard sender === applyButton else { return }
-        guard let (target, revision, output, selection, anchor, caret) = pending, target.window != nil,
-            target.revision == revision, !target.readOnly, target.selectionCount == 1,
-            (!selection || (target.selectionAnchor == anchor && target.selectionCaret == caret))
-        else {
+        do { try applyResult(sender) } catch { NSAlert(error: error).runModal() }
+    }
+    /// Applies the pending extension result. A result that can no longer be applied is dropped and
+    /// the reason is thrown; a click on the button of a replaced preview does nothing.
+    func applyResult(_ sender: NSButton) throws {
+        guard sender === applyButton, let (target, revision, output, selection, anchor, caret) = pending else {
+            return
+        }
+        do {
+            // A closed document is marked read-only and may still sit in its closed window, so
+            // closure is recognised first and reported as what it is.
+            let controller = target.window?.windowController
+            guard target.window != nil, controller == nil || controller?.document != nil else {
+                throw RunFailure.documentClosed
+            }
+            try target.requireWritable()
+            guard target.revision == revision, target.selectionCount == 1,
+                !selection || (target.selectionAnchor == anchor && target.selectionCaret == caret)
+            else { throw RunFailure.documentChanged }
+        } catch {
             pending = nil
             sender.isEnabled = false
-            NSSound.beep()
-            return
+            throw error
         }
         onUnrecordableAction()
         target.beginUndoGroup()

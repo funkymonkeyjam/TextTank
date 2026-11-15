@@ -80,12 +80,15 @@ struct ConfiguredRun: Codable, Equatable {
     }
 }
 enum RunFailure: Error, LocalizedError {
-    case invalid, fileRequired, busy, tooLarge, configurationTooLarge
+    case invalid, fileRequired, busy, tooLarge, configurationTooLarge, documentChanged, documentClosed
     var errorDescription: String? {
         switch self {
         case .invalid: return "Invalid command configuration. Use an absolute executable path and an argument array."
         case .fileRequired: return "This command needs a saved document path."
-        case .busy: return "A command is already running."
+        case .busy: return "A command is already running. Wait for it to finish or cancel it, then try again."
+        case .documentChanged:
+            return "The document or selection changed since this command ran. Run it again. Nothing was changed."
+        case .documentClosed: return "The document this command ran on is closed. The result was not applied."
         case .configurationTooLarge:
             return
                 "Saved Run commands exceed the 1 MiB configuration limit. Shorten arguments or remove commands; the existing configuration was preserved."

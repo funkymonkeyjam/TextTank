@@ -300,6 +300,19 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 switch action {
                 case .all: break
                 case .next, .previous:
+                    // G372: the editor stayed editable while the search ran. A result for text that
+                    // has since changed, or for an editor that is no longer current, moves nothing and
+                    // a recording that already holds the later edits is discarded.
+                    if currentDocumentScope, let b = buffers.first,
+                        !(b.editor.window != nil && b.editor.revision == b.revision
+                            && self.currentEditor() === b.editor)
+                    {
+                        self.status.stringValue = "Result is stale; search again. Selection unchanged."
+                        self.lastOutcome = .staleResult
+                        self.onUnrecordableCommand?(
+                            "The document changed while the search was running; the search step was not recorded.")
+                        return
+                    }
                     // A miss is not recorded: playback stops on a recorded search that finds nothing.
                     let moved = self.navigate(backwards: action == .previous, wrap: opts.wrap)
                     if moved, currentDocumentScope, let editor = buffers.first?.editor {
@@ -399,12 +412,18 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             }
         }
     }
-    /// Macro playback is bounded and has no disk or connector side effects. Next and Previous throw
-    /// when they do not land on a match, so the steps after them never run at a stale caret;
-    /// Replace All with no match is a deliberate no-op.
-    func playRecorded(options: SearchOptions, action: String, on editor: TTEditor) throws {
+    /// The budget of one recorded search step: the interactive budget, from the one constant.
+    static let recordedStepTimeLimit = SearchCore.defaultTimeLimit
+    /// Macro playback is bounded and has no disk or connector side effects: each step may search
+    /// for at most `timeLimit` seconds, synchronously, and a step that runs out of time throws
+    /// before any edit. Next and Previous throw when they do not land on a match, so the steps
+    /// after them never run at a stale caret; Replace All with no match is a deliberate no-op.
+    func playRecorded(
+        options: SearchOptions, action: String, on editor: TTEditor,
+        timeLimit: TimeInterval = SearchController.recordedStepTimeLimit
+    ) throws {
         let text = editor.text, revision = editor.revision
-        let report = try SearchCore.search(text, options: options, timeLimit: 0.1)
+        let report = try SearchCore.search(text, options: options, timeLimit: timeLimit)
         guard !report.truncated else {
             throw NSError(
                 domain: "TextTank.Search", code: 4,
@@ -465,12 +484,33 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             editor.selectionCount == 1, !hits.isEmpty
         else { return false }
         guard let ranges = SearchCore.byteRanges(hits.map(\.range), in: text) else { return false }
-        editor.beginUndoGroup()
-        defer { editor.endUndoGroup() }
-        for (hit, range) in zip(hits, ranges).reversed() {
-            guard editor.setSelectionAnchor(range.location, caret: NSMaxRange(range)) else { return false }
-            editor.replaceSelection(hit.replacement)
+        // The matches are replaced as byte ranges, validated together and applied as one undo step.
+        // The selection is not the edit cursor, so Undo returns to the selection the command began with.
+        let anchor = editor.selectionAnchor, caret = editor.selectionCaret
+        let edits = zip(hits, ranges).map { hit, range in
+            [
+                "start": NSNumber(value: range.location), "end": NSNumber(value: NSMaxRange(range)),
+                "text": hit.replacement
+            ] as [String: Any]
         }
+        guard editor.applyEdits(edits, expectedRevision: revision, expectedLength: text.utf8.count) else {
+            return false
+        }
+        // Carry the selection through the replacements: its start stays before a replacement that
+        // begins at or covers it, its end stays after one that ends at or covers it.
+        func carried(_ position: Int, upper: Bool) -> Int {
+            var delta = 0
+            for (hit, range) in zip(hits, ranges) {
+                let start = range.location, end = NSMaxRange(range), length = hit.replacement.utf8.count
+                if position < start || (position == start && (!upper || end > start)) { break }
+                if position < end { return start + delta + (upper ? length : 0) }
+                delta += length - range.length
+            }
+            return position + delta
+        }
+        let low = carried(min(anchor, caret), upper: false)
+        let high = anchor == caret ? low : carried(max(anchor, caret), upper: true)
+        _ = editor.setSelectionAnchor(anchor <= caret ? low : high, caret: anchor <= caret ? high : low)
         return true
     }
     /// True only when the selection moved to a match.
@@ -530,9 +570,14 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     /// which therefore do nothing even while a row is selected.
     @objc func openResult(_ sender: Any?) { activateResult(at: table.clickedRow) }
     /// What a double-click or Return on a listed result does: selects that match if the result
-    /// is still current, and brings its document forward.
+    /// is still current, and brings its document forward. The jump moves the caret with no
+    /// recordable step (F277), so a jump that happened is reported to the macro recording.
     @discardableResult func activateResult(at row: Int) -> Bool {
-        guard rows.indices.contains(row) else { return false }
-        return select(rows[row], focusEditor: true)
+        guard rows.indices.contains(row), select(rows[row], focusEditor: true) else { return false }
+        onUnrecordableCommand?("Opening a search result is not recorded in macros yet.")
+        return true
+    }
+    func open(row: Int) {
+        activateResult(at: row)
     }
 }

@@ -15,6 +15,8 @@ final class LanguageController: NSObject, NSMenuDelegate {
     private var loadError: Error?
     private let storage: URL
     private var navigator: LanguageFunctionController?
+    /// Called with the reason when a caret jump that macros cannot record has happened (F277).
+    var onUnrecordableCommand: ((String) -> Void)?
     init(
         editorProvider: @escaping () -> TTEditor?, languageProvider: @escaping () -> String,
         setLanguage: @escaping (String) -> Void
@@ -369,6 +371,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
             let text = editor.text, revision = editor.revision
             let symbols = try LanguageFunctions.symbols(text: text, profile: profile)
             navigator = LanguageFunctionController(editor: editor, text: text, revision: revision, symbols: symbols)
+            navigator?.onNavigate = { [weak self] in
+                self?.onUnrecordableCommand?("Function-list navigation is not recorded in macros yet.")
+            }
             navigator?.showWindow(nil)
         } catch { NSAlert(error: error).runModal() }
     }
@@ -466,6 +471,8 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
     private(set) weak var editor: TTEditor?
     private var retirementObserver: NSObjectProtocol?
     private let text: String, revision: UInt, symbols: [LanguageSymbol]
+    /// Called after a row moved the caret.
+    var onNavigate: (() -> Void)?
     let table = ActivatingTableView(),
         status = NSTextField(
             labelWithString:
@@ -522,7 +529,9 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
     /// What a double-click or Return on a listed symbol does.
     func open(row: Int) {
         guard symbols.indices.contains(row), let editor else { return }
-        if !Self.navigate(symbols[row], text: text, revision: revision, editor: editor) {
+        if Self.navigate(symbols[row], text: text, revision: revision, editor: editor) {
+            onNavigate?()
+        } else {
             status.stringValue = "The document changed or closed. Refresh the function list."
         }
     }
