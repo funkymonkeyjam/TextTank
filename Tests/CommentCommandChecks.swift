@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 @main struct CommentCommandChecks {
- static func main() throws {
-  var count=0
-  func check(_ value:Bool,_ label:String){precondition(value,label);count+=1;print("PASS \(label)")}
-  func rejects(_ label:String,_ work:()throws->Void){do{try work();fatalError("Expected rejection: \(label)")}catch{count+=1}}
-  let catalog=try LanguageCatalog.decode(Data(contentsOf:URL(fileURLWithPath:"Resources/LanguageProfiles.json")))
-  let python=catalog.profiles.first{$0.id=="python"}!,cpp=catalog.profiles.first{$0.id=="cpp"}!,html=catalog.profiles.first{$0.id=="html"}!
+ static func main() {
+  Checks.run("CommentCommandChecks") {
+  let catalog=try LanguageCatalog.decode(Data(contentsOf:TestPaths.resources.appendingPathComponent("LanguageProfiles.json")))
+  func profile(_ id:String)throws->LanguageProfile{try requireValue(catalog.profiles.first{$0.id==id},"fixture: \(id) profile exists")}
+  let python=try profile("python"),cpp=try profile("cpp"),html=try profile("html")
   func selection(_ a:Int,_ c:Int)->[[String:NSNumber]]{[["anchor":NSNumber(value:a),"caret":NSNumber(value:c)]]}
   let text="  café 🥑\r\n\tvalue\r\nlast"
   let end="  café 🥑\r\n\tvalue\r\n".utf8.count
@@ -56,6 +55,7 @@ import AppKit
   try CommentCommand.toggleLine.apply(to:editor,profile:python)
   check(editor.text=="# x = 1" && editor.selectionAnchor==7 && editor.selectionCaret==7,"native toggle at end of unterminated last line")
   editor.executeCommand("undo");check(editor.text=="x = 1" && !editor.modified,"native end-of-file toggle is one Undo")
-  print("PASS CommentCommandChecks: \(count) assertions")
+  Checks.summary { "PASS CommentCommandChecks: \(Checks.count) assertions" }
+  }
  }
 }

@@ -1,13 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import Foundation
-#if NATIVE_UTILITY_CHECKS
 import AppKit
-#endif
 @main struct UtilityChecks {
-    static func main() throws {
-        var count = 0
-        func check(_ yes: Bool, _ label: String) { precondition(yes, label); count += 1 }
-        func rejects(_ op: TextUtility, _ value: String) { do { _ = try op.apply(value); preconditionFailure("Accepted malformed \(op): \(value)") } catch { count += 1 } }
+    static func main() {
+        Checks.run("UtilityChecks") {
+        func rejectsMalformed(_ op: TextUtility, _ value: String, line: UInt = #line) { rejects("\(op) rejects malformed \(value.debugDescription)", line: line) { _ = try op.apply(value) } }
         check(try TextUtility.base64Encode.apply("f") == "Zg", "unpadded")
         check(try TextUtility.base64EncodePadded.apply("f") == "Zg==", "padded")
         for value in ["", "f", "fo", "foo", "\u{feff}leading", "café 👩🏽‍💻", "\0\u{feff}\r\n"] {
@@ -22,9 +18,9 @@ import AppKit
         check(try TextUtility.urlDecode.apply("a+b") == "a+b", "plus is literal")
         check(try TextUtility.hexDecode.apply("41 42\n43\t44") == "ABCD", "pair whitespace")
         check(try TextUtility.base64EncodeUnix.apply(String(repeating: "a", count: 60)).split(separator:"\n").map(\.count) == [64,16], "64-column wrapping")
-        for x in ["A", "Zg=", "Zg===", "Z=g=", "Zh==", "@@", "////"] { rejects(.base64DecodeStrict,x) }
-        for x in ["%", "%2", "%GG", "%FF"] { rejects(.urlDecode,x) }
-        for x in ["0", "0 0", "GG", "FF"] { rejects(.hexDecode,x) }
+        for x in ["A", "Zg=", "Zg===", "Z=g=", "Zh==", "@@", "////"] { rejectsMalformed(.base64DecodeStrict,x) }
+        for x in ["%", "%2", "%GG", "%FF"] { rejectsMalformed(.urlDecode,x) }
+        for x in ["0", "0 0", "GG", "FF"] { rejectsMalformed(.hexDecode,x) }
         check(try TextUtility.base64EncodeLines.apply("f\r\nfo\n") == "Zg\r\nZm8\n", "base64 lines")
         check(try TextUtility.base64DecodeLines.apply("Zg\r\nZm8\n") == "f\r\nfo\n", "base64 decode lines")
         check(try TextUtility.base64Decode.apply("TWFyeQ==.aGFk.YQ.bGl0dGxl.bGFtYg==") == "Mary.had.a.little.lamb", "permissive segments")
@@ -33,14 +29,13 @@ import AppKit
         check(try TextUtility.quotedPrintableDecode.apply(TextUtility.quotedPrintableEncode.apply(String(repeating:"é",count:100))) == String(repeating:"é",count:100), "QP wrapping roundtrip")
         check(try TextUtility.samlDecode.apply("sylOzM2xCi5JLCkttnO20UfmAgA=") == "<saml:Status>C</saml:Status>", "SAML deflate")
         check(try TextUtility.samlDecode.apply(Data("<saml:Status>C</saml:Status>".utf8).base64EncodedString()) == "<saml:Status>C</saml:Status>", "SAML direct XML")
-        for x in ["=", "=A", "=GG", "=FF"] { rejects(.quotedPrintableDecode,x) }
-        for x in ["%", "!!!", "YWJj", "sylOzM2xC04sySy2c9bRL4Zx7AA"] { rejects(.samlDecode,x) }
+        for x in ["=", "=A", "=GG", "=FF"] { rejectsMalformed(.quotedPrintableDecode,x) }
+        for x in ["%", "!!!", "YWJj", "sylOzM2xC04sySy2c9bRL4Zx7AA"] { rejectsMalformed(.samlDecode,x) }
         check(try RadixConversion.convert("4294967295",from:10,to:16) == "FFFFFFFF","32-bit upper bound")
         check(try RadixConversion.convert("101010",from:2,to:8) == "52","binary octal")
-        for value in ["-1","4294967296","12x",""] { do { _=try RadixConversion.convert(value,from:10,to:16);preconditionFailure("Invalid number accepted") } catch { count += 1 } }
+        for value in ["-1","4294967296","12x",""] { rejects("radix conversion rejects \(value.debugDescription)") { _=try RadixConversion.convert(value,from:10,to:16) } }
         check(try HexEncodingOptions(insertSpaces:true,uppercase:false,bytesPerLine:2,lineEnding:"\r\n").encode("aéb") == "61 c3\r\na9 62\r\n","hex options encode bytes not characters")
         check(try HexEncodingOptions(bytesPerLine:0).encode("café") == "636166C3A9","hex unwrapped option")
-        #if NATIVE_UTILITY_CHECKS
         _ = NSApplication.shared
         let editor = TTEditor(frame:NSRect(x:0,y:0,width:500,height:300))
         let window=NSWindow(contentRect:editor.bounds,styleMask:[.titled],backing:.buffered,defer:false);window.contentView=editor
@@ -48,17 +43,17 @@ import AppKit
         editor.text = "before café after"; editor.resetUndoHistory(); editor.setSavePoint()
         check(editor.setSelectionAnchor(7,caret:12), "native Unicode selection")
         let menu = controller.makeMenu()
-        let item = menu.items.first { ($0.representedObject as? String) == TextUtility.base64EncodePadded.rawValue }!
+        let item = try requireValue(menu.items.first { ($0.representedObject as? String) == TextUtility.base64EncodePadded.rawValue },"fixture: padded Base64 menu item exists")
         check(NSApplication.shared.sendAction(item.action!,to:item.target,from:item), "menu dispatch")
         check(editor.text == "before Y2Fmw6k= after", "menu changes selected UTF8")
         editor.executeCommand("undo")
         check(editor.text == "before café after", "one Undo restores exact text")
         editor.text = "bad %GG"; editor.resetUndoHistory(); editor.setSavePoint(); _ = editor.setSelectionAnchor(4,caret:7)
         let revision = editor.revision
-        do { try controller.apply(.urlDecode); preconditionFailure("Malformed input accepted") } catch { count += 1 }
+        rejects("malformed selection is rejected by the native command") { try controller.apply(.urlDecode) }
         check(editor.text == "bad %GG" && editor.revision == revision && !editor.modified, "failure preserves native bytes revision dirty")
         _ = editor.setSelectionAnchor(0,caret:0)
-        do { try controller.apply(.hexEncode); preconditionFailure("Empty selection accepted") } catch { count += 1 }
+        rejects("empty selection is rejected by the native command") { try controller.apply(.hexEncode) }
         editor.text = "int café = 42; // <script>&\n";editor.setLanguage("cpp");editor.resetUndoHistory();editor.setSavePoint();_ = editor.setSelectionAnchor(0,caret:0)
         let exportRevision=editor.revision
         let (rtf,plain)=try controller.exportData(format:"rtf")
@@ -73,12 +68,12 @@ import AppKit
         let (_,selectionPlain)=try controller.exportData(format:"rtf")
         check(selectionPlain == "café","styled export selection boundary")
         editor.readOnly=true
-        do { try controller.apply(.hexEncode);preconditionFailure("Read-only accepted") } catch { count += 1 }
+        rejects("read-only editor rejects the native command") { try controller.apply(.hexEncode) }
         editor.readOnly=false
         window.contentView=nil
-        do { try controller.apply(.hexEncode);preconditionFailure("Detached editor accepted") } catch { count += 1 }
-        do { _=try controller.exportData(format:"rtf");preconditionFailure("Detached export accepted") } catch { count += 1 }
-        #endif
-        print("UtilityChecks: \(count) assertions passed")
+        rejects("detached editor rejects the native command") { try controller.apply(.hexEncode) }
+        rejects("detached editor rejects styled export") { _=try controller.exportData(format:"rtf") }
+        Checks.summary { "UtilityChecks: \(Checks.count) assertions passed" }
+        }
     }
 }

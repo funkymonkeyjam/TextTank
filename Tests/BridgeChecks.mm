@@ -2,13 +2,13 @@
 #import <AppKit/AppKit.h>
 #import "TTEditor.h"
 #import "ScintillaView.h"
-static void check(BOOL condition, const char *message) {
-    if (!condition) { fprintf(stderr, "FAIL: %s\n", message); exit(1); }
-    printf("PASS: %s\n", message);
-}
+#import "Checks.h"
 int main() {
     @autoreleasepool {
         [NSApplication sharedApplication];
+        // Shared by the first three sections; later sections make their own editors.
+        TTEditor *second = nil;
+        ttchecks::section("status, exact text and shared clone", [&] {
         TTEditor *first = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 600, 400)];
         ScintillaView *initialNative = (ScintillaView *)first.subviews.firstObject;
         check(initialNative.scrollView.frame.size.width == 600 && initialNative.scrollView.frame.size.height == 400 && initialNative.content.frame.size.height > 0, "Engine viewport initialized before any resize event");
@@ -35,7 +35,7 @@ int main() {
         [first executeCommand:@"selectAll"];
         check([first.selectedText isEqual:unicode], "Selection preserves embedded NUL and Unicode");
         [first resetUndoHistory]; [first setSavePoint];
-        TTEditor *second = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 600, 400)];
+        second = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 600, 400)];
         [second shareDocumentWith:first];
         [second executeCommand:@"selectAll"];
         [second replaceSelection:@"changed 🦋"];
@@ -47,6 +47,8 @@ int main() {
         check([second.text isEqual:@"changed 🦋"] && second.modified, "Closing original retains edited clone");
         [second executeCommand:@"undo"];
         check([second.text isEqual:unicode], "Undo remains alive after original view destruction");
+        });
+        ttchecks::section("find, selections, read-only, line endings and marks", [&] {
         second.text = @"alpha 🦋 alpha";
         [second executeCommand:@"selectAll"];
         check([second find:@"🦋" matchCase:YES backwards:NO], "Find Unicode from end wraps correctly");
@@ -84,6 +86,8 @@ int main() {
         ScintillaView *markNative=(ScintillaView *)markClone.subviews.firstObject;
         check([markNative message:SCI_INDICGETSTYLE wParam:20]==INDIC_ROUNDBOX, "New shared clone has search mark appearance");
         [second clearSearchHighlights];check(second.revision==markedRevision && !second.modified,"Clear marks preserves dirty and Undo state");
+        });
+        ttchecks::section("language and editing commands", [&] {
         second.text = @"int value = 42; // comment\n";
         [second setLanguage:@"cpp"];
         ScintillaView *native = (ScintillaView *)second.subviews.firstObject;
@@ -142,6 +146,8 @@ int main() {
         [second executeCommand:@"unfoldAll"];
         check([native message:SCI_GETLINEVISIBLE wParam:1] == 1, "Unfold all restores body visibility");
         check([[TTEditor availableLanguages] containsObject:@"cpp"] && [[TTEditor availableLanguages] containsObject:@"python"], "Language inventory enumerates linked lexer factories");
+        });
+        ttchecks::section("split view, appearance, macros and session restore", [&] {
         NSWindow *testWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,900,500) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
         NSSplitView *split = [[NSSplitView alloc] initWithFrame:NSMakeRect(0,0,900,500)];
         split.vertical = YES; testWindow.contentView = split;
@@ -196,6 +202,8 @@ int main() {
         check(![left setBookmarks:@[@1,@1]] && ![left setBookmarks:@[@1.5]], "Duplicate and fractional bookmark indices rejected");
         check([left setBookmarks:@[]] && left.bookmarkLines.count == 0, "Empty bookmark set explicitly clears bookmarks");
         check(!left.modified && left.revision == beforeRestoreRevision, "Selection and bookmark restore never changes authoritative bytes or text undo state");
+        });
+        ttchecks::section("line-ending mode", [&] {
         // F126: the line-ending mode is metadata only and governs later insertions.
         TTEditor *eol=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,300)];
         ScintillaView *eolNative=(ScintillaView *)eol.subviews.firstObject;
@@ -211,6 +219,8 @@ int main() {
         check([eol.text isEqual:@"a\rb\r"] && [eol.statusInfo[@"eol"] integerValue]==SC_EOL_CR, "Return in CR mode inserts CR");
         eol.text=@"ab";[eol setLineEndingMode:@"LF"];[eol setSelectionAnchor:2 caret:2];[eol executeCommand:@"newLine"];
         check([eol.text isEqual:@"ab\n"] && [eol.statusInfo[@"eol"] integerValue]==SC_EOL_LF, "Return in LF mode inserts LF");
+        });
+        ttchecks::section("unencodable text", [&] {
         // F20: text that cannot be encoded as UTF-8 is rejected, never applied as a deletion.
         const unichar loneUnit[]={0xD83D};
         NSString *lone=[NSString stringWithCharacters:loneUnit length:1];
@@ -232,7 +242,7 @@ int main() {
         check(![guarded replaceSelection:@"z"] && [guarded.text isEqual:@"keep y keep"], "Read-only selection replacement reports failure");
         guarded.readOnly=NO;guarded.text=@"";
         check(guarded.text.length==0, "Empty text still empties the document");
-        NSLog(@"Bridge checks passed; IME, VoiceOver, UI focus and permission tests not covered.");
+        });
+        return ttchecks::finish("BridgeChecks", "IME, VoiceOver, UI focus and permission tests not covered");
     }
-    return 0;
 }

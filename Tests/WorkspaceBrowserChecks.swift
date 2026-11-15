@@ -2,10 +2,8 @@
 import AppKit
 import Darwin
 @main struct WorkspaceBrowserChecks {
-    static func main()throws {
-        var count=0
-        func check(_ value:Bool,_ message:String){precondition(value,message);count += 1}
-        func rejects(_ message:String,_ body:()throws->Void){do{try body();preconditionFailure(message)}catch{count += 1}}
+    static func main() {
+        Checks.run("WorkspaceBrowserChecks") {
         let root=FileManager.default.temporaryDirectory.appendingPathComponent("TextTankBrowser-"+UUID().uuidString)
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
         setenv("TEXTTANK_SUPPORT_DIRECTORY",root.appendingPathComponent("support").path,1)
@@ -67,7 +65,7 @@ import Darwin
         check(try Data(contentsOf:corruptURL)==corruptBytes,"opening document preserves corrupt workspace evidence")
         let watched=try corruptController.open(fresh)
         let monitor=DocumentMonitor();try monitor.start(watched)
-        func waitFor(_ wanted:DocumentMonitorStatus){let end=Date().addingTimeInterval(4);while monitor.status != wanted && Date()<end{RunLoop.current.run(until:Date().addingTimeInterval(0.01))};check(monitor.status==wanted,"background monitor result")}
+        func waitFor(_ wanted:DocumentMonitorStatus,line:UInt = #line){spinUntil("the document monitor to report \(wanted)",line:line){monitor.status == wanted};check(monitor.status==wanted,"background monitor result",line:line)}
         waitFor(.unchanged)
         try Data("changed on disk".utf8).write(to:fresh);monitor.poll();waitFor(.changed)
         check(watched.editor.text=="fresh","monitor never automatically reloads")
@@ -101,6 +99,7 @@ import Darwin
         let fallback=try WorkspaceController().restore(WorkspaceSession(id:UUID(),name:"Unavailable language",documents:[missing],activeDocumentID:nil))[0]
         check(fallback.languageIdentifier=="null" && fallback.editor.text==sessionText,"unknown session language safely falls back to plain text")
         controller.window?.close()
-        print("WorkspaceBrowserChecks: \(count) assertions passed")
+        Checks.summary { "WorkspaceBrowserChecks: \(Checks.count) assertions passed" }
+        }
     }
 }

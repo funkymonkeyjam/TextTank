@@ -1,11 +1,10 @@
 import AppKit
 @main struct RunControllerChecks {
- @MainActor static func main()throws{
-  _=NSApplication.shared;var count=0
-  func check(_ value:Bool,_ label:String){guard value else{fatalError(label)};count+=1;print("PASS "+label)}
-  let support=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-  let oldSupport=ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]
-  setenv("TEXTTANK_SUPPORT_DIRECTORY",support.path,1);defer{if let oldSupport{setenv("TEXTTANK_SUPPORT_DIRECTORY",oldSupport,1)}else{unsetenv("TEXTTANK_SUPPORT_DIRECTORY")};try? FileManager.default.removeItem(at:support)}
+ @MainActor static func main(){
+  Checks.run("RunControllerChecks") {
+  _=NSApplication.shared
+  let isolatedSupport=try IsolatedSupportDirectory("TextTankRunControllerChecks")
+  defer{isolatedSupport.restore()}
   let document=TextDocument();document.makeWindowControllers();document.editor.text="original";document.editor.resetUndoHistory()
   let controller=RunController(),sample=ConfiguredRun.uppercaseSample
   try controller.persist([sample])
@@ -25,7 +24,7 @@ import AppKit
   check(boundaryRestart.makeMenu().items.contains{($0.representedObject as? String)==boundary.id.uuidString},"exact 1 MiB saved file remains readable after restart")
   try controller.persist([sample])
   let result=RunResult(stdout:Data("FIRST".utf8),stderr:Data(),status:0,cancelled:false,truncated:false)
-  func button()->NSButton{NSApp.windows.flatMap{($0.contentView as? NSStackView)?.views ?? []}.compactMap{$0 as? NSButton}.last{$0.title=="Apply Extension Result"}!}
+  @MainActor func button()->NSButton{NSApp.windows.flatMap{($0.contentView as? NSStackView)?.views ?? []}.compactMap{$0 as? NSButton}.last{$0.title=="Apply Extension Result"}!}
   controller.show(.success(result),command:sample,target:document.editor,revision:document.editor.revision,selection:false,anchor:0,caret:0)
   let old=button()
   controller.show(.success(RunResult(stdout:Data("SECOND".utf8),stderr:Data(),status:0,cancelled:false,truncated:false)),command:sample,target:document.editor,revision:document.editor.revision,selection:false,anchor:0,caret:0)
@@ -42,6 +41,7 @@ import AppKit
   controller.show(.success(result),command:sample,target:document.editor,revision:document.editor.revision,selection:false,anchor:0,caret:0)
   let closed=button();document.close();controller.apply(closed)
   check(document.editor.text=="new edit","detached editor cannot receive extension result")
-  print("PASS RunControllerChecks: \(count) assertions")
+  Checks.summary { "PASS RunControllerChecks: \(Checks.count) assertions" }
+  }
  }
 }

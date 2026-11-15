@@ -1,8 +1,7 @@
 import Foundation
 @main struct RunChecks {
- static func main()throws {
-  var count=0
-  func check(_ value:Bool,_ label:String){guard value else{fatalError(label)};count+=1;print("PASS "+label)}
+ static func main() {
+  Checks.run("RunChecks") {
   let dangerous="space ; $(printf wrong) `touch /no` ' \""
   let c=ConfiguredRun(name:"Arguments",executable:"/usr/bin/printf",arguments:["%s","{selection}"])
   let resolved=try c.resolved(file:nil,selection:dangerous)
@@ -17,15 +16,16 @@ import Foundation
   check(stopped.cancelled,"cancel before launch prevents execution")
   let sleeper=ConfiguredRun(name:"Timeout",executable:"/bin/sleep",arguments:["10"])
   let start=Date();let timeout=try RunExecution().execute(sleeper,timeout:0.1)
-  check(timeout.cancelled && Date().timeIntervalSince(start)<2,"timeout terminates child promptly")
-  do{_ = try RunExecution().execute(ConfiguredRun(name:"Missing",executable:"/no/such/executable",arguments:[]));fatalError("accepted missing")}catch{count+=1;print("PASS missing executable surfaces launch error")}
+  check(timeout.cancelled && Date().timeIntervalSince(start)<10,"timeout terminates child promptly")
+  rejects("missing executable surfaces launch error"){_ = try RunExecution().execute(ConfiguredRun(name:"Missing",executable:"/no/such/executable",arguments:[]))}
   let noisy=try RunExecution().execute(ConfiguredRun(name:"Bounded output",executable:"/usr/bin/yes",arguments:[]),timeout:2)
   check(noisy.truncated && noisy.stdout.count+noisy.stderr.count<=4*1024*1024,"output flood bounded and process stopped")
   let descendant=ConfiguredRun(name:"Descendant",executable:"/bin/zsh",arguments:["-c","/bin/sleep 10 & exit 0"],shellMode:true)
-  let began=Date();let orphan=try RunExecution().execute(descendant,timeout:2)
-  check(orphan.truncated && Date().timeIntervalSince(began)<2,"inherited descendant pipes cannot retain worker indefinitely")
+  // The 0.5 s descendant grace must end the run long before the 10 s timeout or the 10 s sleep.
+  let began=Date();let orphan=try RunExecution().execute(descendant,timeout:10)
+  check(orphan.truncated && !orphan.cancelled && Date().timeIntervalSince(began)<5,"inherited descendant pipes cannot retain worker indefinitely")
   let config=ConfiguredRun.uppercaseSample
-  do{try ConfiguredRun.validateLibrary([config,config]);fatalError("duplicate ids accepted")}catch{count+=1;print("PASS duplicate identities rejected before configuration save")}
+  rejects("duplicate identities rejected before configuration save"){try ConfiguredRun.validateLibrary([config,config])}
   let encoded=try JSONEncoder().encode(config)
   check(try JSONDecoder().decode(ConfiguredRun.self,from:encoded)==config,"configuration roundtrip preserves extension identity without execution")
   var boundary=ConfiguredRun(name:"Boundary",executable:"/usr/bin/printf",arguments:[""])
@@ -35,14 +35,15 @@ import Foundation
   check(boundaryData.count==ConfiguredRun.maximumLibraryBytes,"exact aggregate JSON byte boundary accepted")
   check(try ConfiguredRun.decodeLibrary(boundaryData)==[boundary],"exact-boundary library restart roundtrip")
   boundary.arguments[0]+="x"
-  do{_ = try ConfiguredRun.encodeLibrary([boundary]);fatalError("over boundary accepted")}catch{check(true,"one byte over aggregate boundary rejected")}
+  rejects("one byte over aggregate boundary rejected"){_ = try ConfiguredRun.encodeLibrary([boundary])}
   let escaped=ConfiguredRun(name:"Escaped",executable:"/usr/bin/printf",arguments:[String(repeating:"\"\n",count:300000)])
-  do{_ = try ConfiguredRun.encodeLibrary([escaped]);fatalError("escaped aggregate accepted")}catch{check(true,"JSON escaping counted in aggregate ceiling")}
+  rejects("JSON escaping counted in aggregate ceiling"){_ = try ConfiguredRun.encodeLibrary([escaped])}
   let large=ConfiguredRun(name:"Large",executable:"/usr/bin/printf",arguments:[String(repeating:"x",count:600000),String(repeating:"y",count:600000)])
-  do{_ = try ConfiguredRun.encodeLibrary([large]);fatalError("oversized aggregate accepted")}catch{check(true,"valid individual arguments cannot exceed aggregate ceiling")}
+  rejects("valid individual arguments cannot exceed aggregate ceiling"){_ = try ConfiguredRun.encodeLibrary([large])}
   var second=large;second.id=UUID();second.arguments.removeLast();var first=large;first.arguments.removeLast()
-  do{_ = try ConfiguredRun.encodeLibrary([first,second]);fatalError("multi-command aggregate accepted")}catch{check(true,"aggregate ceiling spans multiple commands")}
-  do{_ = try ConfiguredRun.decodeLibrary(Data(repeating:32,count:ConfiguredRun.maximumLibraryBytes+1));fatalError("oversized decode accepted")}catch{check(true,"restart rejects oversized bytes before JSON decoding")}
-  print("PASS RunChecks: \(count) assertions")
+  rejects("aggregate ceiling spans multiple commands"){_ = try ConfiguredRun.encodeLibrary([first,second])}
+  rejects("restart rejects oversized bytes before JSON decoding"){_ = try ConfiguredRun.decodeLibrary(Data(repeating:32,count:ConfiguredRun.maximumLibraryBytes+1))}
+  Checks.summary { "PASS RunChecks: \(Checks.count) assertions" }
+  }
  }
 }

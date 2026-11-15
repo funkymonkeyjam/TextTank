@@ -1,8 +1,7 @@
 import Foundation
 @main struct SearchScopeChecks {
- static func main()async throws {
-  var checks=0
-  func check(_ b:Bool,_ label:String){precondition(b,label);checks+=1;print("PASS \(label)")}
+ static func main()async {
+  await Checks.run("SearchScopeChecks") {
   let all=try FolderSearchFilters("")
   check(all.acceptsFile("README") && all.acceptsFile("file.txt"),"blank filters include extensionless and dotted files")
   let selected=try FolderSearchFilters("*.txt *.SWIFT !*Tests*; !secret*")
@@ -53,6 +52,7 @@ import Foundation
   let corrupted=Data("invalid".utf8);isolated.set(corrupted,forKey:"TextTank.FolderSearch.v1")
   var refused=false;do{_ = try FolderSearchSettings.load(isolated)}catch{refused=true}
   check(refused && isolated.data(forKey:"TextTank.FolderSearch.v1")==corrupted,"invalid settings rejected and original data untouched")
-  print("PASS SearchScopeChecks: \(checks) assertions")
+  Checks.summary { "PASS SearchScopeChecks: \(Checks.count) assertions" }
+  }
  }
 }

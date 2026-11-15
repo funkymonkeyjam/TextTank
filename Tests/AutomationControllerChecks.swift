@@ -12,11 +12,6 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
 }
 
 @main struct AutomationControllerChecks {
-    static var checks = 0
-    static func check(_ condition: @autoclosure () throws -> Bool, _ name: String) throws {
-        guard try condition() else { fatalError("FAIL: \(name)") }; checks += 1
-        print("PASS: \(name)")
-    }
     static func descendants(_ view:NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     static func typeKeys(_ text:String, in window:NSWindow) {
         for character in text {
@@ -89,13 +84,13 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         RunLoop.main.add(timer,forMode:.modalPanel)
         controller.manage()
         timer.invalidate()
-        try check(!timedOut && stage==3,"native Create Automation and Rules modal chain completed")
-        try check(nameAccepted,"Create Automation name accepts dispatched keyboard events")
-        try check(sampleAccepted,"Sample Input accepts dispatched keyboard events")
-        try check(reentryBlocked,"management cannot open another dialog during Create Automation")
-        try check(nestedRule.0,"nested rule popup dispatch reaches retained controller target")
-        try check(nestedRule.1,"changing rule kind enables find and replacement fields")
-        try check(nestedRule.2?.kind == .replaceLiteral && nestedRule.2?.find == "[salt]" && nestedRule.2?.replacement == "2 eggs","nested Save Rule commits keyboard-entered find and replacement")
+        check(!timedOut && stage==3,"native Create Automation and Rules modal chain completed")
+        check(nameAccepted,"Create Automation name accepts dispatched keyboard events")
+        check(sampleAccepted,"Sample Input accepts dispatched keyboard events")
+        check(reentryBlocked,"management cannot open another dialog during Create Automation")
+        check(nestedRule.0,"nested rule popup dispatch reaches retained controller target")
+        check(nestedRule.1,"changing rule kind enables find and replacement fields")
+        check(nestedRule.2?.kind == .replaceLiteral && nestedRule.2?.find == "[salt]" && nestedRule.2?.replacement == "2 eggs","nested Save Rule commits keyboard-entered find and replacement")
     }
     static func horizontalDialogChecks() throws {
         let alert = TTAlert()
@@ -114,68 +109,70 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             }
             RunLoop.main.add(timer,forMode:.modalPanel)
             let response = alert.runModal(); timer.invalidate()
-            try check(response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue+index,"horizontal dialog preserves response index \(index)")
-            try check(aligned,"horizontal dialog actions remain side by side on presentation \(index)")
-            try check(field.stringValue == "Draft survives reopening","horizontal dialog preserves accessory on presentation \(index)")
+            check(response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue+index,"horizontal dialog preserves response index \(index)")
+            check(aligned,"horizontal dialog actions remain side by side on presentation \(index)")
+            check(field.stringValue == "Draft survives reopening","horizontal dialog preserves accessory on presentation \(index)")
         }
     }
-    static func main() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("TextTankAutomationControllerChecks-" + UUID().uuidString)
-        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
-        let old = ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]
-        setenv("TEXTTANK_SUPPORT_DIRECTORY",root.path,1)
-        defer { if let old { setenv("TEXTTANK_SUPPORT_DIRECTORY",old,1) } else { unsetenv("TEXTTANK_SUPPORT_DIRECTORY") }; try? FileManager.default.removeItem(at:root) }
+    static func main() {
+        Checks.run("AutomationControllerChecks") {
+        let isolatedSupport = try IsolatedSupportDirectory("TextTankAutomationControllerChecks"), root = isolatedSupport.url
+        defer { isolatedSupport.restore() }
         _ = NSApplication.shared
-        try horizontalDialogChecks()
+        Checks.section("horizontal dialog actions") { try horizontalDialogChecks() }
         let window = NSWindow(contentRect:NSRect(x:0,y:0,width:800,height:500),styleMask:[.titled],backing:.buffered,defer:false)
         let editor = TTEditor(frame:window.contentView!.bounds); window.contentView = editor
         var newDocumentCalls = 0
         let controller = AutomationController(editorProvider:{editor},newDocument:{_ in newDocumentCalls += 1})
         let path = root.appendingPathComponent("Automations.json")
         var saved = try AutomationLibrary.decode(Data(contentsOf:path))
-        try check(saved.workflows.count == 2,"new configuration seeds two ordinary saved workflows")
-        try check(saved.workflows[0].output == .editor && saved.workflows[1].output == .reminders,"separate cleanup and send definitions")
-        try check(controller.toolbarIdentifiers().count == 2,"two individual pinned toolbar buttons available")
+        // The toolbar host and the pinned identifier outlive the section that installs them.
+        let toolbarHost = AutomationToolbarHost(controller)
+        var pinnedIdentifier: NSToolbarItem.Identifier?
+        Checks.section("direct cleanup, toolbar and recipe safety") {
+        check(saved.workflows.count == 2,"new configuration seeds two ordinary saved workflows")
+        check(saved.workflows[0].output == .editor && saved.workflows[1].output == .reminders,"separate cleanup and send definitions")
+        check(controller.toolbarIdentifiers().count == 2,"two individual pinned toolbar buttons available")
         let source = "# Ingredients\n- **2 eggs**\n- ½ cup flour\n"
         editor.text = source; editor.resetUndoHistory(); editor.setSavePoint()
         try controller.runSavedAutomation(id:AutomationDefinition.example.id)
-        try check(editor.text == "2 eggs\n½ cup flour\n","cleanup applies directly to actual editor without preview dialog")
+        check(editor.text == "2 eggs\n½ cup flour\n","cleanup applies directly to actual editor without preview dialog")
         editor.executeCommand("undo")
-        try check(editor.text == source,"direct cleanup is one Undo action")
+        check(editor.text == source,"direct cleanup is one Undo action")
         saved.workflows[0].name = "My recipe tidy"
         saved.workflows[0].shortcut = "k"
         saved.workflows[0].previewBeforeApply = nil
         try controller.persistLibrary(saved)
-        let identifier = controller.toolbarIdentifiers()[0]
-        let toolbarHost = AutomationToolbarHost(controller)
+        let identifier = try requireValue(controller.toolbarIdentifiers().first,"fixture: a pinned toolbar identifier exists")
+        pinnedIdentifier = identifier
         let toolbar = NSToolbar(identifier:"TextTank.AutomationControllerChecks")
         toolbar.delegate = toolbarHost; window.toolbar = toolbar
-        guard let button = toolbar.items.first(where: { $0.itemIdentifier == identifier })?.view as? NSButton else { fatalError("missing installed direct toolbar button") }
-        try check(button.window === window,"named automation button is installed in native window toolbar")
-        try check(button.title == "My recipe tidy","renaming updates individual toolbar button label")
+        let button = try requireValue(toolbar.items.first(where: { $0.itemIdentifier == identifier })?.view as? NSButton,"fixture: direct toolbar button is installed")
+        check(button.window === window,"named automation button is installed in native window toolbar")
+        check(button.title == "My recipe tidy","renaming updates individual toolbar button label")
         editor.text = source; editor.resetUndoHistory()
-        try check(NSApp.sendAction(button.action!,to:button.target,from:button),"toolbar action reaches shared stable-ID dispatcher")
-        try check(editor.text == "2 eggs\n½ cup flour\n","absent preview flag applies same saved definition directly")
-        let browserInput = try String(contentsOfFile:"Tests/Fixtures/recipe-browser-plain-input.txt",encoding:.utf8)
-        let browserExpected = try String(contentsOfFile:"Tests/Fixtures/recipe-browser-cleaned-expected.txt",encoding:.utf8)
+        check(NSApp.sendAction(button.action!,to:button.target,from:button),"toolbar action reaches shared stable-ID dispatcher")
+        check(editor.text == "2 eggs\n½ cup flour\n","absent preview flag applies same saved definition directly")
+        let browserInput = try String(contentsOf:TestPaths.fixtures.appendingPathComponent("recipe-browser-plain-input.txt"),encoding:.utf8)
+        let browserExpected = try String(contentsOf:TestPaths.fixtures.appendingPathComponent("recipe-browser-cleaned-expected.txt"),encoding:.utf8)
         let windowCount = NSApp.windows.count
         editor.text = browserInput; editor.resetUndoHistory(); editor.setSavePoint()
-        try check(NSApp.sendAction(button.action!,to:button.target,from:button),"observed browser recipe runs through actual named toolbar button")
+        check(NSApp.sendAction(button.action!,to:button.target,from:button),"observed browser recipe runs through actual named toolbar button")
         let cleanedRows = editor.text.components(separatedBy:.newlines).filter { !$0.isEmpty }
-        try check(cleanedRows.count == 28,"observed full browser recipe produces all 28 ingredient rows")
-        try check(editor.text == browserExpected,"native recipe output exactly preserves quantities options duplicates and copied spacing")
-        try check(editor.window === window && window.contentView === editor && NSApp.windows.count == windowCount,"recipe cleanup stays in same editor and window")
-        try check(newDocumentCalls == 0,"recipe cleanup never invokes new-document output")
+        check(cleanedRows.count == 28,"observed full browser recipe produces all 28 ingredient rows")
+        check(editor.text == browserExpected,"native recipe output exactly preserves quantities options duplicates and copied spacing")
+        check(editor.window === window && window.contentView === editor && NSApp.windows.count == windowCount,"recipe cleanup stays in same editor and window")
+        check(newDocumentCalls == 0,"recipe cleanup never invokes new-document output")
         editor.executeCommand("undo")
-        try check(editor.text == browserInput,"one native Undo restores exact original browser clipboard text")
+        check(editor.text == browserInput,"one native Undo restores exact original browser clipboard text")
         let ambiguous = browserInput + "\nunmarked ingredient continuation\n"
         editor.text = ambiguous; editor.resetUndoHistory(); editor.setSavePoint()
         let unchangedRevision = editor.revision
         var rejectedAmbiguous = false
         do { try controller.runSavedAutomation(id:AutomationDefinition.example.id) }
         catch { rejectedAmbiguous = true }
-        try check(rejectedAmbiguous,"unknown unmarked recipe row rejects cleanup")
-        try check(editor.text == ambiguous && editor.revision == unchangedRevision && !editor.modified,"ambiguous recipe rejection leaves original bytes undo and dirty state untouched")
+        check(rejectedAmbiguous,"unknown unmarked recipe row rejects cleanup")
+        check(editor.text == ambiguous && editor.revision == unchangedRevision && !editor.modified,"ambiguous recipe rejection leaves original bytes undo and dirty state untouched")
         var slowPattern = saved
         slowPattern.workflows[0].steps = [.init(kind:.removeMatchingLines,find:"(a+)+$")]
         try controller.persistLibrary(slowPattern)
@@ -185,38 +182,40 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         var rejectedSlow = false
         do { try controller.runSavedAutomation(id:AutomationDefinition.example.id) }
         catch { rejectedSlow = true }
-        try check(rejectedSlow && ProcessInfo.processInfo.systemUptime - started < 2,"pathological user regex stops promptly before native apply")
-        try check(editor.text == slowInput && editor.revision == slowRevision && !editor.modified,"regex timeout leaves exact native document and dirty state untouched")
+        check(rejectedSlow && ProcessInfo.processInfo.systemUptime - started < 2,"pathological user regex stops promptly before native apply")
+        check(editor.text == slowInput && editor.revision == slowRevision && !editor.modified,"regex timeout leaves exact native document and dirty state untouched")
+        }
         try controller.persistLibrary(saved)
         let beforeReload = try Data(contentsOf:path)
         let restarted = AutomationController(editorProvider:{editor},newDocument:{_ in fatalError("unexpected output")})
-        try check(Data(contentsOf:path) == beforeReload,"existing named configuration is not replaced or rewritten by presets")
-        try check(restarted.makeToolbarItem(identifier:identifier)?.label == "My recipe tidy","toolbar stable identity survives configuration reload")
-        let menuItem = restarted.menu().items.first(where: { ($0.representedObject as? String) == AutomationDefinition.example.id.uuidString })!
-        try check(menuItem.title == "My recipe tidy" && menuItem.keyEquivalent == "k","menu and shortcut use renamed saved definition")
+        Checks.section("restart, menu, selections and output targets") {
+        check(try Data(contentsOf:path) == beforeReload,"existing named configuration is not replaced or rewritten by presets")
+        check(restarted.makeToolbarItem(identifier:try requireValue(pinnedIdentifier,"fixture: the pinned toolbar identifier was captured"))?.label == "My recipe tidy","toolbar stable identity survives configuration reload")
+        let menuItem = try requireValue(restarted.menu().items.first(where: { ($0.representedObject as? String) == AutomationDefinition.example.id.uuidString }),"fixture: the automation has a menu item")
+        check(menuItem.title == "My recipe tidy" && menuItem.keyEquivalent == "k","menu and shortcut use renamed saved definition")
         saved.workflows[0].input = .selection
         try restarted.persistLibrary(saved)
         let selectionSource = "before\n- 2 eggs\n- ½ cup flour\nafter"
         editor.text = selectionSource; editor.resetUndoHistory()
-        try check(editor.find("- 2 eggs\n- ½ cup flour\n",matchCase:true,backwards:false),"selection test captures exact ingredient range")
+        check(editor.find("- 2 eggs\n- ½ cup flour\n",matchCase:true,backwards:false),"selection test captures exact ingredient range")
         try restarted.runSavedAutomation(id:AutomationDefinition.example.id)
-        try check(editor.text == "before\n2 eggs\n½ cup flour\nafter","configured selection cleanup preserves surrounding document")
+        check(editor.text == "before\n2 eggs\n½ cup flour\nafter","configured selection cleanup preserves surrounding document")
         editor.executeCommand("undo")
-        try check(editor.text == selectionSource,"selection cleanup undoes together")
+        check(editor.text == selectionSource,"selection cleanup undoes together")
         let multiSource = "- 2 eggs | - ½ cup flour"
         editor.text = multiSource; editor.resetUndoHistory(); editor.setSavePoint()
-        try check(editor.setSelectionRanges([["anchor":NSNumber(value:0),"caret":NSNumber(value:8)],["anchor":NSNumber(value:multiSource.utf8.count),"caret":NSNumber(value:11)]]),"set separate reversed Unicode selections")
+        check(editor.setSelectionRanges([["anchor":NSNumber(value:0),"caret":NSNumber(value:8)],["anchor":NSNumber(value:multiSource.utf8.count),"caret":NSNumber(value:11)]]),"set separate reversed Unicode selections")
         try restarted.runSavedAutomation(id:AutomationDefinition.example.id)
-        try check(editor.text == "2 eggs | ½ cup flour","automation transforms each captured selection independently")
+        check(editor.text == "2 eggs | ½ cup flour","automation transforms each captured selection independently")
         editor.executeCommand("undo")
-        try check(editor.text == multiSource,"multiple automation selections undo together")
+        check(editor.text == multiSource,"multiple automation selections undo together")
         saved.workflows[0].steps = [.init(kind:.removeMatchingLines,find:"(a+)+$")]
         try restarted.persistLibrary(saved)
         let multiFailure = "safe | " + String(repeating:"a",count:32) + "!"
         editor.text = multiFailure; editor.resetUndoHistory(); editor.setSavePoint()
         _ = editor.setSelectionRanges([["anchor":NSNumber(value:0),"caret":NSNumber(value:4)],["anchor":NSNumber(value:7),"caret":NSNumber(value:multiFailure.utf8.count)]])
-        do { try restarted.runSavedAutomation(id:AutomationDefinition.example.id); fatalError("expected second-selection timeout") } catch {}
-        try check(editor.text == multiFailure && !editor.modified,"later selection failure preserves all earlier selections")
+        rejects("a later selection that times out rejects the whole run") { try restarted.runSavedAutomation(id:AutomationDefinition.example.id) }
+        check(editor.text == multiFailure && !editor.modified,"later selection failure preserves all earlier selections")
         saved.workflows[0].steps = AutomationDefinition.example.steps
         _ = editor.setSelectionAnchor(0,caret:0)
         saved.workflows[0].input = .document; saved.workflows[0].output = .newDocument
@@ -226,15 +225,17 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         editor.text = "- eggs\n- flour"; editor.resetUndoHistory(); editor.setSavePoint()
         _ = editor.setSelectionRanges([["anchor":NSNumber(value:0),"caret":NSNumber(value:6)],["anchor":NSNumber(value:7),"caret":NSNumber(value:14)]])
         try outputController.runSavedAutomation(id:AutomationDefinition.example.id)
-        try check(editor.text == "- eggs\n- flour" && !editor.modified && capturedNewDocument == "eggs\nflour","document input external output never mutates multi-selection editor")
+        check(editor.text == "- eggs\n- flour" && !editor.modified && capturedNewDocument == "eggs\nflour","document input external output never mutates multi-selection editor")
         saved.workflows[0].output = .editor; try restarted.persistLibrary(saved)
         _ = editor.setSelectionAnchor(0,caret:0); editor.readOnly = true
-        do { try restarted.runSavedAutomation(id:AutomationDefinition.example.id); fatalError("read-only expected rejection") } catch {}
-        try check(editor.text == "- eggs\n- flour" && !editor.modified,"read-only automation explicitly rejects without changes")
+        rejects("read-only editor rejects the automation") { try restarted.runSavedAutomation(id:AutomationDefinition.example.id) }
+        check(editor.text == "- eggs\n- flour" && !editor.modified,"read-only automation explicitly rejects without changes")
         editor.readOnly = false
         saved.workflows[0].pinToToolbar = false
         try restarted.persistLibrary(saved)
-        try check(restarted.toolbarIdentifiers().count == 1,"toolbar pin setting hides only configured workflow")
+        check(restarted.toolbarIdentifiers().count == 1,"toolbar pin setting hides only configured workflow")
+        }
+        Checks.section("user recipe samples") {
         // Four literal user examples run through a persisted named automation.
         // No connector or new-document output is invoked by recipe cleanup.
         let preservedWorkflow=saved.workflows[0]
@@ -245,28 +246,34 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         try restarted.persistLibrary(saved)
         let sampleWindows=NSApp.windows.count
         for sample in 1...4 {
-            let input=try String(contentsOfFile:"Tests/Fixtures/recipe-user-sample\(sample)-input.txt",encoding:.utf8)
-            let expected=try String(contentsOfFile:"Tests/Fixtures/recipe-user-sample\(sample)-expected.txt",encoding:.utf8)
+            let input=try String(contentsOf:TestPaths.fixtures.appendingPathComponent("recipe-user-sample\(sample)-input.txt"),encoding:.utf8)
+            let expected=try String(contentsOf:TestPaths.fixtures.appendingPathComponent("recipe-user-sample\(sample)-expected.txt"),encoding:.utf8)
             editor.text=input;editor.resetUndoHistory();editor.setSavePoint()
             _ = editor.setSelectionAnchor(0,caret:0)
             try restarted.runSavedAutomation(id:preservedWorkflow.id)
-            try check(editor.text.utf8.elementsEqual(expected.utf8),"sample \(sample) native exact literal expected bytes")
-            try check(editor.window === window && window.contentView === editor && NSApp.windows.count==sampleWindows,"sample \(sample) uses same editor and window")
+            check(editor.text.utf8.elementsEqual(expected.utf8),"sample \(sample) native exact literal expected bytes")
+            check(editor.window === window && window.contentView === editor && NSApp.windows.count==sampleWindows,"sample \(sample) uses same editor and window")
             editor.executeCommand("undo")
-            try check(editor.text.utf8.elementsEqual(input.utf8) && !editor.modified,"sample \(sample) one Undo restores original bytes and savepoint")
+            check(editor.text.utf8.elementsEqual(input.utf8) && !editor.modified,"sample \(sample) one Undo restores original bytes and savepoint")
         }
-        try check(newDocumentCalls==0,"all four samples avoid new-document output")
+        check(newDocumentCalls==0,"all four samples avoid new-document output")
         saved.workflows[0]=preservedWorkflow;try restarted.persistLibrary(saved)
+        }
+        Checks.section("reminder export matching") {
         let now = Date()
         let confirmed = ReminderBatch(id:UUID(),destinationID:"list-a",destinationTitle:"Shopping",destinationSource:"Local",rows:[ReminderRow(id:UUID(),title:"2 eggs",status:.confirmed,reminderID:"fake-1")],createdAt:now)
         let uncertain = ReminderBatch(id:UUID(),destinationID:"list-a",destinationTitle:"Shopping",destinationSource:"Local",rows:[ReminderRow(id:UUID(),title:"2 eggs",status:.uncertain)],createdAt:now.addingTimeInterval(1))
-        try check(AutomationController.matchingExport(rows:["2 eggs"],destinationID:"list-a",batches:[confirmed,uncertain])?.id == uncertain.id,"repeated identical export resolves existing durable uncertain batch")
-        try check(AutomationController.matchingExport(rows:["3 eggs"],destinationID:"list-a",batches:[confirmed]) == nil,"changed content is distinct export")
-        try check(AutomationController.matchingExport(rows:["2 eggs"],destinationID:"list-b",batches:[confirmed]) == nil,"different destination is distinct export")
-        try check(AutomationController.matchingExport(rows:["2 eggs","2 eggs"],destinationID:"list-a",batches:[confirmed]) == nil,"intentional duplicate rows retain identity")
+        check(AutomationController.matchingExport(rows:["2 eggs"],destinationID:"list-a",batches:[confirmed,uncertain])?.id == uncertain.id,"repeated identical export resolves existing durable uncertain batch")
+        check(AutomationController.matchingExport(rows:["3 eggs"],destinationID:"list-a",batches:[confirmed]) == nil,"changed content is distinct export")
+        check(AutomationController.matchingExport(rows:["2 eggs"],destinationID:"list-b",batches:[confirmed]) == nil,"different destination is distinct export")
+        check(AutomationController.matchingExport(rows:["2 eggs","2 eggs"],destinationID:"list-a",batches:[confirmed]) == nil,"intentional duplicate rows retain identity")
+        }
+        Checks.section("modal keyboard chain") {
         let beforeModal=try Data(contentsOf:path)
         try modalKeyboardChecks(restarted)
-        try check(try Data(contentsOf:path)==beforeModal,"Cancel from keyboard-edited rule draft preserves saved definitions")
+        check(try Data(contentsOf:path)==beforeModal,"Cancel from keyboard-edited rule draft preserves saved definitions")
+        }
+        Checks.section("oversized transform") {
         var growingLibrary=saved
         growingLibrary.workflows[0].steps=[.init(kind:.replaceLiteral,find:"x",replacement:String(repeating:"y",count:7*1024*1024))]
         growingLibrary.workflows[0].previewBeforeApply=false
@@ -275,19 +282,21 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         let growthRevision=editor.revision
         var growthRejected=false
         do { try restarted.runSavedAutomation(id:growingLibrary.workflows[0].id) } catch { growthRejected=true }
-        try check(growthRejected && editor.text=="xxxxx" && editor.revision==growthRevision && !editor.modified,"production oversized transform leaves native text revision Undo and savepoint unchanged")
+        check(growthRejected && editor.text=="xxxxx" && editor.revision==growthRevision && !editor.modified,"production oversized transform leaves native text revision Undo and savepoint unchanged")
         try restarted.persistLibrary(saved)
+        }
+        Checks.section("unsafe configuration files") {
         let unsafeConfigRoot=root.appendingPathComponent("unsafe-config")
         try FileManager.default.createDirectory(at:unsafeConfigRoot,withIntermediateDirectories:true)
         let unsafeConfig=unsafeConfigRoot.appendingPathComponent("Automations.json")
         setenv("TEXTTANK_SUPPORT_DIRECTORY",unsafeConfigRoot.path,1)
         defer { setenv("TEXTTANK_SUPPORT_DIRECTORY",root.path,1) }
-        precondition(mkfifo(unsafeConfig.path,0o600)==0)
+        try require(mkfifo(unsafeConfig.path,0o600)==0,"fixture: configuration FIFO created")
         let fifoStart=ProcessInfo.processInfo.systemUptime
         let fifoController=AutomationController(editorProvider:{nil},newDocument:{_ in})
         var rejectedFIFO=false
         do { try fifoController.persistLibrary(saved) } catch { rejectedFIFO=true }
-        try check(rejectedFIFO && ProcessInfo.processInfo.systemUptime-fifoStart < 1,"FIFO configuration startup rejects promptly and prevents overwrite")
+        check(rejectedFIFO && ProcessInfo.processInfo.systemUptime-fifoStart < 1,"FIFO configuration startup rejects promptly and prevents overwrite")
         try FileManager.default.removeItem(at:unsafeConfig)
         let externalConfig=unsafeConfigRoot.appendingPathComponent("external.json")
         let validConfiguration=try saved.encoded();try validConfiguration.write(to:externalConfig)
@@ -295,15 +304,17 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         let symlinkController=AutomationController(editorProvider:{nil},newDocument:{_ in})
         var rejectedSymlink=false
         do { try symlinkController.persistLibrary(saved) } catch { rejectedSymlink=true }
-        try check(rejectedSymlink && (try Data(contentsOf:externalConfig))==validConfiguration,"configuration startup does not follow symlink or overwrite target")
+        check(try rejectedSymlink && (try Data(contentsOf:externalConfig))==validConfiguration,"configuration startup does not follow symlink or overwrite target")
         try FileManager.default.removeItem(at:unsafeConfig)
-        let oversizedFD=open(unsafeConfig.path,O_CREAT|O_WRONLY,mode_t(0o600));precondition(oversizedFD>=0)
-        precondition(ftruncate(oversizedFD,off_t(AutomationLibrary.maximumBytes+1))==0);close(oversizedFD)
+        let oversizedFD=open(unsafeConfig.path,O_CREAT|O_WRONLY,mode_t(0o600));try require(oversizedFD>=0,"fixture: oversized configuration file opened")
+        let grown=ftruncate(oversizedFD,off_t(AutomationLibrary.maximumBytes+1))==0;close(oversizedFD);try require(grown,"fixture: oversized configuration file sized")
         let oversizedController=AutomationController(editorProvider:{nil},newDocument:{_ in})
         var rejectedOversized=false
         do { try oversizedController.persistLibrary(saved) } catch { rejectedOversized=true }
-        try check(rejectedOversized,"oversized existing configuration is rejected and preserved")
+        check(rejectedOversized,"oversized existing configuration is rejected and preserved")
+        }
         withExtendedLifetime(toolbarHost) {}
-        print("PASS AutomationControllerChecks: \(checks) native assertions; no Reminders access")
+        Checks.summary { "PASS AutomationControllerChecks: \(Checks.count) native assertions; no Reminders access" }
+        }
     }
 }

@@ -3,10 +3,8 @@ import Foundation
 import Darwin
 
 @main struct FolderSearchChecks {
-    static var checks=0
-    static func check(_ value:Bool,_ name:String){guard value else{fatalError("FAIL \(name)")};checks+=1}
-    static func rejects(_ name:String,_ action:()async throws->Void)async{do{try await action();fatalError("FAIL expected rejection: \(name)")}catch{checks+=1}}
-    static func main()async throws{
+    static func main() async {
+        await Checks.run("FolderSearchChecks") {
         let root=FileManager.default.temporaryDirectory.appendingPathComponent("TextTankFolderSearch-"+UUID().uuidString).resolvingSymlinksInPath()
         let outside=root.deletingLastPathComponent().appendingPathComponent("TextTankSearchOutside-"+UUID().uuidString)
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
@@ -44,7 +42,7 @@ import Darwin
         let utf16Hit=report.matches.first{$0.url.lastPathComponent==utf16URL.lastPathComponent}!
         check(utf16Hit.utf8Range.location==4 && utf16Hit.utf16Range.location==4,"BOM offsets refer to decoded editor model")
         request.recursive=false
-        check(try await FolderSearch.search(request).matches.count==5,"nonrecursive scope excludes nested file")
+        await checkAsync(try await FolderSearch.search(request).matches.count==5,"nonrecursive scope excludes nested file")
         request.recursive=true;request.includeHidden=true;request.extensions=["TXT"]
         let visible=try await FolderSearch.search(request)
         check(visible.matches.count==7 && visible.skipped.contains{$0.reason == .extensionFiltered},"hidden opt-in and exact case-insensitive extension filter")
@@ -54,13 +52,13 @@ import Darwin
         try Data("a.*b A.*B café café\0tail".utf8).write(to:literalURL)
         var literal=FolderSearchRequest(directory:root,query:"a.*b")
         literal.matchCase=false
-        check(try await FolderSearch.search(literal).matches.count==2,"regex metacharacters are literal and case option works")
+        await checkAsync(try await FolderSearch.search(literal).matches.count==2,"regex metacharacters are literal and case option works")
         literal.matchCase=true
-        check(try await FolderSearch.search(literal).matches.count==1,"case-sensitive literal distinction")
+        await checkAsync(try await FolderSearch.search(literal).matches.count==1,"case-sensitive literal distinction")
         var regex=FolderSearchRequest(directory:root,query:"[aA]\\.\\*[bB]");regex.mode = .regularExpression
-        check(try await FolderSearch.search(regex).matches.count==2,"Boost folder pattern exact matches")
+        await checkAsync(try await FolderSearch.search(regex).matches.count==2,"Boost folder pattern exact matches")
         var extended=FolderSearchRequest(directory:root,query:"\\0tail");extended.mode = .extended
-        check(try await FolderSearch.search(extended).matches.count==1,"extended folder NUL query")
+        await checkAsync(try await FolderSearch.search(extended).matches.count==1,"extended folder NUL query")
         var zero=FolderSearchRequest(directory:root,query:"(?=tail)");zero.mode = .regularExpression
         let zeros=try await FolderSearch.search(zero)
         check(zeros.matches.count==1 && zeros.matches[0].utf8Range.length==0,"zero-width folder offsets")
@@ -85,26 +83,27 @@ import Darwin
         let entryLimit=try await FolderSearch.search(limited)
         check(entryLimit.entriesVisited==1 && entryLimit.reachedLimit == .entries,"entry traversal cap enforced")
         limited.maximumEntries=100;limited.maximumFiles=1
-        check(try await FolderSearch.search(limited).reachedLimit == .files,"file count cap reported")
+        await checkAsync(try await FolderSearch.search(limited).reachedLimit == .files,"file count cap reported")
         limited.maximumFiles=100;limited.maximumTotalBytes=2
         let byteLimit=try await FolderSearch.search(limited)
         check(byteLimit.reachedLimit == .totalBytes && byteLimit.bytesRead<=2,"total read bytes bounded and reported")
         limited.maximumTotalBytes=10000;limited.maximumFileBytes=2
-        check(try await FolderSearch.search(limited).skipped.contains{$0.reason == .fileTooLarge},"individual large file excluded with explicit reason")
+        await checkAsync(try await FolderSearch.search(limited).skipped.contains{$0.reason == .fileTooLarge},"individual large file excluded with explicit reason")
         let token=FolderSearchCancellation()
         let cancelled=try await FolderSearch.search(request,cancellation:token,progress:{ progress in if progress.filesSearched==1{token.cancel()} })
         check(cancelled.wasCancelled && cancelled.filesSearched==1,"background progress supports cooperative cancellation with partial report")
         let task=Task{try await FolderSearch.search(request)};task.cancel()
-        check(try await task.value.wasCancelled,"Task cancellation propagated into detached search")
+        await checkAsync(try await task.value.wasCancelled,"Task cancellation propagated into detached search")
         let directoryLink=root.deletingLastPathComponent().appendingPathComponent("TextTankSearchRootLink-"+UUID().uuidString)
         try FileManager.default.createSymbolicLink(at:directoryLink,withDestinationURL:root)
         defer{try? FileManager.default.removeItem(at:directoryLink)}
-        await rejects("symlink root refused"){_ = try await FolderSearch.search(FolderSearchRequest(directory:directoryLink,query:"x"))}
-        await rejects("empty query refused"){_ = try await FolderSearch.search(FolderSearchRequest(directory:root,query:""))}
-        await rejects("remote directory refused"){_ = try await FolderSearch.search(FolderSearchRequest(directory:URL(string:"https://example.com")!,query:"x"))}
+        await rejects("symlink root refused",where:{ ($0 as? POSIXError)?.code == .ENOTDIR }){_ = try await FolderSearch.search(FolderSearchRequest(directory:directoryLink,query:"x"))}
+        await rejects("empty query refused",where:{ $0 is FolderSearchError }){_ = try await FolderSearch.search(FolderSearchRequest(directory:root,query:""))}
+        await rejects("remote directory refused",where:{ $0 is FolderSearchError }){_ = try await FolderSearch.search(FolderSearchRequest(directory:URL(string:"https://example.com")!,query:"x"))}
         let fifo=root.appendingPathComponent("named-pipe")
-        guard mkfifo(fifo.path,mode_t(0o600))==0 else{fatalError("fixture mkfifo failed")}
-        check(try await FolderSearch.search(request).skipped.contains{$0.url.lastPathComponent==fifo.lastPathComponent && $0.reason == .notRegularFile},"FIFO skipped without blocking reader")
-        print("PASS FolderSearchChecks: \(checks) assertions; normal/extended/Boost cases, no complete parity or disk replacement claim")
+        try require(mkfifo(fifo.path,mode_t(0o600))==0,"fixture: FIFO created")
+        await checkAsync(try await FolderSearch.search(request).skipped.contains{$0.url.lastPathComponent==fifo.lastPathComponent && $0.reason == .notRegularFile},"FIFO skipped without blocking reader")
+        Checks.summary { "PASS FolderSearchChecks: \(Checks.count) assertions; normal/extended/Boost cases, no complete parity or disk replacement claim" }
+    }
     }
 }

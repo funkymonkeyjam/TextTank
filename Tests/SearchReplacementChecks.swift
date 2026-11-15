@@ -1,13 +1,12 @@
 import Foundation
 import Darwin
 @main struct SearchReplacementChecks {
-    static func main()async throws {
+    static func main()async {
+        await Checks.run("SearchReplacementChecks") {
         setbuf(stdout,nil)
         let root=FileManager.default.temporaryDirectory.appendingPathComponent("TextTankReplacement-"+UUID().uuidString)
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
         defer{try? FileManager.default.removeItem(at:root)}
-        var count=0
-        func check(_ value:Bool,_ label:String){precondition(value,label);count+=1;print("PASS \(label)")}
         let a=root.appendingPathComponent("a.txt"),b=root.appendingPathComponent("b.txt"),c=root.appendingPathComponent("c.txt")
         let original=try FileCodec.encode("🥑 key=12\r\n",format:FileFormat(encoding:.utf16LE,bom:true))
         try original.write(to:a);try Data("key=34".utf8).write(to:b);try Data("key=56".utf8).write(to:c)
@@ -61,6 +60,7 @@ import Darwin
         var fake=before.matches.first{$0.url.lastPathComponent=="b.txt"}!
         fake=FolderSearchMatch(url:link,line:fake.line,columnUTF16:fake.columnUTF16,utf16Range:fake.utf16Range,utf8Range:fake.utf8Range,preview:fake.preview,previewMatchRange:fake.previewMatchRange,isMatchTruncatedInPreview:false,sourceSHA256:fake.sourceSHA256)
         check(try FolderReplacement.replace(directory:root,matches:[fake],options:options).first?.status == .failed,"symlink leaf rejected")
-        print("PASS SearchReplacementChecks: \(count) assertions")
+        Checks.summary { "PASS SearchReplacementChecks: \(Checks.count) assertions" }
+        }
     }
 }

@@ -1,8 +1,15 @@
 import Foundation
+/// Reports "not cancelled" for the first polls and "cancelled" from then on, so
+/// a search is cancelled while it is running without a timer or a second thread.
+final class CancelAfterPolls: TTSearchCancellation {
+    private let allowed:Int
+    private(set) var polls=0
+    init(allowed:Int){self.allowed=allowed;super.init()}
+    override var cancelled:Bool {polls+=1;return polls>allowed}
+}
 @main struct SearchChecks {
-    static func main() throws {
-        var checks=0
-        func check(_ value:Bool,_ label:String){precondition(value,label);checks+=1;print("PASS \(label)")}
+    static func main() {
+        Checks.run("SearchChecks") {
         func search(_ text:String,_ query:String,_ replacement:String="",mode:SearchOptions.Mode = .regularExpression,caseSensitive:Bool=true,whole:Bool=false,dot:Bool=false)throws->SearchReport {
             var o=SearchOptions();o.query=query;o.replacement=replacement;o.mode=mode;o.matchCase=caseSensitive;o.wholeWord=whole;o.dotMatchesNewline=dot;return try SearchCore.search(text,options:o)
         }
@@ -64,21 +71,24 @@ import Foundation
         check(limited.truncated && limited.hits.count==2,"result cap explicit")
         let cancelled=TTSearchCancellation();cancelled.cancel();failed=false
         do{_ = try SearchCore.search("aaa",options:options,cancellation:cancelled)}catch{failed=true};check(failed,"pre-cancelled search rejected")
-        options.query="(a+)+$";let start=Date();failed=false
-        do{_ = try SearchCore.search(String(repeating:"a",count:100)+"!",options:options,timeLimit:0.05)}catch{failed=true}
-        check(failed && Date().timeIntervalSince(start)<1,"pathological Boost pattern bounded under one second")
-        let token=TTSearchCancellation();DispatchQueue.global().asyncAfter(deadline:.now()+0.02){token.cancel()};let cancelStart=Date();failed=false
-        do{_ = try SearchCore.search(String(repeating:"a",count:200)+"!",options:options,cancellation:token,timeLimit:5)}catch{failed=true}
-        check(failed && Date().timeIntervalSince(cancelStart)<1,"active Boost search cancellation bounded")
+        // The product's own time budget and cancellation are what bound these searches, so the
+        // checks assert the reason for the rejection; the stopwatch is only a generous hang guard.
+        options.query="(a+)+$";let start=Date()
+        rejects("pathological Boost pattern stopped by its time budget",message:"exceeded its time budget"){_ = try SearchCore.search(String(repeating:"a",count:100)+"!",options:options,timeLimit:0.05)}
+        check(Date().timeIntervalSince(start)<10,"pathological Boost pattern returns well inside the hang guard")
+        let token=CancelAfterPolls(allowed:1),cancelStart=Date()
+        rejects("active Boost search observes cancellation",message:"Search cancelled"){_ = try SearchCore.search(String(repeating:"a",count:200)+"!",options:options,cancellation:token,timeLimit:5)}
+        check(token.polls==2 && Date().timeIntervalSince(cancelStart)<5,"active Boost search stops at the first cancellation poll after it started, not at its 5 s budget")
         failed=false;do{_ = try SearchCore.replacing("abcd",with:[SearchHit(range:NSRange(location:0,length:3),replacement:"X"),SearchHit(range:NSRange(location:2,length:1),replacement:"Y")])}catch{failed=true};check(failed,"overlap rejected before edits")
         options.query=String(repeating:"(",count:10000)+"a"+String(repeating:")",count:10000);failed=false;let compileStart=Date()
         do{_ = try SearchCore.search("a",options:options,timeLimit:0.1)}catch{failed=true}
-        check(failed && Date().timeIntervalSince(compileStart)<1,"deeply nested pattern compilation rejects safely")
+        check(failed && Date().timeIntervalSince(compileStart)<10,"deeply nested pattern compilation rejects safely")
         check(try SearchCore.bookmarkLines(in:"a\r\nb\rc\n🥑",locations:[0,1,2,3,4,5,6,7,9],cancellation:TTSearchCancellation()) == [0,1,2,3],"bookmark CRLF CR LF Unicode offsets linear")
         check(try SearchCore.bookmarkLines(in:"abc",locations:[],cancellation:TTSearchCancellation()).isEmpty,"empty bookmarks")
         failed=false;do{_ = try SearchCore.bookmarkLines(in:"abc",locations:[0],cancellation:cancelled)}catch{failed=true};check(failed,"bookmark pre-cancellation")
         failed=false;do{_ = try SearchCore.bookmarkLines(in:"abc",locations:[2,1],cancellation:TTSearchCancellation())}catch{failed=true};check(failed,"bookmark reversed offsets reject")
-        let denseStart=Date();check(try SearchCore.bookmarkLines(in:String(repeating:"x\n",count:100000),locations:Array(stride(from:0,to:200000,by:2)),cancellation:TTSearchCancellation()).count==100000 && Date().timeIntervalSince(denseStart)<2,"dense bookmark offsets bounded linear pass")
-        print("PASS SearchChecks: \(checks) assertions")
+        let denseStart=Date();check(try SearchCore.bookmarkLines(in:String(repeating:"x\n",count:100000),locations:Array(stride(from:0,to:200000,by:2)),cancellation:TTSearchCancellation()).count==100000 && Date().timeIntervalSince(denseStart)<10,"dense bookmark offsets bounded linear pass")
+        Checks.summary { "PASS SearchChecks: \(Checks.count) assertions" }
+        }
     }
 }

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 @main struct LanguageControllerChecks {
- static func main()throws {
-  let old=ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"],root=FileManager.default.temporaryDirectory.appendingPathComponent("LanguageChecks-"+UUID().uuidString)
-  setenv("TEXTTANK_SUPPORT_DIRECTORY",root.path,1);defer{if let old{setenv("TEXTTANK_SUPPORT_DIRECTORY",old,1)}else{unsetenv("TEXTTANK_SUPPORT_DIRECTORY")};try? FileManager.default.removeItem(at:root)}
+ static func main() {
+  Checks.run("LanguageControllerChecks") {
+  let isolatedSupport=try IsolatedSupportDirectory("LanguageChecks")
+  defer{isolatedSupport.restore()}
   _ = NSApplication.shared
   let window=NSWindow(contentRect:NSRect(x:0,y:0,width:600,height:400),styleMask:[.titled],backing:.buffered,defer:false),editor=TTEditor(frame:NSRect(x:0,y:0,width:600,height:400));window.contentView=editor
   var selected="python"
   let controller=LanguageController(editorProvider:{editor},languageProvider:{selected},setLanguage:{selected=$0})
-  let catalog=controller.catalog!;var checks=0
-  func check(_ condition:Bool,_ label:String){precondition(condition,label);checks+=1;print("PASS \(label)")}
+  let catalog=try requireValue(controller.catalog,"fixture: language catalog loaded")
   let text="# café\nclass Example:\n    def work(self):\n        return 1\n"
   editor.text=text;editor.resetUndoHistory();editor.setSavePoint();let revision=editor.revision
   check(controller.apply(identifier:"python",to:editor),"Python profile applies to live Lexilla editor")
@@ -87,6 +87,7 @@ import AppKit
   check(applyTime<3*onePass,"applying a profile costs about one lexing pass (apply \(String(format:"%.3f",applyTime)) s, one pass \(String(format:"%.3f",onePass)) s)")
   check(controller.apply(identifier:"python",to:lexEditor) && sci(SCI_GETSTYLEAT,0)==11 && sci(SCI_GETSTYLEAT,UInt(lastLine+8))==11 && sci(SCI_GETENDSTYLED)==lexSource.utf8.count && lexEditor.revision==lexRevision,"switching profile replaces the previous lexer's styles across the whole document")
   print("LEXER CONFIGURATION: \(supported) available; missing \(missing). This proves loading and text integrity, not every lexical semantic.")
-  print("PASS LanguageControllerChecks: \(checks) native assertions")
+  Checks.summary { "PASS LanguageControllerChecks: \(Checks.count) native assertions" }
+  }
  }
 }
