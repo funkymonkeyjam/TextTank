@@ -243,6 +243,132 @@ int main() {
         guarded.readOnly=NO;guarded.text=@"";
         check(guarded.text.length==0, "Empty text still empties the document");
         });
+        // F252: every command name the menus, shortcuts and macros can send is executed once.
+        // Expected values are Scintilla's documented behaviour for the mapped message; a wrong
+        // or dropped mapping changes the text or the selection and fails here.
+        ttchecks::section("every editor command by name", [&] {
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        NSWindow *host=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,600,400) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+        host.contentView=ed;
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        [ed configureTabWidth:4 useTabs:NO];
+        struct Case { const char *command; NSString *text; NSInteger anchor, caret; NSString *expected; NSInteger expectedAnchor, expectedCaret; };
+        NSString *doc=@"one two\nthree\n";
+        const Case cases[]={
+            {"deleteLine",doc,1,1,@"three\n",0,0},
+            {"deleteLineLeft",doc,3,3,@" two\nthree\n",0,0},
+            {"deleteLineRight",doc,3,3,@"one\nthree\n",3,3},
+            {"deleteWordLeft",doc,7,7,@"one \nthree\n",4,4},
+            {"deleteWordRight",doc,0,0,@"two\nthree\n",0,0},
+            {"deleteForward",doc,0,0,@"ne two\nthree\n",0,0},
+            {"deleteBack",doc,1,1,@"ne two\nthree\n",0,0},
+            {"duplicateLine",doc,1,1,@"one two\none two\nthree\n",1,1},
+            {"duplicateSelection",doc,0,3,@"oneone two\nthree\n",0,3},
+            {"transposeLine",doc,8,8,@"three\none two\n",6,6},
+            {"indent",doc,0,10,@"    one two\n    three\n",0,22},
+            {"unindent",@"    one two\n    three\n",0,18,doc,0,14},
+            {"tab",doc,0,0,@"    one two\nthree\n",4,4},
+            {"backTab",@"    one",4,4,@"one",0,0},
+            {"upper",doc,0,3,@"ONE two\nthree\n",0,3},
+            {"lower",@"ONE two",0,3,@"one two",0,3},
+            {"newLine",doc,3,3,@"one\n two\nthree\n",4,4},
+            {"selectAll",doc,3,3,doc,14,0},
+            {"charLeft",doc,5,5,doc,4,4},
+            {"charRight",doc,5,5,doc,6,6},
+            {"charRight",@"a😀b",1,1,@"a😀b",5,5},
+            {"charLeft",@"a😀b",5,5,@"a😀b",1,1},
+            {"wordLeft",doc,5,5,doc,4,4},
+            {"wordRight",doc,1,1,doc,4,4},
+            {"home",doc,5,5,doc,0,0},
+            {"lineEnd",doc,5,5,doc,7,7},
+            {"lineDown",doc,2,2,doc,10,10},
+            {"lineUp",doc,10,10,doc,2,2},
+            {"documentStart",doc,5,5,doc,0,0},
+            {"documentEnd",doc,5,5,doc,14,14},
+            {"charLeftExtend",doc,5,5,doc,5,4},
+            {"charRightExtend",doc,5,5,doc,5,6},
+            {"wordLeftExtend",doc,5,5,doc,5,4},
+            {"wordRightExtend",doc,1,1,doc,1,4},
+            {"homeExtend",doc,5,5,doc,5,0},
+            {"lineEndExtend",doc,5,5,doc,5,7},
+            {"lineDownExtend",doc,2,2,doc,2,10},
+            {"lineUpExtend",doc,10,10,doc,10,2},
+            {"documentStartExtend",doc,5,5,doc,5,0},
+            {"documentEndExtend",doc,5,5,doc,5,14},
+        };
+        for (const Case &c : cases) {
+            ed.text=c.text; [ed resetUndoHistory]; [ed setSavePoint];
+            require([ed setSelectionAnchor:c.anchor caret:c.caret], "fixture: command case selection is valid");
+            // Vertical moves aim for the column chosen by the last horizontal move; choose it
+            // from this case's caret so that no case depends on the one before it.
+            [sv message:SCI_CHOOSECARETX];
+            NSUInteger before=ed.revision;
+            [ed executeCommand:@(c.command)];
+            BOOL edits=![c.expected isEqual:c.text];
+            std::string name(c.command);
+            BOOL matched=[ed.text isEqual:c.expected] && ed.selectionAnchor==c.expectedAnchor && ed.selectionCaret==c.expectedCaret;
+            if (!check(matched, (name+(edits ? " edits to the expected text and selection" : " moves to the expected selection without editing")).c_str()))
+                printf("NOTE %s gave text=%s anchor=%ld caret=%ld\n", c.command, [[ed.text stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"] UTF8String], (long)ed.selectionAnchor, (long)ed.selectionCaret);
+            if (edits) {
+                [ed executeCommand:@"undo"];
+                check([ed.text isEqual:c.text] && !ed.modified, (name+" is one Undo back to the save point").c_str());
+                [ed executeCommand:@"redo"];
+                check([ed.text isEqual:c.expected], (name+" is restored by one Redo").c_str());
+            } else check(ed.revision==before && !ed.modified, (name+" leaves revision and save point alone").c_str());
+        }
+        ed.text=doc; [ed resetUndoHistory]; [ed setSavePoint]; [ed setSelectionAnchor:3 caret:5];
+        NSUInteger quiet=ed.revision;
+        for (NSString *unknown in @[@"", @"noSuchCommand", @"SCI_CLEARALL", @"2004", @"Undo", @"deleteLine "]) [ed executeCommand:unknown];
+        check([ed.text isEqual:doc] && ed.revision==quiet && !ed.modified && ed.selectionAnchor==3 && ed.selectionCaret==5, "unknown command names change neither text, revision, save point nor selection");
+        ed.readOnly=YES;
+        for (NSString *command in @[@"deleteLine",@"deleteWordRight",@"duplicateLine",@"transposeLine",@"indent",@"upper",@"newLine",@"deleteBack",@"trimTrailing",@"joinLines",@"moveLineDown"]) [ed executeCommand:command];
+        check([ed.text isEqual:doc] && ed.revision==quiet && !ed.modified, "editing commands on a read-only editor change neither text nor revision");
+        ed.readOnly=NO;
+        sptr_t zoom=[sv message:SCI_GETZOOM];
+        [ed executeCommand:@"zoomOut"];
+        check([sv message:SCI_GETZOOM]==zoom-1 && ed.revision==quiet, "zoomOut lowers the view zoom by one step without editing");
+        [ed executeCommand:@"zoomIn"];
+        check([sv message:SCI_GETZOOM]==zoom, "zoomIn raises the view zoom by one step");
+        [ed executeCommand:@"rectangularSelection"];
+        check([sv message:SCI_GETSELECTIONMODE]==SC_SEL_RECTANGLE, "rectangularSelection switches the selection mode to rectangle");
+        [ed executeCommand:@"streamSelection"];
+        check([sv message:SCI_GETSELECTIONMODE]==SC_SEL_STREAM, "streamSelection switches the selection mode back to stream");
+        [sv message:SCI_CANCEL];
+        ed.text=@"ab cd ab ef ab"; [ed setSelectionAnchor:0 caret:2];
+        [ed executeCommand:@"addNextOccurrence"];
+        NSArray *two=ed.selectionRanges;
+        if (!check(ed.selectionCount==2 && [two[1][@"anchor"] integerValue]==6 && [two[1][@"caret"] integerValue]==8, "addNextOccurrence adds the next match of the selected text as a second selection"))
+            printf("NOTE addNextOccurrence gave %ld selections %s\n", (long)ed.selectionCount, two.description.UTF8String);
+        [ed executeCommand:@"clearAdditionalSelections"];
+        check(ed.selectionCount==1, "clearAdditionalSelections leaves one selection");
+        [ed setSelectionAnchor:0 caret:2];
+        [ed executeCommand:@"selectAllOccurrences"];
+        if (!check(ed.selectionCount==3 && [ed.text isEqual:@"ab cd ab ef ab"], "selectAllOccurrences selects every match of the selected text without editing"))
+            printf("NOTE selectAllOccurrences gave %ld selections\n", (long)ed.selectionCount);
+        [ed executeCommand:@"clearAdditionalSelections"];
+        for (NSArray *mode in @[@[@"CRLF",@"a\r\nb\r\nc\r\n",@(SC_EOL_CRLF)],@[@"CR",@"a\rb\rc\r",@(SC_EOL_CR)],@[@"LF",@"a\nb\nc\n",@(SC_EOL_LF)]]) {
+            ed.text=@"a\r\nb\rc\n"; [ed resetUndoHistory]; [ed setSavePoint];
+            [ed convertLineEndings:mode[0]];
+            check([ed.text isEqual:mode[1]] && [ed.statusInfo[@"eol"] integerValue]==[mode[2] integerValue], [[NSString stringWithFormat:@"convertLineEndings %@ rewrites every ending and sets the insertion ending",mode[0]] UTF8String]);
+            [ed executeCommand:@"undo"];
+            check([ed.text isEqual:@"a\r\nb\rc\n"] && !ed.modified, [[NSString stringWithFormat:@"convertLineEndings %@ is one Undo back to the mixed original",mode[0]] UTF8String]);
+        }
+        NSUInteger eolRevision=ed.revision; [ed convertLineEndings:@"bogus"];
+        check(ed.revision==eolRevision && [ed.text isEqual:@"a\r\nb\rc\n"], "an unknown line-ending name converts nothing");
+        // cut, copy and paste go through the general pasteboard, which belongs to the person
+        // at the keyboard, so they run only on request and put the previous text back.
+        if (getenv("TEXTTANK_TEST_PASTEBOARD")) {
+            NSPasteboard *board=NSPasteboard.generalPasteboard; NSString *saved=[board stringForType:NSPasteboardTypeString];
+            ed.text=@"one two"; [ed resetUndoHistory]; [ed setSelectionAnchor:0 caret:3];
+            [ed executeCommand:@"copy"];
+            check([[board stringForType:NSPasteboardTypeString] isEqual:@"one"] && [ed.text isEqual:@"one two"], "copy places the selection on the pasteboard without editing");
+            [ed setSelectionAnchor:3 caret:7]; [ed executeCommand:@"cut"];
+            check([[board stringForType:NSPasteboardTypeString] isEqual:@" two"] && [ed.text isEqual:@"one"], "cut removes the selection and places it on the pasteboard");
+            [ed setSelectionAnchor:0 caret:0]; [ed executeCommand:@"paste"];
+            check([ed.text isEqual:@" twoone"], "paste inserts the pasteboard text at the caret");
+            [board clearContents]; if (saved) [board setString:saved forType:NSPasteboardTypeString];
+        } else printf("SKIP cut, copy and paste: set TEXTTANK_TEST_PASTEBOARD=1 to run them against the general pasteboard\n");
+        });
         return ttchecks::finish("BridgeChecks", "IME, VoiceOver, UI focus and permission tests not covered");
     }
 }
