@@ -26,6 +26,30 @@ def module(name, filename):
 
 
 class BuildPipelineChecks(unittest.TestCase):
+    def test_nested_source_archive_never_binds_to_an_unrelated_outer_git_tree(self):
+        recording = module('record_validation', 'record-validation.py')
+        package = module('package_review', 'package_review.py')
+        with tempfile.TemporaryDirectory() as work:
+            outer = Path(work)
+            (outer / '.gitignore').write_text('archive/\n')
+            for command in [['git', 'init', '-q'], ['git', 'add', '.gitignore'],
+                            ['git', '-c', 'user.name=Build checks', '-c', 'user.email=checks@example.invalid',
+                             'commit', '-qm', 'Unrelated outer fixture']]:
+                subprocess.run(command, cwd=outer, check=True, capture_output=True)
+            archive = outer / 'archive'
+            archive.mkdir()
+            (archive / 'source.swift').write_text('// source not tracked by outer repository\n')
+            state = recording.source_state(archive)
+            self.assertIsNone(state['source_tree'])
+            logs = archive / 'harness/logs'
+            recording.write_json(logs / 'test-source-state.json', state)
+            (logs / 'full-acceptance.log').write_text('PASS synthetic source archive protocol\n')
+            record = recording.record(archive, 0)
+            self.assertFalse(record['source_stable'])
+            self.assertIn('root', record['source_stable_reason'])
+            with self.assertRaises(ValueError):
+                package.verify_validation(archive, recording.source_state(outer)['source_tree'])
+
     def test_canonical_build_identity_is_shared_and_rejects_unsupported_arch(self):
         config = module('build_config', 'build_config.py')
         identity = config.load_identity(ROOT)

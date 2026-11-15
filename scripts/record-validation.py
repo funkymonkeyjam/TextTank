@@ -20,6 +20,9 @@ def source_state(root):
     try:
         if git(root, 'rev-parse', '--is-inside-work-tree') != 'true':
             raise ValueError('not a git checkout')
+        if Path(git(root, 'rev-parse', '--show-toplevel')).resolve() != root.resolve():
+            return {'source_commit': None, 'source_tree': None, 'dirty': None,
+                    'source_state_reason': 'selected source directory is not the git checkout root'}
         return {'source_commit': git(root, 'rev-parse', 'HEAD'),
                 'source_tree': git(root, 'rev-parse', 'HEAD^{tree}'),
                 'dirty': bool(git(root, 'status', '--porcelain'))}
@@ -61,7 +64,7 @@ def record(root, code):
     if not start:
         reason = 'start-of-run source state is missing'
     elif not end['source_tree']:
-        reason = 'not a git checkout; evidence cannot be bound to a tree'
+        reason = end.get('source_state_reason', 'selected source root is not a git checkout; evidence cannot be bound to a tree')
     elif start.get('dirty') is not False or end['dirty'] is not False:
         reason = 'working tree was dirty at the start or end'
     elif start.get('source_tree') != end['source_tree']:

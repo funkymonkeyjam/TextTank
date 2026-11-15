@@ -60,6 +60,7 @@ def prune_previous(output):
 
 def main():
     root = pathlib.Path(__file__).resolve().parents[1]
+    os.chdir(root)
     sha = sys.argv[1]
     output = root / 'output'
     output.mkdir(exist_ok=True)
