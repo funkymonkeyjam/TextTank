@@ -24,3 +24,18 @@ final class RecoveryWriter {
     /// queued snapshots cannot resurrect a document the user discarded.
     func finish(_ operation:() throws -> Void) rethrows {try queue.sync(execute:operation)}
 }
+
+/// Decides when repeated recovery-write failures deserve more than the status line.
+/// One failure can be transient; from the second consecutive failure the user is told
+/// once per app session, and any success starts the count again.
+struct RecoveryFailureTracker {
+    static let threshold=2
+    private(set) var consecutiveFailures=0
+    var isFailing:Bool {consecutiveFailures>0}
+    mutating func recordSuccess() {consecutiveFailures=0}
+    /// Returns true when this failure should raise the session's single notice.
+    mutating func recordFailure(sessionAlreadyNotified:Bool) -> Bool {
+        consecutiveFailures+=1
+        return consecutiveFailures>=Self.threshold && !sessionAlreadyNotified
+    }
+}

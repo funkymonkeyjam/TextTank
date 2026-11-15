@@ -133,6 +133,38 @@ import Darwin
         try check(scan.issues.count == 1 && scan.issues[0].url.standardizedFileURL.path == broken.standardizedFileURL.path,"corrupt neighbor reported")
         try check(Data(contentsOf:broken) == brokenBytes,"scan preserves corrupt evidence")
         try FileManager.default.removeItem(at:broken)
+        // F202: discarding a scanned list removes exactly the listed snapshots at their scanned revision.
+        let discardURL = root.appendingPathComponent("discard-recovery"), discardStore = RecoveryStore(directory:discardURL)
+        let keepID = UUID(), dropID = UUID(), advancedID = UUID()
+        try discardStore.save(RecoverySnapshot(id:keepID,text:"unlisted",format:FileFormat(),originalURL:nil,revision:1))
+        try discardStore.save(RecoverySnapshot(id:dropID,text:"listed",format:FileFormat(),originalURL:nil,revision:4))
+        try discardStore.save(RecoverySnapshot(id:advancedID,text:"scanned",format:FileFormat(),originalURL:nil,revision:2))
+        let corruptNeighbour = discardURL.appendingPathComponent(UUID().uuidString+".json")
+        let corruptNeighbourBytes = Data("{neighbour".utf8); try corruptNeighbourBytes.write(to:corruptNeighbour)
+        let scanned = try discardStore.scan()
+        try check(scanned.snapshots.count == 3 && scanned.issues.count == 1,"discard fixture scanned")
+        let advanced = RecoverySnapshot(id:advancedID,text:"edited after the scan",format:FileFormat(),originalURL:nil,revision:3)
+        try discardStore.save(advanced)
+        let listed = scanned.snapshots.filter { $0.id != keepID }
+        let notDiscarded = discardStore.discard(listed)
+        try check(notDiscarded.count == 1 && notDiscarded[0].url.lastPathComponent == advancedID.uuidString+".json","discard reports only the snapshot that advanced after the scan")
+        try check(notDiscarded[0].url.standardizedFileURL.path == discardStore.fileURL(for:advancedID).standardizedFileURL.path && notDiscarded[0].message == RecoveryError.staleRevision.localizedDescription,"discard failure names the file and the reason")
+        let afterDiscard = try discardStore.scan()
+        try check(Set(afterDiscard.snapshots.map(\.id)) == [keepID,advancedID],"discard removes exactly the listed unchanged snapshot")
+        try check(discardStore.load(id:advancedID) == advanced && discardStore.load(id:keepID).text == "unlisted","discard keeps newer and unlisted snapshots intact")
+        try check(Data(contentsOf:corruptNeighbour) == corruptNeighbourBytes && afterDiscard.issues.count == 1,"discard leaves a corrupt neighbour byte-identical")
+        try check(discardStore.discard([]).isEmpty && discardStore.discard(scanned.snapshots.filter { $0.id == dropID }).isEmpty,"discarding nothing or an already removed snapshot is not an error")
+        // F202: escalation policy for repeated recovery failures.
+        var tracker = RecoveryFailureTracker()
+        try check(!tracker.isFailing && !tracker.recordFailure(sessionAlreadyNotified:false) && tracker.isFailing,"one recovery failure does not escalate")
+        try check(tracker.recordFailure(sessionAlreadyNotified:false),"second consecutive recovery failure escalates")
+        try check(!tracker.recordFailure(sessionAlreadyNotified:true) && tracker.consecutiveFailures == 3,"escalation happens once per session")
+        tracker.recordSuccess()
+        try check(!tracker.isFailing && !tracker.recordFailure(sessionAlreadyNotified:false),"a successful write resets the failure count")
+        // F126: line-ending detection uses the first line break only.
+        try check(LineEnding.detect(in:"") == .lf && LineEnding.detect(in:"no break") == .lf,"text without a line break inserts LF")
+        try check(LineEnding.detect(in:"a\r\nb\n") == .crlf && LineEnding.detect(in:"a\nb\r\n") == .lf && LineEnding.detect(in:"a\rb\n") == .cr,"first line break decides the insertion ending")
+        try check(LineEnding.detect(in:"a\r") == .cr && LineEnding.detect(in:"\r\n") == .crlf && LineEnding.detect(in:"\r\r\n") == .cr && LineEnding.detect(in:"é\u{2028}\r\n") == .crlf,"trailing CR, leading CRLF and non-ASCII text detected exactly")
         // A non-directory path simulates a deterministic storage failure without root/ACL assumptions.
         let denied = RecoveryStore(directory:original)
         rejects("non-directory storage write") { try denied.save(first) }

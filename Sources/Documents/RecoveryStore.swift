@@ -102,6 +102,18 @@ final class RecoveryStore {
         guard snapshot.revision <= throughRevision else { throw RecoveryError.staleRevision }
         try FileManager.default.removeItem(at: file)
     }
+    /// Explicit user discard of snapshots listed by an earlier scan. Each item goes through
+    /// remove(id:throughRevision:), so only the listed identities at the scanned revision are
+    /// deleted: a snapshot that advanced since the scan, a corrupt file or an unlisted
+    /// neighbour is left untouched. Returns one issue per snapshot that was not removed.
+    func discard(_ snapshots: [RecoverySnapshot]) -> [RecoveryIssue] {
+        snapshots.compactMap { snapshot in
+            do { try remove(id: snapshot.id, throughRevision: snapshot.revision); return nil }
+            catch { return RecoveryIssue(url: fileURL(for: snapshot.id), message: error.localizedDescription) }
+        }
+    }
+    /// Location only, for reporting and Reveal in Finder. The store never follows it blindly.
+    func fileURL(for id: UUID) -> URL { url(for: id) }
     private func url(for id: UUID) -> URL { directory.appendingPathComponent(id.uuidString).appendingPathExtension("json") }
     private func prepareDirectory() throws {
         try checkDirectoryIfPresent()

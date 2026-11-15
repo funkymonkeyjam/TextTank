@@ -27,6 +27,22 @@ enum FileCodecError: Error, LocalizedError {
     }
 }
 
+/// The ending a document inserts for new line breaks. Detection reads the first line break
+/// only: it is deterministic and cheap, and existing endings are never rewritten by it.
+enum LineEnding: String, CaseIterable {
+    case lf = "LF", crlf = "CRLF", cr = "CR"
+    /// CR LF gives CRLF, a lone CR gives CR, LF gives LF; text with no line break gives LF.
+    static func detect(in text: String) -> LineEnding {
+        var priorCR = false
+        for byte in text.utf8 {
+            if priorCR { return byte == 10 ? .crlf : .cr }
+            if byte == 10 { return .lf }
+            priorCR = byte == 13
+        }
+        return priorCR ? .cr : .lf
+    }
+}
+
 /// Pure codec: never normalizes line endings and never guesses a legacy encoding.
 struct FileCodec {
     private static let cp1252: [UInt32?] = [
