@@ -31,8 +31,9 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     var workspaceRoots: () -> [URL] = { [] }
     let scope = NSPopUpButton()
     let hiddenButton = NSButton(checkboxWithTitle: "Include hidden files/folders", target: nil, action: nil)
-    private let defaults: UserDefaults
-    private var settingsError: Error?
+    let preferenceNotice = AnnouncingLabel(labelWithString: "")
+    let resetPreferencesButton = NSButton(title: "Reset Saved Settings…", target: nil, action: nil)
+    private let preferences: JSONFileStore<FolderSearchSettings>
     let mode = NSPopUpButton()
     let wordButton = NSButton(checkboxWithTitle: "Whole word", target: nil, action: nil)
     let dotButton = NSButton(checkboxWithTitle: "Dot matches newline", target: nil, action: nil)
@@ -83,8 +84,17 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     /// Called with the reason when opening a result moved the caret, which macros cannot record (F277).
     var onUnrecordableCommand: ((String) -> Void)?
 
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    init(defaults: UserDefaults? = nil, preferencesURL: URL? = nil) {
+        let legacy = defaults ?? AppStorage.legacyDefaults
+        preferences = JSONFileStore(
+            url: preferencesURL ?? AppStorage.url(.folderSearch), displayName: "Find in Folder settings",
+            maximumBytes: FolderSearchSettings.maximumBytes, initial: FolderSearchSettings(),
+            decode: FolderSearchSettings.decode,
+            encode: { try $0.encoded() },
+            legacyValue: {
+                guard let legacy else { return nil }
+                return try FolderSearchSettings.load(legacy)
+            })
         // A panel, so the document window stays main while Find in Folder is key. It stays on
         // screen when the application is deactivated: a long search keeps its results visible.
         let window = ToolPanel(
@@ -153,39 +163,33 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         detailScroll.hasVerticalScroller = true
         details.autoresizingMask = [.width]
         details.isVerticallyResizable = true
+        resetPreferencesButton.target = self
+        resetPreferencesButton.action = #selector(resetSavedPreferences(_:))
+        resetPreferencesButton.setAccessibilityLabel("Reset saved Find in Folder settings")
+        preferenceNotice.setAccessibilityLabel("Saved Find in Folder settings status")
+        preferenceNotice.lineBreakMode = .byWordWrapping
+        preferenceNotice.maximumNumberOfLines = 2
+        let preferenceRow = NSStackView(views: [preferenceNotice, resetPreferencesButton])
+        preferenceRow.spacing = 8
+        preferenceRow.isHidden = preferences.state.error == nil
         let root = NSStackView(views: [
-            location, queryField, replacements, filterField, semantics, options, status, results, detailScroll
+            location, queryField, replacements, filterField, semantics, options, preferenceRow, status, results,
+            detailScroll
         ])
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 10
         root.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         window.contentView = root
-        for view in [location, queryField, replacements, filterField, semantics, options, status, results, detailScroll]
-        { view.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true }
+        for view in [
+            location, queryField, replacements, filterField, semantics, options, preferenceRow, status, results,
+            detailScroll
+        ] { view.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true }
         detailScroll.heightAnchor.constraint(equalToConstant: 100).isActive = true
         results.heightAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
         extensionField.widthAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
-        do {
-            let settings = try FolderSearchSettings.load(defaults)
-            folder = settings.folder
-            scope.selectItem(at: settings.workspaceScope ? 1 : 0)
-            recursiveButton.state = settings.recursive ? .on : .off
-            hiddenButton.state = settings.includeHidden ? .on : .off
-            extensionField.stringValue = settings.extensions
-            filterField.stringValue = settings.filters
-            queryField.stringValue = settings.options.query
-            replacementField.stringValue = settings.options.replacement
-            mode.selectItem(at: settings.options.mode.rawValue)
-            caseButton.state = settings.options.matchCase ? .on : .off
-            wordButton.state = settings.options.wholeWord ? .on : .off
-            dotButton.state = settings.options.dotMatchesNewline ? .on : .off
-            updateFolderLabel()
-        } catch {
-            settingsError = error
-            filterField.stringValue = "*.*"
-            status.stringValue = "Saved search settings could not be read; original settings preserved."
-        }
+        applySavedPreferences(preferences.value)
+        if let error = preferences.state.error { showPreferenceFailure(error) }
         window.initialFirstResponder = queryField
         WindowFrames.track(window, as: "TextTank.FindInFolder")
     }
@@ -206,11 +210,11 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         folder = url
         scope.selectItem(at: 0)
         updateFolderLabel()
-        try? saveSettings()
+        savePreferencesOrReport()
     }
     @objc private func scopeChanged(_ sender: Any?) {
         updateFolderLabel()
-        try? saveSettings()
+        savePreferencesOrReport()
     }
     private func updateFolderLabel() {
         folderLabel.stringValue =
@@ -219,7 +223,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     }
     /// Native setting capture is inert and commits the shared field editor first.
     func saveSettings() throws {
-        guard settingsError == nil else { return } // Preserve a corrupt/future version verbatim.
+
         window?.makeFirstResponder(nil)
         var value = FolderSearchSettings()
         value.folder = folder
@@ -234,7 +238,41 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         value.options.matchCase = caseButton.state == .on
         value.options.wholeWord = wordButton.state == .on
         value.options.dotMatchesNewline = dotButton.state == .on
-        try value.save(defaults)
+        try preferences.save(value)
+    }
+    private func applySavedPreferences(_ settings: FolderSearchSettings) {
+        folder = settings.folder
+        scope.selectItem(at: settings.workspaceScope ? 1 : 0)
+        recursiveButton.state = settings.recursive ? .on : .off
+        hiddenButton.state = settings.includeHidden ? .on : .off
+        extensionField.stringValue = settings.extensions
+        filterField.stringValue = settings.filters
+        queryField.stringValue = settings.options.query
+        replacementField.stringValue = settings.options.replacement
+        mode.selectItem(at: settings.options.mode.rawValue)
+        caseButton.state = settings.options.matchCase ? .on : .off
+        wordButton.state = settings.options.wholeWord ? .on : .off
+        dotButton.state = settings.options.dotMatchesNewline ? .on : .off
+        updateFolderLabel()
+    }
+    private func showPreferenceFailure(_ error: Error) {
+        preferenceNotice.stringValue =
+            "Saved search settings are unavailable. Searches still work; reset the settings to keep new choices."
+        preferenceNotice.toolTip = error.localizedDescription
+        preferenceNotice.superview?.isHidden = false
+        resetPreferencesButton.isHidden = false
+    }
+    private func savePreferencesOrReport() {
+        do { try saveSettings() } catch { showPreferenceFailure(error) }
+    }
+    @objc func resetSavedPreferences(_ sender: Any?) {
+        guard StoreRecovery.confirmPreferenceReset(preferences.state) else { return }
+        do {
+            try preferences.reset()
+            applySavedPreferences(preferences.value)
+            preferenceNotice.superview?.isHidden = true
+            status.stringValue = "Saved folder search settings were reset. Documents were not changed."
+        } catch { showPreferenceFailure(error) }
     }
     @objc private func startSearch(_ sender: Any?) {
         // Before anything else, so that a refused Return has no side effect at all.
@@ -270,12 +308,12 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         request.includeHidden = hiddenButton.state == .on
         do {
             _ = try FolderSearchFilters(request.filenameFilters)
-            try saveSettings()
         } catch {
             status.stringValue = error.localizedDescription
             lastOutcome = .failed(error.localizedDescription)
             return
         }
+        savePreferencesOrReport()
         cancelSearch(nil)
         let token = UUID()
         generation = token
@@ -460,7 +498,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         work?.cancel()
     }
     func windowWillClose(_ notification: Notification) {
-        try? saveSettings()
+        savePreferencesOrReport()
         cancelSearch(nil)
         generation = UUID()
         // A cancelled replacement may still be committing its current file off the main thread.

@@ -78,13 +78,26 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     private(set) var reusedResults = 0
     /// Why the last Replace or Replace All skipped documents; `lastOutcome` carries their total.
     private(set) var lastReplaceSkips = ReplaceSkips()
-    private let defaults: UserDefaults
+    let preferenceNotice = AnnouncingLabel(labelWithString: "")
+    let resetPreferencesButton = NSButton(title: "Reset Saved Settings…", target: nil, action: nil)
+    private let preferences: JSONFileStore<FindPreferences>
     /// True from the moment a search is started until its result, failure or cancellation is shown.
     private(set) var isSearching = false
     /// Nil while a search is running and before the first action.
     private(set) var lastOutcome: SearchOutcome?
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    init(defaults: UserDefaults? = nil, preferencesURL: URL? = nil) {
+        let legacy = defaults ?? AppStorage.legacyDefaults
+        preferences = JSONFileStore(
+            url: preferencesURL ?? AppStorage.url(.find), displayName: "Find and Replace settings",
+            maximumBytes: FindPreferences.maximumBytes, initial: FindPreferences(), decode: FindPreferences.decode,
+            encode: { try $0.encoded() },
+            legacyValue: {
+                guard let data = legacy?.data(forKey: "TextTank.Search.v1") else { return nil }
+                guard data.count <= FindPreferences.maximumBytes else { throw SearchFailure.preferencesTooLarge }
+                let options = try JSONInputFailure.decode(SearchOptions.self, from: data, context: "Find settings")
+                try options.validatePreferences()
+                return FindPreferences(options: options)
+            })
         // A panel, so the document window stays main and its menu commands keep working while
         // Find and Replace is key. Escape closes it, which cancels a running search as closing does.
         let window = ToolPanel(
@@ -115,11 +128,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         replacementField.placeholderString = "Replace with"
         mode.addItems(withTitles: ["Normal", "Extended (\\n, \\t, \\xNN)", "Regular expression (Boost)"])
         scope.addItems(withTitles: ["Current document", "Selection", "All open documents"])
-        if let data = defaults.data(forKey: "TextTank.Search.v1"),
-            let saved = try? JSONDecoder().decode(SearchOptions.self, from: data)
-        {
-            options = saved
-        }
+        options = preferences.value.options
         queryField.stringValue = options.query
         replacementField.stringValue = options.replacement
         mode.selectItem(at: options.mode.rawValue)
@@ -156,17 +165,32 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         scroll.documentView = table
         scroll.hasVerticalScroller = true
         table.usesAlternatingRowBackgroundColors = true
-        let root = NSStackView(views: [queryField, replacementField, opts, flags, buttons, marks, status, scroll])
+        resetPreferencesButton.target = self
+        resetPreferencesButton.action = #selector(resetSavedPreferences(_:))
+        resetPreferencesButton.setAccessibilityLabel("Reset saved Find and Replace settings")
+        preferenceNotice.setAccessibilityLabel("Saved Find and Replace settings status")
+        let preferenceRow = NSStackView(views: [preferenceNotice, resetPreferencesButton])
+        preferenceRow.spacing = 8
+        preferenceNotice.lineBreakMode = .byWordWrapping
+        preferenceNotice.maximumNumberOfLines = 2
+        preferenceRow.isHidden = preferences.state.error == nil
+        preferenceNotice.stringValue =
+            preferences.state.error == nil
+            ? "" : "Saved search settings could not be read. Reset them to keep new settings."
+        preferenceNotice.toolTip = preferences.state.error?.localizedDescription
+        let root = NSStackView(views: [
+            queryField, replacementField, opts, flags, buttons, marks, preferenceRow, status, scroll
+        ])
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 8
         root.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         window.contentView = root
-        for v in [queryField, replacementField, opts, flags, buttons, marks, status, scroll] {
+        for v in [queryField, replacementField, opts, flags, buttons, marks, preferenceRow, status, scroll] {
             v.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true
         }
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 150).isActive = true
-        window.minSize = NSSize(width: 780, height: 390)
+        window.minSize = NSSize(width: 780, height: 440)
         window.initialFirstResponder = queryField
         WindowFrames.track(window, as: "TextTank.FindAndReplace")
     }
@@ -189,9 +213,32 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         o.wholeWord = wordButton.state == .on
         o.dotMatchesNewline = dotButton.state == .on
         o.wrap = wrapButton.state == .on
-        if let data = try? JSONEncoder().encode(o) { defaults.set(data, forKey: "TextTank.Search.v1") }
+        do { try preferences.save(FindPreferences(options: o)) } catch { showPreferenceFailure(error) }
         options = o
         return o
+    }
+    private func showPreferenceFailure(_ error: Error) {
+        preferenceNotice.stringValue =
+            "The search can run, but its settings were not saved. Reset saved settings or try again."
+        preferenceNotice.toolTip = error.localizedDescription
+        preferenceNotice.superview?.isHidden = false
+        resetPreferencesButton.isHidden = false
+    }
+    @objc func resetSavedPreferences(_ sender: Any?) {
+        guard StoreRecovery.confirmPreferenceReset(preferences.state) else { return }
+        do {
+            try preferences.reset()
+            options = preferences.value.options
+            queryField.stringValue = options.query
+            replacementField.stringValue = options.replacement
+            mode.selectItem(at: options.mode.rawValue)
+            caseButton.state = options.matchCase ? .on : .off
+            wordButton.state = options.wholeWord ? .on : .off
+            dotButton.state = options.dotMatchesNewline ? .on : .off
+            wrapButton.state = options.wrap ? .on : .off
+            preferenceNotice.superview?.isHidden = true
+            status.stringValue = "Saved search settings were reset. Documents were not changed."
+        } catch { showPreferenceFailure(error) }
     }
     @objc func next(_ sender: Any?) { run(.next) }
     /// Return in the query field. Ignored while a search is running: the buttons are disabled
@@ -239,6 +286,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         lastOutcome = .cancelled
     }
     func windowWillClose(_ notification: Notification) {
+        _ = readOptions()
         cancel(nil)
         // F122: a closed Find window keeps no text snapshot of any document.
         rows = []

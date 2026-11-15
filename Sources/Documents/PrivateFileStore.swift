@@ -27,8 +27,110 @@ enum AppStorage {
         guard let override else { return true }
         return !override.hasPrefix("/") || override.contains("\0")
     }
+    /// Deferred so an isolated constructor never even asks for the shared defaults object.
+    /// Native checks replace this with a protected, test-owned domain.
+    static var sharedDefaultsProvider: () -> UserDefaults = { UserDefaults.standard }
+    static var legacyDefaults: UserDefaults? { permitsLegacyDefaults ? sharedDefaultsProvider() : nil }
     static func url(_ location: Location, under directory: URL? = nil) -> URL {
         (directory ?? supportDirectory).appendingPathComponent(location.rawValue, isDirectory: location.isDirectory)
+    }
+}
+
+/// One latch for a failed store load. Save boundaries call requireWritable, not just UI callers.
+/// Moving aside is an explicit operation on the entry itself, never a copy through a symlink.
+final class StoreLoadState {
+    let url: URL
+    let displayName: String
+    var error: Error?
+    init(url: URL, displayName: String) {
+        self.url = url
+        self.displayName = displayName
+    }
+    func requireWritable() throws { if let error { throw error } }
+    @discardableResult func moveAside(allowSymbolicLink: Bool = true) throws -> URL? {
+        let directory = try PrivateFileStore.directoryDescriptor(for: url)
+        defer { close(directory) }
+        var info = stat()
+        if fstatat(directory, url.lastPathComponent, &info, AT_SYMLINK_NOFOLLOW) != 0 {
+            let code = errno
+            guard code == ENOENT else {
+                throw FileOperationFailure(code, operation: "inspect saved entry", path: url.path)
+            }
+            error = nil
+            return nil
+        }
+        let type = info.st_mode & S_IFMT
+        guard type == S_IFREG || type == S_IFIFO || (type == S_IFLNK && allowSymbolicLink) else {
+            throw PrivateFileError.unsafeLocation
+        }
+        let name =
+            url.deletingPathExtension().lastPathComponent + ".previous-" + UUID().uuidString + "." + url.pathExtension
+        guard renameatx_np(directory, url.lastPathComponent, directory, name, UInt32(RENAME_EXCL)) == 0 else {
+            throw FileOperationFailure(errno, operation: "move saved entry aside", path: url.path)
+        }
+        error = nil
+        return url.deletingLastPathComponent().appendingPathComponent(name)
+    }
+}
+
+/// A small value-store boundary used by preferences. It owns failed-load protection and byte
+/// no-op detection, while each model owns its exact schema, decoder, encoder and field limits.
+final class JSONFileStore<Value> {
+    let state: StoreLoadState
+    private(set) var value: Value
+    private(set) var lastSaveError: Error?
+    private let initial: Value, maximumBytes: Int
+    private let encode: (Value) throws -> Data
+    private var savedModelBytes: Data?
+    init(
+        url: URL, displayName: String, maximumBytes: Int, initial: Value,
+        decode: (Data) throws -> Value, encode: @escaping (Value) throws -> Data,
+        legacyValue: (() throws -> Value?)? = nil
+    ) {
+        state = StoreLoadState(url: url, displayName: displayName)
+        self.initial = initial
+        self.value = initial
+        self.maximumBytes = maximumBytes
+        self.encode = encode
+        do {
+            let data = try PrivateFileStore.read(url, maximumBytes: maximumBytes)
+            value = try decode(data)
+            savedModelBytes = try encode(value)
+        } catch  where error.isFileNotFound {
+            do { if let legacy = try legacyValue?() { value = legacy } } catch { state.error = error }
+        } catch { state.error = error }
+    }
+    func save(_ proposed: Value) throws {
+        do {
+            try state.requireWritable()
+            let bytes = try encode(proposed)
+            // Encoded bytes distinguish NFC/NFD and every field. Model/String equality cannot.
+            if let savedModelBytes, savedModelBytes == bytes {
+                lastSaveError = nil
+                return
+            }
+            try PrivateFileStore.prepareDirectory(state.url.deletingLastPathComponent())
+            try PrivateFileStore.write(
+                bytes, to: state.url, maximumBytes: maximumBytes, temporaryPrefix: ".preferences-")
+            value = proposed
+            savedModelBytes = bytes
+            lastSaveError = nil
+        } catch {
+            lastSaveError = error
+            throw error
+        }
+    }
+    @discardableResult func reset() throws -> URL? {
+        let priorError = state.error
+        try PrivateFileStore.prepareDirectory(state.url.deletingLastPathComponent())
+        let backup = try state.moveAside()
+        savedModelBytes = nil
+        do { try save(initial) } catch {
+            if let backup { _ = renamex_np(backup.path, state.url.path, UInt32(RENAME_EXCL)) }
+            state.error = priorError ?? error
+            throw error
+        }
+        return backup
     }
 }
 

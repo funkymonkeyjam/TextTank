@@ -5,6 +5,23 @@ import AppKit
             let isolatedSupport = try IsolatedSupportDirectory("TextTankFolderUIChecks"), support = isolatedSupport.url
             defer { isolatedSupport.restore() }
             _ = NSApplication.shared
+            let protectedSuite = "TextTankFolderProtected-" + UUID().uuidString
+            let protected = try requireValue(UserDefaults(suiteName: protectedSuite), "fixture: protected defaults")
+            protected.set(Data("sentinel".utf8), forKey: "TextTank.FolderSearch.v1")
+            var providerCalls = 0
+            let provider = AppStorage.sharedDefaultsProvider
+            AppStorage.sharedDefaultsProvider = {
+                providerCalls += 1
+                return protected
+            }
+            defer {
+                AppStorage.sharedDefaultsProvider = provider
+                protected.removePersistentDomain(forName: protectedSuite)
+            }
+            let implicit = FolderSearchController()
+            check(
+                implicit.queryField.stringValue.isEmpty && providerCalls == 0,
+                "an absolute override skips even obtaining shared folder legacy defaults")
             let url = URL(fileURLWithPath: "/tmp/isolated-folder-result.txt")
             let match = FolderSearchMatch(
                 url: url, line: 1, columnUTF16: 4, utf16Range: .init(location: 3, length: 4),
@@ -145,11 +162,18 @@ import AppKit
                 "native saved workspace roots search respects filename filters")
             let corrupt = Data("invalid settings".utf8)
             isolated.set(corrupt, forKey: "TextTank.FolderSearch.v1")
-            let invalid = FolderSearchController(defaults: isolated)
+            let invalidURL = support.appendingPathComponent("invalid-preferences.json")
+            let invalid = FolderSearchController(defaults: isolated, preferencesURL: invalidURL)
             invalid.queryField.stringValue = "new"
-            try invalid.saveSettings()
+            do {
+                try invalid.saveSettings()
+                check(false, "corrupt legacy settings latch blocks save")
+            } catch { check(true, "corrupt legacy settings latch blocks save") }
             check(
-                isolated.data(forKey: "TextTank.FolderSearch.v1") == corrupt,
+                isolated.data(forKey: "TextTank.FolderSearch.v1") == corrupt
+                    && !FileManager.default.fileExists(atPath: invalidURL.path)
+                    && providerCalls == 0
+                    && protected.data(forKey: "TextTank.FolderSearch.v1") == Data("sentinel".utf8),
                 "native corrupt settings stay preserved after attempted save")
             // F111 and G370: while a replacement runs, Return in the query field must not cancel it
             // and a result must not be opened. The first commit is held open to make the window.
@@ -181,7 +205,8 @@ import AppKit
             let busySuite = "TextTankFolderBusy-" + UUID().uuidString
             let busyDefaults = try requireValue(UserDefaults(suiteName: busySuite), "fixture: isolated defaults suite")
             defer { busyDefaults.removePersistentDomain(forName: busySuite) }
-            let busy = FolderSearchController(defaults: busyDefaults)
+            let busy = FolderSearchController(
+                defaults: busyDefaults, preferencesURL: support.appendingPathComponent("busy-preferences.json"))
             busy.workspaceRoots = { [busyRoot] }
             busy.scope.selectItem(at: 1)
             busy.mode.selectItem(at: 0)
@@ -253,7 +278,9 @@ import AppKit
                     && busy.numberOfRows(in: busy.table) == 3,
                 "Return during a replacement is refused and the results stay")
             check(
-                try FolderSearchSettings.load(busyDefaults).options.query == "needle",
+                try FolderSearchSettings.decode(
+                    Data(contentsOf: support.appendingPathComponent("busy-preferences.json"))
+                ).options.query == "needle",
                 "a refused Return saves nothing")
             busy.activateResult(row: 1)
             check(
@@ -333,7 +360,8 @@ import AppKit
             let flowSuite = "TextTankFolderReplaceFlow-" + UUID().uuidString
             let flowDefaults = try requireValue(UserDefaults(suiteName: flowSuite), "fixture: isolated defaults suite")
             defer { flowDefaults.removePersistentDomain(forName: flowSuite) }
-            let flow = FolderSearchController(defaults: flowDefaults)
+            let flow = FolderSearchController(
+                defaults: flowDefaults, preferencesURL: support.appendingPathComponent("flow-preferences.json"))
             flow.workspaceRoots = { [replaceRoot] }
             flow.scope.selectItem(at: 1)
             flow.mode.selectItem(at: 0)

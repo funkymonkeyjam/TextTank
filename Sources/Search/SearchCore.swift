@@ -8,6 +8,32 @@ struct SearchOptions: Codable, Equatable, Sendable {
     var query = "", replacement = ""
     var mode: Mode = .normal
     var matchCase = false, wholeWord = false, dotMatchesNewline = false, wrap = true
+    func validatePreferences() throws {
+        guard query.utf16.count <= 65_536, replacement.utf16.count <= 1_048_576 else {
+            throw SearchFailure.preferencesTooLarge
+        }
+    }
+}
+
+struct FindPreferences: Codable {
+    var version = 1
+    var options = SearchOptions()
+    // Six JSON bytes per allowed UTF-16 unit plus keys/flags fit within 8 MiB.
+    static let maximumBytes = 8 * 1024 * 1024
+    static func decode(_ data: Data) throws -> Self {
+        guard data.count <= maximumBytes else { throw SearchFailure.preferencesTooLarge }
+        let value = try JSONInputFailure.decode(Self.self, from: data, context: "Find settings")
+        guard value.version == 1 else { throw SearchFailure.preferencesVersion }
+        try value.options.validatePreferences()
+        return value
+    }
+    func encoded() throws -> Data {
+        guard version == 1 else { throw SearchFailure.preferencesVersion }
+        try options.validatePreferences()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(self)
+    }
 }
 struct SearchHit {
     let range: NSRange
@@ -18,12 +44,15 @@ struct SearchReport {
     let truncated: Bool
 }
 enum SearchFailure: LocalizedError, CustomNSError, Equatable {
+    case preferencesTooLarge, preferencesVersion
     case invalidBookmarkLimit, bookmarkCancelled, bookmarkOffsetsUnordered, bookmarkOffsetOutOfBounds
     case replacementCancelled, invalidReplacementRange, macroResultLimit, macroReplacement(String)
     case unknownRecordedAction, macroStopped(String)
     static var errorDomain: String { "TextTank.Search" }
     var errorCode: Int {
         switch self {
+        case .preferencesTooLarge: return 10
+        case .preferencesVersion: return 11
         case .invalidReplacementRange: return 3
         case .macroResultLimit: return 4
         case .macroReplacement: return 5
@@ -35,6 +64,11 @@ enum SearchFailure: LocalizedError, CustomNSError, Equatable {
     }
     var errorDescription: String? {
         switch self {
+        case .preferencesTooLarge:
+            return
+                "The search text or replacement is too large to keep as saved settings. The search can still run; earlier saved settings were not changed."
+        case .preferencesVersion:
+            return "These saved search settings need another version of TextTank. The original entry was not changed."
         case .invalidBookmarkLimit: return "Invalid bookmark work limit."
         case .bookmarkCancelled:
             return "Bookmark calculation cancelled or exceeded its time budget; bookmarks were preserved."

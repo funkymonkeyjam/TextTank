@@ -17,13 +17,34 @@ final class CountingWindow: NSWindow {
 @main struct SearchControllerChecks {
     @MainActor static func main() async {
         await Checks.run("SearchControllerChecks") {
+            let support = try IsolatedSupportDirectory("TextTankSearchControllerChecks")
+            defer { support.restore() }
             _ = NSApplication.shared
             // F255: the controller under test keeps its options in a suite of its own, never in the
             // real defaults domain, so nothing is inherited from an earlier run or left behind.
             let suite = "TextTankSearchControllerChecks-" + UUID().uuidString
             let isolated = try requireValue(UserDefaults(suiteName: suite), "fixture: isolated defaults suite")
             defer { isolated.removePersistentDomain(forName: suite) }
-            let standardBefore = UserDefaults.standard.data(forKey: "TextTank.Search.v1")
+            let protectedSuite = "TextTankProtectedLegacy-" + UUID().uuidString
+            let protected = try requireValue(UserDefaults(suiteName: protectedSuite), "fixture: protected defaults")
+            protected.set(Data("sentinel".utf8), forKey: "TextTank.Search.v1")
+            var providerCalls = 0
+            let originalProvider = AppStorage.sharedDefaultsProvider
+            AppStorage.sharedDefaultsProvider = {
+                providerCalls += 1
+                return protected
+            }
+            defer {
+                AppStorage.sharedDefaultsProvider = originalProvider
+                protected.removePersistentDomain(forName: protectedSuite)
+            }
+            let implicit = SearchController()
+            check(
+                implicit.queryField.stringValue.isEmpty && providerCalls == 0,
+                "an absolute support override skips even obtaining shared legacy defaults")
+            check(
+                WindowFrames.defaults == nil && providerCalls == 0,
+                "implicit frame storage does not obtain shared defaults in an isolated check")
             let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 600, height: 400)),
                 window = NSWindow(
                     contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: .titled, backing: .buffered,
@@ -162,16 +183,15 @@ final class CountingWindow: NSWindow {
             check(
                 editor.text == "one:12 two:34" && controller.queryField.stringValue == "([a-z]+)=(\\d+)",
                 "active shared field editor commits only replacement and preserves regex query")
-            let persisted = isolated.data(forKey: "TextTank.Search.v1").flatMap {
-                try? JSONDecoder().decode(SearchOptions.self, from: $0)
-            }
+            let persisted = try FindPreferences.decode(Data(contentsOf: AppStorage.url(.find))).options
             check(
-                persisted?.query == "([a-z]+)=(\\d+)" && persisted?.replacement == "$1:$2"
-                    && persisted?.mode == .regularExpression,
-                "a Find-window action saves its options in the injected defaults")
+                persisted.query == "([a-z]+)=(\\d+)" && persisted.replacement == "$1:$2"
+                    && persisted.mode == .regularExpression,
+                "a Find-window action saves its options in the isolated private file")
             check(
-                UserDefaults.standard.data(forKey: "TextTank.Search.v1") == standardBefore,
-                "a Find-window action leaves the standard defaults domain untouched")
+                providerCalls == 0 && protected.data(forKey: "TextTank.Search.v1") == Data("sentinel".utf8)
+                    && isolated.data(forKey: "TextTank.Search.v1") == nil,
+                "private saves never obtain shared legacy defaults or write either protected legacy fixture")
             let reopened = SearchController(defaults: isolated)
             check(
                 reopened.queryField.stringValue == "([a-z]+)=(\\d+)" && reopened.replacementField.stringValue == "$1:$2"

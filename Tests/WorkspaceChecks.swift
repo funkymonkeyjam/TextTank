@@ -10,6 +10,65 @@ import Darwin
             ).resolvingSymlinksInPath()
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: root) }
+            Checks.section("F198/G361 value stores preserve failures and exact bytes") {
+                struct Value: Codable { var text = "" }
+                func store(_ name: String, legacy: (() throws -> Value?)? = nil) -> JSONFileStore<Value> {
+                    JSONFileStore(
+                        url: root.appendingPathComponent(name), displayName: "Fixture", maximumBytes: 1024,
+                        initial: Value(), decode: { try JSONDecoder().decode(Value.self, from: $0) },
+                        encode: { try JSONEncoder().encode($0) }, legacyValue: legacy)
+                }
+                let path = root.appendingPathComponent("damaged.json"), original = Data("unreadable fixture".utf8)
+                try original.write(to: path)
+                let damaged = store("damaged.json")
+                check(
+                    damaged.state.error != nil && damaged.value.text.isEmpty,
+                    "failed load uses defaults with a durable error latch")
+                do {
+                    try damaged.save(Value(text: "replacement"))
+                    check(false, "failed load blocks direct save")
+                } catch {
+                    check(
+                        try Data(contentsOf: path) == original,
+                        "failed load blocks direct save and preserves original bytes")
+                }
+                let backup = try requireValue(damaged.reset(), "explicit reset returns the retained original")
+                check(
+                    try Data(contentsOf: backup) == original && damaged.state.error == nil
+                        && JSONDecoder().decode(Value.self, from: Data(contentsOf: path)).text.isEmpty,
+                    "explicit reset renames original bytes aside before saving defaults")
+                let migrated = store("migrated.json", legacy: { Value(text: "legacy") })
+                check(
+                    migrated.value.text == "legacy" && !FileManager.default.fileExists(atPath: migrated.state.url.path),
+                    "legacy migration is read-only until an explicit save")
+                try migrated.save(migrated.value)
+                var before = stat(), after = stat()
+                check(lstat(migrated.state.url.path, &before) == 0, "saved fixture identity available")
+                try migrated.save(migrated.value)
+                check(
+                    lstat(migrated.state.url.path, &after) == 0 && before.st_ino == after.st_ino,
+                    "unchanged encoded model is a true no-op")
+                try migrated.save(Value(text: "\u{00e9}"))
+                let nfc = try Data(contentsOf: migrated.state.url)
+                try migrated.save(Value(text: "e\u{0301}"))
+                check(
+                    try Data(contentsOf: migrated.state.url) != nfc,
+                    "canonically equivalent strings preserve distinct UTF-8 bytes instead of becoming no-ops")
+                let unavailable = root.appendingPathComponent("blocked-parent")
+                try Data("block".utf8).write(to: unavailable)
+                let failed = JSONFileStore<Value>(
+                    url: unavailable.appendingPathComponent("prefs.json"), displayName: "Fixture",
+                    maximumBytes: 1024, initial: Value(), decode: { try JSONDecoder().decode(Value.self, from: $0) },
+                    encode: { try JSONEncoder().encode($0) })
+                do {
+                    try failed.save(Value(text: "new"))
+                    check(false, "unavailable preferences report failure")
+                } catch {
+                    check(
+                        failed.lastSaveError != nil && failed.value.text.isEmpty,
+                        "a failed preference save keeps prior model and reports the error")
+                }
+            }
             Checks.section("G360/F140 support path selection") {
                 let fallback = root.appendingPathComponent("fallback", isDirectory: true)
                 for value in [nil, "", "relative/folder", "/bad\0path"] as [String?] {

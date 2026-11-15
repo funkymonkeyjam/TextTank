@@ -104,6 +104,8 @@ struct FolderSearchFilters: Equatable, Sendable {
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
 struct FolderSearchSettings: Codable, Equatable {
+    // Existing limits permit ~6.7 MiB after JSON escaping, plus bounded path/filter data.
+    static let maximumBytes = 8 * 1024 * 1024
     var version = 1
     var folder: URL?
     var workspaceScope = false, recursive = true, includeHidden = false
@@ -122,12 +124,21 @@ struct FolderSearchSettings: Codable, Equatable {
     }
     static func load(_ defaults: UserDefaults) throws -> Self {
         guard let data = defaults.data(forKey: "TextTank.FolderSearch.v1") else { return Self() }
-        guard data.count <= 2 * 1024 * 1024 else {
+        return try decode(data)
+    }
+    static func decode(_ data: Data) throws -> Self {
+        guard data.count <= maximumBytes else {
             throw FolderSearchError.invalidRequest("Saved folder search settings exceed their size limit.")
         }
         let value = try JSONDecoder().decode(Self.self, from: data)
         try value.validate()
         return value
+    }
+    func encoded() throws -> Data {
+        try validate()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(self)
     }
     func save(_ defaults: UserDefaults) throws {
         try validate()

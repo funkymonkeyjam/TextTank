@@ -85,7 +85,19 @@ enum WindowFrames {
     /// Where frames are kept. Only the bundled application keeps them: a check executable has no
     /// bundle identifier, so a check run neither reads nor leaves window positions unless it
     /// supplies defaults of its own.
-    static var defaults: UserDefaults? = Bundle.main.bundleIdentifier == nil ? nil : .standard
+    private static var injectedDefaults: UserDefaults?
+    private static var usesInjectedDefaults = false
+    static var defaults: UserDefaults? {
+        get {
+            if usesInjectedDefaults { return injectedDefaults }
+            guard Bundle.main.bundleIdentifier != nil else { return nil }
+            return AppStorage.legacyDefaults
+        }
+        set {
+            usesInjectedDefaults = true
+            injectedDefaults = newValue
+        }
+    }
     private static var trackerKey = 0
 
     static func defaultsKey(_ name: String) -> String { "TextTank Window Frame " + name }

@@ -26,6 +26,20 @@ def module(name, filename):
 
 
 class BuildPipelineChecks(unittest.TestCase):
+    def test_shared_defaults_are_deferred_behind_isolation(self):
+        owners = [str(path.relative_to(ROOT)) for path in (ROOT / 'Sources').rglob('*.swift')
+                  if 'UserDefaults.standard' in path.read_text()]
+        self.assertEqual(owners, ['Sources/Documents/PrivateFileStore.swift'])
+        for relative in ['Sources/Search/SearchController.swift', 'Sources/Search/FolderSearchController.swift']:
+            source = (ROOT / relative).read_text()
+            self.assertIn('defaults: UserDefaults? = nil', source)
+            self.assertIn('defaults ?? AppStorage.legacyDefaults', source)
+        self.assertIn('permitsLegacyDefaults ? sharedDefaultsProvider() : nil',
+                      (ROOT / owners[0]).read_text())
+        frames = (ROOT / 'Sources/UI/WindowSupport.swift').read_text()
+        self.assertIn('guard Bundle.main.bundleIdentifier != nil else { return nil }', frames)
+        self.assertIn('return AppStorage.legacyDefaults', frames)
+
     def test_support_override_has_one_source(self):
         owners = [str(path.relative_to(ROOT)) for path in (ROOT / 'Sources').rglob('*.swift')
                   if 'TEXTTANK_SUPPORT_DIRECTORY' in path.read_text()]
