@@ -130,10 +130,9 @@ import Darwin
                 detected.languageIdentifier == "python",
                 "workspace filename assigned before extension language detection")
             // G373: a language chosen by hand survives Reload and Revert; only the first load detects.
-            func firstColor(_ editor: TTEditor) -> NSColor? {
-                editor.attributedText(forSelection: false).attribute(.foregroundColor, at: 0, effectiveRange: nil)
-                    as? NSColor
-            }
+            // Every run's colour, font and traits. Two languages can share one keyword colour, so the
+            // first colour alone does not tell them apart.
+            func styling(_ editor: TTEditor) -> NSAttributedString { editor.attributedText(forSelection: false) }
             let scriptURL = folder.appendingPathComponent("manual-choice.py")
             try Data("return 42;".utf8).write(to: scriptURL)
             let manual = try controller.open(scriptURL)
@@ -149,16 +148,16 @@ import Darwin
                 "fixture: a Python file is switched to JavaScript by hand")
             manual.languageIdentifier = "javascript"
             check(
-                firstColor(manualReference) != nil && firstColor(manualReference) != firstColor(pythonReference),
+                styling(manualReference).length == 10 && styling(manualReference) != styling(pythonReference),
                 "fixture: the two languages colour the sample differently")
             try manual.reload(using: .utf8)
             check(
                 manual.languageIdentifier == "javascript" && manual.editor.text == "return 42;"
-                    && firstColor(manual.editor) == firstColor(manualReference),
+                    && styling(manual.editor) == styling(manualReference),
                 "Reload with an encoding keeps the manually chosen language and its styling")
             try manual.revert(toContentsOf: scriptURL, ofType: "Plain Text")
             check(
-                manual.languageIdentifier == "javascript" && firstColor(manual.editor) == firstColor(manualReference),
+                manual.languageIdentifier == "javascript" && styling(manual.editor) == styling(manualReference),
                 "Revert keeps the manually chosen language and its styling")
             let untouched = try controller.open(python)
             try untouched.reload(using: .utf8)
@@ -186,6 +185,17 @@ import Darwin
             check(
                 restored.languageIdentifier == "javascript" && actualColor == expectedColor,
                 "session uses mapped lexer and configured keyword styling")
+            // F22: the comparison above is not trivially equal; the keyword is not plain text.
+            let plain = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+            plain.text = sessionText
+            check(
+                app.languages.apply(identifier: LanguageProfile.plainTextID, to: plain) && actualColor != nil
+                    && actualColor
+                        != plain.attributedText(forSelection: false).attribute(
+                            .foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+                    && restored.editor.attributedText(forSelection: false)
+                        == expected.attributedText(forSelection: false),
+                "the restored JavaScript keyword is styled apart from plain text")
             check(
                 restored.editor.text == sessionText && restored.isDocumentEdited,
                 "session language restore preserves unsaved text")
