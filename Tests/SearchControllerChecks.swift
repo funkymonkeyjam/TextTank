@@ -1146,6 +1146,26 @@ final class CountingWindow: NSWindow {
                 editor.text == "changed meanwhile" && controller.lastOutcome == .replaced(changed: 0, stale: 1)
                     && controller.status.stringValue.contains("1 changed documents skipped") && recorded.isEmpty,
                 "Replace on a document edited during the search preserves it and reports the skip")
+            // F45 with G374: a caret at a zero-width match ends after the text inserted there, as
+            // typing would leave it, so the next Replace moves on instead of inserting there again.
+            controller.mode.selectItem(at: 2)
+            controller.scope.selectItem(at: 0)
+            controller.wrapButton.state = .off
+            controller.queryField.stringValue = "^"
+            controller.replacementField.stringValue = ">"
+            load(editor, "ab\ncd")
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            recorded = []
+            await replaceOne()
+            check(
+                editor.text == ">ab\ncd" && editor.selectionAnchor == 4 && editor.selectionCaret == 4
+                    && recorded == ["replaceOne", "next"],
+                "Replace at a zero-width match inserts once and moves to the next line's match")
+            await replaceOne()
+            check(
+                editor.text == ">ab\n>cd" && editor.selectionAnchor == 5 && editor.selectionCaret == 5,
+                "a second Replace inserts at the next zero-width match, not at the first one again")
+            controller.mode.selectItem(at: 0)
             // F45: cancelling while the following match is being looked for does not deny the
             // replacement that was already made.
             literal("a", "b", scope: 0, wrap: false)

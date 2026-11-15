@@ -703,7 +703,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             }
             return position + delta
         }
-        let low = carried(min(anchor, caret), upper: false)
+        // A caret at a zero-width match ends after the text inserted there, as typing would leave
+        // it, so a following Next or Replace moves on instead of meeting the same place again.
+        let atInsertion = anchor == caret && ranges.contains { $0.location == caret && $0.length == 0 }
+        let low = carried(min(anchor, caret), upper: atInsertion)
         let high = anchor == caret ? low : carried(max(anchor, caret), upper: true)
         _ = editor.setSelectionAnchor(anchor <= caret ? low : high, caret: anchor <= caret ? high : low)
         return .applied(hits.count)
