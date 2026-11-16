@@ -116,7 +116,7 @@ final class TextDocumentController: NSDocumentController {
         private let url: URL, display: Bool
         private let completion: (NSDocument?, Bool, Error?) -> Void
         init(
-            _ controller: TextDocumentController, url: URL, display: Bool,
+            _ controller: TextDocumentController?, url: URL, display: Bool,
             completion: @escaping (NSDocument?, Bool, Error?) -> Void
         ) {
             self.controller = controller

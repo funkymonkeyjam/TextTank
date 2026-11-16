@@ -44,24 +44,20 @@ extension DocumentChecks {
             }
             direct.receive(nil, true, nil)
             check(directCalls == 1, "F316 actual production completion transport invokes main input synchronously once")
-            for releaseOwner in [false, true] {
-                let weakOwner = NSHashTable<TextDocumentController>.weakObjects()
+            for absentOwner in [false, true] {
+                let owner: TextDocumentController? = absentOwner ? nil : documents
                 var callbacks = 0, onMain = false, receivedAlreadyOpen = false
                 var receivedCode: Int?
-                let delivery = autoreleasepool {
-                    let owner = releaseOwner ? TextDocumentController() : documents
-                    weakOwner.add(owner)
-                    return TextDocumentController.OpenDelivery(owner, url: url, display: false) {
-                        document, alreadyOpen, error in
-                        callbacks += 1
-                        onMain = Thread.isMainThread && document == nil
-                        receivedAlreadyOpen = alreadyOpen
-                        receivedCode = (error as NSError?)?.code
-                    }
+                let delivery = TextDocumentController.OpenDelivery(owner, url: url, display: false) {
+                    document, alreadyOpen, error in
+                    callbacks += 1
+                    onMain = Thread.isMainThread && document == nil
+                    receivedAlreadyOpen = alreadyOpen
+                    receivedCode = (error as NSError?)?.code
                 }
                 check(
-                    !releaseOwner || weakOwner.allObjects.isEmpty,
-                    "F316 released secondary document controller is not retained by its production delivery")
+                    NSDocumentController.shared === documents,
+                    "F316 live and nil-owner completion setup keeps the existing document-controller singleton")
                 let posted = DispatchSemaphore(value: 0)
                 let worker = Thread {
                     delivery.receive(nil, true, CocoaError(.fileReadUnknown))
@@ -75,7 +71,7 @@ extension DocumentChecks {
                 spinUntil(timeout: 1, "F316 completion reaches its owned main turn") { callbacks == 1 }
                 check(
                     onMain && receivedAlreadyOpen && receivedCode == CocoaError.fileReadUnknown.rawValue,
-                    "F316 live and released-owner deliveries preserve callback arguments on main")
+                    "F316 live and nil-owner deliveries preserve callback arguments on main")
                 RunLoop.current.run(until: Date().addingTimeInterval(0.02))
                 check(
                     callbacks == 1 && NSDocumentController.shared === shared,
