@@ -392,8 +392,9 @@ retains its compound fallback, clamp and skip behavior rather than promising ato
 NativeSearch is now a separate Foundation Objective-C++ framework containing the snapshot
 search engine and its typed public interface. The application depends on and embeds this
 framework; EditorBridge has no dependency on it. Remaining Swift sources still share the
-application target during the staged module migration. Native checks still compile their
-legacy source sets at this stage; shared artifact acceptance is not yet established.
+application target during the staged module migration. Checks now link the actual signed native frameworks after input/artifact validation.
+Swift product sources still use their legacy per-script lists at this stage; full shared
+Core/Runtime artifact acceptance is not yet established.
 
 EditorBridge is now a separate AppKit Objective-C++ framework owning TTEditor and the
 ported user lexer. It links Scintilla and Lexilla; it has no dependency on NativeSearch

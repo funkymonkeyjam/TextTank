@@ -40,4 +40,5 @@ xattr -dr com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
 xattr -dr com.apple.ResourceFork "$APP_PATH" 2>/dev/null || true
 codesign --force --sign - "$APP_PATH"
 codesign --verify --deep --strict "$APP_PATH"
+python3 scripts/runtime_artifacts.py record --configuration "$CONFIGURATION" --app "$APP_PATH" --manifest "build/artifacts/$CONFIGURATION/manifest.json"
 printf 'Built %s\n' "$APP_PATH"

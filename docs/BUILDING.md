@@ -6,7 +6,7 @@ Run `scripts/build.sh`, `scripts/test.sh` and `scripts/test-performance.sh` in t
 
 Scintilla derived data and outputs are private to each checkout and configuration. Lexilla is copied from the already verified source manifest into `build/vendor/<configuration>/lexilla-work/`, where make writes its objects and archive. The shared Vendor source checkout is never a build-output destination. Copied source bytes are refreshed; unexpected files are rejected; all private Lexilla objects are rebuilt on every build invocation, so changes to flags, compiler or transitive headers cannot reuse stale objects.
 
-Each native suite remains a real script with explicit source lists, test defines and layering boundaries. Common native bridge, search and user-lexer objects are compiled atomically once in a fresh owner-run directory, shared only with child suites in that run and removed on exit. Standalone runs create fresh directories too, so no incomplete cross-run header cache can back an acceptance record. Do not compile two suite/probe scripts concurrently in one checkout: their final check-binary and log paths remain shared.
+Each native suite remains a real script with explicit test sources, defines and layering boundaries. Native bridge, search and user-lexer implementations come from the validated signed application frameworks; checks do not recompile them. Swift product sources still use the legacy per-script lists during migration. Do not compile two suite/probe scripts concurrently in one checkout: their final check-binary and log paths remain shared.
 
 The document-check executable drives many owned document-window transitions without running the normal application event loop. A long CLI prefix on this Mac accumulated AppKit animation workers and blocked native save-panel creation; the same prefix from the accepted pre-catalog source reproduced it. The `TESTING` build therefore disables only its owned document-window transition animations. Production builds retain system animations, and the actual native save panels, review sheets, close routes, Cancel actions and deadlines remain unchanged. Functional check results do not certify physical transition animations. Diagnostic controls and source identities are execution evidence, not source-archive package certification.
 
@@ -45,4 +45,15 @@ an absolute /Library/Frameworks dependency fails rather than passing build-only 
 
 EditorBridge builds the editor bridge and user lexer once for the application target,
 linking the existing pinned engines. Its module exports TTEditor.h; it is signed before
-the app alongside NativeSearch and Scintilla. Check-source migration is still pending.
+the app alongside NativeSearch and Scintilla. Swift check-source migration is still pending.
+
+Native check clients now link the actual signed application EditorBridge, NativeSearch and
+Scintilla artifacts. `runtime_artifacts.py` records separate Debug/Release manifests after
+strict signing and rejects changed source/configuration/header bytes, additional untracked
+build inputs, pinned dependency changes, compiler/SDK differences, altered module metadata
+and changed app files before reuse. Each linked native image is resolved and hashed inside
+the check process, and required image-proof markers accompany normal suite completion.
+For an exact-source archive build, pass its `build/artifacts/Debug/manifest.json` through
+`TEXTTANK_ARTIFACT_MANIFEST`; current checkout inputs must still match. This establishes local
+input/artifact identity, not archive binding, source stability or package provenance. Swift
+product sources are still compiled by the legacy test configurations during this stage.

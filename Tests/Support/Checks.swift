@@ -7,6 +7,8 @@
 // `require` is for a precondition the following code cannot run without: it
 // throws out of the enclosing `Checks.section`, and the next section still runs.
 import Foundation
+import CryptoKit
+import ObjectiveC
 
 /// Thrown by `require` after the failure has been recorded.
 struct CheckStop: Error, CustomStringConvertible { let description: String }
@@ -87,6 +89,7 @@ enum Checks {
         finish(name)
     }
     static func finish(_ name: String) -> Never {
+        verifyNativeImages()
         if failures.isEmpty {
             if fixtureCount > 0 {
                 print("FIXTURES \(name): \(fixtureCount) fixture integrity checks, not counted below")
@@ -104,6 +107,41 @@ enum Checks {
         for entry in failures { print("  " + entry) }
         fflush(stdout)
         exit(1)
+    }
+
+    /// Check the code image actually loaded in this process, not merely linker arguments.
+    /// Foundation-only checks without native dependencies have no images to verify here.
+    private static func verifyNativeImages() {
+        let classes = [("TTEditor", "EditorBridge"), ("TTSearchEngine", "NativeSearch"),
+                       ("ScintillaView", "Scintilla")]
+        let loaded = classes.compactMap { name, framework -> (AnyClass, String)? in
+            guard let type = NSClassFromString(name) else { return nil }
+            return (type, framework)
+        }
+        guard !loaded.isEmpty else { return }
+        do {
+            guard let manifestPath = ProcessInfo.processInfo.environment["TEXTTANK_ARTIFACT_MANIFEST"],
+                let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: manifestPath))) as? [String: Any],
+                let images = manifest["images"] as? [String: [String: Any]]
+            else { throw CheckStop(description: "missing validated native artifact manifest") }
+            for image in loaded {
+                let type: AnyClass = image.0
+                let framework = image.1
+                guard let imageName = class_getImageName(type),
+                    let expected = images[framework], let expectedPath = expected["embedded"] as? String,
+                    let expectedHash = expected["embedded_sha256"] as? String
+                else { throw CheckStop(description: "missing actual code-image identity for \(framework)") }
+                let actual = URL(fileURLWithPath: String(cString: imageName)).resolvingSymlinksInPath()
+                let wanted = URL(fileURLWithPath: expectedPath).resolvingSymlinksInPath()
+                let hash = SHA256.hash(data: try Data(contentsOf: actual)).map { String(format: "%02x", $0) }.joined()
+                guard actual == wanted, hash == expectedHash else {
+                    throw CheckStop(description: "\(framework) was not loaded from the actual signed application artifact")
+                }
+                print("ARTIFACT_IMAGE \(framework) \(hash) \(actual.path)")
+            }
+        } catch {
+            fail("native artifact identity: \(error)", file: #filePath, line: #line)
+        }
     }
     static func describe(_ error: Error) -> String {
         if let stop = error as? CheckStop { return stop.description }

@@ -16,7 +16,6 @@
 # TEXTTANK_SUITE_TIMEOUT sets the per-suite limit in seconds (default 300).
 
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
-source "$TEXTTANK_ROOT/scripts/lib/test-common.sh"
 
 # First-party Swift is warning-clean. A new toolchain can be inspected with an explicit
 # TEXTTANK_WARNINGS_AS_ERRORS=0 override; ordinary acceptance keeps warnings fatal.
@@ -38,14 +37,7 @@ suite_begin() {
     TEXTTANK_SUITE_RESULTS=$(mktemp "${TMPDIR:-/tmp}/texttank-suites.XXXXXX")
     export TEXTTANK_SUITE_RESULTS
     SUITE_OWNER=1
-    TEXTTANK_NATIVE_OBJECT_DIR=$(mktemp -d "$PWD/build/tests/native-objects.XXXXXX")
-    export TEXTTANK_NATIVE_OBJECT_DIR
-    trap 'rm -rf "$TEXTTANK_NATIVE_OBJECT_DIR"' EXIT
   fi
-  BRIDGE_OBJECT="$TEXTTANK_NATIVE_OBJECT_DIR/TTEditor.o"
-  SEARCH_OBJECT="$TEXTTANK_NATIVE_OBJECT_DIR/TTSearchEngine.o"
-  USER_LEXER_OBJECT="$TEXTTANK_NATIVE_OBJECT_DIR/UserLexer.o"
-  export BRIDGE_OBJECT SEARCH_OBJECT USER_LEXER_OBJECT
   SUITE_FIRST_RECORD=$(( $(wc -l < "$TEXTTANK_SUITE_RESULTS") + 1 ))
   # The shared harness is passed by absolute path so that #filePath, and with it
   # the repository root the checks derive, does not depend on the current directory.
@@ -53,12 +45,22 @@ suite_begin() {
 }
 
 suite_require_build() {
-  if [[ ! -d "$VENDOR_BUILD/Scintilla.framework" || ! -f "$LEXILLA_LIBRARY" ]]; then
-    echo "The native dependencies are not built ($CONFIGURATION Scintilla.framework and liblexilla.a are required). Run scripts/build.sh first." >&2
-    if [[ "${GITHUB_ACTIONS:-}" == true ]]; then echo "::error::Native dependencies are not built; run scripts/build.sh first"; fi
-    suite_record "NOT-BUILT" "$(basename "$0")" "run scripts/build.sh first"
+  local actual_app status=0
+  TEXTTANK_ARTIFACT_MANIFEST="${TEXTTANK_ARTIFACT_MANIFEST:-$TEXTTANK_ROOT/build/artifacts/$CONFIGURATION/manifest.json}"
+  actual_app=$(python3 scripts/runtime_artifacts.py validate --configuration "$CONFIGURATION" --manifest "$TEXTTANK_ARTIFACT_MANIFEST") || status=$?
+  if [[ "$status" != 0 ]]; then
+    suite_record "NOT-BUILT" "$(basename "$0")" "canonical signed artifacts are absent, stale or invalid; run scripts/build.sh first"
     suite_finish
   fi
+  APP_PATH="$actual_app"
+  TEXTTANK_FRAMEWORKS="$APP_PATH/Contents/Frameworks"
+  NATIVE_BRIDGE_LIBRARY="$TEXTTANK_FRAMEWORKS/EditorBridge.framework/Versions/A/EditorBridge"
+  NATIVE_SEARCH_LIBRARY="$TEXTTANK_FRAMEWORKS/NativeSearch.framework/Versions/A/NativeSearch"
+  # Put the actual embedded signed frameworks before the dependency build folder.
+  # Header input bytes are validated separately; no product source is compiled here.
+  SWIFT_BASE+=(-F "$TEXTTANK_FRAMEWORKS" -Xlinker -rpath -Xlinker "$TEXTTANK_FRAMEWORKS")
+  CXX_BASE+=(-F "$TEXTTANK_FRAMEWORKS" "-Wl,-rpath,$TEXTTANK_FRAMEWORKS")
+  export APP_PATH TEXTTANK_FRAMEWORKS TEXTTANK_ARTIFACT_MANIFEST NATIVE_BRIDGE_LIBRARY NATIVE_SEARCH_LIBRARY
 }
 
 # status <TAB> suite <TAB> detail
@@ -107,6 +109,16 @@ suite_run() {
   if [[ "$status" == 0 && "$requires_completion" == 1 ]] && ! grep -Eq '^(PASS )?[A-Za-z][A-Za-z0-9]*Checks: [0-9]+ (native )?assertions' "$log"; then
     echo "FAIL $name: exited zero without its native completion summary; the suite is incomplete" | tee -a "$log"
     status=1
+  fi
+  if [[ "$status" == 0 && ( "$1" == build/tests/* || "$1" == "$PWD"/build/tests/* ) ]]; then
+    local expected_images image_name
+    expected_images=$(otool -L "$1" 2>/dev/null | sed -nE 's@.*[/](NativeSearch|EditorBridge|Scintilla)\.framework/.*@\1@p' | sort -u || true)
+    for image_name in $expected_images; do
+      if ! grep -q "^ARTIFACT_IMAGE $image_name " "$log"; then
+        echo "FAIL $name: missing actual loaded signed $image_name image proof" | tee -a "$log"
+        status=1
+      fi
+    done
   fi
   if [[ "$status" == 0 ]]; then
     suite_record "PASS" "$name" "$(tail -n 1 "$log" | cut -c1-110)"

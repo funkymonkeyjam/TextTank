@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import plistlib
 import shutil
 from pathlib import Path
 import subprocess
@@ -141,7 +142,7 @@ VENDOR_BUILD="$PWD/build/vendor/Debug"
 APP_PATH="$PWD/build/Fixture App.app"
 export APP_PATH
 ''')
-            for name in ['bootstrap.py', 'build-lexilla.py', 'check-runtime-linkage.py']:
+            for name in ['bootstrap.py', 'build-lexilla.py', 'check-runtime-linkage.py', 'runtime_artifacts.py']:
                 (scripts / name).write_text('# isolated build fixture; no acquisition\n')
             app = fixture / 'build/Fixture App.app'
             framework = app / 'Contents/Frameworks/Scintilla.framework'
@@ -459,32 +460,113 @@ sys.exit(93)
                 bootstrap.obtain_archive(dep, cache)
             self.assertEqual(cache.read_bytes(), b'good')
 
-    def test_standalone_lexer_build_recompiles_changed_headers(self):
-        with tempfile.TemporaryDirectory() as work:
-            fixture = Path(work)
-            for relative in ['scripts/build-user-lexer.sh', 'scripts/env.sh', 'scripts/lib/test-common.sh',
-                             'scripts/user-lexer-flags.txt', 'scripts/build_config.py', 'Dependencies.lock.json']:
-                destination = fixture / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes((ROOT / relative).read_bytes())
-            source = fixture / 'Sources/Languages/LexUserPort'
-            source.mkdir(parents=True)
-            (source / 'LexUser.cxx').write_text('#include "UserConstants.h"\nint fixtureValue = HEADER_VALUE;\n')
-            header = source / 'UserConstants.h'
-            header.write_text('#define HEADER_VALUE 1\n')
-            command = ['bash', 'scripts/build-user-lexer.sh']
-            environment = dict(os.environ)
-            for key in ['TEXTTANK_NATIVE_OBJECT_DIR', 'TEXTTANK_SUITE_RESULTS', 'USER_LEXER_OBJECT', 'BRIDGE_OBJECT', 'SEARCH_OBJECT']:
-                environment.pop(key, None)
-            first = subprocess.run(command, cwd=fixture, env=environment, capture_output=True, text=True)
-            self.assertEqual(first.returncode, 0, first.stderr)
-            object_file = fixture / 'build/tests/UserLexer.o'
-            previous = object_file.read_bytes()
-            header.write_text('#define HEADER_VALUE 2\n')
-            second = subprocess.run(command, cwd=fixture, env=environment, capture_output=True, text=True)
-            self.assertEqual(second.returncode, 0, second.stderr)
-            self.assertNotEqual(previous, object_file.read_bytes())
-            self.assertEqual(list((fixture / 'build/tests').glob('native-objects.*')), [])
+    def test_native_artifact_reuse_rejects_changed_inputs_metadata_dependencies_and_code(self):
+        artifacts = module('runtime_artifacts', 'runtime_artifacts.py')
+        with tempfile.TemporaryDirectory(prefix='artifact-reuse-', dir=ROOT / 'build/tests') as work:
+            fixture = Path(work).resolve()
+            subprocess.run(['xattr', '-w', 'com.apple.fileprovider.ignore#P', '1', str(fixture)], check=True)
+            self.assertEqual(subprocess.check_output(['xattr', '-p', 'com.apple.fileprovider.ignore#P', str(fixture)]).strip(), b'1')
+            subprocess.run(['git', 'init', '-q', str(fixture)], check=True, capture_output=True)
+            inputs = {'Dependencies.lock.json': json.dumps({'architecture': 'arm64', 'deploymentTarget': '14.0'})}
+            for name, folder, header in [('NativeSearch', 'Search', 'TTSearchEngine.h'),
+                                          ('EditorBridge', 'EditorBridge', 'TTEditor.h')]:
+                inputs[f'Sources/{folder}/{header}'] = f'// fixture public {name} header\n'
+                inputs[f'Sources/{folder}/module.modulemap'] = f'framework module {name} {{ umbrella header "{header}" export * }}\n'
+            for folder in ['scintilla', 'lexilla']:
+                vendor = fixture / 'Vendor' / folder / 'fixture.h'
+                vendor.parent.mkdir(parents=True)
+                vendor.write_text('// pinned fixture dependency\n')
+                inputs[f'scripts/{folder}-source-hashes.json'] = json.dumps({'fixture.h': hashlib.sha256(vendor.read_bytes()).hexdigest()})
+            for name, text in inputs.items():
+                path = fixture / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+            subprocess.run(['git', 'add', '--', *inputs], cwd=fixture, check=True, capture_output=True)
+            products = fixture / 'build/DerivedData/Build/Products/Debug'
+            app = products / 'TextTank.app'
+            (app / 'Contents/MacOS').mkdir(parents=True)
+            (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable': 'TextTank',
+                'CFBundleIdentifier': 'fixture.texttank.artifacts', 'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1'}))
+            embedded = app / 'Contents/Frameworks'
+            embedded.mkdir()
+            built_images = []
+            for name in artifacts.FRAMEWORKS:
+                base = (fixture / 'build/vendor/Debug') if name == 'Scintilla' else products
+                framework = base / f'{name}.framework'
+                version = framework / 'Versions/A'
+                (version / 'Resources').mkdir(parents=True)
+                (version / 'Headers').mkdir()
+                (version / 'Modules').mkdir()
+                (version / 'Resources/Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable': name,
+                    'CFBundleIdentifier': f'fixture.texttank.{name}', 'CFBundlePackageType': 'FMWK', 'CFBundleVersion': '1'}))
+                (framework / 'Versions/Current').symlink_to('A')
+                for entry in [name, 'Resources', 'Headers', 'Modules']:
+                    (framework / entry).symlink_to(f'Versions/Current/{entry}')
+                if name != 'Scintilla':
+                    folder, header = ('Search', 'TTSearchEngine.h') if name == 'NativeSearch' else ('EditorBridge', 'TTEditor.h')
+                    shutil.copyfile(fixture / f'Sources/{folder}/{header}', version / 'Headers' / header)
+                    shutil.copyfile(fixture / f'Sources/{folder}/module.modulemap', version / 'Modules/module.modulemap')
+                source = fixture / f'{name}.c'
+                source.write_text(f'int fixture_{name}(void) {{ return 0; }}\n')
+                image = version / name
+                compiled = subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-macos14.0', '-dynamiclib',
+                    str(source), '-install_name', f'@rpath/{name}.framework/Versions/A/{name}', '-o', str(image)],
+                    capture_output=True, text=True)
+                self.assertEqual(compiled.returncode, 0, compiled.stderr)
+                built_images.append(image)
+                copied = embedded / framework.name
+                shutil.copytree(framework, copied, symlinks=True)
+                for attribute in ['com.apple.FinderInfo', 'com.apple.ResourceFork']:
+                    subprocess.run(['xattr', '-dr', attribute, str(app)], capture_output=True)
+                signed = subprocess.run(['codesign', '--force', '--sign', '-', str(copied)], capture_output=True, text=True)
+                self.assertEqual(signed.returncode, 0, signed.stderr)
+            main = fixture / 'main.c'
+            main.write_text(''.join(f'extern int fixture_{name}(void);\n' for name in artifacts.FRAMEWORKS)
+                            + 'int main(void) { return ' + ' + '.join(f'fixture_{name}()' for name in artifacts.FRAMEWORKS) + '; }\n')
+            linked = subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-macos14.0', str(main),
+                                     *map(str, built_images), '-o', str(app / 'Contents/MacOS/TextTank')], capture_output=True, text=True)
+            self.assertEqual(linked.returncode, 0, linked.stderr)
+            for attribute in ['com.apple.FinderInfo', 'com.apple.ResourceFork']:
+                subprocess.run(['xattr', '-dr', attribute, str(app)], capture_output=True)
+            signed = subprocess.run(['codesign', '--force', '--sign', '-', str(app)], capture_output=True, text=True)
+            self.assertEqual(signed.returncode, 0, signed.stderr)
+            manifest = fixture / 'build/artifacts/Debug/manifest.json'
+            try:
+                artifacts.record(fixture, app, 'Debug', manifest)
+            except subprocess.CalledProcessError as error:
+                self.fail(error.output)
+            self.assertEqual(artifacts.validate(fixture, manifest, 'Debug')['app'], str(app))
+            with self.assertRaisesRegex(ValueError, 'configuration'):
+                artifacts.validate(fixture, manifest, 'Release')
+            header = fixture / 'Sources/EditorBridge/TTEditor.h'
+            previous = header.read_bytes()
+            header.write_bytes(previous + b'// changed header\n')
+            with self.assertRaisesRegex(ValueError, 'Stale artifact'):
+                artifacts.validate(fixture, manifest, 'Debug')
+            header.write_bytes(previous)
+            extra = fixture / 'Sources/Unexpected.swift'
+            extra.write_text('// untracked build input\n')
+            with self.assertRaisesRegex(ValueError, 'untracked'):
+                artifacts.validate(fixture, manifest, 'Debug')
+            extra.unlink()
+            metadata_header = products / 'EditorBridge.framework/Versions/A/Headers/TTEditor.h'
+            metadata_header.write_bytes(previous + b'// changed compiler metadata\n')
+            with self.assertRaisesRegex(ValueError, 'metadata'):
+                artifacts.validate(fixture, manifest, 'Debug')
+            metadata_header.write_bytes(previous)
+            dependency = fixture / 'Vendor/lexilla/fixture.h'
+            previous_dependency = dependency.read_bytes()
+            dependency.write_bytes(b'changed pinned dependency\n')
+            with self.assertRaisesRegex(ValueError, 'Pinned source mismatch'):
+                artifacts.validate(fixture, manifest, 'Debug')
+            dependency.write_bytes(previous_dependency)
+            image = app / 'Contents/Frameworks/EditorBridge.framework/Versions/A/EditorBridge'
+            previous_code = image.read_bytes()
+            image.write_bytes(previous_code + b'tampered')
+            with self.assertRaisesRegex(ValueError, 'application artifact'):
+                artifacts.validate(fixture, manifest, 'Debug')
+            image.write_bytes(previous_code)
+            self.assertEqual(artifacts.validate(fixture, manifest, 'Debug')['app'], str(app))
 
     def test_target_environment_rejects_unsupported_configuration_and_architecture(self):
         for setting in ['CONFIGURATION=Typo', 'ARCH=x86_64']:

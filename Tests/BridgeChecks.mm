@@ -48,8 +48,10 @@ static NSEvent *TTMouse(NSEventType type, NSView *content, NSPoint point, NSTime
     return [NSEvent mouseEventWithType:type location:[content convertPoint:point toView:nil] modifierFlags:0 timestamp:time
                           windowNumber:content.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1];
 }
-int main() {
+int main(int argc, char **argv) {
     @autoreleasepool {
+        if (argc == 2 && std::strcmp(argv[1], "--artifact-identity-only") == 0)
+            return ttchecks::finish("BridgeArtifactChecks", "loaded signed native artifacts; no NSApplication construction");
         [NSApplication sharedApplication];
         ttchecks::section("audit25 unknown command refusal", [&] {
             TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 300, 200)];
