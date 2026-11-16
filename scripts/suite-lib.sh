@@ -72,7 +72,7 @@ suite_record() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$TEXTTANK_SUITE_RESULT
 suite_build() {
   local names="$1" name status
   shift
-  "$@" && return 0
+  python3 scripts/compile_diagnostics.py -- "$@" && return 0
   status=$?
   for name in $names; do
     if [[ "$SUITE_BROKEN" != *" $name "* ]]; then

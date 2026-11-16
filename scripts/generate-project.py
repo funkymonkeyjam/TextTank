@@ -81,6 +81,7 @@ def main():
      'INFOPLIST_FILE': 'Resources/Info.plist',
      'MACOSX_DEPLOYMENT_TARGET': identity['deploymentTarget'],
      'SWIFT_VERSION': '5.0',
+     'SWIFT_STRICT_CONCURRENCY': 'complete',
      'SWIFT_TREAT_WARNINGS_AS_ERRORS': 'YES',
      'OTHER_SWIFT_FLAGS': ['$(inherited)', '-package-name', 'TextTank'],
      'CLANG_CXX_LANGUAGE_STANDARD': 'c++17',

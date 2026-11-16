@@ -11,6 +11,7 @@ suite_require_build
 python3 scripts/record-validation.py capture
 suite_script scripts/test-harness.sh
 suite_script scripts/test-build-pipeline.sh
+suite_run concurrency-guard-checks harness/logs/concurrency-guard-checks.log python3 Tests/ConcurrencyGuardChecks.py
 suite_build "file-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/file-checks "$SUITE_SUPPORT" Tests/FileChecks.swift
 suite_run file-checks harness/logs/file-checks.log build/tests/file-checks
 suite_build "automation-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/automation-checks "$SUITE_SUPPORT" Tests/AutomationChecks.swift

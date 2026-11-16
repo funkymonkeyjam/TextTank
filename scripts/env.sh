@@ -10,7 +10,7 @@ if [[ "$ARCH" != "$TEXTTANK_ARCHITECTURE" ]]; then echo 'Only arm64 is currently
 VENDOR_BUILD="$TEXTTANK_ROOT/build/vendor/$CONFIGURATION"
 APP_PATH="$TEXTTANK_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/TextTank.app"
 LEXILLA_LIBRARY="$VENDOR_BUILD/liblexilla.a"
-SWIFT_BASE=(-swift-version 5 -package-name TextTank -target "$ARCH-apple-macos$DEPLOYMENT_TARGET" -module-cache-path build/ModuleCache)
+SWIFT_BASE=(-swift-version 5 -strict-concurrency=complete -package-name TextTank -target "$ARCH-apple-macos$DEPLOYMENT_TARGET" -module-cache-path build/ModuleCache)
 CXX_BASE=(-std=c++17 -fobjc-arc "-mmacosx-version-min=$DEPLOYMENT_TARGET")
 BRIDGE_INCLUDES=(-I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F "$VENDOR_BUILD")
 APP_LINK=(-framework Scintilla -framework Cocoa -Xlinker -rpath -Xlinker "$VENDOR_BUILD")

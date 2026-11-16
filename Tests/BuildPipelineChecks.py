@@ -35,7 +35,8 @@ class BuildPipelineChecks(unittest.TestCase):
             probe = folder / 'probe.swift'
             probe.write_text(body)
             return subprocess.run(
-                ['xcrun', 'swiftc', '-swift-version', '5', '-warnings-as-errors',
+                ['xcrun', '--sdk', 'macosx', 'swiftc', '-swift-version', '5', '-strict-concurrency=complete', '-warnings-as-errors',
+                 '-sdk', json.loads(Path(os.environ['TEXTTANK_ARTIFACT_MANIFEST']).read_text())['toolchain']['sdk'],
                  '-target', 'arm64-apple-macos14.0', '-module-cache-path',
                  str(ROOT / 'build/ModuleCache'), '-typecheck',
                  '-import-objc-header', str(copied), str(probe)],
@@ -68,7 +69,7 @@ func rawMode() throws {
         # The public editor interface uses AppKit, not the snapshot search engine.
         # Compile a copied header with no neighbouring Search directory; a hidden
         # transitive import is a real compiler failure rather than a text match.
-        sdk = subprocess.check_output(['xcrun', '--show-sdk-path'], text=True).strip()
+        sdk = subprocess.check_output(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], text=True).strip()
         with tempfile.TemporaryDirectory(prefix='editor-header-', dir=ROOT / 'tmp') as work:
             folder = Path(work)
             header = folder / 'EditorBridge/TTEditor.h'
@@ -192,6 +193,7 @@ func rawMode() throws {
             scripts = fixture / 'scripts'
             scripts.mkdir()
             shutil.copyfile(ROOT / 'scripts/build.sh', scripts / 'build.sh')
+            shutil.copyfile(ROOT / 'scripts/compile_diagnostics.py', scripts / 'compile_diagnostics.py')
             (scripts / 'env.sh').write_text('''CONFIGURATION=Debug
 ARCH=arm64
 DEPLOYMENT_TARGET=14.0

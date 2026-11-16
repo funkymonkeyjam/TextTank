@@ -28,6 +28,7 @@ python3 scripts/runtime_artifacts.py begin --configuration "$CONFIGURATION" --ma
 logged scintilla-build xcodebuild -project Vendor/scintilla/cocoa/Scintilla/Scintilla.xcodeproj -scheme Scintilla -configuration "$CONFIGURATION" -derivedDataPath "$PWD/build/ScintillaDerived/$CONFIGURATION" ARCHS="$ARCH" ONLY_ACTIVE_ARCH=YES MACOSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$VENDOR_BUILD" CLANG_MODULE_CACHE_PATH="$PWD/build/ModuleCache"
 logged lexilla-build python3 scripts/build-lexilla.py
 logged app-build xcodebuild -project TextTank.xcodeproj -scheme TextTank -configuration "$CONFIGURATION" -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO build
+python3 scripts/compile_diagnostics.py --log harness/logs/app-build.log
 python3 scripts/check-runtime-linkage.py "$APP_PATH"
 # Finder/file-provider metadata is not part of the generated application resources.
 xattr -dr com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true

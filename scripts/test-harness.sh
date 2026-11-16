@@ -64,6 +64,7 @@ fi
 
 source scripts/suite-lib.sh
 suite_begin
+suite_require_build
 suite_build "harness-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/HarnessChecks.swift -o build/tests/harness-checks
 suite_run harness-checks harness/logs/harness-checks.log build/tests/harness-checks
 suite_run runner-selftest harness/logs/runner-selftest.log scripts/test-harness.sh --runner-selftest
