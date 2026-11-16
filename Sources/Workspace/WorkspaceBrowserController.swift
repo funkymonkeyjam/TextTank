@@ -14,7 +14,7 @@ import AppKit
 final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
     let store: WorkspaceBrowserStore
     let monitor = DocumentMonitor()
-    var chooseEncoding: (URL, Error) -> FileEncoding? = EncodingChoice.present
+    var chooseEncoding: @MainActor (URL, Error) -> FileEncoding? = EncodingChoice.present
     var currentDocument: () -> TextDocument? = { NSApp.mainWindow?.windowController?.document as? TextDocument }
     private(set) var window: NSPanel?
     let outline = NSOutlineView()

@@ -145,13 +145,18 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         retirementObserver = NotificationCenter.default.addObserver(
             forName: .TTEditorWillRetire, object: nil, queue: nil
         ) { [weak self] note in
-            guard let self, let retiring = note.object as? TTEditor,
-                let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor
-            else { return }
-            for index in self.resultBuffers.indices where self.resultBuffers[index].editor === retiring {
-                self.resultBuffers[index].editor = successor
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated {
+
+                guard let self, let retiring = note.object as? TTEditor,
+                    let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor
+                else { return }
+                for index in self.resultBuffers.indices where self.resultBuffers[index].editor === retiring {
+                    self.resultBuffers[index].editor = successor
+                }
+                if self.lastNavigation?.editor === retiring { self.lastNavigation = nil }
+
             }
-            if self.lastNavigation?.editor === retiring { self.lastNavigation = nil }
         }
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -240,7 +245,12 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         WindowFrames.track(window, as: "TextTank.FindAndReplace")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
-    deinit { if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) } }
+    deinit {
+        precondition(Thread.isMainThread)
+        MainActor.assumeIsolated {
+            if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) }
+        }
+    }
     @objc func showSearch(_ sender: Any?) {
         if let shared = readFindText(), !shared.isEmpty { queryField.stringValue = shared }
         showWindow(sender)

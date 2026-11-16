@@ -275,6 +275,32 @@ extension DocumentChecks {
             try files.createSymbolicLink(at: leaf, withDestinationURL: target)
             let inside = alias.appendingPathComponent("inside.txt")
             try Data("inside a linked folder\n".utf8).write(to: real.appendingPathComponent("inside.txt"))
+            // The framework can set fileURL from its own queue. Canonical metadata must be
+            // immediately visible without draining main, while the existing recovery increment
+            // remains queued for main. This fixture owns both aliases and never calls the editor
+            // from the worker.
+            let setterDocument = TextDocument()
+            let setterBase = setterDocument.recoveryBase
+            let setterDone = DispatchSemaphore(value: 0)
+            let setterThread = Thread {
+                setterDocument.fileURL = leaf
+                setterDone.signal()
+            }
+            setterThread.start()
+            try require(
+                setterDone.wait(timeout: .now() + 5) == .success,
+                "F316 owned off-main fileURL setter completes without main coordination")
+            check(
+                setterDocument.fileURL == leaf && setterDocument.diskURL == TextDocument.canonicalDiskURL(target),
+                "F316 off-main fileURL setter publishes its canonical location synchronously")
+            check(
+                setterDocument.recoveryBase == setterBase,
+                "F316 off-main setter preserves queued recovery metadata timing")
+            spinUntil(timeout: 1) { setterDocument.recoveryBase == setterBase + 1 }
+            check(
+                setterDocument.recoveryBase == setterBase + 1,
+                "F316 off-main setter increments recovery metadata on its original main-queue turn")
+            setterDocument.close()
             for (label, url, actual) in [
                 ("symlink leaf", leaf, target),
                 ("symlinked parent folder", inside, real.appendingPathComponent("inside.txt"))

@@ -103,16 +103,37 @@ final class TextDocumentController: NSDocumentController {
             completionHandler(nil, false, CocoaError(.userCancelled))
             return
         }
-        super.openDocument(withContentsOf: url, display: displayDocument) { [weak self] document, alreadyOpen, error in
-            guard let self else {
-                completionHandler(document, alreadyOpen, error)
+        let delivery = OpenDelivery(self, url: url, display: displayDocument, completion: completionHandler)
+        super.openDocument(withContentsOf: url, display: displayDocument) { document, alreadyOpen, error in
+            let finish: @MainActor @Sendable () -> Void = { delivery.finish(document, alreadyOpen, error) }
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { finish() }
+            } else {
+                DispatchQueue.main.async(execute: finish)
+            }
+        }
+    }
+    /// The framework completion transports this actor-owned callback; it never weak-loads the
+    /// UI controller on a worker. The original main/Dispatch.main delivery order is preserved.
+    @MainActor private final class OpenDelivery {
+        private weak var controller: TextDocumentController?
+        private let url: URL, display: Bool
+        private let completion: (NSDocument?, Bool, Error?) -> Void
+        init(
+            _ controller: TextDocumentController, url: URL, display: Bool,
+            completion: @escaping (NSDocument?, Bool, Error?) -> Void
+        ) {
+            self.controller = controller
+            self.url = url
+            self.display = display
+            self.completion = completion
+        }
+        func finish(_ document: NSDocument?, _ alreadyOpen: Bool, _ error: Error?) {
+            guard let controller else {
+                completion(document, alreadyOpen, error)
                 return
             }
-            let finish = {
-                self.finishOpen(
-                    url, display: displayDocument, document, alreadyOpen, error, completionHandler: completionHandler)
-            }
-            if Thread.isMainThread { finish() } else { DispatchQueue.main.async(execute: finish) }
+            controller.finishOpen(url, display: display, document, alreadyOpen, error, completionHandler: completion)
         }
     }
     /// What happens to the stock open's answer. Only a displayed open that failed to decode is

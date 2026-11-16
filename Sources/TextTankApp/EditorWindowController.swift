@@ -135,11 +135,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         lastEditor = document.editor
         wire(document.editor)
         focusObservation = window.observe(\.firstResponder) { [weak self] window, _ in
-            guard let self, let responder = window.firstResponder as? NSView,
-                let pane = self.views.last(where: { responder.isDescendant(of: $0) })
-            else { return }
-            self.lastEditor = pane
-            self.updateInlineFindValidation()
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated {
+
+                guard let self, let responder = window.firstResponder as? NSView,
+                    let pane = self.views.last(where: { responder.isDescendant(of: $0) })
+                else { return }
+                self.lastEditor = pane
+                self.updateInlineFindValidation()
+
+            }
         }
         if let app = EditorServices.current {
             app.settings?.apply(to: document.editor)
@@ -154,16 +159,30 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             EditorToolbarAccessibility.apply(to: window)
             toolbarAccessibilityObservers = [NSWindow.didResizeNotification, NSWindow.didBecomeKeyNotification].map {
                 NotificationCenter.default.addObserver(forName: $0, object: window, queue: .main) { [weak window] _ in
-                    if let window { EditorToolbarAccessibility.apply(to: window) }
+                    precondition(Thread.isMainThread)
+                    MainActor.assumeIsolated {
+
+                        if let window { EditorToolbarAccessibility.apply(to: window) }
+
+                    }
                 }
             }
             toolbarObservations = [
-                toolbar.observe(\.displayMode) { [weak self] _, _ in self?.scheduleToolbarArrangementSave() },
-                toolbar.observe(\.isVisible) { [weak self] _, _ in self?.scheduleToolbarArrangementSave() }
+                toolbar.observe(\.displayMode) { [weak self] _, _ in
+                    precondition(Thread.isMainThread)
+                    MainActor.assumeIsolated { self?.scheduleToolbarArrangementSave() }
+                },
+                toolbar.observe(\.isVisible) { [weak self] _, _ in
+                    precondition(Thread.isMainThread)
+                    MainActor.assumeIsolated { self?.scheduleToolbarArrangementSave() }
+                }
             ]
             automationObserver = NotificationCenter.default.addObserver(
                 forName: .textTankAutomationsDidChange, object: app.automations, queue: .main
-            ) { [weak self] _ in self?.refreshAutomationToolbar() }
+            ) { [weak self] _ in
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated { self?.refreshAutomationToolbar() }
+            }
         }
         window.title = "TextTank"
         window.center()
@@ -255,13 +274,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         stateObserver = NotificationCenter.default.addObserver(
             forName: .TTEditorStateDidChange, object: nil, queue: nil
         ) { [weak self] note in
-            guard let self, !self.statusClosed, let editor = note.object as? TTEditor else { return }
-            if editor === self.primaryEditor || editor === self.secondary {
-                self.updateInlineFindValidation()
-                if self.window?.isVisible == true { self.refreshStatusDetails(source: .editorEvent) }
-            } else if self.window?.isVisible == true {
-                // Another document changed: only its title in this window's tab strip can differ.
-                self.documentTabs.refresh()
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated {
+
+                guard let self, !self.statusClosed, let editor = note.object as? TTEditor else { return }
+                if editor === self.primaryEditor || editor === self.secondary {
+                    self.updateInlineFindValidation()
+                    if self.window?.isVisible == true { self.refreshStatusDetails(source: .editorEvent) }
+                } else if self.window?.isVisible == true {
+                    // Another document changed: only its title in this window's tab strip can differ.
+                    self.documentTabs.refresh()
+                }
+
             }
         }
         // Minimising and restoring a window changes isVisible without any order call.
@@ -270,7 +294,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             NSWindow.didBecomeKeyNotification, NSWindow.didChangeOcclusionStateNotification
         ].map {
             NotificationCenter.default.addObserver(forName: $0, object: window, queue: nil) { [weak self] _ in
-                self?.visibilityChanged()
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated {
+
+                    self?.visibilityChanged()
+
+                }
             }
         }
         visibilityChanged()
@@ -296,7 +325,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
         guard statusTimer == nil else { return }
         let timer = Timer(timeInterval: statusTimerInterval ?? 0.2, repeats: true) { [weak self] _ in
-            self?.statusTimerTick()
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated {
+
+                self?.statusTimerTick()
+
+            }
         }
         timer.tolerance = 0.05
         RunLoop.main.add(timer, forMode: .default)
@@ -368,17 +402,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             let bytes = doc.editor.utf8Data
             statusMetricsPending = true
             statusMetricsCaptureCount += 1
-            DispatchQueue.global(qos: .utility).async { [weak self, weak doc] in
+            let deliver: @MainActor @Sendable (Int, String) -> Void = { [weak self, weak doc] count, eol in
+                guard let self else { return }
+                self.statusMetricsPending = false
+                guard let doc, self.document === doc, doc.editor.revision == revision else { return }
+                self.cachedCharacterCount = count
+                self.cachedEndings = eol
+                self.statusRevision = revision
+                if self.window?.isVisible == true { self.refreshStatusDetails() }
+            }
+            DispatchQueue.global(qos: .utility).async {
                 let (count, eol) = StatusMetrics.scan(bytes)
-                DispatchQueue.main.async { [weak self, weak doc] in
-                    guard let self else { return }
-                    self.statusMetricsPending = false
-                    guard let doc, self.document === doc, doc.editor.revision == revision else { return }
-                    self.cachedCharacterCount = count
-                    self.cachedEndings = eol
-                    self.statusRevision = revision
-                    if self.window?.isVisible == true { self.refreshStatusDetails() }
-                }
+                DispatchQueue.main.async { deliver(count, eol) }
             }
         }
         let language =
@@ -786,11 +821,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         guard editor.executeCommand(command.nativeIdentifier) else { throw EditorCommandFailure.unsupported }
     }
     deinit {
-        statusTimer?.invalidate()
-        focusObservation?.invalidate()
-        if let stateObserver { NotificationCenter.default.removeObserver(stateObserver) }
-        visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
-        if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
+        precondition(Thread.isMainThread)
+        MainActor.assumeIsolated {
+
+            statusTimer?.invalidate()
+            focusObservation?.invalidate()
+            if let stateObserver { NotificationCenter.default.removeObserver(stateObserver) }
+            visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
+
+        }
     }
     private func setFindBar(visible: Bool) {
         guard let findBar, findBar.isHidden == visible else { return }

@@ -29,27 +29,37 @@ import AppKit
         try TextDocument.open(url, as: encoding, ofType: typeName, display: display)
     }
     override func attemptRecovery(fromError error: Error, optionIndex recoveryOptionIndex: Int) -> Bool {
-        guard recoveryOptionIndex == 0 else { return false }
-        do {
-            try open()
-            NSDocumentController.shared.noteNewRecentDocumentURL(url)
-            return true
-        } catch {
-            TTAlert.present(error)
-            return false
+        precondition(Thread.isMainThread)
+        return MainActor.assumeIsolated {
+
+            guard recoveryOptionIndex == 0 else { return false }
+            do {
+                try open()
+                NSDocumentController.shared.noteNewRecentDocumentURL(url)
+                return true
+            } catch {
+                TTAlert.present(error)
+                return false
+            }
+
         }
     }
     override func attemptRecovery(
         fromError error: Error, optionIndex recoveryOptionIndex: Int, delegate: Any?, didRecoverSelector: Selector?,
         contextInfo: UnsafeMutableRawPointer?
     ) {
-        let recovered = attemptRecovery(fromError: error, optionIndex: recoveryOptionIndex)
-        guard let target = delegate as AnyObject?, let didRecoverSelector,
-            let method = class_getInstanceMethod(type(of: target), didRecoverSelector)
-        else { return }
-        // - (void)didPresentErrorWithRecovery:(BOOL)didRecover contextInfo:(void *)contextInfo
-        typealias Callback = @convention(c) (AnyObject, Selector, Bool, UnsafeMutableRawPointer?) -> Void
-        unsafeBitCast(method_getImplementation(method), to: Callback.self)(
-            target, didRecoverSelector, recovered, contextInfo)
+        precondition(Thread.isMainThread)
+        MainActor.assumeIsolated {
+
+            let recovered = attemptRecovery(fromError: error, optionIndex: recoveryOptionIndex)
+            guard let target = delegate as AnyObject?, let didRecoverSelector,
+                let method = class_getInstanceMethod(type(of: target), didRecoverSelector)
+            else { return }
+            // - (void)didPresentErrorWithRecovery:(BOOL)didRecover contextInfo:(void *)contextInfo
+            typealias Callback = @convention(c) (AnyObject, Selector, Bool, UnsafeMutableRawPointer?) -> Void
+            unsafeBitCast(method_getImplementation(method), to: Callback.self)(
+                target, didRecoverSelector, recovered, contextInfo)
+
+        }
     }
 }

@@ -98,19 +98,23 @@ import AppKit
     /// `inPlaceWriteURL` is therefore read and written on the main thread alone.
     override var fileURL: URL? {
         get {
-            if Thread.isMainThread, let inPlaceWriteURL { return inPlaceWriteURL }
+            // File-presenter reads must never wait for main, which can be waiting for them.
+            if Thread.isMainThread {
+                if let destination = MainActor.assumeIsolated({ inPlaceWriteURL }) { return destination }
+            }
             return super.fileURL
         }
         set {
             let oldValue = super.fileURL
             super.fileURL = newValue
             guard newValue != oldValue else { return }
-            diskURL = newValue.map(Self.canonicalDiskURL)
+            diskLocation.set(newValue.map(Self.canonicalDiskURL))
             if Thread.isMainThread {
-                recoveryBase += 1
-                // Saved under a name of its own: no longer a recovered draft. Setting the URL has
-                // already replaced the "Recovered …" display name with the file's name.
-                recoveredOrigin = nil
+                MainActor.assumeIsolated {
+                    recoveryBase += 1
+                    // Only the existing main-thread setter route clears the recovered label.
+                    recoveredOrigin = nil
+                }
             } else {
                 DispatchQueue.main.async { [weak self] in self?.recoveryBase += 1 }
             }
@@ -120,7 +124,8 @@ import AppKit
     /// set. The no-follow reads and the in-place write use it, so a document reached through a
     /// link can be checked and saved, and a link swapped in later is still refused because this
     /// is not resolved again. `fileURL` itself keeps the path the person opened.
-    private(set) var diskURL: URL?
+    nonisolated private let diskLocation = DocumentDiskLocation()
+    nonisolated var diskURL: URL? { diskLocation.get() }
     private var inPlaceWriteURL: URL?
     /// realpath(3) of the file; for a name that does not exist yet, of its folder. Falls back
     /// to the URL as given.
@@ -269,7 +274,10 @@ import AppKit
     /// snapshots still happen while an alert, a menu or interactive macro playback is up.
     /// The timer only captures an immutable snapshot; it never edits the document.
     private func scheduleRecoveryTimer(after delay: TimeInterval) -> Timer {
-        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in self?.enqueueRecovery() }
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { self?.enqueueRecovery() }
+        }
         RunLoop.main.add(timer, forMode: .common)
         return timer
     }
@@ -365,16 +373,17 @@ import AppKit
         guard !recoveryClosed else { return }
         cancelRecoveryTimers()
         let generation = recoveryGeneration, operation = recoveryOperation()
-        recoveryWriter.submit { [weak self] in
+        let deliver: @MainActor @Sendable (Error?) -> Void = { [weak self] error in
+            guard let self, !self.recoveryClosed, self.recoveryGeneration == generation else { return }
+            self.reportRecovery(error)
+        }
+        recoveryWriter.submit {
             let error: Error?
             do {
                 try operation()
                 error = nil
             } catch let failure { error = failure }
-            DispatchQueue.main.async { [weak self] in
-                guard let self, !self.recoveryClosed, self.recoveryGeneration == generation else { return }
-                self.reportRecovery(error)
-            }
+            DispatchQueue.main.async { deliver(error) }
         }
     }
     func flushRecovery() {
@@ -410,6 +419,10 @@ import AppKit
     override class var autosavesInPlace: Bool { false }
     override func makeWindowControllers() { addWindowController(EditorWindowController(document: self)) }
     override func read(from url: URL, ofType typeName: String) throws {
+        precondition(Thread.isMainThread)
+        try MainActor.assumeIsolated { try readURLOnMain(from: url, ofType: typeName) }
+    }
+    private func readURLOnMain(from url: URL, ofType typeName: String) throws {
         readingURL = url
         defer { readingURL = nil }
         // AppKit reads the file itself. Settled metadata that is the same on both sides of
@@ -442,6 +455,10 @@ import AppKit
         try read(from: data, ofType: typeName)
     }
     override func read(from data: Data, ofType typeName: String) throws {
+        precondition(Thread.isMainThread)
+        try MainActor.assumeIsolated { try readDataOnMain(from: data, ofType: typeName) }
+    }
+    private func readDataOnMain(from data: Data, ofType typeName: String) throws {
         let decoded: DecodedFile
         if let openEncoding {
             decoded = try FileCodec.decode(data, encoding: openEncoding)
@@ -654,6 +671,10 @@ import AppKit
         return operation
     }
     override func data(ofType typeName: String) throws -> Data {
+        precondition(Thread.isMainThread)
+        return try MainActor.assumeIsolated { try dataOnMain(ofType: typeName) }
+    }
+    private func dataOnMain(ofType typeName: String) throws -> Data {
         dependencies.duringWrite?()
         if let savePayload { return savePayload }
         return try FileCodec.encode(editor.text, format: format)
@@ -661,6 +682,12 @@ import AppKit
     override func writeSafely(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType)
         throws
     {
+        precondition(Thread.isMainThread)
+        try MainActor.assumeIsolated { try writeSafelyOnMain(to: url, ofType: typeName, for: saveOperation) }
+    }
+    private func writeSafelyOnMain(
+        to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType
+    ) throws {
         // A write to the document's own file goes to its resolved location, so the bytes checked
         // and the bytes replaced are the same file and a link in the path stays a link.
         let inPlace = fileURL != nil && url == fileURL
@@ -701,4 +728,23 @@ import AppKit
         }
     }
 
+}
+
+/// Only the canonical URL snapshot crosses NSDocument's file-presenter boundary. The complete
+/// mutable state is lock-protected; super/AppKit/editor access and callbacks never run under it.
+private final class DocumentDiskLocation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: URL?
+    func get() -> URL? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+    func set(_ next: URL?) {
+        lock.lock()
+        let displaced = value
+        value = next
+        lock.unlock()
+        withExtendedLifetime(displaced) {}
+    }
 }
