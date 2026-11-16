@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import AppKit
+
+extension LineEnding {
+    var nativeMode: TTLineEndingMode {
+        switch self {
+        case .lf: return .lf
+        case .crlf: return .crlf
+        case .cr: return .cr
+        }
+    }
+}

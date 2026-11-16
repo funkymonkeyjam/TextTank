@@ -391,7 +391,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             EditorServices.current?.languages?.profile(identifier: doc.languageIdentifier)?.title
             ?? (doc.languageIdentifier == LanguageProfile.plainTextID ? "Plain Text" : doc.languageIdentifier)
         let eol =
-            cachedEndings.isEmpty ? ([0: "CRLF", 1: "CR", 2: "LF"][info.eol] ?? "LF") : cachedEndings
+            cachedEndings.isEmpty ? ([0: "CRLF", 1: "CR", 2: "LF"][info.eol.rawValue] ?? "LF") : cachedEndings
         let indentation =
             (info.useTabs == true ? "Tabs" : "Spaces") + ": \(info.tabWidth)"
         // VoiceOver names each text area after its document, and after its pane in a split view.
@@ -509,7 +509,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             heading("Convert document line endings")
             for (name, code) in [("LF — Unix / macOS", "LF"), ("CRLF — Windows", "CRLF"), ("CR — Classic Mac", "CR")] {
                 let current =
-                    cachedEndings.isEmpty ? [0: "CRLF", 1: "CR", 2: "LF"][info.eol] : cachedEndings
+                    cachedEndings.isEmpty ? [0: "CRLF", 1: "CR", 2: "LF"][info.eol.rawValue] : cachedEndings
                 add(name, #selector(convertEOL(_:)), self, code, current == code, !editor.readOnly)
             }
         case .wrap:
@@ -1120,11 +1120,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         return editor.replaceSelections(values, expectedRevision: revision)
     }
     @objc func convertEOL(_ sender: NSMenuItem) {
-        guard let mode = sender.representedObject as? String else { return }
-        do { try convertLineEndings(to: mode) } catch { TTAlert.explain(error) }
+        guard let identifier = sender.representedObject as? String, let mode = LineEnding(rawValue: identifier) else {
+            return
+        }
+        do { try convertLineEndings(to: mode.nativeMode) } catch { TTAlert.explain(error) }
     }
     /// Refused with the read-only reason before a macro recording is touched.
-    func convertLineEndings(to mode: String) throws {
+    func convertLineEndings(to mode: TTLineEndingMode) throws {
         let editor = activeEditor
         try editor.requireWritable()
         EditorServices.current?.macros?.invalidateRecording(

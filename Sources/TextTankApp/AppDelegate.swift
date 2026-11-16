@@ -112,7 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static func openAutomationOutput(_ text: String) {
         DocumentFactory.makeUntitled(populate: { doc in
             doc.editor.text = text
-            doc.editor.setLineEndingMode(LineEnding.detect(in: text).rawValue)
+            doc.editor.setLineEndingMode(LineEnding.detect(in: text).nativeMode)
         })
     }
     /// The reason often arrives inside an editor callback, and for a click while the button is

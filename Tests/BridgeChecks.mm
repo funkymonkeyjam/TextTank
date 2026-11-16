@@ -13,6 +13,12 @@
 @end
 @implementation TTFakeDrop
 @end
+static TTLineEndingMode TTE(NSString *name) {
+    if ([name isEqual:@"CRLF"]) return TTLineEndingModeCRLF;
+    if ([name isEqual:@"CR"]) return TTLineEndingModeCR;
+    if ([name isEqual:@"LF"]) return TTLineEndingModeLF;
+    return (TTLineEndingMode)-1;
+}
 static TTByteRange *R(NSRange range) { return [[TTByteRange alloc] initWithLocation:(NSInteger)range.location length:(NSInteger)range.length]; }
 // Foreign malformed values are explicit id casts: the typed constructor cannot express
 // missing keys or fractional offsets. They still have to fail before the first edit.
@@ -116,10 +122,10 @@ int main() {
         check(![second setSelectionRanges:@[S(2,5)]], "Split UTF8 scalar selection rejected");
         check(![second setSelectionRanges:@[S(0,5),S(1,5)]], "Overlapping ranges rejected");
         second.readOnly=YES; revision=second.revision;
-        [second replaceSelection:@"forbidden"]; [second convertLineEndings:@"CRLF"];
+        [second replaceSelection:@"forbidden"]; [second convertLineEndings:TTE(@"CRLF")];
         check(second.revision==revision && [second.text isEqual:@"a😀b café"], "Read-only editing preserves bytes and revision");
         second.readOnly=NO;second.text=@"a\r\nb\rc\n";[second resetUndoHistory];
-        [second convertLineEndings:@"LF"];
+        [second convertLineEndings:TTE(@"LF")];
         check([second.text isEqual:@"a\nb\nc\n"], "Mixed EOL conversion exact");
         [second executeCommand:@"undo"];
         check([second.text isEqual:@"a\r\nb\rc\n"], "EOL conversion single Undo preserves original mix");
@@ -341,7 +347,7 @@ int main() {
         ed.readOnly=YES; NSUInteger revision=ed.revision; sptr_t eol=[sv message:SCI_GETEOLMODE];
         check(![ed requireWritable:&error] && [error.domain isEqual:TTEditorErrorDomain] && error.code==TTEditorErrorReadOnly && [error.localizedDescription containsString:@"read-only"], "requireWritable rejects a read-only document with the one read-only error");
         check(![ed requireWritable:NULL], "requireWritable rejects a read-only document without an error pointer");
-        check(![ed convertLineEndings:@"LF"] && [sv message:SCI_GETEOLMODE]==eol, "convertLineEndings reports failure on a read-only document and keeps the insertion ending");
+        check(![ed convertLineEndings:TTE(@"LF")] && [sv message:SCI_GETEOLMODE]==eol, "convertLineEndings reports failure on a read-only document and keeps the insertion ending");
         check(![ed replaceSelection:@"x"] && ed.selectionAnchor==0 && ed.selectionCaret==3, "replaceSelection on a read-only document reports failure and leaves the selection alone");
         check(![ed executeMacroStep:@{@"kind":@"insertText",@"text":@"x"}], "A macro text step on a read-only document is rejected");
         check(attempts==0, "Bridge edits refused up front do not also report a read-only attempt");
@@ -352,8 +358,8 @@ int main() {
         [ed executeCommand:@"undo"]; [ed executeCommand:@"charRight"]; [ed executeCommand:@"copy"];
         check([ed.text isEqual:@"one\r\ntwo\n"] && ed.revision==revision && !ed.modified, "Refused edits leave text, revision and save point unchanged");
         ed.readOnly=NO;
-        check([ed convertLineEndings:@"LF"] && [ed.text isEqual:@"one\ntwo\n"], "convertLineEndings reports success on a writable document");
-        check(![ed convertLineEndings:@"bogus"], "convertLineEndings reports failure for an unknown mode");
+        check([ed convertLineEndings:TTE(@"LF")] && [ed.text isEqual:@"one\ntwo\n"], "convertLineEndings reports success on a writable document");
+        check(![ed convertLineEndings:TTE(@"bogus")], "convertLineEndings reports failure for an unknown mode");
         BOOL editing=YES, viewing=NO;
         for (NSString *name in @[@"undo",@"redo",@"cut",@"paste",@"duplicateLine",@"deleteLine",@"transposeLine",@"indent",@"unindent",@"upper",@"lower",@"duplicateSelection",@"deleteWordLeft",@"deleteWordRight",@"deleteLineLeft",@"deleteLineRight",@"moveLineUp",@"moveLineDown",@"joinLines",@"trimTrailing",@"deleteBack",@"deleteForward",@"newLine",@"tab",@"backTab"]) editing = editing && [TTEditor commandModifiesText:name];
         for (NSString *name in @[@"copy",@"selectAll",@"zoomIn",@"zoomOut",@"charLeft",@"lineDownExtend",@"documentEnd",@"foldAll",@"unfoldAll",@"showWhitespace",@"toggleEOL",@"toggleLineNumbers",@"toggleOvertype",@"bookmarkToggle",@"bookmarkNext",@"gotoMatchingBrace",@"selectMatchingBrace",@"streamSelection",@"rectangularSelection",@"clearAdditionalSelections",@"addNextOccurrence",@"selectAllOccurrences",@"",@"noSuchCommand"]) viewing = viewing || [TTEditor commandModifiesText:name];
@@ -399,18 +405,18 @@ int main() {
         // F126: the line-ending mode is metadata only and governs later insertions.
         TTEditor *eol=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,300)];
         ScintillaView *eolNative=(ScintillaView *)eol.subviews.firstObject;
-        check(eol.statusInfo.eol==SC_EOL_LF, "New editor inserts LF by default");
+        check(eol.statusInfo.eol==TTLineEndingModeLF, "New editor inserts LF by default");
         eol.text=@"a\r\nb";[eol resetUndoHistory];[eol setSavePoint];NSUInteger eolRevision=eol.revision;
-        [eol setLineEndingMode:@"CRLF"];
-        check([eol.text isEqual:@"a\r\nb"] && eol.revision==eolRevision && !eol.modified && ![eolNative message:SCI_CANUNDO] && eol.statusInfo.eol==SC_EOL_CRLF, "Line-ending mode changes no bytes, revision, save point or undo history");
-        [eol setLineEndingMode:@"bogus"];
-        check(eol.statusInfo.eol==SC_EOL_CRLF && eol.revision==eolRevision, "Unknown line-ending mode is ignored");
+        check(std::strcmp([eol methodSignatureForSelector:@selector(setLineEndingMode:)].methodReturnType,@encode(BOOL))==0, "F29 setting the insertion ending reports whether it was accepted");
+        check([eol setLineEndingMode:TTLineEndingModeCRLF], "F29 a supported insertion ending reports acceptance");
+        check([eol.text isEqual:@"a\r\nb"] && eol.revision==eolRevision && !eol.modified && ![eolNative message:SCI_CANUNDO] && eol.statusInfo.eol==TTLineEndingModeCRLF, "Line-ending mode changes no bytes, revision, save point or undo history");
+        check(![eol setLineEndingMode:(TTLineEndingMode)-1] && eol.statusInfo.eol==TTLineEndingModeCRLF && eol.revision==eolRevision, "Unknown line-ending mode reports refusal without mutation");
         [eol setSelectionAnchor:4 caret:4];[eol executeCommand:@"newLine"];
         check([eol.text isEqual:@"a\r\nb\r\n"], "Return in CRLF mode inserts CRLF");
-        eol.text=@"a\rb";[eol setLineEndingMode:@"CR"];[eol setSelectionAnchor:3 caret:3];[eol executeCommand:@"newLine"];
-        check([eol.text isEqual:@"a\rb\r"] && eol.statusInfo.eol==SC_EOL_CR, "Return in CR mode inserts CR");
-        eol.text=@"ab";[eol setLineEndingMode:@"LF"];[eol setSelectionAnchor:2 caret:2];[eol executeCommand:@"newLine"];
-        check([eol.text isEqual:@"ab\n"] && eol.statusInfo.eol==SC_EOL_LF, "Return in LF mode inserts LF");
+        eol.text=@"a\rb";[eol setLineEndingMode:TTE(@"CR")];[eol setSelectionAnchor:3 caret:3];[eol executeCommand:@"newLine"];
+        check([eol.text isEqual:@"a\rb\r"] && eol.statusInfo.eol==TTLineEndingModeCR, "Return in CR mode inserts CR");
+        eol.text=@"ab";[eol setLineEndingMode:TTE(@"LF")];[eol setSelectionAnchor:2 caret:2];[eol executeCommand:@"newLine"];
+        check([eol.text isEqual:@"ab\n"] && eol.statusInfo.eol==TTLineEndingModeLF, "Return in LF mode inserts LF");
         });
         ttchecks::section("batch range replacement and revision authority", [&] {
         // F44, F224: one bridge call replaces many ranges under one undo action, all-or-nothing.
@@ -470,7 +476,7 @@ int main() {
         check([counted executeMacroStep:@{@"kind":@"insertText",@"text":@"q"}] && moved(), "A replayed insertion moves the revision");
         [countedNative message:SCI_DELETEBACK];
         check(moved(), "A native delete moves the revision");
-        [counted convertLineEndings:@"CRLF"];
+        [counted convertLineEndings:TTE(@"CRLF")];
         check(moved() && [counted.text containsString:@"\r\n"], "Converting line endings moves the revision");
         TTEditor *countedClone=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,300)];
         [countedClone shareDocumentWith:counted];
@@ -609,12 +615,12 @@ int main() {
         [ed executeCommand:@"clearAdditionalSelections"];
         for (NSArray *mode in @[@[@"CRLF",@"a\r\nb\r\nc\r\n",@(SC_EOL_CRLF)],@[@"CR",@"a\rb\rc\r",@(SC_EOL_CR)],@[@"LF",@"a\nb\nc\n",@(SC_EOL_LF)]]) {
             ed.text=@"a\r\nb\rc\n"; [ed resetUndoHistory]; [ed setSavePoint];
-            [ed convertLineEndings:mode[0]];
+            [ed convertLineEndings:TTE(mode[0])];
             check([ed.text isEqual:mode[1]] && ed.statusInfo.eol==[mode[2] integerValue], [[NSString stringWithFormat:@"convertLineEndings %@ rewrites every ending and sets the insertion ending",mode[0]] UTF8String]);
             [ed executeCommand:@"undo"];
             check([ed.text isEqual:@"a\r\nb\rc\n"] && !ed.modified, [[NSString stringWithFormat:@"convertLineEndings %@ is one Undo back to the mixed original",mode[0]] UTF8String]);
         }
-        NSUInteger eolRevision=ed.revision; [ed convertLineEndings:@"bogus"];
+        NSUInteger eolRevision=ed.revision; [ed convertLineEndings:TTE(@"bogus")];
         check(ed.revision==eolRevision && [ed.text isEqual:@"a\r\nb\rc\n"], "an unknown line-ending name converts nothing");
         // Completion list and call tip: asked of Scintilla, and closed again at once.
         ScintillaView *popupNative=(ScintillaView *)ed.subviews.firstObject;

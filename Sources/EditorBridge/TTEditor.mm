@@ -56,7 +56,7 @@ static BOOL TTValidatedByteRange(id candidate, NSUInteger documentLength, NSRang
 @end
 @implementation TTEditorStatus
 - (instancetype)initWithLine:(NSInteger)line column:(NSInteger)column lines:(NSInteger)lines tabWidth:(NSInteger)tabWidth useTabs:(BOOL)useTabs fontSize:(double)fontSize eol:(NSInteger)eol {
-    if ((self = [super init])) { _line=line; _column=column; _lines=lines; _tabWidth=tabWidth; _useTabs=useTabs; _fontSize=fontSize; _eol=eol; }
+    if ((self = [super init])) { _line=line; _column=column; _lines=lines; _tabWidth=tabWidth; _useTabs=useTabs; _fontSize=fontSize; _eol=(TTLineEndingMode)eol; }
     return self;
 }
 - (id)copyWithZone:(NSZone *)zone { return self; }
@@ -763,21 +763,20 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [_engine message:SCI_SETTABWIDTH wParam:width]; [_engine message:SCI_SETUSETABS wParam:useTabs];
     [self scheduleStateNotification];
 }
-- (BOOL)convertLineEndings:(NSString *)mode {
-    [self assertThread]; if (self.readOnly) return NO;
-    NSDictionary *modes = @{@"LF":@(SC_EOL_LF), @"CRLF":@(SC_EOL_CRLF), @"CR":@(SC_EOL_CR)};
-    NSNumber *value = modes[mode]; if (!value) return NO;
-    [self openUndoGroup]; [_engine message:SCI_CONVERTEOLS wParam:value.integerValue];
-    [_engine message:SCI_SETEOLMODE wParam:value.integerValue]; [self closeUndoGroup];
+- (BOOL)convertLineEndings:(TTLineEndingMode)mode {
+    [self assertThread];
+    if (self.readOnly || (mode!=TTLineEndingModeLF && mode!=TTLineEndingModeCRLF && mode!=TTLineEndingModeCR)) return NO;
+    [self openUndoGroup]; [_engine message:SCI_CONVERTEOLS wParam:mode];
+    [_engine message:SCI_SETEOLMODE wParam:mode]; [self closeUndoGroup];
     return YES;
 }
-- (void)setLineEndingMode:(NSString *)mode {
+- (BOOL)setLineEndingMode:(TTLineEndingMode)mode {
     [self assertThread];
-    NSDictionary *modes = @{@"LF":@(SC_EOL_LF), @"CRLF":@(SC_EOL_CRLF), @"CR":@(SC_EOL_CR)};
-    NSNumber *value = modes[mode]; if (!value) return;
+    if (mode!=TTLineEndingModeLF && mode!=TTLineEndingModeCRLF && mode!=TTLineEndingModeCR) return NO;
     // Mode only: existing bytes, undo history, revision and save point are untouched.
-    [_engine message:SCI_SETEOLMODE wParam:value.integerValue];
+    [_engine message:SCI_SETEOLMODE wParam:mode];
     [self scheduleStateNotification];
+    return YES;
 }
 - (NSArray<TTSelectionRange *> *)selectionRanges {
     [self assertThread]; NSMutableArray *ranges = [NSMutableArray array];

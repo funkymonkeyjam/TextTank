@@ -466,7 +466,7 @@ import AppKit
                 check(try document.data(ofType: "Plain Text") == initial, "native document exact bytes roundtrip")
                 // F126: the insertion ending follows the file's first line break; loading never edits.
                 check(
-                    document.editor.statusInfo.eol == 0, "mixed file inserts its first line ending (CRLF)")
+                    document.editor.statusInfo.eol.rawValue == 0, "mixed file inserts its first line ending (CRLF)")
                 check(
                     document.editor.text.utf8.elementsEqual(String(decoding: initial, as: UTF8.self).utf8)
                         && !document.editor.modified && !document.isDocumentEdited,
@@ -478,9 +478,9 @@ import AppKit
                 check(
                     eolDocument.editor.text.utf8.elementsEqual("a\r\nb\r\n".utf8),
                     "Return in a CRLF file inserts CRLF, not a bare LF")
-                eolDocument.editor.convertLineEndings("LF")
+                eolDocument.editor.convertLineEndings(.lf)
                 check(
-                    eolDocument.editor.statusInfo.eol == 2,
+                    eolDocument.editor.statusInfo.eol.rawValue == 2,
                     "explicit conversion switches the insertion ending")
                 for (bytes, mode, label) in [
                     ("x\ry\n", 1, "CR"), ("p\nq\r\n", 2, "LF"), ("a\r\nb\n", 0, "CRLF"),
@@ -488,7 +488,7 @@ import AppKit
                 ] {
                     try eolDocument.read(from: Data(bytes.utf8), ofType: "Plain Text")
                     check(
-                        eolDocument.editor.statusInfo.eol == mode && !eolDocument.editor.modified,
+                        eolDocument.editor.statusInfo.eol.rawValue == mode && !eolDocument.editor.modified,
                         "reload into the same document follows the loaded file: \(label)")
                     check(
                         try eolDocument.data(ofType: "Plain Text") == Data(bytes.utf8),
@@ -839,7 +839,7 @@ import AppKit
                         && recovered.fileURL == nil && recovered.isDocumentEdited,
                     "crash recovery opens the snapshot as a new unsaved document")
                 check(
-                    recovered.editor.statusInfo.eol == 0, "recovered document inserts its own line ending")
+                    recovered.editor.statusInfo.eol.rawValue == 0, "recovered document inserts its own line ending")
                 recovered.automaticRecoveryDelay = 0.02
                 recovered.maximumRecoveryDelay = 0.02
                 recovered.editor.executeCommand("undo")

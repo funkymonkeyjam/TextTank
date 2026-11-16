@@ -1133,7 +1133,7 @@ extension DocumentChecks {
                     }?.1, "fixture: \(mode) menu item")
                 controller.convertEOL(item)
                 check(
-                    same(document.editor.text, expected) && document.editor.statusInfo.eol == eol,
+                    same(document.editor.text, expected) && document.editor.statusInfo.eol.rawValue == eol,
                     "Convert Line Endings to \(mode) rewrites every ending and switches the insertion ending")
             }
             let wrapped = controller.activeEditor.wrap
@@ -1179,9 +1179,9 @@ extension DocumentChecks {
                 "a command that edits nothing still runs in a read-only document")
             _ = document.editor.setSelectionAnchor(0, caret: 1)
             rejects("Convert Line Endings states that the document is read-only", message: "This document is read-only")
-            { try controller.convertLineEndings(to: "LF") }
+            { try controller.convertLineEndings(to: .lf) }
             check(
-                unchangedWhileLocked() && document.editor.statusInfo.eol == 2,
+                unchangedWhileLocked() && document.editor.statusInfo.eol.rawValue == 2,
                 "a refused line-ending conversion changes neither the text nor the insertion ending")
             rejects(
                 "Convert to an encoding states that the document is read-only", message: "This document is read-only"
@@ -1203,12 +1203,12 @@ extension DocumentChecks {
             check(
                 same(document.editor.text, "forbidden\r\na\n"),
                 "Replace Selection in the bar replaces the selection once the document is writable")
-            try controller.convertLineEndings(to: "LF")
+            try controller.convertLineEndings(to: .lf)
             check(
                 same(document.editor.text, "forbidden\na\n"),
                 "Convert Line Endings converts once the document is writable")
-            rejects("an unknown line-ending name is refused with a reason", message: "could not be converted") {
-                try controller.convertLineEndings(to: "bogus")
+            rejects("an unknown native line-ending code is refused with a reason", message: "could not be converted") {
+                try controller.convertLineEndings(to: TTLineEndingMode(rawValue: -1)!)
             }
             // Column insert: the success path of applyColumn, with one Undo.
             document.editor.text = "x\nx\nx\n"

@@ -506,7 +506,7 @@ import AppKit
         format = snapshotFormat
         // A new document: writable and empty, so the load cannot be refused.
         _ = editor.loadDocumentText(text)
-        editor.setLineEndingMode(LineEnding.detect(in: text).rawValue)
+        editor.setLineEndingMode(LineEnding.detect(in: text).nativeMode)
         editor.resetUndoHistory()
         savepointMatchesDisk = false
         loading = false
@@ -541,7 +541,7 @@ import AppKit
         // reload. An empty buffer (first open) takes this as a plain insert.
         // No undo record is kept: the history is emptied below, as for every open and reload.
         _ = editor.loadDocumentText(decoded.text)
-        editor.setLineEndingMode(LineEnding.detect(in: decoded.text).rawValue)
+        editor.setLineEndingMode(LineEnding.detect(in: decoded.text).nativeMode)
         editor.resetUndoHistory()
         format = decoded.format
         savedFormat = format

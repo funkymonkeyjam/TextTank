@@ -17,6 +17,12 @@ typedef NS_ERROR_ENUM(TTEditorErrorDomain, TTEditorError) {
 /// may listen. It says "look again", not what changed; Scintilla reports selection changes when
 /// it paints, so a periodic refresh is still needed for state no event covers.
 extern NSNotificationName const TTEditorStateDidChangeNotification;
+/// Values match Scintilla's insertion-ending codes; they are not file-format strings.
+typedef NS_ENUM(NSInteger, TTLineEndingMode) {
+    TTLineEndingModeCRLF NS_SWIFT_NAME(TTLineEndingMode.crlf) = 0,
+    TTLineEndingModeCR NS_SWIFT_NAME(TTLineEndingMode.cr) = 1,
+    TTLineEndingModeLF NS_SWIFT_NAME(TTLineEndingMode.lf) = 2,
+};
 /// A UTF-8 byte span, distinct from Foundation NSRange values used for UTF-16 search.
 /// Construction does not assert document bounds; the editor validates the complete batch.
 __attribute__((objc_subclassing_restricted))
@@ -52,7 +58,7 @@ __attribute__((objc_subclassing_restricted))
 @property(nonatomic, readonly) NSInteger tabWidth;
 @property(nonatomic, readonly) BOOL useTabs;
 @property(nonatomic, readonly) double fontSize;
-@property(nonatomic, readonly) NSInteger eol;
+@property(nonatomic, readonly) TTLineEndingMode eol;
 - (instancetype)init NS_UNAVAILABLE;
 @end
 /// Main-thread-only view. All positions remain inside the UTF-8 Scintilla model.
@@ -113,11 +119,11 @@ __attribute__((objc_subclassing_restricted))
 /// Called when Scintilla refuses an edit because the document is read-only (typing, a key
 /// command, Undo). Bridge methods that return NO for a read-only document do not call it.
 @property(nonatomic, copy, nullable) void (^onReadOnlyAttempt)(void);
-/// NO, changing nothing, when the document is read-only or the mode is not LF, CRLF or CR.
-- (BOOL)convertLineEndings:(NSString *)mode;
+/// NO, changing nothing, when the document is read-only or the mode is not a supported TTLineEndingMode.
+- (BOOL)convertLineEndings:(TTLineEndingMode)mode;
 /// Sets only the ending inserted by later edits (LF, CRLF or CR). Never rewrites existing
 /// bytes and creates no undo step; convertLineEndings: is the only converting operation.
-- (void)setLineEndingMode:(NSString *)mode;
+- (BOOL)setLineEndingMode:(TTLineEndingMode)mode;
 - (void)configureTabWidth:(NSInteger)width useTabs:(BOOL)useTabs;
 
 @property(nonatomic, readonly) NSInteger selectionStart;
