@@ -409,7 +409,7 @@ import Darwin
                     && app.languages.apply(identifier: "javascript", to: manualReference)
                     && app.languages.apply(identifier: "python", to: pythonReference),
                 "fixture: a Python file is switched to JavaScript by hand")
-            manual.languageIdentifier = "javascript"
+            manual.noteAppliedLanguage("javascript")
             check(
                 styling(manualReference).length == 10 && styling(manualReference) != styling(pythonReference),
                 "fixture: the two languages colour the sample differently")

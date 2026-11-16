@@ -118,23 +118,19 @@ final class WorkspaceController: NSObject {
                 })
             // Sessions written before the single plain-text identifier say "null" or nothing.
             let requestedLanguage = LanguageProfile.canonicalID(snapshot.language)
-            if let app = EditorServices.current,
-                app.languages?.apply(identifier: requestedLanguage, to: document.editor) == true
-            {
-                document.languageIdentifier = requestedLanguage
-            } else {
-                document.languageIdentifier = LanguageProfile.plainTextID
-                document.editor.setLanguage("null")
+            if !document.applyLanguage(requestedLanguage, using: EditorServices.current?.languages) {
+                document.usePlainTextLanguage()
             }
             _ = document.editor.setBookmarks(snapshot.bookmarks.map { NSNumber(value: $0) })
             _ = document.editor.setSelectionAnchor(snapshot.selection.anchorByte, caret: snapshot.selection.caretByte)
             document.showWindows()
-            (document.windowControllers.first as? EditorWindowController)?.status.stringValue =
+            (document.windowControllers.first as? EditorWindowController)?.setStatusMessage(
                 "Session snapshot · \(snapshot.originalURL?.lastPathComponent ?? "Untitled") · Save As to keep separately"
+            )
             document.flushRecovery()
             if requestedLanguage != document.languageIdentifier {
-                (document.windowControllers.first as? EditorWindowController)?.status.stringValue +=
-                    " · Language profile unavailable; using Plain Text"
+                (document.windowControllers.first as? EditorWindowController)?.appendStatusMessage(
+                    " · Language profile unavailable; using Plain Text")
             }
             restored.append(document)
             if snapshot.id == session.activeDocumentID { active = document }

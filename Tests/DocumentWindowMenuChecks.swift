@@ -1187,7 +1187,7 @@ extension DocumentChecks {
                     && controller.window?.firstResponder === fieldEditor,
                 "DS35 backwards field navigation retains the field editor")
             // A real bar action records shared search only after the asynchronous result applies.
-            sessionDelegate.lastDocumentController = controller
+            sessionDelegate.noteActive(controller)
             let beforeBarRecording = document.editor.text
             let recordingAnchor = document.editor.selectionAnchor, recordingCaret = document.editor.selectionCaret
             sessionDelegate.macros.startRecording()
@@ -1294,7 +1294,7 @@ extension DocumentChecks {
             check(advanced.queryField.stringValue == "beta", "the advanced Find window imports the shared Find text")
             advanced.mode.selectItem(at: 0)
             advanced.scope.selectItem(at: 0)
-            sessionDelegate.lastDocumentController = controller
+            sessionDelegate.noteActive(controller)
             sessionDelegate.findNextShared(nil)
             spinUntil("menu navigation through the open advanced window") { !advanced.isSearching }
             check(

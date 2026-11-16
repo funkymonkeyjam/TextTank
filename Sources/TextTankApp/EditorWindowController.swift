@@ -11,7 +11,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     private var splitBelowFindBar: NSLayoutConstraint?
     private var splitBelowTabs: NSLayoutConstraint?
     var findBarVisible: Bool { findBar?.isHidden == false }
-    let status = NSTextField(labelWithString: "Ready")
+    private let statusLabel = NSTextField(labelWithString: "Ready")
+    var statusText: String { statusLabel.stringValue }
+    #if TESTING
+        var status: NSTextField { statusLabel }
+    #endif
+    func setStatusMessage(_ message: String) { statusLabel.stringValue = message }
+    func appendStatusMessage(_ suffix: String) { statusLabel.stringValue += suffix }
     private let statusDetails = StatusBadgeRow()
     private let documentTabs = DocumentTabStrip()
     private var statusTimer: Timer?
@@ -50,14 +56,14 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     private var cachedSelectionKey: SelectionKey?
     private var cachedSelectedCount = 0
     private var cachedEndings = "LF"
-    var secondary: TTEditor?
+    private(set) var secondary: TTEditor?
     /// The pane focused last. Written when the window's first responder moves into a pane, by
     /// each view's onFocus (see `wire`) and by closeSplit.
-    weak var lastEditor: TTEditor?
+    private(set) weak var lastEditor: TTEditor?
     /// Scintilla reports focus only while the window is key and the application active, so the
     /// first responder is observed as well: a pane chosen in a background window still counts.
-    var focusObservation: NSKeyValueObservation?
-    var automationObserver: NSObjectProtocol?
+    private(set) var focusObservation: NSKeyValueObservation?
+    private(set) var automationObserver: NSObjectProtocol?
     let primaryEditor: TTEditor
     /// The primary view and, while the window is split, the clone.
     var views: [TTEditor] { [primaryEditor] + (secondary.map { [$0] } ?? []) }
@@ -166,7 +172,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         search.isHidden = true
         findBar = search
         documentTabs.owner = window
-        [documentTabs, search, split, status, statusDetails].forEach {
+        [documentTabs, search, split, statusLabel, statusDetails].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview($0)
         }
@@ -186,17 +192,17 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             split.bottomAnchor.constraint(equalTo: statusDetails.topAnchor, constant: -5),
             statusDetails.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             statusDetails.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
-            statusDetails.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -2),
-            status.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
-            status.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
-            status.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6)
+            statusDetails.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -2),
+            statusLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            statusLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            statusLabel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6)
         ])
         splitBelowFindBar = split.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 10)
         splitBelowTabs = split.topAnchor.constraint(equalTo: documentTabs.bottomAnchor)
         splitBelowTabs?.isActive = true
-        status.font = .systemFont(ofSize: 11)
-        status.textColor = .secondaryLabelColor
-        status.lineBreakMode = .byTruncatingTail
+        statusLabel.font = .systemFont(ofSize: 11)
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.lineBreakMode = .byTruncatingTail
         statusDetails.onActivate = { [weak self] key, view in self?.showStatusOptions(key, at: view) }
         // Editor events make the bar follow an edit or a selection change in the same turn of
         // the run loop; the timer started by visibilityChanged() covers state no event reports.
@@ -271,22 +277,22 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         if announce { Announce.say(message, from: window) }
         guard let doc = document as? TextDocument, doc.lastRecoveryError == nil else { return }
         transientStatus = message
-        status.stringValue = message
+        statusLabel.stringValue = message
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self, weak doc] in
             guard let self, self.transientStatus == message else { return }
             self.transientStatus = nil
-            if let doc, doc.lastRecoveryError == nil { self.status.stringValue = doc.currentSaveStateStatus }
+            if let doc, doc.lastRecoveryError == nil { self.statusLabel.stringValue = doc.currentSaveStateStatus }
         }
     }
     func showRecoveryStatus(_ message: String, failed: Bool) {
         transientStatus = nil
-        if failed, status.stringValue != message { Announce.say(message, from: window) }
-        status.stringValue = message
+        if failed, statusLabel.stringValue != message { Announce.say(message, from: window) }
+        statusLabel.stringValue = message
         // The failure is carried by the words and the symbol; full-strength label colour keeps it
         // readable in both appearances, where small red text was not.
-        status.textColor = failed ? .labelColor : .secondaryLabelColor
-        status.font = failed ? .boldSystemFont(ofSize: 11) : .systemFont(ofSize: 11)
-        status.toolTip =
+        statusLabel.textColor = failed ? .labelColor : .secondaryLabelColor
+        statusLabel.font = failed ? .boldSystemFont(ofSize: 11) : .systemFont(ofSize: 11)
+        statusLabel.toolTip =
             failed
             ? "Crash-recovery copies of this document are not being written. Save the document to keep your work. This message clears when a recovery copy is written again."
             : nil

@@ -68,6 +68,7 @@ import AppKit
             section("audit29 services") { try Audit29ServiceChecks.run() }
             section("audit29 factory") { try Audit29FactoryChecks.run(root: root) }
             section("audit29 Foundation core") { try DocumentCoreChecks.run(root: root) }
+            section("audit29 intent") { try Audit29IntentChecks.run() }
             // Written by the single-document section and read by the session and recovery section.
             let saved = root.appendingPathComponent("saved-as.txt")
             section("automation configuration and settings") {

@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }()
     /// The document window focused last. Written where focus changes (a view's onFocus, a
     /// document window becoming main, the status menu); never by a getter.
-    weak var lastDocumentController: EditorWindowController?
+    private(set) weak var lastDocumentController: EditorWindowController?
     /// The one definition of "current" for every controller: the main window when it is a
     /// document window, otherwise the document window focused last, because Find and Replace,
     /// a Run result or another auxiliary window may be main. Nil once that document has closed.
@@ -41,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             languageProvider: { [weak self] in
                 self?.currentDocument?.languageIdentifier ?? LanguageProfile.plainTextID
             },
-            setLanguage: { [weak self] id in self?.currentDocument?.languageIdentifier = id })
+            setLanguage: { [weak self] id in self?.currentDocument?.noteAppliedLanguage(id) })
         controller.siblingViews = { editor in
             for document in NSDocumentController.shared.documents {
                 for case let window as EditorWindowController in document.windowControllers
@@ -204,7 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         services.openSessionFile = { [weak self] in self?.workspace.openSession(at: $0) }
         EditorServices.current = services
     }
-    func noteActive(_ controller: EditorWindowController) { lastDocumentController = controller }
+    func noteActive(_ controller: EditorWindowController?) { lastDocumentController = controller }
     @objc func newDocument(_ sender: Any?) {
         DocumentFactory.makeUntitled()
     }

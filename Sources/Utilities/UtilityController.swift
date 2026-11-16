@@ -2,11 +2,14 @@
 import AppKit
 
 final class UtilityController: NSObject {
-    let activeEditor: () -> TTEditor?
+    private let editorProvider: () -> TTEditor?
+    #if TESTING
+        var activeEditor: () -> TTEditor? { editorProvider }
+    #endif
     /// Called immediately before a utility changes the document, and at no other time: asking
     /// for the editor, a cancelled dialog, a failed guard and an export leave a macro recording alone.
     var onUnrecordableEdit: () -> Void = {}
-    init(activeEditor: @escaping () -> TTEditor?) { self.activeEditor = activeEditor }
+    init(activeEditor: @escaping () -> TTEditor?) { self.editorProvider = activeEditor }
     func makeMenu() -> NSMenu {
         precondition(Thread.isMainThread)
         let menu = NSMenu(title: "Text Utilities")
@@ -45,7 +48,7 @@ final class UtilityController: NSObject {
     /// that names the cause the person can least see first: no document, read-only (the shared
     /// requireWritable error), several selections, then an empty selection.
     func editableEditor(requireNonEmpty: Bool) throws -> TTEditor {
-        guard let editor = activeEditor(), editor.window != nil else { throw UtilityFailure.noDocument }
+        guard let editor = editorProvider(), editor.window != nil else { throw UtilityFailure.noDocument }
         try editor.requireWritable()
         guard editor.selectionCount == 1 else { throw UtilityFailure.multipleSelections }
         guard !requireNonEmpty || editor.selectionStart != editor.selectionEnd else {
@@ -128,7 +131,7 @@ final class UtilityController: NSObject {
         let alert = TTAlert()
         alert.messageText = "Number Conversion"
         alert.informativeText = Self.numberConversionNote
-        let captured = activeEditor()
+        let captured = editorProvider()
         let revision = captured?.revision
         let selection = captured?.selectionRanges
         let input = NSTextField(
@@ -171,7 +174,7 @@ final class UtilityController: NSObject {
             } else if action == .alertThirdButtonReturn {
                 // An empty single selection is allowed here: the result is inserted at the caret.
                 let editor = try Self.recheck(
-                    activeEditor(), captured: captured, revision: revision, selection: selection)
+                    editorProvider(), captured: captured, revision: revision, selection: selection)
                 onUnrecordableEdit()
                 editor.beginUndoGroup()
                 editor.replaceSelection(output)
@@ -183,7 +186,7 @@ final class UtilityController: NSObject {
     /// selection is exported; no selection exports the complete document.
     func exportData(format: String) throws -> (Data, String) {
         precondition(Thread.isMainThread)
-        guard let editor = activeEditor(), editor.window != nil else { throw UtilityFailure.noDocument }
+        guard let editor = editorProvider(), editor.window != nil else { throw UtilityFailure.noDocument }
         guard editor.selectionCount == 1 else { throw UtilityFailure.multipleSelections }
         let selected = editor.selectionStart != editor.selectionEnd
         let bytes = selected ? editor.selectionEnd - editor.selectionStart : editor.byteLength

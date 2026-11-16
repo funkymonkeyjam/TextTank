@@ -9,36 +9,49 @@ import AppKit
         let document = DocumentFactory.makeUntitled()
         defer { document.close() }
         document.editor.text = "int main() { return 1; }"
-        let window = try requireValue(document.windowControllers.first as? EditorWindowController,
-                                      "F186 fixture: document controller")
+        let window = try requireValue(
+            document.windowControllers.first as? EditorWindowController,
+            "F186 fixture: document controller")
         composition.noteActive(window)
         window.clone(nil)
         let siblingViews = composition.languages.siblingViews
         var applications = 0
-        composition.languages.siblingViews = { editor in applications += 1; return siblingViews(editor) }
-        let item = try requireValue(composition.languages.menu().items.first {
-            ($0.representedObject as? String) == "cpp"
-        }, "F186 fixture: C++ language action")
+        composition.languages.siblingViews = { editor in
+            applications += 1
+            return siblingViews(editor)
+        }
+        let item = try requireValue(
+            composition.languages.menu().items.first {
+                ($0.representedObject as? String) == "cpp"
+            }, "F186 fixture: C++ language action")
         let revision = document.editor.revision, bytes = document.editor.utf8Data
-        check(NSApp.sendAction(item.action!, to: item.target, from: item)
-              && document.languageIdentifier == "cpp" && applications == 1,
-              "F186 the real language action records its state notification without applying the lexer twice")
-        check(document.editor.revision == revision && document.editor.utf8Data == bytes,
-              "F186 language intent leaves authoritative bytes and revision unchanged")
-        check(document.applyLanguage("python", using: composition.languages)
-              && document.languageIdentifier == "python" && applications == 2,
-              "F186 explicit document language intent applies once then records the successful identifier")
-        check(!document.applyLanguage("audit29-unavailable-profile", using: composition.languages)
-              && document.languageIdentifier == "python" && applications == 2,
-              "F186 a rejected language intent changes neither the identifier nor lexer application count")
+        check(
+            NSApp.sendAction(item.action!, to: item.target, from: item)
+                && document.languageIdentifier == "cpp" && applications == 1,
+            "F186 the real language action records its state notification without applying the lexer twice")
+        check(
+            document.editor.revision == revision && document.editor.utf8Data == bytes,
+            "F186 language intent leaves authoritative bytes and revision unchanged")
+        check(
+            document.applyLanguage("python", using: composition.languages)
+                && document.languageIdentifier == "python" && applications == 2,
+            "F186 explicit document language intent applies once then records the successful identifier")
+        check(
+            !document.applyLanguage("audit29-unavailable-profile", using: composition.languages)
+                && document.languageIdentifier == "python" && applications == 2,
+            "F186 a rejected language intent changes neither the identifier nor lexer application count")
         window.setStatusMessage("Owned status fixture")
         window.appendStatusMessage("; complete")
-        check(window.statusText == "Owned status fixture; complete" && document.editor.revision == revision,
-              "F186 status intent updates only the owned label and leaves the document untouched")
+        check(
+            window.statusText == "Owned status fixture; complete" && document.editor.revision == revision,
+            "F186 status intent updates only the owned label and leaves the document untouched")
     }
     static func checkMenuTargets(_ menu: NSMenu, composition: AppDelegate) throws {
-        let rows = try JSONSerialization.jsonObject(with: Data(contentsOf:
-            TestPaths.fixtures.appendingPathComponent("menu-tree-wave-3.json"))) as! [[String:String]]
+        let rows =
+            try JSONSerialization.jsonObject(
+                with: Data(
+                    contentsOf:
+                        TestPaths.fixtures.appendingPathComponent("menu-tree-wave-3.json"))) as! [[String: String]]
         let commands = rows.filter { $0["target"] == "explicit" && $0["action"] != "submenuAction:" }
         var wrong: [String] = []
         for row in commands {
@@ -71,7 +84,8 @@ import AppKit
             }
             if expected == nil || item?.target !== expected { wrong.append(row["position"]!) }
         }
-        check(commands.count > 100 && wrong.isEmpty,
-              "F274/F276 every explicit command target is its actual composition-root instance (wrong: \(wrong))")
+        check(
+            commands.count > 100 && wrong.isEmpty,
+            "F274/F276 every explicit command target is its actual composition-root instance (wrong: \(wrong))")
     }
 }

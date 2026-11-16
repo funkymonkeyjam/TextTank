@@ -498,7 +498,7 @@ extension DocumentChecks {
                 // The search, utility and language controllers ask the application delegate for the
                 // current editor; menu commands go to the window controller's active editor.
                 // The check process has no main window, so the delegate is told which window is frontmost.
-                splitDelegate.lastDocumentController = controller
+                splitDelegate.noteActive(controller)
                 check(
                     window.makeFirstResponder(clone) && splitDelegate.currentEditor === clone,
                     "with the clone focused it is the current editor the search, utility and language controllers receive"
@@ -991,6 +991,7 @@ extension DocumentChecks {
                 menuSnapshotData == expectedMenuData,
                 "F191 the complete menu tree preserves order, titles, actions, shortcuts, dispatch roles and represented objects"
             )
+            try Audit29IntentChecks.checkMenuTargets(bar, composition: sessionDelegate)
             let helperMenu = NSMenu()
             let helperItem = helperMenu.addItem(
                 title: "Fixture command", action: #selector(EditorWindowController.command(_:)),

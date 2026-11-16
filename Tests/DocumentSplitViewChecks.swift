@@ -90,11 +90,11 @@ extension DocumentChecks {
             try require(
                 !(NSApp.mainWindow?.windowController is EditorWindowController),
                 "fixture: no document window is main while the auxiliary window is in front")
-            delegate.lastDocumentController = nil
+            delegate.noteActive(nil)
             check(
                 delegate.currentEditor == nil && delegate.currentDocument == nil,
                 "with no document window focused there is no current editor")
-            delegate.lastDocumentController = controller
+            delegate.noteActive(controller)
             check(
                 delegate.currentEditor === document.editor && delegate.currentDocument === document
                     && delegate.currentDocumentController === controller,
@@ -213,13 +213,13 @@ extension DocumentChecks {
             let (document, controller, window) = try opened("split.py", "import os\nvalue = 42  # note\n")
             try require(document.languageIdentifier == "python", "fixture: the file opens as Python")
             // F302: a document window that becomes main is the document window focused last.
-            delegate.lastDocumentController = nil
+            delegate.noteActive(nil)
             window.becomeMain()
             check(
                 delegate.lastDocumentController === controller,
                 "a document window that becomes main is recorded as the document window focused last")
             if NSApp.mainWindow !== window { window.resignMain() }
-            delegate.lastDocumentController = controller
+            delegate.noteActive(controller)
             let indentTitles = controller.statusOptionsMenu("indent")?.items.map(\.title) ?? []
             let zoomTitles = controller.statusOptionsMenu("font")?.items.map(\.title) ?? []
             check(
@@ -311,7 +311,7 @@ extension DocumentChecks {
             try require(
                 sameLanguage.languageIdentifier == "cpp" && otherLanguage.languageIdentifier == "python",
                 "fixture: one more C++ document and one Python document")
-            delegate.lastDocumentController = controller
+            delegate.noteActive(controller)
             let untouched = palette(otherLanguage.editor), untouchedLexer = sci(otherLanguage.editor, lexer)
             let otherRevision = otherLanguage.editor.revision
             var edited = originalCatalog
@@ -340,7 +340,7 @@ extension DocumentChecks {
             // F83: the dialogs that save a catalog change re-apply it the same way. Each case first
             // gives the clone and the other C++ document a foreign palette, then saves in the dialog.
             window.makeKeyAndOrderFront(nil)
-            delegate.lastDocumentController = controller
+            delegate.noteActive(controller)
             try require(
                 delegate.currentDocument === document && document.languageIdentifier == "cpp",
                 "fixture: the split C++ document is the current document")
@@ -400,7 +400,7 @@ extension DocumentChecks {
                 try require(
                     delegate.languages.applyToDocument(identifier: user.id, through: target.editor),
                     "fixture: the user-defined language applies")
-                target.languageIdentifier = user.id
+                target.noteAppliedLanguage(user.id)
             }
             try scramble()
             let editUDL = try requireValue(
@@ -416,7 +416,7 @@ extension DocumentChecks {
             otherLanguage.close()
 
             // G337 through the real wiring: a recording started in the clone ends with a reload.
-            delegate.lastDocumentController = controller
+            delegate.noteActive(controller)
             _ = window.makeFirstResponder(clone)
             delegate.macros.startRecording()
             clone.executeCommand("newLine")
@@ -433,7 +433,7 @@ extension DocumentChecks {
 
             // G341: recording across views is not supported, so closing the split ends a recording
             // started in the clone, and the closed clone no longer reports focus.
-            delegate.lastDocumentController = controller
+            delegate.noteActive(controller)
             _ = window.makeFirstResponder(clone)
             try require(delegate.currentEditor === clone, "fixture: the clone is the current editor")
             delegate.macros.startRecording()
@@ -456,7 +456,7 @@ extension DocumentChecks {
             delegate.installEditorServices()
             let (document, controller, window) = try opened(
                 "deferred.py", "def one():\n    pass\n\ndef two():\n    pass\n")
-            delegate.lastDocumentController = controller
+            delegate.noteActive(controller)
             // G342: the first view taken out of a document window stays allocated until that window
             // is deallocated. It was reproduced with a bare NSView and no TextTank code in the path
             // (the extra retain is made inside -[NSView _setWindow:]), and the last check of this

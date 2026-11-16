@@ -10,9 +10,9 @@ import AppKit
     /// and, for some, add that type's extension. The text is written the same way for all.
     override var shouldRunSavePanelWithAccessoryView: Bool { false }
     static let recovery = RecoveryStore(directory: AppStorage.url(.recovery))
-    var recoveryID = UUID()
+    private(set) var recoveryID = UUID()
     /// Offset for recovery metadata changes; adding the editor revision gives the store revision.
-    var recoveryBase: UInt64 = 0
+    private(set) var recoveryBase: UInt64 = 0
     /// One notice per app session about repeated recovery-write failures.
     static var recoveryFailureNoticeShown = false
     #if TESTING
@@ -39,7 +39,7 @@ import AppKit
     #endif
     let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
     /// Encoding/BOM checkpoint paired with the save point from the latest completed read or save.
-    var savedFormat = FileFormat(encoding: .utf8, bom: false)
+    private(set) var savedFormat = FileFormat(encoding: .utf8, bom: false)
     var format = FileFormat(encoding: .utf8, bom: false) {
         didSet {
             if !loading && format != oldValue {
@@ -72,7 +72,20 @@ import AppKit
         var hasSettledDiskSignature: Bool { diskSignature != nil }
     #endif
     var originalDiskFingerprint: String? { diskDigest }
-    var languageIdentifier = LanguageProfile.plainTextID { didSet { languageResolved = true } }
+    private(set) var languageIdentifier = LanguageProfile.plainTextID { didSet { languageResolved = true } }
+    /// State notification after LanguageController already installed the lexer and view styles.
+    /// Never applies a profile again: menu/style callbacks use this path.
+    func noteAppliedLanguage(_ identifier: String) { languageIdentifier = identifier }
+    /// Explicit document-level language intent for loads/restores; metadata changes only after success.
+    @discardableResult func applyLanguage(_ identifier: String, using controller: LanguageController?) -> Bool {
+        guard let controller, controller.applyToDocument(identifier: identifier, through: editor) else { return false }
+        noteAppliedLanguage(identifier)
+        return true
+    }
+    func usePlainTextLanguage() {
+        noteAppliedLanguage(LanguageProfile.plainTextID)
+        editor.setLanguage("null")
+    }
     /// False until the first load has chosen a language, or the person or a restored session has.
     /// Reload and Revert then keep that choice instead of detecting again.
     private var languageResolved = false
@@ -540,11 +553,10 @@ import AppKit
         loading = false
         guard !languageResolved else { return }
         languageResolved = true
-        if let app = EditorServices.current,
-            let id = app.languages?.detect(filename: fileURL?.lastPathComponent ?? "", text: decoded.text),
-            app.languages?.applyToDocument(identifier: id, through: editor) == true
+        if let languages = EditorServices.current?.languages,
+            let id = languages.detect(filename: fileURL?.lastPathComponent ?? "", text: decoded.text)
         {
-            languageIdentifier = id
+            _ = applyLanguage(id, using: languages)
         }
     }
     /// The source's own extension; ".txt" only for an untitled document, nothing for a name without one.
