@@ -1332,28 +1332,6 @@
         }
       }
     },
-    "tab.new": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "New Tab"
-          }
-        }
-      }
-    },
-    "tab.new.shortcut": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "New Tab (%@)"
-          }
-        }
-      }
-    },
     "workspace.counts": {
       "extractionState": "manual",
       "localizations": {

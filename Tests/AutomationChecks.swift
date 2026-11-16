@@ -937,8 +937,10 @@ import Darwin
                 let help = AutomationDefinition.advancedHelp
                 check(
                     help.contains("askForFind") && help.contains("askForReplacement") && help.contains("favorite")
-                        && !help.contains("toolbar button"),
-                    "G381 the Advanced JSON help names the prompt fields and describes pins as favorites")
+                        && help.contains(AutomationDefinition.favoriteHelp) && help.contains("adds its toolbar button")
+                        && help.contains("No automation runs when saved or imported."),
+                    "G381 the Advanced JSON help names prompt fields, working favorite buttons and no implicit execution"
+                )
                 rejects(
                     "G381 a stray find on a kind that takes none is reported with the kind's label",
                     message: "“Trim spaces at line edges” (trimWhitespace in JSON) takes no text to match"
