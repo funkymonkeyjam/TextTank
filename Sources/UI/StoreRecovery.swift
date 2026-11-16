@@ -9,7 +9,7 @@ enum StoreRecovery {
         guard let error = state.error else { return true }
         let alert = TTAlert()
         alert.alertStyle = .warning
-        alert.messageText = "TextTank could not read “\(state.displayName)”"
+        alert.messageText = "TextTank could not use “\(state.displayName)”"
         alert.informativeText =
             "The entry at “\(state.url.path)” has not been changed. Reveal it in Finder, or move it aside to start again. Moving it aside renames the entry next to the original; nothing is deleted.\n\n\(error.localizedDescription)"
         let move = alert.addButton(withTitle: "Move Aside and Start Again")

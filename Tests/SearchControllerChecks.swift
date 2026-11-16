@@ -693,7 +693,7 @@ final class CountingWindow: NSWindow {
             await finished()
             check(
                 controller.lastOutcome == .found(matches: 2, documents: 1, truncated: false)
-                    && controller.status.stringValue == "2 matches in 1 document(s)",
+                    && controller.status.stringValue == "2 matches in 1 document.",
                 "a finished Find All reports its match and document counts")
             controller.queryField.stringValue = "("
             controller.mode.selectItem(at: 2)
@@ -1056,7 +1056,7 @@ final class CountingWindow: NSWindow {
                 "All open documents Replace leaves a background document with a selected match untouched")
             check(
                 second.text == "y=1 x=2" && controller.lastOutcome == .replaced(changed: 1, stale: 0)
-                    && controller.status.stringValue.hasPrefix("Replaced 1 matches") && recorded.isEmpty,
+                    && controller.status.stringValue.hasPrefix("Replaced 1 match") && recorded.isEmpty,
                 "All open documents Replace replaces the selected match of the current document")
             second.executeCommand("undo")
             check(second.text == "x=1 x=2" && !second.modified, "that Replace is one Undo in the current document")
@@ -1177,7 +1177,7 @@ final class CountingWindow: NSWindow {
                 "Replace after a cross-document Next leaves the document left behind untouched")
             check(
                 second.text == "b a" && controller.lastOutcome == .replaced(changed: 1, stale: 0)
-                    && controller.status.stringValue.hasPrefix("Replaced 1 matches") && recorded.isEmpty,
+                    && controller.status.stringValue.hasPrefix("Replaced 1 match") && recorded.isEmpty,
                 "Replace after a cross-document Next replaces the match that Next selected")
             second.executeCommand("undo")
             check(second.text == "a a" && !second.modified, "that Replace is one Undo in the document navigated to")
@@ -1323,7 +1323,7 @@ final class CountingWindow: NSWindow {
             check(
                 editor.text == "one:12 two=34" && editor.selectedText == "two=34"
                     && controller.lastOutcome == .replaced(changed: 1, stale: 0)
-                    && controller.status.stringValue.hasPrefix("Replaced 1 matches")
+                    && controller.status.stringValue.hasPrefix("Replaced 1 match")
                     && controller.status.stringValue.hasSuffix("Selected the next match.")
                     && recorded == ["next", "replaceOne", "next"],
                 "Replace on a selected match replaces it, selects the following match and records both steps")
@@ -1371,7 +1371,7 @@ final class CountingWindow: NSWindow {
             await finished()
             check(
                 editor.text == "changed meanwhile" && controller.lastOutcome == .replaced(changed: 0, stale: 1)
-                    && controller.status.stringValue.contains("1 changed documents skipped") && recorded.isEmpty,
+                    && controller.status.stringValue.contains("1 changed document skipped") && recorded.isEmpty,
                 "Replace on a document edited during the search preserves it and reports the skip")
             // F45 with G374: a caret at a zero-width match ends after the text inserted there, as
             // typing would leave it, so the next Replace moves on instead of inserting there again.
@@ -1418,7 +1418,7 @@ final class CountingWindow: NSWindow {
                 "fixture: the search was cancelled after the replacement and before the next match was selected")
             check(
                 controller.lastOutcome == .replaced(changed: 1, stale: 0)
-                    && controller.status.stringValue.hasPrefix("Replaced 1 matches")
+                    && controller.status.stringValue.hasPrefix("Replaced 1 match")
                     && controller.status.stringValue.hasSuffix("Cancelled before the next match was selected.")
                     && !controller.status.stringValue.contains("no pending replacements applied")
                     && !controller.isSearching && recorded == ["replaceOne"],
@@ -1643,7 +1643,8 @@ final class CountingWindow: NSWindow {
                         && controller.numberOfRows(in: controller.table) == 5,
                     "fixture: All open documents results include the document that will close")
                 let lastRow = controller.tableView(controller.table, objectValueFor: nil, row: 4) as? String
-                check(lastRow?.hasSuffix(" · 0 · aa") == true, "a result row shows its document, offset and match")
+                check(
+                    lastRow?.hasSuffix(" · 1:1 · aa") == true, "a result row shows its document, line/column and match")
                 open = [editor]
                 extraWindow.contentView = nil
             }
@@ -1652,7 +1653,7 @@ final class CountingWindow: NSWindow {
             check(
                 controller.numberOfRows(in: controller.table) == 5
                     && controller.tableView(controller.table, objectValueFor: nil, row: 4) as? String
-                        == "Document · 0 · aa",
+                        == "Document · 1:1 · aa",
                 "rows of a closed document stay listed from the one retained snapshot")
             controller.window?.close()
             check(
@@ -1665,6 +1666,30 @@ final class CountingWindow: NSWindow {
                 "Find Next still works after the Find window was closed")
             controller.wordButton.state = .off
             controller.caseButton.state = .off
+            editor.text = "\t😀e\u{301}x\r\n"
+            editor.configureTabWidth(8, useTabs: true)
+            controller.currentEditor = { editor }
+            controller.openEditors = { [editor] }
+            controller.queryField.stringValue = "x"
+            controller.mode.selectItem(at: 0)
+            controller.scope.selectItem(at: 0)
+            controller.findAll(nil)
+            await finished()
+            check(
+                (controller.tableView(controller.table, objectValueFor: nil, row: 0) as? String)?.contains(
+                    " · 1:12 · x") == true,
+                "G346 actual Find row uses captured native-style Unicode/tab-stop position")
+            // Reorder presentation choices; persisted raw mode 0 remains Normal independently of index.
+            let normalItem = controller.mode.item(at: 0)!
+            controller.mode.menu?.removeItem(normalItem)
+            controller.mode.menu?.addItem(normalItem)
+            controller.mode.selectItem(normalItem)
+            controller.queryField.stringValue = "x"
+            controller.findAll(nil)
+            await finished()
+            check(
+                controller.lastOutcome == .found(matches: 1, documents: 1, truncated: false),
+                "F182 reordered mode display retains represented search identity")
             Checks.summary { "PASS SearchControllerChecks: \(Checks.count) assertions" }
         }
     }

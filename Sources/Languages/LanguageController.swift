@@ -327,8 +327,8 @@ final class LanguageController: NSObject, NSMenuDelegate {
         window.makeFirstResponder(nil)
         // A blank field follows the editor's font or size. The two are independent in Scintilla.
         let name = font.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
-            sizeText = size.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let points = Double(sizeText)
+            sizeText = NumericInput.text(size).trimmingCharacters(in: .whitespacesAndNewlines)
+        let points = NumericInput.number(size)
         guard sizeText.isEmpty || points.map({ (6...72).contains($0) }) == true,
             name.isEmpty || NSFont(name: name, size: points ?? 12) != nil, let chosen = color.usingColorSpace(.sRGB)
         else {
@@ -385,6 +385,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
             choose.addButton(withTitle: "Edit")
             choose.addButton(withTitle: "Cancel", role: .cancel)
             let selector = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 440, height: 28), pullsDown: false)
+            selector.setAccessibilityLabel("Syntax style to customize")
             Self.populateStylePicker(selector, styles: proposed.profiles[profileIndex].styles)
             choose.accessoryView = selector
             guard choose.runModal() == .alertFirstButtonReturn, selector.indexOfSelectedItem >= 0 else { return }
@@ -400,7 +401,8 @@ final class LanguageController: NSObject, NSMenuDelegate {
             edit.addButton(withTitle: "Save")
             edit.addButton(withTitle: "Cancel", role: .cancel)
             let font = NSTextField(string: style.fontName ?? ""),
-                size = NSTextField(string: style.fontSize.map { String($0) } ?? "")
+                size = NSTextField(string: style.fontSize.map { NumericInput.editable($0) } ?? "")
+            NumericInput.configure(size, fractional: true)
             font.placeholderString = "Editor font"
             size.placeholderString = "Editor size"
             let color = NSColorWell()

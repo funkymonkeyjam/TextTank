@@ -194,3 +194,39 @@ Audit 23's shared failed-load latch now protects Settings, Macro, Automation, Ru
 These are load-time failure latches, not universal detection of external rewrites after a healthy load. Language deliberately rereads its existing file before saving, so that reread validates the model and minimum-reader metadata and latches a newly observed failure. Other controllers do not all reread their models immediately before each write, and this audit does not add a multi-process compare-and-swap protocol. The Reminders journal retains its own identity checks around replacement and in-place outcome writes. Recovery retains its existing revision/cache behavior and whole-snapshot allocation; its shared I/O capacity remains `Int.max`, rather than silently adopting the session's 512 MiB ceiling. This is not a practical Recovery memory bound.
 
 The Reminders journal uses the shared strict bounded reader and private atomic replacement tail, transferring the committed descriptor back to its journal actor. Its slotted layout, per-row `pwrite`/`fsync`, pre-commit identity guard, compact fallback at capacity, uncertain-before-EventKit barrier and no automatic resend of uncertain rows remain journal-owned. Shared replacement restores exact 0600 using `fchmod` before `fsync` and rename, including a restrictive process umask. Malformed journals retain the reader's concrete `DecodingError`; minimum-reader gating occurs before the decoded batch can be accepted. Fake-store native checks make no EventKit calls.
+
+## Presentation identity, numbers and positions
+
+`Strings` is a Foundation-only namespace with explicit English fallback values and a bounded
+English `Localizable.xcstrings` catalog for the shared audit26 messages, count labels and display
+names. The native app compiles that catalog; raw check executables use the same English fallbacks.
+This does not localize every existing UI/error literal or certify translations. Existing development
+region `en` is retained. Persisted enum values, library envelopes, command IDs and search-mode
+integers remain unchanged. Popups carry represented identifiers, including when display titles
+are duplicated or renamed. Each automation launcher menu owns its stable menu identifier.
+
+Encoding conversion/reload/status choices share typed `FileEncoding` names and `FileFormat`
+targets. Unknown conversion identifiers fail before format/text mutation. A typed status item
+array and exhaustive field dispatch replace parallel strings; legacy repeated badge identities
+remain stable. Labels and help describe fields and scopes, including Unicode scalar character
+counts. Operational save status no longer appends preview marketing copy; the incomplete-preview
+qualification remains in About and product documentation. Precise Undo action captions remain
+subject to the separately documented provenance limitation.
+
+Numeric forms keep a real locale-aware formatter and the complete active raw draft. Parsing
+requires the whole trimmed input, rejects fractions in integer fields, grouping/exponents/NaN/
+infinity and inappropriate decimal separators, and validates bounds at the owning operation.
+Unicode decimal digits emitted by the formatter are accepted. Go to Line retains signed integer
+recognition and its existing out-of-range feedback. Editable point sizes use a lossless Double
+spelling, distinct from concise one-decimal status presentation; an unchanged 12.125 remains
+12.125 through Save. Explicit Cancel remains reachable with invalid active editing.
+
+Result presentation uses one monotonic scalar/tab-stop pass over existing immutable captured
+text, off the main thread, with cancellation/work limits. Find columns use each document's tab
+width captured at search time; folder columns use the captured default tab width. Held result
+columns retain that captured setting. CR/LF/CRLF lines, astral characters and combining scalars
+agree with native Scintilla columns, including the position between CR and LF. Internal UTF-16
+columns, byte ranges, stale-result checks and navigation remain unchanged. Character and selected
+lengths count Unicode scalars; Sort Lines by Length now deliberately uses that same unit rather
+than grapheme clusters, with stable equal-length ties and one native Undo. Visual glyph width,
+grapheme count and Unicode normalization are not substituted for this documented unit.

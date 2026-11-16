@@ -85,7 +85,10 @@ final class MacroController: NSObject, NSMenuDelegate {
                     throw MacroError.invalid("\(name) is not recordable yet. No partial macro will be saved.")
                 }
                 let step = try RecordedMacro.Step(bridgeStep: raw)
-                guard self.recorded.count < 10000 else { throw MacroError.invalid("Recording exceeded 10000 steps.") }
+                guard self.recorded.count < MacroLimits.recordedActions else {
+                    throw MacroError.invalid(
+                        "Recording exceeded \(Strings.number(MacroLimits.recordedActions)) actions.")
+                }
                 self.recorded.append(step)
             } catch {
                 self.discard(error, editor: editor)
@@ -175,7 +178,9 @@ final class MacroController: NSObject, NSMenuDelegate {
         }
         do {
             try step.validate()
-            guard recorded.count < 10000 else { throw MacroError.invalid("Recording exceeded 10000 steps.") }
+            guard recorded.count < MacroLimits.recordedActions else {
+                throw MacroError.invalid("Recording exceeded \(Strings.number(MacroLimits.recordedActions)) actions.")
+            }
             recorded.append(step)
         } catch {
             discard(error, editor: editor)
@@ -211,11 +216,13 @@ final class MacroController: NSObject, NSMenuDelegate {
         let alert = TTAlert()
         alert.messageText = "Play \(macro.name)"
         alert.informativeText =
-            "Repeat count (1–10000). Playback changes the captured editor as one Undo group. Find steps (literal find and Find-window Next or Previous) stop the macro on no match; earlier edits remain undoable. Replace All with no matches is skipped. Clipboard commands operate on the current clipboard. No shell or external workflow runs."
+            "Repeat count (1–\(Strings.number(MacroLimits.repeatCount))). Playback changes the captured editor as one Undo group. Find steps (literal find and Find-window Next or Previous) stop the macro on no match; earlier edits remain undoable. Replace All with no matches is skipped. Clipboard commands operate on the current clipboard. No shell command or external action runs."
         alert.addButton(withTitle: "Play").identifier = NSUserInterfaceItemIdentifier("macro.play.confirm")
         alert.addButton(withTitle: "Cancel", role: .cancel).identifier = NSUserInterfaceItemIdentifier(
             "macro.play.cancel")
         let count = NSTextField(string: "1")
+        count.setAccessibilityLabel("Macro repeat count")
+        NumericInput.configure(count)
         count.frame = NSRect(x: 0, y: 0, width: 200, height: 24)
         count.identifier = NSUserInterfaceItemIdentifier("macro.play.count")
         let untilEnd = NSButton(checkboxWithTitle: "Repeat until end of document", target: nil, action: nil)
@@ -228,9 +235,13 @@ final class MacroController: NSObject, NSMenuDelegate {
             guard editor.revision == revision, editor.selectionStart == selectionStart,
                 editor.selectionEnd == selectionEnd
             else { throw MacroError.invalid("The editor changed while choosing playback. Run the macro again.") }
-            guard let repeats = Int(count.stringValue), repeats > 0, repeats <= 10000,
-                macro.steps.count <= 100000 / repeats
-            else { throw MacroError.invalid("Choose a valid count; at most 100000 total steps per invocation.") }
+            guard let repeats = NumericInput.integer(count), repeats > 0, repeats <= MacroLimits.repeatCount,
+                macro.steps.count <= MacroLimits.playbackActions / repeats
+            else {
+                throw MacroError.invalid(
+                    "Choose a valid count; at most \(Strings.number(MacroLimits.playbackActions)) total actions per invocation."
+                )
+            }
             try playInteractively(macro, on: editor, repeats: repeats, untilEnd: untilEnd.state == .on)
         } catch { TTAlert.present(error) }
     }
@@ -314,6 +325,7 @@ final class MacroController: NSObject, NSMenuDelegate {
         alert.addButton(withTitle: "Cancel", role: .cancel).identifier = NSUserInterfaceItemIdentifier(
             "macro.save.cancel")
         let name = NSTextField(string: macro.name)
+        name.setAccessibilityLabel("Macro name")
         name.frame = NSRect(x: 0, y: 0, width: 400, height: 24)
         name.identifier = NSUserInterfaceItemIdentifier("macro.save.name")
         alert.accessoryView = name
@@ -380,8 +392,8 @@ private final class MacroPlayback {
     ) throws {
         try macro.validate()
         try editor.requireWritable()
-        guard editor.window != nil, editor.selectionCount == 1, repeats > 0, repeats <= 10000,
-            macro.steps.count <= 100000 / repeats
+        guard editor.window != nil, editor.selectionCount == 1, repeats > 0, repeats <= MacroLimits.repeatCount,
+            macro.steps.count <= MacroLimits.playbackActions / repeats
         else { throw MacroError.invalid("Macro playback is unavailable for this editor or repeat count.") }
         self.macro = macro
         self.editor = editor
@@ -401,8 +413,10 @@ private final class MacroPlayback {
                     "The macro editor closed, became read-only or changed selection mode. Prior edits remain undoable.")
             }
             if index == 0 && untilEnd && editor.selectionCaret >= editor.byteLength { return true }
-            guard performed < 100000 else {
-                throw MacroError.invalid("Macro stopped at the 100000-step limit. Prior edits remain undoable.")
+            guard performed < MacroLimits.playbackActions else {
+                throw MacroError.invalid(
+                    "Macro stopped at the \(Strings.number(MacroLimits.playbackActions))-action limit. Prior edits remain undoable."
+                )
             }
             let step = macro.steps[index]
             switch step {

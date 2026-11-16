@@ -61,6 +61,7 @@ import AppKit
                     finished = true
                 }
             }
+            section("audit26 presentation") { try Audit26PresentationChecks.run() }
             // Written by the single-document section and read by the session and recovery section.
             let saved = root.appendingPathComponent("saved-as.txt")
             section("automation configuration and settings") {
@@ -1087,7 +1088,7 @@ import AppKit
                 failing.editor.text = "a"
                 // N1: the save state is truthful at once, before any recovery write.
                 check(
-                    failing.isDocumentEdited && failingStatus.stringValue.hasPrefix("Edited ·")
+                    failing.isDocumentEdited && failingStatus.stringValue == "Edited"
                         && !failingStatus.stringValue.contains("Saved"),
                     "an edit reads Edited in the status line immediately, never Saved")
                 failing.flushRecovery()
@@ -1353,7 +1354,7 @@ import AppKit
                     visible.editor.text = fixture
                     let (count, endings) = previousMetrics(fixture)
                     let shown = spinUntil("the badges for \(fixture.debugDescription)") {
-                        badges().contains("\(count) chars")
+                        badges().contains(Strings.count(count, .character))
                             && badge("status.eol.0") == (endings.isEmpty ? "LF" : endings)
                     }
                     if !shown { badgeMismatches.append("\(fixture.debugDescription): \(badges())") }
@@ -1364,27 +1365,31 @@ import AppKit
                 )
                 visible.editor.text = "a\r\nb\nc\u{1F600}"
                 spinUntil("exact character count and Mixed EOL") {
-                    badges().contains("7 chars") && badges().contains("Mixed EOL")
+                    badges().contains(Strings.count(7, .character)) && badges().contains("Mixed EOL")
                 }
                 check(
-                    badges().contains("7 chars") && badges().contains("Mixed EOL"),
+                    badges().contains(Strings.count(7, .character)) && badges().contains("Mixed EOL"),
                     "a CRLF and LF document with a non-BMP scalar shows the exact count and Mixed EOL")
                 _ = visible.editor.setSelectionAnchor(0, caret: 3)
-                spinUntil("the selection badge") { badges().contains("3 selected") }
-                check(badges().contains("3 selected"), "a selection-only change shows the selected count")
-                _ = visible.editor.setSelectionAnchor(0, caret: 0)
-                spinUntil("the selection badge to go") { !badges().contains { $0.hasSuffix("selected") } }
+                spinUntil("the selection badge") { badge("status.selection.0") == Strings.count(3, .character) }
                 check(
-                    !badges().contains { $0.hasSuffix("selected") },
+                    badge("status.selection.0") == Strings.count(3, .character),
+                    "a selection-only change shows the selected count")
+                _ = visible.editor.setSelectionAnchor(0, caret: 0)
+                spinUntil("the selection badge to go") { badge("status.selection.0") == nil }
+                check(
+                    badge("status.selection.0") == nil,
                     "collapsing the selection removes the selected count")
                 _ = visible.editor.setSelectionRanges([["anchor": 0, "caret": 1], ["anchor": 4, "caret": 5]])
                 spinUntil("the multi-selection badges") {
-                    badges().contains("2 selected") && badges().contains("2 selections")
+                    badge("status.selection.0") == Strings.count(2, .character) && badges().contains("2 selections")
                 }
                 _ = visible.editor.setSelectionRanges([["anchor": 0, "caret": 1], ["anchor": 3, "caret": 5]])
-                spinUntil("a changed additional selection") { badges().contains("3 selected") }
+                spinUntil("a changed additional selection") {
+                    badge("status.selection.0") == Strings.count(3, .character)
+                }
                 check(
-                    badges().contains("3 selected") && badges().contains("2 selections"),
+                    badge("status.selection.0") == Strings.count(3, .character) && badges().contains("2 selections"),
                     "changing only an additional selection updates the selected count")
                 _ = visible.editor.setSelectionAnchor(0, caret: 0)
                 // Earlier sections change the default settings, so wrap may start either way.
@@ -1393,10 +1398,12 @@ import AppKit
                 visible.editor.executeCommand("bookmarkToggle")
                 visible.editor.readOnly = true
                 spinUntil("wrap, bookmark and read-only badges") {
-                    badges().contains(wrapBadge) && badges().contains("1 Bookmarks") && badges().contains("Read Only")
+                    badges().contains(wrapBadge) && badges().contains(Strings.count(1, .bookmark))
+                        && badges().contains("Read Only")
                 }
                 check(
-                    badges().contains(wrapBadge) && badges().contains("1 Bookmarks") && badges().contains("Read Only"),
+                    badges().contains(wrapBadge) && badges().contains(Strings.count(1, .bookmark))
+                        && badges().contains("Read Only"),
                     "wrap, bookmark and read-only changes reach the badges with no explicit refresh \(badges())")
                 visible.editor.readOnly = false
                 controller.toggleWrap(nil)
@@ -1418,7 +1425,7 @@ import AppKit
                 // V32-01: every edit must deliver the bridge's actual queued state notice.
                 // Drive both orderings around the real polling path: notice before tick and
                 // notice after tick. A tight edit/tick loop alone misses the production adapter.
-                spinUntil("the bar to settle before typing") { badges().contains("7 chars") }
+                spinUntil("the bar to settle before typing") { badges().contains(Strings.count(7, .character)) }
                 let pollingInterval = controller.statusTimerInterval
                 controller.statusTimerInterval = nil
                 controller.visibilityChanged()
@@ -1468,9 +1475,10 @@ import AppKit
                 check(
                     controller.statusMetricsCaptureCount == captures + 1,
                     "the first eligible idle polling tick starts exactly one metrics capture")
-                spinUntil("the count after typing stops") { badges().contains("\(7 + typed) chars") }
+                spinUntil("the count after typing stops") { badges().contains(Strings.count(7 + typed, .character)) }
                 check(
-                    badges().contains("\(7 + typed) chars") && controller.statusMetricsCaptureCount == captures + 1,
+                    badges().contains(Strings.count(7 + typed, .character))
+                        && controller.statusMetricsCaptureCount == captures + 1,
                     "one capture after typing stops brings the character count up to date")
                 controller.statusTimerInterval = pollingInterval
                 controller.visibilityChanged()
@@ -1490,10 +1498,10 @@ import AppKit
                 }
                 _ = visible.editor.replaceSelection("mm")
                 spinUntil(timeout: 3, "the count after typing in the restored window") {
-                    badges().contains("\(9 + typed) chars")
+                    badges().contains(Strings.count(9 + typed, .character))
                 }
                 check(
-                    badges().contains("\(9 + typed) chars"),
+                    badges().contains(Strings.count(9 + typed, .character)),
                     "typing after minimise and restore updates the character count \(badges())")
                 // The editor-event path alone also restarts a timer that was lost while on screen.
                 controller.stopStatusTimerForChecks()
@@ -1663,7 +1671,10 @@ private func referenceLineTransform(_ transform: EditorTransform, _ text: String
                 return a == b ? $0.0 < $1.0 : a < b
             }
         case .sortLength:
-            sorted = values.sorted { $0.1.count == $1.1.count ? $0.0 < $1.0 : $0.1.count < $1.1.count }
+            sorted = values.sorted {
+                $0.1.unicodeScalars.count == $1.1.unicodeScalars.count
+                    ? $0.0 < $1.0 : $0.1.unicodeScalars.count < $1.1.unicodeScalars.count
+            }
         default: sorted = values.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 < $1.1 }
         }
         rows = zip(sorted, rows).map { ($0.0.1, $0.1.1) }

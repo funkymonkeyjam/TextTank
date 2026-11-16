@@ -3,7 +3,19 @@ import Foundation
 import Darwin
 
 struct FolderReplacementOutcome: Sendable {
-    enum Status: String, Sendable { case replaced, unchanged, conflict, skipped, failed, cancelled }
+    enum Status: String, Sendable {
+        case replaced, unchanged, conflict, skipped, failed, cancelled
+        var displayName: String {
+            switch self {
+            case .replaced: return Strings.text("replacement.replaced", "Replaced")
+            case .unchanged: return Strings.text("replacement.unchanged", "Unchanged")
+            case .conflict: return Strings.text("replacement.conflict", "Changed since search")
+            case .skipped: return Strings.text("replacement.skipped", "Skipped")
+            case .failed: return Strings.text("replacement.failed", "Failed")
+            case .cancelled: return Strings.text("replacement.cancelled", "Cancelled")
+            }
+        }
+    }
     let url: URL, status: Status, message: String, backup: URL?
     var recoveryReport: URL? = nil
 }

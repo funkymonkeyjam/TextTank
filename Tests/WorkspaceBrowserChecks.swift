@@ -189,7 +189,7 @@ import Darwin
                 "Refresh re-reads the folder from disk")
             check(controller.outline.isItemExpanded(secondRoot), "an expanded folder stays expanded across Refresh")
             check(
-                controller.statusText.contains("open documents") && controller.statusText.contains("saved folders"),
+                controller.statusText.contains("Open documents:") && controller.statusText.contains("Saved folders:"),
                 "Refresh still ends with the counts summary")
             controller.select(mode: 0)
             controller.select(mode: 1)
@@ -506,7 +506,7 @@ import Darwin
             let summary = controller.statusText
             check(
                 controller.monitorStatusText == DocumentMonitorStatus.changed.message
-                    && summary.contains("open documents"), "Refresh does not erase the monitor's changed notice")
+                    && summary.contains("Open documents:"), "Refresh does not erase the monitor's changed notice")
             let completedPolls = controller.monitor.fileReads + controller.monitor.metadataOnlyPolls
             spinUntil("one more monitor poll to complete") {
                 controller.monitor.poll()

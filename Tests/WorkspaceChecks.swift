@@ -448,7 +448,7 @@ import Darwin
             promptSession.documents[0].originalURL = fifo
             let unread = promptSession.restorePrompt()
             check(
-                unread.message == "Restore 1 Documents from Renamed session?" && unread.detail.hasSuffix("\n\nfifo")
+                unread.message == "Restore 1 Document from Renamed session?" && unread.detail.hasSuffix("\n\nfifo")
                     && unread.detail.contains("have not been read") && !unread.detail.contains("cannot be inspected"),
                 "the first restore prompt names the documents and claims nothing about the originals")
             let inspected = promptSession.restorePrompt(inspections: promptSession.inspectReferencedFiles())

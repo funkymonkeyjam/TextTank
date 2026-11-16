@@ -442,10 +442,31 @@ sys.exit(93)
             self.assertTrue((output / 'unrelated').is_dir())
             self.assertTrue((output / 'review-previous-not-generated').is_dir())
 
+    def test_bounded_english_catalog_matches_explicit_source_fallbacks(self):
+        import re
+        expected = {}
+        for path in (ROOT / 'Sources').rglob('*.swift'):
+            prefix = r'(?<![A-Za-z])text' if path.name == 'Strings.swift' else r'Strings\.text'
+            pattern = prefix + r'\(\s*"([^"\n]+)"\s*,\s*("(?:[^"\\]|\\.)*")\s*\)'
+            for key, literal in re.findall(pattern, path.read_text()):
+                value = json.loads(literal)
+                if key in expected:
+                    self.assertEqual(expected[key], value)
+                expected[key] = value
+        catalog = json.loads((ROOT / 'Resources/Localizable.xcstrings').read_text())
+        actual = {key: value['localizations']['en']['stringUnit']['value']
+                  for key, value in catalog['strings'].items()}
+        self.assertGreater(len(actual), 50)
+        self.assertEqual(actual, expected)
+        self.assertEqual(catalog['sourceLanguage'], 'en')
+        import plistlib
+        self.assertEqual(plistlib.loads((ROOT / 'Resources/Info.plist').read_bytes())['CFBundleDevelopmentRegion'], 'en')
+
     def test_resource_allowlist_keeps_runtime_inputs_and_excludes_design_sources(self):
         generator = module('generate_project', 'generate-project.py')
         resources = generator.resource_paths(ROOT)
         self.assertIn('Resources/LanguageProfiles.json', resources)
+        self.assertIn('Resources/Localizable.xcstrings', resources)
         self.assertIn('Resources/TextTank.icns', resources)
         self.assertIn('Resources/Brand/Inter-OFL.txt', resources)
         self.assertNotIn('Resources/Brand/ICON.md', resources)

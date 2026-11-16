@@ -403,7 +403,7 @@ import zlib
                 "Apply in Hex Encoding Options replaces the selection and reports one unrecordable edit")
             dialogRevision = load("255")
             check(
-                choose("Number Conversion…", ["Cancel"]) && choose("Number Conversion…", ["Convert", "Cancel"])
+                choose("Number Conversion…", ["Cancel"]) && choose("Number Conversion…", ["Convert", "Done"])
                     && editor.text == "255" && editor.revision == dialogRevision && unrecordableEdits == 2,
                 "opening, converting and cancelling Number Conversion changes nothing and reports no unrecordable edit")
             check(

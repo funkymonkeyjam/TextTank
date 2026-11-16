@@ -26,9 +26,14 @@ enum FolderSearchOutcome: Equatable {
 }
 
 final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
+    private enum Scope: Int, CaseIterable { case chosenFolder, workspaceFolders }
+    private var selectedScope: Scope {
+        ControlPresentation.selectedID(scope).flatMap(Int.init).flatMap(Scope.init(rawValue:)) ?? .chosenFolder
+    }
     let queryField = NSTextField(), extensionField = NSTextField(), replacementField = NSTextField(),
         filterField = NSTextField()
     var workspaceRoots: () -> [URL] = { [] }
+    var displayTabWidth: () -> Int = { 4 }
     let scope = NSPopUpButton()
     let hiddenButton = NSButton(checkboxWithTitle: "Include hidden files/folders", target: nil, action: nil)
     let preferenceNotice = AnnouncingLabel(labelWithString: "")
@@ -40,7 +45,8 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     let caseButton = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
     let recursiveButton = NSButton(checkboxWithTitle: "Include subfolders", target: nil, action: nil)
     let folderLabel = NSTextField(labelWithString: "Choose a folder to search")
-    let status = AnnouncingLabel(labelWithString: "Normal / Extended / Boost regex · UTF-8/UTF-16 · symlinks skipped")
+    let status = AnnouncingLabel(
+        labelWithString: "Normal / Extended / Regular expression (Boost) · UTF-8/UTF-16 · symlinks skipped")
     let table = ActivatingTableView(), details = NSTextView()
     private var folder: URL?
     private var searchedFolder: URL?
@@ -113,10 +119,12 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             title: "Replace Matched Files…", target: self, action: #selector(replaceMatchedFiles(_:)))
         replaceButton.isEnabled = false
         replacementField.placeholderString = "Replacement (same mode as completed search)"
-        cancelButton = NSButton(title: "Cancel Search", target: self, action: #selector(cancelSearch(_:)))
+        cancelButton = NSButton(title: "Stop", target: self, action: #selector(cancelSearch(_:)))
         cancelButton.isEnabled = false
-        mode.addItems(withTitles: ["Normal", "Extended", "Boost regex"])
-        scope.addItems(withTitles: ["Chosen Folder", "Workspace Folders"])
+        ControlPresentation.populate(
+            mode, choices: SearchOptions.Mode.allCases.map { (String($0.rawValue), $0.displayName) }, selected: "0")
+        ControlPresentation.populate(
+            scope, choices: [("0", "Chosen Folder"), ("1", "Workspace Folders")], selected: "0")
         scope.target = self
         scope.action = #selector(scopeChanged(_:))
         filterField.placeholderString = "Filename filters: *.swift *.txt !*Tests* !+\\build"
@@ -150,6 +158,12 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         // Return on the selected row does what a double-click on it does.
         table.onActivate = { [weak self] row in self?.openResult(at: row) }
         table.setAccessibilityLabel("Folder search results")
+        table.toolTip = "Columns use the default tab width captured when the search started."
+        for (control, label) in [
+            (queryField as NSView, "Find in folder"), (replacementField, "Replace matches in files with"),
+            (mode, "Folder search mode"), (scope, "Folder search scope"), (extensionField, "Filename extensions"),
+            (filterField, "Filename filters")
+        ] { control.setAccessibilityLabel(label) }
         table.usesAlternatingRowBackgroundColors = true
         let results = NSScrollView()
         results.documentView = table
@@ -221,8 +235,8 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     }
     private func updateFolderLabel() {
         folderLabel.stringValue =
-            scope.indexOfSelectedItem == 1
-            ? "\(workspaceRoots().count) saved workspace folder(s)" : folder?.path ?? "Choose a folder to search"
+            selectedScope == .workspaceFolders
+            ? Strings.count(workspaceRoots().count, .folder) : folder?.path ?? "Choose a folder to search"
     }
     /// Native setting capture is inert and commits the shared field editor first.
     func saveSettings() throws {
@@ -230,14 +244,16 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         window?.makeFirstResponder(nil)
         var value = FolderSearchSettings()
         value.folder = folder
-        value.workspaceScope = scope.indexOfSelectedItem == 1
+        value.workspaceScope = selectedScope == .workspaceFolders
         value.recursive = recursiveButton.state == .on
         value.includeHidden = hiddenButton.state == .on
         value.extensions = extensionField.stringValue
         value.filters = filterField.stringValue
         value.options.query = queryField.stringValue
         value.options.replacement = replacementField.stringValue
-        value.options.mode = SearchOptions.Mode(rawValue: mode.indexOfSelectedItem) ?? .normal
+        value.options.mode =
+            ControlPresentation.selectedID(mode).flatMap(Int.init).flatMap(SearchOptions.Mode.init(rawValue:))
+            ?? .normal
         value.options.matchCase = caseButton.state == .on
         value.options.wholeWord = wordButton.state == .on
         value.options.dotMatchesNewline = dotButton.state == .on
@@ -245,14 +261,14 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     }
     private func applySavedPreferences(_ settings: FolderSearchSettings) {
         folder = settings.folder
-        scope.selectItem(at: settings.workspaceScope ? 1 : 0)
+        scope.selectItem(at: scope.indexOfItem(withRepresentedObject: settings.workspaceScope ? "1" : "0"))
         recursiveButton.state = settings.recursive ? .on : .off
         hiddenButton.state = settings.includeHidden ? .on : .off
         extensionField.stringValue = settings.extensions
         filterField.stringValue = settings.filters
         queryField.stringValue = settings.options.query
         replacementField.stringValue = settings.options.replacement
-        mode.selectItem(at: settings.options.mode.rawValue)
+        mode.selectItem(at: mode.indexOfItem(withRepresentedObject: String(settings.options.mode.rawValue)))
         caseButton.state = settings.options.matchCase ? .on : .off
         wordButton.state = settings.options.wholeWord ? .on : .off
         dotButton.state = settings.options.dotMatchesNewline ? .on : .off
@@ -287,27 +303,30 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             return
         }
         window?.makeFirstResponder(nil)
-        let roots = scope.indexOfSelectedItem == 1 ? workspaceRoots() : (folder.map { [$0] } ?? [])
+        let roots = selectedScope == .workspaceFolders ? workspaceRoots() : (folder.map { [$0] } ?? [])
         guard let folder = roots.first else {
             status.stringValue =
-                scope.indexOfSelectedItem == 1
+                selectedScope == .workspaceFolders
                 ? "Add a folder in Workspace before searching Workspace Folders." : "Choose a folder first."
             lastOutcome = .needsInput
             return
         }
         let query = queryField.stringValue
         guard !query.isEmpty else {
-            status.stringValue = "Enter a nonempty search expression."
+            status.stringValue = "Enter a search expression."
             lastOutcome = .needsInput
             return
         }
         let extensions = Set(
             extensionField.stringValue.split(whereSeparator: { $0 == "," || $0.isWhitespace }).map(String.init))
         var request = FolderSearchRequest(directory: folder, query: query)
+        request.displayTabWidth = displayTabWidth()
         request.matchCase = caseButton.state == .on
         request.recursive = recursiveButton.state == .on
         request.extensions = extensions
-        request.mode = SearchOptions.Mode(rawValue: mode.indexOfSelectedItem) ?? .normal
+        request.mode =
+            ControlPresentation.selectedID(mode).flatMap(Int.init).flatMap(SearchOptions.Mode.init(rawValue:))
+            ?? .normal
         request.wholeWord = wordButton.state == .on
         request.dotMatchesNewline = dotButton.state == .on
         request.filenameFilters = filterField.stringValue
@@ -336,7 +355,13 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         searchedFolder = folder
         table.reloadData()
         details.string =
-            "Limits: 10,000 files · 100,000 entries · 32 MiB/file · 256 MiB total · 10,000 results. Symbolic links are excluded. Filename filters: \(request.filenameFilters)."
+            String(
+                format: Strings.text(
+                    "folder.limits",
+                    "Limits: %@ files; %@ entries; %@ per file; %@ total; %@ results. Symbolic links are excluded. Filename filters: %@."
+                ), Strings.number(request.maximumFiles), Strings.number(request.maximumEntries),
+                Strings.bytes(request.maximumFileBytes), Strings.bytes(request.maximumTotalBytes),
+                Strings.number(request.maximumResults), request.filenameFilters)
         searchButton.isEnabled = false
         cancelButton.isEnabled = true
         status.stringValue = "Searching…"
@@ -351,7 +376,9 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                         Task { @MainActor [weak self] in
                             guard let self, self.generation == token, self.cancellation != nil else { return }
                             self.status.stringValue =
-                                "Searching: \(progress.filesSearched) files · \(progress.matches) matches · \(progress.bytesRead) bytes"
+                                Strings.folderProgress(
+                                    files: progress.filesSearched, matches: progress.matches,
+                                    bytesRead: progress.bytesRead)
                         }
                     })
                 guard let self, self.generation == token else { return }
@@ -360,12 +387,18 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                 self.replaceButton.isEnabled =
                     !report.wasCancelled && report.reachedLimit == nil && !report.matches.isEmpty
                 let problems = report.notSearched, excluded = report.excludedTotal
-                self.status.stringValue =
-                    "\(report.matches.count) matches · \(report.filesSearched) files searched"
-                    + (problems.isEmpty ? "" : " · \(problems.count) not searched (errors)")
-                    + (excluded == 0 ? "" : " · \(excluded) excluded by filters or settings")
-                    + (report.wasCancelled ? " · Cancelled (partial results)" : "")
-                    + (report.reachedLimit.map { " · Limit reached: \($0.rawValue) (partial results)" } ?? "")
+                let state: String
+                if report.wasCancelled {
+                    state = Strings.text("folder.cancelled", "Cancelled; partial results")
+                } else if let limit = report.reachedLimit {
+                    state = String(
+                        format: Strings.text("folder.limited", "Limit reached: %@; partial results"), limit.displayName)
+                } else {
+                    state = Strings.text("folder.complete", "Complete")
+                }
+                self.status.stringValue = Strings.folderSummary(
+                    matches: report.matches.count, files: report.filesSearched,
+                    problems: problems.count, excluded: excluded, state: state)
                 self.lastOutcome = .searched(
                     matches: report.matches.count, filesSearched: report.filesSearched,
                     skipped: problems.count + excluded, cancelled: report.wasCancelled,
@@ -420,7 +453,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         searchButton.isEnabled = false
         replaceButton.isEnabled = false
         cancelButton.isEnabled = true
-        status.stringValue = "Replacing snapshot-matched files…"
+        status.stringValue = "Replacing matched files…"
         isSearching = true
         lastOutcome = nil
         work = Task { @MainActor [weak self] in
@@ -460,12 +493,21 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             return
         }
         status.stringValue =
-            "\(lastReplacementOutcomes.filter{$0.status == .replaced}.count) files replaced · \(lastReplacementOutcomes.filter{$0.status != .replaced}.count) unchanged/skipped/failed. Recovery copies retained."
+            String(
+                format: lastReplacementOutcomes.filter { $0.status == .replaced }.count == 1
+                    ? Strings.text(
+                        "folder.replaced.one",
+                        "%@ file replaced · %@ unchanged/skipped/failed. Recovery copies retained.")
+                    : Strings.text(
+                        "folder.replaced.other",
+                        "%@ files replaced · %@ unchanged/skipped/failed. Recovery copies retained."),
+                Strings.number(lastReplacementOutcomes.filter { $0.status == .replaced }.count),
+                Strings.number(lastReplacementOutcomes.filter { $0.status != .replaced }.count))
         lastOutcome = .replaced(
             replaced: lastReplacementOutcomes.filter { $0.status == .replaced }.count,
             notReplaced: lastReplacementOutcomes.filter { $0.status != .replaced }.count)
         details.string = lastReplacementOutcomes.map {
-            "\($0.url.path): \($0.status.rawValue) — \($0.message)"
+            "\($0.url.path): \($0.status.displayName) — \($0.message)"
                 + ($0.backup.map { "\nRecovery copy: \($0.path)" } ?? "")
                 + ($0.recoveryReport.map { "\nDurable recovery report: \($0.path)" } ?? "")
         }.joined(separator: "\n")
@@ -517,7 +559,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         let match = matches[row]
         switch tableColumn?.identifier.rawValue {
         case "file": return match.url.path
-        case "line": return "\(match.line):\(match.columnUTF16)"
+        case "line": return "\(match.line):\(match.displayColumn)"
         default:
             return match.preview.replacingOccurrences(of: "\n", with: " ↵ ").replacingOccurrences(of: "\r", with: " ↵ ")
         }

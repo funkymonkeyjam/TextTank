@@ -98,7 +98,8 @@ import AppKit
             defer { isolated.removePersistentDomain(forName: suite) }
             let controller = FolderSearchController(defaults: isolated)
             check(
-                controller.window?.title == "Find in Folder" && controller.status.stringValue.contains("Boost regex"),
+                controller.window?.title == "Find in Folder"
+                    && controller.status.stringValue.contains("Regular expression (Boost)"),
                 "native title and status expose search modes")
             check(
                 controller.table.tableColumns.count == 3 && controller.details.isSelectable,
@@ -237,7 +238,7 @@ import AppKit
             // F42: what the filters left out is counted; only the file that could not be read is listed.
             check(
                 busy.status.stringValue
-                    == "3 matches · 3 files searched · 1 not searched (errors) · 3 excluded by filters or settings",
+                    == "3 matches in 3 files searched. Not searched: 1. Excluded: 3. Status: Complete.",
                 "the status separates files that could not be searched from files the filters left out")
             check(
                 busy.details.string.contains("Not searched (1):")
@@ -297,7 +298,7 @@ import AppKit
             check(
                 busy.lastOutcome == .replaced(replaced: 3, notReplaced: 0)
                     && busy.status.stringValue.hasPrefix("3 files replaced")
-                    && busy.details.string.contains("a.txt: replaced"),
+                    && busy.details.string.contains("a.txt: Replaced"),
                 "the replacement report is shown when the held replacement ends")
             busy.queryField.stringValue = "pin"
             let started = pressReturn(), restarted = pressReturn()

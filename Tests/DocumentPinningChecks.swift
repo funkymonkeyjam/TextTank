@@ -47,8 +47,8 @@ extension DocumentChecks {
                     "case-insensitive sort keeps input order between rows that differ only in case"
                 ),
                 (
-                    .sortLength, "ccc\ne\u{301}e\u{301}\nz\n", "z\ne\u{301}e\u{301}\nccc\n",
-                    "length sort counts characters, not bytes or scalars"
+                    .sortLength, "ccc\ne\u{301}e\u{301}\nz\n", "z\nccc\ne\u{301}e\u{301}\n",
+                    "length sort counts Unicode scalars, consistent with native character counts"
                 ),
                 (.reverseLines, "a\r\nb\rc\n", "c\r\nb\ra\n", "reverse keeps the separator sequence"),
                 (

@@ -358,7 +358,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         let picker = TTAlert()
         picker.messageText = "Load Rules"
         picker.informativeText =
-            "Copy rules from any saved automation or template, or import a rule file. Only this draft’s processing steps are replaced; its name, input, output and shortcuts stay unchanged."
+            "Copy rules from any saved automation or template, or import a rule file. Only this draft’s rules are replaced; its name, input, output and shortcuts stay unchanged."
         if !templates.problems.isEmpty {
             picker.informativeText +=
                 " Some built-in templates could not be read and are not listed: "
@@ -396,7 +396,15 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
             let confirm = TTAlert()
             confirm.messageText = "Replace this draft’s rules?"
             confirm.informativeText =
-                "Load \(selected.steps.count) processing steps from ‘\(selected.name)’. Canceling the builder will still preserve the saved automation."
+                String(
+                    format: selected.steps.count == 1
+                        ? Strings.text(
+                            "rules.load.one",
+                            "Load %@ rule from ‘%@’. Canceling the builder will still preserve the saved automation.")
+                        : Strings.text(
+                            "rules.load.other",
+                            "Load %@ rules from ‘%@’. Canceling the builder will still preserve the saved automation."),
+                    Strings.number(selected.steps.count), selected.name)
             confirm.addButton(withTitle: "Replace Rules").identifier = NSUserInterfaceItemIdentifier(
                 "rules.load.replace")
             confirm.addButton(withTitle: "Cancel", role: .cancel)

@@ -376,13 +376,15 @@ final class SettingsController: NSObject {
         alert.informativeText =
             "Applies to new views, and to open views that still use the previous defaults. Indentation or wrapping you chose for one document in the status bar is kept. Shortcut keys use Command; uppercase adds Shift."
         let width = NSTextField(string: String(value.tabWidth))
+        NumericInput.configure(width)
         let tabs = NSButton(checkboxWithTitle: "Indent with tabs", target: nil, action: nil)
         tabs.state = value.useTabs ? .on : .off
         let wrap = NSButton(checkboxWithTitle: "Wrap lines", target: nil, action: nil)
         wrap.state = value.wrap ? .on : .off
         let appearance = NSPopUpButton()
-        appearance.addItems(withTitles: ["system", "light", "dark"])
-        appearance.selectItem(withTitle: value.appearance)
+        ControlPresentation.populate(
+            appearance, choices: [("system", "System"), ("light", "Light"), ("dark", "Dark")],
+            selected: value.appearance)
         let shortcuts = SettingsShortcutEditor(value)
         let shortcut = shortcuts.popup, key = shortcuts.key
         let clear = NSButton(
@@ -439,13 +441,13 @@ final class SettingsController: NSObject {
                     guard confirm.runModal() == .alertSecondButtonReturn else { return }
                     updated = EditorSettings()
                 } else {
-                    guard let tabWidth = Int(width.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)),
+                    guard let tabWidth = NumericInput.integer(width),
                         (1...32).contains(tabWidth)
                     else { throw SettingsError.tabWidth }
                     updated.tabWidth = tabWidth
                     updated.useTabs = tabs.state == .on
                     updated.wrap = wrap.state == .on
-                    updated.appearance = appearance.titleOfSelectedItem ?? "system"
+                    updated.appearance = ControlPresentation.selectedID(appearance) ?? "system"
                 }
                 // Validate every retained draft before any modal recovery can move saved data aside.
                 try updated.validate(reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))

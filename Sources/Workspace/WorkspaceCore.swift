@@ -148,7 +148,11 @@ struct WorkspaceSession: Codable, Equatable, Identifiable {
             lines = zip(lines, documents).map { $0.0 + ($0.1.isDirty ? " · had unsaved edits" : " · no unsaved edits") }
         }
         return (
-            "Restore \(documents.count) Documents from \(name)?",
+            String(
+                format: documents.count == 1
+                    ? Strings.text("session.restore.one", "Restore %@ Document from %@?")
+                    : Strings.text("session.restore.other", "Restore %@ Documents from %@?"),
+                Strings.number(documents.count), name),
             (savedLabel.map { "Saved \($0). " } ?? "")
                 + "Snapshots open as new unsaved documents. Existing tabs and original files are kept."
                 + (inspections == nil

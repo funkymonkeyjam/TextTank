@@ -95,7 +95,8 @@ enum EditorTransform: String, CaseIterable {
                 let keys = rows.map { $0.content.lowercased() }
                 order.sort { keys[$0] == keys[$1] ? $0 < $1 : keys[$0] < keys[$1] }
             case .sortLength:
-                let keys = rows.map { $0.content.count }
+                // User-facing character counts and native Scintilla lengths count Unicode scalars.
+                let keys = rows.map { $0.content.unicodeScalars.count }
                 order.sort { keys[$0] == keys[$1] ? $0 < $1 : keys[$0] < keys[$1] }
             case .sortLocalized:
                 let keys = rows.map { String($0.content) }

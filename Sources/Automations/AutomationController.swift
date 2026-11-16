@@ -111,9 +111,9 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         item.label = "Automations"
         item.paletteLabel = "Automations"
         let button = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 165, height: 30), pullsDown: true)
-        button.menu = invocationMenu(title: "Automation Launcher")
+        button.menu = invocationMenu(title: "Automation Launcher", launcher: true)
         button.setAccessibilityLabel("Automations")
-        button.toolTip = "Run a saved automation or manage your workflows"
+        button.toolTip = "Run a saved automation or manage automations"
         item.view = button
         return item
     }
@@ -154,15 +154,16 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         defer { busy = false }
         try run(workflow, capturedEditor: editorProvider())
     }
-    private func invocationMenu(title: String) -> NSMenu {
+    private func invocationMenu(title: String, launcher: Bool = false) -> NSMenu {
         let result = NSMenu(title: title)
+        if launcher { result.identifier = .init("TextTank.AutomationLauncher") }
         result.delegate = self
         populateInvocations(result)
         return result
     }
     private func populateInvocations(_ menu: NSMenu) {
         menu.removeAllItems()
-        if menu.title == "Automation Launcher" {
+        if menu.identifier?.rawValue == "TextTank.AutomationLauncher" {
             menu.addItem(withTitle: "Automations", action: nil, keyEquivalent: "")
         }
         for workflow in library.workflows.sorted(by: {
@@ -194,6 +195,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         alert.addButton(withTitle: "Run")
         alert.addButton(withTitle: "Cancel", role: .cancel)
         let choice = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 400, height: 28), pullsDown: false)
+        choice.setAccessibilityLabel("Automation to run")
         for workflow in library.workflows {
             let item = NSMenuItem(title: workflow.name, action: nil, keyEquivalent: "")
             item.representedObject = workflow.id.uuidString
@@ -347,13 +349,17 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         shortcut.placeholderString = "Lowercase letter for Command-Option; blank for none"
         let input = NSPopUpButton()
         let output = NSPopUpButton()
-        for value in ["document", "selection", "clipboard", "file"] { input.addItem(withTitle: value) }
-        for value in ["editor", "clipboard", "newDocument", "file", "reminders"] { output.addItem(withTitle: value) }
-        input.selectItem(withTitle: workflow.input.rawValue)
-        output.selectItem(withTitle: workflow.output.rawValue)
+        ControlPresentation.populate(
+            input,
+            choices: [AutomationDefinition.Input.document, .selection, .clipboard, .file].map {
+                (id: $0.rawValue, title: $0.displayName)
+            } as [(String, String)], selected: workflow.input.rawValue)
+        ControlPresentation.populate(
+            output, choices: AutomationDefinition.Output.allCases.map { (id: $0.rawValue, title: $0.displayName) },
+            selected: workflow.output.rawValue)
         let preview = NSButton(checkboxWithTitle: "Preview before applying", target: nil, action: nil)
         preview.state = workflow.previewBeforeApply == true ? .on : .off
-        let pinned = NSButton(checkboxWithTitle: "Favorite in the Automations menu", target: nil, action: nil)
+        let pinned = NSButton(checkboxWithTitle: "Favorite in the toolbar", target: nil, action: nil)
         pinned.state = workflow.pinToToolbar == true ? .on : .off
         edit.accessoryView = settingsView(
             rows: [("Name", name), ("Input", input), ("Output", output), ("Shortcut", shortcut)],
@@ -379,10 +385,14 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             candidate.name = name.stringValue
             // No shortcut is stored as no value, not as an empty string.
             candidate.shortcut = shortcut.stringValue.isEmpty ? nil : shortcut.stringValue
-            if let value = input.titleOfSelectedItem, let typed = AutomationDefinition.Input(rawValue: value) {
+            if let value = ControlPresentation.selectedID(input),
+                let typed = AutomationDefinition.Input(rawValue: value)
+            {
                 candidate.input = typed
             }
-            if let value = output.titleOfSelectedItem, let typed = AutomationDefinition.Output(rawValue: value) {
+            if let value = ControlPresentation.selectedID(output),
+                let typed = AutomationDefinition.Output(rawValue: value)
+            {
                 candidate.output = typed
             }
             candidate.previewBeforeApply = preview.state == .on
@@ -462,6 +472,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         stack.spacing = 10
         for (title, control) in rows {
             let label = NSTextField(labelWithString: title)
+            ControlPresentation.label("Automation " + title.lowercased(), control: control, caption: label)
             label.translatesAutoresizingMaskIntoConstraints = false
             control.translatesAutoresizingMaskIntoConstraints = false
             label.widthAnchor.constraint(equalToConstant: 110).isActive = true
@@ -619,6 +630,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     alert.addButton(withTitle: "Accept")
                     alert.addButton(withTitle: "Cancel", role: .cancel)
                     let preview = makeTextView(height: 250)
+                    preview.editor.setAccessibilityLabel("Automation output preview")
                     preview.editor.string = output
                     alert.accessoryView = preview.scroll
                     guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -661,13 +673,29 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         if workflow.previewBeforeApply == true {
             let alert = TTAlert()
             alert.messageText = workflow.name
-            let scope = workflow.input == .document ? "entire captured document" : "captured selection"
-            let destination = workflow.output == .editor ? "Replace \(scope)" : "Output: \(workflow.output.rawValue)"
-            alert.informativeText =
-                "Input: \(workflow.input.rawValue). \(destination). Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
+            if workflow.output == .editor {
+                let format =
+                    workflow.input == .document
+                    ? Strings.text(
+                        "automation.preview.document",
+                        "Input: %@. Replace the entire captured document. Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
+                    )
+                    : Strings.text(
+                        "automation.preview.selection",
+                        "Input: %@. Replace the captured selection. Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
+                    )
+                alert.informativeText = String(format: format, workflow.input.displayName)
+            } else {
+                alert.informativeText = String(
+                    format: Strings.text(
+                        "automation.preview.output",
+                        "Input: %@. Output: %@. Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
+                    ), workflow.input.displayName, workflow.output.displayName)
+            }
             alert.addButton(withTitle: "Apply")
             alert.addButton(withTitle: "Cancel", role: .cancel)
             let preview = makeTextView(height: 350)
+            preview.editor.setAccessibilityLabel("Automation output preview")
             preview.editor.string = output
             alert.accessoryView = preview.scroll
             guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -816,12 +844,21 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     throw AutomationError.invalid("No writable Reminders lists are available.")
                 }
                 let alert = TTAlert()
-                alert.messageText = "Send \(rows.count) Reminder Items"
+                alert.messageText = String(
+                    format: rows.count == 1
+                        ? Strings.text("reminders.send.title.one", "Send %@ Reminder Item")
+                        : Strings.text("reminders.send.title.other", "Send %@ Reminder Items"),
+                    Strings.number(rows.count))
                 alert.informativeText =
                     "Choose the Reminders list to add these items to. Nothing is sent until you choose Send. Each item's result is recorded, and an item whose result is uncertain is never sent again automatically."
-                alert.addButton(withTitle: "Send \(rows.count) Items")
+                alert.addButton(
+                    withTitle: String(
+                        format: rows.count == 1
+                            ? Strings.text("reminders.send.one", "Send %@ Item")
+                            : Strings.text("reminders.send.other", "Send %@ Items"), Strings.number(rows.count)))
                 alert.addButton(withTitle: "Cancel", role: .cancel)
                 let choice = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 650, height: 28), pullsDown: false)
+                choice.setAccessibilityLabel("Reminders destination list")
                 // A list is named as Reminders names it. Only two lists with the same name in the same
                 // account need telling apart, and then by position rather than by an identifier.
                 let sameName = Dictionary(grouping: writable, by: { "\($0.title)\u{0}\($0.source)" })

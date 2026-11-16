@@ -14,6 +14,8 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     var currentDocument: () -> TextDocument? = { NSApp.mainWindow?.windowController?.document as? TextDocument }
     private(set) var window: NSPanel?
     let outline = NSOutlineView()
+    private enum Mode: Int { case openDocuments, folders, recentFiles }
+    private var selectedMode: Mode { Mode(rawValue: mode.selectedSegment) ?? .openDocuments }
     private let mode = NSSegmentedControl(
         labels: ["Open Documents", "Folders", "Recent Files"], trackingMode: .selectOne, target: nil, action: nil)
     private let status = AnnouncingLabel(labelWithString: "")
@@ -50,7 +52,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             // The panel outlives its window (isReleasedWhenClosed is false); do not keep
             // documents alive behind a closed panel.
             documents = []
-            if mode.selectedSegment == 0 { outline.reloadData() }
+            if selectedMode == .openDocuments { outline.reloadData() }
             return
         }
         // The window closes before its document leaves the document list.
@@ -65,9 +67,9 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         guard window?.isVisible == true else { return }
         let current = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
         guard current.count != documents.count || !zip(current, documents).allSatisfy({ $0 === $1 }) else { return }
-        let selected = mode.selectedSegment == 0 ? outline.item(atRow: outline.selectedRow) as? TextDocument : nil
+        let selected = selectedMode == .openDocuments ? outline.item(atRow: outline.selectedRow) as? TextDocument : nil
         documents = current
-        guard mode.selectedSegment == 0 else { return }
+        guard selectedMode == .openDocuments else { return }
         outline.reloadData()
         if let selected, let row = documents.firstIndex(where: { $0 === selected }) {
             outline.selectRowIndexes([row], byExtendingSelection: false)
@@ -203,7 +205,8 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         scroll.documentView = outline
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
-        mode.selectedSegment = 0
+        mode.setAccessibilityLabel("Workspace browser view")
+        mode.selectedSegment = Mode.openDocuments.rawValue
         mode.target = self
         mode.action = #selector(refresh(_:))
         let refresh = NSButton(title: "Refresh", target: self, action: #selector(refresh(_:)))
@@ -245,10 +248,12 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         // Fresh nodes every time: a node caches its listing, so this is what re-reads the disk.
         nodes = store.state.folders.map { WorkspaceBrowserNode(WorkspaceBrowserEntry(url: $0, directory: true)) }
         outline.reloadData()
-        if mode.selectedSegment == 1 { restoreExpansion() }
+        if selectedMode == .folders { restoreExpansion() }
         reloading = false
         status.stringValue =
-            "\(documents.count) open documents · \(nodes.count) saved folders · \(recent.count) recent files"
+            String(
+                format: Strings.text("workspace.counts", "Open documents: %@. Saved folders: %@. Recent files: %@."),
+                Strings.number(documents.count), Strings.number(nodes.count), Strings.number(recent.count))
     }
     /// Expands again the folders that were expanded before the nodes were rebuilt, parents
     /// before children. A folder that is gone, or sits under one that is, is forgotten.
@@ -284,12 +289,12 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try store.addFolder(url)
-            mode.selectedSegment = 1
+            mode.selectedSegment = Mode.folders.rawValue
             show(nil)
         } catch { TTAlert.present(error) }
     }
     @objc func removeFolder(_ sender: Any?) {
-        guard mode.selectedSegment == 1, let node = outline.item(atRow: outline.selectedRow) as? WorkspaceBrowserNode,
+        guard selectedMode == .folders, let node = outline.item(atRow: outline.selectedRow) as? WorkspaceBrowserNode,
             store.contains(node.entry.url)
         else {
             status.stringValue = "Select a saved root folder to remove it from this workspace. Files on disk are kept."
@@ -307,7 +312,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     @objc func openSelected(_ sender: Any?) {
         let index = outline.selectedRow
         guard index >= 0 else { return }
-        if mode.selectedSegment == 0 {
+        if selectedMode == .openDocuments {
             guard let document = outline.item(atRow: index) as? TextDocument else { return }
             // A row for a document that has since closed is removed, not shown again.
             guard NSDocumentController.shared.documents.contains(where: { $0 === document }) else {
@@ -318,7 +323,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             return
         }
         let url: URL
-        if mode.selectedSegment == 2 {
+        if selectedMode == .recentFiles {
             guard index < recent.count else { return }
             url = recent[index]
         } else {
@@ -376,8 +381,16 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             node.children = listing.entries.map(WorkspaceBrowserNode.init)
             if listing.truncated || listing.skipped > 0 {
                 status.stringValue =
-                    "\(listing.skipped) hidden, symbolic-link or special entries skipped"
-                    + (listing.truncated ? " · 2,000-entry listing limit reached" : "")
+                    String(
+                        format: listing.skipped == 1
+                            ? Strings.text("workspace.skipped.one", "%@ hidden, symbolic-link or special entry skipped")
+                            : Strings.text(
+                                "workspace.skipped.other", "%@ hidden, symbolic-link or special entries skipped"),
+                        Strings.number(listing.skipped))
+                    + (listing.truncated
+                        ? String(
+                            format: Strings.text("workspace.limit", " · %@-entry listing limit reached"),
+                            Strings.number(WorkspaceBrowserStore.defaultListingLimit)) : "")
             }
         } catch {
             node.children = []
@@ -386,14 +399,14 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         return node.children ?? []
     }
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        if mode.selectedSegment == 0 { return item == nil ? documents.count : 0 }
-        if mode.selectedSegment == 2 { return item == nil ? recent.count : 0 }
+        if selectedMode == .openDocuments { return item == nil ? documents.count : 0 }
+        if selectedMode == .recentFiles { return item == nil ? recent.count : 0 }
         guard let node = item as? WorkspaceBrowserNode else { return nodes.count }
         return node.entry.directory ? children(node).count : 0
     }
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        if mode.selectedSegment == 0 { return documents[index] }
-        if mode.selectedSegment == 2 { return recent[index] as NSURL }
+        if selectedMode == .openDocuments { return documents[index] }
+        if selectedMode == .recentFiles { return recent[index] as NSURL }
         return (item as? WorkspaceBrowserNode).map { children($0)[index] } ?? nodes[index]
     }
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {

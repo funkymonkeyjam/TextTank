@@ -81,6 +81,7 @@ final class UtilityController: NSObject {
         let uppercase = NSButton(checkboxWithTitle: "Uppercase hexadecimal", target: nil, action: nil)
         uppercase.state = .on
         let width = NSTextField(string: "16")
+        NumericInput.configure(width)
         let eol = NSPopUpButton()
         eol.addItems(withTitles: ["LF", "CRLF", "CR"])
         let stack = NSStackView(views: [
@@ -98,7 +99,7 @@ final class UtilityController: NSObject {
         while alert.runModal() == .alertFirstButtonReturn {
             do {
                 _ = try Self.recheck(editor, captured: editor, revision: revision, selection: selection)
-                guard let bytesPerLine = Int(width.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)),
+                guard let bytesPerLine = NumericInput.integer(width),
                     (0...65536).contains(bytesPerLine)
                 else {
                     throw UtilityFailure.malformed("bytes per line; enter a whole number from 0 to 65536")
@@ -137,6 +138,9 @@ final class UtilityController: NSObject {
         for field in [from, to] {
             field.addItems(withTitles: ["Binary (2)", "Octal (8)", "Decimal (10)", "Hexadecimal (16)"])
         }
+        input.setAccessibilityLabel("Number to convert")
+        from.setAccessibilityLabel("Source number base")
+        to.setAccessibilityLabel("Destination number base")
         from.selectItem(at: 2)
         to.selectItem(at: 3)
         let stack = NSStackView(views: [
@@ -158,7 +162,7 @@ final class UtilityController: NSObject {
             result.messageText = "Converted Number"
             result.informativeText = output
             result.addButton(withTitle: "Copy")
-            result.addButton(withTitle: "Cancel", role: .cancel)
+            result.addButton(withTitle: "Done", role: .cancel)
             result.addButton(withTitle: "Insert into Editor")
             let action = result.runModal()
             if action == .alertFirstButtonReturn {

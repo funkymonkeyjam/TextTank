@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let recentDocumentsMenu = RecentDocumentsMenu()
     lazy var folderSearch: FolderSearchController = {
         let controller = FolderSearchController()
+        controller.displayTabWidth = { [weak self] in self?.settings.value.tabWidth ?? 4 }
         controller.workspaceRoots = { [weak self] in self?.workspaceBrowser.store.state.folders ?? [] }
         return controller
     }()
@@ -308,23 +309,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         workspaceRoot.submenu = workspaceBrowser.menu()
         bar.addItem(workspaceRoot)
         let encoding = menu("Encoding")
-        for (title, code) in [
-            ("UTF-8", "utf8"), ("UTF-8 with BOM", "utf8bom"), ("UTF-16 LE with BOM", "utf16LE"),
-            ("UTF-16 BE with BOM", "utf16BE"), ("Windows-1252", "windows1252"), ("ISO-8859-1", "latin1")
-        ] {
+        for target in FileFormat.convertTargets {
+            let title = target.title, code = target.code
             encoding.addItem(
                 title: "Convert to \(title)", action: #selector(TextDocument.convertEncoding(_:)),
                 representedObject: code)
         }
         encoding.addItem(.separator())
         // The same names as the Convert items above, never the stored identifier.
-        let encodingNames: [FileEncoding: String] = [
-            .utf8: "UTF-8", .utf16LE: "UTF-16 LE", .utf16BE: "UTF-16 BE", .windows1252: "Windows-1252",
-            .latin1: "ISO-8859-1"
-        ]
         for value in FileEncoding.allCases {
             encoding.addItem(
-                title: "Reload as \(encodingNames[value] ?? value.rawValue)…",
+                title: "Reload as \(value.displayName)…",
                 action: #selector(TextDocument.reloadEncoding(_:)), representedObject: value.rawValue)
         }
         let edit = menu("Edit")
@@ -546,6 +541,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func documentTabChoices(_ windows: [NSWindow]) -> NSPopUpButton {
         let choice = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 420, height: 30))
+        choice.setAccessibilityLabel("Open document to switch to")
         for (index, window) in windows.enumerated() {
             let path = (window.windowController?.document as? NSDocument)?.fileURL?.deletingLastPathComponent().path
             let title = window.title + (window.isDocumentEdited ? " •" : "") + (path.map { " — \($0)" } ?? "")
@@ -886,7 +882,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let alert = TTAlert()
             alert.messageText = "Discard unsaved changes and reload?"
             alert.informativeText =
-                "The disk bytes will be interpreted as \(raw). Use Convert to change the save encoding while keeping your text."
+                "The disk bytes will be interpreted as \(encoding.displayName). Use Convert to change the save encoding while keeping your text."
             alert.addButton(withTitle: "Cancel", role: .cancel)
             alert.addButton(withTitle: "Discard and Reload").hasDestructiveAction = true
             guard alert.runModal() == .alertSecondButtonReturn else { return }
@@ -947,7 +943,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             status = "Saved"
         }
-        return status + " · Incomplete preview"
+        return status
     }
     /// Whether the last recovery write since the latest edit succeeded.
     private var recoveryCopyKept = false
@@ -1241,14 +1237,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A read-only document keeps its format, as the status-bar menu already promises.
     func convertEncoding(to code: String) throws {
         try editor.requireWritable()
-        let target: FileFormat
-        switch code {
-        case "utf8bom": target = FileFormat(encoding: .utf8, bom: true)
-        case "utf16LE": target = FileFormat(encoding: .utf16LE, bom: true)
-        case "utf16BE": target = FileFormat(encoding: .utf16BE, bom: true)
-        case "windows1252": target = FileFormat(encoding: .windows1252, bom: false)
-        case "latin1": target = FileFormat(encoding: .latin1, bom: false)
-        default: target = FileFormat(encoding: .utf8, bom: false)
+        guard let target = FileFormat.convertTargets.first(where: { $0.code == code })?.format else {
+            throw FileCodecError.invalidConversionTarget
         }
         _ = try FileCodec.encode(editor.text, format: target)
         format = target
@@ -1447,6 +1437,42 @@ enum StatusMetrics {
     }
 }
 
+/// Status identity is independent of its displayed text; repeated groups keep their historic IDs.
+enum StatusField: String, CaseIterable {
+    case document, bookmarks, language, position, characters, lines, selectedCharacters, selections, font, indent,
+        encoding, eol, wrap, readOnly
+    var identityGroup: String {
+        switch self {
+        case .characters, .lines: return "count"
+        case .selectedCharacters, .selections: return "selection"
+        case .readOnly: return "document"
+        default: return rawValue
+        }
+    }
+    var displayName: String {
+        switch self {
+        case .document: return Strings.text("status.document", "Document")
+        case .bookmarks: return Strings.text("status.bookmarks", "Bookmarks")
+        case .language: return Strings.text("status.language", "Language")
+        case .position: return Strings.text("status.position", "Position")
+        case .characters: return Strings.text("status.characters", "Character count")
+        case .lines: return Strings.text("status.lines", "Line count")
+        case .selectedCharacters: return Strings.text("status.selectedCharacters", "Selected characters")
+        case .selections: return Strings.text("status.selections", "Selections")
+        case .font: return Strings.text("status.font", "Text size")
+        case .indent: return Strings.text("status.indent", "Indentation")
+        case .encoding: return Strings.text("status.encoding", "Encoding")
+        case .eol: return Strings.text("status.eol", "Line endings")
+        case .wrap: return Strings.text("status.wrap", "Line wrapping")
+        case .readOnly: return Strings.text("status.readOnly", "Document access")
+        }
+    }
+}
+struct StatusItem: Equatable {
+    let field: StatusField
+    let text: String
+}
+
 private final class StatusBadge: NSButton {
     var activate: ((StatusBadge) -> Void)?
     init(_ text: String) {
@@ -1476,33 +1502,37 @@ private final class StatusBadge: NSButton {
 }
 
 private final class StatusBadgeRow: NSView {
-    var onActivate: ((String, NSView) -> Void)?
-    private var values: [String] = []
+    var onActivate: ((StatusField, NSView) -> Void)?
+    private var values: [StatusItem] = []
     private var badges: [StatusBadge] = []
     private var identities: [String] = []
     private var measuredWidth: CGFloat = -1
     override var isFlipped: Bool { true }
-    func update(_ fields: [String], keys: [String]) {
+    func update(_ items: [StatusItem]) {
+        setAccessibilityLabel(Strings.text("status.group", "Document status"))
         var counts: [String: Int] = [:]
-        let ids = keys.map { key -> String in
-            let n = counts[key, default: 0]
+        let ids = items.map { item -> String in
+            let key = item.field.identityGroup, n = counts[key, default: 0]
             counts[key] = n + 1
             return "\(key).\(n)"
         }
-        guard fields != values || ids != identities else { return }
+        guard items != values || ids != identities else { return }
         let existing = Dictionary(uniqueKeysWithValues: zip(identities, badges))
-        let updated = zip(zip(fields, keys), ids).map { entry, id -> StatusBadge in
-            let (text, key) = entry
-            let badge = existing[id] ?? StatusBadge(text)
-            badge.title = text
-            badge.toolTip = text + " — click for options"
+        let updated = zip(items, ids).map { item, id -> StatusBadge in
+            let badge = existing[id] ?? StatusBadge(item.text)
+            badge.title = item.text
+            let description = String(
+                format: Strings.text("status.fieldValue", "%@: %@"), item.field.displayName, item.text)
+            badge.toolTip = String(format: Strings.text("status.options", "%@. Show options."), description)
+            badge.setAccessibilityLabel(description)
+            badge.setAccessibilityHelp(Strings.text("status.showOptions", "Shows options for this field."))
             badge.identifier = NSUserInterfaceItemIdentifier("status." + id)
-            badge.activate = { [weak self] button in self?.onActivate?(key, button) }
+            badge.activate = { [weak self] button in self?.onActivate?(item.field, button) }
             if badge.superview == nil { addSubview(badge) }
             return badge
         }
         for (id, badge) in existing where !ids.contains(id) { badge.removeFromSuperview() }
-        values = fields
+        values = items
         identities = ids
         badges = updated
         invalidateIntrinsicContentSize()
@@ -1741,7 +1771,13 @@ private final class DocumentTabStrip: NSView {
             action: #selector(newTab(_:)))
         add.isBordered = false
         add.contentTintColor = .controlAccentColor
-        add.toolTip = "New tab (⌘N)"
+        add.setAccessibilityLabel("Open a new document tab")
+        if let shortcut = ControlPresentation.shortcut(for: #selector(AppDelegate.newDocument(_:)), in: NSApp.mainMenu)
+        {
+            add.toolTip = String(format: Strings.text("tab.new.shortcut", "New Tab (%@)"), shortcut)
+        } else {
+            add.toolTip = Strings.text("tab.new", "New Tab")
+        }
         add.identifier = NSUserInterfaceItemIdentifier("tab.new")
         add.frame = NSRect(x: x + 4, y: 3, width: 32, height: 30)
         row.addSubview(add)
@@ -1826,7 +1862,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     private var splitBelowFindBar: NSLayoutConstraint?
     private var splitBelowTabs: NSLayoutConstraint?
     var findBarVisible: Bool { findBar?.isHidden == false }
-    let status = NSTextField(labelWithString: "Ready · Incomplete preview")
+    let status = NSTextField(labelWithString: "Ready")
     private let statusDetails = StatusBadgeRow()
     private let documentTabs = DocumentTabStrip()
     private var statusTimer: Timer?
@@ -1961,6 +1997,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         replaceMatchButton.action = #selector(replaceSelection(_:))
         replaceMatchButton.setAccessibilityLabel("Replace selected match in document")
         let doneButton = NSButton(title: "Done", target: self, action: #selector(hideFind(_:)))
+        doneButton.setAccessibilityLabel("Close Find in document")
+        caseBox.setAccessibilityLabel("Match case in document search")
         let search = NSStackView(views: [
             findField, replaceField, caseBox, findNextButton, replaceMatchButton, doneButton
         ])
@@ -2139,10 +2177,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
                 }
             }
         }
-        let encoding: [FileEncoding: String] = [
-            .utf8: "UTF-8", .utf16LE: "UTF-16 LE", .utf16BE: "UTF-16 BE", .windows1252: "Windows-1252",
-            .latin1: "Latin-1"
-        ]
         let language =
             (NSApp.delegate as? AppDelegate)?.languages.profile(identifier: doc.languageIdentifier)?.title
             ?? (doc.languageIdentifier == LanguageProfile.plainTextID ? "Plain Text" : doc.languageIdentifier)
@@ -2157,11 +2191,17 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
                 + (views.count > 1 ? (index == 0 ? ", first pane" : ", second pane") : "")
             if pane.accessibilityDocumentName != name { pane.accessibilityDocumentName = name }
         }
-        var fields = [
-            doc.displayName + (doc.isDocumentEdited ? " *" : ""), "\(doc.editor.bookmarkCount) Bookmarks",
-            language,
-            "Ln \(info["line"]?.intValue ?? 1), Col \(info["column"]?.intValue ?? 1)", "\(cachedCharacterCount) chars",
-            "\(info["lines"]?.intValue ?? 1) lines"
+        var items: [StatusItem] = [
+            .init(field: .document, text: doc.displayName + (doc.isDocumentEdited ? " *" : "")),
+            .init(field: .bookmarks, text: Strings.count(doc.editor.bookmarkCount, .bookmark)),
+            .init(field: .language, text: language),
+            .init(
+                field: .position,
+                text:
+                    "Ln \(Strings.number(info["line"]?.intValue ?? 1)), Col \(Strings.number(info["column"]?.intValue ?? 1))"
+            ),
+            .init(field: .characters, text: Strings.count(cachedCharacterCount, .character)),
+            .init(field: .lines, text: Strings.count(info["lines"]?.intValue ?? 1, .line))
         ]
         // The generation changes with every edit, every bridge call that can move a selection
         // and every selection update Scintilla reports; the main range is compared as well.
@@ -2172,28 +2212,26 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             cachedSelectedCount = editor.selectedCharacterCount
             cachedSelectionKey = selectionKey
         }
-        var keys = ["document", "bookmarks", "language", "position", "count", "count"]
         if cachedSelectedCount > 0 {
-            fields.append("\(cachedSelectedCount) selected")
-            keys.append("selection")
+            items.append(.init(field: .selectedCharacters, text: Strings.count(cachedSelectedCount, .character)))
         }
         if editor.selectionCount > 1 {
-            fields.append("\(editor.selectionCount) selections")
-            keys.append("selection")
+            items.append(.init(field: .selections, text: Strings.count(editor.selectionCount, .selection)))
         }
-        fields += [
-            String(format: "Base %g pt", info["fontSize"]?.doubleValue ?? 14), indentation,
-            (encoding[doc.format.encoding] ?? "UTF-8") + (doc.format.bom ? " BOM" : ""), eol,
-            editor.wrap ? "Wrap" : "No Wrap"
+        items += [
+            .init(
+                field: .font,
+                text: String(
+                    format: Strings.text("status.basePoints", "Base %@ pt"),
+                    Strings.points(info["fontSize"]?.doubleValue ?? 14))),
+            .init(field: .indent, text: indentation),
+            .init(field: .encoding, text: doc.format.encoding.displayName + (doc.format.bom ? " BOM" : "")),
+            .init(field: .eol, text: eol), .init(field: .wrap, text: editor.wrap ? "Wrap" : "No Wrap")
         ]
-        keys += ["font", "indent", "encoding", "eol", "wrap"]
-        if editor.readOnly {
-            fields.append("Read Only")
-            keys.append("document")
-        }
-        statusDetails.update(fields, keys: keys)
+        if editor.readOnly { items.append(.init(field: .readOnly, text: "Read Only")) }
+        statusDetails.update(items)
     }
-    private func showStatusOptions(_ key: String, at view: NSView) {
+    private func showStatusOptions(_ key: StatusField, at view: NSView) {
         let editor = activeEditor
         (NSApp.delegate as? AppDelegate)?.lastDocumentController = self
         lastEditor = editor
@@ -2204,6 +2242,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     /// The menu a status bar field opens, for the active pane. Building it changes nothing, so
     /// its wording can be checked without showing it.
     func statusOptionsMenu(_ key: String) -> NSMenu? {
+        let field =
+            key == "count"
+            ? StatusField.characters : (key == "selection" ? .selectedCharacters : StatusField(rawValue: key))
+        guard let field else { return nil }
+        return statusOptionsMenu(field)
+    }
+    func statusOptionsMenu(_ key: StatusField) -> NSMenu? {
         guard let doc = document as? TextDocument else { return nil }
         let editor = activeEditor, info = editor.statusInfo
         let app = NSApp.delegate as? AppDelegate
@@ -2230,27 +2275,21 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             menu.addItem(title: title, action: nil, isEnabled: false)
         }
         switch key {
-        case "encoding":
-            heading("Re-read using encoding…")
-            let options: [(String, String)] = [
-                ("UTF-8", "utf8"), ("UTF-16 LE", "utf16LE"), ("UTF-16 BE", "utf16BE"), ("Latin-1", "latin1"),
-                ("Windows-1252", "windows1252")
-            ]
-            for (name, code) in options {
+        case .encoding:
+            heading("Reload using encoding…")
+            for encoding in FileEncoding.allCases {
                 add(
-                    name, #selector(TextDocument.reloadEncoding(_:)), doc, code, doc.format.encoding.rawValue == code,
-                    doc.fileURL != nil)
+                    encoding.displayName, #selector(TextDocument.reloadEncoding(_:)), doc, encoding.rawValue,
+                    doc.format.encoding == encoding, doc.fileURL != nil)
             }
             menu.addItem(.separator())
             heading("Convert document encoding (save separately)")
-            for (name, code) in [
-                ("UTF-8", "utf8"), ("UTF-8 with BOM", "utf8bom"), ("UTF-16 LE with BOM", "utf16LE"),
-                ("UTF-16 BE with BOM", "utf16BE"), ("Latin-1", "latin1"), ("Windows-1252", "windows1252")
-            ] {
-                let current = doc.format.encoding == .utf8 && doc.format.bom ? "utf8bom" : doc.format.encoding.rawValue
-                add(name, #selector(TextDocument.convertEncoding(_:)), doc, code, current == code, !editor.readOnly)
+            for target in FileFormat.convertTargets {
+                add(
+                    target.title, #selector(TextDocument.convertEncoding(_:)), doc, target.code,
+                    doc.format == target.format, !editor.readOnly)
             }
-        case "indent":
+        case .indent:
             heading("Indentation for this document")
             add("Tabs", #selector(statusOption(_:)), self, "tabs", info["useTabs"]?.boolValue == true)
             add("Spaces", #selector(statusOption(_:)), self, "spaces", info["useTabs"]?.boolValue == false)
@@ -2262,17 +2301,17 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
                 menu.addItem(.separator())
                 add("Default Editor Settings…", #selector(SettingsController.showSettings(_:)), settings)
             }
-        case "eol":
+        case .eol:
             heading("Convert document line endings")
             for (name, code) in [("LF — Unix / macOS", "LF"), ("CRLF — Windows", "CRLF"), ("CR — Classic Mac", "CR")] {
                 let current =
                     cachedEndings.isEmpty ? [0: "CRLF", 1: "CR", 2: "LF"][info["eol"]?.intValue ?? 2] : cachedEndings
                 add(name, #selector(convertEOL(_:)), self, code, current == code, !editor.readOnly)
             }
-        case "wrap":
+        case .wrap:
             add("Wrap Lines", #selector(statusOption(_:)), self, "wrap.on", editor.wrap)
             add("No Wrap", #selector(statusOption(_:)), self, "wrap.off", !editor.wrap)
-        case "font":
+        case .font:
             heading("Text size for this view")
             command(.zoomIn)
             command(.zoomOut)
@@ -2280,22 +2319,22 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
                 menu.addItem(.separator())
                 menu.addItem(languages.styleSettingsMenuItem())
             }
-        case "language":
+        case .language:
             if let languages = app?.languages {
                 for item in languages.languageMenuItems() {
                     item.state = (item.representedObject as? String) == doc.languageIdentifier ? .on : .off
                     menu.addItem(item)
                 }
             }
-        case "bookmarks":
+        case .bookmarks:
             for value: EditorCommand in [.bookmarkToggle, .bookmarkNext, .bookmarkPrevious] { command(value) }
-        case "position":
+        case .position:
             add("Go to Line…", #selector(statusOption(_:)), self, "goToLine")
-        case "document":
-            add("Save…", #selector(NSDocument.save(_:)), doc)
+        case .document, .readOnly:
+            add("Save", #selector(NSDocument.save(_:)), doc)
             add("Save As…", #selector(NSDocument.saveAs(_:)), doc)
             add("Read Only", #selector(TextDocument.toggleReadOnly(_:)), doc, nil, editor.readOnly)
-        default:
+        case .characters, .lines, .selectedCharacters, .selections:
             command(.selectAll)
             add("Clear Selection", #selector(statusOption(_:)), self, "clearSelection")
         }
@@ -2344,6 +2383,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         input.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
         input.identifier = NSUserInterfaceItemIdentifier("goToLine.line")
         input.setAccessibilityLabel("Line number")
+        NumericInput.configure(input)
         alert.accessoryView = input
         alert.addButton(withTitle: "Go")
         alert.addButton(withTitle: "Cancel", role: .cancel)
@@ -2351,11 +2391,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         // The engine's own line model decides which lines exist; a folded target is revealed.
         guard editor.window != nil else { return }
-        guard let line = Int(input.stringValue),
+        guard let line = NumericInput.integer(input, signed: true),
             Self.goToLine(line, in: editor, macros: (NSApp.delegate as? AppDelegate)?.macros)
         else {
             TTAlert.explain(
-                Int(input.stringValue) == nil
+                NumericInput.integer(input, signed: true) == nil
                     ? "Enter a whole line number" : "There is no line \(input.stringValue)",
                 detail: "Enter a line number from 1 to \(editor.statusInfo["lines"]?.intValue ?? 1).")
             return
@@ -2723,6 +2763,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         text.placeholderString = "Text to insert"
         let number = NSButton(checkboxWithTitle: "Insert sequential numbers", target: nil, action: nil)
         let start = NSTextField(string: "1"), step = NSTextField(string: "1")
+        text.setAccessibilityLabel("Text to insert into each selection")
+        number.setAccessibilityLabel("Insert sequential numbers into each selection")
+        start.setAccessibilityLabel("Starting column number")
+        step.setAccessibilityLabel("Column number increment")
         let stack = NSStackView(views: [
             text, number, NSTextField(labelWithString: "Start"), start, NSTextField(labelWithString: "Increment"), step
         ])
