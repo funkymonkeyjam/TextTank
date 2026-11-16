@@ -686,7 +686,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // G330: the TextTank-authored parts of the user-defined-language lexer. Expected styles
             // are Notepad++'s UDL 2.1 behaviour: style 4 is KEYWORDS1, 13 FOLDER IN CODE1, 1 COMMENTS.
             let SCI_GETFOLDLEVEL: UInt32 = 2223, foldHeader = 0x2000, foldBase = 0x400, keyword1 = 4
-            func userProfile(
+            @MainActor func userProfile(
                 _ name: String, keywords: [String: String], prefix: [String: String] = [:],
                 nesting: [String: Int] = [:]
             ) throws
