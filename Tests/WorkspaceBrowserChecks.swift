@@ -383,9 +383,9 @@ import Darwin
             host.contentView = nil
             host.close()
             let app = AppDelegate()
-            let previousDelegate = NSApp.delegate
-            NSApp.delegate = app
-            defer { NSApp.delegate = previousDelegate }
+            let previousServices = EditorServices.current
+            app.installEditorServices()
+            defer { EditorServices.current = previousServices }
             let python = folder.appendingPathComponent("extension-only.py")
             try Data("value = 1".utf8).write(to: python)
             let detected = try controller.open(python)

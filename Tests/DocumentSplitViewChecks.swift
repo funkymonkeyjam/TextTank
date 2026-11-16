@@ -73,7 +73,7 @@ extension DocumentChecks {
         // F275, F302, F278
         section("one current editor for every controller", #line) {
             let delegate = AppDelegate()
-            app.delegate = delegate
+            delegate.installEditorServices()
             let (document, controller, _) = try opened("current.txt", "- **2 eggs**\n- plain text\n")
             // The case F275 is about: an auxiliary titled window (Find and Replace, a Run result)
             // is main. A document window that has just been shown is main whenever the check
@@ -201,7 +201,7 @@ extension DocumentChecks {
         // F21, F83, G335, G336, G339, G341
         section("split view keeps document state and copies view state", #line) {
             let delegate = AppDelegate()
-            app.delegate = delegate
+            delegate.installEditorServices()
             var global = EditorSettings()
             global.tabWidth = 8
             global.useTabs = false
@@ -453,7 +453,7 @@ extension DocumentChecks {
         // G338, G342
         section("results captured through a clone survive Close Split View", #line) {
             let delegate = AppDelegate()
-            app.delegate = delegate
+            delegate.installEditorServices()
             let (document, controller, window) = try opened(
                 "deferred.py", "def one():\n    pass\n\ndef two():\n    pass\n")
             delegate.lastDocumentController = controller

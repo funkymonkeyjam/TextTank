@@ -10,6 +10,7 @@ import AppKit
             app.setActivationPolicy(.regular)
             let delegate = AppDelegate()
             app.delegate = delegate
+            delegate.installEditorServices()
             if NSDocumentController.shared !== documents {
                 NSLog("TextTank: the document controller was created early; encoding choice on open is unavailable")
             }

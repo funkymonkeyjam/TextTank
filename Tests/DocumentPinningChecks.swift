@@ -420,9 +420,9 @@ extension DocumentChecks {
         }
         // G342
         section("split view focus and per-view state", #line) {
-            let priorDelegate = app.delegate, splitDelegate = AppDelegate()
-            app.delegate = splitDelegate
-            defer { app.delegate = priorDelegate }
+            let priorServices = EditorServices.current, splitDelegate = AppDelegate()
+            splitDelegate.installEditorServices()
+            defer { EditorServices.current = priorServices }
             var viewSettings = EditorSettings()
             viewSettings.tabWidth = 8
             viewSettings.useTabs = false

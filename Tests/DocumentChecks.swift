@@ -37,6 +37,9 @@ import AppKit
             // As in the app: the first document controller created becomes the shared one.
             let documentController = TextDocumentController()
             let app = NSApplication.shared
+            check(
+                NSDocumentController.shared === documentController,
+                "F276 document controller constructed before NSApplication keeps singleton identity")
             app.setActivationPolicy(.accessory)
             print("SCREENS \(NSScreen.screens.map { $0.frame })")
             fflush(stdout)
@@ -45,7 +48,7 @@ import AppKit
             // it started with and by closing any document it left registered; leaving one behind
             // on a normal finish is itself reported, so a missing close cannot hide.
             @MainActor func section(_ name: String, line: UInt = #line, _ body: () throws -> Void) {
-                let delegate = app.delegate
+                let services = EditorServices.current
                 Checks.section(name, line: line) {
                     var finished = false
                     defer {
@@ -55,13 +58,14 @@ import AppKit
                                 "section '\(name)' left \(left.count) document(s) open", file: #filePath, line: line)
                         }
                         left.forEach { $0.close() }
-                        app.delegate = delegate
+                        EditorServices.current = services
                     }
                     try body()
                     finished = true
                 }
             }
             section("audit26 presentation") { try Audit26PresentationChecks.run() }
+            section("audit29 services") { try Audit29ServiceChecks.run() }
             // Written by the single-document section and read by the session and recovery section.
             let saved = root.appendingPathComponent("saved-as.txt")
             section("automation configuration and settings") {
@@ -548,9 +552,9 @@ import AppKit
                 )
                 fflush(stdout)
                 inspectGeometry(document.editor, label: "before-clone")
-                let priorDelegate = app.delegate
+                let priorServices = EditorServices.current
                 let cloneDelegate = AppDelegate()
-                app.delegate = cloneDelegate
+                cloneDelegate.installEditorServices()
                 var cloneSettings = EditorSettings()
                 cloneSettings.wrap = true
                 cloneSettings.tabWidth = 8
@@ -560,7 +564,7 @@ import AppKit
                 check(
                     controller.secondary?.wrap == true && controller.secondary?.menu != nil,
                     "new clone inherits persisted view settings and automation context")
-                app.delegate = priorDelegate
+                EditorServices.current = priorServices
                 window.contentView?.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
                 let clone = try requireValue(controller.secondary, "fixture: the split view has a clone editor")
@@ -697,11 +701,11 @@ import AppKit
                         $0.rawValue == "TextTank.CloseTab"
                     }, "the toolbar has no Close Tab item; each tab closes from its own button or Command-W")
             }
-            // The delegate installed here is deliberately left in place for every later section:
-            // NSApp.delegate is weak, and the tab, status and navigation paths checked below reach
-            // the application delegate. It is declared at this level so that it stays alive.
+            // Feature services live for the remaining sections, then restore their prior environment.
+            let priorServices = EditorServices.current
+            defer { EditorServices.current = priorServices }
             let sessionDelegate = AppDelegate()
-            app.delegate = sessionDelegate
+            sessionDelegate.installEditorServices()
             section("session restore and crash recovery") {
                 let snapshotText = "\u{FEFF}café😀\n2 eggs\0"
                 let snapshot = SessionDocument(

@@ -77,11 +77,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             guard let self, let editor else { return }
             self.lastEditor = editor
             self.updateInlineFindValidation()
-            let app = NSApp.delegate as? AppDelegate
-            app?.lastDocumentController = self
-            app?.macros.editorDidFocus(editor)
+            let app = EditorServices.current
+            app?.noteActiveController(self)
+            app?.macros?.editorDidFocus(editor)
         }
-        editor.menu = (NSApp.delegate as? AppDelegate)?.automations.contextMenu()
+        editor.menu = EditorServices.current?.automations?.contextMenu()
     }
     /// Copies the active pane's syntax styles to the other pane after a language or style
     /// change. The lexer itself belongs to the shared document and is never applied twice.
@@ -109,8 +109,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             self.lastEditor = pane
             self.updateInlineFindValidation()
         }
-        if let app = NSApp.delegate as? AppDelegate {
-            app.settings.apply(to: document.editor)
+        if let app = EditorServices.current {
+            app.settings?.apply(to: document.editor)
             let toolbar = NSToolbar(identifier: "TextTankToolbar")
             toolbar.delegate = self
             toolbar.displayMode = .iconOnly
@@ -327,7 +327,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             }
         }
         let language =
-            (NSApp.delegate as? AppDelegate)?.languages.profile(identifier: doc.languageIdentifier)?.title
+            EditorServices.current?.languages?.profile(identifier: doc.languageIdentifier)?.title
             ?? (doc.languageIdentifier == LanguageProfile.plainTextID ? "Plain Text" : doc.languageIdentifier)
         let eol =
             cachedEndings.isEmpty ? ([0: "CRLF", 1: "CR", 2: "LF"][info["eol"]?.intValue ?? 2] ?? "LF") : cachedEndings
@@ -382,7 +382,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     }
     private func showStatusOptions(_ key: StatusField, at view: NSView) {
         let editor = activeEditor
-        (NSApp.delegate as? AppDelegate)?.lastDocumentController = self
+        EditorServices.current?.noteActiveController(self)
         lastEditor = editor
         guard let menu = statusOptionsMenu(key) else { return }
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height), in: view)
@@ -400,7 +400,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     func statusOptionsMenu(_ key: StatusField) -> NSMenu? {
         guard let doc = document as? TextDocument else { return nil }
         let editor = activeEditor, info = editor.statusInfo
-        let app = NSApp.delegate as? AppDelegate
+        let app = EditorServices.current
         let menu = NSMenu()
         menu.autoenablesItems = false
         func add(
@@ -413,7 +413,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             if let value, let command = EditorCommand(rawValue: value) {
                 item.keyEquivalent =
                     command.isShortcutAssignable
-                    ? app?.settings.value.shortcut(for: value) ?? command.defaultMenuShortcut
+                    ? app?.settings?.value.shortcut(for: value) ?? command.defaultMenuShortcut
                     : command.defaultMenuShortcut
                 item.isEnabled = enabled && (!TTEditor.commandModifiesText(value) || !editor.readOnly)
                 if command.isToggle { item.state = editor.commandIsChecked(value) ? .on : .off }
@@ -510,7 +510,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         switch id {
         case "tabs", "spaces": editor.configureTabWidth(info["tabWidth"]?.intValue ?? 4, useTabs: id == "tabs")
         case "wrap.on", "wrap.off": editor.wrap = id == "wrap.on"
-        case "clearSelection": Self.clearSelection(in: editor, macros: (NSApp.delegate as? AppDelegate)?.macros)
+        case "clearSelection": Self.clearSelection(in: editor, macros: EditorServices.current?.macros)
         case "goToLine": goToLine(sender)
         default:
             if id.hasPrefix("width."), let width = Int(id.dropFirst(6)) {
@@ -541,7 +541,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         // The engine's own line model decides which lines exist; a folded target is revealed.
         guard editor.window != nil else { return }
         guard let line = NumericInput.integer(input, signed: true),
-            Self.goToLine(line, in: editor, macros: (NSApp.delegate as? AppDelegate)?.macros)
+            Self.goToLine(line, in: editor, macros: EditorServices.current?.macros)
         else {
             TTAlert.explain(
                 NumericInput.integer(input, signed: true) == nil
@@ -570,7 +570,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         _ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar: Bool
     ) -> NSToolbarItem? {
-        guard let automations = (NSApp.delegate as? AppDelegate)?.automations else { return nil }
+        guard let automations = EditorServices.current?.automations else { return nil }
         return identifier.rawValue == "TextTank.Automations"
             ? automations.makeToolbarItem() : automations.makeToolbarItem(identifier: identifier)
     }
@@ -628,14 +628,14 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         let editor = activeEditor
         if id.hasPrefix("transform."), let transform = EditorTransform(rawValue: String(id.dropFirst(10))) {
             try editor.requireWritable()
-            (NSApp.delegate as? AppDelegate)?.macros.invalidateRecording(
+            EditorServices.current?.macros?.invalidateRecording(
                 reason: "This text transform is not yet recorded.")
             try transform.apply(to: editor)
             return
         }
         guard EditorCommand(rawValue: id) != nil else { throw EditorCommandFailure.unsupported }
         if TTEditor.commandModifiesText(id) { try editor.requireWritable() }
-        (NSApp.delegate as? AppDelegate)?.macros.willExecuteCommand(id, on: editor)
+        EditorServices.current?.macros?.willExecuteCommand(id, on: editor)
         guard editor.executeCommand(id) else { throw EditorCommandFailure.unsupported }
     }
     deinit {
@@ -698,7 +698,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         }
         findField.stringValue = selected
         Self.findPasteboardText = selected
-        (NSApp.delegate as? AppDelegate)?.searchController.queryField.stringValue = selected
+        EditorServices.current?.searchController?.queryField.stringValue = selected
         updateInlineFindValidation()
     }
     /// Find Next and Find Previous from the menu. With nothing to find yet, the bar opens instead.
@@ -783,16 +783,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         captured.matchCase = caseBox.state == .on
         let options = captured
         cancelInlineSearch()
-        guard !options.query.isEmpty, let delegate = NSApp.delegate as? AppDelegate, let capturedWindow = window else {
+        guard !options.query.isEmpty, let delegate = EditorServices.current,
+            let search = delegate.searchController, let capturedWindow = window
+        else {
             return
         }
         Self.findPasteboardText = options.query
-        delegate.searchController.queryField.stringValue = options.query
+        search.queryField.stringValue = options.query
         let token = inlineSearchGeneration, flag = TTSearchCancellation()
         inlineCancellation = flag
         inlineSearchPending = true
         updateInlineFindValidation()
-        delegate.searchController.performInline(
+        search.performInline(
             options: options, action: action, on: editor, cancellation: flag,
             isCurrent: { [weak self, weak editor, weak capturedWindow] in
                 guard let self, let editor, let capturedWindow else { return false }
@@ -810,7 +812,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
                 switch result {
                 case .applied:
                     guard let editor else { return }
-                    delegate.macros.recordSearch(.init(options: options, action: action), editor: editor)
+                    delegate.macros?.recordSearch(.init(options: options, action: action), editor: editor)
                     if action == "replaceOne" {
                         self.showTransientStatus("Replaced the selected match. Undo restores it.")
                     }
@@ -854,7 +856,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         lastEditor = primaryEditor
         window?.makeFirstResponder(primaryEditor)
         // Recording across views is not supported; say so even if no focus event was sent.
-        (NSApp.delegate as? AppDelegate)?.macros.editorDidFocus(primaryEditor)
+        EditorServices.current?.macros?.editorDidFocus(primaryEditor)
         // Deferred results that do not depend on the clone's selection move to the primary view.
         clone.retire(inFavorOf: primaryEditor)
         clone.removeFromSuperview()
@@ -883,9 +885,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     @objc func toggleWrap(_ sender: Any?) { activeEditor.wrap.toggle() }
     @objc func comment(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let command = CommentCommand(rawValue: raw),
-            let app = NSApp.delegate as? AppDelegate, let document = document as? TextDocument
+            let app = EditorServices.current, let document = document as? TextDocument
         else { return }
-        guard let profile = app.languages.profile(identifier: document.languageIdentifier) else {
+        guard let profile = app.languages?.profile(identifier: document.languageIdentifier) else {
             TTAlert.explain(
                 "Comments are not available for this language",
                 detail: "Choose a language with comment syntax in the Language menu, then try again.")
@@ -893,7 +895,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         }
         do {
             try activeEditor.requireWritable()
-            app.macros.invalidateRecording(reason: "Language-specific comments are not yet recorded.")
+            app.macros?.invalidateRecording(reason: "Language-specific comments are not yet recorded.")
             try command.apply(to: activeEditor, profile: profile)
         } catch { TTAlert.present(error) }
     }
@@ -951,7 +953,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
                 }
             }
         }
-        (NSApp.delegate as? AppDelegate)?.macros.invalidateRecording(reason: "Column insertion is not yet recorded.")
+        EditorServices.current?.macros?.invalidateRecording(reason: "Column insertion is not yet recorded.")
         if !Self.applyColumn(values, to: editor, revision: revision, selections: selections) {
             let error = TTAlert()
             error.messageText = "Selections changed or are not writable"
@@ -973,7 +975,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     func convertLineEndings(to mode: String) throws {
         let editor = activeEditor
         try editor.requireWritable()
-        (NSApp.delegate as? AppDelegate)?.macros.invalidateRecording(
+        EditorServices.current?.macros?.invalidateRecording(
             reason: "Line-ending conversion is not yet recorded.")
         guard editor.convertLineEndings(mode) else {
             throw DocumentActionError.lineEndingsRejected

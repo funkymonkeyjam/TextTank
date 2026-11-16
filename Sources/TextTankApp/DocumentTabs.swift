@@ -10,7 +10,7 @@ final class DocumentTabWindow: NSWindow {
     override func becomeMain() {
         super.becomeMain()
         if let controller = windowController as? EditorWindowController {
-            (NSApp.delegate as? AppDelegate)?.lastDocumentController = controller
+            EditorServices.current?.noteActiveController(controller)
         }
     }
     // The tabs look like one window, so its red close button closes that whole window: it quits
@@ -225,5 +225,5 @@ final class DocumentTabStrip: NSView {
         (target as? DocumentTabWindow)?.returnTo = active
         target.performClose(sender)
     }
-    @objc private func newTab(_ sender: Any?) { (NSApp.delegate as? AppDelegate)?.newDocument(sender) }
+    @objc private func newTab(_ sender: Any?) { EditorServices.current?.newDocument(sender) }
 }

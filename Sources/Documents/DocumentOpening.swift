@@ -89,7 +89,7 @@ enum EncodingChoice {
 final class TextDocumentController: NSDocumentController {
     var chooseEncoding: (URL, Error) -> FileEncoding? = EncodingChoice.present
     /// A session snapshot is restored through its own review prompt, never opened as editable JSON.
-    var openSessionFile: (URL) -> Void = { url in (NSApp.delegate as? AppDelegate)?.workspace.openSession(at: url) }
+    var openSessionFile: (URL) -> Void = { url in EditorServices.current?.openSessionFile(url) }
     override func openDocument(
         withContentsOf url: URL, display displayDocument: Bool,
         completionHandler: @escaping (NSDocument?, Bool, Error?) -> Void

@@ -188,6 +188,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         restoreRecovery()
     }
+    /// Installation is explicit and follows TextDocumentController construction in main.
+    /// Weak providers preserve the lazy feature graph without retaining a discarded composition root.
+    func installEditorServices() {
+        var services = EditorServices()
+        services.isAvailable = { [weak self] in self != nil }
+        services.settingsProvider = { [weak self] in self?.settings }
+        services.languagesProvider = { [weak self] in self?.languages }
+        services.macrosProvider = { [weak self] in self?.macros }
+        services.automationsProvider = { [weak self] in self?.automations }
+        services.searchProvider = { [weak self] in self?.searchController }
+        services.newDocument = { [weak self] in self?.newDocument($0) }
+        services.noteActiveController = { [weak self] in self?.noteActive($0) }
+        services.openSessionFile = { [weak self] in self?.workspace.openSession(at: $0) }
+        EditorServices.current = services
+    }
+    func noteActive(_ controller: EditorWindowController) { lastDocumentController = controller }
     @objc func newDocument(_ sender: Any?) {
         let doc = TextDocument()
         NSDocumentController.shared.addDocument(doc)

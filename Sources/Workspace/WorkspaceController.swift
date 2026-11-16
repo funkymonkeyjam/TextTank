@@ -117,8 +117,8 @@ final class WorkspaceController: NSObject {
             document.loadUnsavedSnapshot(text: snapshot.text, format: snapshot.format)
             // Sessions written before the single plain-text identifier say "null" or nothing.
             let requestedLanguage = LanguageProfile.canonicalID(snapshot.language)
-            if let app = NSApp.delegate as? AppDelegate,
-                app.languages.apply(identifier: requestedLanguage, to: document.editor)
+            if let app = EditorServices.current,
+                app.languages?.apply(identifier: requestedLanguage, to: document.editor) == true
             {
                 document.languageIdentifier = requestedLanguage
             } else {

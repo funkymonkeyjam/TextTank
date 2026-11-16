@@ -385,7 +385,7 @@ import AppKit
         } catch { reportRecovery(error) }
     }
     override func close() {
-        (NSApp.delegate as? AppDelegate)?.macros.editorWillReset(editor, reason: "The recording document was closed.")
+        EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was closed.")
         cancelRecoveryTimers()
         recoveryGeneration += 1
         recoveryClosed = true
@@ -527,7 +527,7 @@ import AppKit
         return doc
     }
     private func loadDecoded(_ decoded: DecodedFile, sample: FileSample) {
-        (NSApp.delegate as? AppDelegate)?.macros.editorWillReset(editor, reason: "The recording document was reloaded.")
+        EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was reloaded.")
         loading = true
         let locked = editor.readOnly
         editor.readOnly = false
@@ -547,9 +547,9 @@ import AppKit
         loading = false
         guard !languageResolved else { return }
         languageResolved = true
-        if let app = NSApp.delegate as? AppDelegate,
-            let id = app.languages.detect(filename: fileURL?.lastPathComponent ?? "", text: decoded.text),
-            app.languages.applyToDocument(identifier: id, through: editor)
+        if let app = EditorServices.current,
+            let id = app.languages?.detect(filename: fileURL?.lastPathComponent ?? "", text: decoded.text),
+            app.languages?.applyToDocument(identifier: id, through: editor) == true
         {
             languageIdentifier = id
         }
