@@ -84,9 +84,7 @@ final class MacroController: NSObject, NSMenuDelegate {
                         raw["name"] as? String ?? "An editing action (Scintilla message \(raw["message"] ?? "unknown"))"
                     throw MacroError.invalid("\(name) is not recordable yet. No partial macro will be saved.")
                 }
-                let data = try JSONSerialization.data(withJSONObject: raw)
-                let step = try JSONDecoder().decode(RecordedMacro.Step.self, from: data)
-                try step.validate()
+                let step = try RecordedMacro.Step(bridgeStep: raw)
                 guard self.recorded.count < 10000 else { throw MacroError.invalid("Recording exceeded 10000 steps.") }
                 self.recorded.append(step)
             } catch {
@@ -169,14 +167,14 @@ final class MacroController: NSObject, NSMenuDelegate {
     /// A find that did not match changed nothing and would stop playback, so it is left out (F68).
     func recordFind(text: String, matchCase: Bool, backwards: Bool, matched: Bool, editor: TTEditor) {
         guard matched else { return }
-        append(.init(kind: .findLiteral, text: text, matchCase: matchCase, backwards: backwards), editor: editor)
+        append(.findLiteral(text: text, matchCase: matchCase, backwards: backwards), editor: editor)
     }
     func recordSearch(_ search: RecordedMacro.Search, editor: TTEditor) {
-        append(.init(kind: .search, search: search), editor: editor)
+        append(.search(search), editor: editor)
     }
     /// The bridge's target-based replaceSelection is not SCN_MACRORECORD text input.
     func recordReplace(text: String, editor: TTEditor) {
-        append(.init(kind: .replaceSelection, text: text), editor: editor)
+        append(.replaceSelection(text), editor: editor)
     }
     private func append(_ step: RecordedMacro.Step, editor: TTEditor) {
         guard recordingEditor != nil, !playing, captureError == nil else { return }
@@ -456,24 +454,22 @@ private final class MacroPlayback {
                 throw MacroError.invalid("Macro stopped at the 100000-step limit. Prior edits remain undoable.")
             }
             let step = macro.steps[index]
-            switch step.kind {
-            case .search:
+            switch step {
+            case .search(let search):
                 guard let searchPlayback else {
                     throw MacroError.invalid("Search playback is not available. Prior edits remain undoable.")
                 }
-                try searchPlayback(step.search!, editor)
-            case .findLiteral:
-                guard editor.find(step.text!, matchCase: step.matchCase!, backwards: step.backwards!) else {
+                try searchPlayback(search, editor)
+            case .findLiteral(let text, let matchCase, let backwards):
+                guard editor.find(text, matchCase: matchCase, backwards: backwards) else {
                     throw MacroError.invalid("Macro stopped: literal find did not match. Prior edits remain undoable.")
                 }
-            case .replaceSelection:
-                guard editor.replaceSelection(step.text!) else {
+            case .replaceSelection(let text):
+                guard editor.replaceSelection(text) else {
                     throw MacroError.invalid("The editor rejected a macro step. Prior edits remain undoable.")
                 }
             case .insertText, .command:
-                let data = try JSONEncoder().encode(step)
-                let dictionary = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-                guard editor.executeMacroStep(dictionary) else {
+                guard let dictionary = step.bridgeStep, editor.executeMacroStep(dictionary) else {
                     throw MacroError.invalid("The editor rejected a macro step. Prior edits remain undoable.")
                 }
             }

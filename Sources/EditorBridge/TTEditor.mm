@@ -238,6 +238,21 @@ static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
     }; });
     return map;
 }
+/// Canonical recorded name for each allowed message, built once rather than scanned per key.
+/// indent/unindent are playback-only aliases; only tab/backTab belong to the recording table.
+static NSDictionary<NSNumber *, NSString *> *TTMacroNamesByMessage() {
+    static NSDictionary<NSNumber *, NSString *> *names;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSMutableDictionary *reverse = [NSMutableDictionary dictionary];
+        for (NSString *name in [TTMacroCommands().allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+            NSNumber *message = TTMacroCommands()[name];
+            if (!reverse[message]) reverse[message] = name;
+        }
+        names = [reverse copy];
+    });
+    return names;
+}
 /// A name the person can recognise for an action that cannot be recorded.
 static NSString *TTUnrecordableName(unsigned int message) {
     switch (message) {
@@ -1375,11 +1390,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
             NSString *text = TTStringFromUTF8(utf8, std::strlen(utf8));
             if (text.length) step = @{@"kind":@"insertText", @"text":text};
         } else {
-            for (NSString *name in TTMacroCommands()) {
-                if (TTMacroCommands()[name].unsignedIntValue == notification->message) {
-                    step = @{@"kind":@"command", @"command":name}; break;
-                }
-            }
+            NSString *name = TTMacroNamesByMessage()[@(notification->message)];
+            if (name) step = @{@"kind":@"command", @"command":name};
         }
         [self reportMacroStep:step ?: TTUnrecordableStep(notification->message)];
     }

@@ -769,12 +769,11 @@ extension DocumentChecks {
             let macro = RecordedMacro(
                 id: idA, name: "Golden macro",
                 steps: [
-                    .init(kind: .insertText, text: "caf\u{E9}"), .init(kind: .command, command: "lineEnd"),
-                    .init(kind: .findLiteral, text: "x", matchCase: true, backwards: false),
-                    .init(kind: .replaceSelection, text: "y"),
-                    .init(
-                        kind: .search,
-                        search: .init(
+                    .insertText("caf\u{E9}"), .command("lineEnd"),
+                    .findLiteral(text: "x", matchCase: true, backwards: false),
+                    .replaceSelection("y"),
+                    .search(
+                        .init(
                             query: "a+", replacement: "b", mode: 2, matchCase: true, wholeWord: false,
                             dotMatchesNewline: false, wrap: true, action: "replaceAll"))
                 ])

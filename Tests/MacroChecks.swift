@@ -181,8 +181,8 @@ import Foundation
             try key(down, code: 125, [.numericPad, .function])
             let prefix = try requireValue(try controller.finishRecording(), "fixture: the prefix recording is saveable")
             check(
-                prefix.steps.first == .init(kind: .command, command: "vcHome")
-                    && prefix.steps.last == .init(kind: .command, command: "lineDown")
+                prefix.steps.first == .command("vcHome")
+                    && prefix.steps.last == .command("lineDown")
                     && prefix.steps.compactMap(\.text).joined() == "// " && editor.text == "// one\ntwo\nthree"
                     && reasons.isEmpty, "Home, typing and Down record as vcHome, the typed text and lineDown")
             load(lines, caret: 2)
@@ -216,7 +216,8 @@ import Foundation
             check(refused.isEmpty, "every command a macro file may name is accepted by the bridge")
             for name in RecordedMacro.Step.commands.sorted() {
                 rejects("a \(name) step carrying text is refused by validation") {
-                    try RecordedMacro.Step(kind: .command, text: "x", command: name).validate()
+                    let json = "{\"kind\":\"command\",\"text\":\"x\",\"command\":\"\(name)\"}"
+                    _ = try JSONDecoder().decode(RecordedMacro.Step.self, from: Data(json.utf8))
                 }
             }
             // No message number or parameter from a file reaches Scintilla.
@@ -391,6 +392,28 @@ import Foundation
             split.onFocus = nil
             splitWindow.contentView = nil
             reasons = []
+            // Audit27 pre-consolidation characterization, using valid legacy payload sizes.
+            let longQuery = String(repeating: "q", count: 65_537)
+            load(longQuery, caret: 0)
+            check(
+                editor.find(longQuery, matchCase: true, backwards: false),
+                "legacy literal find accepts a 65,537-unit query")
+            var limited = SearchOptions()
+            limited.query = longQuery
+            rejects("shared engine explicitly rejects that legacy query", message: "64 Ki") {
+                _ = try SearchCore.search(longQuery, options: limited)
+            }
+            for (text, query) in [("İ i", "i"), ("é e\u{301}", "é"), ("Σ σ ς", "σ"), ("Straße STRASSE", "ss")] {
+                load(text, caret: 0)
+                let legacy = editor.find(query, matchCase: false, backwards: false)
+                var shared = SearchOptions()
+                shared.query = query
+                let first = try SearchCore.search(text, options: shared).hits.first
+                let bytes = first.flatMap { SearchCore.byteRange($0.range, in: text) }
+                print(
+                    "CHARACTERIZE literal \(query.debugDescription) in \(text.debugDescription): legacy=\(legacy ? "\(editor.selectionStart):\(editor.selectionEnd)" : "none") shared=\(bytes.map { "\($0.location):\(NSMaxRange($0))" } ?? "none")"
+                )
+            }
             // Application-layer find and replace change the selection and the text outside Scintilla's
             // recording and are recorded by the caller afterwards; they must stay recordable.
             load("egg and egg", caret: 0)
@@ -401,8 +424,8 @@ import Foundation
             let literal = try controller.finishRecording()
             check(
                 literal?.steps == [
-                    .init(kind: .findLiteral, text: "egg", matchCase: true, backwards: false),
-                    .init(kind: .replaceSelection, text: "milk")
+                    .findLiteral(text: "egg", matchCase: true, backwards: false),
+                    .replaceSelection("milk")
                 ] && editor.text == "milk and egg" && reasons.isEmpty,
                 "a live recording keeps exactly the literal find and the replacement made through the application")
 
@@ -413,7 +436,7 @@ import Foundation
             let missed = editor.find("absent", matchCase: false, backwards: false)
             controller.recordFind(text: "absent", matchCase: false, backwards: false, matched: missed, editor: editor)
             check(
-                try !missed && controller.finishRecording()?.steps == [.init(kind: .command, command: "charRight")],
+                try !missed && controller.finishRecording()?.steps == [.command("charRight")],
                 "a literal find that did not match is left out of the recording")
             controller.startRecording()
             controller.recordFind(text: "absent", matchCase: false, backwards: false, matched: false, editor: editor)
@@ -572,7 +595,7 @@ import Foundation
 
             // F222: until-end compares the caret with the byte length, never a copy of the document.
             let advance = RecordedMacro(
-                id: UUID(), name: "Advance", steps: [.init(kind: .command, command: "charRight")])
+                id: UUID(), name: "Advance", steps: [.command("charRight")])
             load("é\n👩🏽‍💻\r\nz", caret: 0)
             try controller.play(advance, on: editor, untilEnd: true)
             check(
@@ -581,7 +604,7 @@ import Foundation
             let rows = 20000
             load(String(repeating: String(repeating: "x", count: 149) + "\n", count: rows), caret: 0)
             let lineDown = RecordedMacro(
-                id: UUID(), name: "Down", steps: [.init(kind: .command, command: "lineDown")])
+                id: UUID(), name: "Down", steps: [.command("lineDown")])
             let scale = max(1, Double(ProcessInfo.processInfo.environment["TEXTTANK_PERF_BUDGET_SCALE"] ?? "") ?? 1)
             let started = ProcessInfo.processInfo.systemUptime
             try controller.play(lineDown, on: editor, untilEnd: true)
@@ -599,17 +622,48 @@ import Foundation
             var macro = RecordedMacro(
                 id: id, name: "My edit",
                 steps: [
-                    .init(kind: .insertText, text: "½ café 👩🏽‍💻\0\r\n"),
-                    .init(kind: .command, command: "charLeft"),
-                    .init(kind: .findLiteral, text: "$()", matchCase: true, backwards: true),
-                    .init(kind: .replaceSelection, text: "2 eggs")
+                    .insertText("½ café 👩🏽‍💻\0\r\n"),
+                    .command("charLeft"),
+                    .findLiteral(text: "$()", matchCase: true, backwards: true),
+                    .replaceSelection("2 eggs")
                 ])
+            for raw: [String: Any] in [
+                ["kind": "command", "command": "SCI_SETDOCPOINTER"],
+                ["kind": "command", "command": "undo"],
+                ["kind": "command", "command": "charLeft", "text": "x"],
+                ["kind": "insertText", "text": 7],
+                ["kind": "insertText", "text": "x", "matchCase": false],
+                ["kind": "search", "search": [:]], ["kind": "unsupported"]
+            ] {
+                rejects("direct captured dictionary refuses malformed or unsafe actions") {
+                    _ = try RecordedMacro.Step(bridgeStep: raw)
+                }
+            }
+            let direct = try RecordedMacro.Step(bridgeStep: ["kind": "insertText", "text": "é\0e\u{301}", "future": 7])
+            check(
+                direct.text?.utf8.elementsEqual("é\0e\u{301}".utf8) == true,
+                "direct capture preserves composed/decomposed Unicode and NUL bytes")
+            // Audit27: freeze the legacy wire bytes before replacing the optional payload model.
+            let goldenBytes = try Data(
+                contentsOf: TestPaths.fixtures.appendingPathComponent("persistence/MacroLibrary.json"))
+            check(
+                try MacroLibrary.decode(goldenBytes).encoded() == goldenBytes,
+                "legacy macro encoder preserves golden bytes")
+            for json in [
+                #"{"kind":"insertText","text":"x","future":17}"#,
+                #"{"kind":"replaceSelection","text":""}"#,
+                #"{"kind":"findLiteral","text":"é","matchCase":false,"backwards":true,"search":null}"#
+            ] {
+                let step = try JSONDecoder().decode(RecordedMacro.Step.self, from: Data(json.utf8))
+                try step.validate()
+                check(true, "legacy optional omissions, null and unknown keys stay readable")
+            }
             let library = MacroLibrary(macros: [macro])
             let data = try library.encoded()
             check(try MacroLibrary.decode(data) == library, "capture data exact Unicode/NUL and find params roundtrip")
             Checks.section("F149 bounded macro libraries") {
                 var large = macro
-                large.steps = [.init(kind: .insertText, text: String(repeating: "x", count: 32 * 1024 * 1024))]
+                large.steps = [.insertText(String(repeating: "x", count: 32 * 1024 * 1024))]
                 let largeLibrary = MacroLibrary(macros: [large])
                 let oversized = try JSONEncoder().encode(largeLibrary)
                 rejects("F149 the macro reader refuses a valid library over 32 MiB", message: "32 MiB") {
@@ -638,16 +692,20 @@ import Foundation
             invalid.version = 2
             rejects("unknown version", message: "requires version 1") { try invalid.validate() }
             invalid = macro
-            invalid.steps = [.init(kind: .command, command: "undo")]
+            invalid.steps = [.command("undo")]
             rejects("undo command cannot escape grouped replay", message: "Unrecognized or unsafe macro command") {
                 try invalid.validate()
             }
-            invalid.steps = [.init(kind: .findLiteral, text: "", matchCase: false, backwards: false)]
+            invalid.steps = [.findLiteral(text: "", matchCase: false, backwards: false)]
             rejects("empty find") { try invalid.validate() }
-            invalid.steps = [.init(kind: .findLiteral, text: "needle")]
-            rejects("missing captured find parameters") { try invalid.validate() }
-            invalid.steps = [.init(kind: .insertText, text: "x", command: "cut")]
-            rejects("incompatible parameters") { try invalid.validate() }
+            for json in [
+                #"{"kind":"findLiteral","text":"needle"}"#,
+                #"{"kind":"insertText","text":"x","command":"cut"}"#
+            ] {
+                rejects("missing or incompatible captured parameters") {
+                    _ = try JSONDecoder().decode(RecordedMacro.Step.self, from: Data(json.utf8))
+                }
+            }
             rejects("duplicate macro ID", message: "appears more than once") {
                 try MacroLibrary(macros: [macro, macro]).validate()
             }
@@ -741,8 +799,8 @@ import Foundation
                 let edit = RecordedMacro(
                     id: UUID(), name: "Literal replacement",
                     steps: [
-                        .init(kind: .findLiteral, text: "egg", matchCase: true, backwards: false),
-                        .init(kind: .replaceSelection, text: "milk")
+                        .findLiteral(text: "egg", matchCase: true, backwards: false),
+                        .replaceSelection("milk")
                     ])
                 try controller.play(edit, on: editor, repeats: 2)
                 check(editor.text == "café milk milk 👩🏽‍💻", "native literal find/replace repeat captures parameters")
@@ -752,8 +810,8 @@ import Foundation
                 let failing = RecordedMacro(
                     id: UUID(), name: "Stop on missing search",
                     steps: [
-                        .init(kind: .insertText, text: "changed"),
-                        .init(kind: .findLiteral, text: "absent", matchCase: false, backwards: false)
+                        .insertText("changed"),
+                        .findLiteral(text: "absent", matchCase: false, backwards: false)
                     ])
                 rejects("native missing search aborts") { try controller.play(failing, on: editor) }
                 check(editor.text == "changed", "native earlier edit retained for explicit Undo")
@@ -824,7 +882,7 @@ import Foundation
                 _ = editor.setSelectionAnchor(0, caret: 0)
                 let lockedRevision = editor.revision
                 let replacing = RecordedMacro(
-                    id: UUID(), name: "Replace", steps: [.init(kind: .replaceSelection, text: "x")])
+                    id: UUID(), name: "Replace", steps: [.replaceSelection("x")])
                 editor.readOnly = true
                 rejects(
                     "playback into a read-only document states that it is read-only",
@@ -852,17 +910,17 @@ import Foundation
                 editor.resetUndoHistory()
                 _ = editor.setSelectionAnchor(0, caret: 0)
                 let advance = RecordedMacro(
-                    id: UUID(), name: "Advance", steps: [.init(kind: .command, command: "charRight")])
+                    id: UUID(), name: "Advance", steps: [.command("charRight")])
                 try controller.play(advance, on: editor, untilEnd: true)
                 check(editor.selectionCaret == editor.text.utf8.count, "until-end playback reaches document boundary")
                 _ = editor.setSelectionAnchor(0, caret: 0)
                 let stalled = RecordedMacro(
-                    id: UUID(), name: "No movement", steps: [.init(kind: .command, command: "home")])
+                    id: UUID(), name: "No movement", steps: [.command("home")])
                 rejects("until-end no-progress guard") { try controller.play(stalled, on: editor, untilEnd: true) }
                 editor.text = "original"
                 editor.resetUndoHistory()
                 _ = editor.setSelectionAnchor(0, caret: 0)
-                let typing = RecordedMacro(id: UUID(), name: "Typing", steps: [.init(kind: .insertText, text: "x")])
+                let typing = RecordedMacro(id: UUID(), name: "Typing", steps: [.insertText("x")])
                 var calls = 0
                 rejects("cancel playback between steps") {
                     try controller.play(
@@ -879,7 +937,7 @@ import Foundation
                     query: "(egg)", replacement: "$1s", mode: 2, matchCase: true, wholeWord: false,
                     dotMatchesNewline: false, wrap: true, action: "replaceAll")
                 let searchMacro = RecordedMacro(
-                    id: UUID(), name: "Captured search", steps: [.init(kind: .search, search: search)])
+                    id: UUID(), name: "Captured search", steps: [.search(search)])
                 check(
                     try MacroLibrary.decode(MacroLibrary(macros: [searchMacro]).encoded()).macros[0] == searchMacro,
                     "all regex parameters roundtrip")
@@ -914,7 +972,7 @@ import Foundation
                     dotMatchesNewline: false, wrap: false, action: "next")
                 let deleteTodo = RecordedMacro(
                     id: UUID(), name: "Delete found lines",
-                    steps: [.init(kind: .search, search: findNext), .init(kind: .command, command: "deleteLine")])
+                    steps: [.search(findNext), .command("deleteLine")])
                 for untilEnd in [false, true] {
                     let label = untilEnd ? "until-end" : "repeat-500"
                     editor.text = todoSource
