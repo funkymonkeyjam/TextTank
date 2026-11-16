@@ -5,6 +5,8 @@ import AppKit
 import EditorBridge
 import NativeSearch
 import Darwin
+@MainActor private final class SessionCancelState { var pressed = false, timedOut = false }
+
 @main struct WorkspaceBrowserChecks {
     @MainActor static func main() {
         Checks.run("WorkspaceBrowserChecks") {
@@ -556,6 +558,41 @@ import Darwin
             check(
                 WorkspaceController.checkOriginals(of: checkedSession)?.map(\.status) == [.unchanged, .missing],
                 "Check Originals returns each original's status from the background inspection")
+            // Hold enough bounded inspection work for the real Cancel action to interrupt it.
+            // Repeated references are inert session data, all pointing at our owned fixture.
+            let cancellableSession = WorkspaceSession(
+                id: UUID(), name: "Cancelled native inspection",
+                documents: (0..<1000).map { _ in
+                    SessionDocument(
+                        id: UUID(), originalURL: polled, text: "", format: FileFormat(), isDirty: false,
+                        selection: SessionSelection(anchorByte: 0, caretByte: 0),
+                        originalSHA256: String(repeating: "0", count: 64))
+                })
+            let cancelState = SessionCancelState(), cancelDeadline = Date().addingTimeInterval(3)
+            let cancelTimer = Timer(timeInterval: 0.001, repeats: true) { _ in
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated {
+                    guard !cancelState.pressed else { return }
+                    if Date() > cancelDeadline {
+                        cancelState.timedOut = true
+                        NSApp.abortModal()
+                        return
+                    }
+                    guard let content = NSApp.modalWindow?.contentView,
+                        let button = descendants(content).compactMap({ $0 as? NSButton }).first(where: {
+                            $0.title == "Cancel"
+                        })
+                    else { return }
+                    cancelState.pressed = true
+                    button.performClick(nil)
+                }
+            }
+            RunLoop.main.add(cancelTimer, forMode: .modalPanel)
+            let cancelledInspection = WorkspaceController.checkOriginals(of: cancellableSession)
+            cancelTimer.invalidate()
+            check(
+                cancelState.pressed && !cancelState.timedOut && cancelledInspection == nil && NSApp.modalWindow == nil,
+                "F316 actual Check Originals Cancel returns no partial result and closes its modal")
             check(listed() > 0, "fixture: the panel lists documents before it closes")
             controller.window?.close()
             check(listed() == 0, "a closed panel holds no documents")
