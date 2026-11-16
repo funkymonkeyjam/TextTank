@@ -79,7 +79,7 @@ The user's `LanguageProfiles.json` is the one store that is not a whole value: i
 
 `Tests/Fixtures/persistence/` holds one file per format as written by the build of 15 November 2026. The "persisted format golden fixtures" section of document-checks decodes each one through the production reader and compares every value, so a field added without a decoder for old files fails acceptance. Do not rewrite those files to make a check pass; add a new fixture beside them when a format gains a version.
 
-## Reminders export journal
+## Library codecs and advanced JSON editing
 
 The advanced Automation, Macro and Language JSON editors share `JSONLibraryEditor`
 in `Sources/UI/`. Its text, import, export and optional example actions operate on
@@ -98,6 +98,8 @@ gate, validation, byte capacity and diagnostic vocabulary. Encoding validates an
 checks the same capacity used by decoding. The three libraries retain pretty,
 sorted, unescaped-slash JSON; portable rule files retain their escaped-slash
 format. No stored keys or version-1 fixture bytes change.
+
+## Reminders export journal
 
 Each export batch is one version-1 JSON file in `ReminderExports`. A row is recorded as uncertain, and that record is synced, before the row is handed to Reminders; it becomes confirmed or failed only afterwards, and an uncertain row is never resent automatically.
 
