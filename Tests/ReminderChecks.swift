@@ -374,7 +374,7 @@ import Darwin
                 if case ReminderConnectorError.journalFailed(let batch, _) = $0 { return batch }
                 return nil
             }
-            func failure(_ work: () async throws -> Void) async -> Error? {
+            @MainActor func failure(_ work: @MainActor () async throws -> Void) async -> Error? {
                 do {
                     try await work()
                     return nil

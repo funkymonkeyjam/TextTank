@@ -163,9 +163,9 @@ import Foundation
         let leader = ConfiguredRun(
             name: "Leader", executable: "/bin/zsh", arguments: ["-c", "echo $$; exec /bin/sleep 30"], shellMode: true)
         let quitting = RunExecution(), done = DispatchSemaphore(value: 0)
-        var quitResult: Result<RunResult, Error>?
+        let quitResult = QuitRunOutcome()
         DispatchQueue.global().async {
-            quitResult = Result { try quitting.execute(leader) }
+            quitResult.set(Result { try quitting.execute(leader) })
             done.signal()
         }
         Thread.sleep(forTimeInterval: 0.3)
@@ -173,7 +173,7 @@ import Foundation
         let waited = quitting.cancelAndWait(timeout: 5), took = Date().timeIntervalSince(asked)
         check(waited && took < 2, "F116 cancel and wait returns once the command has stopped")
         _ = done.wait(timeout: .now() + 5)
-        let quit = try requireValue(try quitResult?.get(), "the cancelled run returned a result")
+        let quit = try requireValue(try quitResult.value?.get(), "the cancelled run returned a result")
         check(quit.reason == .cancelled, "F116 the stopped command reports cancelled")
         let leaderPid = try requireValue(
             pid_t(String(decoding: quit.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -306,5 +306,24 @@ import Foundation
         check(
             long.summary().count <= 301 && long.summary().hasSuffix("…") && long.summary().hasPrefix("/usr/bin/printf"),
             "F137 the summary is bounded for a 1 MiB argument")
+    }
+}
+
+/// Only this fixture's typed result crosses the worker/main wait boundary. Its complete
+/// mutable state is locked; displaced errors are released after unlock.
+private final class QuitRunOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<RunResult, Error>?
+    func set(_ next: Result<RunResult, Error>) {
+        lock.lock()
+        let displaced = result
+        result = next
+        lock.unlock()
+        withExtendedLifetime(displaced) {}
+    }
+    var value: Result<RunResult, Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return result
     }
 }

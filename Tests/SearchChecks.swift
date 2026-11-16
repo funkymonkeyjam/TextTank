@@ -608,8 +608,7 @@ final class CancelAfterPolls: TTSearchCancellation, @unchecked Sendable {
                 "bulk-copied input keeps every surrogate pair and offset")
             // Searches run on background tasks, so two can compile and match at once. Before Boost's
             // locks were enabled this aborted the process inside its traits cache.
-            let mismatches = NSLock()
-            var wrong = 0
+            let mismatches = SearchMismatchCounter()
             DispatchQueue.concurrentPerform(iterations: 16) { worker in
                 var concurrent = SearchOptions()
                 concurrent.mode = .regularExpression
@@ -617,13 +616,13 @@ final class CancelAfterPolls: TTSearchCancellation, @unchecked Sendable {
                     concurrent.query = turn % 2 == 0 ? "a+\(worker % 3)" : "b+"
                     let found = (try? SearchCore.search("aa\(worker % 3) bb", options: concurrent).hits.count) ?? -1
                     if found != 1 {
-                        mismatches.lock()
-                        wrong += 1
-                        mismatches.unlock()
+                        mismatches.record()
                     }
                 }
             }
-            check(wrong == 0, "regex searches on sixteen threads at once compile, share the cache and match correctly")
+            check(
+                mismatches.count == 0,
+                "regex searches on sixteen threads at once compile, share the cache and match correctly")
             // F162: one cursor converts offsets for in-document and folder search alike.
             var cursor = SearchCore.UTFCursor("é\r\n🥑x\ry", tracksLines: true)
             check(
@@ -660,5 +659,21 @@ final class CancelAfterPolls: TTSearchCancellation, @unchecked Sendable {
                 "a zero-width match just chosen is not chosen again")
             Checks.summary { "PASS SearchChecks: \(Checks.count) assertions" }
         }
+    }
+}
+
+/// The complete shared mismatch count is private and lock-protected.
+private final class SearchMismatchCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func record() {
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
     }
 }
