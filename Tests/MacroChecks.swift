@@ -436,7 +436,9 @@ import Foundation
             var refused: [String] = []
             for name in RecordedMacro.Step.commands.sorted() where usePasteboard || !clipboard.contains(name) {
                 load("alpha beta\ngamma", caret: 3)
-                if !editor.executeMacroStep(["kind": "command", "command": name]) { refused.append(name) }
+                if !editor.executeMacroStep(TTMacroAction.command(TTEditorCommandIdentifier(rawValue: name))) {
+                    refused.append(name)
+                }
             }
             if !refused.isEmpty { print("commands the bridge refused: \(refused)") }
             check(refused.isEmpty, "every command a macro file may name is accepted by the bridge")
@@ -926,6 +928,12 @@ import Foundation
                     .findLiteral(text: "$()", matchCase: true, backwards: true),
                     .replaceSelection("2 eggs")
                 ])
+            func decodedWireStep(_ raw: [String: Any]) throws -> RecordedMacro.Step {
+                let bytes = try JSONSerialization.data(withJSONObject: raw)
+                let step = try JSONDecoder().decode(RecordedMacro.Step.self, from: bytes)
+                try step.validate()
+                return step
+            }
             for raw: [String: Any] in [
                 ["kind": "command", "command": "SCI_SETDOCPOINTER"],
                 ["kind": "command", "command": "undo"],
@@ -934,14 +942,20 @@ import Foundation
                 ["kind": "insertText", "text": "x", "matchCase": false],
                 ["kind": "search", "search": [:]], ["kind": "unsupported"]
             ] {
-                rejects("direct captured dictionary refuses malformed or unsafe actions") {
-                    _ = try RecordedMacro.Step(bridgeStep: raw)
+                rejects("persisted wire refuses malformed or unsafe actions") {
+                    _ = try decodedWireStep(raw)
                 }
             }
-            let direct = try RecordedMacro.Step(bridgeStep: ["kind": "insertText", "text": "é\0e\u{301}", "future": 7])
+            let direct = try decodedWireStep(["kind": "insertText", "text": "é\0e\u{301}", "future": 7])
             check(
                 direct.text?.utf8.elementsEqual("é\0e\u{301}".utf8) == true,
-                "direct capture preserves composed/decomposed Unicode and NUL bytes")
+                "persisted wire preserves composed/decomposed Unicode and NUL bytes")
+            let symbolic = try decodedWireStep([
+                "kind": "command", "command": "charRight", "message": 2004, "wParam": 7, "lParam": 9
+            ])
+            check(
+                symbolic == .command("charRight"),
+                "wire message numbers remain ignored data; only the validated symbolic command is retained")
             // Audit27: freeze the legacy wire bytes before replacing the optional payload model.
             let goldenBytes = try Data(
                 contentsOf: TestPaths.fixtures.appendingPathComponent("persistence/MacroLibrary.json"))

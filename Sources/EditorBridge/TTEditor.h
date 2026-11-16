@@ -26,6 +26,24 @@ typedef NS_ENUM(NSInteger, TTLineEndingMode) {
     TTLineEndingModeCR NS_SWIFT_NAME(TTLineEndingMode.cr) = 1,
     TTLineEndingModeLF NS_SWIFT_NAME(TTLineEndingMode.lf) = 2,
 };
+typedef NS_ENUM(NSInteger, TTMacroActionKind) {
+    TTMacroActionKindInsertText NS_SWIFT_NAME(TTMacroActionKind.insertText),
+    TTMacroActionKindCommand NS_SWIFT_NAME(TTMacroActionKind.command),
+    TTMacroActionKindUnsupported NS_SWIFT_NAME(TTMacroActionKind.unsupported),
+};
+/// A native recording/playback value. Unsupported messages are diagnostics, never dispatch inputs.
+__attribute__((objc_subclassing_restricted))
+@interface TTMacroAction : NSObject <NSCopying>
+@property(nonatomic, readonly) TTMacroActionKind kind;
+@property(nonatomic, readonly, copy, nullable) NSString *text;
+@property(nonatomic, readonly, copy, nullable) TTEditorCommandIdentifier command;
+@property(nonatomic, readonly, copy, nullable) NSString *name;
+@property(nonatomic, readonly) NSUInteger message;
++ (instancetype)insertText:(NSString *)text NS_SWIFT_NAME(insertText(_:));
++ (instancetype)command:(TTEditorCommandIdentifier)command NS_SWIFT_NAME(command(_:));
++ (instancetype)unsupported:(NSString *)name message:(NSUInteger)message NS_SWIFT_NAME(unsupported(_:message:));
+- (instancetype)init NS_UNAVAILABLE;
+@end
 /// A UTF-8 byte span, distinct from Foundation NSRange values used for UTF-16 search.
 /// Construction does not assert document bounds; the editor validates the complete batch.
 __attribute__((objc_subclassing_restricted))
@@ -157,18 +175,18 @@ __attribute__((objc_subclassing_restricted))
 @property(nonatomic, copy, nullable) void (^onChange)(void);
 @property(nonatomic, copy, nullable) void (^onFocus)(void);
 + (NSArray<NSString *> *)availableLanguages;
-/// Called while recording with one step per recordable action: kind "insertText" or "command".
-/// Anything that changed the text or the selection and cannot be replayed arrives as kind
-/// "unsupported" with a "name" for the person (a mouse click or drop, typing in Overtype, a
+/// Called while recording with one typed action per recordable insertion or command.
+/// Anything that changed the text or the selection and cannot be replayed arrives with
+/// TTMacroActionKindUnsupported and a diagnostic name (a mouse click or drop, typing in Overtype, a
 /// completion list, native Undo, an unmapped Scintilla message); the recording must be discarded.
-@property(nonatomic, copy, nullable) void (^onMacroStep)(NSDictionary<NSString *, id> *step);
+@property(nonatomic, copy, nullable) void (^onMacroStep)(TTMacroAction *step);
 /// The symbolic command names a recorded step may carry; the only names playback dispatches.
 + (NSArray<TTEditorCommandIdentifier> *)macroCommandNames;
 /// Immutable canonical recording map; playback-only aliases are deliberately excluded.
 + (NSDictionary<TTEditorCommandIdentifier, NSNumber *> *)macroCommandMessages;
 - (void)startRecording;
 - (void)stopRecording;
-- (BOOL)executeMacroStep:(NSDictionary<NSString *, id> *)step;
+- (BOOL)executeMacroStep:(TTMacroAction *)step;
 - (void)beginUndoGroup;
 - (void)endUndoGroup;
 @property(nonatomic) BOOL wrap;

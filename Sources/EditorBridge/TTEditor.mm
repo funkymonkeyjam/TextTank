@@ -10,6 +10,7 @@
 extern "C" Scintilla::ILexer5 *TextTankCreateUserLexer();
 
 @implementation TTByteRange
++ (BOOL)accessInstanceVariablesDirectly { return NO; }
 - (instancetype)initWithLocation:(NSInteger)location length:(NSInteger)length {
     if ((self=[super init])) { _location=location; _length=length; }
     return self;
@@ -31,7 +32,23 @@ static BOOL TTValidatedByteRange(id candidate, NSUInteger documentLength, NSRang
     return YES;
 }
 
+@interface TTMacroAction ()
+- (instancetype)initWithKind:(TTMacroActionKind)kind text:(NSString * _Nullable)text command:(TTEditorCommandIdentifier _Nullable)command name:(NSString * _Nullable)name message:(NSUInteger)message;
+@end
+@implementation TTMacroAction
++ (BOOL)accessInstanceVariablesDirectly { return NO; }
+- (instancetype)initWithKind:(TTMacroActionKind)kind text:(NSString *)text command:(TTEditorCommandIdentifier)command name:(NSString *)name message:(NSUInteger)message {
+    if ((self=[super init])) { _kind=kind; _text=[text copy]; _command=[command copy]; _name=[name copy]; _message=message; }
+    return self;
+}
++ (instancetype)insertText:(NSString *)text { return [[self alloc] initWithKind:TTMacroActionKindInsertText text:text command:nil name:nil message:0]; }
++ (instancetype)command:(TTEditorCommandIdentifier)command { return [[self alloc] initWithKind:TTMacroActionKindCommand text:nil command:command name:nil message:0]; }
++ (instancetype)unsupported:(NSString *)name message:(NSUInteger)message { return [[self alloc] initWithKind:TTMacroActionKindUnsupported text:nil command:nil name:name message:message]; }
+- (id)copyWithZone:(NSZone *)zone { return self; }
+@end
+
 @implementation TTTextEdit
++ (BOOL)accessInstanceVariablesDirectly { return NO; }
 - (instancetype)initWithRange:(TTByteRange *)range text:(NSString *)text {
     if ((self=[super init])) { _range=range; _text=[text copy]; }
     return self;
@@ -40,6 +57,7 @@ static BOOL TTValidatedByteRange(id candidate, NSUInteger documentLength, NSRang
 @end
 
 @implementation TTSelectionRange
++ (BOOL)accessInstanceVariablesDirectly { return NO; }
 - (instancetype)initWithAnchor:(NSInteger)anchor caret:(NSInteger)caret {
     if ((self=[super init])) { _anchor=anchor; _caret=caret; }
     return self;
@@ -55,6 +73,7 @@ static BOOL TTValidatedByteRange(id candidate, NSUInteger documentLength, NSRang
 - (instancetype)initWithLine:(NSInteger)line column:(NSInteger)column lines:(NSInteger)lines tabWidth:(NSInteger)tabWidth useTabs:(BOOL)useTabs fontSize:(double)fontSize eol:(NSInteger)eol;
 @end
 @implementation TTEditorStatus
++ (BOOL)accessInstanceVariablesDirectly { return NO; }
 - (instancetype)initWithLine:(NSInteger)line column:(NSInteger)column lines:(NSInteger)lines tabWidth:(NSInteger)tabWidth useTabs:(BOOL)useTabs fontSize:(double)fontSize eol:(NSInteger)eol {
     if ((self = [super init])) { _line=line; _column=column; _lines=lines; _tabWidth=tabWidth; _useTabs=useTabs; _fontSize=fontSize; _eol=(TTLineEndingMode)eol; }
     return self;
@@ -109,7 +128,7 @@ static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
 struct TTInteractionState { NSUInteger revision; sptr_t selections, anchor, caret; };
 @interface TTEditor (MacroInteraction)
 - (TTInteractionState)interactionState;
-- (void)reportMacroStep:(NSDictionary<NSString *, id> *)step;
+- (void)reportMacroStep:(TTMacroAction *)step;
 - (void)noteUnrecordedInteractionSince:(TTInteractionState)before;
 @end
 // Every editor that is recording. A split view shares the recorded document, and a drop into it
@@ -419,8 +438,8 @@ static NSString *TTUnrecordableName(unsigned int message) {
         default: return [NSString stringWithFormat:@"An editing action (Scintilla message %u)", message];
     }
 }
-static NSDictionary *TTUnrecordableStep(unsigned int message) {
-    return @{@"kind":@"unsupported", @"message":@(message), @"name":TTUnrecordableName(message)};
+static TTMacroAction *TTUnrecordableStep(unsigned int message) {
+    return [TTMacroAction unsupported:TTUnrecordableName(message) message:message];
 }
 
 NSNotificationName const TTEditorWillRetireNotification = @"TTEditorWillRetireNotification";
@@ -469,6 +488,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @property(nonatomic) BOOL stateNotificationScheduled;
 /// Undo groups this view has open; released in dealloc so a lost view cannot hold callbacks back.
 @property(nonatomic) NSInteger ownGroups;
+- (BOOL)replaceSelectionWithEncodedBytes:(NSData *)data;
 - (void)deliverDeferredChange;
 - (BOOL)undoGroupOpen;
 @property(nonatomic) BOOL cppDefaults;
@@ -1135,7 +1155,10 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (BOOL)replaceSelection:(NSString *)text {
     [self assertThread];
-    NSData *data = TTUTF8(text); if (!data || self.readOnly) return NO;
+    NSData *data = TTUTF8(text); if (data == nil || self.readOnly) return NO;
+    return [self replaceSelectionWithEncodedBytes:data];
+}
+- (BOOL)replaceSelectionWithEncodedBytes:(NSData *)data {
     [self openUndoGroup];
     [_engine message:SCI_TARGETFROMSELECTION];
     const sptr_t start = [_engine message:SCI_GETTARGETSTART];
@@ -1281,11 +1304,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     if (!_macroRecording || !_onMacroStep) return;
     const TTInteractionState now = [self interactionState];
     if (now.revision == before.revision && now.selections == before.selections && now.anchor == before.anchor && now.caret == before.caret) return;
-    [self reportMacroStep:@{@"kind":@"unsupported", @"message":@0, @"name":@"A mouse click, mouse selection or drag and drop"}];
+    [self reportMacroStep:[TTMacroAction unsupported:@"A mouse click, mouse selection or drag and drop" message:0]];
 }
 /// The handler may clear itself while it runs (a discard does), so it is held for the call.
-- (void)reportMacroStep:(NSDictionary<NSString *, id> *)step {
-    void (^handler)(NSDictionary<NSString *, id> *) = _onMacroStep;
+- (void)reportMacroStep:(TTMacroAction *)step {
+    void (^handler)(TTMacroAction *) = _onMacroStep;
     if (handler) handler(step);
 }
 - (void)settlePendingInteraction {
@@ -1332,25 +1355,24 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (void)beginUndoGroup { [self assertThread]; [self openUndoGroup]; }
 - (void)endUndoGroup { [self assertThread]; [self closeUndoGroup]; }
-- (BOOL)executeMacroStep:(NSDictionary<NSString *, id> *)step {
+- (BOOL)executeMacroStep:(TTMacroAction *)step {
     [self assertThread];
-    if (![step isKindOfClass:NSDictionary.class]) return NO;
-    id kind = step[@"kind"];
-    if (![kind isKindOfClass:NSString.class]) return NO;
-    if ([kind isEqualToString:@"insertText"]) {
-        id text = step[@"text"];
-        if (![text isKindOfClass:NSString.class] || self.selectionCount != 1) return NO;
-        [self noteStateChange];
-        return [self replaceSelection:text];
-    }
-    if ([kind isEqualToString:@"command"]) {
-        id command = step[@"command"];
-        if (![command isKindOfClass:NSString.class]) return NO;
-        // Only symbolic editing commands can reach Scintilla; no imported message
-        // number, pointer, executable, or arbitrary parameter is ever dispatched.
-        NSNumber *message = TTReplayCommands()[command];
-        if (message == nil) return NO;
-        [_engine message:message.unsignedIntValue]; [self noteStateChange]; return YES;
+    if (![step isKindOfClass:TTMacroAction.class]) return NO;
+    switch (step.kind) {
+        case TTMacroActionKindInsertText: {
+            if (![step.text isKindOfClass:NSString.class] || self.selectionCount!=1 || self.readOnly) return NO;
+            NSData *bytes=TTUTF8(step.text); if (bytes==nil) return NO;
+            [self noteStateChange];
+            return [self replaceSelectionWithEncodedBytes:bytes];
+        }
+        case TTMacroActionKindCommand: {
+            if (![step.command isKindOfClass:NSString.class]) return NO;
+            // Only fixed symbolic commands dispatch. Diagnostic messages and imported numbers do not.
+            NSNumber *message=TTReplayCommands()[step.command];
+            if (message==nil) return NO;
+            [_engine message:message.unsignedIntValue]; [self noteStateChange]; return YES;
+        }
+        case TTMacroActionKindUnsupported: return NO;
     }
     return NO;
 }
@@ -1542,16 +1564,16 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     const BOOL viewOnly = code == SCN_MACRORECORD && (notification->message == SCI_LINESCROLLUP || notification->message == SCI_LINESCROLLDOWN ||
         notification->message == SCI_SCROLLTOSTART || notification->message == SCI_SCROLLTOEND || notification->message == SCI_VERTICALCENTRECARET);
     if (code == SCN_MACRORECORD && _onMacroStep && !viewOnly) {
-        NSDictionary *step = nil;
+        TTMacroAction *step = nil;
         // G371: a typed character is replayed as an insertion, which is not what Overtype did.
         if (notification->message == SCI_REPLACESEL && [_engine message:SCI_GETOVERTYPE]) {
         } else if (notification->message == SCI_REPLACESEL && notification->lParam && self.selectionCount == 1) {
             const char *utf8 = (const char *)notification->lParam;
             NSString *text = TTStringFromUTF8(utf8, std::strlen(utf8));
-            if (text.length) step = @{@"kind":@"insertText", @"text":text};
+            if (text.length) step = [TTMacroAction insertText:text];
         } else {
             NSString *name = TTMacroNamesByMessage()[@(notification->message)];
-            if (name) step = @{@"kind":@"command", @"command":name};
+            if (name) step = [TTMacroAction command:name];
         }
         [self reportMacroStep:step ?: TTUnrecordableStep(notification->message)];
     }

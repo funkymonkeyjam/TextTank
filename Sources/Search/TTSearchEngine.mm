@@ -20,9 +20,11 @@
 - (BOOL)cancelled { return _cancelled.load(); }
 @end
 @implementation TTSearchMatch
++ (BOOL)accessInstanceVariablesDirectly { return NO; }
 - (instancetype)initWithRange:(NSRange)range replacement:(NSString *)replacement { if ((self=[super init])) { _range=range; _replacement=[replacement copy]; } return self; }
 @end
 @implementation TTSearchResult
++ (BOOL)accessInstanceVariablesDirectly { return NO; }
 - (instancetype)initWithMatches:(NSArray<TTSearchMatch *> *)matches truncated:(BOOL)truncated { if ((self=[super init])) { _matches=[matches copy]; _truncated=truncated; } return self; }
 @end
 namespace {

@@ -82,14 +82,24 @@ final class MacroController: NSObject, NSMenuDelegate {
         editor.onMacroStep = { [weak self, weak editor] raw in
             guard let self, let editor, self.recordingEditor === editor, !self.playing else { return }
             do {
-                // The bridge reports what it cannot replay; the name is for the person. This kind is
-                // never a Step.Kind, so it cannot arrive through an imported file.
-                if raw["kind"] as? String == "unsupported" {
-                    let name =
-                        raw["name"] as? String ?? "An editing action (Scintilla message \(raw["message"] ?? "unknown"))"
+                let step: RecordedMacro.Step
+                switch raw.kind {
+                case .unsupported:
+                    let name = raw.name ?? "An editing action (Scintilla message \(raw.message))"
                     throw MacroError.invalid("\(name) is not recordable yet. No partial macro will be saved.")
+                case .insertText:
+                    guard let text = raw.text else {
+                        throw MacroError.invalid("Text macro step has invalid parameters.")
+                    }
+                    step = .insertText(text)
+                case .command:
+                    guard let command = raw.command else {
+                        throw MacroError.invalid("Unrecognized or unsafe macro command.")
+                    }
+                    step = .command(command.rawValue)
+                @unknown default: throw MacroError.invalid("Unrecognized captured editing action.")
                 }
-                let step = try RecordedMacro.Step(bridgeStep: raw)
+                try step.validate()
                 guard self.recorded.count < MacroLimits.recordedActions else {
                     throw MacroError.invalid(
                         "Recording exceeded \(Strings.number(MacroLimits.recordedActions)) actions.")
@@ -538,8 +548,13 @@ private final class MacroPlayback {
                 guard editor.replaceSelection(text) else {
                     throw MacroError.invalid("The editor rejected a macro step. Prior edits remain undoable.")
                 }
-            case .insertText, .command:
-                guard let dictionary = step.bridgeStep, editor.executeMacroStep(dictionary) else {
+            case .insertText(let text):
+                guard editor.executeMacroStep(TTMacroAction.insertText(text)) else {
+                    throw MacroError.invalid("The editor rejected a macro step. Prior edits remain undoable.")
+                }
+            case .command(let command):
+                guard editor.executeMacroStep(TTMacroAction.command(TTEditorCommandIdentifier(rawValue: command)))
+                else {
                     throw MacroError.invalid("The editor rejected a macro step. Prior edits remain undoable.")
                 }
             }

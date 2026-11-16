@@ -115,36 +115,7 @@ struct RecordedMacro: Codable, Identifiable, Equatable {
             case .search(let search): try c.encode(search, forKey: .search)
             }
         }
-        /// The bridge emits only typed text and whitelisted editing commands. This is deliberately
-        /// narrower than persisted Codable; numeric message IDs and other imported keys never dispatch.
-        init(bridgeStep raw: [String: Any]) throws {
-            func absent(_ key: String) -> Bool { raw[key] == nil || raw[key] is NSNull }
-            guard absent("matchCase"), absent("backwards"), absent("search") else {
-                throw MacroError.invalid("Invalid captured editing parameters.")
-            }
-            switch raw["kind"] as? String {
-            case "insertText":
-                guard let text = raw["text"] as? String, absent("command") else {
-                    throw MacroError.invalid("Text macro step has invalid parameters.")
-                }
-                self = .insertText(text)
-            case "command":
-                guard let command = raw["command"] as? String, absent("text") else {
-                    throw MacroError.invalid("Unrecognized or unsafe macro command.")
-                }
-                self = .command(command)
-            default: throw MacroError.invalid("Unrecognized captured editing action.")
-            }
-            try validate()
-        }
-        /// Only these cases cross the dictionary bridge; legacy find/replace use their migration paths.
-        var bridgeStep: [String: Any]? {
-            switch self {
-            case .insertText(let text): return ["kind": "insertText", "text": text]
-            case .command(let command): return ["kind": "command", "command": command]
-            default: return nil
-            }
-        }
+
     }
 
     var version: Int = 1

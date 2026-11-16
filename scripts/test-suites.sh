@@ -20,7 +20,8 @@ suite_run automation-checks harness/logs/automation-checks.log build/tests/autom
 suite_build "reminder-checks" swiftc Sources/Documents/Strings.swift Sources/Documents/FailureContext.swift Sources/Documents/PrivateFileStore.swift "${SWIFT_BASE[@]}" -o build/tests/reminder-checks Sources/Connectors/RemindersConnector.swift "$SUITE_SUPPORT" Tests/ReminderChecks.swift
 suite_run reminder-checks harness/logs/reminder-checks.log build/tests/reminder-checks
 suite_build "bridge-checks" build_bridge_object
-suite_build "bridge-checks" clang++ "${CXX_BASE[@]}" -I Tests/Support -I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F "$VENDOR_BUILD" -framework Scintilla -framework Cocoa "$BRIDGE_OBJECT" Tests/BridgeChecks.mm "$USER_LEXER_OBJECT" "$LEXILLA_LIBRARY" -Wl,-rpath,"$VENDOR_BUILD" -o build/tests/bridge-checks
+suite_build "bridge-checks" build_search_object
+suite_build "bridge-checks" clang++ "${CXX_BASE[@]}" -I Tests/Support -I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F "$VENDOR_BUILD" -framework Scintilla -framework Cocoa "$BRIDGE_OBJECT" "$SEARCH_OBJECT" Tests/BridgeChecks.mm "$USER_LEXER_OBJECT" "$LEXILLA_LIBRARY" -Wl,-rpath,"$VENDOR_BUILD" -o build/tests/bridge-checks
 suite_run bridge-checks harness/logs/bridge-checks.log build/tests/bridge-checks
 
 suite_script scripts/test-documents.sh

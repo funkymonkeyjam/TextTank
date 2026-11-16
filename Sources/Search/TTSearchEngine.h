@@ -11,11 +11,13 @@ typedef NS_ENUM(NSInteger, TTSearchMode) {
 @property(nonatomic, readonly) BOOL cancelled;
 @end
 /// One match: its UTF-16 range in the searched text and the expanded replacement for it.
+__attribute__((objc_subclassing_restricted))
 @interface TTSearchMatch : NSObject
 @property(nonatomic, readonly) NSRange range;
 @property(nonatomic, readonly, copy) NSString *replacement;
 - (instancetype)init NS_UNAVAILABLE;
 @end
+__attribute__((objc_subclassing_restricted))
 @interface TTSearchResult : NSObject
 @property(nonatomic, readonly, copy) NSArray<TTSearchMatch *> *matches;
 /// YES when the search stopped at maximumMatches with more matches possible.
