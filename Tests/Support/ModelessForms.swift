@@ -7,18 +7,18 @@ import NativeSearch
 
 /// Old dialog checks now drive the actual modeless window after the command returns.
 /// The modal-panel run-loop mode delivers their existing owned timers, not an app-modal session.
-var presentedFormWindow: NSWindow? {
+@MainActor var presentedFormWindow: NSWindow? {
     if let modal = NSApp.modalWindow { return modal }
     var window = FormPanel.frontWindow
     while let sheet = window?.attachedSheet { window = sheet }
     return window
 }
-func waitForModelessForms(
+@MainActor func waitForModelessForms(
     timeout: TimeInterval = 10, excluding: Set<ObjectIdentifier> = [], file: StaticString = #filePath,
     line: UInt = #line
 ) {
     let deadline = Date().addingTimeInterval(timeout)
-    func pending() -> [FormPanel] { FormPanel.visible.filter { !excluding.contains(ObjectIdentifier($0)) } }
+    @MainActor func pending() -> [FormPanel] { FormPanel.visible.filter { !excluding.contains(ObjectIdentifier($0)) } }
     while !pending().isEmpty && Date() < deadline {
         _ = RunLoop.current.run(mode: .modalPanel, before: Date().addingTimeInterval(0.01))
         RunLoop.current.run(until: Date().addingTimeInterval(0.01))
@@ -73,7 +73,7 @@ func waitForModelessForms(
 }
 
 /// Explicit effects owned by the native test host; production defaults remain unchanged.
-enum NativeFixtureEnvironment {
+@MainActor enum NativeFixtureEnvironment {
     static var announcements: [String] = []
     static var recoveryFailureNotice: ((TextDocument, Error) -> Void)?
     private static var board: NSPasteboard?
