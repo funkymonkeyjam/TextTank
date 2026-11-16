@@ -82,6 +82,27 @@ func rawMode() throws {
                 text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_cpp_evidence_rejects_effective_later_response_overrides(self):
+        import build_evidence
+        with tempfile.TemporaryDirectory(prefix='cpp-options-', dir=ROOT / 'build/tests') as work:
+            fixture = Path(work)
+            source = fixture / 'probe.cxx'
+            source.write_text('int fixture(void) { return 1; }\n')
+            compiler = subprocess.check_output(['xcrun', '--find', 'clang++'], text=True).strip()
+            arguments = [compiler, '-x', 'c++', '-std=c++17', '-Os']
+            positive = subprocess.run([*arguments, '-c', str(source), '-o', str(fixture / 'positive.o')],
+                                      capture_output=True, text=True)
+            self.assertEqual(positive.returncode, 0, positive.stderr)
+            build_evidence.check_effective_options(arguments, ['-std=c++17', '-Os'])
+            response = fixture / 'later.rsp'
+            response.write_text('-std=c++20 -O0\n')
+            overridden = [*arguments, '@' + str(response), '-c', str(source), '-o', str(fixture / 'overridden.o')]
+            negative = subprocess.run(overridden, capture_output=True, text=True)
+            self.assertEqual(negative.returncode, 0, negative.stderr)
+            expanded = build_evidence.expand(overridden, {})
+            with self.assertRaisesRegex(ValueError, 'Effective'):
+                build_evidence.check_effective_options(expanded, ['-std=c++17', '-Os'])
+
     def test_native_suite_rejects_dependency_inspection_failure(self):
         with tempfile.TemporaryDirectory(prefix='image-inspection-', dir=ROOT / 'build/tests') as work:
             fixture = Path(work)
@@ -513,6 +534,12 @@ sys.exit(93)
                 'CFBundleIdentifier': 'fixture.texttank.artifacts', 'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1'}))
             embedded = app / 'Contents/Frameworks'
             embedded.mkdir()
+            before_path = fixture / 'build/artifacts/Debug/before.json'
+            # This cache-fault fixture uses actual clang-built/signed tiny artifacts,
+            # not an Xcode project. Resolved project settings are integration-covered
+            # by each canonical application build; no product CLI bypass exists.
+            with patch.object(artifacts.build_evidence, 'resolved_settings', return_value={}):
+                artifacts.begin(fixture, 'Debug', before_path)
             built_images = []
             for name in artifacts.FRAMEWORKS:
                 base = (fixture / 'build/vendor/Debug') if name == 'Scintilla' else products
@@ -556,7 +583,8 @@ sys.exit(93)
             self.assertEqual(signed.returncode, 0, signed.stderr)
             manifest = fixture / 'build/artifacts/Debug/manifest.json'
             try:
-                artifacts.record(fixture, app, 'Debug', manifest)
+                with patch.object(artifacts.build_evidence, 'resolved_settings', return_value={}):
+                    artifacts.record(fixture, app, 'Debug', manifest, before_path)
             except subprocess.CalledProcessError as error:
                 self.fail(error.output)
             self.assertEqual(artifacts.validate(fixture, manifest, 'Debug')['app'], str(app))

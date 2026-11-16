@@ -63,3 +63,11 @@ cannot turn required image proofs into an empty list. The user-lexer provenance 
 its eight contracts: the former second-compilation assertion now checks delegation to the
 actual signed EditorBridge producer, with canonical per-file C++ flags and hashed compiler
 log, response files and object evidence. Existing source/patch/upstream contracts remain.
+
+Before compilation, canonical builds capture actual resolved settings for every application
+project target and source/toolchain inputs; recording refuses before/after differences.
+User-lexer compiler evidence is immutable and scoped to that object: actual dependency-file
+source/header bytes, effective options after response expansion, C++ target settings, clang/SDK
+identity, response files and object bytes. A normal incremental build may retain this evidence
+when the C++ producer remains valid while recording new whole-product inputs for Swift changes.
+The build does not force routine recompilation to manufacture a fresh compiler log.

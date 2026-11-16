@@ -24,6 +24,7 @@ if [[ "${1:-}" == --logged-selftest ]]; then
   exit 0
 fi
 python3 scripts/bootstrap.py
+python3 scripts/runtime_artifacts.py begin --configuration "$CONFIGURATION" --manifest "build/artifacts/$CONFIGURATION/before.json"
 logged scintilla-build xcodebuild -project Vendor/scintilla/cocoa/Scintilla/Scintilla.xcodeproj -scheme Scintilla -configuration "$CONFIGURATION" -derivedDataPath "$PWD/build/ScintillaDerived/$CONFIGURATION" ARCHS="$ARCH" ONLY_ACTIVE_ARCH=YES MACOSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$VENDOR_BUILD" CLANG_MODULE_CACHE_PATH="$PWD/build/ModuleCache"
 logged lexilla-build python3 scripts/build-lexilla.py
 logged app-build xcodebuild -project TextTank.xcodeproj -scheme TextTank -configuration "$CONFIGURATION" -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO build
@@ -40,5 +41,5 @@ xattr -dr com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
 xattr -dr com.apple.ResourceFork "$APP_PATH" 2>/dev/null || true
 codesign --force --sign - "$APP_PATH"
 codesign --verify --deep --strict "$APP_PATH"
-python3 scripts/runtime_artifacts.py record --configuration "$CONFIGURATION" --app "$APP_PATH" --manifest "build/artifacts/$CONFIGURATION/manifest.json"
+python3 scripts/runtime_artifacts.py record --configuration "$CONFIGURATION" --app "$APP_PATH" --manifest "build/artifacts/$CONFIGURATION/manifest.json" --before "build/artifacts/$CONFIGURATION/before.json"
 printf 'Built %s\n' "$APP_PATH"

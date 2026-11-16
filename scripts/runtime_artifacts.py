@@ -10,12 +10,12 @@ import json
 import os
 from pathlib import Path
 import platform
-import shlex
 import stat
 import subprocess
 
 from build_config import load_identity
 import bootstrap
+import build_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
 FRAMEWORKS = ['Scintilla', 'NativeSearch', 'EditorBridge']
@@ -109,45 +109,13 @@ def uuid(image):
     return lines[0].split()[1]
 
 
-def user_lexer_producer(root):
-    """Retain the actual canonical per-file compiler invocation, not a second build."""
-    source = root / 'Sources/Languages/LexUserPort/LexUser.cxx'
-    if not source.exists():
-        return None  # Isolated cache-fault fixtures have no user-lexer source.
-    log = root / 'harness/logs/app-build.log'
-    lines = log.read_text().splitlines()
-    headers = [line for line in lines if line.startswith('CompileC ') and str(source) in shlex.split(line)]
-    if len(headers) != 1 or "(in target 'EditorBridge' from project 'TextTank')" not in headers[0]:
-        raise ValueError('User lexer was not compiled once by the actual EditorBridge producer')
-    matches = []
-    flags = (root / 'scripts/user-lexer-flags.txt').read_text().split()
-    for line in lines:
-        if not line.startswith('    '):
-            continue
-        try:
-            arguments = shlex.split(line)
-        except ValueError:
-            continue
-        if not arguments or Path(arguments[0]).name not in ('clang', 'clang++') or str(source) not in arguments:
-            continue
-        if '-x' not in arguments or arguments[arguments.index('-x') + 1] != 'c++':
-            raise ValueError('Actual user-lexer producer did not use plain C++')
-        if not any(arguments[index:index + len(flags)] == flags for index in range(len(arguments))):
-            raise ValueError('Actual user-lexer producer did not use the canonical per-file flags')
-        output = Path(arguments[arguments.index('-o') + 1])
-        if output.suffix != '.o' or 'EditorBridge.build' not in output.parts:
-            raise ValueError('User-lexer compiler output does not belong to the actual EditorBridge target')
-        responses = {argument[1:]: digest(Path(argument[1:]))
-                     for argument in arguments if argument.startswith('@')}
-        matches.append({'source': str(source.relative_to(root)), 'target': 'EditorBridge',
-                        'arguments': arguments, 'canonical_flags': flags,
-                        'flags_sha256': digest(root / 'scripts/user-lexer-flags.txt'),
-                        'response_files': responses,
-                        'object': {'path': str(output), 'sha256': digest(output)},
-                        'build_log': {'path': str(log), 'sha256': digest(log)}})
-    if len(matches) != 1:
-        raise ValueError(f'Expected one actual user-lexer compilation; found {len(matches)}')
-    return matches[0]
+def begin(root, configuration, destination):
+    verify_dependencies(root)
+    value = {'schema': 1, 'configuration': configuration, 'inputs': inputs(root),
+             'toolchain': toolchain(), 'target_settings': build_evidence.resolved_settings(root, configuration)}
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(value, indent=2) + '\n')
+    return value
 
 
 def code_and_metadata(build_root, app, configuration):
@@ -174,17 +142,24 @@ def code_and_metadata(build_root, app, configuration):
     return images, metadata
 
 
-def record(root, app, configuration, destination):
+def record(root, app, configuration, destination, before_path):
     if configuration not in ('Debug', 'Release'):
         raise ValueError('Unsupported artifact configuration')
     source_inputs = inputs(root)
+    before = json.loads(before_path.read_text())
+    settings = build_evidence.resolved_settings(root, configuration)
+    if before.get('schema') != 1 or before.get('configuration') != configuration or before.get('inputs') != source_inputs or before.get('toolchain') != toolchain() or before.get('target_settings') != settings:
+        raise ValueError('Source/dependency/configuration/toolchain inputs changed during the canonical build')
+    previous = json.loads(destination.read_text()) if destination.exists() else {}
+    producer = build_evidence.cpp_producer(root, configuration, settings, previous.get('user_lexer_producer') if previous.get('schema') == 2 else None)
     verify_dependencies(root)
     command('codesign', '--verify', '--deep', '--strict', str(app))
     images, metadata = code_and_metadata(root, app, configuration)
-    value = {'schema': 1, 'configuration': configuration, 'build_root': str(root), 'app': str(app),
+    value = {'schema': 2, 'configuration': configuration, 'build_root': str(root), 'app': str(app),
              'identity': load_identity(root), 'toolchain': toolchain(), 'inputs': source_inputs,
              'app_files': snapshot(app), 'images': images, 'metadata': metadata,
-             'user_lexer_producer': user_lexer_producer(root),
+             'user_lexer_producer': producer, 'target_settings': settings,
+             'before': {'path': str(before_path), 'sha256': digest(before_path)},
              'source_checkout': tracked_inputs(root) is not None,
              'scope': 'Local native artifact/input identity only; no source-stable, archive-binding or package-provenance claim'}
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -194,7 +169,7 @@ def record(root, app, configuration, destination):
 
 def validate(root, manifest, configuration):
     value = json.loads(manifest.read_text())
-    if value.get('schema') != 1 or value.get('configuration') != configuration:
+    if value.get('schema') != 2 or value.get('configuration') != configuration:
         raise ValueError('Artifact configuration/schema does not match this check invocation')
     if inputs(root, require_checkout=True) != value['inputs']:
         raise ValueError('Stale artifact: source/configuration/header input bytes or modes changed')
@@ -210,25 +185,34 @@ def validate(root, manifest, configuration):
     images, metadata = code_and_metadata(build_root, app, configuration)
     if images != value['images'] or metadata != value['metadata']:
         raise ValueError('Built code image or compiler module/header metadata changed')
-    if user_lexer_producer(build_root) != value['user_lexer_producer']:
-        raise ValueError('Actual user-lexer compiler/object/response evidence changed')
+    before_path = Path(value['before']['path'])
+    if digest(before_path) != value['before']['sha256']:
+        raise ValueError('Actual before-build input/settings evidence changed')
+    before = json.loads(before_path.read_text())
+    if before['inputs'] != value['inputs'] or before['target_settings'] != value['target_settings'] or before['toolchain'] != value['toolchain']:
+        raise ValueError('Before/after canonical input/settings evidence differs')
+    if value['user_lexer_producer'] is not None:
+        build_evidence.validate_cpp(build_root, value['user_lexer_producer'], value['target_settings']['EditorBridge'])
     command('codesign', '--verify', '--deep', '--strict', str(app))
     return value
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['record', 'validate'])
+    parser.add_argument('operation', choices=['begin', 'record', 'validate'])
     parser.add_argument('--root', type=Path, default=ROOT)
     parser.add_argument('--configuration', choices=['Debug', 'Release'], required=True)
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--app', type=Path)
+    parser.add_argument('--before', type=Path)
     arguments = parser.parse_args()
     root = arguments.root.resolve()
-    if arguments.operation == 'record':
-        if arguments.app is None:
-            parser.error('record requires --app')
-        record(root, arguments.app.resolve(), arguments.configuration, arguments.manifest)
+    if arguments.operation == 'begin':
+        begin(root, arguments.configuration, arguments.manifest)
+    elif arguments.operation == 'record':
+        if arguments.app is None or arguments.before is None:
+            parser.error('record requires --app and --before')
+        record(root, arguments.app.resolve(), arguments.configuration, arguments.manifest, arguments.before)
     else:
         value = validate(root, arguments.manifest, arguments.configuration)
         print(value['app'])
