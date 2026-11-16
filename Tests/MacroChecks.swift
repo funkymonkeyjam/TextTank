@@ -81,7 +81,9 @@ import Foundation
             let recording = try requireValue(try controller.finishRecording(), "fixture: a one-step recording")
             editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             try require(editor.text == "ab", "fixture: the recorded edit is undone")
-            @MainActor func answer(_ field: String, _ value: String?, _ button: String) -> ([NSView]) -> Bool {
+            @MainActor func answer(_ field: String, _ value: String?, _ button: String)
+                -> @MainActor @Sendable ([NSView]) -> Bool
+            {
                 { views in
                     guard let press = control(button, NSButton.self, in: views),
                         let input = control(field, NSTextField.self, in: views)

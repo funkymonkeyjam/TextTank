@@ -4,6 +4,7 @@ import AppKit
 import EditorBridge
 import NativeSearch
 @main struct FolderSearchControllerChecks {
+    @MainActor static func everyView(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { everyView($0) } }
     @MainActor static func main() async {
         await Checks.run("FolderSearchControllerChecks") {
             let isolatedSupport = try IsolatedSupportDirectory("TextTankFolderUIChecks"), support = isolatedSupport.url
@@ -382,9 +383,6 @@ import NativeSearch
                 "fixture: replace-flow search dispatched")
             await waitUntil("the replace-flow search to finish") { !flow.isSearching }
             try require(flow.numberOfRows(in: flow.table) == 2, "fixture: both files matched on disk")
-            @MainActor @Sendable func everyView(_ view: NSView) -> [NSView] {
-                [view] + view.subviews.flatMap { everyView($0) }
-            }
             var confirmed = false
             let giveUp = Date().addingTimeInterval(10)
             let confirm = Timer(timeInterval: 0.05, repeats: true) { _ in

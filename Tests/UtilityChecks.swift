@@ -13,6 +13,10 @@ import zlib
 @MainActor private final class UtilityHexState { var stage = 0, draftKept = false }
 
 @main struct UtilityChecks {
+    @MainActor static func buttons(_ view: NSView) -> [NSButton] {
+        (view as? NSButton).map { [$0] } ?? [] + view.subviews.flatMap(buttons)
+    }
+    @MainActor static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     @MainActor static func main() {
         Checks.run("UtilityChecks") {
             func rejectsMalformed(_ op: TextUtility, _ value: String, line: UInt = #line) {
@@ -342,9 +346,6 @@ import zlib
             check(selectionPlain == "café", "styled export selection boundary")
             // The two dialog utilities. In each modal the menu item presents, the next named
             // button is clicked; a dialog still open after 20 s is aborted and reported.
-            @MainActor @Sendable func buttons(_ view: NSView) -> [NSButton] {
-                (view as? NSButton).map { [$0] } ?? [] + view.subviews.flatMap(buttons)
-            }
             @MainActor func choose(_ title: String, _ answers: [String]) -> Bool {
                 let dialog = UtilityDialogState(answers)
                 let deadline = Date().addingTimeInterval(20)
@@ -424,9 +425,6 @@ import zlib
                 "Cancel in Hex Encoding Options changes nothing and reports no unrecordable edit")
             let hex = UtilityHexState()
             let hexDeadline = Date().addingTimeInterval(10)
-            @MainActor @Sendable func descendants(_ view: NSView) -> [NSView] {
-                [view] + view.subviews.flatMap(descendants)
-            }
             let hexRetry = Timer(timeInterval: 0.01, repeats: true) { _ in
                 precondition(Thread.isMainThread)
                 MainActor.assumeIsolated {

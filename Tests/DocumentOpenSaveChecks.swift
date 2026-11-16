@@ -369,12 +369,13 @@ extension DocumentChecks {
                 edit(document, "saved \(label)\n")
                 // NSDocument reads fileURL from its file-presenter queue. Only the thread doing
                 // the write may see the resolved destination; any other keeps the opened path.
-                var seenElsewhere: URL?, seenByWriter: URL?
+                let seenElsewhere = FileURLObservation()
+                var seenByWriter: URL?
                 document.dependencies.duringWrite = {
                     seenByWriter = document.fileURL
                     let done = DispatchSemaphore(value: 0)
                     let other = Thread {
-                        seenElsewhere = document.fileURL
+                        seenElsewhere.set(document.fileURL)
                         done.signal()
                     }
                     other.start()
@@ -383,7 +384,7 @@ extension DocumentChecks {
                 try document.writeSafely(to: url, ofType: "Plain Text", for: .saveOperation)
                 document.dependencies.duringWrite = nil
                 check(
-                    seenByWriter == document.diskURL && seenElsewhere == url && document.fileURL == url,
+                    seenByWriter == document.diskURL && seenElsewhere.value == url && document.fileURL == url,
                     "\(label): only the writing thread sees the resolved location during an in-place Save")
                 check(
                     try Data(contentsOf: actual) == Data("saved \(label)\n".utf8) && !document.isDocumentEdited
@@ -715,5 +716,24 @@ extension DocumentChecks {
             try WorkspaceStore.save(session, to: renamed)
             check(try WorkspaceStore.load(from: renamed) == session, "a snapshot saved under any name still loads")
         }
+    }
+}
+
+/// Only the worker's opened URL crosses this test's file-presenter wait. No UI or callback
+/// enters the lock; all mutable state is private and displaced values release after unlock.
+private final class FileURLObservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: URL?
+    func set(_ next: URL?) {
+        lock.lock()
+        let displaced = stored
+        stored = next
+        lock.unlock()
+        withExtendedLifetime(displaced) {}
+    }
+    var value: URL? {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
     }
 }

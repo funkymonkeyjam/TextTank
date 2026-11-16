@@ -1243,7 +1243,7 @@ extension DocumentChecks {
             // F207: a dialog that cannot do what was asked says why in a second alert. The helpers
             // below answer the dialog, then record that alert's text here and dismiss it.
             let explanation = ColumnExplanation()
-            @MainActor @Sendable func dismissExplanation(_ modal: NSWindow, after dialog: NSWindow?) {
+            let dismissExplanation: @MainActor @Sendable (NSWindow, NSWindow?) -> Void = { modal, dialog in
                 guard modal !== dialog, let content = modal.contentView,
                     let ok = descendants(content).compactMap({ $0 as? NSButton }).first(where: { $0.title == "OK" })
                 else { return }
@@ -1267,7 +1267,7 @@ extension DocumentChecks {
                             return
                         }
                         guard !acted else {
-                            dismissExplanation(modal, after: dialog)
+                            dismissExplanation(modal, dialog)
                             return
                         }
                         let views = descendants(content)
