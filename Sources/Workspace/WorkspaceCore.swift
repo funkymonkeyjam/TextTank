@@ -212,6 +212,13 @@ struct FileSample: Equatable {
     let digest: String
     let signature: FileSignature?
 }
+/// Descriptor-derived read metadata. A modification date is presentation metadata, not a
+/// settled signature that allows skipping the next fingerprint check.
+struct CapturedFileRead {
+    let data: Data
+    let sample: FileSample
+    let modificationDate: Date?
+}
 enum WorkspaceError: LocalizedError {
     case invalid(String), unsafeLocation, tooLarge
     case fileTooLarge(limit: Int, url: URL)
@@ -318,13 +325,31 @@ enum WorkspaceStore {
     static func readRegularFileSample(_ url: URL, maximumBytes: Int = maximumSessionBytes, now: Int64? = nil) throws
         -> (data: Data, sample: FileSample)
     {
-        let now = now ?? currentSecond()
-        var signature: FileSignature?
-        let data = try readRegularFile(url, maximumBytes: maximumBytes, signature: &signature)
-        return (
-            data,
-            FileSample(digest: fingerprint(data), signature: signature.flatMap { $0.isSettled(at: now) ? $0 : nil })
-        )
+        let read = try captureRegularFile(url, maximumBytes: maximumBytes, now: now)
+        return (read.data, read.sample)
+    }
+    /// One bounded no-follow descriptor read, retaining its stable modification date even
+    /// while its metadata is too recent to stand in for a fingerprint.
+    static func captureRegularFile(_ url: URL, maximumBytes: Int = maximumSessionBytes, now: Int64? = nil) throws
+        -> CapturedFileRead
+    {
+        do {
+            let now = now ?? currentSecond()
+            let read = try PrivateFileStore.readSample(url, maximumBytes: maximumBytes)
+            let stable = read.after.flatMap { after -> FileSignature? in
+                let signature = FileSignature(after)
+                return signature == FileSignature(read.before) && signature.size == Int64(read.data.count)
+                    ? signature : nil
+            }
+            let date = stable.map {
+                Date(timeIntervalSince1970: Double($0.modifiedSeconds) + Double($0.modifiedNanoseconds) / 1_000_000_000)
+            }
+            return CapturedFileRead(
+                data: read.data,
+                sample: FileSample(
+                    digest: fingerprint(read.data), signature: stable.flatMap { $0.isSettled(at: now) ? $0 : nil }),
+                modificationDate: date)
+        } catch { throw mappedFileError(error) }
     }
     static func readRegularFile(_ url: URL, maximumBytes: Int = maximumSessionBytes) throws -> Data {
         var signature: FileSignature?

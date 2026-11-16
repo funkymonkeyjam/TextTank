@@ -111,10 +111,11 @@ final class WorkspaceController: NSObject {
         var restored = [TextDocument]()
         var active: TextDocument?
         for snapshot in session.documents {
-            let document = TextDocument()
-            NSDocumentController.shared.addDocument(document)
-            document.makeWindowControllers()
-            document.loadUnsavedSnapshot(text: snapshot.text, format: snapshot.format)
+            let document = DocumentFactory.makeUntitled(
+                display: false, focus: false,
+                populate: { document in
+                    document.loadUnsavedSnapshot(text: snapshot.text, format: snapshot.format)
+                })
             // Sessions written before the single plain-text identifier say "null" or nothing.
             let requestedLanguage = LanguageProfile.canonicalID(snapshot.language)
             if let app = EditorServices.current,

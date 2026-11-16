@@ -359,14 +359,8 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             existing.showWindows()
             return existing
         }
-        let (data, sample) = try WorkspaceStore.readRegularFileSample(url)
-        let document = TextDocument()
-        document.fileURL = url
-        try document.read(
-            captured: data, sample: sample, from: url, ofType: TextDocument.plainTextType, as: encoding)
-        NSDocumentController.shared.addDocument(document)
-        document.makeWindowControllers()
-        document.showWindows()
+        let read = try WorkspaceStore.captureRegularFile(url)
+        let document = try DocumentFactory.openCaptured(read, from: url, as: encoding)
         reloadDocuments()
         if recordsSystemRecent { NSDocumentController.shared.noteNewRecentDocumentURL(url) }
         do { try store.noteRecent(url) } catch {

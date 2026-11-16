@@ -102,13 +102,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return controller
     }()
     private static func openAutomationOutput(_ text: String) {
-        let doc = TextDocument()
-        NSDocumentController.shared.addDocument(doc)
-        doc.makeWindowControllers()
-        doc.editor.text = text
-        doc.editor.setLineEndingMode(LineEnding.detect(in: text).rawValue)
-        doc.showWindows()
-        doc.windowControllers.first?.window?.makeFirstResponder(doc.editor)
+        DocumentFactory.makeUntitled(populate: { doc in
+            doc.editor.text = text
+            doc.editor.setLineEndingMode(LineEnding.detect(in: text).rawValue)
+        })
     }
     /// The reason often arrives inside an editor callback, and for a click while the button is
     /// still down. A modal alert then would swallow the mouse-up and leave the editor dragging,
@@ -205,11 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func noteActive(_ controller: EditorWindowController) { lastDocumentController = controller }
     @objc func newDocument(_ sender: Any?) {
-        let doc = TextDocument()
-        NSDocumentController.shared.addDocument(doc)
-        doc.makeWindowControllers()
-        doc.showWindows()
-        doc.windowControllers.first?.window?.makeFirstResponder(doc.editor)
+        DocumentFactory.makeUntitled()
     }
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
     /// Saved window state is decoded with secure coding only.

@@ -473,20 +473,10 @@ import AppKit
             try existing.reload(using: encoding, discard: true)
             return existing
         }
-        let doc = TextDocument()
-        doc.fileURL = url
-        doc.fileType = typeName
-        doc.openEncoding = encoding
-        defer { doc.openEncoding = nil }
-        try doc.read(from: url, ofType: typeName)
-        doc.fileModificationDate =
-            (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        NSDocumentController.shared.addDocument(doc)
-        if display {
-            doc.makeWindowControllers()
-            doc.showWindows()
-        }
-        return doc
+        // Resolve an initial alias once, as fileURL does, then refuse replacement links.
+        // Explicit encoding retains the existing addressable-data capacity; browser opens keep their own cap.
+        let read = try WorkspaceStore.captureRegularFile(canonicalDiskURL(url), maximumBytes: Int.max)
+        return try DocumentFactory.openCaptured(read, from: url, as: encoding, ofType: typeName, display: display)
     }
     /// NSDocument's revert discards the edits but schedules no recovery work, because loading
     /// suppresses change handling. Remove the discarded draft's snapshot now. If the revert
@@ -513,15 +503,18 @@ import AppKit
     @discardableResult static func openRecovered(_ snapshot: RecoverySnapshot) throws -> TextDocument {
         let (base, overflow) = snapshot.revision.addingReportingOverflow(1)
         guard !overflow else { throw RecoveryError.invalidSnapshot }
-        let doc = TextDocument()
-        doc.recoveryID = snapshot.id
-        doc.recoveryBase = base
-        NSDocumentController.shared.addDocument(doc)
-        doc.makeWindowControllers()
-        doc.loadUnsavedSnapshot(text: snapshot.text, format: snapshot.format)
-        // Display only: the original path is never opened, read or written by recovery.
-        doc.recoveredOrigin = SnapshotLabel.status(for: snapshot)
-        if let name = SnapshotLabel.originName(of: snapshot) { doc.displayName = "Recovered " + name }
+        let doc = DocumentFactory.makeUntitled(
+            display: false, focus: false,
+            prepare: { document in
+                document.recoveryID = snapshot.id
+                document.recoveryBase = base
+            },
+            populate: { document in
+                document.loadUnsavedSnapshot(text: snapshot.text, format: snapshot.format)
+                // Display only: recovery never opens or writes the original path.
+                document.recoveredOrigin = SnapshotLabel.status(for: snapshot)
+                if let name = SnapshotLabel.originName(of: snapshot) { document.displayName = "Recovered " + name }
+            })
         doc.showWindows()
         doc.flushRecovery()
         return doc
