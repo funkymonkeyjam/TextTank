@@ -13,7 +13,9 @@ The document-check executable drives many owned document-window transitions with
 `scripts/test-documents.sh` compiles one native check executable, then always runs two
 required processes: the existing document checks and configuration input accessibility
 checks (`--configuration-input-accessibility`). Each retains its own watchdog, status
-and normal completion marker; a failure in either fails acceptance. The complete test
+and normal completion marker; a failure in either fails acceptance. Both processes create
+their owned support directory and document controller before `NSApplication`, check
+singleton identity, and use the same accessory activation policy. The complete test
 runner therefore records 32 suites, including all prior 31 and the new input checks.
 A combined CLI prefix failed native review/save-panel creation with saturated AppKit
 animation workers; paired controls passed the full original document checks and all

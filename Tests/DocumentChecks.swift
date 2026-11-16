@@ -31,11 +31,16 @@ import AppKit
             // Always required by test-documents.sh in a fresh process. A combined CLI
             // prefix saturated AppKit animation workers; no production flags change.
             Checks.run("DesignSettingsInputChecks") {
-                _ = NSApplication.shared
                 let isolated = try IsolatedSupportDirectory("DesignSettingsInputProcess")
                 defer { isolated.restore() }
                 LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent(
                     "LanguageProfiles.json")
+                let documentController = TextDocumentController()
+                let app = NSApplication.shared
+                check(
+                    NSDocumentController.shared === documentController,
+                    "DG input process constructs its owned document controller before NSApplication")
+                app.setActivationPolicy(.accessory)
                 let composition = AppDelegate()
                 NSApp.delegate = composition
                 composition.installEditorServices()
@@ -43,7 +48,6 @@ import AppKit
                 try DesignSettingsChecks.inputAccessibilityChecks(root: isolated.url, composition: composition)
                 Checks.summary { "PASS DesignSettingsInputChecks: \(Checks.count) native assertions" }
             }
-            return
         }
         guard arguments.isEmpty else {
             fputs("Unknown DocumentChecks argument\n", stderr)
