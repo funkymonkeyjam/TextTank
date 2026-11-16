@@ -49,17 +49,15 @@ import AppKit
         contextInfo: UnsafeMutableRawPointer?
     ) {
         precondition(Thread.isMainThread)
-        MainActor.assumeIsolated {
-
-            let recovered = attemptRecovery(fromError: error, optionIndex: recoveryOptionIndex)
-            guard let target = delegate as AnyObject?, let didRecoverSelector,
-                let method = class_getInstanceMethod(type(of: target), didRecoverSelector)
-            else { return }
-            // - (void)didPresentErrorWithRecovery:(BOOL)didRecover contextInfo:(void *)contextInfo
-            typealias Callback = @convention(c) (AnyObject, Selector, Bool, UnsafeMutableRawPointer?) -> Void
-            unsafeBitCast(method_getImplementation(method), to: Callback.self)(
-                target, didRecoverSelector, recovered, contextInfo)
-
-        }
+        // Only the Bool crosses the synchronous UI boundary. Raw Objective-C callback
+        // identity/context remain on this actual main-thread entry, with no actor transfer.
+        let recovered = attemptRecovery(fromError: error, optionIndex: recoveryOptionIndex)
+        guard let target = delegate as AnyObject?, let didRecoverSelector,
+            let method = class_getInstanceMethod(type(of: target), didRecoverSelector)
+        else { return }
+        // - (void)didPresentErrorWithRecovery:(BOOL)didRecover contextInfo:(void *)contextInfo
+        typealias Callback = @convention(c) (AnyObject, Selector, Bool, UnsafeMutableRawPointer?) -> Void
+        unsafeBitCast(method_getImplementation(method), to: Callback.self)(
+            target, didRecoverSelector, recovered, contextInfo)
     }
 }
