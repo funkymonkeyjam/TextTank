@@ -1344,7 +1344,7 @@ extension DocumentChecks {
                 "Cancel in Insert into Each Selection inserts nothing")
             check(explanation.isEmpty, "Cancel in Insert into Each Selection shows no explanation")
             // F12: Go to Line through its real dialog, on the engine's own line model.
-            func goToLineDialog(_ entry: String, confirm: Bool = true) -> Bool {
+            @MainActor func goToLineDialog(_ entry: String, confirm: Bool = true) -> Bool {
                 var acted = false, timedOut = false
                 explanation = ""
                 let deadline = Date().addingTimeInterval(10)
