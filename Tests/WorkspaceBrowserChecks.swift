@@ -6,7 +6,7 @@ import EditorBridge
 import NativeSearch
 import Darwin
 @main struct WorkspaceBrowserChecks {
-    static func main() {
+    @MainActor static func main() {
         Checks.run("WorkspaceBrowserChecks") {
             // F148: there is no bundle here, so the suite names the bundled language catalog itself.
             LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")
@@ -386,6 +386,20 @@ import Darwin
             }
             check(releasedDuringPoll, "F117 a poll in flight does not keep its document alive")
             check(stoppedAfterRelease, "F117 a monitor whose document was released stops at the next result")
+            // The worker also must not own the monitor itself. Its only strong owner is
+            // main-owned; deinit invalidates the timer synchronously on this same thread.
+            let disposableDocument = TextDocument()
+            disposableDocument.fileURL = polled
+            host.contentView = disposableDocument.editor
+            weak var releasedMonitor: DocumentMonitor?
+            try autoreleasepool {
+                let disposableMonitor = DocumentMonitor()
+                releasedMonitor = disposableMonitor
+                try disposableMonitor.start(disposableDocument)
+                try require(disposableMonitor.status == .checking, "fixture: disposable monitor started a poll")
+            }
+            check(releasedMonitor == nil, "F316 an in-flight inspection does not retain its main-owned monitor")
+            disposableDocument.close()
             host.contentView = nil
             host.close()
             let app = AppDelegate()

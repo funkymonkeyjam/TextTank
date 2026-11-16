@@ -4,12 +4,13 @@ import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
-final class WorkspaceBrowserNode {
+@MainActor final class WorkspaceBrowserNode {
     let entry: WorkspaceBrowserEntry
     var children: [WorkspaceBrowserNode]?
     init(_ entry: WorkspaceBrowserEntry) { self.entry = entry }
 }
 
+@MainActor
 final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
     let store: WorkspaceBrowserStore
     let monitor = DocumentMonitor()

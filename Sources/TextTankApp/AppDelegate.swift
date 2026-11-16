@@ -9,7 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.activeDocument = { [weak self] in self?.currentDocument }
         return controller
     }()
-    lazy var workspaceBrowser: WorkspaceBrowserController = {
+    @MainActor lazy var workspaceBrowser: WorkspaceBrowserController = {
         let controller = WorkspaceBrowserController()
         controller.currentDocument = { [weak self] in self?.currentDocument }
         return controller
@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             (NSApp.mainWindow?.windowController as? EditorWindowController)?.showTransientStatus(message)
         })
     let recentDocumentsMenu = RecentDocumentsMenu()
-    lazy var folderSearch: FolderSearchController = {
+    @MainActor lazy var folderSearch: FolderSearchController = {
         let controller = FolderSearchController()
         controller.displayTabWidth = { [weak self] in self?.settings.value.tabWidth ?? 4 }
         controller.workspaceRoots = { [weak self] in self?.workspaceBrowser.store.state.folders ?? [] }
@@ -250,7 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if didReviewAll { closeAllForTermination() }
         replyToTerminate(didReviewAll)
     }
-    func buildMenus() {
+    @MainActor func buildMenus() {
         let bar = NSMenu()
         NSApp.mainMenu = bar
         func menu(_ title: String) -> NSMenu {

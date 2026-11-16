@@ -381,8 +381,9 @@ import AppKit
         guard !recoveryClosed else { return }
         cancelRecoveryTimers()
         recoveryGeneration += 1
+        let operation: @Sendable () throws -> Void = recoveryOperation()
         do {
-            try recoveryWriter.finish(recoveryOperation())
+            try recoveryWriter.finish(operation)
             reportRecovery(nil)
         } catch { reportRecovery(error) }
     }

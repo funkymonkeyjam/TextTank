@@ -218,7 +218,7 @@ package struct SessionFileInspection: Equatable {
 }
 /// What `fstat` says about one state of a regular file. Two equal signatures name the same
 /// bytes only when the earlier one was settled; see `isSettled`.
-package struct FileSignature: Equatable {
+package struct FileSignature: Equatable, Sendable {
     package var device: Int64
     package var inode: UInt64
     package var size: Int64
@@ -245,7 +245,7 @@ package struct FileSignature: Equatable {
 }
 /// A streamed SHA-256 of a file. `signature` is present only when the metadata was the same
 /// before and after the read and was settled, so it can stand in for the digest later.
-package struct FileSample: Equatable {
+package struct FileSample: Equatable, Sendable {
     package init(digest: String, signature: FileSignature?) {
         self.digest = digest
         self.signature = signature
