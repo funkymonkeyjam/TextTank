@@ -62,6 +62,26 @@ struct StatusItem: Equatable {
     let text: String
 }
 
+/// A display prefix never substitutes the document's save state for an action result.
+/// Callers with essential details after a variable name/path provide a semantic summary instead.
+enum StatusMessageSummary {
+    static func leadingWords(_ text: String, font: NSFont) -> String {
+        var prefix = "", boundary = ""
+        for character in text.prefix(256) {
+            if character.isWhitespace && !prefix.isEmpty { boundary = prefix }
+            let candidate = prefix + String(character)
+            if ((candidate + "…") as NSString).size(withAttributes: [.font: font]).width > 420 {
+                return boundary.isEmpty
+                    ? Strings.text("status.messageDetails", "Message details are available.") : boundary + "…"
+            }
+            prefix = candidate
+        }
+        if prefix == text { return text }
+        return boundary.isEmpty
+            ? Strings.text("status.messageDetails", "Message details are available.") : boundary + "…"
+    }
+}
+
 /// Native pop-up cells supply their own menu tracking, keyboard behavior and accessibility role.
 private final class StatusPopup: NSPopUpButton {
     let field: StatusField

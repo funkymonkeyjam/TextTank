@@ -6,6 +6,17 @@ enum DesignStatusChecks {
         [view] + view.subviews.flatMap(descendants)
     }
     @MainActor static func run() throws {
+        let initialURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]!)
+            .appendingPathComponent("owned-status-initial-" + UUID().uuidString + ".txt")
+        try Data("saved input".utf8).write(to: initialURL)
+        defer { try? FileManager.default.removeItem(at: initialURL) }
+        let opened = try TextDocument.open(initialURL, as: .utf8, display: false)
+        opened.makeWindowControllers()
+        let openedController = opened.windowControllers[0] as! EditorWindowController
+        check(
+            !opened.isDocumentEdited && openedController.statusText == opened.currentSaveStateStatus,
+            "DB-R1 an actually loaded saved file starts with its current save-state words")
+        opened.close()
         let document = TextDocument()
         NSDocumentController.shared.addDocument(document)
         document.makeWindowControllers()
@@ -137,8 +148,31 @@ enum DesignStatusChecks {
         check(
             controller.statusText == document.currentSaveStateStatus,
             "DB-R1 transient expiry restores the document's actual save state")
+        let missing = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]!)
+            .appendingPathComponent(String(repeating: "missing-owned-status-", count: 10) + UUID().uuidString + ".txt")
+        var actualOpenError: Error?
+        do { _ = try FileHandle(forReadingFrom: missing) } catch { actualOpenError = error }
+        let openError = try requireValue(actualOpenError, "fixture: actual read failure for a missing owned file")
+        check(
+            !document.isDocumentEdited && document.currentSaveStateStatus == "Saved",
+            "DB-R1 actual-error fixture starts clean and saved")
+        controller.showSearchFailure(openError, seconds: 0.03, announce: false)
+        root.layoutSubtreeIfNeeded()
+        print("DB_LONG_ERROR", "full=", controller.statusText, "visible=", controller.status.stringValue)
+        check(
+            controller.status.stringValue != "Saved" && controller.status.stringValue.contains("could not complete"),
+            "DB-R1 an actual long error keeps essential failure words visible instead of becoming Saved")
+        check(
+            controller.statusText == openError.localizedDescription
+                && controller.status.accessibilityLabel() == openError.localizedDescription,
+            "DB-R1 actual error retains its entire diagnostic in the model and native name")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         document.fileURL = nil
         controller.showRecoveryStatus(document.currentSaveStateStatus, failed: false)
+        check(
+            position.items.contains { $0.representedObject as? String == "selectAll" }
+                && position.items.contains { $0.representedObject as? String == "clearSelection" },
+            "DB-R3 former character and line fields keep Select All and Clear Selection in Position")
         // An actual Language menu invocation, without a fabricated missing notification.
         let previousServices = EditorServices.current
         defer { EditorServices.current = previousServices }
@@ -227,5 +261,35 @@ enum DesignStatusChecks {
         check(
             afterEvent != targetTitle,
             "DB-R8 real Language action has no status event on this native fixture before polling")
+        _ = document.editor.setSelectionAnchor(0, caret: 0)
+        document.fileURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]!)
+            .appendingPathComponent("owned-positive-result.txt")
+        controller.showRecoveryStatus(document.currentSaveStateStatus, failed: false)
+        let positive =
+            "Added 2 items to “\(String(repeating: "owned result destination ", count: 25))” in Reminders. Editor Undo does not remove them."
+        // Drive the real composition callback with an owned result fixture. No reminders are sent.
+        composition.automations.onQuietExportResult(positive)
+        root.layoutSubtreeIfNeeded()
+        check(
+            controller.statusText == positive
+                && controller.status.stringValue == "Items were added in Reminders. Editor Undo does not remove them.",
+            "DB-R1 long positive action result keeps its action and external Undo limitation visible")
+        check(
+            controller.status.accessibilityLabel() == positive && controller.status.toolTip == positive,
+            "DB-R1 positive-result callback retains the complete native name and tooltip")
+        _ = document.editor.setSelectionAnchor(0, caret: 0)
+        _ = document.editor.replaceSelection("selected")
+        _ = document.editor.setSelectionAnchor(0, caret: 4)
+        controller.refreshStatusDetails()
+        let selectionMenu = controller.statusOptionsMenu(.position)!
+        check(
+            selectionMenu.items.contains {
+                $0.title
+                    == String(
+                        format: Strings.text("status.fieldValue", "%@: %@"), StatusField.selectedCharacters.displayName,
+                        Strings.count(4, .character))
+            }
+                && selectionMenu.items.contains { $0.representedObject as? String == "clearSelection" },
+            "DB-R3 collapsed selection details and clearing remain reachable in Position")
     }
 }

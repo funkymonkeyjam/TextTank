@@ -97,7 +97,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             editorProvider: { [weak self] in self?.currentEditor }, newDocument: AppDelegate.openAutomationOutput)
         controller.onQuietExportResult = { [weak self] message in
             let window = (NSApp.mainWindow?.windowController as? EditorWindowController) ?? self?.lastDocumentController
-            window?.showTransientStatus(message, seconds: 8, announce: false)
+            window?.showTransientStatus(
+                message,
+                compactMessage: Strings.text(
+                    "status.remindersAdded", "Items were added in Reminders. Editor Undo does not remove them."),
+                seconds: 8, announce: false)
         }
         controller.onInvocation = { [weak self] in
             self?.macros.invalidateRecording(

@@ -15,6 +15,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     var findBarVisible: Bool { findBar?.isHidden == false }
     private let statusLabel = NSTextField(labelWithString: "Ready")
     private var fullStatusText = "Ready"
+    private var compactStatusText = "Ready"
     private var recoveryStatusFailed = false
     var statusText: String { fullStatusText }
     #if TESTING
@@ -24,21 +25,17 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         guard !recoveryStatusFailed else { return }
         applyStatusMessage(message)
     }
-    private func applyStatusMessage(_ message: String) {
+    private func applyStatusMessage(_ message: String, compactMessage: String? = nil) {
         fullStatusText = message
+        compactStatusText =
+            compactMessage
+            ?? StatusMessageSummary.leadingWords(
+                message, font: statusLabel.font ?? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize))
         updateLeadingStatus()
     }
     func appendStatusMessage(_ suffix: String) { setStatusMessage(fullStatusText + suffix) }
     private func updateLeadingStatus() {
-        let doc = document as? TextDocument
-        let compact: String
-        if recoveryStatusFailed {
-            compact = "⚠︎ Recovery copy not written"
-        } else if doc?.recoveredOrigin != nil {
-            compact = "Recovered copy — Save As to keep"
-        } else {
-            compact = doc?.currentSaveStateStatus ?? fullStatusText
-        }
+        let compact = recoveryStatusFailed ? "⚠︎ Recovery copy not written" : compactStatusText
         statusDetails.setLeadingStatus(statusLabel, fullText: fullStatusText, compactText: compact)
         if recoveryStatusFailed {
             statusLabel.toolTip =
@@ -249,7 +246,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byClipping
-        updateLeadingStatus()
+        applyStatusMessage(
+            document.currentSaveStateStatus,
+            compactMessage: document.recoveredOrigin == nil
+                ? document.currentSaveStateStatus : "Recovered copy — Save As to keep")
         statusDetails.menuProvider = { [weak self] field in
             guard let self else { return nil }
             EditorServices.current?.noteActiveController(self)
@@ -324,23 +324,28 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// Says why something the person just did had no effect, in the status line for a few seconds
     /// and to assistive technology, then shows the save state again. A standing recovery failure
     /// is never replaced.
-    func showTransientStatus(_ message: String, seconds: TimeInterval = 4, announce: Bool = true) {
+    func showTransientStatus(
+        _ message: String, compactMessage: String? = nil, seconds: TimeInterval = 4, announce: Bool = true
+    ) {
         guard transientStatus != message else { return }
         if announce { Announce.say(message, from: window) }
         guard let doc = document as? TextDocument, doc.lastRecoveryError == nil, !recoveryStatusFailed else { return }
         transientStatus = message
-        setStatusMessage(message)
+        applyStatusMessage(message, compactMessage: compactMessage)
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self, weak doc] in
             guard let self, self.transientStatus == message else { return }
             self.transientStatus = nil
-            if let doc, doc.lastRecoveryError == nil { self.setStatusMessage(doc.currentSaveStateStatus) }
+            if let doc, doc.lastRecoveryError == nil {
+                self.showRecoveryStatus(doc.currentSaveStateStatus, failed: false)
+            }
         }
     }
     func showRecoveryStatus(_ message: String, failed: Bool) {
         transientStatus = nil
         recoveryStatusFailed = failed
         if failed, fullStatusText != message { Announce.say(message, from: window) }
-        applyStatusMessage(message)
+        let compact = (document as? TextDocument)?.recoveredOrigin == nil ? message : "Recovered copy — Save As to keep"
+        applyStatusMessage(message, compactMessage: compact)
         // The failure is carried by the words and the symbol; full-strength label colour keeps it
         // readable in both appearances, where small red text was not.
         statusLabel.textColor = failed ? .labelColor : .secondaryLabelColor
@@ -534,6 +539,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             where [.bookmarks, .characters, .lines, .font, .wrap, .readOnly].contains(item.field) {
                 heading(item.text)
             }
+            for item in statusSummaryItems where [.selectedCharacters, .selections].contains(item.field) {
+                heading(String(format: Strings.text("status.fieldValue", "%@: %@"), item.field.displayName, item.text))
+            }
+            command(.selectAll)
+            add("Clear Selection", #selector(statusOption(_:)), self, "clearSelection")
             for field: StatusField in [.bookmarks, .font, .wrap, .language, .indent, .encoding, .eol] {
                 guard let submenu = statusOptionsMenu(field) else { continue }
                 let item = NSMenuItem(title: field.displayName, action: nil, keyEquivalent: "")
@@ -753,7 +763,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     private func reportCommandFailure(_ message: String) {
         NSSound.beep()
-        showTransientStatus(message)
+        showTransientStatus(
+            message,
+            compactMessage: Strings.text("status.commandUnavailable", "This editor command is unavailable."))
+    }
+    /// The full error can begin with an arbitrarily long file name. The failure stays visible.
+    func showSearchFailure(_ error: Error, seconds: TimeInterval = 4, announce: Bool = true) {
+        showTransientStatus(
+            error.localizedDescription,
+            compactMessage: Strings.text("status.searchFailed", "Search could not complete."), seconds: seconds,
+            announce: announce)
     }
     /// Runs one editor command on the active editor. A command that edits text is refused with the
     /// read-only reason before anything else happens, so a macro recording is left as it was.
@@ -961,7 +980,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 case .stale:
                     self.showTransientStatus("The document, selection or Find text changed. Search again.")
                 case .cancelled: break
-                case .failed(let error): self.showTransientStatus(error.localizedDescription)
+                case .failed(let error): self.showSearchFailure(error)
                 }
             })
     }

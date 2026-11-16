@@ -58,8 +58,13 @@ read-only validation, shortcut or checkmark changes.
 
 An unbounded path, error or transient cannot fit in a finite row. The full message
 stays in `statusText`, the actual native accessibility name and the tooltip. Only
-when necessary, the visible leading label uses the document's unchanged save-state
-words, “Recovered copy — Save As to keep”, or “⚠︎ Recovery copy not written”. This
+when necessary, the visible leading label retains the action/result prefix, a
+caller-provided semantic summary, “Recovered copy — Save As to keep”, or
+“⚠︎ Recovery copy not written”. A long transient never becomes the document's save
+state. Search failure and confirmed Reminder results provide explicit short whole
+messages; the fallback is a bounded whole-word prefix, without English keyword
+classification. An unbounded first token uses “Message details are available.”,
+so no universal essence-preservation claim is made for unspecified future callers. This
 is an explicit DB-R1 presentation departure for path/diagnostic overflow, preserving
 essential state without a giant minimum window width. Recovery failure remains
 latched above transient messages until the document reports successful recovery.
