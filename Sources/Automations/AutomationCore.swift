@@ -2,7 +2,7 @@
 import Foundation
 import Darwin
 
-package struct AutomationDefinition: Codable, Equatable, Identifiable {
+package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable {
     package init(
         version: Int = 1, id: UUID, name: String, input: Input, steps: [Step], output: Output, shortcut: String? = nil,
         destinationID: String? = nil, previewBeforeApply: Bool? = nil, pinToToolbar: Bool? = nil
@@ -19,7 +19,7 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable {
         self.pinToToolbar = pinToToolbar
     }
 
-    package enum Input: String, Codable, CaseIterable {
+    package enum Input: String, Codable, CaseIterable, Sendable {
         case selection, document, clipboard, file
         package var displayName: String {
             switch self {
@@ -30,7 +30,7 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable {
             }
         }
     }
-    package enum Output: String, Codable, CaseIterable {
+    package enum Output: String, Codable, CaseIterable, Sendable {
         case editor, clipboard, newDocument, file, reminders
         package var displayName: String {
             switch self {

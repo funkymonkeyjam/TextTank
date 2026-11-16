@@ -113,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         return controller
     }()
-    private static func openAutomationOutput(_ text: String) {
+    @MainActor private static func openAutomationOutput(_ text: String) {
         DocumentFactory.makeUntitled(populate: { doc in
             doc.editor.text = text
             doc.editor.setLineEndingMode(LineEnding.detect(in: text).nativeMode)
@@ -535,7 +535,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windows[(index + direction + windows.count) % windows.count].makeKeyAndOrderFront(nil)
     }
     private var documentsPanel: ChoicePanel?
-    @objc func showDocumentTabs(_ sender: Any?) {
+    @MainActor @objc func showDocumentTabs(_ sender: Any?) {
         if let documentsPanel {
             documentsPanel.form.window.makeKeyAndOrderFront(nil)
             return
@@ -565,7 +565,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         panel.show()
     }
-    func documentTabChoices(
+    @MainActor func documentTabChoices(
         _ windows: [NSWindow], identity: (NSWindow) -> String = { String(describing: ObjectIdentifier($0)) }
     ) -> [ChoicePanel.Row] {
         windows.map { window in

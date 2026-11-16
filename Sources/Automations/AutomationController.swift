@@ -9,8 +9,11 @@ import Darwin
 /// modal panels and event tracking. Unlike the main dispatch queue, this still delivers while a
 /// main-queue block or main-actor job is itself inside a nested modal run loop.
 enum MainRunLoop {
-    static func perform(_ block: @escaping () -> Void) {
-        CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue, block)
+    static func perform(_ block: @escaping @MainActor @Sendable () -> Void) {
+        CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { block() }
+        }
         CFRunLoopWakeUp(CFRunLoopGetMain())
     }
 }
@@ -19,13 +22,13 @@ extension Notification.Name {
     static let textTankAutomationsDidChange = Notification.Name("TextTankAutomationsDidChange")
 }
 
-final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSToolbarItemValidation {
+@MainActor final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSToolbarItemValidation {
     /// Independent isolated compositions must not share AppKit toolbar synchronization state.
     let toolbarFamilyIdentifier = UUID().uuidString
     private let editorProvider: () -> TTEditor?
     /// Called once each time a saved automation starts to run, before any prompt or change.
     var onInvocation: () -> Void = {}
-    private let newDocument: (String) -> Void
+    private let newDocument: @MainActor (String) -> Void
     private let storage: URL
     private var library = AutomationLibrary(workflows: [])
     /// An existing library that could not be read. It is never overwritten; see `persistLibrary`.
@@ -79,7 +82,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         return m
     }()
 
-    init(editorProvider: @escaping () -> TTEditor?, newDocument: @escaping (String) -> Void) {
+    init(editorProvider: @escaping () -> TTEditor?, newDocument: @escaping @MainActor (String) -> Void) {
         self.editorProvider = editorProvider
         self.newDocument = newDocument
         storage = AppStorage.url(.automations)
@@ -245,10 +248,13 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             watches.append(
                 NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) {
                     [weak panel, weak capturedEditor] note in
-                    guard let editor = capturedEditor, let changed = note.object as? TTEditor,
-                        changed === editor || changed.sharesDocument(with: editor)
-                    else { return }
-                    MainRunLoop.perform { [weak panel] in panel?.refresh() }
+                    precondition(Thread.isMainThread)
+                    MainActor.assumeIsolated {
+                        guard let editor = capturedEditor, let changed = note.object as? TTEditor,
+                            changed === editor || changed.sharesDocument(with: editor)
+                        else { return }
+                        MainRunLoop.perform { [weak panel] in panel?.refresh() }
+                    }
                 })
         }
         panel.rows = { [weak self] in self?.library.workflows.map { .init(id: $0.id.uuidString, title: $0.name) } ?? []
@@ -840,7 +846,8 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         runControl.cancel()
         if let runPanel, NSApp.modalWindow === runPanel { NSApp.stopModal() }
     }
-    /// The worker's result, handed across threads under a lock.
+    /// One-shot worker result for the synchronous 0.2-second fast path. Every read/write is
+    /// protected by this lock; UI/modal result ownership stays in TransformProgress.
     private final class TransformOutcome: @unchecked Sendable {
         private let lock = NSLock()
         private var result: Result<String, Error>?
@@ -858,7 +865,8 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     /// Progress controls, created only when a run outlasts the short wait. Main thread only.
     /// The worker's blocks hold this box and can outlive the run, so the references are weak:
     /// the panel and its views are owned by the run and released on the main thread.
-    private final class TransformProgress {
+    @MainActor private final class TransformProgress {
+        var result: Result<String, Error>?
         weak var panel: NSPanel?
         weak var bar: NSProgressIndicator?
         weak var status: NSTextField?
@@ -876,16 +884,24 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         let outcome = TransformOutcome(), finished = DispatchSemaphore(value: 0), ui = TransformProgress()
         // Progress and completion are delivered through the run loop, not the main queue, so they
         // arrive even when this run was itself started from a main-queue block.
+        let deliverProgress: @MainActor @Sendable (Int, Int) -> Void = { completed, total in
+            ui.bar?.doubleValue = Double(completed)
+            ui.status?.stringValue = "Processing step \(min(completed+1,total)) of \(total)…"
+        }
+        let deliverResult: @MainActor @Sendable (Result<String, Error>) -> Void = { result in
+            // The modal path publishes its actor-owned result before stopping the same run-loop turn.
+            ui.result = result
+            if let panel = ui.panel, NSApp.modalWindow === panel { NSApp.stopModal() }
+        }
         control.onProgress = { completed, total in
-            MainRunLoop.perform {
-                ui.bar?.doubleValue = Double(completed)
-                ui.status?.stringValue = "Processing step \(min(completed+1,total)) of \(total)…"
-            }
+            MainRunLoop.perform { deliverProgress(completed, total) }
         }
         DispatchQueue.global(qos: .userInitiated).async {
-            outcome.set(Result { try workflow.transform(input, control: control) })
+            let result = Result { try workflow.transform(input, control: control) }
+            // The locked handoff is only for the existing synchronous wait/setup fast path.
+            outcome.set(result)
             finished.signal()
-            MainRunLoop.perform { if let panel = ui.panel, NSApp.modalWindow === panel { NSApp.stopModal() } }
+            MainRunLoop.perform { deliverResult(result) }
         }
         if finished.wait(timeout: .now() + 0.2) == .success, let result = outcome.get() { return try result.get() }
         let panel = NSPanel(
@@ -914,11 +930,15 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         panel.center()
         // A worker that finished during the wait or the setup has its stop block queued for the
         // modal run loop; skipping the modal when the result is already here saves a flash.
-        if outcome.get() == nil { NSApp.runModal(for: panel) }
+        if let result = outcome.get() {
+            ui.result = result
+        } else {
+            NSApp.runModal(for: panel)
+        }
         panel.orderOut(nil)
         // Cancel wins over a result that arrived at the same moment.
         try control.checkCancellation()
-        guard let result = outcome.get() else {
+        guard let result = ui.result else {
             control.cancel()
             throw AutomationError.invalid("Automation cancelled. Nothing was changed.")
         }
@@ -1068,7 +1088,9 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             }
         )
     }
-    static func matchingExport(rows: [String], destinationID: String, batches: [ReminderBatch]) -> ReminderBatch? {
+    nonisolated static func matchingExport(rows: [String], destinationID: String, batches: [ReminderBatch])
+        -> ReminderBatch?
+    {
         batches.filter { $0.destinationID == destinationID && $0.rows.map(\.title) == rows }
             .max { $0.createdAt < $1.createdAt }
     }
@@ -1079,7 +1101,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         case needsConfirmation([ReminderJournalIssue])
         case clear
     }
-    static func exportPrecheck(
+    nonisolated static func exportPrecheck(
         rows: [String], destinationID: String, batches: [ReminderBatch], issues: [ReminderJournalIssue]
     ) -> ReminderExportPrecheck {
         if let existing = matchingExport(rows: rows, destinationID: destinationID, batches: batches) {
@@ -1088,19 +1110,19 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         return issues.isEmpty ? .clear : .needsConfirmation(issues)
     }
     /// The batches Clear Confirmed History removes: those with nothing left to resume or reconcile.
-    static func clearableBatches(_ batches: [ReminderBatch]) -> [ReminderBatch] {
+    nonisolated static func clearableBatches(_ batches: [ReminderBatch]) -> [ReminderBatch] {
         batches.filter { !$0.rows.isEmpty && $0.rows.allSatisfy { $0.status == .confirmed } }
     }
     /// Export History rows, newest first.
-    static func historyOrder(_ batches: [ReminderBatch]) -> [ReminderBatch] {
+    nonisolated static func historyOrder(_ batches: [ReminderBatch]) -> [ReminderBatch] {
         batches.sorted { ($0.createdAt, $0.id.uuidString) > ($1.createdAt, $1.id.uuidString) }
     }
     /// File names of unreadable journals with the reason for each, at most ten, then a count.
-    static func issueSummary(_ issues: [ReminderJournalIssue]) -> String {
+    nonisolated static func issueSummary(_ issues: [ReminderJournalIssue]) -> String {
         let lines = issues.prefix(10).map { "\($0.url.lastPathComponent): \($0.message)" }
         return (lines + (issues.count > 10 ? ["and \(issues.count - 10) more"] : [])).joined(separator: "\n")
     }
-    static func journalFailureHeader(_ underlying: Error) -> String {
+    nonisolated static func journalFailureHeader(_ underlying: Error) -> String {
         "The export journal could not be updated (\(underlying.localizedDescription)), so sending stopped. The list below is the outcome held in memory. Export History will show the last attempted item as uncertain, possibly although it was saved, and may be unavailable until the journal folder can be written again. Check Reminders before sending any of these items again."
     }
     /// Told about an export in which every item was confirmed. The app shows it in the document

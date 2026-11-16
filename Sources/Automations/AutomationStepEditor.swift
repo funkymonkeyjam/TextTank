@@ -503,10 +503,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
             }
             // Delivered through the run loop, so the result also arrives while a modal started from a
             // main-queue block is open.
-            MainRunLoop.perform {
-                precondition(Thread.isMainThread)
-                MainActor.assumeIsolated { deliver(outcome) }
-            }
+            MainRunLoop.perform { deliver(outcome) }
         }
     }
     @objc private func save() {

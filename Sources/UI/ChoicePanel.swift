@@ -5,7 +5,7 @@ import NativeSearch
 import AppKit
 
 /// A filtered, keyboard-operable chooser. Row identity is independent of its displayed name.
-final class ChoicePanel: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+@MainActor final class ChoicePanel: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
     struct Row { let id: String, title: String }
     let form: FormPanel
     let filter = NSTextField(string: "")
