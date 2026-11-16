@@ -77,3 +77,11 @@ and remaining application-client lists. Debug checks import the build-produced C
 metadata and link the actual signed embedded Core/NativeSearch images, with package name
 TextTank. Release retains normal optimization and ENABLE_TESTABILITY=NO. Header/module
 metadata remains separately hashed; code-image path/hash evidence is required for Core too.
+
+The Runtime target builds all UI/document/service code once, and the executable is a thin
+bootstrap. Native check clients import the matching build-produced Debug modules and link
+actual signed embedded Runtime/Core/native code. Check compilation pins the artifact's SDK;
+there are no product source arguments or product TESTING flags in the suite scripts. The two
+required DocumentChecks processes install explicit owned effects before the document-controller
+singleton and NSApplication; owned window animations are disabled through that dependency,
+while production defaults retain native animations and real sheet/save behavior.

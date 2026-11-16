@@ -1,6 +1,7 @@
 @testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 
@@ -38,6 +39,8 @@ import NativeSearch
                 defer { isolated.restore() }
                 LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent(
                     "LanguageProfiles.json")
+                NativeFixtureEnvironment.install()
+                defer { NativeFixtureEnvironment.restore() }
                 let documentController = TextDocumentController()
                 let app = NSApplication.shared
                 check(
@@ -65,6 +68,8 @@ import NativeSearch
             setenv("TEXTTANK_SUPPORT_DIRECTORY", root.appendingPathComponent("support").path, 1)
             defer { try? FileManager.default.removeItem(at: root) }
             // As in the app: the first document controller created becomes the shared one.
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             let documentController = TextDocumentController()
             let app = NSApplication.shared
             check(
@@ -843,8 +848,8 @@ import NativeSearch
                     "crash recovery opens the snapshot as a new unsaved document")
                 check(
                     recovered.editor.statusInfo.eol.rawValue == 0, "recovered document inserts its own line ending")
-                recovered.automaticRecoveryDelay = 0.02
-                recovered.maximumRecoveryDelay = 0.02
+                recovered.dependencies.automaticRecoveryDelay = 0.02
+                recovered.dependencies.maximumRecoveryDelay = 0.02
                 recovered.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 RunLoop.current.run(until: Date().addingTimeInterval(0.2))
                 recovered.flushRecovery()
@@ -924,10 +929,10 @@ import NativeSearch
                 race.fileURL = raceURL
                 try race.read(from: Data("original".utf8), ofType: "Plain Text")
                 race.editor.text = "our save"
-                race.afterWriteForTesting = { try Data("external edit".utf8).write(to: raceURL) }
+                race.dependencies.afterWrite = { try Data("external edit".utf8).write(to: raceURL) }
                 try race.writeSafely(to: raceURL, ofType: "Plain Text", for: .saveOperation)
                 check(try race.diskState() == .changed, "post-save external writer cannot become acknowledged baseline")
-                race.afterWriteForTesting = nil
+                race.dependencies.afterWrite = nil
                 race.editor.text = "our second save"
                 rejects("later save rejects post-save external edit", message: "The file changed outside TextTank") {
                     try race.writeSafely(to: raceURL, ofType: "Plain Text", for: .saveOperation)
@@ -942,7 +947,7 @@ import NativeSearch
                 try Data("old".utf8).write(to: changedURL)
                 changed.editor.text = "submitted"
                 changed.format = FileFormat(encoding: .utf16LE, bom: true)
-                changed.afterWriteForTesting = {
+                changed.dependencies.afterWrite = {
                     changed.format = FileFormat(encoding: .utf8, bom: false)
                     changed.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 }
@@ -956,7 +961,7 @@ import NativeSearch
                 check(
                     try FileCodec.decode(Data(contentsOf: changedURL)).text == "submitted",
                     "Save writes captured text despite later editor changes")
-                changed.afterWriteForTesting = nil
+                changed.dependencies.afterWrite = nil
                 changed.close()
 
             }
@@ -1040,8 +1045,8 @@ import NativeSearch
             }
             section("recovery timing and failure reporting") {
                 let recoveryDoc = TextDocument()
-                recoveryDoc.automaticRecoveryDelay = 0.25
-                recoveryDoc.maximumRecoveryDelay = 0.08
+                recoveryDoc.dependencies.automaticRecoveryDelay = 0.25
+                recoveryDoc.dependencies.maximumRecoveryDelay = 0.08
                 let deadline = Date().addingTimeInterval(0.24)
                 while Date() < deadline {
                     recoveryDoc.editor.text += "x"
@@ -1070,8 +1075,8 @@ import NativeSearch
                     (RunLoop.Mode.modalPanel, "modal"), (RunLoop.Mode.eventTracking, "event-tracking")
                 ] {
                     let modalDoc = TextDocument()
-                    modalDoc.automaticRecoveryDelay = 0.05
-                    modalDoc.maximumRecoveryDelay = 0.05
+                    modalDoc.dependencies.automaticRecoveryDelay = 0.05
+                    modalDoc.dependencies.maximumRecoveryDelay = 0.05
                     modalDoc.editor.text = "typed just before a \(label) loop"
                     let modalDeadline = Date().addingTimeInterval(1)
                     var modalSnapshot: RecoverySnapshot?
@@ -1113,11 +1118,11 @@ import NativeSearch
                 // F202: failures are sticky and distinct in the status line, escalate once, and reset on success.
                 var notices = 0
                 defer {
-                    TextDocument.recoveryFailureNoticeForTesting = nil
+                    NativeFixtureEnvironment.recoveryFailureNotice = nil
                     TextDocument.recoveryFailureNoticeShown = false
                 }
                 TextDocument.recoveryFailureNoticeShown = false
-                TextDocument.recoveryFailureNoticeForTesting = { _, _ in notices += 1 }
+                NativeFixtureEnvironment.recoveryFailureNotice = { _, _ in notices += 1 }
                 let failing = TextDocument()
                 NSDocumentController.shared.addDocument(failing)
                 failing.makeWindowControllers()
@@ -1182,7 +1187,7 @@ import NativeSearch
                     AppDelegate.recoveryIssueText(try TextDocument.recovery.scan().issues).contains(failingFile.path),
                     "recovery review lists the full path of each file")
                 try FileManager.default.removeItem(at: failingFile)
-                TextDocument.recoveryFailureNoticeForTesting = nil
+                NativeFixtureEnvironment.recoveryFailureNotice = nil
                 TextDocument.recoveryFailureNoticeShown = false
             }
             section("explicit encoding choice") {
@@ -1554,7 +1559,7 @@ import NativeSearch
                     badges().contains(Strings.count(9 + typed, .character)),
                     "typing after minimise and restore updates the character count \(badges())")
                 // The editor-event path alone also restarts a timer that was lost while on screen.
-                controller.stopStatusTimerForChecks()
+                controller.stopStatusTimer()
                 _ = visible.editor.replaceSelection("n")
                 spinUntil(timeout: 3, "the timer after an editor event") { controller.statusTimerActive }
                 check(
@@ -1575,8 +1580,8 @@ import NativeSearch
                 // Interactive macro playback holds one undo group open under a modal panel for
                 // the whole playback; the document must still be marked edited and snapshotted.
                 let doc = TextDocument()
-                doc.automaticRecoveryDelay = 0.05
-                doc.maximumRecoveryDelay = 0.2
+                doc.dependencies.automaticRecoveryDelay = 0.05
+                doc.dependencies.maximumRecoveryDelay = 0.2
                 try require(!doc.isDocumentEdited, "fixture: the document starts clean")
                 doc.editor.beginUndoGroup()
                 let playbackUntil = Date().addingTimeInterval(1.0)

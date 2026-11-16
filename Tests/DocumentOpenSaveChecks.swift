@@ -4,6 +4,7 @@
 // document-checks after the sections in DocumentChecks.swift and share its support directory
 // and document controller. Nothing here presents a panel: every chooser is an injected closure.
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 
@@ -293,7 +294,7 @@ extension DocumentChecks {
                 // NSDocument reads fileURL from its file-presenter queue. Only the thread doing
                 // the write may see the resolved destination; any other keeps the opened path.
                 var seenElsewhere: URL?, seenByWriter: URL?
-                document.duringWriteForTesting = {
+                document.dependencies.duringWrite = {
                     seenByWriter = document.fileURL
                     let done = DispatchSemaphore(value: 0)
                     let other = Thread {
@@ -304,7 +305,7 @@ extension DocumentChecks {
                     _ = done.wait(timeout: .now() + 5)
                 }
                 try document.writeSafely(to: url, ofType: "Plain Text", for: .saveOperation)
-                document.duringWriteForTesting = nil
+                document.dependencies.duringWrite = nil
                 check(
                     seenByWriter == document.diskURL && seenElsewhere == url && document.fileURL == url,
                     "\(label): only the writing thread sees the resolved location during an in-place Save")

@@ -1,6 +1,7 @@
 @testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 @main struct CommentCommandChecks {
@@ -175,6 +176,10 @@ import NativeSearch
                 }
             }
             check(clean, "no comment plan introduces U+FFFD into text that had none")
+            let runtimeSupport = try IsolatedSupportDirectory("CommentCommandChecksRuntime")
+            defer { runtimeSupport.restore() }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
             let
                 window = NSWindow(

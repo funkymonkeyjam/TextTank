@@ -15,10 +15,13 @@ suite_build "file-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/file-checks "
 suite_run file-checks harness/logs/file-checks.log build/tests/file-checks
 suite_build "automation-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/automation-checks "$SUITE_SUPPORT" Tests/AutomationChecks.swift
 suite_run automation-checks harness/logs/automation-checks.log build/tests/automation-checks
-suite_build "reminder-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/reminder-checks Sources/Connectors/RemindersConnector.swift "$SUITE_SUPPORT" Tests/ReminderChecks.swift
+suite_build "reminder-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/reminder-checks "$SUITE_SUPPORT" Tests/ReminderChecks.swift
 suite_run reminder-checks harness/logs/reminder-checks.log build/tests/reminder-checks
 suite_build "bridge-checks" clang++ "${CXX_BASE[@]}" -I Tests/Support -I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F "$VENDOR_BUILD" -framework Scintilla -framework Cocoa -Xlinker "$NATIVE_BRIDGE_LIBRARY" -Xlinker "$NATIVE_SEARCH_LIBRARY" Tests/BridgeChecks.mm -Wl,-rpath,"$VENDOR_BUILD" -o build/tests/bridge-checks
 suite_run bridge-checks harness/logs/bridge-checks.log build/tests/bridge-checks
+
+suite_build "module-contract-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/ModuleContractChecks.swift -o build/tests/module-contract-checks
+suite_run module-contract-checks harness/logs/module-contract-checks.log build/tests/module-contract-checks
 
 suite_script scripts/test-documents.sh
 

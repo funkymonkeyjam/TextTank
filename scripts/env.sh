@@ -14,7 +14,5 @@ SWIFT_BASE=(-swift-version 5 -package-name TextTank -target "$ARCH-apple-macos$D
 CXX_BASE=(-std=c++17 -fobjc-arc "-mmacosx-version-min=$DEPLOYMENT_TARGET")
 BRIDGE_INCLUDES=(-I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F "$VENDOR_BUILD")
 APP_LINK=(-framework Scintilla -framework Cocoa -Xlinker -rpath -Xlinker "$VENDOR_BUILD")
-APP_SOURCES=()
-while IFS= read -r source_path; do APP_SOURCES+=("$source_path"); done < <(python3 "$TEXTTANK_ROOT/scripts/core_sources.py" --application-clients)
 if [[ "$CONFIGURATION" == Release ]]; then SWIFT_BASE+=(-O); CXX_BASE+=(-O2); fi
 export CONFIGURATION ARCH DEPLOYMENT_TARGET VENDOR_BUILD APP_PATH LEXILLA_LIBRARY

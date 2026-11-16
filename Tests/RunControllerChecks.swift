@@ -1,13 +1,16 @@
 @testable import TextTankCore
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 @main struct RunControllerChecks {
     @MainActor static func main() {
         Checks.run("RunControllerChecks") {
-            _ = NSApplication.shared
             let isolatedSupport = try IsolatedSupportDirectory("TextTankRunControllerChecks")
             defer { isolatedSupport.restore() }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
+            _ = NSApplication.shared
             let document = TextDocument()
             document.makeWindowControllers()
             document.editor.text = "original"

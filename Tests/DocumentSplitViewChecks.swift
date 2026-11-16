@@ -5,6 +5,7 @@
 // support directory. The check process has no main window, so "the document window focused
 // last" is set directly on the application delegate, as the pinning checks do.
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 

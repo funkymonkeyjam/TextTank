@@ -1,6 +1,7 @@
 @testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 import Darwin
@@ -17,6 +18,8 @@ import Darwin
                 NSDocumentController.shared.documents.forEach { $0.close() }
                 try? FileManager.default.removeItem(at: root)
             }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
             let folder = root.appendingPathComponent("project")
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

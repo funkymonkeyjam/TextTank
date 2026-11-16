@@ -45,7 +45,8 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     }
     private var runControl: AutomationRunControl?
     /// The pasteboard used for clipboard input and output. Checks substitute a private one.
-    var pasteboard = NSPasteboard.general
+    var pasteboard: NSPasteboard?
+    private var activePasteboard: NSPasteboard? { pasteboard ?? RuntimeEnvironment.current.generalPasteboard() }
     /// Internal, not private, so that a check can hold an export open without EventKit.
     var exportInProgress = false {
         didSet {
@@ -763,7 +764,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             // File input explicitly accepts valid UTF-8 only; never guess or replace invalid bytes.
             input = try AutomationFileInput.read(url)
         case .clipboard:
-            guard let value = Self.plainText(from: pasteboard) else {
+            guard let board = activePasteboard, let value = Self.plainText(from: board) else {
                 throw AutomationError.invalid("The clipboard does not contain supported text.")
             }
             input = value
@@ -814,8 +815,11 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             guard workflow.input == .document ? editor.replaceDocumentText(output) : editor.replaceSelection(output)
             else { throw AutomationError.invalid("The automation result could not be written to the editor.") }
         case .clipboard:
-            pasteboard.clearContents()
-            guard pasteboard.setString(output, forType: .string) else {
+            guard let board = activePasteboard else {
+                throw AutomationError.invalid("Clipboard access is unavailable for this isolated support directory.")
+            }
+            board.clearContents()
+            guard board.setString(output, forType: .string) else {
                 throw AutomationError.invalid("The clipboard could not be updated.")
             }
         case .newDocument: newDocument(output)

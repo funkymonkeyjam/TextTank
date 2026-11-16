@@ -154,15 +154,12 @@ private final class FrameTracker: NSObject {
 /// to VoiceOver unless the person moves to it; a finished search, a failed find or a refused
 /// edit is announced so that they keep their place.
 enum Announce {
-    #if TESTING
-        /// Every announcement made, newest last, for checks.
-        static var spoken: [String] = []
-    #endif
     static func say(_ text: String, from element: Any? = nil) {
         guard !text.isEmpty else { return }
-        #if TESTING
-            spoken.append(text)
-        #endif
+        if let announce = RuntimeEnvironment.current.announce {
+            announce(text, element)
+            return
+        }
         guard let source = element ?? NSApp.keyWindow ?? NSApp.mainWindow else { return }
         NSAccessibility.post(
             element: source, notification: .announcementRequested,

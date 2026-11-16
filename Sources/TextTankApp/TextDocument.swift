@@ -18,9 +18,6 @@ import AppKit
     private(set) var recoveryBase: UInt64 = 0
     /// One notice per app session about repeated recovery-write failures.
     static var recoveryFailureNoticeShown = false
-    #if TESTING
-        static var recoveryFailureNoticeForTesting: ((TextDocument, Error) -> Void)?
-    #endif
     private var recoveryFailures = RecoveryFailureTracker()
     /// The failure of the most recent recovery write or cleanup; nil after a success.
     private(set) var lastRecoveryError: Error?
@@ -31,15 +28,9 @@ import AppKit
     private var recoveryGeneration = 0
     /// Terminal once close starts: no timer or late completion may enqueue another copy.
     private var recoveryClosed = false
-    private static let defaultAutomaticRecoveryDelay: TimeInterval = 0.5
-    private static let defaultMaximumRecoveryDelay: TimeInterval = 5
-    #if TESTING
-        var automaticRecoveryDelay = TextDocument.defaultAutomaticRecoveryDelay
-        var maximumRecoveryDelay = TextDocument.defaultMaximumRecoveryDelay
-    #else
-        private let automaticRecoveryDelay = TextDocument.defaultAutomaticRecoveryDelay
-        private let maximumRecoveryDelay = TextDocument.defaultMaximumRecoveryDelay
-    #endif
+    var dependencies: DocumentDependencies
+    private var automaticRecoveryDelay: TimeInterval { dependencies.automaticRecoveryDelay }
+    private var maximumRecoveryDelay: TimeInterval { dependencies.maximumRecoveryDelay }
     let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
     /// Encoding/BOM checkpoint paired with the save point from the latest completed read or save.
     private(set) var savedFormat = FileFormat(encoding: .utf8, bom: false)
@@ -68,12 +59,7 @@ import AppKit
     /// of the freshly loaded editor's save point and format checkpoint. Keep this broader rule distinct.
     private var shouldKeepRecoveryCopy: Bool { isDocumentEdited || editor.modified || format != savedFormat }
     private var recoveryRevision: UInt64 { recoveryBase + UInt64(editor.revision) }
-    #if TESTING
-        var afterWriteForTesting: (() throws -> Void)?
-        /// Runs while NSDocument is inside an in-progress write, as the bytes are produced.
-        var duringWriteForTesting: (() -> Void)?
-        var hasSettledDiskSignature: Bool { diskSignature != nil }
-    #endif
+    var hasSettledDiskSignature: Bool { diskSignature != nil }
     var originalDiskFingerprint: String? { diskDigest }
     private(set) var languageIdentifier = LanguageProfile.plainTextID { didSet { languageResolved = true } }
     /// State notification after LanguageController already installed the lexer and view styles.
@@ -257,7 +243,11 @@ import AppKit
         }
         do { try reload(using: encoding, discard: true) } catch { presentError(error) }
     }
-    override init() {
+    override convenience init() {
+        self.init(dependencies: RuntimeEnvironment.current.document())
+    }
+    init(dependencies: DocumentDependencies) {
+        self.dependencies = dependencies
         super.init()
         hasUndoManager = false
         // Typing or a key command that Scintilla refuses in a read-only document; the status bar
@@ -358,22 +348,18 @@ import AppKit
     /// A sheet, never an app-modal alert: this runs from the recovery timer and must not
     /// interrupt typing. Returns false when there was nowhere to show it, so a later failure retries.
     private func presentRecoveryFailureNotice(_ error: Error) -> Bool {
-        #if TESTING
-            Self.recoveryFailureNoticeForTesting?(self, error)
-            return Self.recoveryFailureNoticeForTesting != nil
-        #else
-            guard let window = windowControllers.compactMap({ $0.window }).first(where: { $0.isVisible }) else {
-                return false
-            }
-            let alert = TTAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Unsaved changes are not being backed up"
-            alert.informativeText =
-                "TextTank could not write the crash-recovery copy of “\(displayName ?? "this document")” more than once in a row. If the app quit unexpectedly now, recent edits could be lost. The document itself is unchanged; save it to keep your work.\n\nReason: \(error.localizedDescription)\n\nThis notice appears once per session. The status line keeps showing the failure until a recovery copy is written again."
-            alert.addButton(withTitle: "OK")
-            alert.beginSheetModal(for: window)
-            return true
-        #endif
+        if let notice = dependencies.recoveryFailureNotice { return notice(self, error) }
+        guard let window = windowControllers.compactMap({ $0.window }).first(where: { $0.isVisible }) else {
+            return false
+        }
+        let alert = TTAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Unsaved changes are not being backed up"
+        alert.informativeText =
+            "TextTank could not write the crash-recovery copy of “\(displayName ?? "this document")” more than once in a row. If the app quit unexpectedly now, recent edits could be lost. The document itself is unchanged; save it to keep your work.\n\nReason: \(error.localizedDescription)\n\nThis notice appears once per session. The status line keeps showing the failure until a recovery copy is written again."
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window)
+        return true
     }
     private func enqueueRecovery() {
         guard !recoveryClosed else { return }
@@ -667,9 +653,7 @@ import AppKit
         return operation
     }
     override func data(ofType typeName: String) throws -> Data {
-        #if TESTING
-            duringWriteForTesting?()
-        #endif
+        dependencies.duringWrite?()
         if let savePayload { return savePayload }
         return try FileCodec.encode(editor.text, format: format)
     }
@@ -697,9 +681,7 @@ import AppKit
             defer { inPlaceWriteURL = nil }
             try super.writeSafely(to: destination, ofType: typeName, for: saveOperation)
         }
-        #if TESTING
-            try afterWriteForTesting?()
-        #endif
+        try dependencies.afterWrite?()
         if saveOperation != .saveToOperation {
             // The baseline is what was submitted. The file's metadata is not recorded here:
             // another writer may already have replaced it, and only a hash can tell.

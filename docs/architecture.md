@@ -409,3 +409,12 @@ version decoding requirements and existing defaults. UUID/Date defaults evaluate
 construction. Native checks import the actual built Debug Core module and link/load its
 signed application image rather than recompiling those sources. Swift UI source copies and
 TESTING seams remain until the separate Runtime target transition; this is partial F269.
+
+TextTankRuntime now owns the AppKit/document/controller/service composition and depends on
+Core, EditorBridge and NativeSearch. TextTankMain is only the executable bootstrap; Runtime
+initializes the custom document controller before NSApplication and installs services in the
+existing order. The stable Objective-C TextDocument name is retained. Checks compile only
+Tests sources and consume the actual signed Runtime/Core/native images. Product TESTING
+branches are replaced by explicit document timing/write/notice configuration and runtime
+window/Find/announcement effects; production defaults remain unchanged. Isolated support
+without explicit owner capabilities cannot obtain general clipboard or EventKit implicitly.

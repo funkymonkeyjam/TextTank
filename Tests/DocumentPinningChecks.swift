@@ -8,6 +8,7 @@
 // compared with what the build does. A `knownDefect` line marks behaviour the audit
 // confirmed as wrong: it is not pinned as correct, and it fails when it is repaired.
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 

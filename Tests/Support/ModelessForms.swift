@@ -1,6 +1,7 @@
 @testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 
@@ -68,5 +69,49 @@ func waitForModelessForms(
         }
         edit()
         return false
+    }
+}
+
+/// Explicit effects owned by the native test host; production defaults remain unchanged.
+enum NativeFixtureEnvironment {
+    static var announcements: [String] = []
+    static var recoveryFailureNotice: ((TextDocument, Error) -> Void)?
+    private static var board: NSPasteboard?
+    private static var previous: RuntimeDependencies?
+    static func install() {
+        precondition(!AppStorage.permitsLegacyDefaults, "Install owned support isolation before runtime effects")
+        previous = RuntimeEnvironment.dependencies
+        var effects = RuntimeDependencies()
+        effects.windowAnimation = .none
+        effects.document = {
+            DocumentDependencies(recoveryFailureNotice: { document, error in
+                guard let notice = recoveryFailureNotice else { return false }
+                notice(document, error)
+                return true
+            })
+        }
+        effects.announce = { text, _ in announcements.append(text) }
+        effects.readFindText = { findBoard().string(forType: .string) ?? "" }
+        effects.writeFindText = { text in
+            let pasteboard = findBoard()
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+        }
+        effects.generalPasteboard = { nil }
+        RuntimeEnvironment.dependencies = effects
+    }
+    private static func findBoard() -> NSPasteboard {
+        if let board { return board }
+        let created = NSPasteboard.withUniqueName()
+        board = created
+        return created
+    }
+    static func restore() {
+        board?.releaseGlobally()
+        board = nil
+        announcements = []
+        recoveryFailureNotice = nil
+        RuntimeEnvironment.dependencies = previous
+        previous = nil
     }
 }

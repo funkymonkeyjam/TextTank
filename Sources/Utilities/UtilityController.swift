@@ -6,9 +6,7 @@ import AppKit
 
 final class UtilityController: NSObject {
     private let editorProvider: () -> TTEditor?
-    #if TESTING
-        var activeEditor: () -> TTEditor? { editorProvider }
-    #endif
+    var activeEditor: () -> TTEditor? { editorProvider }
     /// Called immediately before a utility changes the document, and at no other time: asking
     /// for the editor, a cancelled dialog, a failed guard and an export leave a macro recording alone.
     var onUnrecordableEdit: () -> Void = {}

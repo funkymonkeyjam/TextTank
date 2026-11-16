@@ -3,6 +3,7 @@
 import Foundation
 #if TEXTTANK_NATIVE_MACRO_TEST
     import AppKit
+    @testable import TextTankRuntime
     import EditorBridge
     import NativeSearch
 #endif
@@ -1033,6 +1034,8 @@ import Foundation
             #if TEXTTANK_NATIVE_MACRO_TEST
                 let isolatedSupport = try IsolatedSupportDirectory("TextTankMacroChecks")
                 defer { isolatedSupport.restore() }
+                NativeFixtureEnvironment.install()
+                defer { NativeFixtureEnvironment.restore() }
                 _ = NSApplication.shared
                 Checks.section("F149 unsafe macro storage") {
                     let originalOverride = isolatedSupport.url.path

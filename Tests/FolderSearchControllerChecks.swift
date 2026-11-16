@@ -1,5 +1,6 @@
 @testable import TextTankCore
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 @main struct FolderSearchControllerChecks {
@@ -7,6 +8,8 @@ import NativeSearch
         await Checks.run("FolderSearchControllerChecks") {
             let isolatedSupport = try IsolatedSupportDirectory("TextTankFolderUIChecks"), support = isolatedSupport.url
             defer { isolatedSupport.restore() }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
             let protectedSuite = "TextTankFolderProtected-" + UUID().uuidString
             let protected = try requireValue(UserDefaults(suiteName: protectedSuite), "fixture: protected defaults")

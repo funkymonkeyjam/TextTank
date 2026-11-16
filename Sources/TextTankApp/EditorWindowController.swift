@@ -21,9 +21,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     private var compactStatusText = "Ready"
     private var recoveryStatusFailed = false
     var statusText: String { fullStatusText }
-    #if TESTING
-        var status: NSTextField { statusLabel }
-    #endif
+    var status: NSTextField { statusLabel }
     func setStatusMessage(_ message: String) {
         guard !recoveryStatusFailed else { return }
         applyStatusMessage(message)
@@ -55,13 +53,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     var statusTimerInterval: TimeInterval? = 0.2
     /// True while the recurring refresh is scheduled, which is only while the window is on screen.
     var statusTimerActive: Bool { statusTimer != nil }
-    #if TESTING
-        /// Drops the timer without any visibility change, as a lost timer would look.
-        func stopStatusTimerForChecks() {
-            statusTimer?.invalidate()
-            statusTimer = nil
-        }
-    #endif
+    /// Stop the recurring refresh without changing visibility.
+    func stopStatusTimer() {
+        statusTimer?.invalidate()
+        statusTimer = nil
+    }
     private var statusClosed = false
     private var inlineSearchGeneration = UUID()
     private var inlineCancellation: TTSearchCancellation?
@@ -135,12 +131,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
-        #if TESTING
-            // The CLI checks drive many document transitions without NSApplication.run.
-            // Their native animations exhausted AppKit workers before a save panel could open.
-            // Suppress only this owned fixture transition; native sheets and production keep their behavior.
-            window.animationBehavior = .none
-        #endif
+        if let animation = RuntimeEnvironment.current.windowAnimation { window.animationBehavior = animation }
         lastEditor = document.editor
         wire(document.editor)
         focusObservation = window.observe(\.firstResponder) { [weak self] window, _ in
@@ -808,19 +799,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         splitBelowFindBar?.isActive = visible
     }
     /// The text other apps and the Find and Replace window last searched for.
-    #if TESTING
-        /// Checks never read or write the Mac's shared find pasteboard.
-        static var findPasteboardText = ""
-    #else
-        static var findPasteboardText: String {
-            get { NSPasteboard(name: .find).string(forType: .string) ?? "" }
-            set {
-                let board = NSPasteboard(name: .find)
-                board.clearContents()
-                board.setString(newValue, forType: .string)
-            }
-        }
-    #endif
+    static var findPasteboardText: String {
+        get { RuntimeEnvironment.current.readFindText() }
+        set { RuntimeEnvironment.current.writeFindText(newValue) }
+    }
     /// The advanced window and inline bar share the query without scheduling another search.
     func acceptSharedFindText(_ text: String) {
         cancelInlineSearch()

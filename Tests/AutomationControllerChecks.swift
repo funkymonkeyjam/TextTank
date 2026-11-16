@@ -1,6 +1,7 @@
 @testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 
@@ -1331,6 +1332,8 @@ final class Audit24RecoverySpy: NSObject {
             let isolatedSupport = try IsolatedSupportDirectory("TextTankAutomationControllerChecks"),
                 root = isolatedSupport.url
             defer { isolatedSupport.restore() }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
             Checks.section("horizontal dialog actions") { try horizontalDialogChecks() }
             Checks.section("modeless Unicode controller conflict") { try staleModelessJSONCheck() }
@@ -1977,7 +1980,7 @@ final class Audit24RecoverySpy: NSObject {
                 clipboardLibrary.workflows[0].steps = [.init(kind: .removeBlankLines)]
                 try restarted.persistLibrary(clipboardLibrary)
                 restarted.pasteboard = board
-                defer { restarted.pasteboard = .general }
+                defer { restarted.pasteboard = nil }
                 editor.text = "before"
                 editor.resetUndoHistory()
                 _ = editor.setSelectionAnchor(0, caret: 6)

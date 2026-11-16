@@ -1,6 +1,7 @@
 @testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 import zlib
@@ -205,6 +206,10 @@ import zlib
                 try HexEncodingOptions(insertSpaces: true, uppercase: false, bytesPerLine: 2, lineEnding: "\r\n")
                     .encode("aéb") == "61 c3\r\na9 62\r\n", "hex options encode bytes not characters")
             check(try HexEncodingOptions(bytesPerLine: 0).encode("café") == "636166C3A9", "hex unwrapped option")
+            let runtimeSupport = try IsolatedSupportDirectory("UtilityChecksRuntime")
+            defer { runtimeSupport.restore() }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
             let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 500, height: 300))
             let window = NSWindow(contentRect: editor.bounds, styleMask: [.titled], backing: .buffered, defer: false)

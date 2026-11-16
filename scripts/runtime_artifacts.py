@@ -18,7 +18,7 @@ import bootstrap
 import build_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
-FRAMEWORKS = ['Scintilla', 'NativeSearch', 'EditorBridge', 'TextTankCore']
+FRAMEWORKS = ['Scintilla', 'NativeSearch', 'EditorBridge', 'TextTankCore', 'TextTankRuntime']
 
 
 def command(*arguments, cwd=None):

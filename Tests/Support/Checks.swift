@@ -117,7 +117,7 @@ enum Checks {
     private static func verifyNativeImages() {
         let classes = [
             ("TTEditor", "EditorBridge"), ("TTSearchEngine", "NativeSearch"),
-            ("ScintillaView", "Scintilla")
+            ("ScintillaView", "Scintilla"), ("TextDocument", "TextTankRuntime")
         ]
         var loaded = classes.compactMap { name, framework -> (AnyClass, String)? in
             guard let type = NSClassFromString(name) else { return nil }

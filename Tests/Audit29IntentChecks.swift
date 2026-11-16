@@ -1,5 +1,6 @@
 @testable import TextTankCore
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 

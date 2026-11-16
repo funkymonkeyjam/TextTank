@@ -17,7 +17,7 @@ def dependencies(image):
 def verify(app):
     app = Path(app)
     expected = {name: f"@rpath/{name}.framework/Versions/A/{name}"
-                for name in ["NativeSearch", "EditorBridge", "TextTankCore"]}
+                for name in ["NativeSearch", "EditorBridge", "TextTankCore", "TextTankRuntime"]}
     images = {name: app / f"Contents/Frameworks/{name}.framework/Versions/A/{name}"
               for name in expected}
     for name, image in images.items():

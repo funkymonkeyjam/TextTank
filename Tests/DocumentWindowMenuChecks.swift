@@ -7,6 +7,7 @@
 // is the one the "menu and command wiring" section built: its submenus belong to that menu bar,
 // so the delegate cannot build a second one.
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 import UniformTypeIdentifiers
@@ -1434,13 +1435,13 @@ extension DocumentChecks {
                 "DS35 Find Previous also routes to the open advanced window")
             advanced.window = originalFindWindow
             // N4: a failed find is put into words and announced, not only beeped.
-            Announce.spoken.removeAll()
+            NativeFixtureEnvironment.announcements.removeAll()
             controller.findField.stringValue = "zebra"
             controller.findFromMenu(backwards: false)
             spinUntil("inline Find to finish") { !controller.inlineSearchPending }
             check(
                 controller.status.stringValue == "No matches for “zebra”."
-                    && Announce.spoken.contains("No matches for “zebra”."),
+                    && NativeFixtureEnvironment.announcements.contains("No matches for “zebra”."),
                 "a failed find says No matches in the status line and to assistive technology")
             check(
                 controller.control(
@@ -1452,11 +1453,11 @@ extension DocumentChecks {
             check(
                 controller.findField.stringValue == "zebra" && controller.status.stringValue.contains("one line"),
                 "Use Selection for Find refuses a selection that spans lines, in words")
-            Announce.spoken.removeAll()
+            NativeFixtureEnvironment.announcements.removeAll()
             document.editor.readOnly = true
             document.noteReadOnlyAttempt()
             check(
-                Announce.spoken.contains { $0.hasPrefix("Read Only is on") },
+                NativeFixtureEnvironment.announcements.contains { $0.hasPrefix("Read Only is on") },
                 "typing in a read-only document is explained, not only beeped")
             document.editor.readOnly = false
             controller.refreshStatusDetails()

@@ -58,10 +58,11 @@ suite_require_build() {
   NATIVE_SEARCH_LIBRARY="$TEXTTANK_FRAMEWORKS/NativeSearch.framework/Versions/A/NativeSearch"
   NATIVE_CORE_LIBRARY="$TEXTTANK_FRAMEWORKS/TextTankCore.framework/Versions/A/TextTankCore"
   TEXTTANK_MODULE_PRODUCTS=$(python3 -c 'import json,sys; from pathlib import Path; v=json.load(open(sys.argv[1])); print(Path(v["build_root"])/"build/DerivedData/Build/Products"/v["configuration"])' "$TEXTTANK_ARTIFACT_MANIFEST")
+  TEXTTANK_SDKROOT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["toolchain"]["sdk"])' "$TEXTTANK_ARTIFACT_MANIFEST")
   # Put the actual embedded signed frameworks before the dependency build folder.
   # Header input bytes are validated separately; no product source is compiled here.
-  SWIFT_BASE+=(-F "$TEXTTANK_FRAMEWORKS" -F "$TEXTTANK_MODULE_PRODUCTS" -Xlinker -rpath -Xlinker "$TEXTTANK_FRAMEWORKS" -Xlinker "$NATIVE_CORE_LIBRARY" -Xlinker "$NATIVE_SEARCH_LIBRARY")
-  CXX_BASE+=(-F "$TEXTTANK_FRAMEWORKS" "-Wl,-rpath,$TEXTTANK_FRAMEWORKS")
+  SWIFT_BASE+=(-sdk "$TEXTTANK_SDKROOT" -F "$TEXTTANK_FRAMEWORKS" -F "$TEXTTANK_MODULE_PRODUCTS" -Xlinker -rpath -Xlinker "$TEXTTANK_FRAMEWORKS" -Xlinker "$NATIVE_CORE_LIBRARY" -Xlinker "$NATIVE_SEARCH_LIBRARY")
+  CXX_BASE+=(-isysroot "$TEXTTANK_SDKROOT" -F "$TEXTTANK_FRAMEWORKS" "-Wl,-rpath,$TEXTTANK_FRAMEWORKS")
   export APP_PATH TEXTTANK_FRAMEWORKS TEXTTANK_ARTIFACT_MANIFEST NATIVE_BRIDGE_LIBRARY NATIVE_SEARCH_LIBRARY
 }
 
@@ -115,7 +116,7 @@ suite_run() {
   if [[ "$status" == 0 && ( "$1" == build/tests/* || "$1" == "$PWD"/build/tests/* ) ]]; then
     local native_dependencies image_name inspection_status
     if native_dependencies=$(otool -L "$1" 2>&1); then
-      for image_name in NativeSearch EditorBridge Scintilla TextTankCore; do
+      for image_name in NativeSearch EditorBridge Scintilla TextTankCore TextTankRuntime; do
         if [[ "$native_dependencies" == *"/$image_name.framework/"* ]] && ! grep -q "^ARTIFACT_IMAGE $image_name " "$log"; then
           echo "FAIL $name: missing actual loaded signed $image_name image proof" | tee -a "$log"
           status=1

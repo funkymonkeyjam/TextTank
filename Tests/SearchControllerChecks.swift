@@ -1,5 +1,6 @@
 @testable import TextTankCore
 import AppKit
+@testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 /// Find-window navigation fronts the document window; checks must never put one on screen.
@@ -34,6 +35,8 @@ private final class SelectionReadCounterEditor: TTEditor {
         await Checks.run("SearchControllerChecks") {
             let support = try IsolatedSupportDirectory("TextTankSearchControllerChecks")
             defer { support.restore() }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
             let closedEditor = SelectionReadCounterEditor(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
             closedEditor.text = "alpha"

@@ -81,6 +81,14 @@ struct ReminderJournalIssue {
     func save(title: String, destinationID: String) throws -> String
 }
 
+/// An isolated support directory never creates the owner's EventKit store implicitly.
+@MainActor private final class UnavailableReminderStore: ReminderStore {
+    var permission: ReminderPermission { .denied }
+    func requestAccess() async throws { throw ReminderConnectorError.permissionRequired }
+    func destinations() throws -> [ReminderDestination] { throw ReminderConnectorError.permissionRequired }
+    func save(title: String, destinationID: String) throws -> String { throw ReminderConnectorError.permissionRequired }
+}
+
 @MainActor final class EventKitReminderStore: ReminderStore {
     private let store = EKEventStore()
     var permission: ReminderPermission {
@@ -329,7 +337,7 @@ actor ReminderJournalFile {
     private var busy = false
     init(storageURL: URL) {
         self.storageURL = storageURL
-        self.store = EventKitReminderStore()
+        self.store = AppStorage.permitsLegacyDefaults ? EventKitReminderStore() : UnavailableReminderStore()
     }
     init(storageURL: URL, store: ReminderStore) {
         self.storageURL = storageURL
