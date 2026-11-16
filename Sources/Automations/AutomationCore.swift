@@ -863,7 +863,23 @@ final package class AutomationRunControl: @unchecked Sendable {
 
     private let lock = NSLock()
     private var cancelled = false
-    package var onProgress: ((Int, Int) -> Void)?
+    // The complete mutable state is protected by lock. Callbacks are copied while locked,
+    // then invoked and destroyed after unlock so arbitrary reentry cannot deadlock.
+    private var progressCallback: (@Sendable (Int, Int) -> Void)?
+    package var onProgress: (@Sendable (Int, Int) -> Void)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return progressCallback
+        }
+        set {
+            lock.lock()
+            let displaced = progressCallback
+            progressCallback = newValue
+            lock.unlock()
+            withExtendedLifetime(displaced) {}
+        }
+    }
     package func cancel() {
         lock.lock()
         cancelled = true
@@ -877,7 +893,8 @@ final package class AutomationRunControl: @unchecked Sendable {
     }
     package func checkpoint(completed: Int, total: Int) throws {
         try checkCancellation()
-        onProgress?(completed, total)
+        let callback = onProgress
+        callback?(completed, total)
     }
 }
 

@@ -4,8 +4,64 @@ import Foundation
 import Darwin
 
 @main struct AutomationChecks {
+    static func progressReentry(_ mode: String) throws {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) { exit(70) }
+        let control = AutomationRunControl(), done = DispatchSemaphore(value: 0)
+        if mode == "release" {
+            installProgressCapture(control, done)
+            control.onProgress = nil
+        } else if mode == "invoke" {
+            control.onProgress = { _, _ in
+                control.onProgress = nil
+                control.cancel()
+                done.signal()
+            }
+            try control.checkpoint(completed: 0, total: 1)
+        } else {
+            throw ProgressReentryFailure.unknownMode
+        }
+        check(
+            done.wait(timeout: .now() + 1) == .success,
+            "progress callback reentry completes outside the control lock")
+        rejects("progress callback reentry reaches the actual cancellation state", message: "Automation cancelled") {
+            try control.checkCancellation()
+        }
+    }
+    static func installProgressCapture(_ control: AutomationRunControl, _ done: DispatchSemaphore) {
+        let token = AutomationProgressCapture(control: control, done: done)
+        control.onProgress = { _, _ in withExtendedLifetime(token) {} }
+    }
     static func main() {
+        if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--progress-reentry" {
+            Checks.run("AutomationProgressReentryChecks") {
+                try progressReentry(CommandLine.arguments[2])
+                Checks.summary { "PASS AutomationProgressReentryChecks: \(Checks.count) assertions" }
+            }
+        }
         Checks.run("AutomationChecks") {
+            for mode in ["release", "invoke"] {
+                let child = Process(), output = Pipe()
+                child.executableURL = Checks.executable
+                child.arguments = ["--progress-reentry", mode]
+                child.standardOutput = output
+                child.standardError = output
+                try child.run()
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                child.waitUntilExit()
+                let text = String(decoding: data, as: UTF8.self)
+                check(
+                    child.terminationReason == .exit && child.terminationStatus == 0
+                        && text.contains("PASS AutomationProgressReentryChecks: 2 assertions"),
+                    "F316 actual progress callback \(mode) can reenter its control without deadlock")
+            }
+            let concurrentControl = AutomationRunControl(), concurrentObservations = AutomationProgressObservations()
+            concurrentControl.onProgress = { step, _ in concurrentObservations.record(step) }
+            DispatchQueue.concurrentPerform(iterations: 100) { step in
+                _ = try? concurrentControl.checkpoint(completed: step, total: 100)
+            }
+            check(
+                concurrentObservations.completed.sorted() == Array(0..<100),
+                "F316 actual concurrent progress callbacks retain every completed checkpoint")
             var definition = AutomationDefinition.example
             // This older generic bullet-only configuration intentionally keeps unmarked rows.
             definition.steps = [.init(kind: .removeListMarkers), .init(kind: .removeBlankLines)]
@@ -224,11 +280,12 @@ import Darwin
                 _ = try AutomationDefinition.example.transform(native, control: control)
             }
             let progress = AutomationRunControl()
-            var completed: [Int] = []
-            progress.onProgress = { step, _ in completed.append(step) }
+            let progressObservations = AutomationProgressObservations()
+            progress.onProgress = { step, _ in progressObservations.record(step) }
             _ = try AutomationDefinition.example.transform(native, control: progress)
             check(
-                completed.first == 0 && completed.last == AutomationDefinition.example.steps.count,
+                progressObservations.completed.first == 0
+                    && progressObservations.completed.last == AutomationDefinition.example.steps.count,
                 "progress reaches all steps")
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(
                 "AutomationFiles-" + UUID().uuidString)
@@ -477,17 +534,19 @@ import Darwin
             let activeText = String(repeating: "[", count: 2 * 1024 * 1024)
             // Cancel from the checkpoint that precedes the only step: the request is then
             // pending while that step runs, with no timer and no dependence on speed.
-            var cancelledAtCheckpoint = false
+            let cancellationObservations = AutomationProgressObservations()
             activeCancellation.onProgress = { completed, _ in
                 if completed == 0 {
                     activeCancellation.cancel()
-                    cancelledAtCheckpoint = true
+                    cancellationObservations.markCancelled()
                 }
             }
             rejects("active Markdown transformation observes cancellation", message: "Automation cancelled") {
                 _ = try bounded.transform(activeText, control: activeCancellation)
             }
-            check(cancelledAtCheckpoint, "active transformation was cancelled from its own progress checkpoint")
+            check(
+                cancellationObservations.cancelledAtCheckpoint,
+                "active transformation was cancelled from its own progress checkpoint")
             let escapedMalformed = "[" + String(repeating: "\\x", count: 20000)
             check(
                 try bounded.transform(escapedMalformed) == escapedMalformed,
@@ -737,15 +796,15 @@ import Darwin
             rule.steps = [.init(kind: .sortLinesLocalized, find: "x")]
             rejects("G347 the locale sort takes no parameter") { try rule.validate() }
             let sortCancel = AutomationRunControl()
-            var comparisonsSeen = false
+            let sortObservations = AutomationProgressObservations()
             sortCancel.onProgress = { completed, _ in
-                if completed == 0 { sortCancel.cancel() } else { comparisonsSeen = true }
+                if completed == 0 { sortCancel.cancel() } else { sortObservations.markComparison() }
             }
             rule.steps = [.init(kind: .sortLinesLocalized)]
             rejects("G347 the locale sort observes cancellation", message: "Automation cancelled") {
                 _ = try rule.transform((0..<20_000).map { "row \(20_000 - $0)\n" }.joined(), control: sortCancel)
             }
-            check(!comparisonsSeen, "G347 a cancelled sort never reports its step complete")
+            check(!sortObservations.comparisonsSeen, "G347 a cancelled sort never reports its step complete")
             check(
                 LineOrder.codePointAscending("Z", "a") && !LineOrder.localizedAscending("Z", "a")
                     && LineOrder.localizedAscending("item 9", "item 10")
@@ -1139,5 +1198,58 @@ import Darwin
                 "PASS AutomationChecks: \(Checks.count) assertions (pure core; native UI and external outputs not covered)"
             }
         }
+    }
+}
+
+private enum ProgressReentryFailure: Error { case unknownMode }
+
+/// Only this fixture's complete mutable observation state is protected by its lock.
+private final class AutomationProgressObservations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var steps: [Int] = []
+    private var cancelled = false
+    private var compared = false
+    func record(_ step: Int) {
+        lock.lock()
+        steps.append(step)
+        lock.unlock()
+    }
+    func markCancelled() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+    func markComparison() {
+        lock.lock()
+        compared = true
+        lock.unlock()
+    }
+    var completed: [Int] {
+        lock.lock()
+        defer { lock.unlock() }
+        return steps
+    }
+    var cancelledAtCheckpoint: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+    var comparisonsSeen: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return compared
+    }
+}
+
+private final class AutomationProgressCapture: Sendable {
+    let control: AutomationRunControl
+    let done: DispatchSemaphore
+    init(control: AutomationRunControl, done: DispatchSemaphore) {
+        self.control = control
+        self.done = done
+    }
+    deinit {
+        control.cancel()
+        done.signal()
     }
 }
