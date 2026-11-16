@@ -9,7 +9,7 @@ import Darwin
 private final class LanguageMenu: NSMenu {
     var generation = -1
 }
-final class LanguageController: NSObject, NSMenuDelegate {
+@MainActor final class LanguageController: NSObject, NSMenuDelegate {
     private let editorProvider: () -> TTEditor?
     private let languageProvider: () -> String
     private let setLanguage: (String) -> Void
@@ -53,9 +53,17 @@ final class LanguageController: NSObject, NSMenuDelegate {
     /// Where the bundled catalog is. Check executables have no bundle and set this to the
     /// repository's copy before they construct a controller or an AppDelegate.
     static var bundledCatalogURL = Bundle.main.url(forResource: "LanguageProfiles", withExtension: "json")
+    convenience init(
+        editorProvider: @escaping () -> TTEditor?, languageProvider: @escaping () -> String,
+        setLanguage: @escaping (String) -> Void
+    ) {
+        self.init(
+            editorProvider: editorProvider, languageProvider: languageProvider,
+            setLanguage: setLanguage, bundledCatalog: Self.bundledCatalogURL)
+    }
     init(
         editorProvider: @escaping () -> TTEditor?, languageProvider: @escaping () -> String,
-        setLanguage: @escaping (String) -> Void, bundledCatalog: URL? = LanguageController.bundledCatalogURL
+        setLanguage: @escaping (String) -> Void, bundledCatalog: URL?
     ) {
         self.editorProvider = editorProvider
         self.languageProvider = languageProvider
@@ -362,7 +370,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
         if !styles.isEmpty { selector.selectItem(at: 0) }
     }
     /// Carries a saved style into the embedded UDL, so Edit Current UDL and export keep it.
-    static func mirror(_ style: LanguageProfile.Style, into udl: inout UserDefinedLanguage) {
+    nonisolated static func mirror(_ style: LanguageProfile.Style, into udl: inout UserDefinedLanguage) {
         guard let index = udl.styles.firstIndex(where: { $0.name == style.name }) else { return }
         udl.styles[index].attributes["fontName"] = style.fontName
         udl.styles[index].attributes["fontSize"] = style.fontSize.map { String($0) }
@@ -533,7 +541,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
             temporaryPrefix: ".languages-")
         catalog = merged
     }
-    private static func readRegular(_ url: URL, parent: PrivateFileStore.ParentPolicy = .selectedInput) throws -> Data {
+    nonisolated private static func readRegular(_ url: URL, parent: PrivateFileStore.ParentPolicy = .selectedInput)
+        throws -> Data
+    {
         do {
             return try PrivateFileStore.read(url, maximumBytes: LanguageCatalog.maximumBytes, parent: parent)
         } catch PrivateFileError.unsafeLocation {
@@ -567,7 +577,10 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
         // The list is about the document; when its split pane closes it follows the remaining view.
         retirementObserver = NotificationCenter.default.addObserver(
             forName: .TTEditorWillRetire, object: editor, queue: nil
-        ) { [weak self] note in self?.editor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor }
+        ) { [weak self] note in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { self?.editor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor }
+        }
         window.title = "Function List"
         window.listedInWindowMenu = true
         window.isReleasedWhenClosed = false
@@ -596,7 +609,12 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
         WindowFrames.track(window, as: "TextTank.FunctionList")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
-    deinit { if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) } }
+    deinit {
+        precondition(Thread.isMainThread)
+        MainActor.assumeIsolated {
+            if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) }
+        }
+    }
     func numberOfRows(in tableView: NSTableView) -> Int { symbols.count }
     func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?, row: Int) -> Any? {
         symbols.indices.contains(row) ? "\(symbols[row].line) · \(symbols[row].name)" : nil

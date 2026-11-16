@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     var currentDocument: TextDocument? { currentDocumentController?.document as? TextDocument }
     var currentEditor: TTEditor? { currentDocumentController?.activeEditor }
-    lazy var languages: LanguageController = {
+    @MainActor lazy var languages: LanguageController = {
         let controller = LanguageController(
             editorProvider: { [weak self] in self?.currentEditor },
             languageProvider: { [weak self] in

@@ -6,27 +6,34 @@ import EditorBridge
 import NativeSearch
 /// Function-list navigation fronts the document window; these checks never put one on screen.
 final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sender: Any?) {} }
+@MainActor private final class LanguageDialogState { var acted = false, timedOut = false }
+
 @main struct LanguageControllerChecks {
-    static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-    static func editingJSON(_ controller: LanguageController, _ act: @escaping (NSWindow, [NSView]) -> Bool) -> Bool {
-        var acted = false, timedOut = false
+    @MainActor static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    @MainActor static func editingJSON(_ controller: LanguageController, _ act: @escaping (NSWindow, [NSView]) -> Bool)
+        -> Bool
+    {
+        let state = LanguageDialogState()
         let deadline = Date().addingTimeInterval(10)
         let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-            guard let window = presentedFormWindow, let content = window.contentView else { return }
-            if Date() > deadline {
-                timedOut = true
-                NSApp.abortModal()
-                return
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated {
+                guard let window = presentedFormWindow, let content = window.contentView else { return }
+                if Date() > deadline {
+                    state.timedOut = true
+                    NSApp.abortModal()
+                    return
+                }
+                if !state.acted { state.acted = act(window, descendants(content)) }
             }
-            if !acted { acted = act(window, descendants(content)) }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         defer { timer.invalidate() }
         controller.configure()
         waitForModelessForms()
-        return acted && !timedOut
+        return state.acted && !state.timedOut
     }
-    static func jsonEditorChecks(bundledURL: URL) throws {
+    @MainActor static func jsonEditorChecks(bundledURL: URL) throws {
         let isolated = try IsolatedSupportDirectory("LanguageJSONChecks")
         defer { isolated.restore() }
         let path = isolated.url.appendingPathComponent("LanguageProfiles.json")
@@ -270,7 +277,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             try declined && recoveryOnly && Data(contentsOf: path) == corrupt && blocked.storageDamaged,
             "F155 unreadable Language storage requires explicit recovery before the JSON editor")
     }
-    static func main() {
+    @MainActor static func main() {
         Checks.run("LanguageControllerChecks") {
             let isolatedSupport = try IsolatedSupportDirectory("LanguageChecks")
             defer { isolatedSupport.restore() }
@@ -453,7 +460,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             try controller.persist(custom)
             let beforeStyleRevision = editor.revision
             _ = controller.apply(identifier: user.id, to: editor)
-            func styleMatches() -> Bool {
+            @MainActor func styleMatches() -> Bool {
                 let output = editor.attributedText(forSelection: false),
                     font = output.attribute(.font, at: 0, effectiveRange: nil) as! NSFont,
                     color = (output.attribute(.foregroundColor, at: 0, effectiveRange: nil) as! NSColor)
@@ -472,7 +479,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // F21, F83: a saved style change reaches every view of every open document on that
             // profile, the lexer is installed once per document, and other documents are left alone.
             do {
-                func look(_ view: TTEditor) -> (size: CGFloat, red: CGFloat) {
+                @MainActor func look(_ view: TTEditor) -> (size: CGFloat, red: CGFloat) {
                     let output = view.attributedText(forSelection: false),
                         font = output.attribute(.font, at: 0, effectiveRange: nil) as! NSFont,
                         color = (output.attribute(.foregroundColor, at: 0, effectiveRange: nil) as! NSColor)
@@ -580,7 +587,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             lexWindow.contentView = lexEditor
             let native = lexEditor.subviews.first!, messageSelector = NSSelectorFromString("message:wParam:lParam:")
             let send = unsafeBitCast(native.method(for: messageSelector), to: ScintillaMessage.self)
-            func sci(_ message: UInt32, _ w: UInt = 0, _ l: Int = 0) -> Int {
+            @MainActor func sci(_ message: UInt32, _ w: UInt = 0, _ l: Int = 0) -> Int {
                 send(native, messageSelector, message, w, l)
             }
             let SCI_GETLENGTH: UInt32 = 2006, SCI_GETSTYLEAT: UInt32 = 2010, SCI_GETENDSTYLED: UInt32 = 2028,
@@ -639,16 +646,16 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             check(
                 supported == catalog.profiles.count - expectedMissing.count && catalog.profiles.count == 96,
                 "every other catalog profile applies (\(supported) of \(catalog.profiles.count))")
-            func message(_ target: TTEditor, _ number: UInt32, _ w: UInt = 0, _ l: Int = 0) -> Int {
+            @MainActor func message(_ target: TTEditor, _ number: UInt32, _ w: UInt = 0, _ l: Int = 0) -> Int {
                 let view = target.subviews.first!
                 return unsafeBitCast(view.method(for: messageSelector), to: ScintillaMessage.self)(
                     view, messageSelector, number, w, l)
             }
-            func styles(_ target: TTEditor) -> [Int] {
+            @MainActor func styles(_ target: TTEditor) -> [Int] {
                 (0..<target.text.utf8.count).map { message(target, SCI_GETSTYLEAT, UInt($0)) }
             }
             var hosts: [NSWindow] = []
-            func hostedEditor() -> TTEditor {
+            @MainActor func hostedEditor() -> TTEditor {
                 let
                     host = NSWindow(
                         contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled],
@@ -807,7 +814,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // G328: a multi-part keyword goes ahead of its own prefixes in its list, on every lex.
             // `e ea else "else if"` is the order the old sort comparator contradicted itself on.
             let keyword2 = 5, SCI_POSITIONFROMLINE: UInt32 = 2167
-            func settled(_ target: TTEditor) -> [Int] {
+            @MainActor func settled(_ target: TTEditor) -> [Int] {
                 _ = message(target, SCI_COLOURISE, UInt(message(target, SCI_GETENDSTYLED)), -1)
                 return styles(target)
             }
@@ -882,7 +889,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // G329: the lexer keeps its reordered lists between lexes, so they must follow every
             // change to a list. Keywords1 is word list 7 of the user lexer.
             let SCI_SETKEYWORDS: UInt32 = 4005, keywords1List: UInt = 7
-            func setKeywords(_ target: TTEditor, _ list: UInt, _ words: String) {
+            @MainActor func setKeywords(_ target: TTEditor, _ list: UInt, _ words: String) {
                 words.withCString { _ = message(target, SCI_SETKEYWORDS, list, Int(bitPattern: $0)) }
                 _ = message(target, SCI_COLOURISE, 0, -1)
             }
@@ -922,7 +929,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 controller.apply(identifier: bigLists.id, to: bigEditor)
                 && controller.apply(identifier: smallLists.id, to: smallEditor)
             let costLine = UInt(message(bigEditor, SCI_POSITIONFROMLINE, 39))
-            func relexCost(_ target: TTEditor) -> Double {
+            @MainActor func relexCost(_ target: TTEditor) -> Double {
                 (0..<3).map { _ in timed { for _ in 0..<100 { _ = message(target, SCI_COLOURISE, costLine, -1) } } }
                     .min()!
             }
@@ -962,8 +969,8 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // G334: the lexer describes itself accurately, and its property plumbing is the lexer's own.
             let SCI_GETLEXER: UInt32 = 4002, SCI_SETPROPERTY: UInt32 = 4004, SCI_GETPROPERTY: UInt32 = 4008,
                 SCI_GETLEXERLANGUAGE: UInt32 = 4012, SCI_DESCRIBEKEYWORDSETS: UInt32 = 4017
-            func lexerText(_ target: TTEditor, _ number: UInt32, _ key: String? = nil) -> String {
-                func fetch(_ w: UInt) -> String {
+            @MainActor func lexerText(_ target: TTEditor, _ number: UInt32, _ key: String? = nil) -> String {
+                @MainActor func fetch(_ w: UInt) -> String {
                     let size = message(target, number, w, 0)
                     var buffer = [CChar](repeating: 0, count: max(size, 0) + 1)
                     return buffer.withUnsafeMutableBufferPointer {
@@ -974,7 +981,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 guard let key else { return fetch(0) }
                 return key.withCString { fetch(UInt(bitPattern: $0)) }
             }
-            func setProperty(_ target: TTEditor, _ key: String, _ value: String) {
+            @MainActor func setProperty(_ target: TTEditor, _ key: String, _ value: String) {
                 key.withCString { k in
                     value.withCString { v in
                         _ = message(target, SCI_SETPROPERTY, UInt(bitPattern: k), Int(bitPattern: v))
@@ -1021,7 +1028,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // ---- Package 18 ----
             let SCI_STYLEGETFORE: UInt32 = 2481, STYLE_DEFAULT: UInt = 32
             let bundledCatalog = try LanguageCatalog.decode(Data(contentsOf: bundledURL))
-            func plainController(_ language: String = "python") -> LanguageController {
+            @MainActor func plainController(_ language: String = "python") -> LanguageController {
                 LanguageController(
                     editorProvider: { nil }, languageProvider: { language }, setLanguage: { _ in },
                     bundledCatalog: bundledURL)
@@ -1036,7 +1043,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             func close(_ a: [Double], _ b: [Double], _ tolerance: Double = 0.012) -> Bool {
                 zip(a, b).allSatisfy { abs($0 - $1) <= tolerance }
             }
-            func colors(_ target: TTEditor, at offset: Int) -> (text: [Double], back: [Double]) {
+            @MainActor func colors(_ target: TTEditor, at offset: Int) -> (text: [Double], back: [Double]) {
                 let output = target.attributedText(forSelection: false)
                 return (
                     components(output.attribute(.foregroundColor, at: offset, effectiveRange: nil) as! NSColor),
@@ -1068,7 +1075,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // overwritten, and can be moved aside explicitly.
             var customCatalog = bundledCatalog
             customCatalog.profiles[0].title = "Recovered plain language"
-            func damagedCase(_ name: String, _ write: (URL) throws -> Void) throws {
+            @MainActor func damagedCase(_ name: String, _ write: (URL) throws -> Void) throws {
                 try withIsolatedSupportDirectory("LanguageDamaged") { support in
                     let stored = support.appendingPathComponent("LanguageProfiles.json")
                     try write(stored)
@@ -1369,7 +1376,9 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             let monoIndex = monoCatalog.profiles.count - 1,
                 monoStyle = try requireValue(
                     mono.styles.firstIndex { $0.name == "KEYWORDS1" }, "fixture: keyword style")
-            func monoColors(_ name: NSAppearance.Name) -> (keyword: [Double], ordinary: [Double], back: [Double]) {
+            @MainActor func monoColors(_ name: NSAppearance.Name) -> (
+                keyword: [Double], ordinary: [Double], back: [Double]
+            ) {
                 let themed = hostedEditor()
                 themed.appearance = NSAppearance(named: name)
                 themed.text = "hello ordinary\n"
@@ -1420,7 +1429,8 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 "javascript: the profile's own keyword style reaches the cpp lexer")
             // F84: a blank font or size field means "follow the editor", and can be saved and restored.
             let inherit = LanguageProfile.Style(id: 4, name: "KEYWORDS1", foreground: "0000FF", fontStyle: 0)
-            func entered(_ original: LanguageProfile.Style, font: String, size: String, bold: Bool = false) throws
+            @MainActor func entered(_ original: LanguageProfile.Style, font: String, size: String, bold: Bool = false)
+                throws
                 -> LanguageProfile.Style
             {
                 try LanguageController.readStyle(
@@ -1459,7 +1469,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             let fontEditor = hostedEditor()
             fontEditor.text = "HELLO ordinary\n"
             _ = controller.apply(identifier: user.id, to: fontEditor)
-            func pointSize(_ target: TTEditor) -> Double {
+            @MainActor func pointSize(_ target: TTEditor) -> Double {
                 Double(
                     (target.attributedText(forSelection: false).attribute(.font, at: 0, effectiveRange: nil) as! NSFont)
                         .pointSize)
