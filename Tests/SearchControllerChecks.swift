@@ -57,6 +57,26 @@ final class CountingWindow: NSWindow {
             var signals = 0
             controller.onFailureSignal = { signals += 1 }
             @MainActor func finished() async { await waitUntil("the search to finish") { !controller.isSearching } }
+            // Audit27: Boost distinguishes canonically equivalent patterns by scalar sequence.
+            editor.text = "é e\u{301}"
+            controller.mode.selectItem(at: SearchOptions.Mode.regularExpression.rawValue)
+            controller.caseButton.state = .on
+            controller.queryField.stringValue = "é"
+            controller.next(nil)
+            await finished()
+            check(editor.selectionStart == 0 && editor.selectionEnd == 2, "NFC regex selects NFC bytes")
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            let beforeUnicodeReuse = controller.reusedResults
+            controller.queryField.stringValue = "e\u{301}"
+            controller.next(nil)
+            await finished()
+            check(
+                editor.selectionStart == 3 && editor.selectionEnd == 6
+                    && controller.reusedResults == beforeUnicodeReuse,
+                "NFD regex gets its own scalar-exact results rather than reusing NFC hits")
+            controller.mode.selectItem(at: 0)
+            controller.caseButton.state = .off
+            controller.queryField.stringValue = ""
             editor.text = "one needle"
             let damagedURL = support.url.appendingPathComponent("damaged-find.json"),
                 damagedBytes = Data("keep unreadable settings".utf8)

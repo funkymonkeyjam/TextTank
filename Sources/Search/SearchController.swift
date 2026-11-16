@@ -64,6 +64,17 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             let editor: ObjectIdentifier?, revision: UInt, range: NSRange?
         }
         let options: SearchOptions, scope: Int, documents: [Document]
+        // Swift String equality folds canonical equivalents, but Boost regexes and replacement
+        // output distinguish their scalar sequences. Cache only identical engine input bytes.
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.scope == rhs.scope && lhs.documents == rhs.documents
+                && lhs.options.query.utf8.elementsEqual(rhs.options.query.utf8)
+                && lhs.options.replacement.utf8.elementsEqual(rhs.options.replacement.utf8)
+                && lhs.options.mode == rhs.options.mode && lhs.options.matchCase == rhs.options.matchCase
+                && lhs.options.wholeWord == rhs.options.wholeWord
+                && lhs.options.dotMatchesNewline == rhs.options.dotMatchesNewline
+                && lhs.options.wrap == rhs.options.wrap
+        }
     }
     private var retirementObserver: NSObjectProtocol?
     private var resultBuffers: [Buffer] = [], rows: [Row] = []
