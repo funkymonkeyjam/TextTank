@@ -9,7 +9,7 @@ Pinned clean engines precede explicit audit/port of Notepad++ UDL and Boost rege
 | Invariant | Owner and focused evidence |
 | --- | --- |
 | One authoritative UTF-8 document/Undo history; main-thread bridge access | `Sources/EditorBridge/TTEditor.h/.mm`; bridge and split-view document checks |
-| Captured/revalidated save payload, disk identity and recovery lifecycle | `TextDocument` in `Sources/TextTankApp/App.swift`; `DocumentOpenSaveChecks` and file/recovery checks |
+| Captured/revalidated save payload, disk identity and recovery lifecycle | `TextDocument` in `Sources/TextTankApp/TextDocument.swift`; `DocumentOpenSaveChecks` and file/recovery checks |
 | Strict bytes and private atomic recovery writes | `FileCodec`, `RecoveryStore`, `RecoveryWriter` in `Sources/Documents/`; `FileChecks` |
 | Snapshot search, revision guards and descriptor/fingerprint-gated folder replacement | `SearchController`, `FolderSearch`, `FolderReplacement` in `Sources/Search/`; search/controller/replacement checks |
 | Named, versioned automations and inert imports | `AutomationCore`/`AutomationController`; automation and controller checks |
@@ -230,3 +230,54 @@ columns, byte ranges, stale-result checks and navigation remain unchanged. Chara
 lengths count Unicode scalars; Sort Lines by Length now deliberately uses that same unit rather
 than grapheme clusters, with stable equal-length ties and one native Undo. Visual glyph width,
 grapheme count and Unicode normalization are not substituted for this documented unit.
+
+
+## App composition and document boundaries
+
+App entry, composition, documents, encoding recovery, tabs, recent documents, status items and
+editor windows live in separate files under `Sources/TextTankApp/`. The first split preserves
+the declarations, menu tree and lifecycle; subsequent changes have their own focused checks.
+`TextDocumentController` is still constructed before `NSApplication.shared`, before constructing
+the application delegate. The intended shared document controller must win that bootstrap order.
+The Objective-C document name and Info.plist document class remain unchanged.
+
+`EditorServices` is an optional, explicitly installed feature environment. Its weak providers
+retain lazy controller creation and do not retain a discarded composition root. A missing owner,
+provider or environment remains a no-op. AppKit creates documents normally; documents, tabs,
+workspace restore and editor windows resolve typed services without casting the application
+delegate. Checks install and restore that environment independently of `NSApplication.delegate`.
+Focus changes call `noteActive`; current-editor getters remain pure.
+
+`DocumentFactory` centralizes hand-built document registration, type and window setup. New,
+automation, session and recovery documents have the plain-text type before their first edit.
+Recovery identity and revision base are installed before window wiring and loading. Session and
+recovery text still opens unsaved, and the original path is never opened by restore. Browser
+open still short-circuits an existing document before reading and performs one bounded,
+nonblocking no-follow descriptor read. Explicit encoding open retains its initial alias resolution
+and prior addressable-data capacity. Captured bytes, digest and descriptor modification date are
+handed to the factory together. A recent modification date is not a trusted settled signature;
+later pathname replacements remain external changes, rather than becoming a new save baseline.
+
+`SettingsCore.swift` contains Foundation-only values, validation, drafts and `SettingsStore`.
+The store retains the version-1 bytes, shortcut-only tolerant load, strict save validation, failed-load
+latch, retained repair backup and private write/rollback policies. `SettingsController.swift` owns
+its AppKit editor and publishes synchronous application/status callbacks. The composition root
+supplies `EditorSettingsApplication`, which carries changed defaults to eligible open views and
+menus exactly as before. Standalone controllers can supply their own effects; the store itself
+never enumerates windows or changes appearance. Pure line transforms and comment plans are
+separate from their AppKit editor-application extensions.
+
+`SearchSession` is a Foundation-only immutable planning layer for the existing single-document
+navigation, strict replacement and carried selection. It uses the same search reports and engine;
+it holds no editor, window or mutable text model. `SearchController` retains scheduling, weak view
+lifetimes, multi-document result state and guarded bridge application, with its existing forwarding
+APIs. Cheap truncated/closed/stale rejection still happens before selection reads or position
+conversion, and the pure planner also validates its input facts. Foundation-only compilation and
+native checks enforce this boundary; the product remains one Swift target, not separate modules.
+
+Document language intent applies a profile once and records its identifier only on success.
+Language-controller notifications use the separate state-only `noteAppliedLanguage` method, so
+menu and style callbacks never apply the lexer again. Lifecycle/focus state has private setters;
+production status labels and utility providers are private while checks retain focused read access.
+The authoritative read-only flag still belongs to the shared Scintilla document and covers both
+panes. No second document buffer, search engine or Undo history was introduced.

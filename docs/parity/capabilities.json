@@ -848,9 +848,10 @@
     ]
   },
   "assessment_snapshot": {
-    "source_commit": "cb66cfd24cb40f9764d6079018532667d6003342",
-    "source_tree": "0a51d08d6bccf9421a388b8d6f1d19833fbebc1c",
-    "scope": "Dated source ownership and focused-check presence. Actual run results belong to the exact-candidate validation record. No Windows differential, GUI, full-language, full-command or full-parity certification."
+    "source_commit": "05d22261fe7364cce5b15361b715a160a8df676f",
+    "source_tree": "a66ce17d68738f4e8346a98461ca6a7d30c75f43",
+    "refreshed_on": "2026-11-16",
+    "scope": "All eight dated source ownership and focused-check-presence mappings refreshed after the app/core split. Actual run results belong to exact-candidate validation. No Windows differential, GUI, full-language, full-command or full-parity certification."
   },
   "assessments": {
     "files.save.external-conflict": {

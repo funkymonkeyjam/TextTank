@@ -6,3 +6,6 @@ dadcdba4e0e26178e8043617265cf56de8e52131
 
 # V25-DS45 native validation fixture: verified layout only.
 cc73f25bfefb6c622d92199c6736a91dc2eac341
+
+# F285 extracted core fixture/declarations: token and parse-tree verified layout only.
+c52e3cbe3bc67fe7016395d85c95e57d3192ef19
