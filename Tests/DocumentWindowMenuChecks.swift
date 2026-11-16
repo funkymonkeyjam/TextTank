@@ -693,10 +693,14 @@ extension DocumentChecks {
             let settings = SettingsController(url: root.appendingPathComponent("audit24-settings.json"))
             let original = settings.value
             var aborted = false
-            let abort = Timer(timeInterval: 0.02, repeats: true) { _ in
+            let abortAction: @MainActor @Sendable () -> Void = {
                 guard let window = presentedFormWindow else { return }
                 aborted = true
                 window.performClose(nil)
+            }
+            let abort = Timer(timeInterval: 0.02, repeats: true) { _ in
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated { abortAction() }
             }
             RunLoop.main.add(abort, forMode: .modalPanel)
             settings.showSettings(nil)
