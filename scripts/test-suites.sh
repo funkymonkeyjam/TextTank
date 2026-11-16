@@ -27,7 +27,7 @@ suite_script scripts/test-documents.sh
 
 # The Foundation-only macro core must keep compiling without AppKit. Its checks
 # run once, in the native build made by scripts/test-macros.sh.
-suite_build "macro-core-layering" swiftc Sources/Documents/FailureContext.swift Sources/Documents/PrivateFileStore.swift -typecheck "${SWIFT_BASE[@]}" Sources/Macros/MacroCore.swift "$SUITE_SUPPORT" Tests/MacroChecks.swift
+suite_build "macro-core-layering" swiftc Sources/Documents/FailureContext.swift Sources/Documents/PrivateFileStore.swift -typecheck "${SWIFT_BASE[@]}" Sources/Documents/EditorCommandCatalog.swift Sources/Macros/MacroCore.swift "$SUITE_SUPPORT" Tests/MacroChecks.swift
 suite_run macro-core-layering harness/logs/macro-core-layering.log /bin/echo "PASS MacroCore compiles without AppKit; its checks run in macro-integration-checks"
 
 suite_script scripts/test-macros.sh

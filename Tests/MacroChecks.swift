@@ -201,6 +201,30 @@ import Foundation
                     && reasons.isEmpty,
                 "Command-Left, Page Down, Escape and Option-Delete are recorded instead of discarding the recording")
             // Parity: one allow-list, in the bridge and in the persisted format.
+            let fixture = try requireValue(
+                JSONSerialization.jsonObject(
+                    with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("editor-commands-wave-3.json")))
+                    as? [String: Any], "fixture: frozen native command contract")
+            let messages = try requireValue(
+                fixture["bridge_replay_messages"] as? [String: Int], "fixture: frozen recording numbers")
+            check(
+                TTEditor.macroCommandMessages().mapValues(\.intValue) == messages,
+                "F281 canonical command names keep every exact accepted Scintilla message number")
+            let supported = Set(
+                try requireValue(fixture["bridge_supported"] as? [String], "fixture: supported identifiers"))
+            check(
+                Set(TTEditor.supportedCommandIdentifiers()) == supported
+                    && supported == Set(EditorCommand.allCases.map(\.rawValue)),
+                "F281 Swift catalog and full bridge dispatch support the frozen exact identifier set")
+            let modifies = Set(
+                try requireValue(fixture["modifies_text"] as? [String], "fixture: text modifying commands"))
+            check(
+                Set(supported.filter(TTEditor.commandModifiesText)) == modifies,
+                "F281 read-only classification preserves the exact accepted editing subset")
+            check(
+                messages["indent"] == nil && messages["unindent"] == nil && messages["tab"] != nil
+                    && messages["backTab"] != nil,
+                "F281 playback-only indent aliases never compete for canonical Tab recording names")
             let bridgeNames = Set(TTEditor.macroCommandNames())
             check(
                 bridgeNames.union(["indent", "unindent"]) == RecordedMacro.Step.commands,
@@ -671,6 +695,26 @@ import Foundation
     #endif
     static func main() {
         Checks.run("MacroChecks") {
+            let commandFixture = try requireValue(
+                JSONSerialization.jsonObject(
+                    with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("editor-commands-wave-3.json")))
+                    as? [String: Any], "fixture: frozen command contract")
+            func frozen(_ key: String) throws -> Set<String> {
+                Set(try requireValue(commandFixture[key] as? [String], "fixture: frozen " + key))
+            }
+            check(
+                Set(EditorCommand.allCases.map(\.rawValue)) == (try frozen("bridge_supported")),
+                "F281 catalog preserves every accepted command identifier, including keyboard-only commands")
+            let frozenRecordable = try frozen("recordable")
+            let frozenViewOnly = try frozen("view_only"), frozenAssignable = try frozen("shortcut_assignable")
+            check(
+                EditorCommand.recordableIdentifiers == frozenRecordable
+                    && RecordedMacro.Step.commands == frozenRecordable,
+                "F281 catalog keeps the exact accepted macro-safe subset")
+            check(
+                EditorCommand.viewOnlyIdentifiers == frozenViewOnly
+                    && EditorCommand.shortcutIdentifiers == frozenAssignable,
+                "F281 view-only and assignable subsets remain separate and exact")
             let id = UUID()
             var macro = RecordedMacro(
                 id: id, name: "My edit",

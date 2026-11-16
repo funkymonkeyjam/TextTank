@@ -43,21 +43,7 @@ struct RecordedMacro: Codable, Identifiable, Equatable {
             if case .search(let value) = self { return value }
             return nil
         }
-        static let commands: Set<String> = [
-            "cut", "copy", "paste", "selectAll", "duplicateLine", "deleteLine", "transposeLine", "indent", "unindent",
-            "upper", "lower",
-            "charLeft", "charRight", "lineUp", "lineDown", "home", "lineEnd", "documentStart", "documentEnd",
-            "wordLeft", "wordRight", "deleteBack", "deleteForward", "newLine", "tab", "backTab",
-            "charLeftExtend", "charRightExtend", "lineUpExtend", "lineDownExtend", "homeExtend", "lineEndExtend",
-            "documentStartExtend", "documentEndExtend", "wordLeftExtend", "wordRightExtend",
-            // G367: the rest of the standard Mac key map. Each name is also in the bridge's table.
-            "vcHome", "vcHomeExtend", "pageUp", "pageUpExtend", "pageDown", "pageDownExtend",
-            "paraUp", "paraUpExtend", "paraDown", "paraDownExtend",
-            "wordPartLeft", "wordPartLeftExtend", "wordPartRight", "wordPartRightExtend",
-            "homeDisplay", "lineEndDisplay",
-            "deleteWordLeft", "deleteWordRight", "deleteLineLeft", "deleteLineRight",
-            "lineCut", "lineCopy", "duplicateSelection", "moveLineUp", "moveLineDown", "cancel"
-        ]
+        static let commands = EditorCommand.recordableIdentifiers
         func validate() throws {
             switch self {
             case .insertText, .replaceSelection: break

@@ -20,6 +20,14 @@ static NSEvent *TTMouse(NSEventType type, NSView *content, NSPoint point, NSTime
 int main() {
     @autoreleasepool {
         [NSApplication sharedApplication];
+        ttchecks::section("audit25 unknown command refusal", [&] {
+            TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 300, 200)];
+            editor.text = @"safe"; [editor setSelectionAnchor:1 caret:1];
+            const NSUInteger revision = editor.revision, generation = editor.selectionGeneration;
+            check(![editor executeCommand:@"noSuchCommand"] && ![editor executeCommand:@"bookmarkBogus"], "F281 unknown and unmatched bookmark commands report refusal");
+            check(editor.revision == revision && editor.selectionGeneration == generation && [editor.text isEqual:@"safe"] && editor.selectionCaret == 1, "F281 unknown commands preserve bytes, revision and selection generation");
+            check([TTEditor respondsToSelector:NSSelectorFromString(@"supportedCommandIdentifiers")], "F281 bridge exposes its exact supported command identifiers");
+        });
         // Shared by the first three sections; later sections make their own editors.
         TTEditor *second = nil;
         ttchecks::section("status, exact text and shared clone", [&] {

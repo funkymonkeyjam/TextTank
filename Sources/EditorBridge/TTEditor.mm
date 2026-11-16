@@ -9,6 +9,16 @@
 #include <cmath>
 extern "C" Scintilla::ILexer5 *TextTankCreateUserLexer();
 
+static const int TTBookmarkMarker = 1;
+static const int TTBookmarkMask = 1 << TTBookmarkMarker;
+static const int TTSearchIndicator = 20;
+static NSColor *TTColorFromScintilla(sptr_t color) {
+    return [NSColor colorWithSRGBRed:(color & 255)/255.0 green:((color >> 8)&255)/255.0 blue:((color >> 16)&255)/255.0 alpha:1];
+}
+static sptr_t TTScintillaFromColor(NSColor *color) {
+    return ((NSInteger)lround(color.redComponent*255)) | ((NSInteger)lround(color.greenComponent*255)<<8) | ((NSInteger)lround(color.blueComponent*255)<<16);
+}
+
 // NSString's UTF-8 constructors consume a leading EF BB BF as an external BOM.
 // Editor bytes are already decoded content, so U+FEFF must remain ordinary text.
 // TTStringFromUTF8 restores the one scalar they strip.
@@ -192,7 +202,7 @@ static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
     NSString *key = [NSString stringWithFormat:@"%@|%.2f|%ld", faceName, size, (long)rgb];
     if (![key isEqualToString:_attributesKey]) {
         NSFont *font = [NSFont fontWithName:faceName size:MAX(1,size)] ?: [NSFont monospacedSystemFontOfSize:MAX(1,size) weight:NSFontWeightRegular];
-        NSColor *color = [NSColor colorWithSRGBRed:(rgb & 255)/255.0 green:((rgb >> 8)&255)/255.0 blue:((rgb >> 16)&255)/255.0 alpha:1];
+        NSColor *color = TTColorFromScintilla(rgb);
         _attributes = @{NSFontAttributeName:font, NSForegroundColorAttributeName:color};
         _attributesKey = key;
     }
@@ -208,34 +218,115 @@ static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
 }
 @end
 
+struct TTCommandEntry { const char *identifier; unsigned int message; bool replay; bool records; bool modifiesText; };
+// Zero-message entries are handled below; aliases replay but never own a recorded message name.
+static const TTCommandEntry TTCommandEntries[] = {
+    {"addNextOccurrence", 0, false, false, false},
+    {"backTab", SCI_BACKTAB, true, true, true},
+    {"bookmarkNext", 0, false, false, false},
+    {"bookmarkPrevious", 0, false, false, false},
+    {"bookmarkToggle", 0, false, false, false},
+    {"cancel", SCI_CANCEL, true, true, false},
+    {"charLeft", SCI_CHARLEFT, true, true, false},
+    {"charLeftExtend", SCI_CHARLEFTEXTEND, true, true, false},
+    {"charRight", SCI_CHARRIGHT, true, true, false},
+    {"charRightExtend", SCI_CHARRIGHTEXTEND, true, true, false},
+    {"clearAdditionalSelections", 0, false, false, false},
+    {"copy", SCI_COPY, true, true, false},
+    {"cut", SCI_CUT, true, true, true},
+    {"deleteBack", SCI_DELETEBACK, true, true, true},
+    {"deleteForward", SCI_CLEAR, true, true, true},
+    {"deleteLine", SCI_LINEDELETE, true, true, true},
+    {"deleteLineLeft", SCI_DELLINELEFT, true, true, true},
+    {"deleteLineRight", SCI_DELLINERIGHT, true, true, true},
+    {"deleteWordLeft", SCI_DELWORDLEFT, true, true, true},
+    {"deleteWordRight", SCI_DELWORDRIGHT, true, true, true},
+    {"documentEnd", SCI_DOCUMENTEND, true, true, false},
+    {"documentEndExtend", SCI_DOCUMENTENDEXTEND, true, true, false},
+    {"documentStart", SCI_DOCUMENTSTART, true, true, false},
+    {"documentStartExtend", SCI_DOCUMENTSTARTEXTEND, true, true, false},
+    {"duplicateLine", SCI_LINEDUPLICATE, true, true, true},
+    {"duplicateSelection", SCI_SELECTIONDUPLICATE, true, true, true},
+    {"foldAll", 0, false, false, false},
+    {"gotoMatchingBrace", 0, false, false, false},
+    {"home", SCI_HOME, true, true, false},
+    {"homeDisplay", SCI_HOMEDISPLAY, true, true, false},
+    {"homeExtend", SCI_HOMEEXTEND, true, true, false},
+    {"indent", SCI_TAB, true, false, true},
+    {"joinLines", 0, false, false, true},
+    {"lineCopy", SCI_LINECOPY, true, true, false},
+    {"lineCut", SCI_LINECUT, true, true, true},
+    {"lineDown", SCI_LINEDOWN, true, true, false},
+    {"lineDownExtend", SCI_LINEDOWNEXTEND, true, true, false},
+    {"lineEnd", SCI_LINEEND, true, true, false},
+    {"lineEndDisplay", SCI_LINEENDDISPLAY, true, true, false},
+    {"lineEndExtend", SCI_LINEENDEXTEND, true, true, false},
+    {"lineUp", SCI_LINEUP, true, true, false},
+    {"lineUpExtend", SCI_LINEUPEXTEND, true, true, false},
+    {"lower", SCI_LOWERCASE, true, true, true},
+    {"moveLineDown", SCI_MOVESELECTEDLINESDOWN, true, true, true},
+    {"moveLineUp", SCI_MOVESELECTEDLINESUP, true, true, true},
+    {"newLine", SCI_NEWLINE, true, true, true},
+    {"pageDown", SCI_PAGEDOWN, true, true, false},
+    {"pageDownExtend", SCI_PAGEDOWNEXTEND, true, true, false},
+    {"pageUp", SCI_PAGEUP, true, true, false},
+    {"pageUpExtend", SCI_PAGEUPEXTEND, true, true, false},
+    {"paraDown", SCI_PARADOWN, true, true, false},
+    {"paraDownExtend", SCI_PARADOWNEXTEND, true, true, false},
+    {"paraUp", SCI_PARAUP, true, true, false},
+    {"paraUpExtend", SCI_PARAUPEXTEND, true, true, false},
+    {"paste", SCI_PASTE, true, true, true},
+    {"rectangularSelection", 0, false, false, false},
+    {"redo", SCI_REDO, false, false, true},
+    {"selectAll", SCI_SELECTALL, true, true, false},
+    {"selectAllOccurrences", 0, false, false, false},
+    {"selectMatchingBrace", 0, false, false, false},
+    {"showWhitespace", 0, false, false, false},
+    {"streamSelection", 0, false, false, false},
+    {"tab", SCI_TAB, true, true, true},
+    {"toggleEOL", 0, false, false, false},
+    {"toggleLineNumbers", 0, false, false, false},
+    {"toggleOvertype", 0, false, false, false},
+    {"transposeLine", SCI_LINETRANSPOSE, true, true, true},
+    {"trimTrailing", 0, false, false, true},
+    {"undo", SCI_UNDO, false, false, true},
+    {"unfoldAll", 0, false, false, false},
+    {"unindent", SCI_BACKTAB, true, false, true},
+    {"upper", SCI_UPPERCASE, true, true, true},
+    {"vcHome", SCI_VCHOME, true, true, false},
+    {"vcHomeExtend", SCI_VCHOMEEXTEND, true, true, false},
+    {"wordLeft", SCI_WORDLEFT, true, true, false},
+    {"wordLeftExtend", SCI_WORDLEFTEXTEND, true, true, false},
+    {"wordPartLeft", SCI_WORDPARTLEFT, true, true, false},
+    {"wordPartLeftExtend", SCI_WORDPARTLEFTEXTEND, true, true, false},
+    {"wordPartRight", SCI_WORDPARTRIGHT, true, true, false},
+    {"wordPartRightExtend", SCI_WORDPARTRIGHTEXTEND, true, true, false},
+    {"wordRight", SCI_WORDRIGHT, true, true, false},
+    {"wordRightExtend", SCI_WORDRIGHTEXTEND, true, true, false},
+    {"zoomIn", SCI_ZOOMIN, false, false, false},
+    {"zoomOut", SCI_ZOOMOUT, false, false, false},
+};
+static NSDictionary<NSString *, NSNumber *> *TTCommandMessages(bool replay, bool records) {
+    NSMutableDictionary *map = [NSMutableDictionary dictionary];
+    for (const auto &entry : TTCommandEntries) {
+        if (entry.message && (!replay || entry.replay) && (!records || entry.records))
+            map[[NSString stringWithUTF8String:entry.identifier]] = @(entry.message);
+    }
+    return [map copy];
+}
 static NSDictionary<NSString *, NSNumber *> *TTMacroCommands() {
-    static NSDictionary<NSString *, NSNumber *> *map;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ map = @{
-        @"cut":@(SCI_CUT), @"copy":@(SCI_COPY), @"paste":@(SCI_PASTE), @"selectAll":@(SCI_SELECTALL),
-        @"duplicateLine":@(SCI_LINEDUPLICATE), @"deleteLine":@(SCI_LINEDELETE), @"transposeLine":@(SCI_LINETRANSPOSE),
-        @"upper":@(SCI_UPPERCASE), @"lower":@(SCI_LOWERCASE),
-        @"charLeft":@(SCI_CHARLEFT), @"charRight":@(SCI_CHARRIGHT), @"lineUp":@(SCI_LINEUP), @"lineDown":@(SCI_LINEDOWN),
-        @"home":@(SCI_HOME), @"lineEnd":@(SCI_LINEEND), @"documentStart":@(SCI_DOCUMENTSTART), @"documentEnd":@(SCI_DOCUMENTEND),
-        @"wordLeft":@(SCI_WORDLEFT), @"wordRight":@(SCI_WORDRIGHT),
-        @"charLeftExtend":@(SCI_CHARLEFTEXTEND), @"charRightExtend":@(SCI_CHARRIGHTEXTEND), @"lineUpExtend":@(SCI_LINEUPEXTEND), @"lineDownExtend":@(SCI_LINEDOWNEXTEND),
-        @"homeExtend":@(SCI_HOMEEXTEND), @"lineEndExtend":@(SCI_LINEENDEXTEND), @"documentStartExtend":@(SCI_DOCUMENTSTARTEXTEND), @"documentEndExtend":@(SCI_DOCUMENTENDEXTEND),
-        @"wordLeftExtend":@(SCI_WORDLEFTEXTEND), @"wordRightExtend":@(SCI_WORDRIGHTEXTEND),
-        @"deleteBack":@(SCI_DELETEBACK), @"deleteForward":@(SCI_CLEAR), @"newLine":@(SCI_NEWLINE), @"tab":@(SCI_TAB), @"backTab":@(SCI_BACKTAB),
-        // G367: the rest of the standard Mac key map (Home, Command-Left, Page Up and Down, Escape,
-        // Option- and Command-Delete and the Control chords). One name per message, and every name
-        // is also in RecordedMacro.Step.commands; the checks compare the two lists.
-        @"vcHome":@(SCI_VCHOME), @"vcHomeExtend":@(SCI_VCHOMEEXTEND),
-        @"pageUp":@(SCI_PAGEUP), @"pageUpExtend":@(SCI_PAGEUPEXTEND), @"pageDown":@(SCI_PAGEDOWN), @"pageDownExtend":@(SCI_PAGEDOWNEXTEND),
-        @"paraUp":@(SCI_PARAUP), @"paraUpExtend":@(SCI_PARAUPEXTEND), @"paraDown":@(SCI_PARADOWN), @"paraDownExtend":@(SCI_PARADOWNEXTEND),
-        @"wordPartLeft":@(SCI_WORDPARTLEFT), @"wordPartLeftExtend":@(SCI_WORDPARTLEFTEXTEND), @"wordPartRight":@(SCI_WORDPARTRIGHT), @"wordPartRightExtend":@(SCI_WORDPARTRIGHTEXTEND),
-        @"homeDisplay":@(SCI_HOMEDISPLAY), @"lineEndDisplay":@(SCI_LINEENDDISPLAY),
-        @"deleteWordLeft":@(SCI_DELWORDLEFT), @"deleteWordRight":@(SCI_DELWORDRIGHT), @"deleteLineLeft":@(SCI_DELLINELEFT), @"deleteLineRight":@(SCI_DELLINERIGHT),
-        @"lineCut":@(SCI_LINECUT), @"lineCopy":@(SCI_LINECOPY), @"duplicateSelection":@(SCI_SELECTIONDUPLICATE),
-        @"moveLineUp":@(SCI_MOVESELECTEDLINESUP), @"moveLineDown":@(SCI_MOVESELECTEDLINESDOWN),
-        // Escape also drops additional selections, so it is replayed rather than ignored.
-        @"cancel":@(SCI_CANCEL)
-    }; });
+    static NSDictionary *map; static dispatch_once_t once;
+    dispatch_once(&once, ^{ map = TTCommandMessages(true, true); });
+    return map;
+}
+static NSDictionary<NSString *, NSNumber *> *TTReplayCommands() {
+    static NSDictionary *map; static dispatch_once_t once;
+    dispatch_once(&once, ^{ map = TTCommandMessages(true, false); });
+    return map;
+}
+static NSDictionary<NSString *, NSNumber *> *TTDispatchCommands() {
+    static NSDictionary *map; static dispatch_once_t once;
+    dispatch_once(&once, ^{ map = TTCommandMessages(false, false); });
     return map;
 }
 /// Canonical recorded name for each allowed message, built once rather than scanned per key.
@@ -337,9 +428,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         self.accessibilityDocumentName = nil;
         [_engine message:SCI_SETMARGINTYPEN wParam:0 lParam:SC_MARGIN_NUMBER];
         [self updateLineNumberMargin:YES];
-        [_engine message:SCI_MARKERDEFINE wParam:1 lParam:SC_MARK_CIRCLE];
+        [_engine message:SCI_MARKERDEFINE wParam:TTBookmarkMarker lParam:SC_MARK_CIRCLE];
         [_engine message:SCI_SETMARGINTYPEN wParam:1 lParam:SC_MARGIN_SYMBOL];
-        [_engine message:SCI_SETMARGINMASKN wParam:1 lParam:(1 << 1)];
+        [_engine message:SCI_SETMARGINMASKN wParam:1 lParam:TTBookmarkMask];
         [_engine message:SCI_SETMARGINWIDTHN wParam:1 lParam:14];
         [_engine message:SCI_SETMULTIPLESELECTION wParam:1];
         [_engine message:SCI_SETADDITIONALSELECTIONTYPING wParam:1];
@@ -411,10 +502,10 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 // the light outline and strengthens the fill.
 - (void)applySearchIndicatorStyle {
     const BOOL dark = [self usesDarkPalette], highContrast = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
-    [_engine message:SCI_INDICSETSTYLE wParam:20 lParam:INDIC_ROUNDBOX];
-    [_engine message:SCI_INDICSETFORE wParam:20 lParam:dark ? 0x5BF4C7 : (highContrast ? 0x00402E : 0x006B4D)];
-    [_engine message:SCI_INDICSETALPHA wParam:20 lParam:highContrast ? 110 : 70];
-    [_engine message:SCI_INDICSETOUTLINEALPHA wParam:20 lParam:255];
+    [_engine message:SCI_INDICSETSTYLE wParam:TTSearchIndicator lParam:INDIC_ROUNDBOX];
+    [_engine message:SCI_INDICSETFORE wParam:TTSearchIndicator lParam:dark ? 0x5BF4C7 : (highContrast ? 0x00402E : 0x006B4D)];
+    [_engine message:SCI_INDICSETALPHA wParam:TTSearchIndicator lParam:highContrast ? 110 : 70];
+    [_engine message:SCI_INDICSETOUTLINEALPHA wParam:TTSearchIndicator lParam:255];
 }
 - (void)applyPalette {
     const BOOL dark = [self usesDarkPalette], highContrast = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
@@ -430,8 +521,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self applySearchIndicatorStyle];
     // The bookmark dot: brand green on the light margin, citrus on the dark one, each at least 3:1.
     _bookmarkColour = dark ? 0x5BF4C7 : (highContrast ? 0x002E1C : 0x005B3A);
-    [_engine message:SCI_MARKERSETBACK wParam:1 lParam:_bookmarkColour];
-    [_engine message:SCI_MARKERSETFORE wParam:1 lParam:_bookmarkColour];
+    [_engine message:SCI_MARKERSETBACK wParam:TTBookmarkMarker lParam:_bookmarkColour];
+    [_engine message:SCI_MARKERSETFORE wParam:TTBookmarkMarker lParam:_bookmarkColour];
     [_engine message:SCI_SETCARETFORE wParam:foreground];
     // Selection uses the system's colours, so it follows the accent colour, the appearance and
     // Increase Contrast, and an unfocused pane shows the system's unemphasised selection.
@@ -441,10 +532,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         selectionText = [NSColor.selectedTextColor colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
         inactiveBack = [NSColor.unemphasizedSelectedTextBackgroundColor colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
     }];
-    auto bgr=[](NSColor *c)->sptr_t {return ((NSInteger)lround(c.redComponent*255))|((NSInteger)lround(c.greenComponent*255)<<8)|((NSInteger)lround(c.blueComponent*255)<<16);};
-    [_engine message:SCI_SETSELFORE wParam:1 lParam:selectionText ? bgr(selectionText) : (dark ? 0xFFFFFF : 0x101010)];
-    [_engine message:SCI_SETSELBACK wParam:1 lParam:selectionBack ? bgr(selectionBack) : (dark ? 0x725038 : 0xF1D4AF)];
-    if (inactiveBack) [_engine message:SCI_SETELEMENTCOLOUR wParam:SC_ELEMENT_SELECTION_INACTIVE_BACK lParam:(sptr_t)(0xFF000000 | (NSUInteger)bgr(inactiveBack))];
+    [_engine message:SCI_SETSELFORE wParam:1 lParam:selectionText ? TTScintillaFromColor(selectionText) : (dark ? 0xFFFFFF : 0x101010)];
+    [_engine message:SCI_SETSELBACK wParam:1 lParam:selectionBack ? TTScintillaFromColor(selectionBack) : (dark ? 0x725038 : 0xF1D4AF)];
+    if (inactiveBack) [_engine message:SCI_SETELEMENTCOLOUR wParam:SC_ELEMENT_SELECTION_INACTIVE_BACK lParam:(sptr_t)(0xFF000000 | (NSUInteger)TTScintillaFromColor(inactiveBack))];
     // These style numbers mean comment, keyword and string in the cpp lexer only. Every other
     // lexer keeps the default colour until a language profile supplies its own styles.
     if (_cppDefaults) {
@@ -778,12 +868,12 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         // bookmark back explicitly: untouched lines keep theirs, lines after the span follow
         // their text, and lines inside it keep their line number, clamped to the new span.
         const sptr_t shift = newLastLine - oldLastLine;
-        [_engine message:SCI_MARKERDELETEALL wParam:1];
+        [_engine message:SCI_MARKERDELETEALL wParam:TTBookmarkMarker];
         for (NSNumber *bookmark in bookmarks) {
             sptr_t line = bookmark.integerValue;
             if (line > oldLastLine || (line == oldLastLine && lastLineKept)) line += shift;
             else if (line > firstLine) line = line == oldLastLine ? newLastLine : MIN(line, newLastLine);
-            if (!([_engine message:SCI_MARKERGET wParam:line] & (1 << 1))) [_engine message:SCI_MARKERADD wParam:line lParam:1];
+            if (!([_engine message:SCI_MARKERGET wParam:line] & TTBookmarkMask)) [_engine message:SCI_MARKERADD wParam:line lParam:TTBookmarkMarker];
         }
     }
     if (selectionInside) {
@@ -907,17 +997,17 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (NSArray<NSNumber *> *)bookmarkLines {
     [self assertThread];
     NSMutableArray<NSNumber *> *lines = [NSMutableArray array];
-    sptr_t line = [_engine message:SCI_MARKERNEXT wParam:0 lParam:(1 << 1)];
+    sptr_t line = [_engine message:SCI_MARKERNEXT wParam:0 lParam:TTBookmarkMask];
     while (line >= 0) {
         [lines addObject:@(line)];
-        line = [_engine message:SCI_MARKERNEXT wParam:line+1 lParam:(1 << 1)];
+        line = [_engine message:SCI_MARKERNEXT wParam:line+1 lParam:TTBookmarkMask];
     }
     return lines;
 }
 - (NSInteger)bookmarkCount {
     [self assertThread];
     NSInteger count = 0;
-    for (sptr_t line = [_engine message:SCI_MARKERNEXT wParam:0 lParam:(1 << 1)]; line >= 0; line = [_engine message:SCI_MARKERNEXT wParam:line+1 lParam:(1 << 1)]) ++count;
+    for (sptr_t line = [_engine message:SCI_MARKERNEXT wParam:0 lParam:TTBookmarkMask]; line >= 0; line = [_engine message:SCI_MARKERNEXT wParam:line+1 lParam:TTBookmarkMask]) ++count;
     return count;
 }
 - (BOOL)setBookmarks:(NSArray<NSNumber *> *)lines {
@@ -931,8 +1021,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         if (line < 0 || line >= count || [value doubleValue] != (double)line || [seen containsObject:@(line)]) return NO;
         [seen addObject:@(line)];
     }
-    [_engine message:SCI_MARKERDELETEALL wParam:1];
-    for (NSNumber *line in seen) [_engine message:SCI_MARKERADD wParam:line.integerValue lParam:1];
+    [_engine message:SCI_MARKERDELETEALL wParam:TTBookmarkMarker];
+    for (NSNumber *line in seen) [_engine message:SCI_MARKERADD wParam:line.integerValue lParam:TTBookmarkMarker];
     [self scheduleStateNotification];
     return YES;
 }
@@ -1004,26 +1094,44 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     return YES;
 }
 + (BOOL)commandModifiesText:(NSString *)identifier {
-    static NSSet<NSString *> *editing;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ editing = [NSSet setWithArray:@[
-        @"undo", @"redo", @"cut", @"paste", @"duplicateLine", @"deleteLine", @"transposeLine", @"indent", @"unindent",
-        @"upper", @"lower", @"duplicateSelection", @"deleteWordLeft", @"deleteWordRight", @"deleteLineLeft", @"deleteLineRight",
-        @"moveLineUp", @"moveLineDown", @"joinLines", @"trimTrailing", @"deleteBack", @"deleteForward", @"newLine", @"tab", @"backTab", @"lineCut"]]; });
-    return [identifier isKindOfClass:NSString.class] && [editing containsObject:identifier];
+    if (![identifier isKindOfClass:NSString.class]) return NO;
+    static NSSet<NSString *> *editing; static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSMutableSet *identifiers = [NSMutableSet set];
+        for (const auto &entry : TTCommandEntries)
+            if (entry.modifiesText) [identifiers addObject:[NSString stringWithUTF8String:entry.identifier]];
+        editing = [identifiers copy];
+    });
+    return [editing containsObject:identifier];
 }
-- (void)executeCommand:(NSString *)identifier {
+- (BOOL)commandIsChecked:(NSString *)identifier {
     [self assertThread];
-    [self runCommand:identifier];
+    if ([identifier isEqualToString:@"showWhitespace"]) return [_engine message:SCI_GETVIEWWS] != SCWS_INVISIBLE;
+    if ([identifier isEqualToString:@"toggleEOL"]) return [_engine message:SCI_GETVIEWEOL] != 0;
+    if ([identifier isEqualToString:@"toggleLineNumbers"]) return [_engine message:SCI_GETMARGINWIDTHN wParam:0] != 0;
+    if ([identifier isEqualToString:@"toggleOvertype"]) return [_engine message:SCI_GETOVERTYPE] != 0;
+    if ([identifier isEqualToString:@"rectangularSelection"]) return [_engine message:SCI_GETSELECTIONMODE] == SC_SEL_RECTANGLE;
+    if ([identifier isEqualToString:@"streamSelection"]) return [_engine message:SCI_GETSELECTIONMODE] == SC_SEL_STREAM;
+    if ([identifier isEqualToString:@"bookmarkToggle"]) {
+        const sptr_t line = [_engine message:SCI_LINEFROMPOSITION wParam:[_engine message:SCI_GETCURRENTPOS]];
+        return ([_engine message:SCI_MARKERGET wParam:line] & TTBookmarkMask) != 0;
+    }
+    return NO;
+}
+- (BOOL)executeCommand:(NSString *)identifier {
+    [self assertThread];
+    if (![self runCommand:identifier]) return NO;
     // Folding, the margin toggle and selection commands raise no synchronous notification.
     [self invalidateLineNumbersIfChanged];
     [self noteStateChange];
+    return YES;
 }
-- (void)runCommand:(NSString *)identifier {
+- (BOOL)runCommand:(NSString *)identifier {
+    if (![identifier isKindOfClass:NSString.class]) return NO;
     // Rectangular Selection is the keyboard column mode: its sticky extend mode lets plain arrow
     // keys grow the rectangle, and choosing it again switches that off.
-    if ([identifier isEqualToString:@"rectangularSelection"]) { [_engine message:SCI_SETSELECTIONMODE wParam:SC_SEL_RECTANGLE]; return; }
-    if ([identifier isEqualToString:@"streamSelection"]) { [self useStreamSelection]; return; }
+    if ([identifier isEqualToString:@"rectangularSelection"]) { [_engine message:SCI_SETSELECTIONMODE wParam:SC_SEL_RECTANGLE]; return YES; }
+    if ([identifier isEqualToString:@"streamSelection"]) { [self useStreamSelection]; return YES; }
     if ([identifier isEqualToString:@"clearAdditionalSelections"]) {
         // SCI_CLEARSELECTIONS leaves one empty selection at position 0, but it is what resets the
         // rectangular and extend modes, so clear first and then put the main range back.
@@ -1032,33 +1140,33 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         const sptr_t anchor = [_engine message:SCI_GETSELECTIONNANCHOR wParam:main], caret = [_engine message:SCI_GETSELECTIONNCARET wParam:main];
         [_engine message:SCI_CLEARSELECTIONS];
         [_engine message:SCI_SETSELECTION wParam:caret lParam:anchor];
-        return;
+        return YES;
     }
     if ([identifier isEqualToString:@"addNextOccurrence"] || [identifier isEqualToString:@"selectAllOccurrences"]) {
-        [_engine message:[identifier isEqualToString:@"addNextOccurrence"] ? SCI_MULTIPLESELECTADDNEXT : SCI_MULTIPLESELECTADDEACH]; return;
+        [_engine message:[identifier isEqualToString:@"addNextOccurrence"] ? SCI_MULTIPLESELECTADDNEXT : SCI_MULTIPLESELECTADDEACH]; return YES;
     }
     if ([identifier isEqualToString:@"foldAll"] || [identifier isEqualToString:@"unfoldAll"]) {
         [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
         [_engine message:SCI_FOLDALL wParam:[identifier isEqualToString:@"foldAll"] ? SC_FOLDACTION_CONTRACT : SC_FOLDACTION_EXPAND];
-        return;
+        return YES;
     }
     if ([identifier isEqualToString:@"showWhitespace"]) {
-        [_engine message:SCI_SETVIEWWS wParam:[_engine message:SCI_GETVIEWWS] ? SCWS_INVISIBLE : SCWS_VISIBLEALWAYS]; return;
+        [_engine message:SCI_SETVIEWWS wParam:[_engine message:SCI_GETVIEWWS] ? SCWS_INVISIBLE : SCWS_VISIBLEALWAYS]; return YES;
     }
     if ([identifier isEqualToString:@"toggleEOL"]) {
-        [_engine message:SCI_SETVIEWEOL wParam:![_engine message:SCI_GETVIEWEOL]]; return;
+        [_engine message:SCI_SETVIEWEOL wParam:![_engine message:SCI_GETVIEWEOL]]; return YES;
     }
     if ([identifier isEqualToString:@"toggleLineNumbers"]) {
         if ([_engine message:SCI_GETMARGINWIDTHN wParam:0]) [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:0];
         else [self updateLineNumberMargin:YES];
-        return;
+        return YES;
     }
     if ([identifier isEqualToString:@"toggleOvertype"]) {
-        [_engine message:SCI_SETOVERTYPE wParam:![_engine message:SCI_GETOVERTYPE]]; return;
+        [_engine message:SCI_SETOVERTYPE wParam:![_engine message:SCI_GETOVERTYPE]]; return YES;
     }
     if ([identifier isEqualToString:@"joinLines"]) {
         [_engine message:SCI_TARGETFROMSELECTION];
-        [_engine message:SCI_LINESJOIN]; return;
+        [_engine message:SCI_LINESJOIN]; return YES;
     }
     if ([identifier isEqualToString:@"trimTrailing"]) {
         [self openUndoGroup];
@@ -1076,7 +1184,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
                 [_engine message:SCI_REPLACETARGET wParam:0 lParam:(sptr_t)""];
             }
         }
-        [self closeUndoGroup]; return;
+        [self closeUndoGroup]; return YES;
     }
     if ([identifier isEqualToString:@"gotoMatchingBrace"] || [identifier isEqualToString:@"selectMatchingBrace"]) {
         sptr_t position = [_engine message:SCI_GETCURRENTPOS];
@@ -1087,35 +1195,33 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
             else [_engine message:SCI_GOTOPOS wParam:match];
             [_engine message:SCI_SCROLLCARET];
         }
-        return;
+        return YES;
     }
     if ([identifier hasPrefix:@"bookmark"]) {
+        if (![@[@"bookmarkToggle", @"bookmarkNext", @"bookmarkPrevious"] containsObject:identifier]) return NO;
         sptr_t line = [_engine message:SCI_LINEFROMPOSITION wParam:[_engine message:SCI_GETCURRENTPOS]];
         if ([identifier isEqualToString:@"bookmarkToggle"]) {
-            [_engine message:([_engine message:SCI_MARKERGET wParam:line] & (1 << 1)) ? SCI_MARKERDELETE : SCI_MARKERADD wParam:line lParam:1];
+            [_engine message:([_engine message:SCI_MARKERGET wParam:line] & TTBookmarkMask) ? SCI_MARKERDELETE : SCI_MARKERADD wParam:line lParam:TTBookmarkMarker];
         } else if ([identifier isEqualToString:@"bookmarkNext"] || [identifier isEqualToString:@"bookmarkPrevious"]) {
             BOOL next = [identifier isEqualToString:@"bookmarkNext"];
-            sptr_t found = (!next && line == 0) ? -1 : [_engine message:next ? SCI_MARKERNEXT : SCI_MARKERPREVIOUS wParam:next ? line+1 : line-1 lParam:(1 << 1)];
-            if (found < 0) found = [_engine message:next ? SCI_MARKERNEXT : SCI_MARKERPREVIOUS wParam:next ? 0 : [_engine message:SCI_GETLINECOUNT]-1 lParam:(1 << 1)];
+            sptr_t found = (!next && line == 0) ? -1 : [_engine message:next ? SCI_MARKERNEXT : SCI_MARKERPREVIOUS wParam:next ? line+1 : line-1 lParam:TTBookmarkMask];
+            if (found < 0) found = [_engine message:next ? SCI_MARKERNEXT : SCI_MARKERPREVIOUS wParam:next ? 0 : [_engine message:SCI_GETLINECOUNT]-1 lParam:TTBookmarkMask];
             if (found >= 0) { [_engine message:SCI_ENSUREVISIBLE wParam:found]; [_engine message:SCI_GOTOLINE wParam:found]; }
         }
-        return;
+        return YES;
     }
-    static NSDictionary<NSString *, NSNumber *> *commands;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ commands = @{
-        @"undo": @(SCI_UNDO), @"redo": @(SCI_REDO), @"cut": @(SCI_CUT),
-        @"copy": @(SCI_COPY), @"paste": @(SCI_PASTE), @"selectAll": @(SCI_SELECTALL),
-        @"duplicateLine": @(SCI_LINEDUPLICATE), @"deleteLine": @(SCI_LINEDELETE),
-        @"transposeLine": @(SCI_LINETRANSPOSE), @"indent": @(SCI_TAB),
-        @"unindent": @(SCI_BACKTAB), @"upper": @(SCI_UPPERCASE), @"lower": @(SCI_LOWERCASE),
-        @"duplicateSelection": @(SCI_SELECTIONDUPLICATE), @"deleteWordLeft": @(SCI_DELWORDLEFT), @"deleteWordRight": @(SCI_DELWORDRIGHT), @"deleteLineLeft": @(SCI_DELLINELEFT), @"deleteLineRight": @(SCI_DELLINERIGHT),
-        @"zoomIn": @(SCI_ZOOMIN), @"zoomOut": @(SCI_ZOOMOUT),
-        @"moveLineUp": @(SCI_MOVESELECTEDLINESUP), @"moveLineDown": @(SCI_MOVESELECTEDLINESDOWN)}; });
-    NSNumber *message = commands[identifier] ?: TTMacroCommands()[identifier];
-    if (message) [_engine message:message.unsignedIntValue];
+    NSNumber *message = TTDispatchCommands()[identifier];
+    if (!message) return NO;
+    [_engine message:message.unsignedIntValue];
+    return YES;
+}
++ (NSArray<NSString *> *)supportedCommandIdentifiers {
+    NSMutableArray *identifiers = [NSMutableArray array];
+    for (const auto &entry : TTCommandEntries) [identifiers addObject:[NSString stringWithUTF8String:entry.identifier]];
+    return [identifiers sortedArrayUsingSelector:@selector(compare:)];
 }
 + (NSArray<NSString *> *)macroCommandNames { return [TTMacroCommands().allKeys sortedArrayUsingSelector:@selector(compare:)]; }
++ (NSDictionary<NSString *, NSNumber *> *)macroCommandMessages { return TTMacroCommands(); }
 - (TTInteractionState)interactionState {
     return {_revision, [_engine message:SCI_GETSELECTIONS], [_engine message:SCI_GETANCHOR], [_engine message:SCI_GETCURRENTPOS]};
 }
@@ -1190,9 +1296,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         if (![command isKindOfClass:NSString.class]) return NO;
         // Only symbolic editing commands can reach Scintilla; no imported message
         // number, pointer, executable, or arbitrary parameter is ever dispatched.
-        NSNumber *message = TTMacroCommands()[command];
-        if (!message && [command isEqualToString:@"indent"]) message = @(SCI_TAB);
-        if (!message && [command isEqualToString:@"unindent"]) message = @(SCI_BACKTAB);
+        NSNumber *message = TTReplayCommands()[command];
         if (!message) return NO;
         [_engine message:message.unsignedIntValue]; [self noteStateChange]; return YES;
     }
@@ -1268,7 +1372,6 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     for (size_t i=0;i<length;++i) { styles[i]=(unsigned char)cells[2*i+1]; cells[i]=cells[2*i]; }
     // The font and colours of a style are resolved once per call, not once per run.
     NSDictionary *attributes[256]={};
-    auto color=[](sptr_t c) { return [NSColor colorWithSRGBRed:(c&255)/255.0 green:((c>>8)&255)/255.0 blue:((c>>16)&255)/255.0 alpha:1]; };
     [result beginEditing];
     for (size_t p=0;p<length;) {
         const unsigned char style=styles[p];size_t q=p+1;
@@ -1283,7 +1386,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
             NSFont *font=(faceName ? [NSFont fontWithName:faceName size:size] : nil) ?: [NSFont monospacedSystemFontOfSize:MAX(1,size) weight:NSFontWeightRegular];
             NSFontTraitMask traits=0;if ([_engine message:SCI_STYLEGETBOLD wParam:style]) traits|=NSBoldFontMask;if ([_engine message:SCI_STYLEGETITALIC wParam:style]) traits|=NSItalicFontMask;
             if(traits)font=[[NSFontManager sharedFontManager] convertFont:font toHaveTrait:traits];
-            attributes[style]=@{NSFontAttributeName:font,NSForegroundColorAttributeName:color([_engine message:SCI_STYLEGETFORE wParam:style]),NSBackgroundColorAttributeName:color([_engine message:SCI_STYLEGETBACK wParam:style])};
+            attributes[style]=@{NSFontAttributeName:font,NSForegroundColorAttributeName:TTColorFromScintilla([_engine message:SCI_STYLEGETFORE wParam:style]),NSBackgroundColorAttributeName:TTColorFromScintilla([_engine message:SCI_STYLEGETBACK wParam:style])};
         }
         [result appendAttributedString:[[NSAttributedString alloc] initWithString:TTStringFromUTF8(cells.data()+p,q-p) attributes:attributes[style]]];
         p=q;
@@ -1302,16 +1405,15 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         front=[foreground colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
         back=[background colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
     }];
-    auto packed=[](NSColor *c)->sptr_t {return ((NSInteger)lround(c.redComponent*255))|((NSInteger)lround(c.greenComponent*255)<<8)|((NSInteger)lround(c.blueComponent*255)<<16);};
     // A colour with no RGB form (a pattern, say) leaves the style's colour alone instead of turning it black.
-    if(front)[_engine message:SCI_STYLESETFORE wParam:index lParam:packed(front)];
-    if(back)[_engine message:SCI_STYLESETBACK wParam:index lParam:packed(back)];
+    if(front)[_engine message:SCI_STYLESETFORE wParam:index lParam:TTScintillaFromColor(front)];
+    if(back)[_engine message:SCI_STYLESETBACK wParam:index lParam:TTScintillaFromColor(back)];
     [_engine message:SCI_STYLESETBOLD wParam:index lParam:bold];[_engine message:SCI_STYLESETITALIC wParam:index lParam:italic];
     // The filler line numbers are drawn in this style's colour and no notification follows.
     if (index == STYLE_LINENUMBER) _emptyLineNumbers.needsDisplay = YES;
 }
 - (void)clearSearchHighlights {
-    [self assertThread];[_engine message:SCI_SETINDICATORCURRENT wParam:20];[_engine message:SCI_INDICATORCLEARRANGE wParam:0 lParam:[_engine message:SCI_GETLENGTH]];
+    [self assertThread];[_engine message:SCI_SETINDICATORCURRENT wParam:TTSearchIndicator];[_engine message:SCI_INDICATORCLEARRANGE wParam:0 lParam:[_engine message:SCI_GETLENGTH]];
 }
 - (BOOL)setSearchHighlights:(NSArray<NSValue *> *)ranges {
     [self assertThread];if(ranges.count>100000)return NO;const NSUInteger length=[_engine message:SCI_GETLENGTH];

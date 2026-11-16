@@ -118,6 +118,8 @@ extern NSNotificationName const TTEditorStateDidChangeNotification;
 @property(nonatomic, copy, nullable) void (^onMacroStep)(NSDictionary<NSString *, id> *step);
 /// The symbolic command names a recorded step may carry; the only names playback dispatches.
 + (NSArray<NSString *> *)macroCommandNames;
+/// Immutable canonical recording map; playback-only aliases are deliberately excluded.
++ (NSDictionary<NSString *, NSNumber *> *)macroCommandMessages;
 - (void)startRecording;
 - (void)stopRecording;
 - (BOOL)executeMacroStep:(NSDictionary<NSString *, id> *)step;
@@ -142,9 +144,13 @@ extern NSNotificationName const TTEditorStateDidChangeNotification;
 /// document, so holders of results that do not depend on this view's selection can retarget
 /// them. Posts nothing unless the two views share a document.
 - (void)retireInFavorOf:(TTEditor *)successor;
-- (void)executeCommand:(NSString *)identifier;
+/// NO for an unknown identifier, without changing text, selection or notifications.
+- (BOOL)executeCommand:(NSString *)identifier;
++ (NSArray<NSString *> *)supportedCommandIdentifiers;
 /// YES for executeCommand: identifiers that edit text, which callers guard with requireWritable:.
 + (BOOL)commandModifiesText:(NSString *)identifier;
+/// The actual focused-view state of a known toggle; NO for non-toggle/unknown identifiers.
+- (BOOL)commandIsChecked:(NSString *)identifier;
 /// Returns NO, changing nothing (selection included), when the text cannot be encoded as
 /// UTF-8 (an unpaired surrogate) or the document is read-only.
 - (BOOL)replaceSelection:(NSString *)text;

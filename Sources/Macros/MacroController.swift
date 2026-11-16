@@ -137,9 +137,7 @@ final class MacroController: NSObject, NSMenuDelegate {
     func willExecuteCommand(_ command: String, on editor: TTEditor) {
         guard recordingEditor != nil else { return }
         editorDidFocus(editor)
-        let viewOnly: Set<String> = [
-            "zoomIn", "zoomOut", "foldAll", "unfoldAll", "showWhitespace", "toggleEOL", "toggleLineNumbers"
-        ]
+        let viewOnly = EditorCommand.viewOnlyIdentifiers
         if !RecordedMacro.Step.commands.contains(command) && !viewOnly.contains(command) {
             invalidateRecording(
                 reason: "The command ‘\(command)’ is not recordable yet. No partial macro will be saved.")
