@@ -6,6 +6,13 @@ import Foundation
 struct SearchOptions: Codable, Equatable, Sendable {
     enum Mode: Int, Codable, Sendable, CaseIterable {
         case normal = 0, extended = 1, regularExpression = 2
+        var nativeMode: TTSearchMode {
+            switch self {
+            case .normal: return .literal
+            case .extended: return .extended
+            case .regularExpression: return .regularExpression
+            }
+        }
         var displayName: String {
             switch self {
             case .normal: return Strings.text("search.mode.normal", "Normal")
@@ -176,7 +183,7 @@ enum SearchCore {
         let displayDeadline = Date().addingTimeInterval(timeLimit)
         let result = try TTSearchEngine.searchText(
             text, range: range ?? NSRange(location: 0, length: (text as NSString).length), query: options.query,
-            replacement: options.replacement, mode: options.mode.rawValue, matchCase: options.matchCase,
+            replacement: options.replacement, mode: options.mode.nativeMode, matchCase: options.matchCase,
             wholeWord: options.wholeWord, dotMatchesNewline: options.dotMatchesNewline, cancellation: cancellation,
             maximumMatches: limit, overlappingLiterals: purpose == .navigation, timeLimit: timeLimit)
         var hits = result.matches.map { SearchHit(range: $0.range, replacement: $0.replacement) }

@@ -495,22 +495,22 @@ final class CancelAfterPolls: TTSearchCancellation {
                 "ranged result cap reports truncation")
             let rangedAll = try SearchCore.search("aaaaa", options: rangedOptions, range: at(1, 3), limit: 3)
             check(!rangedAll.truncated && rangedAll.hits.count == 3, "ranged result cap counts only hits in the range")
-            // F210: typed results; the dictionary selector stays as a wrapper.
+            // F210/F29: typed results and full-text requests preserve UTF-16 ranges and expansion.
             let typed = try TTSearchEngine.searchText(
-                "a b", range: at(0, 3), query: "\\w", replacement: "<$0>", mode: 2, matchCase: true, wholeWord: false,
+                "a b", range: at(0, 3), query: "\\w", replacement: "<$0>", mode: .regularExpression, matchCase: true,
+                wholeWord: false,
                 dotMatchesNewline: false, cancellation: TTSearchCancellation(), maximumMatches: 1, timeLimit: 2)
             check(
                 typed.truncated && typed.matches.count == 1 && typed.matches[0].range == at(0, 1)
                     && typed.matches[0].replacement == "<a>", "typed search result carries range and replacement")
-            let legacy = try TTSearchEngine.matches(
-                inText: "a b", query: "\\w", replacement: "<$0>", mode: 2, matchCase: true, wholeWord: false,
-                dotMatchesNewline: false, cancellation: TTSearchCancellation(), maximumMatches: 5, timeLimit: 2)
-            let legacyRows = legacy["matches"] as? [[String: Any]] ?? []
+            let fullText = try TTSearchEngine.searchText(
+                "a b", range: at(0, 3), query: "\\w", replacement: "<$0>", mode: .regularExpression,
+                matchCase: true, wholeWord: false, dotMatchesNewline: false,
+                cancellation: TTSearchCancellation(), maximumMatches: 5, timeLimit: 2)
             check(
-                legacy["truncated"] as? Bool == false
-                    && legacyRows.map { ($0["range"] as? NSValue)?.rangeValue } == [at(0, 1), at(2, 1)]
-                    && legacyRows.map { $0["replacement"] as? String } == ["<a>", "<b>"],
-                "dictionary selector still returns the same matches")
+                !fullText.truncated && fullText.matches.map(\.range) == [at(0, 1), at(2, 1)]
+                    && fullText.matches.map(\.replacement) == ["<a>", "<b>"],
+                "typed full-text request returns the same UTF-16 matches and replacements")
             var bad = SearchOptions()
             bad.query = "a"
             check(
@@ -565,7 +565,8 @@ final class CancelAfterPolls: TTSearchCancellation {
             check(
                 message {
                     _ = try TTSearchEngine.searchText(
-                        "a", range: at(0, 1), query: "a", replacement: "", mode: 3, matchCase: true, wholeWord: false,
+                        "a", range: at(0, 1), query: "a", replacement: "", mode: TTSearchMode(rawValue: 3)!,
+                        matchCase: true, wholeWord: false,
                         dotMatchesNewline: false, cancellation: TTSearchCancellation(), maximumMatches: 1, timeLimit: 2)
                 }.contains("mode"), "unknown search mode is named")
             check(

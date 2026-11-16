@@ -156,17 +156,10 @@ SearchRegex compiledRegex(const std::wstring &pattern,bool matchCase){
     }return out;
 }
 + (NSUInteger)regexCompilationCount { return compilations.load(); }
-+ (NSDictionary *)matchesInText:(NSString *)text query:(NSString *)query replacement:(NSString *)replacement mode:(NSInteger)mode matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord dotMatchesNewline:(BOOL)dotMatchesNewline cancellation:(TTSearchCancellation *)cancellation maximumMatches:(NSInteger)maximumMatches timeLimit:(NSTimeInterval)timeLimit error:(NSError **)error {
-    TTSearchResult *result=[self searchText:text range:NSMakeRange(0,text.length) query:query replacement:replacement mode:mode matchCase:matchCase wholeWord:wholeWord dotMatchesNewline:dotMatchesNewline cancellation:cancellation maximumMatches:maximumMatches timeLimit:timeLimit error:error];
-    if(!result)return nil;
-    NSMutableArray *rows=[NSMutableArray arrayWithCapacity:result.matches.count];
-    for(TTSearchMatch *match in result.matches)[rows addObject:@{@"range":[NSValue valueWithRange:match.range],@"replacement":match.replacement}];
-    return @{@"matches":rows,@"truncated":@(result.truncated)};
-}
-+ (TTSearchResult *)searchText:(NSString *)text range:(NSRange)scope query:(NSString *)query replacement:(NSString *)replacement mode:(NSInteger)mode matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord dotMatchesNewline:(BOOL)dotMatchesNewline cancellation:(TTSearchCancellation *)cancellation maximumMatches:(NSInteger)maximumMatches timeLimit:(NSTimeInterval)timeLimit error:(NSError **)error {
++ (TTSearchResult *)searchText:(NSString *)text range:(NSRange)scope query:(NSString *)query replacement:(NSString *)replacement mode:(TTSearchMode)mode matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord dotMatchesNewline:(BOOL)dotMatchesNewline cancellation:(TTSearchCancellation *)cancellation maximumMatches:(NSInteger)maximumMatches timeLimit:(NSTimeInterval)timeLimit error:(NSError **)error {
     return [self searchText:text range:scope query:query replacement:replacement mode:mode matchCase:matchCase wholeWord:wholeWord dotMatchesNewline:dotMatchesNewline cancellation:cancellation maximumMatches:maximumMatches overlappingLiterals:NO timeLimit:timeLimit error:error];
 }
-+ (TTSearchResult *)searchText:(NSString *)text range:(NSRange)scope query:(NSString *)query replacement:(NSString *)replacement mode:(NSInteger)mode matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord dotMatchesNewline:(BOOL)dotMatchesNewline cancellation:(TTSearchCancellation *)cancellation maximumMatches:(NSInteger)maximumMatches overlappingLiterals:(BOOL)overlappingLiterals timeLimit:(NSTimeInterval)timeLimit error:(NSError **)error {
++ (TTSearchResult *)searchText:(NSString *)text range:(NSRange)scope query:(NSString *)query replacement:(NSString *)replacement mode:(TTSearchMode)mode matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord dotMatchesNewline:(BOOL)dotMatchesNewline cancellation:(TTSearchCancellation *)cancellation maximumMatches:(NSInteger)maximumMatches overlappingLiterals:(BOOL)overlappingLiterals timeLimit:(NSTimeInterval)timeLimit error:(NSError **)error {
     @try { try {
         if(mode<0||mode>2)throw std::runtime_error("Unknown search mode.");
         if(query.length==0)throw std::runtime_error("Enter a nonempty search expression.");

@@ -49,6 +49,20 @@ import AppKit
         self.assertIn('cannot convert value', result.stderr)
         self.assertIn('TTEditorCommandIdentifier', result.stderr)
 
+    def test_search_boundary_rejects_an_untyped_swift_mode(self):
+        result = self.swift_header_probe(ROOT / 'Sources/Search/TTSearchEngine.h', '''
+import Foundation
+func rawMode() throws {
+    _ = try TTSearchEngine.searchText("x", range: NSRange(location: 0, length: 1),
+        query: "x", replacement: "", mode: 0, matchCase: true, wholeWord: false,
+        dotMatchesNewline: false, cancellation: TTSearchCancellation(),
+        maximumMatches: 1, timeLimit: 1)
+}
+''')
+        self.assertNotEqual(result.returncode, 0, 'An untyped Int crossed the search boundary')
+        self.assertIn('cannot convert value', result.stderr)
+        self.assertIn('TTSearchMode', result.stderr)
+
     def test_editor_header_compiles_without_the_search_tree(self):
         # The public editor interface uses AppKit, not the snapshot search engine.
         # Compile a copied header with no neighbouring Search directory; a hidden
