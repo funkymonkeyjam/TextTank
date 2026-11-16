@@ -45,7 +45,7 @@ final class Audit24RecoverySpy: NSObject {
     static func ruleKeyboardCheck() -> (Bool, Bool, AutomationDefinition.Step?) {
         var actionSent = false, fieldsEnabled = false, acted = false
         let deadline = Date().addingTimeInterval(5)
-        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
+        let timerAction0: @MainActor @Sendable (Timer) -> Void = { _ in
             guard let modal = presentedFormWindow, let content = modal.contentView else { return }
             if Date() > deadline {
                 NSApp.abortModal()
@@ -76,6 +76,10 @@ final class Audit24RecoverySpy: NSObject {
             typeKeys("2 eggs", in: modal)
             save.performClick(nil)
         }
+        let timer = Timer(timeInterval: 0.1, repeats: true) { timer in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { timerAction0(timer) }
+        }
         RunLoop.main.add(timer, forMode: .modalPanel)
         let result = capturedStep(.init(kind: .removeBlankLines), timeout: 5)
         timer.invalidate()
@@ -85,7 +89,7 @@ final class Audit24RecoverySpy: NSObject {
         var stage = 0, nameAccepted = false, sampleAccepted = false, reentryBlocked = false, timedOut = false
         var nestedRule: (Bool, Bool, AutomationDefinition.Step?) = (false, false, nil)
         let deadline = Date().addingTimeInterval(8)
-        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
+        let timerAction1: @MainActor @Sendable (Timer) -> Void = { _ in
             guard let window = presentedFormWindow, let content = window.contentView else { return }
             let views = descendants(content)
             if Date() > deadline {
@@ -133,6 +137,10 @@ final class Audit24RecoverySpy: NSObject {
             default: break
             }
         }
+        let timer = Timer(timeInterval: 0.1, repeats: true) { timer in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { timerAction1(timer) }
+        }
         RunLoop.main.add(timer, forMode: .modalPanel)
         controller.manage()
         waitForModelessForms(timeout: 8)
@@ -155,7 +163,7 @@ final class Audit24RecoverySpy: NSObject {
     ) rethrows -> (value: T, acted: Bool, timedOut: Bool) {
         var acted = false, timedOut = false
         let deadline = Date().addingTimeInterval(timeout)
-        let timer = Timer(timeInterval: 0.005, repeats: true) { _ in
+        let timerAction2: @MainActor @Sendable (Timer) -> Void = { _ in
             guard let modal = presentedFormWindow, let content = modal.contentView else { return }
             if Date() > deadline {
                 timedOut = true
@@ -163,6 +171,10 @@ final class Audit24RecoverySpy: NSObject {
                 return
             }
             if !acted { acted = act(modal, descendants(content)) }
+        }
+        let timer = Timer(timeInterval: 0.005, repeats: true) { timer in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { timerAction2(timer) }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         defer { timer.invalidate() }
@@ -317,11 +329,15 @@ final class Audit24RecoverySpy: NSObject {
     static func nestedModal(_ act: @escaping (NSWindow, [NSView]) -> Void, _ trigger: () -> Void) -> Bool {
         let outer = presentedFormWindow, deadline = Date().addingTimeInterval(8)
         var acted = false
-        let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+        let timerAction3: @MainActor @Sendable (Timer) -> Void = { _ in
             guard let nested = presentedFormWindow, nested !== outer, let content = nested.contentView else { return }
             if acted || Date() > deadline { return }
             acted = true
             act(nested, descendants(content))
+        }
+        let timer = Timer(timeInterval: 0.02, repeats: true) { timer in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { timerAction3(timer) }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         trigger()
@@ -1055,7 +1071,7 @@ final class Audit24RecoverySpy: NSObject {
             mine.name = "My edited cleanup"
             mine.steps = [Step(kind: .trimWhitespace)]
             try controller.persistLibrary(AutomationLibrary(workflows: [mine]))
-            func restore(confirming: Bool) -> Bool {
+            @MainActor func restore(confirming: Bool) -> Bool {
                 let run = drivingModal(
                     timeout: 10,
                     { _, views in
@@ -1109,7 +1125,7 @@ final class Audit24RecoverySpy: NSObject {
                 "F75 the presets are available in memory after a failed first write")
             // Manage reports the failure once, then opens as usual.
             var reports: [String] = [], manageOpened = 0
-            func manageAndCancel() -> Bool {
+            @MainActor func manageAndCancel() -> Bool {
                 var stage = 0
                 let run = drivingModal(
                     timeout: 10,
@@ -1200,7 +1216,7 @@ final class Audit24RecoverySpy: NSObject {
         func recoveryButtons(_ view: NSView) -> [NSButton] {
             (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(recoveryButtons)
         }
-        let recoveryAnswer = Timer(timeInterval: 0.02, repeats: true) { _ in
+        let timerAction4: @MainActor @Sendable (Timer) -> Void = { _ in
             MainActor.assumeIsolated {
                 guard let content = presentedFormWindow?.contentView else { return }
                 if Date() > recoveryDeadline {
@@ -1213,6 +1229,10 @@ final class Audit24RecoverySpy: NSObject {
                 recoveryPressed = true
                 retry.performClick(nil)
             }
+        }
+        let recoveryAnswer = Timer(timeInterval: 0.02, repeats: true) { timer in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { timerAction4(timer) }
         }
         RunLoop.main.add(recoveryAnswer, forMode: .modalPanel)
         TTAlert.present(recoverable)
@@ -1272,8 +1292,12 @@ final class Audit24RecoverySpy: NSObject {
                     && frames[1].maxX < frames[0].minX
                 alert.buttons[index].performClick(nil)
             }
-            let timer = Timer(timeInterval: 0.1, repeats: false) { _ in
+            let timerAction5: @MainActor @Sendable (Timer) -> Void = { _ in
                 MainActor.assumeIsolated { chooseButton() }
+            }
+            let timer = Timer(timeInterval: 0.1, repeats: false) { timer in
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated { timerAction5(timer) }
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             let response = alert.runModal()
