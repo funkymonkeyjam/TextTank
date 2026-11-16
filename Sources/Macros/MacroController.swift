@@ -407,7 +407,7 @@ final class MacroController: NSObject, NSMenuDelegate {
                 )
                 let name = form.field("Name", value: "My Macro", identifier: "macro.new.name")
                 let text = JSONLibraryEditor.makeTextView(size: NSSize(width: 560, height: 180))
-                text.editor.setAccessibilityLabel("Text inserted by the new macro")
+                ControlPresentation.label("Text inserted by the new macro", control: text.editor)
                 text.editor.identifier = NSUserInterfaceItemIdentifier("macro.new.text")
                 form.add(text.scroll)
                 text.scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true

@@ -29,7 +29,18 @@ enum ControlPresentation {
     static func selectedID(_ popup: NSPopUpButton) -> String? { popup.selectedItem?.representedObject as? String }
     static func label(_ title: String, control: NSView, caption: NSTextField? = nil) {
         control.setAccessibilityLabel(title)
-        if let caption { control.setAccessibilityTitleUIElement(caption) }
+        // AppKit exposes native cells for text fields, popups and buttons. Naming
+        // only the host leaves those unignored input elements unnamed.
+        let cell = (control as? NSControl)?.cell
+        cell?.setAccessibilityLabel(title)
+        if let caption {
+            control.setAccessibilityTitleUIElement(caption)
+            if let captionCell = caption.cell {
+                cell?.setAccessibilityTitleUIElement(captionCell)
+            } else {
+                cell?.setAccessibilityTitleUIElement(caption)
+            }
+        }
     }
 }
 

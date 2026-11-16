@@ -186,7 +186,7 @@ final class LibraryManager: NSObject, NSTableViewDataSource, NSTableViewDelegate
         field.toolTip = value.name
         field.delegate = self
         field.identifier = NSUserInterfaceItemIdentifier(value.id.uuidString)
-        field.setAccessibilityLabel(Strings.formAction("Rename", scope: value.name))
+        ControlPresentation.label(Strings.formAction("Rename", scope: value.name), control: field)
         return field
     }
     func controlTextDidEndEditing(_ notification: Notification) {
@@ -194,6 +194,7 @@ final class LibraryManager: NSObject, NSTableViewDataSource, NSTableViewDelegate
             let text = field.identifier?.rawValue, let id = UUID(uuidString: text)
         else { return }
         rename(id, field.stringValue)
+        ControlPresentation.label(Strings.formAction("Rename", scope: field.stringValue), control: field)
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
         refresh()

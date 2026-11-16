@@ -184,7 +184,7 @@ final class RunController: NSObject, NSMenuItemValidation {
                     size: NSSize(width: 700, height: 530))
                 form.note(Self.manageHelp)
                 let text = JSONLibraryEditor.makeTextView(size: NSSize(width: 640, height: 330))
-                text.editor.setAccessibilityLabel("Saved Run commands as JSON")
+                ControlPresentation.label("Saved Run commands as JSON", control: text.editor)
                 text.editor.identifier = NSUserInterfaceItemIdentifier("run.manage.text")
                 do {
                     let encoder = JSONEncoder()

@@ -32,7 +32,7 @@ final class ChoicePanel: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         form.retainPresentationOwner(self)
         form.onClose = { [weak self] in self?.retire() }
         filter.placeholderString = filterLabel
-        filter.setAccessibilityLabel(filterLabel)
+        ControlPresentation.label(filterLabel, control: filter)
         filter.identifier = NSUserInterfaceItemIdentifier(identifier + ".filter")
         filter.delegate = self
         form.add(filter)

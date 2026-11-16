@@ -158,7 +158,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         nameField.isEditable = true
         nameField.isSelectable = true
         nameField.isBezeled = true
-        nameField.setAccessibilityLabel("Automation name")
+        ControlPresentation.label("Automation name", control: nameField)
         nameField.setContentHuggingPriority(.init(1), for: .horizontal)
         let note = NSTextField(
             labelWithString:
@@ -368,7 +368,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
             item.tag = index
             choices.menu?.addItem(item)
         }
-        choices.setAccessibilityLabel("Rules to load")
+        ControlPresentation.label("Rules to load", control: choices)
         return choices
     }
     /// The rule set the picker's selected item stands for.
@@ -560,10 +560,12 @@ private final class RuleFields: NSObject {
         kind.selectItem(at: AutomationDefinition.Step.Kind.allCases.firstIndex(of: initial.kind)!)
         kind.target = self
         kind.action = #selector(changed)
-        kind.setAccessibilityLabel("Rule")
+        ControlPresentation.label("Rule", control: kind)
         find.stringValue = initial.find ?? ""
         replacement.stringValue = initial.replacement ?? ""
-        replacement.setAccessibilityLabel(AutomationDefinition.Step.Kind.replacementTitle)
+        ControlPresentation.label(AutomationDefinition.Step.Kind.replacementTitle, control: replacement)
+        ControlPresentation.label("Ask for match text when running this rule", control: askFind)
+        ControlPresentation.label("Ask for replacement when running this rule", control: askReplacement)
         askFind.state = initial.askForFind == true ? .on : .off
         askReplacement.state = initial.askForReplacement == true ? .on : .off
         let stack = NSStackView()
@@ -574,6 +576,8 @@ private final class RuleFields: NSObject {
             (NSTextField(labelWithString: "Rule"), kind as NSView), (findTitle, find),
             (NSTextField(labelWithString: AutomationDefinition.Step.Kind.replacementTitle), replacement)
         ] {
+            ControlPresentation.label(
+                control.accessibilityLabel() ?? title.stringValue, control: control, caption: title)
             title.widthAnchor.constraint(equalToConstant: 100).isActive = true
             control.widthAnchor.constraint(equalToConstant: 420).isActive = true
             stack.addArrangedSubview(NSStackView(views: [title, control]))
@@ -610,7 +614,7 @@ private final class RuleFields: NSObject {
         replacement.isEnabled = selected.acceptsReplacement
         askReplacement.isEnabled = selected.acceptsReplacement
         findTitle.stringValue = selected.findTitle
-        find.setAccessibilityLabel(selected.findTitle)
+        ControlPresentation.label(selected.findTitle, control: find)
         guidance.stringValue = selected.guidance
     }
 }

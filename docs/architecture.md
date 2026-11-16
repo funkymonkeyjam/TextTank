@@ -93,6 +93,11 @@ Settings uses an owned, resizable `FormPanel`, opened by Command-comma and title
 “Settings”. Save explicitly applies its working copy; Cancel, Escape and Close abandon
 pending changes. Reset Defaults remains a destructive, explicitly confirmed action.
 Frames use the existing `WindowFrames` policy, including isolated test defaults.
+Input purpose labels name both the host and AppKit's exposed native cell, with
+caption relationships attached to the caption cell. Dynamic rule and inline
+rename labels follow their current purpose. Native checks traverse actual window
+children and table accessibility edges, retain native roles/values, and type into
+focused fields; they do not certify physical VoiceOver interaction.
 
 Automation, Macro and Run managers use `LibraryManager` with native tables, inline
 rename, Add, Duplicate and confirmed Delete. Automation Favorite shows its pending

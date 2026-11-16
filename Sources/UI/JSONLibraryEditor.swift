@@ -59,14 +59,14 @@ enum JSONLibraryEditor {
         form.window.contentMinSize = NSSize(width: 600, height: 400)
         form.note(configuration.information)
         let text = makeTextView(size: configuration.size)
-        text.editor.setAccessibilityLabel(configuration.accessibilityLabel)
+        ControlPresentation.label(configuration.accessibilityLabel, control: text.editor)
         text.editor.identifier = NSUserInterfaceItemIdentifier(configuration.identifier + ".text")
         text.editor.string = initialText
         if let reference = configuration.reference {
             let help = makeTextView(size: NSSize(width: configuration.size.width, height: reference.height))
             help.editor.isEditable = false
             help.editor.string = reference.text
-            help.editor.setAccessibilityLabel(reference.accessibilityLabel)
+            ControlPresentation.label(reference.accessibilityLabel, control: help.editor)
             form.add(help.scroll)
             help.scroll.heightAnchor.constraint(equalToConstant: reference.height).isActive = true
         }

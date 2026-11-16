@@ -28,8 +28,7 @@ import AppKit
             let names = exposed.flatMap { element in
                 [
                     nativeText(element, selector: "accessibilityLabel"),
-                    nativeText(element, selector: "accessibilityTitle"),
-                    nativeText(element, selector: "accessibilityAttributeValue:", argument: "AXDescription")
+                    nativeText(element, selector: "accessibilityTitle")
                 ]
             }
             print("AX_FORM_ELEMENT", button.identifier!.rawValue, "expected=", expected, "actual=", names)
@@ -314,4 +313,259 @@ import AppKit
             "DG native Run Add, Duplicate, Delete and Save preserve the configured arguments without execution")
     }
 
+}
+
+extension DesignSettingsChecks {
+    private static func modernAttribute(_ value: Any, _ name: String) -> Any? {
+        guard let object = value as? NSObject, object.responds(to: NSSelectorFromString(name)) else { return nil }
+        return object.perform(NSSelectorFromString(name))?.takeUnretainedValue()
+    }
+    /// Traverse the real window's modern accessibility children, including native cells.
+    /// Host getter values and deprecated AXDescription are not the acceptance oracle.
+    private static func nativeTree(_ window: NSWindow) -> [NSObject] {
+        var seen: Set<ObjectIdentifier> = [], result: [NSObject] = []
+        func visit(_ value: Any) {
+            guard let object = value as? NSObject, seen.insert(ObjectIdentifier(object)).inserted else { return }
+            result.append(object)
+            for child in modernAttribute(object, "accessibilityChildren") as? [Any] ?? [] { visit(child) }
+            // Some AppKit-owned table proxies expose only the AXChildren bridge.
+            // Use that native edge for navigation, never legacy names/roles as the oracle.
+            let childrenSelector = NSSelectorFromString("accessibilityChildren")
+            let bridgeSelector = NSSelectorFromString("accessibilityAttributeValue:")
+            if !object.responds(to: childrenSelector), object.responds(to: bridgeSelector),
+                let children = object.perform(bridgeSelector, with: "AXChildren")?.takeUnretainedValue() as? [Any]
+            {
+                for child in children { visit(child) }
+            }
+            // AppKit's private row proxies do not implement modern children selectors.
+            // Follow the table protocol's public cell edges instead of a legacy-name fallback.
+            if let table = object as? NSTableView {
+                for row in 0..<table.numberOfRows {
+                    for column in 0..<table.numberOfColumns {
+                        if let cell = table.accessibilityCell(forColumn: column, row: row) { visit(cell) }
+                    }
+                }
+            }
+        }
+        visit(window)
+        return result
+    }
+    private static func exposes(_ value: Any, purpose: String, role: String) -> Bool {
+        guard modernAttribute(value, "accessibilityRole") as? String == role else { return false }
+        if modernAttribute(value, "accessibilityLabel") as? String == purpose
+            || modernAttribute(value, "accessibilityTitle") as? String == purpose
+        {
+            return true
+        }
+        guard let caption = modernAttribute(value, "accessibilityTitleUIElement") else { return false }
+        return modernAttribute(caption, "accessibilityValue") as? String == purpose
+    }
+    private static func inputName(
+        _ view: NSView, _ purpose: String, role: String, in form: FormPanel, focus: Bool = false
+    ) {
+        form.window.contentView?.layoutSubtreeIfNeeded()
+        form.window.displayIfNeeded()
+        let actual = NSAccessibility.unignoredChildrenForOnlyChild(from: view)
+        let tree = nativeTree(form.window)
+        let cellPass = actual.contains { exposes($0, purpose: purpose, role: role) }
+        let treePass = tree.contains { exposes($0, purpose: purpose, role: role) }
+        let expectedText =
+            (view as? NSPopUpButton)?.titleOfSelectedItem ?? (view as? NSTextField)?.stringValue
+            ?? (view as? NSTextView)?.string
+        if let expectedText {
+            check(
+                actual.contains {
+                    exposes($0, purpose: purpose, role: role)
+                        && modernAttribute($0, "accessibilityValue") as? String == expectedText
+                },
+                "DG naming preserves the real native input role and displayed value: \(purpose)")
+        } else if let button = view as? NSButton {
+            check(
+                actual.contains {
+                    exposes($0, purpose: purpose, role: role)
+                        && (modernAttribute($0, "accessibilityValue") as? NSNumber)?.intValue == button.state.rawValue
+                },
+                "DG naming preserves the real native checkbox state: \(purpose)")
+        }
+        print("DG_INPUT_AX", form.window.identifier!.rawValue, purpose, role, "native=", cellPass, "window=", treePass)
+        if !treePass {
+            for element in tree {
+                print(
+                    "DG_INPUT_AX_TREE", String(describing: Swift.type(of: element)),
+                    modernAttribute(element, "accessibilityRole") ?? "",
+                    modernAttribute(element, "accessibilityLabel") ?? "",
+                    modernAttribute(element, "accessibilityTitle") ?? "",
+                    modernAttribute(element, "accessibilityValue") ?? "")
+            }
+        }
+        check(
+            cellPass && treePass,
+            "DG actual native input and full window tree expose purpose: \(form.window.identifier!.rawValue) / \(purpose)"
+        )
+        guard focus, let field = view as? NSTextField, field.isEnabled else { return }
+        field.selectText(nil)
+        type("8", in: form.window)
+        let focusedTree = nativeTree(form.window)
+        check(
+            field.currentEditor() != nil && focusedTree.contains { exposes($0, purpose: purpose, role: role) },
+            "DG real focused field editing retains its native input purpose: \(purpose)")
+        if let editor = field.currentEditor(), focusedTree.contains(where: { $0 === editor }) {
+            let editorRole = modernAttribute(editor, "accessibilityRole") as? String ?? ""
+            check(
+                exposes(editor, purpose: purpose, role: editorRole),
+                "DG an exposed active field editor retains the input purpose: \(purpose)")
+        } else {
+            print("DG_FIELD_EDITOR", purpose, "represented by its named native input cell in the window tree")
+        }
+        form.window.makeFirstResponder(nil)
+        if purpose.hasPrefix("Rename in ") {
+            let renamedPurpose = "Rename in " + field.stringValue
+            check(
+                nativeTree(form.window).contains { exposes($0, purpose: renamedPurpose, role: role) },
+                "DG the native inline Rename name follows its committed display name")
+        }
+    }
+    static func inputAccessibilityChecks(root: URL, composition: AppDelegate) throws {
+        let isolated = try IsolatedSupportDirectory("DesignSettingsInputAX")
+        defer { isolated.restore() }
+        let prior = Set(FormPanel.visible.map(ObjectIdentifier.init))
+        defer {
+            for form in FormPanel.visible.reversed() where !prior.contains(ObjectIdentifier(form)) { form.close() }
+        }
+        func form(_ id: String) throws -> FormPanel {
+            try requireValue(
+                FormPanel.visible.last { $0.window.identifier?.rawValue == id }, "DG AX fixture owns \(id)")
+        }
+        func labelled(_ purpose: String, in form: FormPanel) throws -> NSView {
+            try requireValue(
+                descendants(form.window.contentView!).first { $0.accessibilityLabel() == purpose },
+                "DG AX fixture input \(purpose)")
+        }
+        func checkInputs(_ id: String, _ purposes: [(String, String)], focus: Bool = false) throws -> FormPanel {
+            let owned = try form(id)
+            for (index, pair) in purposes.enumerated() {
+                inputName(try labelled(pair.0, in: owned), pair.0, role: pair.1, in: owned, focus: focus && index == 0)
+            }
+            return owned
+        }
+        func action(_ selector: String, menu: NSMenu) throws {
+            let item = try requireValue(
+                menu.items.first { $0.action == NSSelectorFromString(selector) }, "DG AX native menu route \(selector)")
+            _ = NSApp.sendAction(item.action!, to: item.target, from: item)
+        }
+        let settings = SettingsController(url: isolated.url.appendingPathComponent("Settings.json"))
+        settings.showSettings(nil)
+        let settingsForm = try checkInputs(
+            "TextTank.Settings",
+            [
+                ("Tab width", "AXTextField"), ("Appearance", "AXPopUpButton"),
+                ("Command shortcut to assign", "AXPopUpButton"), ("Shortcut key", "AXTextField"),
+                ("Indent with tabs", "AXCheckBox"), ("Wrap lines", "AXCheckBox")
+            ], focus: true)
+        let shortcut = try field("settings.shortcut.key", settingsForm.window)
+        let commands = try requireValue(
+            descendants(settingsForm.window.contentView!).compactMap { $0 as? NSPopUpButton }.first {
+                $0.identifier?.rawValue == "settings.shortcut.command"
+            }, "DG AX shortcut choices")
+        commands.selectItem(at: min(1, commands.numberOfItems - 1))
+        _ = NSApp.sendAction(commands.action!, to: commands.target, from: commands)
+        inputName(shortcut, "Shortcut key", role: "AXTextField", in: settingsForm, focus: true)
+        settingsForm.close()
+
+        let document = DocumentFactory.makeUntitled()
+        defer { document.close() }
+        let controller = try requireValue(
+            document.windowControllers.first as? EditorWindowController, "DG AX document controller")
+        document.editor.text = "one\ntwo"
+        document.editor.setSavePoint()
+        controller.goToLine(nil)
+        try checkInputs("TextTank.GoToLine", [("Line number in Go to Line", "AXTextField")], focus: true).close()
+        composition.showDocumentTabs(nil)
+        try checkInputs(
+            "TextTank.OpenDocuments", [("Filter open documents by name or path", "AXTextField")], focus: true
+        ).close()
+        let editor = document.editor
+        let automation = AutomationController(
+            editorProvider: { editor }, newDocument: { _ in check(false, "DG input checks never invoke output") })
+        var workflow = AutomationDefinition.example
+        workflow.name = "AX automation"
+        workflow.shortcut = nil
+        try automation.persistLibrary(.init(workflows: [workflow]))
+        automation.manage()
+        let manager = try checkInputs("automation.manager", [("Rename in AX automation", "AXTextField")], focus: true)
+        try button("automation.edit", manager.window).performClick(nil)
+        try checkInputs(
+            "automation.settings",
+            [
+                ("Automation name", "AXTextField"), ("Automation input", "AXPopUpButton"),
+                ("Automation output", "AXPopUpButton"), ("Automation shortcut", "AXTextField")
+            ], focus: true
+        ).close()
+        try button("automation.rules", manager.window).performClick(nil)
+        let rules = try checkInputs(
+            "TextTank.Rules", [("Automation name", "AXTextField"), ("Sample input", "AXTextArea")], focus: true)
+        try button("rules.add", rules.window).performClick(nil)
+        let rule = try checkInputs(
+            "rule",
+            [
+                ("Rule", "AXPopUpButton"), ("Text to match", "AXTextField"), ("Replace with", "AXTextField"),
+                ("Ask for match text when running this rule", "AXCheckBox"),
+                ("Ask for replacement when running this rule", "AXCheckBox")
+            ])
+        let kind = try requireValue(try labelled("Rule", in: rule) as? NSPopUpButton, "DG AX actual rule kind")
+        kind.selectItem(
+            at: try requireValue(
+                AutomationDefinition.Step.Kind.allCases.firstIndex { $0.findTitle == "Pattern" },
+                "DG AX pattern rule kind"))
+        _ = NSApp.sendAction(kind.action!, to: kind.target, from: kind)
+        inputName(try labelled("Pattern", in: rule), "Pattern", role: "AXTextField", in: rule, focus: true)
+        rule.close()
+        rules.close()
+        try button("automation.json", manager.window).performClick(nil)
+        try checkInputs("automation.json", [("Automation library JSON", "AXTextArea")]).close()
+        manager.close()
+        automation.showPalette()
+        try checkInputs("automation.palette", [("Filter automations by name", "AXTextField")], focus: true).close()
+
+        let macro = MacroController(editorProvider: { editor })
+        try macro.persist(.init(macros: [.init(id: UUID(), name: "AX macro", steps: [.insertText("x")])]))
+        try action("manage", menu: macro.menu())
+        let macroManager = try checkInputs("macro.manager", [("Rename in AX macro", "AXTextField")], focus: true)
+        try button("macro.manager.add", macroManager.window).performClick(nil)
+        try checkInputs(
+            "macro.new", [("Name in New Macro", "AXTextField"), ("Text inserted by the new macro", "AXTextArea")],
+            focus: true
+        ).close()
+        try button("macro.manager.advanced", macroManager.window).performClick(nil)
+        try checkInputs("macro.json", [("Macro library JSON", "AXTextArea")]).close()
+        macroManager.close()
+        macro.startRecording()
+        editor.executeCommand("newLine")
+        _ = try macro.finishRecording()
+        editor.executeCommand("undo")
+        try action("saveLast", menu: macro.menu())
+        try checkInputs("macro.save", [("Macro name in Name Recorded Macro", "AXTextField")], focus: true).close()
+        let run = RunController()
+        try run.persist([.uppercaseSample])
+        try action("manage:", menu: run.makeMenu())
+        let runManager = try checkInputs(
+            "run.manager", [("Rename in " + ConfiguredRun.uppercaseSample.name, "AXTextField")], focus: true)
+        try button("run.manager.add", runManager.window).performClick(nil)
+        try checkInputs(
+            "run.command",
+            [
+                ("Name in New Run Command", "AXTextField"), ("Executable in New Run Command", "AXTextField"),
+                ("Arguments in New Run Command", "AXTextField"),
+                ("Intentional shell mode for this Run command", "AXCheckBox"),
+                ("Text extension mode for this Run command", "AXCheckBox")
+            ], focus: true
+        ).close()
+        try button("run.manager.advanced", runManager.window).performClick(nil)
+        try checkInputs("run.json", [("Saved Run commands as JSON", "AXTextArea")]).close()
+        runManager.close()
+        let language = LanguageController(
+            editorProvider: { editor }, languageProvider: { "plain" }, setLanguage: { _ in })
+        language.configure()
+        try checkInputs("language.json", [("Language profiles JSON", "AXTextArea")]).close()
+    }
 }

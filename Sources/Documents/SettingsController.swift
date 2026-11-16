@@ -14,11 +14,11 @@ private final class SettingsShortcutEditor: NSObject {
         }
         popup.target = self
         popup.action = #selector(selectCommand(_:))
-        popup.setAccessibilityLabel("Command shortcut to assign")
+        ControlPresentation.label("Command shortcut to assign", control: popup)
         popup.identifier = NSUserInterfaceItemIdentifier("settings.shortcut.command")
         key.stringValue = settings.shortcut(for: draft.selected)
         key.placeholderString = "No custom shortcut"
-        key.setAccessibilityLabel("Shortcut key")
+        ControlPresentation.label("Shortcut key", control: key)
         key.identifier = NSUserInterfaceItemIdentifier("settings.shortcut.key")
     }
     @objc func selectCommand(_ sender: NSPopUpButton) {
@@ -137,12 +137,12 @@ final class SettingsController: NSObject {
         clear.setAccessibilityLabel("Clear the selected command's custom shortcut")
         clear.cell?.setAccessibilityLabel("Clear the selected command's custom shortcut")
         clear.identifier = NSUserInterfaceItemIdentifier("settings.shortcut.clear")
-        width.setAccessibilityLabel("Tab width")
-        tabs.setAccessibilityLabel("Indent with tabs")
-        wrap.setAccessibilityLabel("Wrap lines")
-        appearance.setAccessibilityLabel("Appearance")
-        shortcut.setAccessibilityLabel("Command shortcut to assign")
-        key.setAccessibilityLabel("Shortcut key")
+        ControlPresentation.label("Tab width", control: width)
+        ControlPresentation.label("Indent with tabs", control: tabs)
+        ControlPresentation.label("Wrap lines", control: wrap)
+        ControlPresentation.label("Appearance", control: appearance)
+        ControlPresentation.label("Command shortcut to assign", control: shortcut)
+        ControlPresentation.label("Shortcut key", control: key)
         let stack = NSStackView(views: [
             NSTextField(labelWithString: "Tab width (1–32)"), width, tabs, wrap, appearance,
             NSTextField(labelWithString: "Command shortcuts (Command; uppercase adds Shift)"), shortcut, key, clear
