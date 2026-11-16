@@ -1909,6 +1909,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
+        #if TESTING
+            // The CLI checks drive many document transitions without NSApplication.run.
+            // Their native animations exhausted AppKit workers before a save panel could open.
+            // Suppress only this owned fixture transition; native sheets and production keep their behavior.
+            window.animationBehavior = .none
+        #endif
         lastEditor = document.editor
         wire(document.editor)
         focusObservation = window.observe(\.firstResponder) { [weak self] window, _ in
