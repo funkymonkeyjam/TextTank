@@ -133,6 +133,61 @@ import Foundation
                 "Play Last Recording replays the unsaved recording through the same dialog")
             editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "ab" && !editor.modified, "Play Last Recording is one Undo")
+            // F316: exercise the real interactive playback timer and its actual Stop action,
+            // rather than the separate synchronous play(shouldCancel:) control below.
+            editor.text = "ab"
+            editor.resetUndoHistory()
+            editor.setSavePoint()
+            _ = editor.setSelectionAnchor(1, caret: 1)
+            let stopRevision = editor.revision
+            var stopPressed = false, stopTimedOut = false, errorAcknowledged = false
+            var retainedPrefix = ""
+            let stopDeadline = Date().addingTimeInterval(10)
+            let stopTimer = Timer(timeInterval: 0.01, repeats: true) { _ in
+                guard let content = NSApp.modalWindow?.contentView else { return }
+                let views = descendants(content)
+                if Date() > stopDeadline {
+                    stopTimedOut = true
+                    NSApp.abortModal()
+                    return
+                }
+                if !stopPressed, editor.revision > stopRevision,
+                    let stop = views.compactMap({ $0 as? NSButton }).first(where: {
+                        $0.action == NSSelectorFromString("cancelPlayback")
+                    })
+                {
+                    retainedPrefix = editor.text
+                    stopPressed = true
+                    stop.performClick(nil)
+                } else if stopPressed,
+                    let acknowledge = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "OK" })
+                {
+                    errorAcknowledged = true
+                    acknowledge.performClick(nil)
+                }
+            }
+            RunLoop.main.add(stopTimer, forMode: .modalPanel)
+            let stopped = choosing(savedItem, answer("macro.play.count", "1000", "macro.play.confirm"))
+            stopTimer.invalidate()
+            check(
+                stopped && stopPressed && !stopTimedOut && errorAcknowledged && NSApp.modalWindow == nil,
+                "F316 real interactive Macro Stop returns from playback and its native error notice")
+            let completed = retainedPrefix.utf8.count - 2
+            check(
+                completed > 0 && completed < 1000
+                    && retainedPrefix == "a" + String(repeating: "\n", count: completed) + "b",
+                "F316 real Stop retains an exact nonempty incomplete prefix of completed editing steps")
+            check(
+                editor.text == retainedPrefix && editor.modified,
+                "F316 the interactive timer stops without advancing after the Stop turn")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            check(
+                editor.text == "ab" && !editor.modified,
+                "F316 actual interactive Stop preserves one Undo to the original save point")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            check(
+                editor.text == "ab" && !editor.modified,
+                "F316 interactive Stop leaves no second partial edit to undo")
             check(
                 item("playLast", in: restarted)?.isEnabled == false
                     && item("saveLast", in: restarted)?.isEnabled == false,
