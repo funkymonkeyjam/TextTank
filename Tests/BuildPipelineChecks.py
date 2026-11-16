@@ -81,6 +81,33 @@ func rawMode() throws {
                 text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_runtime_linkage_rejects_real_absolute_framework_install_names(self):
+        linkage = module('check_runtime_linkage', 'check-runtime-linkage.py')
+        with tempfile.TemporaryDirectory(prefix='runtime-linkage-', dir=ROOT / 'tmp') as work:
+            fixture = Path(work)
+            app = fixture / 'Fixture.app'
+            image = app / 'Contents/Frameworks/NativeSearch.framework/Versions/A/NativeSearch'
+            executable = app / 'Contents/MacOS/TextTank'
+            image.parent.mkdir(parents=True)
+            executable.parent.mkdir(parents=True)
+            library_source = fixture / 'search.c'
+            library_source.write_text('int fixture_search(void) { return 0; }\n')
+            main_source = fixture / 'main.c'
+            main_source.write_text('extern int fixture_search(void); int main(void) { return fixture_search(); }\n')
+            for identity, accepted in [('/Library/Frameworks/NativeSearch.framework/Versions/A/NativeSearch', False),
+                                       ('@rpath/NativeSearch.framework/Versions/A/NativeSearch', True)]:
+                built = subprocess.run(['xcrun', 'clang', '-dynamiclib', str(library_source),
+                                        '-install_name', identity, '-o', str(image)], capture_output=True, text=True)
+                self.assertEqual(built.returncode, 0, built.stderr)
+                linked = subprocess.run(['xcrun', 'clang', str(main_source), str(image), '-o', str(executable)],
+                                        capture_output=True, text=True)
+                self.assertEqual(linked.returncode, 0, linked.stderr)
+                if accepted:
+                    self.assertEqual(linkage.verify(app)['NativeSearch'], identity)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'install name'):
+                        linkage.verify(app)
+
     def test_signing_cleans_metadata_at_each_boundary_and_keeps_failures_fatal(self):
         # Simulate metadata arriving between signing steps; this does not attribute
         # the real metadata recurrence to codesign, Finder or a file provider.
@@ -98,7 +125,7 @@ VENDOR_BUILD="$PWD/build/vendor/Debug"
 APP_PATH="$PWD/build/Fixture App.app"
 export APP_PATH
 ''')
-            for name in ['bootstrap.py', 'build-lexilla.py']:
+            for name in ['bootstrap.py', 'build-lexilla.py', 'check-runtime-linkage.py']:
                 (scripts / name).write_text('# isolated build fixture; no acquisition\n')
             app = fixture / 'build/Fixture App.app'
             framework = app / 'Contents/Frameworks/Scintilla.framework'

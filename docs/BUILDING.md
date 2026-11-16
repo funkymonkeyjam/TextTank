@@ -38,3 +38,7 @@ Product documentation is copied from the explicit `REVIEW_DOCUMENTS` list in `sc
 The generated graph includes NativeSearch, a Foundation Objective-C++ framework. Canonical
 builds embed and ad-hoc sign it before the application, retaining fatal signing and strict
 verification failures. Its public module exports only TTSearchEngine.h.
+
+The build also inspects actual application code images (including the Debug dylib) and
+NativeSearch install names before signing. Embedded runtime dependencies must use @rpath;
+an absolute /Library/Frameworks dependency fails rather than passing build-only evidence.
