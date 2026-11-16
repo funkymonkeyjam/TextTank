@@ -382,7 +382,9 @@ import NativeSearch
                 "fixture: replace-flow search dispatched")
             await waitUntil("the replace-flow search to finish") { !flow.isSearching }
             try require(flow.numberOfRows(in: flow.table) == 2, "fixture: both files matched on disk")
-            @MainActor func everyView(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { everyView($0) } }
+            @MainActor @Sendable func everyView(_ view: NSView) -> [NSView] {
+                [view] + view.subviews.flatMap { everyView($0) }
+            }
             var confirmed = false
             let giveUp = Date().addingTimeInterval(10)
             let confirm = Timer(timeInterval: 0.05, repeats: true) { _ in

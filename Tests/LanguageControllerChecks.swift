@@ -10,7 +10,9 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
 
 @main struct LanguageControllerChecks {
     @MainActor static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-    @MainActor static func editingJSON(_ controller: LanguageController, _ act: @escaping (NSWindow, [NSView]) -> Bool)
+    @MainActor static func editingJSON(
+        _ controller: LanguageController, _ act: @escaping @MainActor @Sendable (NSWindow, [NSView]) -> Bool
+    )
         -> Bool
     {
         let state = LanguageDialogState()

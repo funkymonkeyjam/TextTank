@@ -5,6 +5,8 @@ import AppKit
 import EditorBridge
 import NativeSearch
 
+@MainActor private final class DocumentNoticeState { var count = 0 }
+
 @main struct DocumentChecks {
     @MainActor static func descendants(_ view: NSView) -> [NSView] {
         [view] + view.subviews.flatMap { descendants($0) }
@@ -1488,10 +1490,13 @@ import NativeSearch
                     controller.statusTimerInterval = pollingInterval
                     controller.visibilityChanged()
                 }
-                var notices = 0
+                let notices = DocumentNoticeState()
                 let observer = NotificationCenter.default.addObserver(
                     forName: .TTEditorStateDidChange, object: visible.editor, queue: nil
-                ) { _ in notices += 1 }
+                ) { _ in
+                    precondition(Thread.isMainThread)
+                    MainActor.assumeIsolated { notices.count += 1 }
+                }
                 defer { NotificationCenter.default.removeObserver(observer) }
                 // Empty the queued notices from the fixture before taking the baseline.
                 var ready = false
@@ -1502,12 +1507,12 @@ import NativeSearch
                 for noticeBeforeTick in [true, false] {
                     let order = noticeBeforeTick ? "notice before tick" : "notice after tick"
                     for index in 0..<10 {
-                        let beforeNotice = notices
+                        let beforeNotice = notices.count
                         _ = visible.editor.replaceSelection("k")
                         typed += 1
                         if !noticeBeforeTick { controller.statusTimerTick() }
                         let beforeEventRefresh = controller.statusRefreshCount
-                        spinUntil("real bridge \(order) \(index + 1)") { notices > beforeNotice }
+                        spinUntil("real bridge \(order) \(index + 1)") { notices.count > beforeNotice }
                         let info = visible.editor.statusInfo
                         check(
                             controller.statusRefreshCount > beforeEventRefresh

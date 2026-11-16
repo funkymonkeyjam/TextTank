@@ -45,7 +45,7 @@ final class Audit24RecoverySpy: NSObject {
     static func ruleKeyboardCheck() -> (Bool, Bool, AutomationDefinition.Step?) {
         var actionSent = false, fieldsEnabled = false, acted = false
         let deadline = Date().addingTimeInterval(5)
-        let timerAction0: @MainActor @Sendable (Timer) -> Void = { _ in
+        let timerAction0: @MainActor @Sendable () -> Void = {
             guard let modal = presentedFormWindow, let content = modal.contentView else { return }
             if Date() > deadline {
                 NSApp.abortModal()
@@ -76,9 +76,9 @@ final class Audit24RecoverySpy: NSObject {
             typeKeys("2 eggs", in: modal)
             save.performClick(nil)
         }
-        let timer = Timer(timeInterval: 0.1, repeats: true) { timer in
+        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
             precondition(Thread.isMainThread)
-            MainActor.assumeIsolated { timerAction0(timer) }
+            MainActor.assumeIsolated { timerAction0() }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         let result = capturedStep(.init(kind: .removeBlankLines), timeout: 5)
@@ -89,7 +89,7 @@ final class Audit24RecoverySpy: NSObject {
         var stage = 0, nameAccepted = false, sampleAccepted = false, reentryBlocked = false, timedOut = false
         var nestedRule: (Bool, Bool, AutomationDefinition.Step?) = (false, false, nil)
         let deadline = Date().addingTimeInterval(8)
-        let timerAction1: @MainActor @Sendable (Timer) -> Void = { _ in
+        let timerAction1: @MainActor @Sendable () -> Void = {
             guard let window = presentedFormWindow, let content = window.contentView else { return }
             let views = descendants(content)
             if Date() > deadline {
@@ -137,9 +137,9 @@ final class Audit24RecoverySpy: NSObject {
             default: break
             }
         }
-        let timer = Timer(timeInterval: 0.1, repeats: true) { timer in
+        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
             precondition(Thread.isMainThread)
-            MainActor.assumeIsolated { timerAction1(timer) }
+            MainActor.assumeIsolated { timerAction1() }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         controller.manage()
@@ -163,7 +163,7 @@ final class Audit24RecoverySpy: NSObject {
     ) rethrows -> (value: T, acted: Bool, timedOut: Bool) {
         var acted = false, timedOut = false
         let deadline = Date().addingTimeInterval(timeout)
-        let timerAction2: @MainActor @Sendable (Timer) -> Void = { _ in
+        let timerAction2: @MainActor @Sendable () -> Void = {
             guard let modal = presentedFormWindow, let content = modal.contentView else { return }
             if Date() > deadline {
                 timedOut = true
@@ -172,9 +172,9 @@ final class Audit24RecoverySpy: NSObject {
             }
             if !acted { acted = act(modal, descendants(content)) }
         }
-        let timer = Timer(timeInterval: 0.005, repeats: true) { timer in
+        let timer = Timer(timeInterval: 0.005, repeats: true) { _ in
             precondition(Thread.isMainThread)
-            MainActor.assumeIsolated { timerAction2(timer) }
+            MainActor.assumeIsolated { timerAction2() }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         defer { timer.invalidate() }
@@ -329,15 +329,15 @@ final class Audit24RecoverySpy: NSObject {
     static func nestedModal(_ act: @escaping (NSWindow, [NSView]) -> Void, _ trigger: () -> Void) -> Bool {
         let outer = presentedFormWindow, deadline = Date().addingTimeInterval(8)
         var acted = false
-        let timerAction3: @MainActor @Sendable (Timer) -> Void = { _ in
+        let timerAction3: @MainActor @Sendable () -> Void = {
             guard let nested = presentedFormWindow, nested !== outer, let content = nested.contentView else { return }
             if acted || Date() > deadline { return }
             acted = true
             act(nested, descendants(content))
         }
-        let timer = Timer(timeInterval: 0.02, repeats: true) { timer in
+        let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
             precondition(Thread.isMainThread)
-            MainActor.assumeIsolated { timerAction3(timer) }
+            MainActor.assumeIsolated { timerAction3() }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         trigger()
@@ -1216,7 +1216,7 @@ final class Audit24RecoverySpy: NSObject {
         func recoveryButtons(_ view: NSView) -> [NSButton] {
             (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(recoveryButtons)
         }
-        let timerAction4: @MainActor @Sendable (Timer) -> Void = { _ in
+        let timerAction4: @MainActor @Sendable () -> Void = {
             MainActor.assumeIsolated {
                 guard let content = presentedFormWindow?.contentView else { return }
                 if Date() > recoveryDeadline {
@@ -1230,9 +1230,9 @@ final class Audit24RecoverySpy: NSObject {
                 retry.performClick(nil)
             }
         }
-        let recoveryAnswer = Timer(timeInterval: 0.02, repeats: true) { timer in
+        let recoveryAnswer = Timer(timeInterval: 0.02, repeats: true) { _ in
             precondition(Thread.isMainThread)
-            MainActor.assumeIsolated { timerAction4(timer) }
+            MainActor.assumeIsolated { timerAction4() }
         }
         RunLoop.main.add(recoveryAnswer, forMode: .modalPanel)
         TTAlert.present(recoverable)
@@ -1292,12 +1292,12 @@ final class Audit24RecoverySpy: NSObject {
                     && frames[1].maxX < frames[0].minX
                 alert.buttons[index].performClick(nil)
             }
-            let timerAction5: @MainActor @Sendable (Timer) -> Void = { _ in
+            let timerAction5: @MainActor @Sendable () -> Void = {
                 MainActor.assumeIsolated { chooseButton() }
             }
-            let timer = Timer(timeInterval: 0.1, repeats: false) { timer in
+            let timer = Timer(timeInterval: 0.1, repeats: false) { _ in
                 precondition(Thread.isMainThread)
-                MainActor.assumeIsolated { timerAction5(timer) }
+                MainActor.assumeIsolated { timerAction5() }
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             let response = alert.runModal()

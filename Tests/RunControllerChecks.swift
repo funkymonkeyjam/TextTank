@@ -471,10 +471,10 @@ import NativeSearch
         let originalReveal = StoreRecovery.reveal
         StoreRecovery.reveal = { revealed.append($0) }
         defer { StoreRecovery.reveal = originalReveal }
-        func recovery(_ identifier: String, action: (() throws -> Bool)? = nil) throws -> Bool {
+        @MainActor func recovery(_ identifier: String, action: (@MainActor () throws -> Bool)? = nil) throws -> Bool {
             let deadline = Date().addingTimeInterval(5)
             var clicked = false
-            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+            let tick: @MainActor @Sendable () -> Void = {
                 guard let content = NSApp.modalWindow?.contentView else { return }
                 if Date() > deadline {
                     NSApp.abortModal()
@@ -487,6 +487,10 @@ import NativeSearch
                 else { return }
                 clicked = true
                 button.performClick(nil)
+            }
+            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated { tick() }
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             defer { timer.invalidate() }
@@ -560,12 +564,12 @@ import NativeSearch
                 && RunController.configureHelp.contains("option"),
             "F143 Configure explains a selection that begins with -")
     }
-    static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    @MainActor static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     /// Opens Manage Commands… from its menu item and calls `step` each time a modal window is up,
     /// with a count of the calls so far, until the dialogs are gone. False if it had to be aborted.
     @MainActor static func manage(
         _ controller: RunController, title: String = "Manage Commands…", commit: Bool = true,
-        _ step: @escaping (Int, [NSView]) -> Void
+        _ step: @escaping @MainActor @Sendable (Int, [NSView]) -> Void
     ) throws -> Bool {
         let item = try requireValue(
             controller.makeMenu().items.first { $0.title == title }, "the requested Run configuration item")

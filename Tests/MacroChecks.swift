@@ -21,7 +21,9 @@ import Foundation
         }
         /// Sends a Macros menu item's own action while a timer in modal mode answers the dialog it opens.
         /// `act` is called on every tick until it returns true; a modal still open at the deadline is aborted.
-        @MainActor static func choosing(_ item: NSMenuItem, _ act: @escaping ([NSView]) -> Bool) -> Bool {
+        @MainActor static func choosing(_ item: NSMenuItem, _ act: @escaping @MainActor @Sendable ([NSView]) -> Bool)
+            -> Bool
+        {
             let state = ChoosingState()
             let deadline = Date().addingTimeInterval(10)
             let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
@@ -42,7 +44,9 @@ import Foundation
             waitForModelessForms()
             return state.acted && !state.timedOut
         }
-        @MainActor static func choosingAdvanced(_ item: NSMenuItem, commit: Bool, _ act: @escaping ([NSView]) -> Bool)
+        @MainActor static func choosingAdvanced(
+            _ item: NSMenuItem, commit: Bool, _ act: @escaping @MainActor @Sendable ([NSView]) -> Bool
+        )
             -> Bool
         {
             MainActor.assumeIsolated {
@@ -392,7 +396,7 @@ import Foundation
         /// Navigation from the Find window fronts the document window; checks never put one on screen.
         final class QuietWindow: NSWindow { override func makeKeyAndOrderFront(_ sender: Any?) {} }
         /// Stands in for the system's drag information, so a real drop runs through a content view.
-        final class FakeDrop: NSObject {
+        @MainActor final class FakeDrop: NSObject {
             @objc let draggingPasteboard = NSPasteboard.withUniqueName()
             @objc var draggingLocation = NSPoint.zero
             @objc let draggingSourceOperationMask = NSDragOperation.copy
@@ -680,8 +684,9 @@ import Foundation
             let beforeDrop = editor.revision
             _ = splitContent.draggingEntered(dropInfo)
             _ = splitContent.draggingUpdated(dropInfo)
+            let performedDrop = splitContent.performDragOperation(dropInfo)
             try require(
-                splitContent.performDragOperation(dropInfo) && editor.text.contains("DROP")
+                performedDrop && editor.text.contains("DROP")
                     && editor.revision != beforeDrop,
                 "fixture: the drop into the split view edited the recorded document")
             check(

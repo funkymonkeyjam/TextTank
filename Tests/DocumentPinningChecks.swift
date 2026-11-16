@@ -12,6 +12,8 @@ import AppKit
 import EditorBridge
 import NativeSearch
 
+@MainActor private final class ColumnExplanation { var text = "" }
+
 extension DocumentChecks {
     typealias SectionRunner = (_ name: String, _ line: UInt, _ body: () throws -> Void) -> Void
 
@@ -1240,12 +1242,12 @@ extension DocumentChecks {
             // Insert into Each Selection through its real dialog: plain text, then sequential numbers.
             // F207: a dialog that cannot do what was asked says why in a second alert. The helpers
             // below answer the dialog, then record that alert's text here and dismiss it.
-            var explanation = ""
-            @MainActor func dismissExplanation(_ modal: NSWindow, after dialog: NSWindow?) {
+            let explanation = ColumnExplanation()
+            @MainActor @Sendable func dismissExplanation(_ modal: NSWindow, after dialog: NSWindow?) {
                 guard modal !== dialog, let content = modal.contentView,
                     let ok = descendants(content).compactMap({ $0 as? NSButton }).first(where: { $0.title == "OK" })
                 else { return }
-                explanation = descendants(content).compactMap { ($0 as? NSTextField)?.stringValue }.joined(
+                explanation.text = descendants(content).compactMap { ($0 as? NSTextField)?.stringValue }.joined(
                     separator: "\n")
                 ok.performClick(nil)
             }
@@ -1254,7 +1256,7 @@ extension DocumentChecks {
             ) -> Bool {
                 var acted = false, timedOut = false
                 var dialog: NSWindow?
-                explanation = ""
+                explanation.text = ""
                 let deadline = Date().addingTimeInterval(10)
                 let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                     MainActor.assumeIsolated {
@@ -1269,7 +1271,7 @@ extension DocumentChecks {
                             return
                         }
                         let views = descendants(content)
-                        func find<T: NSView>(_ identifier: String, _ type: T.Type) -> T? {
+                        @MainActor func find<T: NSView>(_ identifier: String, _ type: T.Type) -> T? {
                             views.compactMap { $0 as? T }.first { $0.identifier?.rawValue == identifier }
                         }
                         guard let textField = find("column.text", NSTextField.self),
@@ -1327,7 +1329,7 @@ extension DocumentChecks {
                     && document.editor.revision == untouched, "a start value that is not a whole number inserts nothing"
             )
             check(
-                explanation.contains("Start and Increment must be whole numbers"),
+                explanation.text.contains("Start and Increment must be whole numbers"),
                 "a start value that is not a whole number is explained instead of a beep")
             untouched = try threeSelections()
             check(
@@ -1335,18 +1337,18 @@ extension DocumentChecks {
                     && document.editor.text == "x\nx\nx\n" && document.editor.revision == untouched,
                 "a sequence that would overflow inserts nothing")
             check(
-                explanation.contains("The number sequence is too large"),
+                explanation.text.contains("The number sequence is too large"),
                 "a sequence that would overflow is explained instead of a beep")
             untouched = try threeSelections()
             check(
                 columnDialog(text: "ab", numbered: false, start: "1", step: "1", confirm: false)
                     && document.editor.text == "x\nx\nx\n" && document.editor.revision == untouched,
                 "Cancel in Insert into Each Selection inserts nothing")
-            check(explanation.isEmpty, "Cancel in Insert into Each Selection shows no explanation")
+            check(explanation.text.isEmpty, "Cancel in Insert into Each Selection shows no explanation")
             // F12: Go to Line through its real dialog, on the engine's own line model.
             @MainActor func goToLineDialog(_ entry: String, confirm: Bool = true) -> Bool {
                 var acted = false, timedOut = false
-                explanation = ""
+                explanation.text = ""
                 let deadline = Date().addingTimeInterval(10)
                 let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                     MainActor.assumeIsolated {
@@ -1364,7 +1366,7 @@ extension DocumentChecks {
                         else { return }
                         if acted {
                             // Invalid input remains in this same modeless form, instead of a replacement alert.
-                            explanation =
+                            explanation.text =
                                 views.compactMap { $0 as? NSTextField }.first {
                                     $0.accessibilityLabel()?.hasPrefix("Input needs correction") == true
                                 }?.stringValue ?? ""
@@ -1401,12 +1403,12 @@ extension DocumentChecks {
                 goToLineDialog("3") && document.editor.selectionCaret == 7 && document.editor.selectionAnchor == 7,
                 "Go to Line places the caret at the start of the one-based line across CRLF and CR")
             check(
-                goToLineDialog("4") && document.editor.selectionCaret == 11 && explanation.isEmpty,
+                goToLineDialog("4") && document.editor.selectionCaret == 11 && explanation.text.isEmpty,
                 "Go to Line reaches the empty line after the final line break, with nothing to explain")
             for entry in ["5", "0", "two", "-1"] {
                 check(
                     goToLineDialog(entry) && document.editor.selectionCaret == 11
-                        && explanation.contains("Enter a whole line number from 1 to 4."),
+                        && explanation.text.contains("Enter a whole line number from 1 to 4."),
                     "Go to Line \(entry) says that line does not exist and names the valid range")
             }
             check(

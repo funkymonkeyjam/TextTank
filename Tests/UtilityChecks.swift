@@ -342,7 +342,7 @@ import zlib
             check(selectionPlain == "café", "styled export selection boundary")
             // The two dialog utilities. In each modal the menu item presents, the next named
             // button is clicked; a dialog still open after 20 s is aborted and reported.
-            @MainActor func buttons(_ view: NSView) -> [NSButton] {
+            @MainActor @Sendable func buttons(_ view: NSView) -> [NSButton] {
                 (view as? NSButton).map { [$0] } ?? [] + view.subviews.flatMap(buttons)
             }
             @MainActor func choose(_ title: String, _ answers: [String]) -> Bool {
@@ -424,7 +424,9 @@ import zlib
                 "Cancel in Hex Encoding Options changes nothing and reports no unrecordable edit")
             let hex = UtilityHexState()
             let hexDeadline = Date().addingTimeInterval(10)
-            @MainActor func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+            @MainActor @Sendable func descendants(_ view: NSView) -> [NSView] {
+                [view] + view.subviews.flatMap(descendants)
+            }
             let hexRetry = Timer(timeInterval: 0.01, repeats: true) { _ in
                 precondition(Thread.isMainThread)
                 MainActor.assumeIsolated {
