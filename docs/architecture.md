@@ -388,3 +388,9 @@ The native bridge reports acceptance for indentation, syntax style/font, call ti
 completion requests. Bounds and installed-font rules remain unchanged; completion lists still
 filter invalid words before requesting presentation. `setLanguage(keywordLists:properties:)`
 retains its compound fallback, clamp and skip behavior rather than promising atomic refusal.
+
+NativeSearch is now a separate Foundation Objective-C++ framework containing the snapshot
+search engine and its typed public interface. The application depends on and embeds this
+framework; EditorBridge has no dependency on it. Remaining Swift sources still share the
+application target during the staged module migration. Native checks still compile their
+legacy source sets at this stage; shared artifact acceptance is not yet established.

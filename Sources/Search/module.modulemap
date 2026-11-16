@@ -1,0 +1,5 @@
+framework module NativeSearch {
+    umbrella header "TTSearchEngine.h"
+    export *
+    module * { export * }
+}

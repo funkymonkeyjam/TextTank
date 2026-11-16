@@ -38,13 +38,17 @@ def main():
     identity = load_identity(ROOT)
     files = []
     builds = []
+    search_builds = []
+    header_refs = {}
     cxx_flags = ' '.join(Path('scripts/user-lexer-flags.txt').read_text().split())
     for path in sorted([*Path('Sources').rglob('*.swift'), *Path('Sources').rglob('*.mm'), *Path('Sources').rglob('*.cxx')]):
         f = add(str(path), 'PBXFileReference', lastKnownFileType={'.swift': 'sourcecode.swift', '.cxx': 'sourcecode.cpp.cpp'}.get(path.suffix, 'sourcecode.cpp.objcpp'), path=str(path), sourceTree='<group>')
         files.append(f)
-        builds.append(add('build:' + str(path), 'PBXBuildFile', fileRef=f, **{'settings': {'COMPILER_FLAGS': cxx_flags}} if path.suffix == '.cxx' else {}))
+        destination = search_builds if str(path) == 'Sources/Search/TTSearchEngine.mm' else builds
+        destination.append(add('build:' + str(path), 'PBXBuildFile', fileRef=f, **{'settings': {'COMPILER_FLAGS': cxx_flags}} if path.suffix == '.cxx' else {}))
     for path in sorted(Path('Sources').rglob('*.h')):
-        files.append(add(str(path), 'PBXFileReference', lastKnownFileType='sourcecode.c.h', path=str(path), sourceTree='<group>'))
+        header_refs[str(path)] = add(str(path), 'PBXFileReference', lastKnownFileType='sourcecode.c.h', path=str(path), sourceTree='<group>')
+        files.append(header_refs[str(path)])
     resources = []
     for relative in resource_paths(ROOT):
         path = Path(relative)
@@ -55,12 +59,13 @@ def main():
     framework = add('framework', 'PBXFileReference', lastKnownFileType='wrapper.framework', path='build/vendor/$(CONFIGURATION)/Scintilla.framework', sourceTree='<group>')
     files.append(framework)
     product = add('product', 'PBXFileReference', explicitFileType='wrapper.application', path='TextTank.app', sourceTree='BUILT_PRODUCTS_DIR')
-    products = add('products', 'PBXGroup', children=[product], name='Products', sourceTree='<group>')
+    search_product = add('NativeSearch:product', 'PBXFileReference', explicitFileType='wrapper.framework', path='NativeSearch.framework', sourceTree='BUILT_PRODUCTS_DIR')
+    products = add('products', 'PBXGroup', children=[product, search_product], name='Products', sourceTree='<group>')
     group = add('root', 'PBXGroup', children=files + [products], sourceTree='<group>')
     sources = add('sources', 'PBXSourcesBuildPhase', buildActionMask='2147483647', files=builds, runOnlyForDeploymentPostprocessing='0')
     res = add('resources', 'PBXResourcesBuildPhase', buildActionMask='2147483647', files=resources, runOnlyForDeploymentPostprocessing='0')
-    link = add('link', 'PBXFrameworksBuildPhase', buildActionMask='2147483647', files=[add('linkframework', 'PBXBuildFile', fileRef=framework)], runOnlyForDeploymentPostprocessing='0')
-    embed = add('embed', 'PBXCopyFilesBuildPhase', buildActionMask='2147483647', dstPath='', dstSubfolderSpec='10', files=[add('embedframework', 'PBXBuildFile', fileRef=framework, settings={'ATTRIBUTES': ['RemoveHeadersOnCopy']})], runOnlyForDeploymentPostprocessing='0')
+    link = add('link', 'PBXFrameworksBuildPhase', buildActionMask='2147483647', files=[add('linkframework', 'PBXBuildFile', fileRef=framework), add('NativeSearch:app-link', 'PBXBuildFile', fileRef=search_product)], runOnlyForDeploymentPostprocessing='0')
+    embed = add('embed', 'PBXCopyFilesBuildPhase', buildActionMask='2147483647', dstPath='', dstSubfolderSpec='10', files=[add('embedframework', 'PBXBuildFile', fileRef=framework, settings={'ATTRIBUTES': ['RemoveHeadersOnCopy']}), add('NativeSearch:app-embed', 'PBXBuildFile', fileRef=search_product, settings={'ATTRIBUTES': ['RemoveHeadersOnCopy']})], runOnlyForDeploymentPostprocessing='0')
     settings = {'PRODUCT_NAME': 'TextTank',
      'PRODUCT_BUNDLE_IDENTIFIER': 'app.texttank.editor',
      'INFOPLIST_FILE': 'Resources/Info.plist',
@@ -100,15 +105,27 @@ def main():
      'GCC_WARN_UNUSED_VARIABLE': 'YES',
      'DEAD_CODE_STRIPPING': 'YES',
      'ENABLE_STRICT_OBJC_MSGSEND': 'YES'}
+    search_sources = add('NativeSearch:sources', 'PBXSourcesBuildPhase', buildActionMask='2147483647', files=search_builds, runOnlyForDeploymentPostprocessing='0')
+    search_public_headers = [add('NativeSearch:public-header', 'PBXBuildFile', fileRef=header_refs['Sources/Search/TTSearchEngine.h'], settings={'ATTRIBUTES': ['Public']})] if 'Sources/Search/TTSearchEngine.h' in header_refs else []
+    search_headers = add('NativeSearch:headers', 'PBXHeadersBuildPhase', buildActionMask='2147483647', files=search_public_headers, runOnlyForDeploymentPostprocessing='0')
+    search_link = add('NativeSearch:link', 'PBXFrameworksBuildPhase', buildActionMask='2147483647', files=[], runOnlyForDeploymentPostprocessing='0')
+    search_configs = []
     configs = []
     pconfigs = []
     for name in ['Debug', 'Release']:
         configs.append(add('config' + name, 'XCBuildConfiguration', name=name, buildSettings={**settings, **({'SWIFT_OPTIMIZATION_LEVEL': '-O', 'GCC_OPTIMIZATION_LEVEL': '3', 'DEBUG_INFORMATION_FORMAT': 'dwarf-with-dsym', 'ENABLE_TESTABILITY': 'NO'} if name == 'Release' else {'SWIFT_OPTIMIZATION_LEVEL': '-Onone', 'GCC_OPTIMIZATION_LEVEL': '0', 'GCC_PREPROCESSOR_DEFINITIONS': ['$(inherited)', 'DEBUG=1'], 'SWIFT_ACTIVE_COMPILATION_CONDITIONS': 'DEBUG', 'ONLY_ACTIVE_ARCH': 'YES', 'ENABLE_TESTABILITY': 'YES'})}))
+        search_settings = {**settings, 'PRODUCT_NAME': 'NativeSearch', 'PRODUCT_MODULE_NAME': 'NativeSearch', 'PRODUCT_BUNDLE_IDENTIFIER': 'app.texttank.NativeSearch', 'DEFINES_MODULE': 'YES', 'GENERATE_INFOPLIST_FILE': 'YES', 'MODULEMAP_FILE': 'Sources/Search/module.modulemap', 'SKIP_INSTALL': 'YES', 'HEADER_SEARCH_PATHS': ['$(PROJECT_DIR)/Sources/Search/Boost'], 'FRAMEWORK_SEARCH_PATHS': ['$(inherited)'], 'SWIFT_OPTIMIZATION_LEVEL': '-O' if name == 'Release' else '-Onone', 'OTHER_LDFLAGS': ['$(inherited)', '-framework', 'Foundation', '-lc++'], 'GCC_OPTIMIZATION_LEVEL': '3' if name == 'Release' else '0'}
+        for key in ['INFOPLIST_FILE', 'SWIFT_OBJC_BRIDGING_HEADER']:
+            search_settings.pop(key, None)
+        search_configs.append(add('NativeSearch:config:' + name, 'XCBuildConfiguration', name=name, buildSettings=search_settings))
         pconfigs.append(add('pconfig' + name, 'XCBuildConfiguration', name=name, buildSettings={'SDKROOT': 'macosx', 'ARCHS': identity['architecture']}))
     cl = add('configs', 'XCConfigurationList', buildConfigurations=configs, defaultConfigurationIsVisible='0', defaultConfigurationName='Debug')
     pcl = add('pconfigs', 'XCConfigurationList', buildConfigurations=pconfigs, defaultConfigurationIsVisible='0', defaultConfigurationName='Debug')
-    target = add('target', 'PBXNativeTarget', buildConfigurationList=cl, buildPhases=[sources, link, res, embed], buildRules=[], dependencies=[], name='TextTank', productName='TextTank', productReference=product, productType='com.apple.product-type.application')
-    project = add('project', 'PBXProject', attributes={'LastUpgradeCheck': '1600'}, buildConfigurationList=pcl, compatibilityVersion='Xcode 14.0', developmentRegion='en', hasScannedForEncodings='0', knownRegions=['en', 'Base'], mainGroup=group, productRefGroup=products, projectDirPath='', projectRoot='', targets=[target])
+    search_cl = add('NativeSearch:configs', 'XCConfigurationList', buildConfigurations=search_configs, defaultConfigurationIsVisible='0', defaultConfigurationName='Debug')
+    search_target = add('NativeSearch:target', 'PBXNativeTarget', buildConfigurationList=search_cl, buildPhases=[search_sources, search_headers, search_link], buildRules=[], dependencies=[], name='NativeSearch', productName='NativeSearch', productReference=search_product, productType='com.apple.product-type.framework')
+    search_dependency = add('NativeSearch:app-dependency', 'PBXTargetDependency', target=search_target)
+    target = add('target', 'PBXNativeTarget', buildConfigurationList=cl, buildPhases=[sources, link, res, embed], buildRules=[], dependencies=[search_dependency], name='TextTank', productName='TextTank', productReference=product, productType='com.apple.product-type.application')
+    project = add('project', 'PBXProject', attributes={'LastUpgradeCheck': '1600'}, buildConfigurationList=pcl, compatibilityVersion='Xcode 14.0', developmentRegion='en', hasScannedForEncodings='0', knownRegions=['en', 'Base'], mainGroup=group, productRefGroup=products, projectDirPath='', projectRoot='', targets=[target, search_target])
     Path('TextTank.xcodeproj/project.pbxproj').write_text('// !$*UTF8*$!\n' + q({'archiveVersion': 1, 'classes': {}, 'objectVersion': 56, 'objects': objects, 'rootObject': project}) + '\n')
     Path('TextTank.xcodeproj/xcshareddata/xcschemes/TextTank.xcscheme').write_text(f'<?xml version="1.0" encoding="UTF-8"?><Scheme LastUpgradeVersion="1600" version="1.3"><BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries><BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{target}" BuildableName="TextTank.app" BlueprintName="TextTank" ReferencedContainer="container:TextTank.xcodeproj"/></BuildActionEntry></BuildActionEntries></BuildAction><LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES"><BuildableProductRunnable runnableDebuggingMode="0"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{target}" BuildableName="TextTank.app" BlueprintName="TextTank" ReferencedContainer="container:TextTank.xcodeproj"/></BuildableProductRunnable></LaunchAction></Scheme>')
 

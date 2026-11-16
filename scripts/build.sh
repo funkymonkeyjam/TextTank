@@ -30,7 +30,9 @@ logged app-build xcodebuild -project TextTank.xcodeproj -scheme TextTank -config
 # Finder/file-provider metadata is not part of the generated application resources.
 xattr -dr com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
 xattr -dr com.apple.ResourceFork "$APP_PATH" 2>/dev/null || true
-codesign --force --sign - "$APP_PATH/Contents/Frameworks/Scintilla.framework"
+for framework in Scintilla NativeSearch; do
+  codesign --force --sign - "$APP_PATH/Contents/Frameworks/$framework.framework"
+done
 # Metadata may arrive between steps. Reclean generated resources at the enclosing
 # signing boundary too; a later signing or strict-verification failure is still fatal.
 xattr -dr com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true

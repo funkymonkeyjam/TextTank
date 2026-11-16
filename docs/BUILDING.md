@@ -34,3 +34,7 @@ Packaging stages on the delivery filesystem and removes its stage on failure. Af
 `build-pipeline-checks` adds isolated fault scenarios for archive/extraction boundaries, extra sources, stale headers, bad configuration/arguments, mismatched or tampered evidence, public log paths, retention, resource/license inputs and the strict icon renderer. It supplements all existing native suites.
 
 Product documentation is copied from the explicit `REVIEW_DOCUMENTS` list in `scripts/package_review.py`; session prompts, run-state and dated worker notes are not review docs. The legacy `render-audit-report.swift` is retained because external callers are unknown; it is not part of build, acceptance or packaging validation. Its presence in a project source archive is not a claim that it produces current candidate evidence.
+
+The generated graph includes NativeSearch, a Foundation Objective-C++ framework. Canonical
+builds embed and ad-hoc sign it before the application, retaining fatal signing and strict
+verification failures. Its public module exports only TTSearchEngine.h.

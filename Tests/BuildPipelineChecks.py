@@ -103,6 +103,8 @@ export APP_PATH
             app = fixture / 'build/Fixture App.app'
             framework = app / 'Contents/Frameworks/Scintilla.framework'
             framework.mkdir(parents=True)
+            search_framework = app / 'Contents/Frameworks/NativeSearch.framework'
+            search_framework.mkdir()
             binary = fixture / 'bin'
             binary.mkdir()
             tool_source = '''#!/usr/bin/env python3
@@ -126,6 +128,8 @@ if tool == 'xattr':
     sys.exit(0)
 if tool != 'codesign':
     sys.exit(92)
+if args == ['--force', '--sign', '-', str(app / 'Contents/Frameworks/NativeSearch.framework')]:
+    sys.exit(75 if scenario == 'nested-sign-error' else 0)
 if args == ['--force', '--sign', '-', str(framework)]:
     flag.write_text('metadata arrived between steps')
     sys.exit(0)
@@ -149,11 +153,12 @@ sys.exit(93)
             metadata = fixture / 'metadata-flag'
             expected = [
                 ['--force', '--sign', '-', str(framework)],
+                ['--force', '--sign', '-', str(search_framework)],
                 ['--force', '--sign', '-', str(app)],
                 ['--verify', '--deep', '--strict', str(app)],
             ]
             for scenario, code in [('arrival-between-steps', 0), ('persistent-metadata', 1),
-                                   ('ordinary-sign-error', 73), ('strict-verify-error', 74)]:
+                                   ('ordinary-sign-error', 73), ('strict-verify-error', 74), ('nested-sign-error', 75)]:
                 with self.subTest(scenario=scenario):
                     events.write_text('')
                     if metadata.exists():
@@ -167,7 +172,7 @@ sys.exit(93)
                     self.assertEqual(result.returncode, code, result.stderr)
                     trace = [json.loads(line) for line in events.read_text().splitlines()]
                     signing = [args for tool, args in trace if tool == 'codesign']
-                    self.assertEqual(signing, expected if code in (0, 74) else expected[:2])
+                    self.assertEqual(signing, expected if code in (0, 74) else expected[:2 if code == 75 else 3])
                     for tool, args in trace:
                         if tool == 'xattr':
                             self.assertEqual(args[0], '-dr')
