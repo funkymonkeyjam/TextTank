@@ -30,7 +30,7 @@ final class Audit24RecoverySpy: NSObject {
     }
 }
 
-@main struct AutomationControllerChecks {
+@main @MainActor struct AutomationControllerChecks {
     static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     static func typeKeys(_ text: String, in window: NSWindow) {
         for character in text {

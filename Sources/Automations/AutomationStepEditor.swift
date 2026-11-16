@@ -55,6 +55,7 @@ extension AutomationDefinition.Step.Kind {
 }
 
 /// A draft-only native rule builder. Testing never invokes inputs, outputs or connectors.
+@MainActor
 final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate,
     NSTextViewDelegate
 {
@@ -485,22 +486,26 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         let control = AutomationRunControl()
         previewControl = control
         status.stringValue = "Testing rules using saved parameter defaults…"
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        let deliver: @MainActor @Sendable (Result<String, Error>) -> Void = { [weak self] outcome in
+            guard let self, self.preview.finish(token) else { return }
+            self.previewControl = nil
+            switch outcome {
+            case .success(let text):
+                self.result.string = text
+                self.status.stringValue =
+                    "Test passed using saved parameter defaults. No document or external output was changed."
+            case .failure(let error): self.status.stringValue = error.localizedDescription
+            }
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
             let outcome: Result<String, Error> = Result {
                 try AutomationDefinition.testRules(steps, sample: input, control: control)
             }
             // Delivered through the run loop, so the result also arrives while a modal started from a
             // main-queue block is open.
-            MainRunLoop.perform { [weak self] in
-                guard let self, self.preview.finish(token) else { return }
-                self.previewControl = nil
-                switch outcome {
-                case .success(let text):
-                    self.result.string = text
-                    self.status.stringValue =
-                        "Test passed using saved parameter defaults. No document or external output was changed."
-                case .failure(let error): self.status.stringValue = error.localizedDescription
-                }
+            MainRunLoop.perform {
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated { deliver(outcome) }
             }
         }
     }
@@ -537,7 +542,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
 
 }
 
-private final class RuleFields: NSObject {
+@MainActor private final class RuleFields: NSObject {
     private let initial: AutomationDefinition.Step
     private let form = FormPanel(title: "Configure Rule", identifier: "rule", size: NSSize(width: 650, height: 460))
     private let kind = NSPopUpButton(), find = NSTextField(), replacement = NSTextField()

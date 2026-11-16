@@ -42,7 +42,7 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable {
             }
         }
     }
-    package struct Step: Codable, Equatable {
+    package struct Step: Codable, Equatable, Sendable {
         package init(
             kind: Kind, find: String? = nil, replacement: String? = nil, askForFind: Bool? = nil,
             askForReplacement: Bool? = nil
@@ -57,7 +57,7 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable {
         /// Raw values are the persisted spellings in Automations.json and rule files and never
         /// change. The five `clear…` kinds empty a matching line and keep its line ending, so their
         /// Swift names say "clear" although the stored spelling says "remove".
-        package enum Kind: String, Codable, CaseIterable {
+        package enum Kind: String, Codable, CaseIterable, Sendable {
             case removeListMarkers, removeBlankLines, sortLines, deduplicateLines, replaceLiteral
             case clearLinesEqualTo = "removeLinesEqualTo"
             case clearLinesContaining = "removeLinesContaining"

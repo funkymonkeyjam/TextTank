@@ -297,7 +297,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             automationMenu.addItem(item)
         }
     }
-    @objc private func manageAction() { manage() }
+    @MainActor @objc private func manageAction() { manage() }
     @objc private func paletteAction() { showPalette() }
     @objc private func restoreDefaultsAction() { restoreDefaultAutomations() }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
@@ -315,7 +315,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     /// automations may share a name. Each item carries its automation's UUID.
     private var manager: LibraryManager?
     private var advancedAction: (() -> Void)?
-    func manage() {
+    @MainActor func manage() {
         if let manager {
             manager.form.window.makeKeyAndOrderFront(nil)
             return
@@ -614,7 +614,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         return stack
     }
     var jsonFilePanels = JSONLibraryEditor.FilePanels.standard
-    func manageAdvanced() {
+    @MainActor func manageAdvanced() {
         if manager == nil { manage() }
         guard let manager, manager.canEdit(), manager.form.window.attachedSheet == nil else { return }
         advancedAction?()
