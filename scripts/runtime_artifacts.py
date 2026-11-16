@@ -146,6 +146,8 @@ def record(root, app, configuration, destination, before_path):
     if configuration not in ('Debug', 'Release'):
         raise ValueError('Unsupported artifact configuration')
     source_inputs = inputs(root)
+    before_path = before_path if before_path.is_absolute() else root / before_path
+    before_path = before_path.resolve()
     before = json.loads(before_path.read_text())
     settings = build_evidence.resolved_settings(root, configuration)
     if before.get('schema') != 1 or before.get('configuration') != configuration or before.get('inputs') != source_inputs or before.get('toolchain') != toolchain() or before.get('target_settings') != settings:

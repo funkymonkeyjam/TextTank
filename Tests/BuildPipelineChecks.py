@@ -584,7 +584,7 @@ sys.exit(93)
             manifest = fixture / 'build/artifacts/Debug/manifest.json'
             try:
                 with patch.object(artifacts.build_evidence, 'resolved_settings', return_value={}):
-                    artifacts.record(fixture, app, 'Debug', manifest, before_path)
+                    artifacts.record(fixture, app, 'Debug', manifest, before_path.relative_to(fixture))
             except subprocess.CalledProcessError as error:
                 self.fail(error.output)
             self.assertEqual(artifacts.validate(fixture, manifest, 'Debug')['app'], str(app))
