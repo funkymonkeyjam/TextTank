@@ -359,7 +359,11 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             selected: workflow.output.rawValue)
         let preview = NSButton(checkboxWithTitle: "Preview before applying", target: nil, action: nil)
         preview.state = workflow.previewBeforeApply == true ? .on : .off
-        let pinned = NSButton(checkboxWithTitle: "Favorite in the toolbar", target: nil, action: nil)
+        let pinned = NSButton(
+            checkboxWithTitle: Strings.text("automation.favorite", "Favorite"), target: nil, action: nil)
+        pinned.setAccessibilityLabel("Favorite automation")
+        pinned.setAccessibilityHelp(AutomationDefinition.favoriteHelp)
+        pinned.toolTip = AutomationDefinition.favoriteHelp
         pinned.state = workflow.pinToToolbar == true ? .on : .off
         edit.accessoryView = settingsView(
             rows: [("Name", name), ("Input", input), ("Output", output), ("Shortcut", shortcut)],

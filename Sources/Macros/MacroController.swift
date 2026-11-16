@@ -216,7 +216,7 @@ final class MacroController: NSObject, NSMenuDelegate {
         let alert = TTAlert()
         alert.messageText = "Play \(macro.name)"
         alert.informativeText =
-            "Repeat count (1–\(Strings.number(MacroLimits.repeatCount))). Playback changes the captured editor as one Undo group. Find steps (literal find and Find-window Next or Previous) stop the macro on no match; earlier edits remain undoable. Replace All with no matches is skipped. Clipboard commands operate on the current clipboard. No shell command or external action runs."
+            "Repeat count (1–\(Strings.number(MacroLimits.repeatCount))). Playback changes the captured editor as one Undo group. Find steps (literal find and Find-window Next or Previous) stop the macro on no match; earlier edits remain undoable. Replace All with no matches is skipped. Clipboard commands operate on the current clipboard. No shell command or automation runs."
         alert.addButton(withTitle: "Play").identifier = NSUserInterfaceItemIdentifier("macro.play.confirm")
         alert.addButton(withTitle: "Cancel", role: .cancel).identifier = NSUserInterfaceItemIdentifier(
             "macro.play.cancel")

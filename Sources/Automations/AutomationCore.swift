@@ -681,16 +681,18 @@ extension AutomationDefinition {
     static var ruleKindReference: String {
         Step.Kind.allCases.map { "\($0.rawValue) — \($0.label). Takes \($0.parameters)." }.joined(separator: "\n")
     }
-    /// The help shown above the Advanced JSON editor.
+    static var favoriteHelp: String {
+        Strings.text(
+            "automation.favorite.help",
+            "Favorites appear first in the toolbar’s Automations launcher and the editor context menu. The menu bar and Run Automation list keep the saved order."
+        )
+    }
+    /// The help shown above the Advanced JSON editor; complete English fallback, not fragments.
     static var advancedHelp: String {
-        "Edit the JSON below. Rename by changing name and keeping id unchanged. "
-            + "Input: selection, document, clipboard, file. Output: editor, clipboard, newDocument, file, reminders. "
-            + "Each entry of steps has a kind from the list below and only the fields that kind takes. "
-            + "Set askForFind or askForReplacement true to be asked for that text on every run. "
-            + "Optional shortcut: one lowercase letter, bound to Command-Option. "
-            + "Set previewBeforeApply true for a preview before the result is applied. "
-            + "Set pinToToolbar true to list the automation first, as a favorite, in the Automations menus. "
-            + "No automation runs when saved or imported."
+        Strings.text(
+            "automation.advanced.help",
+            "Edit the JSON below. Rename by changing name and keeping id unchanged. Input: selection, document, clipboard, file. Output: editor, clipboard, newDocument, file, reminders. Each entry of steps has a kind from the list below and only the fields that kind takes. Set askForFind or askForReplacement true to be asked for that text on every run. Optional shortcut: one lowercase letter, bound to Command-Option. Set previewBeforeApply true for a preview before the result is applied. Set pinToToolbar true to mark the automation as a favorite. Favorites appear first in the toolbar’s Automations launcher and the editor context menu. The menu bar and Run Automation list keep the saved order. No automation runs when saved or imported."
+        )
     }
 }
 

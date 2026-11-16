@@ -380,17 +380,9 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             let listing = try WorkspaceBrowserStore.list(node.entry.url)
             node.children = listing.entries.map(WorkspaceBrowserNode.init)
             if listing.truncated || listing.skipped > 0 {
-                status.stringValue =
-                    String(
-                        format: listing.skipped == 1
-                            ? Strings.text("workspace.skipped.one", "%@ hidden, symbolic-link or special entry skipped")
-                            : Strings.text(
-                                "workspace.skipped.other", "%@ hidden, symbolic-link or special entries skipped"),
-                        Strings.number(listing.skipped))
-                    + (listing.truncated
-                        ? String(
-                            format: Strings.text("workspace.limit", " · %@-entry listing limit reached"),
-                            Strings.number(WorkspaceBrowserStore.defaultListingLimit)) : "")
+                status.stringValue = Strings.workspaceSkipped(
+                    listing.skipped, truncated: listing.truncated,
+                    limit: WorkspaceBrowserStore.defaultListingLimit)
             }
         } catch {
             node.children = []

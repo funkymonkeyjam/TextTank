@@ -31,6 +31,70 @@ enum Audit26PresentationChecks {
         check(
             automation.contextMenu().items.first?.representedObject is String,
             "G390 context menu starts with an invocation, not a launcher placeholder")
+        let automationURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]!)
+            .appendingPathComponent("Automations.json")
+        let originalLibrary = try AutomationLibrary.decode(Data(contentsOf: automationURL))
+        var ordinary = AutomationDefinition.example, favorite = AutomationDefinition.remindersExample
+        ordinary.name = "First saved"
+        ordinary.pinToToolbar = false
+        favorite.name = "Second saved favorite"
+        favorite.pinToToolbar = true
+        try automation.persistLibrary(AutomationLibrary(workflows: [ordinary, favorite]))
+        func invocationIDs(_ menu: NSMenu) -> [String] {
+            menu.items.compactMap { item in
+                guard let id = item.representedObject as? String, UUID(uuidString: id) != nil else { return nil }
+                return id
+            }
+        }
+        check(
+            invocationIDs(automation.menu()) == [ordinary.id.uuidString, favorite.id.uuidString],
+            "G416 menu bar retains saved order independent of favorite state")
+        check(
+            invocationIDs(automation.contextMenu()) == [favorite.id.uuidString, ordinary.id.uuidString],
+            "G416 editor context menu puts favorites first")
+        let favoriteLauncher = automation.makeToolbarItem().view as! NSPopUpButton
+        check(
+            invocationIDs(favoriteLauncher.menu!) == [favorite.id.uuidString, ordinary.id.uuidString],
+            "G416 toolbar launcher puts favorites first")
+        check(
+            AutomationDefinition.advancedHelp.contains(AutomationDefinition.favoriteHelp)
+                && !AutomationDefinition.advancedHelp.contains("in the Automations menus"),
+            "G416 advanced help states current favorite scope accurately")
+        var paletteSeen = false, paletteOrder = false, paletteTimedOut = false
+        let paletteDeadline = Date().addingTimeInterval(5)
+        let paletteTimer = Timer(timeInterval: 0.05, repeats: true) { _ in
+            if Date() > paletteDeadline {
+                paletteTimedOut = true
+                NSApp.abortModal()
+                return
+            }
+            guard let content = NSApp.modalWindow?.contentView else { return }
+            let views = descendants(content)
+            guard let popup = views.compactMap({ $0 as? NSPopUpButton }).first,
+                let cancel = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
+            else { return }
+            paletteSeen = true
+            paletteOrder = invocationIDs(popup.menu!) == [ordinary.id.uuidString, favorite.id.uuidString]
+            cancel.performClick(nil)
+        }
+        RunLoop.main.add(paletteTimer, forMode: .modalPanel)
+        automation.showPalette()
+        paletteTimer.invalidate()
+        check(
+            paletteSeen && paletteOrder && !paletteTimedOut,
+            "G416 actual Run Automation palette keeps saved order and Cancel invokes nothing")
+        try automation.persistLibrary(originalLibrary)
+        for count in [0, 1, 2] {
+            for truncated in [false, true] {
+                let noun = count == 1 ? "entry" : "entries"
+                let expected =
+                    "\(count) hidden, symbolic-link or special \(noun) skipped"
+                    + (truncated ? "; 2,000-entry listing limit reached." : ".")
+                check(
+                    Strings.workspaceSkipped(count, truncated: truncated, limit: 2000) == expected,
+                    "DS84 workspace complete template covers count and truncation")
+            }
+        }
         let doc = TextDocument()
         doc.makeWindowControllers()
         defer { doc.close() }

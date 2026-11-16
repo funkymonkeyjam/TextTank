@@ -165,6 +165,24 @@ enum Strings {
         }
         return String(format: format, number(count), number(stale), number(zeroWidth))
     }
+    static func workspaceSkipped(_ count: Int, truncated: Bool, limit: Int) -> String {
+        let format: String
+        switch (count == 1, truncated) {
+        case (true, false):
+            format = text("workspace.skipped.one.complete", "%@ hidden, symbolic-link or special entry skipped.")
+        case (false, false):
+            format = text("workspace.skipped.other.complete", "%@ hidden, symbolic-link or special entries skipped.")
+        case (true, true):
+            format = text(
+                "workspace.skipped.one.truncated",
+                "%@ hidden, symbolic-link or special entry skipped; %@-entry listing limit reached.")
+        case (false, true):
+            format = text(
+                "workspace.skipped.other.truncated",
+                "%@ hidden, symbolic-link or special entries skipped; %@-entry listing limit reached.")
+        }
+        return truncated ? String(format: format, number(count), number(limit)) : String(format: format, number(count))
+    }
     /// Whole-input grammar precedes NumberFormatter, whose number(from:) accepts prefixes.
     /// Grouping, exponent notation, signs and foreign decimal separators are not accepted in
     /// these bounded positive form inputs. Persisted numeric values keep their existing types.
