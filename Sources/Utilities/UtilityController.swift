@@ -4,7 +4,7 @@ import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
-final class UtilityController: NSObject {
+@MainActor final class UtilityController: NSObject {
     private let editorProvider: () -> TTEditor?
     var activeEditor: () -> TTEditor? { editorProvider }
     /// Called immediately before a utility changes the document, and at no other time: asking

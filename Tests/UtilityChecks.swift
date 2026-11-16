@@ -5,8 +5,15 @@ import AppKit
 import EditorBridge
 import NativeSearch
 import zlib
+@MainActor private final class UtilityDialogState {
+    var remaining: [String]
+    var timedOut = false
+    init(_ answers: [String]) { remaining = answers }
+}
+@MainActor private final class UtilityHexState { var stage = 0, draftKept = false }
+
 @main struct UtilityChecks {
-    static func main() {
+    @MainActor static func main() {
         Checks.run("UtilityChecks") {
             func rejectsMalformed(_ op: TextUtility, _ value: String, line: UInt = #line) {
                 rejects("\(op) rejects malformed \(value.debugDescription)", line: line) { _ = try op.apply(value) }
@@ -335,32 +342,37 @@ import zlib
             check(selectionPlain == "café", "styled export selection boundary")
             // The two dialog utilities. In each modal the menu item presents, the next named
             // button is clicked; a dialog still open after 20 s is aborted and reported.
-            func buttons(_ view: NSView) -> [NSButton] {
+            @MainActor func buttons(_ view: NSView) -> [NSButton] {
                 (view as? NSButton).map { [$0] } ?? [] + view.subviews.flatMap(buttons)
             }
-            func choose(_ title: String, _ answers: [String]) -> Bool {
-                var remaining = answers, timedOut = false
+            @MainActor func choose(_ title: String, _ answers: [String]) -> Bool {
+                let dialog = UtilityDialogState(answers)
                 let deadline = Date().addingTimeInterval(20)
                 let timer = Timer(timeInterval: 0.005, repeats: true) { _ in
-                    guard let content = NSApp.modalWindow?.contentView else { return }
-                    if Date() > deadline {
-                        timedOut = true
-                        NSApp.abortModal()
-                        return
+                    precondition(Thread.isMainThread)
+                    MainActor.assumeIsolated {
+                        guard let content = NSApp.modalWindow?.contentView else { return }
+                        if Date() > deadline {
+                            dialog.timedOut = true
+                            NSApp.abortModal()
+                            return
+                        }
+                        guard let next = dialog.remaining.first,
+                            let button = buttons(content).first(where: { $0.title == next })
+                        else { return }
+                        dialog.remaining.removeFirst()
+                        button.performClick(nil)
                     }
-                    guard let next = remaining.first, let button = buttons(content).first(where: { $0.title == next })
-                    else { return }
-                    remaining.removeFirst()
-                    button.performClick(nil)
                 }
                 RunLoop.main.add(timer, forMode: .modalPanel)
                 defer { timer.invalidate() }
                 guard let item = menu.items.first(where: { $0.title == title }), let action = item.action else {
                     return false
                 }
-                return NSApp.sendAction(action, to: item.target, from: item) && remaining.isEmpty && !timedOut
+                return NSApp.sendAction(action, to: item.target, from: item) && dialog.remaining.isEmpty
+                    && !dialog.timedOut
             }
-            func load(_ text: String) -> UInt {
+            @MainActor func load(_ text: String) -> UInt {
                 editor.text = text
                 editor.resetUndoHistory()
                 editor.setSavePoint()
@@ -410,37 +422,40 @@ import zlib
                 choose("UTF-8 to Hex with Options…", ["Cancel"]) && editor.text == "abc"
                     && editor.revision == dialogRevision && unrecordableEdits == 1,
                 "Cancel in Hex Encoding Options changes nothing and reports no unrecordable edit")
-            var hexStage = 0, hexDraftKept = false
+            let hex = UtilityHexState()
             let hexDeadline = Date().addingTimeInterval(10)
-            func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+            @MainActor func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
             let hexRetry = Timer(timeInterval: 0.01, repeats: true) { _ in
-                guard let content = NSApp.modalWindow?.contentView else { return }
-                let views = descendants(content)
-                if Date() > hexDeadline {
-                    NSApp.abortModal()
-                    return
-                }
-                guard let width = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
-                    let apply = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Apply" })
-                else {
-                    views.compactMap { $0 as? NSButton }.first?.performClick(nil)
-                    return
-                }
-                if hexStage == 0 {
-                    width.stringValue = "invalid width"
-                    hexStage = 1
-                    apply.performClick(nil)
-                } else if hexStage == 1 {
-                    hexDraftKept = width.stringValue == "invalid width"
-                    views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
-                    hexStage = 2
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated {
+                    guard let content = NSApp.modalWindow?.contentView else { return }
+                    let views = descendants(content)
+                    if Date() > hexDeadline {
+                        NSApp.abortModal()
+                        return
+                    }
+                    guard let width = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
+                        let apply = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Apply" })
+                    else {
+                        views.compactMap { $0 as? NSButton }.first?.performClick(nil)
+                        return
+                    }
+                    if hex.stage == 0 {
+                        width.stringValue = "invalid width"
+                        hex.stage = 1
+                        apply.performClick(nil)
+                    } else if hex.stage == 1 {
+                        hex.draftKept = width.stringValue == "invalid width"
+                        views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
+                        hex.stage = 2
+                    }
                 }
             }
             RunLoop.main.add(hexRetry, forMode: .modalPanel)
             let hexItem = menu.items.first { $0.title == "UTF-8 to Hex with Options…" }!
             _ = NSApp.sendAction(hexItem.action!, to: hexItem.target, from: hexItem)
             hexRetry.invalidate()
-            check(hexStage == 2 && hexDraftKept, "F214 invalid Hex options retain their input for correction")
+            check(hex.stage == 2 && hex.draftKept, "F214 invalid Hex options retain their input for correction")
             check(
                 editor.text == "abc" && editor.revision == dialogRevision && unrecordableEdits == 1,
                 "F214 cancelling invalid Hex options preserves text revision and recording state")
