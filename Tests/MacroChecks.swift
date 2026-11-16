@@ -10,31 +10,37 @@ import Foundation
 
 @main struct MacroChecks {
     #if TEXTTANK_NATIVE_MACRO_TEST
-        static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-        static func control<T: NSView>(_ identifier: String, _ type: T.Type, in views: [NSView]) -> T? {
+        @MainActor final class ChoosingState { var acted = false, timedOut = false }
+        @MainActor static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        @MainActor static func control<T: NSView>(_ identifier: String, _ type: T.Type, in views: [NSView]) -> T? {
             views.compactMap { $0 as? T }.first { $0.identifier?.rawValue == identifier }
         }
         /// Sends a Macros menu item's own action while a timer in modal mode answers the dialog it opens.
         /// `act` is called on every tick until it returns true; a modal still open at the deadline is aborted.
-        static func choosing(_ item: NSMenuItem, _ act: @escaping ([NSView]) -> Bool) -> Bool {
-            var acted = false, timedOut = false
+        @MainActor static func choosing(_ item: NSMenuItem, _ act: @escaping ([NSView]) -> Bool) -> Bool {
+            let state = ChoosingState()
             let deadline = Date().addingTimeInterval(10)
             let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-                guard let content = presentedFormWindow?.contentView else { return }
-                if Date() > deadline {
-                    timedOut = true
-                    NSApp.abortModal()
-                    return
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated {
+                    guard let content = presentedFormWindow?.contentView else { return }
+                    if Date() > deadline {
+                        state.timedOut = true
+                        NSApp.abortModal()
+                        return
+                    }
+                    if !state.acted { state.acted = act(descendants(content)) }
                 }
-                if !acted { acted = act(descendants(content)) }
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             defer { timer.invalidate() }
             guard let action = item.action, NSApp.sendAction(action, to: item.target, from: item) else { return false }
             waitForModelessForms()
-            return acted && !timedOut
+            return state.acted && !state.timedOut
         }
-        static func choosingAdvanced(_ item: NSMenuItem, commit: Bool, _ act: @escaping ([NSView]) -> Bool) -> Bool {
+        @MainActor static func choosingAdvanced(_ item: NSMenuItem, commit: Bool, _ act: @escaping ([NSView]) -> Bool)
+            -> Bool
+        {
             MainActor.assumeIsolated {
                 let route = ManagerChildRoute(
                     managerID: "macro.manager", openerID: "macro.manager.advanced", childID: "macro.json",
@@ -47,14 +53,15 @@ import Foundation
                 }
             }
         }
-        static func item(_ selector: String, in controller: MacroController, id: UUID? = nil) -> NSMenuItem? {
+        @MainActor static func item(_ selector: String, in controller: MacroController, id: UUID? = nil) -> NSMenuItem?
+        {
             controller.menu().items.first {
                 $0.action == NSSelectorFromString(selector)
                     && (id == nil || ($0.representedObject as? String) == id?.uuidString)
             }
         }
         /// F253: Save Last Recording, a restart, then playback from the Macros menu.
-        static func menuFlowChecks(editor: TTEditor, support: URL) throws {
+        @MainActor static func menuFlowChecks(editor: TTEditor, support: URL) throws {
             let storage = support.appendingPathComponent("Macros.json")
             let controller = MacroController(editorProvider: { editor })
             editor.text = "ab"
@@ -66,7 +73,7 @@ import Foundation
             let recording = try requireValue(try controller.finishRecording(), "fixture: a one-step recording")
             editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             try require(editor.text == "ab", "fixture: the recorded edit is undone")
-            func answer(_ field: String, _ value: String?, _ button: String) -> ([NSView]) -> Bool {
+            @MainActor func answer(_ field: String, _ value: String?, _ button: String) -> ([NSView]) -> Bool {
                 { views in
                     guard let press = control(button, NSButton.self, in: views),
                         let input = control(field, NSTextField.self, in: views)
@@ -233,7 +240,7 @@ import Foundation
                 "DG stale-save refusal preserves the actual newer recording for later Save")
             editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
         }
-        static func jsonManagerChecks(editor: TTEditor) throws {
+        @MainActor static func jsonManagerChecks(editor: TTEditor) throws {
             let isolated = try IsolatedSupportDirectory("MacroJSONChecks")
             defer { isolated.restore() }
             let path = isolated.url.appendingPathComponent("Macros.json")
@@ -385,11 +392,11 @@ import Foundation
             @objc let draggingSource: Any? = nil
         }
         /// Package 12: a recording either reproduces what was done or is discarded with a named reason.
-        static func fidelityChecks(editor: TTEditor, window: NSWindow) throws {
+        @MainActor static func fidelityChecks(editor: TTEditor, window: NSWindow) throws {
             let controller = MacroController(editorProvider: { editor })
             var reasons: [String] = []
             controller.onInvalidated = { reasons.append($0) }
-            func load(_ text: String, caret: Int = 0) {
+            @MainActor func load(_ text: String, caret: Int = 0) {
                 editor.executeCommand(TTEditorCommandIdentifier(rawValue: "streamSelection"))
                 editor.text = text
                 editor.resetUndoHistory()
@@ -399,11 +406,11 @@ import Foundation
             let content = try requireValue(
                 descendants(editor).first { $0.className == "TTContentView" }, "fixture: the editor's content view")
             let input = try requireValue(content as? NSTextInputClient, "fixture: the content view takes text input")
-            func type(_ text: String) {
+            @MainActor func type(_ text: String) {
                 input.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
             }
             /// A real key event through the content view, so Scintilla's own Mac key map chooses the message.
-            func key(_ scalar: Int, code: UInt16, _ flags: NSEvent.ModifierFlags = []) throws {
+            @MainActor func key(_ scalar: Int, code: UInt16, _ flags: NSEvent.ModifierFlags = []) throws {
                 let characters = String(UnicodeScalar(UInt32(scalar))!)
                 let event = try requireValue(
                     NSEvent.keyEvent(
@@ -417,7 +424,7 @@ import Foundation
             let pageDown = NSPageDownFunctionKey
             var clock = ProcessInfo.processInfo.systemUptime
             /// A click in the content view. Clicks are five seconds apart so none is a double click.
-            func click(at point: NSPoint, in view: NSView) throws {
+            @MainActor func click(at point: NSPoint, in view: NSView) throws {
                 clock += 5
                 for (type, time) in [(NSEvent.EventType.leftMouseDown, clock), (.leftMouseUp, clock + 0.05)] {
                     let event = try requireValue(
@@ -955,6 +962,9 @@ import Foundation
                 "until-end playback over a 3 MB document does not copy the document every repetition")
             load("", caret: 0)
         }
+    #endif
+    #if TEXTTANK_NATIVE_MACRO_TEST
+        @MainActor
     #endif
     static func main() {
         Checks.run("MacroChecks") {

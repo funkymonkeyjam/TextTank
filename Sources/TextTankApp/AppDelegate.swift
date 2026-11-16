@@ -72,14 +72,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.file = { [weak self] in self?.currentDocument?.fileURL }
         return controller
     }()
-    lazy var utilities: UtilityController = {
+    @MainActor lazy var utilities: UtilityController = {
         let controller = UtilityController(activeEditor: { [weak self] in self?.currentEditor })
         controller.onUnrecordableEdit = { [weak self] in
             self?.macros.invalidateRecording(reason: "Text utilities are not recorded in macros yet.")
         }
         return controller
     }()
-    lazy var searchController: SearchController = {
+    @MainActor lazy var searchController: SearchController = {
         let controller = SearchController()
         controller.readFindText = { EditorWindowController.findPasteboardText }
         controller.writeFindText = { [weak self] text in
@@ -94,8 +94,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         return controller
     }()
-    lazy var macros = MacroController(editorProvider: { [weak self] in self?.currentEditor })
-    lazy var automations: AutomationController = {
+    @MainActor lazy var macros = MacroController(editorProvider: { [weak self] in self?.currentEditor })
+    @MainActor lazy var automations: AutomationController = {
         let controller = AutomationController(
             editorProvider: { [weak self] in self?.currentEditor }, newDocument: AppDelegate.openAutomationOutput)
         controller.onQuietExportResult = { [weak self] message in
@@ -198,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     /// Installation is explicit and follows TextDocumentController construction in main.
     /// Weak providers preserve the lazy feature graph without retaining a discarded composition root.
-    func installEditorServices() {
+    @MainActor func installEditorServices() {
         var services = EditorServices()
         services.isAvailable = { [weak self] in self != nil }
         services.settingsProvider = { [weak self] in self?.settings }
@@ -514,9 +514,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     /// Find Next and Find Previous act on whichever Find the person is using: the Find and Replace
     /// window while it is open, otherwise the find bar of the current document window.
-    @objc func findNextShared(_ sender: Any?) { findShared(backwards: false) }
-    @objc func findPreviousShared(_ sender: Any?) { findShared(backwards: true) }
-    private func findShared(backwards: Bool) {
+    @MainActor @objc func findNextShared(_ sender: Any?) { findShared(backwards: false) }
+    @MainActor @objc func findPreviousShared(_ sender: Any?) { findShared(backwards: true) }
+    @MainActor private func findShared(backwards: Bool) {
         if searchController.isWindowLoaded, searchController.window?.isVisible == true {
             if backwards { searchController.previous(nil) } else { searchController.next(nil) }
         } else {

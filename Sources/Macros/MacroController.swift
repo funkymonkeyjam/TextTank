@@ -5,7 +5,7 @@ import NativeSearch
 import AppKit
 import Darwin
 
-final class MacroController: NSObject, NSMenuDelegate {
+@MainActor final class MacroController: NSObject, NSMenuDelegate {
     private let editorProvider: () -> TTEditor?
     private var library = MacroLibrary(macros: [])
     private let storage: URL
@@ -288,24 +288,27 @@ final class MacroController: NSObject, NSMenuDelegate {
         stop.frame = NSRect(x: 310, y: 20, width: 110, height: 30)
         panel.contentView?.addSubview(status)
         panel.contentView?.addSubview(stop)
-        var failure: Error?
+        let outcome = MacroPlaybackOutcome()
         let timer = Timer(timeInterval: 0.005, repeats: true) { [weak self] timer in
-            guard let self else {
-                timer.invalidate()
-                NSApp.stopModal()
-                return
-            }
-            do {
-                let finished = try session.advance(budget: 50, shouldCancel: { self.playbackCancelled })
-                status.stringValue = "Played \(session.performed) steps. Stop preserves one Undo."
-                if finished {
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated {
+                guard let self else {
+                    timer.invalidate()
+                    NSApp.stopModal()
+                    return
+                }
+                do {
+                    let finished = try session.advance(budget: 50, shouldCancel: { self.playbackCancelled })
+                    status.stringValue = "Played \(session.performed) steps. Stop preserves one Undo."
+                    if finished {
+                        timer.invalidate()
+                        NSApp.stopModal()
+                    }
+                } catch {
+                    outcome.failure = error
                     timer.invalidate()
                     NSApp.stopModal()
                 }
-            } catch {
-                failure = error
-                timer.invalidate()
-                NSApp.stopModal()
             }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
@@ -313,7 +316,7 @@ final class MacroController: NSObject, NSMenuDelegate {
         NSApp.runModal(for: panel)
         timer.invalidate()
         panel.orderOut(nil)
-        if let failure { throw failure }
+        if let failure = outcome.failure { throw failure }
     }
     func play(
         _ macro: RecordedMacro, on editor: TTEditor, repeats: Int = 1, untilEnd: Bool = false,
@@ -493,8 +496,11 @@ final class MacroController: NSObject, NSMenuDelegate {
 
 }
 
+/// Result shared only by the synchronous main-run-loop timer and its modal caller.
+@MainActor private final class MacroPlaybackOutcome { var failure: Error? }
+
 /// Bounded incremental playback shared by native progress UI and deterministic tests.
-private final class MacroPlayback {
+@MainActor private final class MacroPlayback {
     let macro: RecordedMacro, editor: TTEditor
     let repeats: Int, untilEnd: Bool
     let searchPlayback: ((RecordedMacro.Search, TTEditor) throws -> Void)?
