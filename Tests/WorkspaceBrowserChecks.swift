@@ -143,7 +143,7 @@ import Darwin
             controller.show(nil)
             check(controller.window != nil && controller.window?.contentView != nil, "native browser built")
             // F91: the Open Documents list follows the documents without Refresh and without the status line.
-            func listed() -> Int { controller.outlineView(controller.outline, numberOfChildrenOfItem: nil) }
+            @MainActor func listed() -> Int { controller.outlineView(controller.outline, numberOfChildrenOfItem: nil) }
             func pump() { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
             check(
                 listed() == NSDocumentController.shared.documents.count && listed() > 0,
@@ -171,11 +171,11 @@ import Darwin
             check(closedDocument == nil, "the list does not keep a closed document alive")
             // Refresh rebuilds the folder nodes, which is what re-reads the disk; expansion survives it.
             controller.select(mode: 1)
-            func rootNode() throws -> WorkspaceBrowserNode {
+            @MainActor func rootNode() throws -> WorkspaceBrowserNode {
                 try requireValue(
                     controller.outline.item(atRow: 0) as? WorkspaceBrowserNode, "fixture: the saved folder is listed")
             }
-            func names(_ node: WorkspaceBrowserNode) -> [String] {
+            @MainActor func names(_ node: WorkspaceBrowserNode) -> [String] {
                 (0..<controller.outlineView(controller.outline, numberOfChildrenOfItem: node)).compactMap {
                     (controller.outlineView(controller.outline, child: $0, ofItem: node) as? WorkspaceBrowserNode)?
                         .entry.url.lastPathComponent
@@ -290,7 +290,7 @@ import Darwin
             var published: [DocumentMonitorStatus] = []
             monitor.onStatus = { published.append($0) }
             try monitor.start(watched)
-            func waitFor(_ wanted: DocumentMonitorStatus, line: UInt = #line) {
+            @MainActor func waitFor(_ wanted: DocumentMonitorStatus, line: UInt = #line) {
                 spinUntil("the document monitor to report \(wanted)", line: line) { monitor.status == wanted }
                 check(monitor.status == wanted, "background monitor result", line: line)
             }
@@ -415,7 +415,9 @@ import Darwin
             // G373: a language chosen by hand survives Reload and Revert; only the first load detects.
             // Every run's colour, font and traits. Two languages can share one keyword colour, so the
             // first colour alone does not tell them apart.
-            func styling(_ editor: TTEditor) -> NSAttributedString { editor.attributedText(forSelection: false) }
+            @MainActor func styling(_ editor: TTEditor) -> NSAttributedString {
+                editor.attributedText(forSelection: false)
+            }
             let scriptURL = folder.appendingPathComponent("manual-choice.py")
             try Data("return 42;".utf8).write(to: scriptURL)
             let manual = try controller.open(scriptURL)
