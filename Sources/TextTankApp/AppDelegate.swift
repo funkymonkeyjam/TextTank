@@ -4,7 +4,7 @@ import NativeSearch
 import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    lazy var workspace: WorkspaceController = {
+    @MainActor lazy var workspace: WorkspaceController = {
         let controller = WorkspaceController()
         controller.activeDocument = { [weak self] in self?.currentDocument }
         return controller

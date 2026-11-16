@@ -4,7 +4,7 @@ import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
-final class WorkspaceController: NSObject {
+@MainActor final class WorkspaceController: NSObject {
     /// The document a saved session marks as active. The application supplies its one
     /// definition of the current document; a controller made on its own asks the main window.
     var activeDocument: () -> TextDocument? = { NSApp.mainWindow?.windowController?.document as? TextDocument }
@@ -52,7 +52,9 @@ final class WorkspaceController: NSObject {
     /// What the restore prompt says: when the snapshot was saved and, for each document, the
     /// state of its original file and whether it had unsaved edits when captured.
     /// The originals' states are there only once they have been checked (`inspections`).
-    static func restorePromptText(_ session: WorkspaceSession, _ inspections: [SessionFileInspection]?) -> String {
+    nonisolated static func restorePromptText(_ session: WorkspaceSession, _ inspections: [SessionFileInspection]?)
+        -> String
+    {
         session.restorePrompt(
             inspections: inspections, savedLabel: SnapshotLabel.savedAt(session.savedAt), showsDirtyState: true
         ).detail
@@ -87,25 +89,26 @@ final class WorkspaceController: NSObject {
     /// when cancelled; the work stops at the next file or 64 KiB step and its result is dropped.
     static func checkOriginals(of session: WorkspaceSession) -> [SessionFileInspection]? {
         let cancellation = SessionCheckCancellation()
-        var result: [SessionFileInspection]?
+        let outcome = SessionInspectionOutcome()
         let progress = TTAlert()
         progress.messageText = "Checking Original Files…"
         progress.informativeText =
             "Each original is compared with the fingerprint saved in the session. Nothing is changed."
         progress.addButton(withTitle: "Cancel", role: .cancel)
+        let deliver: @MainActor @Sendable ([SessionFileInspection]) -> Void = { inspections in
+            guard !cancellation.isCancelled else { return }
+            outcome.result = inspections
+            NSApp.abortModal()
+        }
         DispatchQueue.global(qos: .utility).async {
             let inspections = session.inspectReferencedFiles(isCancelled: { cancellation.isCancelled })
             // Delivered inside the modal session below; main-queue work runs in modal mode.
             // abortModal, not stopModal: this is not code responding to an event.
-            DispatchQueue.main.async {
-                guard !cancellation.isCancelled else { return }
-                result = inspections
-                NSApp.abortModal()
-            }
+            DispatchQueue.main.async { deliver(inspections) }
         }
         _ = progress.runModal()
-        if result == nil { cancellation.cancel() }
-        return result
+        if outcome.result == nil { cancellation.cancel() }
+        return outcome.result
     }
     /// All snapshots are validated before opening any document. A session cannot execute code
     /// or overwrite originals, even if file fingerprints no longer match.
@@ -142,6 +145,9 @@ final class WorkspaceController: NSObject {
         return restored
     }
 }
+
+/// The modal caller and its synchronous main-queue delivery own this result.
+@MainActor private final class SessionInspectionOutcome { var result: [SessionFileInspection]? }
 
 /// Set on the main thread, read by the inspection running on a utility queue.
 final class SessionCheckCancellation: @unchecked Sendable {

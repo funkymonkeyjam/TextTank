@@ -3,7 +3,7 @@ import Foundation
 import CryptoKit
 import Darwin
 
-package struct SessionSelection: Codable, Equatable {
+package struct SessionSelection: Codable, Equatable, Sendable {
     package init(anchorByte: Int, caretByte: Int) {
         self.anchorByte = anchorByte
         self.caretByte = caretByte
@@ -15,7 +15,7 @@ package struct SessionSelection: Codable, Equatable {
 
 /// A retained snapshot, not an instruction to replace the referenced file.
 /// Restore as an unsaved document unless the UI independently verifies disk identity.
-package struct SessionDocument: Codable, Equatable, Identifiable {
+package struct SessionDocument: Codable, Equatable, Identifiable, Sendable {
     package init(
         id: UUID, originalURL: URL? = nil, text: String, format: FileFormat, isDirty: Bool, selection: SessionSelection,
         bookmarks: [Int] = [], language: String? = nil, originalSHA256: String? = nil
@@ -79,7 +79,7 @@ package struct SessionDocument: Codable, Equatable, Identifiable {
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-package struct WorkspaceSession: Codable, Equatable, Identifiable {
+package struct WorkspaceSession: Codable, Equatable, Identifiable, Sendable {
     package init(
         schemaVersion: Int = 1, id: UUID, name: String, documents: [SessionDocument], activeDocumentID: UUID? = nil,
         savedAt: Date = Date()
@@ -194,7 +194,7 @@ package struct WorkspaceSession: Codable, Equatable, Identifiable {
     }
 }
 
-package enum SessionFileStatus: Equatable {
+package enum SessionFileStatus: Equatable, Sendable {
     case untitled, unchanged, changed, missing, unverified, unreadable(String)
     package var description: String {
         switch self {
@@ -207,7 +207,7 @@ package enum SessionFileStatus: Equatable {
         }
     }
 }
-package struct SessionFileInspection: Equatable {
+package struct SessionFileInspection: Equatable, Sendable {
     package init(documentID: UUID, status: SessionFileStatus) {
         self.documentID = documentID
         self.status = status
