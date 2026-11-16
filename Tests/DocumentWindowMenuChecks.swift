@@ -1,3 +1,4 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Audit package 21: window, menu and keyboard conventions. These sections run inside
 // document-checks after the split-view sections and share its support directory and delegate.
@@ -6,6 +7,8 @@
 // is the one the "menu and command wiring" section built: its submenus belong to that menu bar,
 // so the delegate cannot build a second one.
 import AppKit
+import EditorBridge
+import NativeSearch
 import UniformTypeIdentifiers
 
 /// Lets the real application dispatcher observe an open Find window without putting it on screen.

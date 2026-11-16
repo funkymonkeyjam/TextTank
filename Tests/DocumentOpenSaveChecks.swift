@@ -1,8 +1,11 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Audit package 6: document open, save and recovery correctness. These sections run inside
 // document-checks after the sections in DocumentChecks.swift and share its support directory
 // and document controller. Nothing here presents a panel: every chooser is an injected closure.
 import AppKit
+import EditorBridge
+import NativeSearch
 
 extension DocumentChecks {
     @MainActor static func openSaveRecovery(root: URL, documents: TextDocumentController, section: SectionRunner) {

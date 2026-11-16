@@ -18,7 +18,7 @@ import bootstrap
 import build_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
-FRAMEWORKS = ['Scintilla', 'NativeSearch', 'EditorBridge']
+FRAMEWORKS = ['Scintilla', 'NativeSearch', 'EditorBridge', 'TextTankCore']
 
 
 def command(*arguments, cwd=None):
@@ -193,7 +193,11 @@ def validate(root, manifest, configuration):
     before = json.loads(before_path.read_text())
     if before['inputs'] != value['inputs'] or before['target_settings'] != value['target_settings'] or before['toolchain'] != value['toolchain']:
         raise ValueError('Before/after canonical input/settings evidence differs')
-    if value['user_lexer_producer'] is not None:
+    has_lexer = (build_root / 'Sources/Languages/LexUserPort/LexUser.cxx').is_file()
+    producer = value['user_lexer_producer']
+    if has_lexer and (not isinstance(producer, dict) or producer.get('source') != 'Sources/Languages/LexUserPort/LexUser.cxx' or producer.get('target') != 'EditorBridge'):
+        raise ValueError('Actual user-lexer source requires complete nonnull EditorBridge producer evidence')
+    if producer is not None:
         build_evidence.validate_cpp(build_root, value['user_lexer_producer'], value['target_settings']['EditorBridge'])
     command('codesign', '--verify', '--deep', '--strict', str(app))
     return value

@@ -2,11 +2,30 @@
 import Foundation
 import CryptoKit
 
-struct UserDefinedLanguage: Codable, Equatable {
-    struct Style: Codable, Equatable { var name: String, attributes: [String: String] }
-    var name: String, extensions: String, version: String
-    var global: [String: String], prefix: [String: String], keywords: [String: String], styles: [Style]
-    static let keywordNames = [
+package struct UserDefinedLanguage: Codable, Equatable {
+    package init(
+        name: String, extensions: String, version: String, global: [String: String], prefix: [String: String],
+        keywords: [String: String], styles: [Style]
+    ) {
+        self.name = name
+        self.extensions = extensions
+        self.version = version
+        self.global = global
+        self.prefix = prefix
+        self.keywords = keywords
+        self.styles = styles
+    }
+
+    package struct Style: Codable, Equatable {
+        package init(name: String, attributes: [String: String]) {
+            self.name = name
+            self.attributes = attributes
+        }
+        package var name: String, attributes: [String: String]
+    }
+    package var name: String, extensions: String, version: String
+    package var global: [String: String], prefix: [String: String], keywords: [String: String], styles: [Style]
+    static package let keywordNames = [
         "Comments", "Numbers, prefix1", "Numbers, prefix2", "Numbers, extras1", "Numbers, extras2", "Numbers, suffix1",
         "Numbers, suffix2", "Numbers, range", "Operators1", "Operators2", "Folders in code1, open",
         "Folders in code1, middle", "Folders in code1, close", "Folders in code2, open", "Folders in code2, middle",
@@ -14,13 +33,13 @@ struct UserDefinedLanguage: Codable, Equatable {
         "Folders in comment, close", "Keywords1", "Keywords2", "Keywords3", "Keywords4", "Keywords5", "Keywords6",
         "Keywords7", "Keywords8", "Delimiters"
     ]
-    static let styleNames = [
+    static package let styleNames = [
         "DEFAULT", "COMMENTS", "LINE COMMENTS", "NUMBERS", "KEYWORDS1", "KEYWORDS2", "KEYWORDS3", "KEYWORDS4",
         "KEYWORDS5", "KEYWORDS6", "KEYWORDS7", "KEYWORDS8", "OPERATORS", "FOLDER IN CODE1", "FOLDER IN CODE2",
         "FOLDER IN COMMENT", "DELIMITERS1", "DELIMITERS2", "DELIMITERS3", "DELIMITERS4", "DELIMITERS5", "DELIMITERS6",
         "DELIMITERS7", "DELIMITERS8"
     ]
-    func profile() throws -> LanguageProfile {
+    package func profile() throws -> LanguageProfile {
         let itemName = String(name.prefix(120))
         guard version == "2.1" || version == "2.0" else {
             throw LanguageError.invalid("Language “\(itemName)” requires UDL version 2.0 or 2.1.")
@@ -147,12 +166,12 @@ struct UserDefinedLanguage: Codable, Equatable {
     /// TextTank's own WordsStyle attribute: the person's explicit "Use custom text color" choice in
     /// Syntax Style Settings ("1" or "0"), so that it survives Edit Current UDL and export/import.
     /// Notepad++ ignores attributes it does not know.
-    static let customColorAttribute = "texttankCustomColor"
+    static package let customColorAttribute = "texttankCustomColor"
     /// Whether an imported style keeps its fixed RGB. A real colour does. No colour, a colour
     /// the file marks as unused (`colorStyle` without the foreground bit) and the near-black or
     /// near-white a light-theme UDL uses for ordinary text carry no colour information, so those
     /// follow the appearance (nil) instead of pinning black text onto a dark background.
-    static func usesCustomColor(_ foreground: String, colorStyle: String, marker: String?) -> Bool? {
+    static package func usesCustomColor(_ foreground: String, colorStyle: String, marker: String?) -> Bool? {
         if let marker { return marker == "1" }
         guard let value = UInt32(foreground, radix: 16), foreground.utf8.count == 6,
             (Int(colorStyle) ?? 3) & 1 != 0
@@ -165,7 +184,7 @@ struct UserDefinedLanguage: Codable, Equatable {
     /// the same language again). Everything the XML can express comes from the XML. What it cannot
     /// express is kept: the function pattern, an explicit adaptive-colour choice for a style whose
     /// colour the XML did not change, and comment markers the person overrode in the profile editor.
-    func profile(preserving existing: LanguageProfile?) throws -> LanguageProfile {
+    package func profile(preserving existing: LanguageProfile?) throws -> LanguageProfile {
         var profile = try profile()
         guard let existing else { return profile }
         profile.id = existing.id
@@ -192,7 +211,7 @@ struct UserDefinedLanguage: Codable, Equatable {
         return String(token.dropFirst(2))
     }
     /// Notepad++ multi-part quoted words encode spaces as vertical-tab/backspace markers.
-    static func words(_ input: String) throws -> String {
+    static package func words(_ input: String) throws -> String {
         let chars = Array(input.utf8)
         var output: [UInt8] = [], quote: UInt8? = nil, nonWhitespace = false, index = 0
         while index < chars.count {
@@ -226,7 +245,7 @@ struct UserDefinedLanguage: Codable, Equatable {
         }
         return result
     }
-    static func decode(_ data: Data) throws -> [Self] {
+    static package func decode(_ data: Data) throws -> [Self] {
         // XML has no U+0000, so a NUL byte means UTF-16 or UTF-32, which would hide a DTD from the
         // text scan below. The scan stays: nothing else rejects a DOCTYPE that declares nothing.
         guard data.count <= 2 * 1024 * 1024, !data.contains(0), let text = String(data: data, encoding: .utf8),
@@ -244,7 +263,7 @@ struct UserDefinedLanguage: Codable, Equatable {
         for item in delegate.languages { _ = try item.profile() }
         return delegate.languages
     }
-    func encodedXML() throws -> Data {
+    package func encodedXML() throws -> Data {
         _ = try profile()
         func escape(_ text: String) -> String {
             text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")

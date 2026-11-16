@@ -1,3 +1,4 @@
+@testable import TextTankCore
 import Foundation
 import Darwin
 @main struct SearchReplacementChecks {

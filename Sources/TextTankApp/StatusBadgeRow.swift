@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 import AppKit
 
 /// Borderless native buttons preserve keyboard and accessibility activation.

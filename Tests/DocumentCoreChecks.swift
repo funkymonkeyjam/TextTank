@@ -1,3 +1,4 @@
+@testable import TextTankCore
 import Foundation
 
 /// These same checks also compile and run without AppKit or an editor bridge.

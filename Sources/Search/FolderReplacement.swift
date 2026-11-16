@@ -2,10 +2,18 @@
 import Foundation
 import Darwin
 
-struct FolderReplacementOutcome: Sendable {
-    enum Status: String, Sendable {
+package struct FolderReplacementOutcome: Sendable {
+    package init(url: URL, status: Status, message: String, backup: URL?, recoveryReport: URL? = nil) {
+        self.url = url
+        self.status = status
+        self.message = message
+        self.backup = backup
+        self.recoveryReport = recoveryReport
+    }
+
+    package enum Status: String, Sendable {
         case replaced, unchanged, conflict, skipped, failed, cancelled
-        var displayName: String {
+        package var displayName: String {
             switch self {
             case .replaced: return Strings.text("replacement.replaced", "Replaced")
             case .unchanged: return Strings.text("replacement.unchanged", "Unchanged")
@@ -16,15 +24,15 @@ struct FolderReplacementOutcome: Sendable {
             }
         }
     }
-    let url: URL, status: Status, message: String, backup: URL?
-    var recoveryReport: URL? = nil
+    package let url: URL, status: Status, message: String, backup: URL?
+    package var recoveryReport: URL?
 }
 /// Explicit disk replacement of a completed folder-search snapshot. Each file has
 /// its own byte-exact recovery copy. This is NOT an atomic multi-file transaction.
 /// Descriptor traversal rejects symlink parents/leaves. Compare just before rename
 /// detects ordinary external changes; noncooperating writers can still race the
 /// final stat/rename interval. Open documents are excluded by the UI.
-enum FolderReplacement {
+package enum FolderReplacement {
     private enum Failure: LocalizedError {
         case unsafe, changed, large, cancelled
         var errorDescription: String? {
@@ -36,7 +44,7 @@ enum FolderReplacement {
             }
         }
     }
-    static func replace(
+    static package func replace(
         directory: URL, matches: [FolderSearchMatch], options: SearchOptions, excluding: Set<URL> = [],
         cancellation: FolderSearchCancellation = FolderSearchCancellation(), beforeCommit: ((URL) -> Void)? = nil
     ) throws -> [FolderReplacementOutcome] {

@@ -1,3 +1,4 @@
+@testable import TextTankCore
 import Foundation
 
 /// Literal input/expected pairs transcribed from the user's Sample Recipe Data.txt.

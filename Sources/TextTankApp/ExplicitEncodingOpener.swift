@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 import AppKit
 
 /// Recovery attempter for a file whose bytes need an explicit encoding choice. It only

@@ -1,5 +1,8 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import EditorBridge
+import NativeSearch
 
 final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
     let controller: AutomationController

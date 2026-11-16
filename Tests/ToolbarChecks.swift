@@ -1,4 +1,7 @@
+@testable import TextTankCore
 import AppKit
+import EditorBridge
+import NativeSearch
 
 @MainActor enum ToolbarChecks {
     private static func descendants(_ view: NSView) -> [NSView] {

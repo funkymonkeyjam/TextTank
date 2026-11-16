@@ -1,3 +1,4 @@
+@testable import TextTankCore
 import Foundation
 @main struct SearchScopeChecks {
     static func main() async {

@@ -1,32 +1,53 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-enum MacroLimits {
-    static let recordedActions = 10_000
-    static let repeatCount = 10_000
-    static let playbackActions = 100_000
+package enum MacroLimits {
+    static package let recordedActions = 10_000
+    static package let repeatCount = 10_000
+    static package let playbackActions = 100_000
 }
 
-struct RecordedMacro: Codable, Identifiable, Equatable {
-    struct Search: Codable, Equatable {
-        var query: String, replacement: String, mode: Int
-        var matchCase: Bool, wholeWord: Bool, dotMatchesNewline: Bool, wrap: Bool
-        var action: String
-        func validate() throws {
+package struct RecordedMacro: Codable, Identifiable, Equatable {
+    package init(version: Int = 1, id: UUID, name: String, steps: [Step]) {
+        self.version = version
+        self.id = id
+        self.name = name
+        self.steps = steps
+    }
+
+    package struct Search: Codable, Equatable {
+        package init(
+            query: String, replacement: String, mode: Int, matchCase: Bool, wholeWord: Bool, dotMatchesNewline: Bool,
+            wrap: Bool, action: String
+        ) {
+            self.query = query
+            self.replacement = replacement
+            self.mode = mode
+            self.matchCase = matchCase
+            self.wholeWord = wholeWord
+            self.dotMatchesNewline = dotMatchesNewline
+            self.wrap = wrap
+            self.action = action
+        }
+
+        package var query: String, replacement: String, mode: Int
+        package var matchCase: Bool, wholeWord: Bool, dotMatchesNewline: Bool, wrap: Bool
+        package var action: String
+        package func validate() throws {
             guard !query.isEmpty, (0...2).contains(mode),
                 ["next", "previous", "replaceOne", "replaceAll"].contains(action)
             else { throw MacroError.invalid("Invalid captured search parameters or scope.") }
         }
     }
     /// Cases carry only their own payload. Custom Codable retains the version-1 optional-key wire format.
-    enum Step: Codable, Equatable {
-        enum Kind: String, Codable { case insertText, command, findLiteral, replaceSelection, search }
+    package enum Step: Codable, Equatable {
+        package enum Kind: String, Codable { case insertText, command, findLiteral, replaceSelection, search }
         case insertText(String)
         case command(String)
         case findLiteral(text: String, matchCase: Bool, backwards: Bool)
         case replaceSelection(String)
         case search(Search)
-        var kind: Kind {
+        package var kind: Kind {
             switch self {
             case .insertText: return .insertText
             case .command: return .command
@@ -35,22 +56,22 @@ struct RecordedMacro: Codable, Identifiable, Equatable {
             case .search: return .search
             }
         }
-        var text: String? {
+        package var text: String? {
             switch self {
             case .insertText(let text), .replaceSelection(let text), .findLiteral(let text, _, _): return text
             default: return nil
             }
         }
-        var command: String? {
+        package var command: String? {
             if case .command(let value) = self { return value }
             return nil
         }
-        var search: Search? {
+        package var search: Search? {
             if case .search(let value) = self { return value }
             return nil
         }
-        static let commands = EditorCommand.recordableIdentifiers
-        func validate() throws {
+        static package let commands = EditorCommand.recordableIdentifiers
+        package func validate() throws {
             switch self {
             case .insertText, .replaceSelection: break
             case .command(let command):
@@ -65,7 +86,7 @@ struct RecordedMacro: Codable, Identifiable, Equatable {
             }
         }
         private enum CodingKeys: String, CodingKey { case kind, text, command, matchCase, backwards, search }
-        init(from decoder: Decoder) throws {
+        package init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             let kind = try c.decode(Kind.self, forKey: .kind)
             // Decode every known key even if it does not belong to this kind. Legacy files ignored
@@ -102,7 +123,7 @@ struct RecordedMacro: Codable, Identifiable, Equatable {
             }
             try validate()
         }
-        func encode(to encoder: Encoder) throws {
+        package func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
             try c.encode(kind, forKey: .kind)
             switch self {
@@ -118,11 +139,11 @@ struct RecordedMacro: Codable, Identifiable, Equatable {
 
     }
 
-    var version: Int = 1
-    var id: UUID
-    var name: String
-    var steps: [Step]
-    func validate() throws {
+    package var version: Int
+    package var id: UUID
+    package var name: String
+    package var steps: [Step]
+    package func validate() throws {
         let itemName = String(name.prefix(120))
         guard version == 1 else { throw MacroError.invalid("Macro “\(itemName)” requires version 1.") }
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 120 else {
@@ -139,9 +160,9 @@ struct RecordedMacro: Codable, Identifiable, Equatable {
         }
     }
 }
-enum MacroError: LocalizedError {
+package enum MacroError: LocalizedError {
     case invalid(String)
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .invalid(let message): return message
         }
@@ -149,16 +170,21 @@ enum MacroError: LocalizedError {
 }
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct MacroLibrary: VersionedLibrary, Equatable {
-    static let libraryContext = "Saved macros"
-    static var librarySizeError: Error {
+package struct MacroLibrary: VersionedLibrary, Equatable {
+    package init(version: Int = 1, macros: [RecordedMacro]) {
+        self.version = version
+        self.macros = macros
+    }
+
+    static package let libraryContext = "Saved macros"
+    static package var librarySizeError: Error {
         MacroError.invalid("Saved macros exceed the 32 MiB limit. The file was not changed.")
     }
     /// Same 32 MiB resource envelope as saved automations; bound both import and persistence.
-    static let maximumBytes = 32 * 1024 * 1024
-    var version: Int = 1
-    var macros: [RecordedMacro]
-    func validate() throws {
+    static package let maximumBytes = 32 * 1024 * 1024
+    package var version: Int
+    package var macros: [RecordedMacro]
+    package func validate() throws {
         guard version == 1 else { throw MacroError.invalid("Saved macros require version 1.") }
         guard macros.count <= 200 else { throw MacroError.invalid("Keep at most 200 saved macros.") }
         var seen = Set<UUID>()

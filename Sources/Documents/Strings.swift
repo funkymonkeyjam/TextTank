@@ -3,33 +3,27 @@ import Foundation
 
 /// Bounded English presentation catalog for the audit26 surfaces. Raw native checks have no
 /// bundle and use the same explicit English fallbacks. This is not complete app localization.
-enum Strings {
-    #if TESTING
-        static var resourceBundleForChecks: Bundle?
-    #endif
-    static func text(_ key: String, _ english: String) -> String {
-        #if TESTING
-            let bundle = resourceBundleForChecks ?? Bundle.main
-        #else
-            let bundle = Bundle.main
-        #endif
+package enum Strings {
+    package static func text(_ key: String, _ english: String, bundle: Bundle = .main) -> String {
         return bundle.localizedString(forKey: key, value: english, table: nil)
     }
-    static func formAction(_ action: String, scope: String) -> String {
+    static package func formAction(_ action: String, scope: String) -> String {
         String(format: text("form.action.scope", "%@ in %@"), action, scope)
     }
-    static func number(_ value: Int, locale: Locale = .current) -> String { value.formatted(.number.locale(locale)) }
-    static func points(_ value: Double, locale: Locale = .current) -> String {
+    static package func number(_ value: Int, locale: Locale = .current) -> String {
+        value.formatted(.number.locale(locale))
+    }
+    static package func points(_ value: Double, locale: Locale = .current) -> String {
         value.formatted(.number.locale(locale).precision(.fractionLength(0...1)))
     }
-    static func bytes(_ value: Int) -> String {
+    static package func bytes(_ value: Int) -> String {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .memory
         return formatter.string(fromByteCount: Int64(value))
     }
-    enum Unit: String, CaseIterable {
+    package enum Unit: String, CaseIterable {
         case match, document, file, folder, bookmark, character, line, selection, rule, item, recoveryCopy
-        var formats: (String, String) {
+        package var formats: (String, String) {
             switch self {
             case .match: return (text("count.match.one", "%@ match"), text("count.match.other", "%@ matches"))
             case .document:
@@ -56,11 +50,11 @@ enum Strings {
             }
         }
     }
-    static func count(_ value: Int, _ unit: Unit) -> String {
+    static package func count(_ value: Int, _ unit: Unit) -> String {
         let formats = unit.formats
         return String(format: value == 1 ? formats.0 : formats.1, number(value))
     }
-    static func found(_ matches: Int, documents: Int, truncated: Bool) -> String {
+    static package func found(_ matches: Int, documents: Int, truncated: Bool) -> String {
         let format: String
         switch (matches == 1, documents == 1, truncated) {
         case (true, true, true):
@@ -78,13 +72,13 @@ enum Strings {
         }
         return String(format: format, number(matches), number(documents))
     }
-    static func cleared(_ n: Int) -> String {
+    static package func cleared(_ n: Int) -> String {
         String(
             format: n == 1
                 ? text("search.cleared.one", "Cleared search highlights from %@ document.")
                 : text("search.cleared.other", "Cleared search highlights from %@ documents."), number(n))
     }
-    static func folderSummary(matches: Int, files: Int, problems: Int, excluded: Int, state: String) -> String {
+    static package func folderSummary(matches: Int, files: Int, problems: Int, excluded: Int, state: String) -> String {
         let format: String
         switch (matches == 1, files == 1) {
         case (true, true):
@@ -102,7 +96,7 @@ enum Strings {
         }
         return String(format: format, number(matches), number(files), number(problems), number(excluded), state)
     }
-    static func folderProgress(files: Int, matches: Int, bytesRead: Int) -> String {
+    static package func folderProgress(files: Int, matches: Int, bytesRead: Int) -> String {
         let format: String
         switch (files == 1, matches == 1) {
         case (true, true): format = text("folder.progress.1.1", "Searching: %@ file; %@ match; %@ read…")
@@ -112,7 +106,7 @@ enum Strings {
         }
         return String(format: format, number(files), number(matches), bytes(bytesRead))
     }
-    static func replaced(_ changed: Int, stale: Int) -> String {
+    static package func replaced(_ changed: Int, stale: Int) -> String {
         let format: String
         switch (changed == 1, stale == 1) {
         case (true, true):
@@ -130,7 +124,7 @@ enum Strings {
         }
         return String(format: format, number(changed), number(stale))
     }
-    static func marked(_ count: Int, stale: Int, zeroWidth: Int) -> String {
+    static package func marked(_ count: Int, stale: Int, zeroWidth: Int) -> String {
         let format: String
         switch (count == 1, stale == 1, zeroWidth == 1) {
         case (true, true, true):
@@ -168,7 +162,7 @@ enum Strings {
         }
         return String(format: format, number(count), number(stale), number(zeroWidth))
     }
-    static func workspaceSkipped(_ count: Int, truncated: Bool, limit: Int) -> String {
+    static package func workspaceSkipped(_ count: Int, truncated: Bool, limit: Int) -> String {
         let format: String
         switch (count == 1, truncated) {
         case (true, false):
@@ -189,7 +183,7 @@ enum Strings {
     /// Whole-input grammar precedes NumberFormatter, whose number(from:) accepts prefixes.
     /// Grouping, exponent notation, signs and foreign decimal separators are not accepted in
     /// these bounded positive form inputs. Persisted numeric values keep their existing types.
-    static func decimal(_ input: String, fractional: Bool, locale: Locale = .current) -> Double? {
+    static package func decimal(_ input: String, fractional: Bool, locale: Locale = .current) -> Double? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let formatter = NumberFormatter()
         formatter.locale = locale
@@ -203,7 +197,7 @@ enum Strings {
         else { return nil }
         return value
     }
-    static func integer(_ input: String, locale: Locale = .current, signed: Bool = false) -> Int? {
+    static package func integer(_ input: String, locale: Locale = .current, signed: Bool = false) -> Int? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let sign = signed && (trimmed.hasPrefix("-") || trimmed.hasPrefix("+")) ? String(trimmed.prefix(1)) : ""
         let magnitude = sign.isEmpty ? trimmed : String(trimmed.dropFirst())

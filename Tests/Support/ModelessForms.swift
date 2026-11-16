@@ -1,5 +1,8 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import EditorBridge
+import NativeSearch
 
 /// Old dialog checks now drive the actual modeless window after the command returns.
 /// The modal-panel run-loop mode delivers their existing owned timers, not an app-modal session.

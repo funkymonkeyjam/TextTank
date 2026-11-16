@@ -1,5 +1,8 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import EditorBridge
+import NativeSearch
 
 @MainActor enum DesignSettingsChecks {
     static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }

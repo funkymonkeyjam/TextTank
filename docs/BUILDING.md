@@ -71,3 +71,9 @@ source/header bytes, effective options after response expansion, C++ target sett
 identity, response files and object bytes. A normal incremental build may retain this evidence
 when the C++ producer remains valid while recording new whole-product inputs for Swift changes.
 The build does not force routine recompilation to manufacture a fresh compiler log.
+
+Core membership is declared once in scripts/core_sources.py and consumed by the project
+and remaining application-client lists. Debug checks import the build-produced Core module
+metadata and link the actual signed embedded Core/NativeSearch images, with package name
+TextTank. Release retains normal optimization and ENABLE_TESTABILITY=NO. Header/module
+metadata remains separately hashed; code-image path/hash evidence is required for Core too.

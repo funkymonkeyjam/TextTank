@@ -2,20 +2,28 @@ import Foundation
 
 /// Immutable application-time facts. The AppKit adapter captures and validates the real editor;
 /// this layer plans navigation/replacement without holding a view, window or mutable text model.
-enum SearchSession {
-    struct Snapshot {
-        let text: String
-        let revision: UInt
-        let currentRevision: UInt
-        let selection: NSRange?
-        let isOpen: Bool
+package enum SearchSession {
+    package struct Snapshot {
+        package init(text: String, revision: UInt, currentRevision: UInt, selection: NSRange?, isOpen: Bool) {
+            self.text = text
+            self.revision = revision
+            self.currentRevision = currentRevision
+            self.selection = selection
+            self.isOpen = isOpen
+        }
+
+        package let text: String
+        package let revision: UInt
+        package let currentRevision: UInt
+        package let selection: NSRange?
+        package let isOpen: Bool
     }
-    enum Effect {
+    package enum Effect {
         case noMatch
         case select(NSRange)
         case replace([SearchHit])
     }
-    static func plan(
+    static package func plan(
         _ report: SearchReport, snapshot: Snapshot, options: SearchOptions,
         action: String, continuing: Bool
     ) throws -> Effect {
@@ -47,12 +55,17 @@ enum SearchSession {
         }
         throw SearchFailure.unknownRecordedAction
     }
-    struct Edit {
-        let range: NSRange
-        let replacementBytes: Int
+    package struct Edit {
+        package init(range: NSRange, replacementBytes: Int) {
+            self.range = range
+            self.replacementBytes = replacementBytes
+        }
+
+        package let range: NSRange
+        package let replacementBytes: Int
     }
     /// Carries the original selection through already validated byte edits. No editor is mutated.
-    static func carriedSelection(anchor: Int, caret: Int, edits: [Edit]) -> (anchor: Int, caret: Int) {
+    static package func carriedSelection(anchor: Int, caret: Int, edits: [Edit]) -> (anchor: Int, caret: Int) {
         func carried(_ position: Int, upper: Bool) -> Int {
             var delta = 0
             for edit in edits {

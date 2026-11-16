@@ -1,3 +1,4 @@
+@testable import TextTankCore
 import Foundation
 
 enum SearchSessionChecks {

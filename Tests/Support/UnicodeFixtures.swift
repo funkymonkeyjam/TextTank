@@ -1,3 +1,4 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 // One Unicode fixture table for every suite (audit finding G354). A suite adds this
 // file to its swiftc line and runs each consumer it owns over `UnicodeFixtures.all`,

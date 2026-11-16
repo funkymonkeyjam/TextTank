@@ -1,19 +1,33 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import NativeSearch
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct SearchOptions: Codable, Equatable, Sendable {
-    enum Mode: Int, Codable, Sendable, CaseIterable {
+package struct SearchOptions: Codable, Equatable, Sendable {
+    package init(
+        query: String = "", replacement: String = "", mode: Mode = .normal, matchCase: Bool = false,
+        wholeWord: Bool = false, dotMatchesNewline: Bool = false, wrap: Bool = true
+    ) {
+        self.query = query
+        self.replacement = replacement
+        self.mode = mode
+        self.matchCase = matchCase
+        self.wholeWord = wholeWord
+        self.dotMatchesNewline = dotMatchesNewline
+        self.wrap = wrap
+    }
+
+    package enum Mode: Int, Codable, Sendable, CaseIterable {
         case normal = 0, extended = 1, regularExpression = 2
-        var nativeMode: TTSearchMode {
+        package var nativeMode: TTSearchMode {
             switch self {
             case .normal: return .literal
             case .extended: return .extended
             case .regularExpression: return .regularExpression
             }
         }
-        var displayName: String {
+        package var displayName: String {
             switch self {
             case .normal: return Strings.text("search.mode.normal", "Normal")
             case .extended: return Strings.text("search.mode.extended", "Extended (\\n, \\t, \\xNN)")
@@ -21,22 +35,27 @@ struct SearchOptions: Codable, Equatable, Sendable {
             }
         }
     }
-    var query = "", replacement = ""
-    var mode: Mode = .normal
-    var matchCase = false, wholeWord = false, dotMatchesNewline = false, wrap = true
-    func validatePreferences() throws {
+    package var query: String, replacement: String
+    package var mode: Mode
+    package var matchCase: Bool, wholeWord: Bool, dotMatchesNewline: Bool, wrap: Bool
+    package func validatePreferences() throws {
         guard query.utf16.count <= 65_536, replacement.utf16.count <= 1_048_576 else {
             throw SearchFailure.preferencesTooLarge
         }
     }
 }
 
-struct FindPreferences: Codable {
-    var version = 1
-    var options = SearchOptions()
+package struct FindPreferences: Codable {
+    package init(version: Int = 1, options: SearchOptions = SearchOptions()) {
+        self.version = version
+        self.options = options
+    }
+
+    package var version: Int
+    package var options: SearchOptions
     // Six JSON bytes per allowed UTF-16 unit plus keys/flags fit within 8 MiB.
-    static let maximumBytes = 8 * 1024 * 1024
-    static func decode(_ data: Data) throws -> Self {
+    static package let maximumBytes = 8 * 1024 * 1024
+    static package func decode(_ data: Data) throws -> Self {
         guard data.count <= maximumBytes else { throw SearchFailure.preferencesTooLarge }
         try PersistedFormat.check(data, context: "Find settings")
         let value = try JSONInputFailure.decode(Self.self, from: data, context: "Find settings")
@@ -44,7 +63,7 @@ struct FindPreferences: Codable {
         try value.options.validatePreferences()
         return value
     }
-    func encoded() throws -> Data {
+    package func encoded() throws -> Data {
         guard version == 1 else { throw SearchFailure.preferencesVersion }
         try options.validatePreferences()
         let encoder = JSONEncoder()
@@ -52,29 +71,46 @@ struct FindPreferences: Codable {
         return try encoder.encode(self)
     }
 }
-struct SearchDisplayPosition: Equatable, Sendable {
-    let line: Int
-    let column: Int
+package struct SearchDisplayPosition: Equatable, Sendable {
+    package init(line: Int, column: Int) {
+        self.line = line
+        self.column = column
+    }
+
+    package let line: Int
+    package let column: Int
 }
-struct SearchHit {
-    let range: NSRange
-    let replacement: String
-    var displayPosition: SearchDisplayPosition? = nil
+package struct SearchHit {
+    package init(range: NSRange, replacement: String, displayPosition: SearchDisplayPosition? = nil) {
+        self.range = range
+        self.replacement = replacement
+        self.displayPosition = displayPosition
+    }
+
+    package let range: NSRange
+    package let replacement: String
+    package var displayPosition: SearchDisplayPosition?
 }
-struct SearchReport {
-    let hits: [SearchHit]
-    let truncated: Bool
-    let purpose: SearchCore.Purpose
+package struct SearchReport {
+    package init(hits: [SearchHit], truncated: Bool, purpose: SearchCore.Purpose) {
+        self.hits = hits
+        self.truncated = truncated
+        self.purpose = purpose
+    }
+
+    package let hits: [SearchHit]
+    package let truncated: Bool
+    package let purpose: SearchCore.Purpose
 }
-enum SearchFailure: LocalizedError, CustomNSError, Equatable {
-    enum ReplacementCondition: Error, Equatable { case readOnly, multipleSelections, closed, stale }
+package enum SearchFailure: LocalizedError, CustomNSError, Equatable {
+    package enum ReplacementCondition: Error, Equatable { case readOnly, multipleSelections, closed, stale }
     case positionMapping
     case preferencesTooLarge, preferencesVersion, inlineResultLimit, inlineReplacement(ReplacementCondition)
     case invalidBookmarkLimit, bookmarkCancelled, bookmarkOffsetsUnordered, bookmarkOffsetOutOfBounds
     case replacementCancelled, invalidReplacementRange, macroResultLimit, macroReplacement(String)
     case unknownRecordedAction, macroStopped(String)
-    static var errorDomain: String { "TextTank.Search" }
-    var errorCode: Int {
+    static package var errorDomain: String { "TextTank.Search" }
+    package var errorCode: Int {
         switch self {
         case .inlineResultLimit: return 12
         case .inlineReplacement: return 13
@@ -90,7 +126,7 @@ enum SearchFailure: LocalizedError, CustomNSError, Equatable {
         case .replacementCancelled: return 9
         }
     }
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .inlineResultLimit:
             return "The search reached the result limit. Narrow the Find text and search again; nothing was changed."
@@ -127,16 +163,16 @@ enum SearchFailure: LocalizedError, CustomNSError, Equatable {
         case .macroStopped(let reason): return "Macro stopped: \(reason). Prior edits remain undoable."
         }
     }
-    var errorUserInfo: [String: Any] { [NSLocalizedDescriptionKey: errorDescription ?? ""] }
+    package var errorUserInfo: [String: Any] { [NSLocalizedDescriptionKey: errorDescription ?? ""] }
 }
 
-enum SearchCore {
-    enum Purpose: Sendable, Equatable { case allMatches, navigation }
+package enum SearchCore {
+    package enum Purpose: Sendable, Equatable { case allMatches, navigation }
     /// One forward UTF-16 pass over zero-based lines. A break is counted once its terminator has
     /// been passed in full, so an offset between CR and LF is still on the line that owns the
     /// CRLF, as in Scintilla.
     /// Called off-main before any bookmarks are mutated.
-    static func bookmarkLines(
+    static package func bookmarkLines(
         in text: String, locations: [Int], cancellation: TTSearchCancellation, timeLimit: TimeInterval = 2
     ) throws -> [Int] {
         guard locations.count <= 100000, timeLimit > 0, timeLimit <= 30 else {
@@ -172,10 +208,10 @@ enum SearchCore {
 
     /// The time one interactive search may take. Macro playback of a recorded search step uses
     /// the same value, so a step that could be recorded can also be replayed (F43).
-    static let defaultTimeLimit: TimeInterval = 2
+    static package let defaultTimeLimit: TimeInterval = 2
     /// `range` (UTF-16, default the whole text) limits where matches may lie; hits keep their
     /// offsets in `text` and the engine still sees the text around the range.
-    static func search(
+    static package func search(
         _ text: String, options: SearchOptions, range: NSRange? = nil,
         cancellation: TTSearchCancellation = TTSearchCancellation(), limit: Int = 100000,
         timeLimit: TimeInterval = defaultTimeLimit, purpose: Purpose = .allMatches, displayTabWidth: Int? = nil
@@ -200,7 +236,7 @@ enum SearchCore {
     /// Presentation positions share one cancellable forward pass over existing immutable text.
     /// Internal UTF-16 columns/ranges stay unchanged. Tabs advance to the captured tab stops;
     /// astral and combining scalars each occupy one column, like native SCI_GETCOLUMN.
-    static func displayPositions(
+    static package func displayPositions(
         _ locations: [Int], in text: String, tabWidth: Int,
         cancellation: TTSearchCancellation, deadline: Date = Date().addingTimeInterval(defaultTimeLimit)
     ) throws -> [SearchDisplayPosition] {
@@ -216,16 +252,18 @@ enum SearchCore {
         return positions
     }
     /// Scalar-granular like byteRanges: nil for surrogate splits, negative and out-of-range input.
-    static func byteRange(_ range: NSRange, in text: String) -> NSRange? { byteRanges([range], in: text)?.first }
+    static package func byteRange(_ range: NSRange, in text: String) -> NSRange? {
+        byteRanges([range], in: text)?.first
+    }
     /// The hits whose byte range is exactly the byte selection. All hits are converted in one
     /// linear pass, so a single Replace costs the same for one match as for a hundred thousand.
-    static func hits(_ hits: [SearchHit], selectedBy selection: NSRange, in text: String) -> [SearchHit] {
+    static package func hits(_ hits: [SearchHit], selectedBy selection: NSRange, in text: String) -> [SearchHit] {
         guard let ranges = byteRanges(hits.map(\.range), in: text) else { return [] }
         return zip(hits, ranges).filter { $0.1 == selection }.map(\.0)
     }
     /// Linear offset conversion for sorted nonoverlapping matches; avoids copying
     /// a document prefix separately for every replacement.
-    static func byteRanges(_ ranges: [NSRange], in text: String) -> [NSRange]? {
+    static package func byteRanges(_ ranges: [NSRange], in text: String) -> [NSRange]? {
         var cursor = UTFCursor(text), output: [NSRange] = []
         for range in ranges {
             guard range.location >= 0, range.length >= 0, range.length <= Int.max - range.location,
@@ -240,17 +278,17 @@ enum SearchCore {
     /// The one forward walk from UTF-16 offsets to UTF-8 offsets, shared by in-document search and
     /// folder search. Targets must not go backwards, so any number of sorted matches costs a single
     /// pass over the text. Line and column (one-based, CRLF counted once) are kept only on request.
-    struct UTFCursor {
-        let text: String
-        let tracksLines: Bool
+    package struct UTFCursor {
+        package let text: String
+        package let tracksLines: Bool
         private var index: String.UnicodeScalarView.Index
-        private(set) var utf16Offset = 0
-        private(set) var byteOffset = 0
-        private(set) var line = 1
-        private(set) var columnUTF16 = 1
-        private(set) var displayColumn = 1
-        let tabWidth: Int
-        init(_ text: String, tracksLines: Bool = false, tabWidth: Int = 4) {
+        private(set) package var utf16Offset = 0
+        private(set) package var byteOffset = 0
+        private(set) package var line = 1
+        private(set) package var columnUTF16 = 1
+        private(set) package var displayColumn = 1
+        package let tabWidth: Int
+        package init(_ text: String, tracksLines: Bool = false, tabWidth: Int = 4) {
             self.tabWidth = tabWidth
             self.text = text
             self.tracksLines = tracksLines
@@ -258,7 +296,7 @@ enum SearchCore {
         }
         /// False when the target is behind the cursor, past the end of the text or inside a
         /// surrogate pair, and when `stop` (asked every 4,096 scalars) answers true.
-        mutating func advance(to target: Int, stop: () -> Bool = { false }) -> Bool {
+        mutating package func advance(to target: Int, stop: () -> Bool = { false }) -> Bool {
             let scalars = text.unicodeScalars
             var count = 0
             guard target >= utf16Offset else { return false }
@@ -291,14 +329,16 @@ enum SearchCore {
         }
     }
     /// False only between the two halves of a surrogate pair.
-    static func isScalarBoundary(_ i: Int, in source: NSString) -> Bool {
+    static package func isScalarBoundary(_ i: Int, in source: NSString) -> Bool {
         i <= 0 || i >= source.length
             || !(source.character(at: i) >= 0xDC00 && source.character(at: i) <= 0xDFFF
                 && source.character(at: i - 1) >= 0xD800 && source.character(at: i - 1) <= 0xDBFF)
     }
     /// Whether a match is where Next (or Previous) may go from `selection`. `continuing` is true
     /// when the selection is the match the last navigation chose, which is then not chosen again.
-    static func isNavigationCandidate(_ range: NSRange, from selection: NSRange, backwards: Bool, continuing: Bool)
+    static package func isNavigationCandidate(
+        _ range: NSRange, from selection: NSRange, backwards: Bool, continuing: Bool
+    )
         -> Bool
     {
         backwards
@@ -307,14 +347,14 @@ enum SearchCore {
     }
     /// A literal wrap searches the other side of the original boundary, never a match crossing
     /// that boundary. Regex navigation retains its whole-report/zero-width semantics.
-    static func isWrappedNavigationCandidate(
+    static package func isWrappedNavigationCandidate(
         _ range: NSRange, from selection: NSRange, backwards: Bool,
         mode: SearchOptions.Mode
     ) -> Bool {
         mode == .regularExpression
             || (backwards ? range.location >= selection.location : NSMaxRange(range) <= NSMaxRange(selection))
     }
-    static func utf16Range(_ range: NSRange, in text: String) -> NSRange? {
+    static package func utf16Range(_ range: NSRange, in text: String) -> NSRange? {
         let bytes = text.utf8
         guard range.location >= 0, range.length >= 0, range.location <= bytes.count,
             range.length <= bytes.count - range.location
@@ -328,7 +368,8 @@ enum SearchCore {
     /// appended once, so the cost is linear however many matches change length. Hits must be in
     /// ascending order, must not overlap and must not split a surrogate pair (invalidReplacementRange).
     /// A cancelled token stops the pass with replacementCancelled and nothing is returned.
-    static func replacing(_ text: String, with hits: [SearchHit], cancellation: TTSearchCancellation? = nil) throws
+    static package func replacing(_ text: String, with hits: [SearchHit], cancellation: TTSearchCancellation? = nil)
+        throws
         -> String
     {
         let source = text as NSString, length = source.length

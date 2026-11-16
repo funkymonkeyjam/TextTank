@@ -1,5 +1,8 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import EditorBridge
+import NativeSearch
 
 enum Audit26PresentationChecks {
     @MainActor private static func descendants(_ view: NSView) -> [NSView] {

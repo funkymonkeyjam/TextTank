@@ -1,3 +1,4 @@
+@testable import TextTankCore
 import Foundation
 @main struct RunChecks {
     static func main() {

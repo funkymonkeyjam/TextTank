@@ -1,4 +1,7 @@
+@testable import TextTankCore
 import AppKit
+import EditorBridge
+import NativeSearch
 @main struct RunControllerChecks {
     @MainActor static func main() {
         Checks.run("RunControllerChecks") {

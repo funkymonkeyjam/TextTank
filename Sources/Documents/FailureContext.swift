@@ -4,21 +4,21 @@ import Darwin
 
 /// Preserve the syscall's error number before evaluating a path or doing cleanup. Call with
 /// `FileOperationFailure(errno, operation: ..., path: ...)`, with errno as the first argument.
-struct FileOperationFailure: LocalizedError, CustomNSError {
-    let errorNumber: Int32
-    let operation: String
-    let path: String
-    init(_ errorNumber: Int32, operation: String, path: String) {
+package struct FileOperationFailure: LocalizedError, CustomNSError {
+    package let errorNumber: Int32
+    package let operation: String
+    package let path: String
+    package init(_ errorNumber: Int32, operation: String, path: String) {
         self.errorNumber = errorNumber == 0 ? EIO : errorNumber
         self.operation = operation
         self.path = path
     }
-    static var errorDomain: String { NSPOSIXErrorDomain }
-    var errorCode: Int { Int(errorNumber) }
-    var errorDescription: String? {
+    static package var errorDomain: String { NSPOSIXErrorDomain }
+    package var errorCode: Int { Int(errorNumber) }
+    package var errorDescription: String? {
         "The file action “\(operation)” failed for “\(path)”. \(String(cString: strerror(errorNumber)))."
     }
-    var errorUserInfo: [String: Any] {
+    package var errorUserInfo: [String: Any] {
         [
             NSLocalizedDescriptionKey: errorDescription ?? "", NSFilePathErrorKey: path,
             NSUnderlyingErrorKey: POSIXError(POSIXErrorCode(rawValue: errorNumber) ?? .EIO)
@@ -27,12 +27,12 @@ struct FileOperationFailure: LocalizedError, CustomNSError {
 }
 
 extension Error {
-    var isFileNotFound: Bool {
+    package var isFileNotFound: Bool {
         let error = self as NSError
         return (error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT))
             || (error.domain == NSCocoaErrorDomain && error.code == CocoaError.fileReadNoSuchFile.rawValue)
     }
-    var posixCode: POSIXErrorCode? {
+    package var posixCode: POSIXErrorCode? {
         let error = self as NSError
         return error.domain == NSPOSIXErrorDomain ? POSIXErrorCode(rawValue: Int32(clamping: error.code)) : nil
     }
@@ -40,11 +40,16 @@ extension Error {
 
 /// A JSON editor needs the field path, not the decoder's generic Cocoa wording. The underlying
 /// error remains available to diagnostics; neither a failed decode nor this wrapper writes data.
-struct JSONInputFailure: LocalizedError {
-    let message: String
-    let underlying: Error
-    var errorDescription: String? { message }
-    static func decode<Value: Decodable>(_ type: Value.Type, from data: Data, context: String) throws -> Value {
+package struct JSONInputFailure: LocalizedError {
+    package init(message: String, underlying: Error) {
+        self.message = message
+        self.underlying = underlying
+    }
+
+    package let message: String
+    package let underlying: Error
+    package var errorDescription: String? { message }
+    static package func decode<Value: Decodable>(_ type: Value.Type, from data: Data, context: String) throws -> Value {
         do { return try JSONDecoder().decode(type, from: data) } catch let error as DecodingError {
             let message: String
             func path(_ keys: [CodingKey]) -> String {
@@ -77,11 +82,11 @@ struct JSONInputFailure: LocalizedError {
 
 /// Named Swift errors retain the existing bridged domain/codes for callers that display them
 /// through Cocoa. Code numbers are compatibility metadata, never behavior selectors.
-enum DocumentActionError: LocalizedError, CustomNSError {
+package enum DocumentActionError: LocalizedError, CustomNSError {
     case diskChanged, notSaved, unsavedChanges, unsafeDiskPath(URL, underlying: Error)
     case multipleSelections, selectionTooLarge, changeRejected, replacementRejected, lineEndingsRejected
-    static var errorDomain: String { "TextTank" }
-    var errorCode: Int {
+    static package var errorDomain: String { "TextTank" }
+    package var errorCode: Int {
         switch self {
         case .diskChanged: return 1
         case .notSaved: return 2
@@ -93,7 +98,7 @@ enum DocumentActionError: LocalizedError, CustomNSError {
         case .lineEndingsRejected: return 8
         }
     }
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .diskChanged:
             return
@@ -111,7 +116,7 @@ enum DocumentActionError: LocalizedError, CustomNSError {
         case .lineEndingsRejected: return "Line endings could not be converted. Nothing was changed."
         }
     }
-    var errorUserInfo: [String: Any] {
+    package var errorUserInfo: [String: Any] {
         var info: [String: Any] = [NSLocalizedDescriptionKey: errorDescription ?? ""]
         if case .unsafeDiskPath(_, let error) = self { info[NSUnderlyingErrorKey] = error }
         return info

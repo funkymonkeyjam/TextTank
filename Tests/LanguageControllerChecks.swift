@@ -1,5 +1,8 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import EditorBridge
+import NativeSearch
 /// Function-list navigation fronts the document window; these checks never put one on screen.
 final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sender: Any?) {} }
 @main struct LanguageControllerChecks {

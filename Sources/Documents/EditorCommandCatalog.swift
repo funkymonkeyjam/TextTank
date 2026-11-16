@@ -3,7 +3,7 @@ import Foundation
 
 /// Stable editor identifiers are storage and bridge contracts. Menu placement remains literal;
 /// recording and shortcut assignment are explicit security/behavior subsets, never inferred from a title.
-enum EditorCommand: String, CaseIterable {
+package enum EditorCommand: String, CaseIterable {
     case addNextOccurrence, backTab, bookmarkNext, bookmarkPrevious, bookmarkToggle, cancel, charLeft, charLeftExtend,
         charRight, charRightExtend, clearAdditionalSelections, copy, cut, deleteBack, deleteForward, deleteLine,
         deleteLineLeft, deleteLineRight, deleteWordLeft, deleteWordRight, documentEnd, documentEndExtend, documentStart,
@@ -15,7 +15,7 @@ enum EditorCommand: String, CaseIterable {
         toggleOvertype, transposeLine, trimTrailing, undo, unfoldAll, unindent, upper, vcHome, vcHomeExtend, wordLeft,
         wordLeftExtend, wordPartLeft, wordPartLeftExtend, wordPartRight, wordPartRightExtend, wordRight,
         wordRightExtend, zoomIn, zoomOut
-    var isRecordable: Bool {
+    package var isRecordable: Bool {
         switch self {
         case .backTab, .cancel, .charLeft, .charLeftExtend, .charRight, .charRightExtend, .copy, .cut, .deleteBack,
             .deleteForward, .deleteLine, .deleteLineLeft, .deleteLineRight, .deleteWordLeft, .deleteWordRight,
@@ -30,13 +30,13 @@ enum EditorCommand: String, CaseIterable {
         default: return false
         }
     }
-    var isViewOnly: Bool {
+    package var isViewOnly: Bool {
         switch self {
         case .foldAll, .showWhitespace, .toggleEOL, .toggleLineNumbers, .unfoldAll, .zoomIn, .zoomOut: return true
         default: return false
         }
     }
-    var isShortcutAssignable: Bool {
+    package var isShortcutAssignable: Bool {
         switch self {
         case .bookmarkNext, .bookmarkPrevious, .bookmarkToggle, .deleteLine, .duplicateLine, .joinLines, .lower,
             .moveLineDown, .moveLineUp, .transposeLine, .trimTrailing, .upper:
@@ -44,7 +44,7 @@ enum EditorCommand: String, CaseIterable {
         default: return false
         }
     }
-    var isToggle: Bool {
+    package var isToggle: Bool {
         switch self {
         case .showWhitespace, .toggleEOL, .toggleLineNumbers, .toggleOvertype, .bookmarkToggle,
             .rectangularSelection, .streamSelection:
@@ -52,7 +52,7 @@ enum EditorCommand: String, CaseIterable {
         default: return false
         }
     }
-    var title: String {
+    package var title: String {
         switch self {
         case .addNextOccurrence: return "Add Next Occurrence"
         case .backTab: return "Back Tab"
@@ -140,13 +140,13 @@ enum EditorCommand: String, CaseIterable {
         case .zoomOut: return "Zoom Out"
         }
     }
-    static let recordableIdentifiers = Set(allCases.filter(\.isRecordable).map(\.rawValue))
-    static let viewOnlyIdentifiers = Set(allCases.filter(\.isViewOnly).map(\.rawValue))
-    static let shortcutIdentifiers = Set(allCases.filter(\.isShortcutAssignable).map(\.rawValue))
-    static let defaultShortcuts: [String: String] = [EditorCommand.duplicateLine.rawValue: "d"]
-    var defaultShortcut: String { Self.defaultShortcuts[rawValue] ?? "" }
+    static package let recordableIdentifiers = Set(allCases.filter(\.isRecordable).map(\.rawValue))
+    static package let viewOnlyIdentifiers = Set(allCases.filter(\.isViewOnly).map(\.rawValue))
+    static package let shortcutIdentifiers = Set(allCases.filter(\.isShortcutAssignable).map(\.rawValue))
+    static package let defaultShortcuts: [String: String] = [EditorCommand.duplicateLine.rawValue: "d"]
+    package var defaultShortcut: String { Self.defaultShortcuts[rawValue] ?? "" }
     /// Fixed system/editor menu keys remain distinct from assignable override defaults.
-    var defaultMenuShortcut: String {
+    package var defaultMenuShortcut: String {
         switch self {
         case .undo: return "z"
         case .redo: return "Z"
@@ -164,9 +164,9 @@ enum EditorCommand: String, CaseIterable {
 }
 
 /// An invalid routed identifier never changes the editor or starts a recording action.
-enum EditorCommandFailure: LocalizedError {
+package enum EditorCommandFailure: LocalizedError {
     case unsupported
-    var errorDescription: String? {
+    package var errorDescription: String? {
         "This editor command is unavailable. Nothing was changed. Choose another command from the menu."
     }
 }

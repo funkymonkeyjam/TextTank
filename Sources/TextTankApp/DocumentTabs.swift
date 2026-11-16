@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 import AppKit
 
 /// Each document retains its native window and save lifecycle; only the selected tab is visible.

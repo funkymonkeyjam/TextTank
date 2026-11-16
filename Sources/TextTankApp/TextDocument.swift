@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 import AppKit
 
 /// The Objective-C name is fixed, so `NSDocumentClass` in Info.plist does not depend on the

@@ -1,5 +1,8 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import EditorBridge
+import NativeSearch
 @main struct CommentCommandChecks {
     static func main() {
         Checks.run("CommentCommandChecks") {

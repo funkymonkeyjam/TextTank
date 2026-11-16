@@ -11,11 +11,11 @@ suite_require_build
 python3 scripts/record-validation.py capture
 suite_script scripts/test-harness.sh
 suite_script scripts/test-build-pipeline.sh
-suite_build "file-checks" swiftc Sources/Documents/Strings.swift Sources/Documents/FailureContext.swift Sources/Documents/PrivateFileStore.swift "${SWIFT_BASE[@]}" -o build/tests/file-checks Sources/Documents/FileCodec.swift Sources/Documents/RecoveryStore.swift Sources/Documents/RecoveryWriter.swift "$SUITE_SUPPORT" Tests/FileChecks.swift
+suite_build "file-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/file-checks "$SUITE_SUPPORT" Tests/FileChecks.swift
 suite_run file-checks harness/logs/file-checks.log build/tests/file-checks
-suite_build "automation-checks" swiftc Sources/Documents/Strings.swift Sources/Documents/FailureContext.swift Sources/Documents/PrivateFileStore.swift Sources/Documents/VersionedLibrary.swift "${SWIFT_BASE[@]}" -o build/tests/automation-checks Sources/Automations/AutomationCore.swift Sources/Documents/LineOrder.swift "$SUITE_SUPPORT" Tests/AutomationChecks.swift
+suite_build "automation-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/automation-checks "$SUITE_SUPPORT" Tests/AutomationChecks.swift
 suite_run automation-checks harness/logs/automation-checks.log build/tests/automation-checks
-suite_build "reminder-checks" swiftc Sources/Documents/Strings.swift Sources/Documents/FailureContext.swift Sources/Documents/PrivateFileStore.swift "${SWIFT_BASE[@]}" -o build/tests/reminder-checks Sources/Connectors/RemindersConnector.swift "$SUITE_SUPPORT" Tests/ReminderChecks.swift
+suite_build "reminder-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/reminder-checks Sources/Connectors/RemindersConnector.swift "$SUITE_SUPPORT" Tests/ReminderChecks.swift
 suite_run reminder-checks harness/logs/reminder-checks.log build/tests/reminder-checks
 suite_build "bridge-checks" clang++ "${CXX_BASE[@]}" -I Tests/Support -I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F "$VENDOR_BUILD" -framework Scintilla -framework Cocoa -Xlinker "$NATIVE_BRIDGE_LIBRARY" -Xlinker "$NATIVE_SEARCH_LIBRARY" Tests/BridgeChecks.mm -Wl,-rpath,"$VENDOR_BUILD" -o build/tests/bridge-checks
 suite_run bridge-checks harness/logs/bridge-checks.log build/tests/bridge-checks
@@ -24,7 +24,7 @@ suite_script scripts/test-documents.sh
 
 # The Foundation-only macro core must keep compiling without AppKit. Its checks
 # run once, in the native build made by scripts/test-macros.sh.
-suite_build "macro-core-layering" swiftc Sources/Documents/Strings.swift Sources/Documents/FailureContext.swift Sources/Documents/PrivateFileStore.swift Sources/Documents/VersionedLibrary.swift -typecheck "${SWIFT_BASE[@]}" Sources/Documents/EditorCommandCatalog.swift Sources/Macros/MacroCore.swift "$SUITE_SUPPORT" Tests/MacroChecks.swift
+suite_build "macro-core-layering" swiftc -typecheck "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/MacroChecks.swift
 suite_run macro-core-layering harness/logs/macro-core-layering.log /bin/echo "PASS MacroCore compiles without AppKit; its checks run in macro-integration-checks"
 
 suite_script scripts/test-macros.sh

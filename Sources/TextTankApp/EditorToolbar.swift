@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 import AppKit
 
 /// The same selectors and responder-chain targets used by the menu bar.

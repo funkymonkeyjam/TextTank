@@ -1,4 +1,7 @@
+@testable import TextTankCore
 import AppKit
+import EditorBridge
+import NativeSearch
 
 @MainActor enum Audit29ServiceChecks {
     static func run() throws {

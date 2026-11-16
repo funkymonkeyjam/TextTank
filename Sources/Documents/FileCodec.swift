@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-enum FileEncoding: String, Codable, CaseIterable {
+package enum FileEncoding: String, Codable, CaseIterable {
     case utf8, utf16LE, utf16BE, windows1252, latin1
-    var displayName: String {
+    package var displayName: String {
         switch self {
         case .utf8: return Strings.text("encoding.utf8", "UTF-8")
         case .utf16LE: return Strings.text("encoding.utf16le", "UTF-16 LE")
@@ -16,20 +16,30 @@ enum FileEncoding: String, Codable, CaseIterable {
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct FileFormat: Codable, Equatable {
-    var encoding: FileEncoding = .utf8
-    var bom: Bool = false
-    struct Target {
-        let code: String
-        let format: FileFormat
-        var title: String {
+package struct FileFormat: Codable, Equatable {
+    package init(encoding: FileEncoding = .utf8, bom: Bool = false) {
+        self.encoding = encoding
+        self.bom = bom
+    }
+
+    package var encoding: FileEncoding
+    package var bom: Bool
+    package struct Target {
+        package init(code: String, format: FileFormat) {
+            self.code = code
+            self.format = format
+        }
+
+        package let code: String
+        package let format: FileFormat
+        package var title: String {
             if format.bom {
                 return String(format: Strings.text("encoding.bom", "%@ with BOM"), format.encoding.displayName)
             }
             return format.encoding.displayName
         }
     }
-    static let convertTargets: [Target] = [
+    static package let convertTargets: [Target] = [
         .init(code: "utf8", format: .init(encoding: .utf8)),
         .init(code: "utf8bom", format: .init(encoding: .utf8, bom: true)),
         .init(code: "utf16LE", format: .init(encoding: .utf16LE, bom: true)),
@@ -39,15 +49,20 @@ struct FileFormat: Codable, Equatable {
     ]
 }
 
-struct DecodedFile {
-    let text: String
-    let format: FileFormat
+package struct DecodedFile {
+    package init(text: String, format: FileFormat) {
+        self.text = text
+        self.format = format
+    }
+
+    package let text: String
+    package let format: FileFormat
 }
 
-enum FileCodecError: Error, LocalizedError, Equatable {
+package enum FileCodecError: Error, LocalizedError, Equatable {
     case invalidBytes(FileEncoding), unrepresentable(FileEncoding), unsupportedBOM, unsupportedUTF32,
         invalidConversionTarget
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .invalidBytes(let e):
             return
@@ -67,10 +82,10 @@ enum FileCodecError: Error, LocalizedError, Equatable {
 
 /// The ending a document inserts for new line breaks. Detection reads the first line break
 /// only: it is deterministic and cheap, and existing endings are never rewritten by it.
-enum LineEnding: String, CaseIterable {
+package enum LineEnding: String, CaseIterable {
     case lf = "LF", crlf = "CRLF", cr = "CR"
     /// CR LF gives CRLF, a lone CR gives CR, LF gives LF; text with no line break gives LF.
-    static func detect(in text: String) -> LineEnding {
+    static package func detect(in text: String) -> LineEnding {
         var priorCR = false
         for byte in text.utf8 {
             if priorCR { return byte == 10 ? .crlf : .cr }
@@ -82,14 +97,14 @@ enum LineEnding: String, CaseIterable {
 }
 
 /// Pure codec: never normalizes line endings and never guesses a legacy encoding.
-enum FileCodec {
+package enum FileCodec {
     private static let cp1252: [UInt32?] = [
         0x20AC, nil, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
         0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, nil, 0x017D, nil,
         nil, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
         0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, nil, 0x017E, 0x0178
     ]
-    static func decode(_ data: Data) throws -> DecodedFile {
+    static package func decode(_ data: Data) throws -> DecodedFile {
         // UTF-32LE overlaps UTF-16LE + leading NUL. Do not silently interpret an
         // apparent UTF-32 file as editable UTF-16; explicit UTF-16 selection remains valid.
         if data.starts(with: [0xFF, 0xFE, 0, 0]) || data.starts(with: [0, 0, 0xFE, 0xFF]) {
@@ -102,7 +117,7 @@ enum FileCodec {
     }
     /// Validates and decodes in place: the bytes are read where they are, with no intermediate
     /// array, and each encoding builds its text in one pass.
-    static func decode(_ data: Data, encoding: FileEncoding) throws -> DecodedFile {
+    static package func decode(_ data: Data, encoding: FileEncoding) throws -> DecodedFile {
         let marker = bomBytes(encoding)
         let hasBOM = !marker.isEmpty && data.starts(with: marker)
         let text: String = try data.withUnsafeBytes { (all: UnsafeRawBufferPointer) throws -> String in
@@ -166,7 +181,7 @@ enum FileCodec {
         }
         return DecodedFile(text: text, format: FileFormat(encoding: encoding, bom: hasBOM))
     }
-    static func encode(_ text: String, format: FileFormat) throws -> Data {
+    static package func encode(_ text: String, format: FileFormat) throws -> Data {
         let marker = bomBytes(format.encoding)
         if format.bom && marker.isEmpty { throw FileCodecError.unsupportedBOM }
         let prefix = format.bom ? marker : []

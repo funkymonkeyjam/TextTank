@@ -1,4 +1,7 @@
+@testable import TextTankCore
 import AppKit
+import EditorBridge
+import NativeSearch
 @main struct FolderSearchControllerChecks {
     @MainActor static func main() async {
         await Checks.run("FolderSearchControllerChecks") {

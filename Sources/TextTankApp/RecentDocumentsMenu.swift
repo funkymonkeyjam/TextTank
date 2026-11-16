@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 import AppKit
 
 /// File > Open Recent, filled from the system's recent-documents list each time it opens.

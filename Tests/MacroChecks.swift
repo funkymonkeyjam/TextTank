@@ -1,7 +1,10 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 #if TEXTTANK_NATIVE_MACRO_TEST
     import AppKit
+    import EditorBridge
+    import NativeSearch
 #endif
 
 @main struct MacroChecks {

@@ -5,9 +5,9 @@ import Foundation
 /// Common.cpp matchInList/matchInExcludeDirList at the pinned source. Wildcards
 /// are case-insensitive * and ?, with Windows *.* treated as all filenames.
 /// Quoted tokens additionally support native filenames containing spaces.
-struct FolderSearchFilters: Equatable, Sendable {
-    let includes: [String], excludedFiles: [String], excludedTopFolders: [String], excludedAllFolders: [String]
-    init(_ source: String) throws {
+package struct FolderSearchFilters: Equatable, Sendable {
+    package let includes: [String], excludedFiles: [String], excludedTopFolders: [String], excludedAllFolders: [String]
+    package init(_ source: String) throws {
         guard source.utf8.count <= 16384, !source.contains("\0") else {
             throw FolderSearchError.invalidRequest("Filename filters exceed 16 KiB or contain NUL.")
         }
@@ -55,10 +55,10 @@ struct FolderSearchFilters: Equatable, Sendable {
         excludedTopFolders = top
         excludedAllFolders = all
     }
-    func acceptsFile(_ name: String) -> Bool {
+    package func acceptsFile(_ name: String) -> Bool {
         includes.contains { Self.matches(name, $0) } && !excludedFiles.contains { Self.matches(name, $0) }
     }
-    func excludesFolder(_ name: String, depth: Int) -> Bool {
+    package func excludesFolder(_ name: String, depth: Int) -> Bool {
         excludedAllFolders.contains { Self.matches(name, $0) }
             || (depth == 1 && excludedTopFolders.contains { Self.matches(name, $0) })
     }
@@ -67,7 +67,7 @@ struct FolderSearchFilters: Equatable, Sendable {
     /// or as UTF-16 units, the Windows reference behaviour, so every pattern that matched before
     /// still does. An exclusion can therefore only protect more files than it did.
     /// Lowercase first: lowercasing can itself decompose (U+0130 becomes i and U+0307).
-    static func matches(_ name: String, _ pattern: String) -> Bool {
+    static package func matches(_ name: String, _ pattern: String) -> Bool {
         let name = name.lowercased(), pattern = (pattern == "*.*" ? "*" : pattern).lowercased()
         if wildcardMatch(Array(name.utf16), Array(pattern.utf16), any: 63, many: 42) { return true }
         let scalars = Array(name.precomposedStringWithCanonicalMapping.unicodeScalars),
@@ -103,15 +103,30 @@ struct FolderSearchFilters: Equatable, Sendable {
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct FolderSearchSettings: Codable, Equatable {
+package struct FolderSearchSettings: Codable, Equatable {
+    package init(
+        version: Int = 1, folder: URL? = nil, workspaceScope: Bool = false, recursive: Bool = true,
+        includeHidden: Bool = false, extensions: String = "", filters: String = "*.*",
+        options: SearchOptions = SearchOptions()
+    ) {
+        self.version = version
+        self.folder = folder
+        self.workspaceScope = workspaceScope
+        self.recursive = recursive
+        self.includeHidden = includeHidden
+        self.extensions = extensions
+        self.filters = filters
+        self.options = options
+    }
+
     // Existing limits permit ~6.7 MiB after JSON escaping, plus bounded path/filter data.
-    static let maximumBytes = 8 * 1024 * 1024
-    var version = 1
-    var folder: URL?
-    var workspaceScope = false, recursive = true, includeHidden = false
-    var extensions = "", filters = "*.*"
-    var options = SearchOptions()
-    func validate() throws {
+    static package let maximumBytes = 8 * 1024 * 1024
+    package var version: Int
+    package var folder: URL?
+    package var workspaceScope: Bool, recursive: Bool, includeHidden: Bool
+    package var extensions: String, filters: String
+    package var options: SearchOptions
+    package func validate() throws {
         guard version == 1, extensions.utf8.count <= 4096, options.query.utf16.count <= 65536,
             options.replacement.utf16.count <= 1048576
         else { throw FolderSearchError.invalidRequest("Unsupported or oversized saved folder search settings.") }
@@ -122,11 +137,11 @@ struct FolderSearchSettings: Codable, Equatable {
         }
         _ = try FolderSearchFilters(filters)
     }
-    static func load(_ defaults: UserDefaults) throws -> Self {
+    static package func load(_ defaults: UserDefaults) throws -> Self {
         guard let data = defaults.data(forKey: "TextTank.FolderSearch.v1") else { return Self() }
         return try decode(data)
     }
-    static func decode(_ data: Data) throws -> Self {
+    static package func decode(_ data: Data) throws -> Self {
         guard data.count <= maximumBytes else {
             throw FolderSearchError.invalidRequest("Saved folder search settings exceed their size limit.")
         }
@@ -135,13 +150,13 @@ struct FolderSearchSettings: Codable, Equatable {
         try value.validate()
         return value
     }
-    func encoded() throws -> Data {
+    package func encoded() throws -> Data {
         try validate()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(self)
     }
-    func save(_ defaults: UserDefaults) throws {
+    package func save(_ defaults: UserDefaults) throws {
         try validate()
         defaults.set(try JSONEncoder().encode(self), forKey: "TextTank.FolderSearch.v1")
     }

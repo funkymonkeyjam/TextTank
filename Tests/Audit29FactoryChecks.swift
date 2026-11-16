@@ -1,4 +1,7 @@
+@testable import TextTankCore
 import AppKit
+import EditorBridge
+import NativeSearch
 import Darwin
 
 @MainActor enum Audit29FactoryChecks {

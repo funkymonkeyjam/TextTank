@@ -3,15 +3,28 @@ import Foundation
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct ConfiguredRun: Codable, Equatable {
-    var version = 1
-    var id = UUID()
-    var name: String
-    var executable: String
-    var arguments: [String]
-    var shellMode = false
-    var extensionMode = false
-    func validate() throws {
+package struct ConfiguredRun: Codable, Equatable {
+    package init(
+        version: Int = 1, id: UUID = UUID(), name: String, executable: String, arguments: [String],
+        shellMode: Bool = false, extensionMode: Bool = false
+    ) {
+        self.version = version
+        self.id = id
+        self.name = name
+        self.executable = executable
+        self.arguments = arguments
+        self.shellMode = shellMode
+        self.extensionMode = extensionMode
+    }
+
+    package var version: Int
+    package var id: UUID
+    package var name: String
+    package var executable: String
+    package var arguments: [String]
+    package var shellMode: Bool
+    package var extensionMode: Bool
+    package func validate() throws {
         let title = String(name.prefix(200))
         guard version == 1 else {
             throw RunFailure.configuration(
@@ -60,7 +73,7 @@ struct ConfiguredRun: Codable, Equatable {
             )
         }
     }
-    func resolved(file: URL?, selection: String) throws -> Self {
+    package func resolved(file: URL?, selection: String) throws -> Self {
         try validate()
         var result = self
         // Shell code never interpolates document contents. Those values are exposed
@@ -89,7 +102,7 @@ struct ConfiguredRun: Codable, Equatable {
         try result.validate()
         return result
     }
-    static func validateLibrary(_ commands: [Self]) throws {
+    static package func validateLibrary(_ commands: [Self]) throws {
         guard commands.count <= 1000 else {
             throw RunFailure.configuration(
                 field: .library, message: "Keep at most 1000 Run commands. The saved commands were not changed.")
@@ -107,8 +120,8 @@ struct ConfiguredRun: Codable, Equatable {
         }
     }
     /// One shared byte ceiling for persistence and restart, including JSON escaping.
-    static let maximumLibraryBytes = 1024 * 1024
-    static func encodeLibrary(_ commands: [Self], sortedKeys: Bool = false) throws -> Data {
+    static package let maximumLibraryBytes = 1024 * 1024
+    static package func encodeLibrary(_ commands: [Self], sortedKeys: Bool = false) throws -> Data {
         try validateLibrary(commands)
         // Reject obviously oversized inputs before JSONEncoder allocates an expanded
         // representation. JSON overhead/escaping is checked on the encoded result.
@@ -126,7 +139,7 @@ struct ConfiguredRun: Codable, Equatable {
         guard data.count <= maximumLibraryBytes else { throw RunFailure.configurationTooLarge }
         return data
     }
-    static func decodeLibrary(_ data: Data) throws -> [Self] {
+    static package func decodeLibrary(_ data: Data) throws -> [Self] {
         guard data.count <= maximumLibraryBytes else { throw RunFailure.configurationTooLarge }
         try PersistedFormat.check(data, context: "Run commands", array: true)
         let commands = try JSONInputFailure.decode([Self].self, from: data, context: "Run commands")
@@ -135,7 +148,7 @@ struct ConfiguredRun: Codable, Equatable {
     }
     /// What selecting this command executes, for the menu tooltip: the mode, the executable and
     /// the arguments as stored. Bounded, because one argument may be up to 1 MiB.
-    func summary(limit: Int = 300) -> String {
+    package func summary(limit: Int = 300) -> String {
         var text = (shellMode ? "shell: " : extensionMode ? "text extension: " : "") + executable
         for argument in arguments where text.count <= limit {
             let shown = String(argument.prefix(limit + 1)).map { $0.isNewline || $0 == "\t" ? " " : $0 }
@@ -146,21 +159,21 @@ struct ConfiguredRun: Codable, Equatable {
     }
     /// Version 1 extension contract: UTF-8 document/selection on stdin, UTF-8 result
     /// on stdout, diagnostics on stderr, exit 0 required. No automatic mutation.
-    static var uppercaseSample: Self {
+    static package var uppercaseSample: Self {
         Self(
             name: "Uppercase ASCII (sample extension)", executable: "/usr/bin/tr", arguments: ["a-z", "A-Z"],
             extensionMode: true)
     }
 }
-enum RunConfigurationField: Equatable {
+package enum RunConfigurationField: Equatable {
     case version, name, executable, arguments, argument(Int), mode, shell, library, identity
 }
-enum RunFailure: Error, LocalizedError, Equatable {
+package enum RunFailure: Error, LocalizedError, Equatable {
     case invalid, fileRequired, busy, tooLarge, configurationTooLarge, documentChanged, documentClosed
     case selectionUnsuitable, noDocument, multipleSelections
     case configuration(field: RunConfigurationField, message: String)
     case preparationFailed(Int32)
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .noDocument: return "Open a document before running a text extension. Nothing was changed."
         case .multipleSelections:
@@ -186,7 +199,7 @@ enum RunFailure: Error, LocalizedError, Equatable {
     }
 }
 /// Why a run ended. Exactly one applies; only `finished` leaves complete output.
-enum RunTermination: Equatable, CaseIterable {
+package enum RunTermination: Equatable, CaseIterable {
     /// The command exited by itself and all of its output was read.
     case finished
     /// The user cancelled it, or TextTank was quitting.
@@ -197,7 +210,7 @@ enum RunTermination: Equatable, CaseIterable {
     case outputLimit
     /// It exited, but a process it started still held its output open and was stopped.
     case lingeringDescendants
-    var summary: String {
+    package var summary: String {
         switch self {
         case .finished: return "finished"
         case .cancelled: return "cancelled"
@@ -209,21 +222,30 @@ enum RunTermination: Equatable, CaseIterable {
         }
     }
 }
-struct RunResult {
-    let stdout: Data, stderr: Data
+package struct RunResult {
+    package init(stdout: Data, stderr: Data, status: Int32, reason: RunTermination) {
+        self.stdout = stdout
+        self.stderr = stderr
+        self.status = status
+        self.reason = reason
+    }
+
+    package let stdout: Data, stderr: Data
     /// The exit status, 128 + signal for a signalled leader, or -1 when no status is known
     /// (nothing was launched, or the exit status could not be collected).
-    let status: Int32
-    let reason: RunTermination
-    var statusLine: String { (status < 0 ? "No exit status" : "Exit \(status)") + " · " + reason.summary }
+    package let status: Int32
+    package let reason: RunTermination
+    package var statusLine: String { (status < 0 ? "No exit status" : "Exit \(status)") + " · " + reason.summary }
 }
 /// Explicit process group with bounded nonblocking pipes. Imports are inert.
-final class RunExecution: @unchecked Sendable {
+final package class RunExecution: @unchecked Sendable {
+    package init() {}
+
     private let lock = NSLock()
     private var active = false, cancelRequested = false
     private let running = DispatchGroup()
-    static let defaultTimeout: TimeInterval = 30
-    func cancel() {
+    static package let defaultTimeout: TimeInterval = 30
+    package func cancel() {
         lock.lock()
         cancelRequested = true
         lock.unlock()
@@ -236,13 +258,13 @@ final class RunExecution: @unchecked Sendable {
     /// Cancels and waits until `execute` has returned on its own thread, so the child and its
     /// process group are gone. The wait is signalled by the worker, never by the main queue, so
     /// this may be called from the main thread. True when nothing is running any more.
-    func cancelAndWait(timeout: TimeInterval) -> Bool {
+    package func cancelAndWait(timeout: TimeInterval) -> Bool {
         cancel()
         return running.wait(timeout: .now() + timeout) == .success
     }
     /// `workingDirectory` nil inherits the caller's working directory. The environment is always
     /// inherited as it is.
-    func execute(
+    package func execute(
         _ command: ConfiguredRun, input: Data = Data(), timeout: TimeInterval = RunExecution.defaultTimeout,
         workingDirectory: URL? = nil
     ) throws -> RunResult {

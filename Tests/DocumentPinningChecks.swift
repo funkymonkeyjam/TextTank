@@ -1,3 +1,4 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Audit package 4: behaviour pinned before refactoring. These sections run inside
 // document-checks, after the sections in DocumentChecks.swift, and share its
@@ -7,6 +8,8 @@
 // compared with what the build does. A `knownDefect` line marks behaviour the audit
 // confirmed as wrong: it is not pinned as correct, and it fails when it is repaired.
 import AppKit
+import EditorBridge
+import NativeSearch
 
 extension DocumentChecks {
     typealias SectionRunner = (_ name: String, _ line: UInt, _ body: () throws -> Void) -> Void

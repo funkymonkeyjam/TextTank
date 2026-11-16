@@ -1,9 +1,12 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Audit package 11: split view and one definition of the current editor. These sections run
 // inside document-checks after the sections in DocumentPinningChecks.swift and share its
 // support directory. The check process has no main window, so "the document window focused
 // last" is set directly on the application delegate, as the pinning checks do.
 import AppKit
+import EditorBridge
+import NativeSearch
 
 extension DocumentChecks {
     @MainActor static func splitViewAndCurrentEditor(root: URL, app: NSApplication, section: SectionRunner) {

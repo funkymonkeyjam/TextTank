@@ -32,7 +32,7 @@ python3 scripts/check-runtime-linkage.py "$APP_PATH"
 # Finder/file-provider metadata is not part of the generated application resources.
 xattr -dr com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
 xattr -dr com.apple.ResourceFork "$APP_PATH" 2>/dev/null || true
-for framework in Scintilla NativeSearch EditorBridge; do
+for framework in Scintilla NativeSearch EditorBridge TextTankCore; do
   codesign --force --sign - "$APP_PATH/Contents/Frameworks/$framework.framework"
 done
 # Metadata may arrive between steps. Reclean generated resources at the enclosing

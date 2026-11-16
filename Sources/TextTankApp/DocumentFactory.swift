@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 import AppKit
 
 /// Product-created documents share type, registration and window setup. NSDocumentController's

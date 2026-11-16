@@ -9,6 +9,9 @@
 import Foundation
 import CryptoKit
 import ObjectiveC
+#if canImport(TextTankCore)
+    @testable import TextTankCore
+#endif
 
 /// Thrown by `require` after the failure has been recorded.
 struct CheckStop: Error, CustomStringConvertible { let description: String }
@@ -112,16 +115,22 @@ enum Checks {
     /// Check the code image actually loaded in this process, not merely linker arguments.
     /// Foundation-only checks without native dependencies have no images to verify here.
     private static func verifyNativeImages() {
-        let classes = [("TTEditor", "EditorBridge"), ("TTSearchEngine", "NativeSearch"),
-                       ("ScintillaView", "Scintilla")]
-        let loaded = classes.compactMap { name, framework -> (AnyClass, String)? in
+        let classes = [
+            ("TTEditor", "EditorBridge"), ("TTSearchEngine", "NativeSearch"),
+            ("ScintillaView", "Scintilla")
+        ]
+        var loaded = classes.compactMap { name, framework -> (AnyClass, String)? in
             guard let type = NSClassFromString(name) else { return nil }
             return (type, framework)
         }
+        #if canImport(TextTankCore)
+            loaded.append((RecoveryStore.self, "TextTankCore"))
+        #endif
         guard !loaded.isEmpty else { return }
         do {
             guard let manifestPath = ProcessInfo.processInfo.environment["TEXTTANK_ARTIFACT_MANIFEST"],
-                let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: manifestPath))) as? [String: Any],
+                let manifest = try JSONSerialization.jsonObject(
+                    with: Data(contentsOf: URL(fileURLWithPath: manifestPath))) as? [String: Any],
                 let images = manifest["images"] as? [String: [String: Any]]
             else { throw CheckStop(description: "missing validated native artifact manifest") }
             for image in loaded {
@@ -135,7 +144,8 @@ enum Checks {
                 let wanted = URL(fileURLWithPath: expectedPath).resolvingSymlinksInPath()
                 let hash = SHA256.hash(data: try Data(contentsOf: actual)).map { String(format: "%02x", $0) }.joined()
                 guard actual == wanted, hash == expectedHash else {
-                    throw CheckStop(description: "\(framework) was not loaded from the actual signed application artifact")
+                    throw CheckStop(
+                        description: "\(framework) was not loaded from the actual signed application artifact")
                 }
                 print("ARTIFACT_IMAGE \(framework) \(hash) \(actual.path)")
             }

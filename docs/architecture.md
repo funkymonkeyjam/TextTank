@@ -375,7 +375,8 @@ it holds no editor, window or mutable text model. `SearchController` retains sch
 lifetimes, multi-document result state and guarded bridge application, with its existing forwarding
 APIs. Cheap truncated/closed/stale rejection still happens before selection reads or position
 conversion, and the pure planner also validates its input facts. Foundation-only compilation and
-native checks enforce this boundary; the product remains one Swift target, not separate modules.
+native checks enforce this boundary. TextTankCore is now a separate Foundation Swift module;
+AppKit composition remains in the application target during the Runtime migration.
 
 Document language intent applies a profile once and records its identifier only on success.
 Language-controller notifications use the separate state-only `noteAppliedLanguage` method, so
@@ -399,3 +400,12 @@ Core/Runtime artifact acceptance is not yet established.
 EditorBridge is now a separate AppKit Objective-C++ framework owning TTEditor and the
 ported user lexer. It links Scintilla and Lexilla; it has no dependency on NativeSearch
 or the remaining Swift application target. The application embeds both native frameworks.
+
+TextTankCore owns the25 Foundation model/codec/storage/search-planning sources listed once
+in scripts/core_sources.py. It depends on NativeSearch and system Foundation/Darwin/CryptoKit/
+zlib interfaces, with no EditorBridge, AppKit or executable dependency. Package access and
+explicit value constructors form the cross-target API; fields retain setter restrictions,
+version decoding requirements and existing defaults. UUID/Date defaults evaluate once per
+construction. Native checks import the actual built Debug Core module and link/load its
+signed application image rather than recompiling those sources. Swift UI source copies and
+TESTING seams remain until the separate Runtime target transition; this is partial F269.

@@ -10,10 +10,11 @@ if [[ "$ARCH" != "$TEXTTANK_ARCHITECTURE" ]]; then echo 'Only arm64 is currently
 VENDOR_BUILD="$TEXTTANK_ROOT/build/vendor/$CONFIGURATION"
 APP_PATH="$TEXTTANK_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/TextTank.app"
 LEXILLA_LIBRARY="$VENDOR_BUILD/liblexilla.a"
-SWIFT_BASE=(-target "$ARCH-apple-macos$DEPLOYMENT_TARGET" -module-cache-path build/ModuleCache)
+SWIFT_BASE=(-swift-version 5 -package-name TextTank -target "$ARCH-apple-macos$DEPLOYMENT_TARGET" -module-cache-path build/ModuleCache)
 CXX_BASE=(-std=c++17 -fobjc-arc "-mmacosx-version-min=$DEPLOYMENT_TARGET")
 BRIDGE_INCLUDES=(-I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F "$VENDOR_BUILD")
 APP_LINK=(-framework Scintilla -framework Cocoa -Xlinker -rpath -Xlinker "$VENDOR_BUILD")
-APP_SOURCES=(Sources/Languages/*.swift Sources/Run/*.swift Sources/Utilities/*.swift Sources/Search/*.swift Sources/Workspace/*.swift Sources/Macros/*.swift Sources/Documents/*.swift Sources/Automations/*.swift Sources/Connectors/*.swift Sources/TextTankApp/*.swift)
+APP_SOURCES=()
+while IFS= read -r source_path; do APP_SOURCES+=("$source_path"); done < <(python3 "$TEXTTANK_ROOT/scripts/core_sources.py" --application-clients)
 if [[ "$CONFIGURATION" == Release ]]; then SWIFT_BASE+=(-O); CXX_BASE+=(-O2); fi
 export CONFIGURATION ARCH DEPLOYMENT_TARGET VENDOR_BUILD APP_PATH LEXILLA_LIBRARY

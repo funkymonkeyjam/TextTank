@@ -17,7 +17,7 @@ def dependencies(image):
 def verify(app):
     app = Path(app)
     expected = {name: f"@rpath/{name}.framework/Versions/A/{name}"
-                for name in ["NativeSearch", "EditorBridge"]}
+                for name in ["NativeSearch", "EditorBridge", "TextTankCore"]}
     images = {name: app / f"Contents/Frameworks/{name}.framework/Versions/A/{name}"
               for name in expected}
     for name, image in images.items():
@@ -31,6 +31,9 @@ def verify(app):
     editor_dependencies = dependencies(images["EditorBridge"])
     if any("NativeSearch.framework" in item for item in editor_dependencies):
         raise ValueError("EditorBridge depends on the snapshot search engine")
+    core_dependencies = dependencies(images["TextTankCore"])
+    if any("AppKit.framework" in item or "EditorBridge.framework" in item for item in core_dependencies):
+        raise ValueError("Foundation Core depends on an editor/UI framework")
     application_dependencies = [item for file in (app / "Contents/MacOS").iterdir()
                                 if file.is_file() for item in dependencies(file)]
     for name, identity in expected.items():

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-enum EditorTransform: String, CaseIterable {
+package enum EditorTransform: String, CaseIterable {
     case sortAscending, sortDescending, sortCaseInsensitive, sortLength, reverseLines, uniqueLines, removeEmptyLines,
         trimLeading, trimBoth, invertCase, titleCase
     /// Locale-aware order, beside the code-point order of `sortAscending`; see `LineOrder`.
     case sortLocalized
-    var title: String {
+    package var title: String {
         switch self {
         case .sortAscending: return "Sort Lines Ascending"
         case .sortDescending: return "Sort Lines Descending"
@@ -22,7 +22,7 @@ enum EditorTransform: String, CaseIterable {
         case .sortLocalized: return "Sort Lines in Locale Order"
         }
     }
-    func transform(_ text: String) -> String {
+    package func transform(_ text: String) -> String {
         if self == .titleCase { return text.capitalized(with: Locale(identifier: "en_US_POSIX")) }
         if self == .invertCase {
             // One scalar in, one scalar out, so the text never changes length: a mapping that would

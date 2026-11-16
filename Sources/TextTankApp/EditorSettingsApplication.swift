@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 import AppKit
 
 /// Synchronous application effects installed by the composition root, outside the value/store layer.

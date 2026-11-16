@@ -1,4 +1,7 @@
+@testable import TextTankCore
 import AppKit
+import EditorBridge
+import NativeSearch
 /// Find-window navigation fronts the document window; checks must never put one on screen.
 /// `shown` stands for being the visible tab: fronting sets it, and a check clears it by hand
 /// where the application would have ordered the other document windows out.

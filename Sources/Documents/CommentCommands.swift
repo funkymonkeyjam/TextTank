@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-struct EditorSelection: Equatable, Sendable {
-    let anchor: Int
-    let caret: Int
+package struct EditorSelection: Equatable, Sendable {
+    package init(anchor: Int, caret: Int) {
+        self.anchor = anchor
+        self.caret = caret
+    }
+
+    package let anchor: Int
+    package let caret: Int
 }
 
-enum CommentCommand: String, CaseIterable {
+package enum CommentCommand: String, CaseIterable {
     case toggleLine, lineComment, lineUncomment, blockComment, blockUncomment
-    var title: String {
+    package var title: String {
         switch self {
         case .toggleLine: return "Toggle Line Comment"
         case .lineComment: return "Comment Selected Lines"
@@ -17,10 +22,24 @@ enum CommentCommand: String, CaseIterable {
         case .blockUncomment: return "Remove Block Comment"
         }
     }
-    struct Edit: Hashable { var start: Int, end: Int, text: String }
+    package struct Edit: Hashable {
+        package init(start: Int, end: Int, text: String) {
+            self.start = start
+            self.end = end
+            self.text = text
+        }
+        package var start: Int, end: Int, text: String
+    }
     /// `edits` are ascending, non-overlapping byte ranges of the input; applying them yields `text`.
-    struct Plan { let text: String, selections: [EditorSelection], edits: [Edit] }
-    func plan(text: String, selections: [EditorSelection], profile: LanguageProfile) throws -> Plan {
+    package struct Plan {
+        package init(text: String, selections: [EditorSelection], edits: [Edit]) {
+            self.text = text
+            self.selections = selections
+            self.edits = edits
+        }
+        package let text: String, selections: [EditorSelection], edits: [Edit]
+    }
+    package func plan(text: String, selections: [EditorSelection], profile: LanguageProfile) throws -> Plan {
         guard text.utf8.count <= 16 * 1024 * 1024 else {
             throw LanguageError.invalid("Comment commands currently accept documents up to 16 MiB.")
         }

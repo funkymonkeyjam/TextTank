@@ -4,50 +4,50 @@ import Darwin
 
 /// Path selection is computed and has no filesystem side effects. In particular, invalid
 /// overrides never create a relative store, and checks can repoint the directory in process.
-enum AppStorage {
-    enum Location: String {
+package enum AppStorage {
+    package enum Location: String {
         case settings = "Settings.json", macros = "Macros.json", automations = "Automations.json"
         case languages = "LanguageProfiles.json", commands = "RunCommands.json", workspace = "WorkspaceBrowser.json"
         case recovery = "Recovery", reminders = "ReminderExports"
         case find = "FindPreferences.json", folderSearch = "FolderSearchPreferences.json"
-        var isDirectory: Bool { self == .recovery || self == .reminders }
+        package var isDirectory: Bool { self == .recovery || self == .reminders }
     }
-    static func resolve(override: String?, fallback: URL) -> URL {
+    static package func resolve(override: String?, fallback: URL) -> URL {
         guard let override, override.hasPrefix("/"), !override.contains("\0") else { return fallback }
         return URL(fileURLWithPath: override, isDirectory: true)
     }
-    static var defaultDirectory: URL {
+    static package var defaultDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("TextTank", isDirectory: true)
     }
     private static var override: String? { ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"] }
-    static var supportDirectory: URL { resolve(override: override, fallback: defaultDirectory) }
+    static package var supportDirectory: URL { resolve(override: override, fallback: defaultDirectory) }
     /// An isolated/portable store never imports from the person's shared defaults implicitly.
-    static var permitsLegacyDefaults: Bool {
+    static package var permitsLegacyDefaults: Bool {
         guard let override else { return true }
         return !override.hasPrefix("/") || override.contains("\0")
     }
     /// Deferred so an isolated constructor never even asks for the shared defaults object.
     /// Native checks replace this with a protected, test-owned domain.
-    static var sharedDefaultsProvider: () -> UserDefaults = { UserDefaults.standard }
-    static var legacyDefaults: UserDefaults? { permitsLegacyDefaults ? sharedDefaultsProvider() : nil }
-    static func url(_ location: Location, under directory: URL? = nil) -> URL {
+    static package var sharedDefaultsProvider: () -> UserDefaults = { UserDefaults.standard }
+    static package var legacyDefaults: UserDefaults? { permitsLegacyDefaults ? sharedDefaultsProvider() : nil }
+    static package func url(_ location: Location, under directory: URL? = nil) -> URL {
         (directory ?? supportDirectory).appendingPathComponent(location.rawValue, isDirectory: location.isDirectory)
     }
 }
 
 /// One latch for a failed store load. Save boundaries call requireWritable, not just UI callers.
 /// Moving aside is an explicit operation on the entry itself, never a copy through a symlink.
-final class StoreLoadState {
-    let url: URL
-    let displayName: String
-    var error: Error?
-    init(url: URL, displayName: String) {
+final package class StoreLoadState {
+    package let url: URL
+    package let displayName: String
+    package var error: Error?
+    package init(url: URL, displayName: String) {
         self.url = url
         self.displayName = displayName
     }
-    func requireWritable() throws { if let error { throw error } }
-    @discardableResult func moveAside(allowSymbolicLink: Bool = true, tag: String = "previous") throws -> URL? {
+    package func requireWritable() throws { if let error { throw error } }
+    @discardableResult package func moveAside(allowSymbolicLink: Bool = true, tag: String = "previous") throws -> URL? {
         let directory = try PrivateFileStore.directoryDescriptor(for: url)
         defer { close(directory) }
         var info = stat()
@@ -76,14 +76,14 @@ final class StoreLoadState {
 
 /// A small value-store boundary used by preferences. It owns failed-load protection and byte
 /// no-op detection, while each model owns its exact schema, decoder, encoder and field limits.
-final class JSONFileStore<Value> {
-    let state: StoreLoadState
-    private(set) var value: Value
-    private(set) var lastSaveError: Error?
+final package class JSONFileStore<Value> {
+    package let state: StoreLoadState
+    private(set) package var value: Value
+    private(set) package var lastSaveError: Error?
     private let initial: Value, maximumBytes: Int
     private let encode: (Value) throws -> Data
     private var savedModelBytes: Data?
-    init(
+    package init(
         url: URL, displayName: String, maximumBytes: Int, initial: Value,
         decode: (Data) throws -> Value, encode: @escaping (Value) throws -> Data,
         legacyValue: (() throws -> Value?)? = nil
@@ -102,7 +102,7 @@ final class JSONFileStore<Value> {
             do { if let legacy = try legacyValue?() { value = legacy } } catch { state.error = error }
         } catch { state.error = error }
     }
-    func save(_ proposed: Value) throws {
+    package func save(_ proposed: Value) throws {
         do {
             try state.requireWritable()
             let bytes = try encode(proposed)
@@ -122,7 +122,7 @@ final class JSONFileStore<Value> {
             throw error
         }
     }
-    @discardableResult func reset() throws -> URL? {
+    @discardableResult package func reset() throws -> URL? {
         let priorError = state.error
         try PrivateFileStore.prepareDirectory(state.url.deletingLastPathComponent())
         let backup = try state.moveAside()
@@ -136,9 +136,9 @@ final class JSONFileStore<Value> {
     }
 }
 
-enum PrivateFileError: LocalizedError {
+package enum PrivateFileError: LocalizedError {
     case unsafeLocation, tooLarge(limit: Int, url: URL)
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .unsafeLocation:
             return "This action requires a regular local file in a real directory. The file was not changed."
@@ -151,15 +151,15 @@ enum PrivateFileError: LocalizedError {
 /// Shared byte I/O only. Models keep their validation, load-failure latch and storage policy.
 /// A selected import follows its parent path but never its final component; app-owned stores
 /// and existing WorkspaceStore callers also refuse a symlinked immediate parent directory.
-enum PrivateFileStore {
-    enum ParentPolicy { case strict, selectedInput }
-    static func validateLocalURL(_ url: URL) throws {
+package enum PrivateFileStore {
+    package enum ParentPolicy { case strict, selectedInput }
+    static package func validateLocalURL(_ url: URL) throws {
         guard url.isFileURL, (url.host ?? "").isEmpty || url.host == "localhost",
             url.query == nil, url.fragment == nil, url.path.hasPrefix("/"), !url.path.contains("\0"),
             !url.pathComponents.contains(".."), !url.lastPathComponent.isEmpty
         else { throw PrivateFileError.unsafeLocation }
     }
-    static func directoryDescriptor(for url: URL) throws -> Int32 {
+    static package func directoryDescriptor(for url: URL) throws -> Int32 {
         try validateLocalURL(url)
         let descriptor = open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard descriptor >= 0 else {
@@ -167,7 +167,7 @@ enum PrivateFileStore {
         }
         return descriptor
     }
-    static func openRegularFile(
+    static package func openRegularFile(
         _ url: URL, maximumBytes: Int, parent: ParentPolicy = .strict,
         closeDirectory: (Int32) -> Int32 = { close($0) }
     ) throws -> (descriptor: Int32, info: stat) {
@@ -203,12 +203,12 @@ enum PrivateFileStore {
             throw error
         }
     }
-    static func read(
+    static package func read(
         _ url: URL, maximumBytes: Int, parent: ParentPolicy = .strict
     ) throws -> Data {
         try readSample(url, maximumBytes: maximumBytes, parent: parent).data
     }
-    static func readSample(
+    static package func readSample(
         _ url: URL, maximumBytes: Int, parent: ParentPolicy = .strict
     ) throws -> (data: Data, before: stat, after: stat?) {
         let opened = try openRegularFile(url, maximumBytes: maximumBytes, parent: parent)
@@ -230,7 +230,7 @@ enum PrivateFileStore {
         return (data, opened.info, fstat(opened.descriptor, &after) == 0 ? after : nil)
     }
     /// Create/harden only a caller-declared app-owned directory. Never chmod its parent.
-    static func prepareDirectory(_ directory: URL) throws {
+    static package func prepareDirectory(_ directory: URL) throws {
         try validateLocalURL(directory.appendingPathComponent(".storage-check"))
         var info = stat()
         if lstat(directory.path, &info) == 0 {
@@ -251,7 +251,7 @@ enum PrivateFileStore {
     }
     /// The optional synchronizer is a narrow failure seam: a failed sync must not commit.
     /// Data and its 0600 metadata reach fsync before the same-directory atomic rename.
-    @discardableResult static func write(
+    @discardableResult static package func write(
         _ data: Data, to url: URL, maximumBytes: Int, temporaryPrefix: String = ".texttank-",
         temporarySuffix: String = "", synchronize: (Int32) -> Int32 = { fsync($0) },
         beforeCommit: () throws -> Void = {}, retainingDescriptor: Bool = false,
@@ -333,8 +333,8 @@ enum PrivateFileStore {
 
 /// Codable model comparisons use deterministic bytes, including exact Unicode spelling.
 /// Failed encodes are conservatively unequal; the caller's validation reports the real error.
-enum PersistedValue {
-    static func equal<Value: Encodable>(_ lhs: Value, _ rhs: Value) -> Bool {
+package enum PersistedValue {
+    static package func equal<Value: Encodable>(_ lhs: Value, _ rhs: Value) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let left = try? encoder.encode(lhs), let right = try? encoder.encode(rhs) else { return false }
@@ -345,8 +345,8 @@ enum PersistedValue {
 /// Optional envelope metadata supplements, never replaces, each model's required schema version.
 /// Writers of the unchanged version-1 formats omit it; absent means reader 1. Do not inspect
 /// arbitrary nested dictionaries: names and user payloads remain data, not behavior selectors.
-enum PersistedFormat {
-    static let readerVersion = 1
+package enum PersistedFormat {
+    static package let readerVersion = 1
     private struct Metadata: Decodable {
         enum CodingKeys: String, CodingKey { case minimumReaderVersion }
         init(from decoder: Decoder) throws {
@@ -357,7 +357,7 @@ enum PersistedFormat {
             guard minimum <= PersistedFormat.readerVersion else { throw PersistedFormatError.needsReader(minimum) }
         }
     }
-    static func check(_ data: Data, context: String, array: Bool = false) throws {
+    static package func check(_ data: Data, context: String, array: Bool = false) throws {
         if array {
             _ = try JSONInputFailure.decode([Metadata].self, from: data, context: context)
         } else {
@@ -365,9 +365,9 @@ enum PersistedFormat {
         }
     }
 }
-enum PersistedFormatError: LocalizedError {
+package enum PersistedFormatError: LocalizedError {
     case needsReader(Int), invalidMinimumReader
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .needsReader(let version):
             return

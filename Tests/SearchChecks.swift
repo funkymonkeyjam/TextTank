@@ -1,3 +1,4 @@
+@testable import TextTankCore
 import Foundation
 /// Reports "not cancelled" for the first polls and "cancelled" from then on, so
 /// a search is cancelled while it is running without a timer or a second thread.
