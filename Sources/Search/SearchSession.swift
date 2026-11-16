@@ -15,8 +15,10 @@ enum SearchSession {
         case select(NSRange)
         case replace([SearchHit])
     }
-    static func plan(_ report: SearchReport, snapshot: Snapshot, options: SearchOptions,
-                     action: String, continuing: Bool) throws -> Effect {
+    static func plan(
+        _ report: SearchReport, snapshot: Snapshot, options: SearchOptions,
+        action: String, continuing: Bool
+    ) throws -> Effect {
         guard !report.truncated else { throw SearchFailure.macroResultLimit }
         guard snapshot.isOpen, snapshot.currentRevision == snapshot.revision, let selection = snapshot.selection else {
             throw SearchFailure.macroStopped("the document changed or selection is not on a character boundary")
@@ -27,12 +29,15 @@ enum SearchSession {
         } else if action == "next" || action == "previous" {
             let backwards = action == "previous"
             let candidates = report.hits.filter {
-                SearchCore.isNavigationCandidate($0.range, from: selection, backwards: backwards, continuing: continuing)
+                SearchCore.isNavigationCandidate(
+                    $0.range, from: selection, backwards: backwards, continuing: continuing)
             }
             let wrapped = report.hits.filter {
-                SearchCore.isWrappedNavigationCandidate($0.range, from: selection, backwards: backwards, mode: options.mode)
+                SearchCore.isWrappedNavigationCandidate(
+                    $0.range, from: selection, backwards: backwards, mode: options.mode)
             }
-            let hit = (backwards ? candidates.last : candidates.first)
+            let hit =
+                (backwards ? candidates.last : candidates.first)
                 ?? (options.wrap ? (backwards ? wrapped.last : wrapped.first) : nil)
             guard let hit else { return .noMatch }
             guard let bytes = SearchCore.byteRange(hit.range, in: snapshot.text) else {

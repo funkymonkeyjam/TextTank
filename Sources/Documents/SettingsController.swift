@@ -59,8 +59,10 @@ final class SettingsController: NSObject {
     var loadFailureMessage: String? { store.loadFailureMessage }
     private let onApply: (EditorSettings, EditorSettings?) -> Void
     private let onStatus: (String) -> Void
-    init(url: URL? = nil, onApply: @escaping (EditorSettings, EditorSettings?) -> Void = { _, _ in },
-         onStatus: @escaping (String) -> Void = { _ in }) {
+    init(
+        url: URL? = nil, onApply: @escaping (EditorSettings, EditorSettings?) -> Void = { _, _ in },
+        onStatus: @escaping (String) -> Void = { _ in }
+    ) {
         store = SettingsStore(url: url, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
         self.onApply = onApply
         self.onStatus = onStatus
@@ -71,8 +73,9 @@ final class SettingsController: NSObject {
     }
     @discardableResult func save(_ settings: EditorSettings, replacingUnreadable: Bool = false) throws -> URL? {
         let previous = value
-        let backup = try store.save(settings, replacingUnreadable: replacingUnreadable,
-                                    reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
+        let backup = try store.save(
+            settings, replacingUnreadable: replacingUnreadable,
+            reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
         apply(replacing: previous)
         return backup
     }

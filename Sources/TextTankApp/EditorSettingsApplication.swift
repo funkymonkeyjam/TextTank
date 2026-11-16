@@ -3,14 +3,16 @@ import AppKit
 /// Synchronous application effects installed by the composition root, outside the value/store layer.
 enum EditorSettingsApplication {
     static func apply(_ value: EditorSettings, replacing previous: EditorSettings?) {
-        NSApp.appearance = value.appearance == "system" ? nil : NSAppearance(named: value.appearance == "dark" ? .darkAqua : .aqua)
+        NSApp.appearance =
+            value.appearance == "system" ? nil : NSAppearance(named: value.appearance == "dark" ? .darkAqua : .aqua)
         for doc in NSDocumentController.shared.documents.compactMap({ $0 as? TextDocument }) {
             let clones = doc.windowControllers.compactMap { ($0 as? EditorWindowController)?.secondary }
             for editor in [doc.editor] + clones {
                 if let previous {
                     let info = editor.statusInfo
                     if previous.tabWidth != value.tabWidth || previous.useTabs != value.useTabs,
-                       info["tabWidth"]?.intValue == previous.tabWidth, info["useTabs"]?.boolValue == previous.useTabs {
+                        info["tabWidth"]?.intValue == previous.tabWidth, info["useTabs"]?.boolValue == previous.useTabs
+                    {
                         editor.configureTabWidth(value.tabWidth, useTabs: value.useTabs)
                     }
                     if previous.wrap != value.wrap, editor.wrap == previous.wrap { editor.wrap = value.wrap }

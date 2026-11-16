@@ -240,8 +240,10 @@ final class SettingsStore {
     /// explicit confirmation. With confirmation the unread file is first moved aside, intact,
     /// under a unique sibling name; it is renamed rather than copied because the load may have
     /// failed on size or permissions. Returns the backup location when one was made.
-    @discardableResult func save(_ settings: EditorSettings, replacingUnreadable: Bool = false,
-              reservedKeys: Set<String> = EditorSettings.protectedShortcuts) throws -> URL? {
+    @discardableResult func save(
+        _ settings: EditorSettings, replacingUnreadable: Bool = false,
+        reservedKeys: Set<String> = EditorSettings.protectedShortcuts
+    ) throws -> URL? {
         try settings.validate(reservedKeys: reservedKeys)
         if loadError != nil && !replacingUnreadable { throw SettingsError.unreadable }
         try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
