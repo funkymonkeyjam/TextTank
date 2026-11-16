@@ -432,11 +432,11 @@ import AppKit
                 check(
                     transformed.editor.text == indented.replacingOccurrences(of: "  row", with: "row")
                         && transformed.editor.bookmarkLines == [7, 40]
-                        && transformed.editor.statusInfo["line"]?.intValue == 41,
+                        && transformed.editor.statusInfo.line == 41,
                     "whole-document transform keeps bookmarks and the caret line")
                 transformed.editor.executeCommand("undo")
                 check(
-                    transformed.editor.text == indented && transformed.editor.statusInfo["line"]?.intValue == 41,
+                    transformed.editor.text == indented && transformed.editor.statusInfo.line == 41,
                     "whole-document transform is one Undo, which also returns the caret to its line")
                 // Scintilla's Undo deletes and reinserts the replaced span, and undo history does not
                 // record markers, so bookmarks inside a span that covers every line collapse on Undo.
@@ -466,7 +466,7 @@ import AppKit
                 check(try document.data(ofType: "Plain Text") == initial, "native document exact bytes roundtrip")
                 // F126: the insertion ending follows the file's first line break; loading never edits.
                 check(
-                    document.editor.statusInfo["eol"]?.intValue == 0, "mixed file inserts its first line ending (CRLF)")
+                    document.editor.statusInfo.eol == 0, "mixed file inserts its first line ending (CRLF)")
                 check(
                     document.editor.text.utf8.elementsEqual(String(decoding: initial, as: UTF8.self).utf8)
                         && !document.editor.modified && !document.isDocumentEdited,
@@ -480,7 +480,7 @@ import AppKit
                     "Return in a CRLF file inserts CRLF, not a bare LF")
                 eolDocument.editor.convertLineEndings("LF")
                 check(
-                    eolDocument.editor.statusInfo["eol"]?.intValue == 2,
+                    eolDocument.editor.statusInfo.eol == 2,
                     "explicit conversion switches the insertion ending")
                 for (bytes, mode, label) in [
                     ("x\ry\n", 1, "CR"), ("p\nq\r\n", 2, "LF"), ("a\r\nb\n", 0, "CRLF"),
@@ -488,7 +488,7 @@ import AppKit
                 ] {
                     try eolDocument.read(from: Data(bytes.utf8), ofType: "Plain Text")
                     check(
-                        eolDocument.editor.statusInfo["eol"]?.intValue == mode && !eolDocument.editor.modified,
+                        eolDocument.editor.statusInfo.eol == mode && !eolDocument.editor.modified,
                         "reload into the same document follows the loaded file: \(label)")
                     check(
                         try eolDocument.data(ofType: "Plain Text") == Data(bytes.utf8),
@@ -701,7 +701,7 @@ import AppKit
                 try document.reload(using: .utf8, discard: true)
                 check(
                     document.editor.text == externallyEdited && document.editor.bookmarkLines == [5, 40]
-                        && document.editor.statusInfo["line"]?.intValue == 41,
+                        && document.editor.statusInfo.line == 41,
                     "reload after a one-character disk change keeps bookmarks and the caret line")
                 check(
                     try !document.editor.modified && !document.isDocumentEdited && document.diskState() == .unchanged,
@@ -839,7 +839,7 @@ import AppKit
                         && recovered.fileURL == nil && recovered.isDocumentEdited,
                     "crash recovery opens the snapshot as a new unsaved document")
                 check(
-                    recovered.editor.statusInfo["eol"]?.intValue == 0, "recovered document inserts its own line ending")
+                    recovered.editor.statusInfo.eol == 0, "recovered document inserts its own line ending")
                 recovered.automaticRecoveryDelay = 0.02
                 recovered.maximumRecoveryDelay = 0.02
                 recovered.editor.executeCommand("undo")
@@ -1500,7 +1500,7 @@ import AppKit
                         check(
                             controller.statusRefreshCount > beforeEventRefresh
                                 && badge("status.position.0")
-                                    == "Ln \(info["line"]?.intValue ?? 1), Col \(info["column"]?.intValue ?? 1)",
+                                    == "Ln \(info.line), Col \(info.column)",
                             "a real bridge \(order) refreshes the cheap position badge immediately")
                         if noticeBeforeTick { controller.statusTimerTick() }
                     }

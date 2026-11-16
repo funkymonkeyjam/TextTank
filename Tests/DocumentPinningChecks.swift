@@ -189,7 +189,7 @@ extension DocumentChecks {
                 editor.text = text
                 check(
                     same(editor.text, text)
-                        && editor.statusInfo["lines"]?.intValue == UnicodeFixtures.lineBreaks(in: text) + 1,
+                        && editor.statusInfo.lines == UnicodeFixtures.lineBreaks(in: text) + 1,
                     "\(name): the editor keeps the exact bytes and counts only CR, LF and CRLF as line breaks")
                 // The status bar's position at the end of the text: the line is counted in CR, LF and
                 // CRLF breaks, the column in Unicode scalars after the last break (current behaviour:
@@ -200,8 +200,8 @@ extension DocumentChecks {
                     ).last?.count ?? 0
                 check(
                     editor.setSelectionAnchor(text.utf8.count, caret: text.utf8.count)
-                        && editor.statusInfo["line"]?.intValue == UnicodeFixtures.lineBreaks(in: text) + 1
-                        && editor.statusInfo["column"]?.intValue == lastRow + 1,
+                        && editor.statusInfo.line == UnicodeFixtures.lineBreaks(in: text) + 1
+                        && editor.statusInfo.column == lastRow + 1,
                     "\(name): the status line and column at the end of the text count CR/LF breaks and scalars")
             }
             // The line model is CR, LF and CRLF only. Swift's isNewline and NSString's line
@@ -246,7 +246,7 @@ extension DocumentChecks {
             editor.text = wide
             check(
                 editor.setSelectionAnchor(wide.utf8.count, caret: wide.utf8.count)
-                    && editor.statusInfo["column"]?.intValue == 7,
+                    && editor.statusInfo.column == 7,
                 "the status column after a ZWJ emoji and a combining pair counts six scalars, not two characters")
             automation.steps = [.init(kind: .clearLinesEqualTo, find: UnicodeFixtures.zwjEmoji)]
             check(
@@ -443,7 +443,7 @@ extension DocumentChecks {
                 window = try requireValue(controller.window, "fixture: window")
             let primaryStatus = document.editor.statusInfo
             check(
-                primaryStatus["tabWidth"]?.intValue == 8 && primaryStatus["useTabs"]?.boolValue == false,
+                primaryStatus.tabWidth == 8 && primaryStatus.useTabs == false,
                 "the primary view takes the saved tab settings")
             weak var released: TTEditor?
             try autoreleasepool {
@@ -455,17 +455,17 @@ extension DocumentChecks {
                     "a new clone becomes the active editor")
                 let cloneStatus = clone.statusInfo
                 check(
-                    cloneStatus["tabWidth"]?.intValue == 8 && cloneStatus["useTabs"]?.boolValue == false
-                        && document.editor.statusInfo["tabWidth"]?.intValue == 8
-                        && document.editor.statusInfo["useTabs"]?.boolValue == false,
+                    cloneStatus.tabWidth == 8 && cloneStatus.useTabs == false
+                        && document.editor.statusInfo.tabWidth == 8
+                        && document.editor.statusInfo.useTabs == false,
                     "the clone takes the saved tab settings and the primary view keeps its own")
                 clone.configureTabWidth(2, useTabs: true)
                 // Scintilla keeps tab width and tabs-or-spaces in the document, so a clone cannot
                 // differ from the primary view, although the status menu calls them view settings.
                 check(
-                    document.editor.statusInfo["tabWidth"]?.intValue == 2
-                        && document.editor.statusInfo["useTabs"]?.boolValue == true
-                        && clone.statusInfo["tabWidth"]?.intValue == 2,
+                    document.editor.statusInfo.tabWidth == 2
+                        && document.editor.statusInfo.useTabs == true
+                        && clone.statusInfo.tabWidth == 2,
                     "tab settings changed through the clone apply to the shared document and so to both views")
                 clone.configureTabWidth(8, useTabs: false)
                 check(
@@ -1132,7 +1132,7 @@ extension DocumentChecks {
                     }?.1, "fixture: \(mode) menu item")
                 controller.convertEOL(item)
                 check(
-                    same(document.editor.text, expected) && document.editor.statusInfo["eol"]?.intValue == eol,
+                    same(document.editor.text, expected) && document.editor.statusInfo.eol == eol,
                     "Convert Line Endings to \(mode) rewrites every ending and switches the insertion ending")
             }
             let wrapped = controller.activeEditor.wrap
@@ -1180,7 +1180,7 @@ extension DocumentChecks {
             rejects("Convert Line Endings states that the document is read-only", message: "This document is read-only")
             { try controller.convertLineEndings(to: "LF") }
             check(
-                unchangedWhileLocked() && document.editor.statusInfo["eol"]?.intValue == 2,
+                unchangedWhileLocked() && document.editor.statusInfo.eol == 2,
                 "a refused line-ending conversion changes neither the text nor the insertion ending")
             rejects(
                 "Convert to an encoding states that the document is read-only", message: "This document is read-only"

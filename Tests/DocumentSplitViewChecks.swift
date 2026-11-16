@@ -258,9 +258,9 @@ extension DocumentChecks {
                 !controller.validateMenuItem(cloneItem) && controller.validateMenuItem(closeItem),
                 "with a split, Close Split View is enabled and Clone in Split View is not")
             check(
-                document.editor.statusInfo["tabWidth"]?.intValue == 2
-                    && document.editor.statusInfo["useTabs"]?.boolValue == true
-                    && clone.statusInfo["tabWidth"]?.intValue == 2 && clone.statusInfo["useTabs"]?.boolValue == true,
+                document.editor.statusInfo.tabWidth == 2
+                    && document.editor.statusInfo.useTabs == true
+                    && clone.statusInfo.tabWidth == 2 && clone.statusInfo.useTabs == true,
                 "clone does not reset per-document indentation")
             check(
                 sci(clone, zoom) == 3 && sci(document.editor, zoom) == 3 && sci(clone, viewWhitespace) == 1

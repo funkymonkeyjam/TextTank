@@ -37,10 +37,12 @@ int main() {
         first.text = @"one\n\t😀";
         [first configureTabWidth:4 useTabs:NO];
         [first setSelectionAnchor:9 caret:9];
-        NSDictionary *details=first.statusInfo;
-        check([details[@"line"] integerValue] == 2 && [details[@"column"] integerValue] == 6, "Status caret uses one-based line and tab-expanded Unicode column");
-        check([details[@"lines"] integerValue] == 2 && [details[@"tabWidth"] integerValue] == 4 && ![details[@"useTabs"] boolValue], "Status reports document line count and actual indentation settings");
+        TTEditorStatus *details=first.statusInfo;
+        check(NSClassFromString(@"TTEditorStatus") != Nil && [first.statusInfo isKindOfClass:NSClassFromString(@"TTEditorStatus")], "F29 status crosses the bridge as an immutable typed value");
+        check(details.line == 2 && details.column == 6, "Status caret uses one-based line and tab-expanded Unicode column");
+        check(details.lines == 2 && details.tabWidth == 4 && !details.useTabs, "Status reports document line count and actual indentation settings");
         check([first.text isEqual:@"one\n\t😀"], "Status query never adds virtual gutter lines to document");
+        check([details.copy isEqual:first.statusInfo], "F29 status snapshots compare by typed field values");
         [first setSelectionRanges:@[@{@"anchor":@0,@"caret":@0},@{@"anchor":@5,@"caret":@9}]];
         check(first.selectedCharacterCount == 1, "Status counts Unicode selection with empty main caret without synthetic separators");
         first.text = @"\uFEFFa";
@@ -375,18 +377,18 @@ int main() {
         // F126: the line-ending mode is metadata only and governs later insertions.
         TTEditor *eol=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,300)];
         ScintillaView *eolNative=(ScintillaView *)eol.subviews.firstObject;
-        check([eol.statusInfo[@"eol"] integerValue]==SC_EOL_LF, "New editor inserts LF by default");
+        check(eol.statusInfo.eol==SC_EOL_LF, "New editor inserts LF by default");
         eol.text=@"a\r\nb";[eol resetUndoHistory];[eol setSavePoint];NSUInteger eolRevision=eol.revision;
         [eol setLineEndingMode:@"CRLF"];
-        check([eol.text isEqual:@"a\r\nb"] && eol.revision==eolRevision && !eol.modified && ![eolNative message:SCI_CANUNDO] && [eol.statusInfo[@"eol"] integerValue]==SC_EOL_CRLF, "Line-ending mode changes no bytes, revision, save point or undo history");
+        check([eol.text isEqual:@"a\r\nb"] && eol.revision==eolRevision && !eol.modified && ![eolNative message:SCI_CANUNDO] && eol.statusInfo.eol==SC_EOL_CRLF, "Line-ending mode changes no bytes, revision, save point or undo history");
         [eol setLineEndingMode:@"bogus"];
-        check([eol.statusInfo[@"eol"] integerValue]==SC_EOL_CRLF && eol.revision==eolRevision, "Unknown line-ending mode is ignored");
+        check(eol.statusInfo.eol==SC_EOL_CRLF && eol.revision==eolRevision, "Unknown line-ending mode is ignored");
         [eol setSelectionAnchor:4 caret:4];[eol executeCommand:@"newLine"];
         check([eol.text isEqual:@"a\r\nb\r\n"], "Return in CRLF mode inserts CRLF");
         eol.text=@"a\rb";[eol setLineEndingMode:@"CR"];[eol setSelectionAnchor:3 caret:3];[eol executeCommand:@"newLine"];
-        check([eol.text isEqual:@"a\rb\r"] && [eol.statusInfo[@"eol"] integerValue]==SC_EOL_CR, "Return in CR mode inserts CR");
+        check([eol.text isEqual:@"a\rb\r"] && eol.statusInfo.eol==SC_EOL_CR, "Return in CR mode inserts CR");
         eol.text=@"ab";[eol setLineEndingMode:@"LF"];[eol setSelectionAnchor:2 caret:2];[eol executeCommand:@"newLine"];
-        check([eol.text isEqual:@"ab\n"] && [eol.statusInfo[@"eol"] integerValue]==SC_EOL_LF, "Return in LF mode inserts LF");
+        check([eol.text isEqual:@"ab\n"] && eol.statusInfo.eol==SC_EOL_LF, "Return in LF mode inserts LF");
         });
         ttchecks::section("batch range replacement and revision authority", [&] {
         // F44, F224: one bridge call replaces many ranges under one undo action, all-or-nothing.
@@ -586,7 +588,7 @@ int main() {
         for (NSArray *mode in @[@[@"CRLF",@"a\r\nb\r\nc\r\n",@(SC_EOL_CRLF)],@[@"CR",@"a\rb\rc\r",@(SC_EOL_CR)],@[@"LF",@"a\nb\nc\n",@(SC_EOL_LF)]]) {
             ed.text=@"a\r\nb\rc\n"; [ed resetUndoHistory]; [ed setSavePoint];
             [ed convertLineEndings:mode[0]];
-            check([ed.text isEqual:mode[1]] && [ed.statusInfo[@"eol"] integerValue]==[mode[2] integerValue], [[NSString stringWithFormat:@"convertLineEndings %@ rewrites every ending and sets the insertion ending",mode[0]] UTF8String]);
+            check([ed.text isEqual:mode[1]] && ed.statusInfo.eol==[mode[2] integerValue], [[NSString stringWithFormat:@"convertLineEndings %@ rewrites every ending and sets the insertion ending",mode[0]] UTF8String]);
             [ed executeCommand:@"undo"];
             check([ed.text isEqual:@"a\r\nb\rc\n"] && !ed.modified, [[NSString stringWithFormat:@"convertLineEndings %@ is one Undo back to the mixed original",mode[0]] UTF8String]);
         }
@@ -651,7 +653,7 @@ int main() {
         check(b.wrap && [native(b) message:SCI_GETVIEWWS]==SCWS_VISIBLEALWAYS && [native(b) message:SCI_GETVIEWEOL]==1 && [native(b) message:SCI_GETMARGINWIDTHN wParam:0]==0 && [native(b) message:SCI_GETMARGINWIDTHN wParam:2]==16, "a new view adopts wrap, whitespace and line-ending visibility and margin widths");
         check([native(b) message:SCI_GETSTYLEAT wParam:0]==5 && [native(a) message:SCI_GETSTYLEAT wParam:0]==5, "adopting view state leaves the shared lexer and its keyword lists in place");
         check(a.revision==revision && b.revision==revision && !a.modified && [a.text isEqual:@"int value = 42; // comment\n"], "adopting view state never edits the document or moves a revision");
-        check([b.statusInfo[@"tabWidth"] integerValue]==3 && ![b.statusInfo[@"useTabs"] boolValue] && [a.statusInfo[@"tabWidth"] integerValue]==3, "tab width and tabs-or-spaces are document state and are untouched by adopting view state");
+        check(b.statusInfo.tabWidth==3 && !b.statusInfo.useTabs && a.statusInfo.tabWidth==3, "tab width and tabs-or-spaces are document state and are untouched by adopting view state");
         // A language change through one view: the lexer is shared, the style tables are not.
         a.text=@"import os\n"; [a resetUndoHistory]; [a setSavePoint];
         // A bare lexer has no keyword list of its own (package 18), so the fixture names its keyword.
@@ -795,7 +797,7 @@ int main() {
         ed.text=original;[ed resetUndoHistory];[ed setSavePoint];
         check([ed setBookmarks:@[@40,@300]] && [ed goToLine:301], "Fixture: bookmarks on lines 40 and 300, caret on line 300");
         NSInteger caret=ed.selectionCaret, top=ed.firstVisibleLine; NSUInteger revision=ed.revision;
-        check(top>200 && [ed.statusInfo[@"line"] integerValue]==301, "Fixture: the view is scrolled to the caret");
+        check(top>200 && ed.statusInfo.line==301, "Fixture: the view is scrolled to the caret");
         NSString *changed=[original stringByReplacingOccurrencesOfString:@"line 10\n" withString:@"line 1X\n"];
         check([ed replaceDocumentText:changed] && [ed.text isEqual:changed], "replaceDocumentText produces the new text");
         check([ed.bookmarkLines isEqual:@[@40,@300]], "A one-character replacement keeps bookmarks");
@@ -818,7 +820,7 @@ int main() {
         [ed executeCommand:@"undo"];
         check([bytes(ed.text) isEqual:bytes(original)] && !ed.modified, "A full-content replacement is one Undo");
         check([ed setBookmarks:@[@40,@300,@399]] && [ed replaceDocumentText:@"only\ntwo"] && [ed.bookmarkLines isEqual:@[@1]] && [ed.text isEqual:@"only\ntwo"], "Bookmarks beyond a shorter replacement are clamped to its last line");
-        check([ed.statusInfo[@"line"] integerValue]==2 && ed.selectionCaret<=8, "The caret is clamped into a shorter replacement");
+        check(ed.statusInfo.line==2 && ed.selectionCaret<=8, "The caret is clamped into a shorter replacement");
         ed.text=@"a\nb\nc";[ed setBookmarks:@[@1]];[ed setSelectionAnchor:3 caret:2];
         check([ed replaceDocumentText:@"new\nlines\na\nb\nc"] && [ed.bookmarkLines isEqual:@[@3]] && ed.selectionAnchor==13 && ed.selectionCaret==12, "Lines inserted above move bookmarks and the selection with their text");
         check([ed replaceDocumentText:@"a\nb\nc"] && [ed.bookmarkLines isEqual:@[@1]] && ed.selectionAnchor==3 && ed.selectionCaret==2, "Lines removed above move bookmarks and the selection back");
@@ -864,7 +866,7 @@ int main() {
         NSWindow *host=hosted(ed); (void)host;
         ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
         ed.text=@"é one\r\ntwo\rthree\n";[ed resetUndoHistory];[ed setSavePoint];NSUInteger revision=ed.revision;
-        check([ed goToLine:3] && ed.selectionCaret==12 && ed.selectionAnchor==12 && [ed.statusInfo[@"line"] integerValue]==3, "goToLine uses one-based lines over CRLF, CR and LF and UTF-8 byte offsets");
+        check([ed goToLine:3] && ed.selectionCaret==12 && ed.selectionAnchor==12 && ed.statusInfo.line==3, "goToLine uses one-based lines over CRLF, CR and LF and UTF-8 byte offsets");
         check([ed goToLine:4] && ed.selectionCaret==18, "The empty line after a final line break is a line");
         check(![ed goToLine:0] && ![ed goToLine:5] && ![ed goToLine:-3] && ed.selectionCaret==18, "Out-of-range lines are rejected without moving the caret");
         check([ed goToLine:1] && ed.selectionCaret==0 && ed.revision==revision && !ed.modified, "goToLine never changes the document");
@@ -874,7 +876,7 @@ int main() {
         ed.text=@"void f() {\n  int a;\n  int b;\n}\nint tail;\n";
         [ed executeCommand:@"foldAll"];
         check(![sv message:SCI_GETLINEVISIBLE wParam:2], "Fixture: line 3 is hidden inside a collapsed fold");
-        check([ed goToLine:3] && [sv message:SCI_GETLINEVISIBLE wParam:2] && [ed.statusInfo[@"line"] integerValue]==3, "goToLine unfolds a hidden target line");
+        check([ed goToLine:3] && [sv message:SCI_GETLINEVISIBLE wParam:2] && ed.statusInfo.line==3, "goToLine unfolds a hidden target line");
         });
         ttchecks::section("undo restores the selection", [&] {
         TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];

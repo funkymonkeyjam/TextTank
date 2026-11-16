@@ -391,9 +391,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             EditorServices.current?.languages?.profile(identifier: doc.languageIdentifier)?.title
             ?? (doc.languageIdentifier == LanguageProfile.plainTextID ? "Plain Text" : doc.languageIdentifier)
         let eol =
-            cachedEndings.isEmpty ? ([0: "CRLF", 1: "CR", 2: "LF"][info["eol"]?.intValue ?? 2] ?? "LF") : cachedEndings
+            cachedEndings.isEmpty ? ([0: "CRLF", 1: "CR", 2: "LF"][info.eol] ?? "LF") : cachedEndings
         let indentation =
-            (info["useTabs"]?.boolValue == true ? "Tabs" : "Spaces") + ": \(info["tabWidth"]?.intValue ?? 4)"
+            (info.useTabs == true ? "Tabs" : "Spaces") + ": \(info.tabWidth)"
         // VoiceOver names each text area after its document, and after its pane in a split view.
         for (index, pane) in views.enumerated() {
             let name =
@@ -408,10 +408,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             .init(
                 field: .position,
                 text:
-                    "Ln \(Strings.number(info["line"]?.intValue ?? 1)), Col \(Strings.number(info["column"]?.intValue ?? 1))"
+                    "Ln \(Strings.number(info.line)), Col \(Strings.number(info.column))"
             ),
             .init(field: .characters, text: Strings.count(cachedCharacterCount, .character)),
-            .init(field: .lines, text: Strings.count(info["lines"]?.intValue ?? 1, .line))
+            .init(field: .lines, text: Strings.count(info.lines, .line))
         ]
         // The generation changes with every edit, every bridge call that can move a selection
         // and every selection update Scintilla reports; the main range is compared as well.
@@ -433,7 +433,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 field: .font,
                 text: String(
                     format: Strings.text("status.basePoints", "Base %@ pt"),
-                    Strings.points(info["fontSize"]?.doubleValue ?? 14))),
+                    Strings.points(info.fontSize))),
             .init(field: .indent, text: indentation),
             .init(field: .encoding, text: doc.format.encoding.displayName + (doc.format.bom ? " BOM" : "")),
             .init(field: .eol, text: eol), .init(field: .wrap, text: editor.wrap ? "Wrap" : "No Wrap")
@@ -495,11 +495,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             }
         case .indent:
             heading("Indentation for this document")
-            add("Tabs", #selector(statusOption(_:)), self, "tabs", info["useTabs"]?.boolValue == true)
-            add("Spaces", #selector(statusOption(_:)), self, "spaces", info["useTabs"]?.boolValue == false)
+            add("Tabs", #selector(statusOption(_:)), self, "tabs", info.useTabs == true)
+            add("Spaces", #selector(statusOption(_:)), self, "spaces", info.useTabs == false)
             menu.addItem(.separator())
             for n in [2, 3, 4, 8] {
-                add("Width: \(n)", #selector(statusOption(_:)), self, "width.\(n)", info["tabWidth"]?.intValue == n)
+                add("Width: \(n)", #selector(statusOption(_:)), self, "width.\(n)", info.tabWidth == n)
             }
             if let settings = app?.settings {
                 menu.addItem(.separator())
@@ -509,7 +509,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             heading("Convert document line endings")
             for (name, code) in [("LF — Unix / macOS", "LF"), ("CRLF — Windows", "CRLF"), ("CR — Classic Mac", "CR")] {
                 let current =
-                    cachedEndings.isEmpty ? [0: "CRLF", 1: "CR", 2: "LF"][info["eol"]?.intValue ?? 2] : cachedEndings
+                    cachedEndings.isEmpty ? [0: "CRLF", 1: "CR", 2: "LF"][info.eol] : cachedEndings
                 add(name, #selector(convertEOL(_:)), self, code, current == code, !editor.readOnly)
             }
         case .wrap:
@@ -579,13 +579,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         guard let id = sender.representedObject as? String else { return }
         let editor = activeEditor, info = editor.statusInfo
         switch id {
-        case "tabs", "spaces": editor.configureTabWidth(info["tabWidth"]?.intValue ?? 4, useTabs: id == "tabs")
+        case "tabs", "spaces": editor.configureTabWidth(info.tabWidth, useTabs: id == "tabs")
         case "wrap.on", "wrap.off": editor.wrap = id == "wrap.on"
         case "clearSelection": Self.clearSelection(in: editor, macros: EditorServices.current?.macros)
         case "goToLine": goToLine(sender)
         default:
             if id.hasPrefix("width."), let width = Int(id.dropFirst(6)) {
-                editor.configureTabWidth(width, useTabs: info["useTabs"]?.boolValue ?? true)
+                editor.configureTabWidth(width, useTabs: info.useTabs)
             } else {
                 do { try perform(command: id) } catch is EditorCommandFailure {
                     reportCommandFailure(EditorCommandFailure.unsupported.localizedDescription)
@@ -610,7 +610,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         linePanel = form
         form.onClose = { [weak self] in self?.linePanel = nil }
         let input = form.field(
-            "Line number", value: String(editor.statusInfo["line"]?.intValue ?? 1), identifier: "goToLine.line")
+            "Line number", value: String(editor.statusInfo.line), identifier: "goToLine.line")
         NumericInput.configure(input)
         form.button("Go", identifier: "goToLine.go") { [weak self, weak editor] in
             guard let self, form.commitEditing() else { return }
@@ -621,7 +621,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 guard let line = NumericInput.integer(input, signed: true),
                     Self.goToLine(line, in: editor, macros: macros)
                 else {
-                    throw GoToLineFailure(last: editor.statusInfo["lines"]?.intValue ?? 1)
+                    throw GoToLineFailure(last: editor.statusInfo.lines)
                 }
                 form.close()
                 self.window?.makeFirstResponder(editor)

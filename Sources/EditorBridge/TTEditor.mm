@@ -9,6 +9,24 @@
 #include <cmath>
 extern "C" Scintilla::ILexer5 *TextTankCreateUserLexer();
 
+@interface TTEditorStatus ()
+- (instancetype)initWithLine:(NSInteger)line column:(NSInteger)column lines:(NSInteger)lines tabWidth:(NSInteger)tabWidth useTabs:(BOOL)useTabs fontSize:(double)fontSize eol:(NSInteger)eol;
+@end
+@implementation TTEditorStatus
+- (instancetype)initWithLine:(NSInteger)line column:(NSInteger)column lines:(NSInteger)lines tabWidth:(NSInteger)tabWidth useTabs:(BOOL)useTabs fontSize:(double)fontSize eol:(NSInteger)eol {
+    if ((self = [super init])) { _line=line; _column=column; _lines=lines; _tabWidth=tabWidth; _useTabs=useTabs; _fontSize=fontSize; _eol=eol; }
+    return self;
+}
+- (id)copyWithZone:(NSZone *)zone { return self; }
+- (BOOL)isEqual:(id)other {
+    if (other == self) return YES;
+    if (![other isKindOfClass:TTEditorStatus.class]) return NO;
+    TTEditorStatus *value=other;
+    return _line==value.line && _column==value.column && _lines==value.lines && _tabWidth==value.tabWidth && _useTabs==value.useTabs && _fontSize==value.fontSize && _eol==value.eol;
+}
+- (NSUInteger)hash { return (NSUInteger)_line ^ ((NSUInteger)_column << 1) ^ ((NSUInteger)_lines << 2) ^ ((NSUInteger)_tabWidth << 3) ^ (NSUInteger)_useTabs ^ [@(_fontSize) hash] ^ (NSUInteger)_eol; }
+@end
+
 static const int TTBookmarkMarker = 1;
 static const int TTBookmarkMask = 1 << TTBookmarkMarker;
 static const int TTSearchIndicator = 20;
@@ -970,16 +988,14 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     }
     return total;
 }
-- (NSDictionary<NSString *,NSNumber *> *)statusInfo {
+- (TTEditorStatus *)statusInfo {
     [self assertThread];
     NSInteger caret = [_engine message:SCI_GETCURRENTPOS];
-    return @{@"line":@([_engine message:SCI_LINEFROMPOSITION wParam:caret]+1),
-             @"column":@([_engine message:SCI_GETCOLUMN wParam:caret]+1+[_engine message:SCI_GETSELECTIONNCARETVIRTUALSPACE wParam:[_engine message:SCI_GETMAINSELECTION]]),
-             @"lines":@([_engine message:SCI_GETLINECOUNT]),
-             @"tabWidth":@([_engine message:SCI_GETTABWIDTH]),
-             @"useTabs":@([_engine message:SCI_GETUSETABS]),
-             @"fontSize":@([_engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_DEFAULT]/100.0+[_engine message:SCI_GETZOOM]),
-             @"eol":@([_engine message:SCI_GETEOLMODE])};
+    return [[TTEditorStatus alloc] initWithLine:[_engine message:SCI_LINEFROMPOSITION wParam:caret]+1
+        column:[_engine message:SCI_GETCOLUMN wParam:caret]+1+[_engine message:SCI_GETSELECTIONNCARETVIRTUALSPACE wParam:[_engine message:SCI_GETMAINSELECTION]]
+        lines:[_engine message:SCI_GETLINECOUNT] tabWidth:[_engine message:SCI_GETTABWIDTH]
+        useTabs:[_engine message:SCI_GETUSETABS] fontSize:[_engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_DEFAULT]/100.0+[_engine message:SCI_GETZOOM]
+        eol:[_engine message:SCI_GETEOLMODE]];
 }
 - (NSInteger)selectionCaret { [self assertThread]; return [_engine message:SCI_GETCURRENTPOS]; }
 - (BOOL)setSelectionAnchor:(NSInteger)anchor caret:(NSInteger)caret {

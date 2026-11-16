@@ -17,6 +17,18 @@ typedef NS_ERROR_ENUM(TTEditorErrorDomain, TTEditorError) {
 /// may listen. It says "look again", not what changed; Scintilla reports selection changes when
 /// it paints, so a periodic refresh is still needed for state no event covers.
 extern NSNotificationName const TTEditorStateDidChangeNotification;
+/// Immutable metadata copied from one main-thread engine observation. No view is retained.
+__attribute__((objc_subclassing_restricted))
+@interface TTEditorStatus : NSObject <NSCopying>
+@property(nonatomic, readonly) NSInteger line;
+@property(nonatomic, readonly) NSInteger column;
+@property(nonatomic, readonly) NSInteger lines;
+@property(nonatomic, readonly) NSInteger tabWidth;
+@property(nonatomic, readonly) BOOL useTabs;
+@property(nonatomic, readonly) double fontSize;
+@property(nonatomic, readonly) NSInteger eol;
+- (instancetype)init NS_UNAVAILABLE;
+@end
 /// Main-thread-only view. All positions remain inside the UTF-8 Scintilla model.
 ///
 /// A split view is two TTEditor views on one Scintilla document (shareDocumentWith:). State
@@ -87,7 +99,7 @@ extern NSNotificationName const TTEditorStateDidChangeNotification;
 @property(nonatomic, readonly) NSInteger selectionAnchor;
 @property(nonatomic, readonly) NSInteger selectionCaret;
 /// View metadata; line/column are one-based, column expands tabs.
-@property(nonatomic, readonly) NSDictionary<NSString *, NSNumber *> *statusInfo;
+@property(nonatomic, readonly) TTEditorStatus *statusInfo;
 /// Unicode scalar count across actual selections, without clipboard separators.
 @property(nonatomic, readonly) NSInteger selectedCharacterCount;
 /// Restores one ordinary selection. Rejects out-of-bounds or split UTF-8 code points.

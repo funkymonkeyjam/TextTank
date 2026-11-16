@@ -416,7 +416,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             buffers.append(
                 Buffer(
                     editor: e, text: text, revision: revision, anchor: e.selectionAnchor, caret: e.selectionCaret,
-                    range: range, tabWidth: e.statusInfo["tabWidth"]?.intValue ?? 4))
+                    range: range, tabWidth: e.statusInfo.tabWidth))
         }
         // F36: the document a single Replace may edit. In All open documents scope that is the
         // document Next last moved to while its match is still selected, by the same rule as
@@ -499,7 +499,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     // F45: a single Replace then moves to the next match. The text has changed, so
                     // that needs a search of the new text; it is recorded as an ordinary Next.
                     let text = editor.text, revision = editor.revision,
-                        tabWidth = editor.statusInfo["tabWidth"]?.intValue ?? 4
+                        tabWidth = editor.statusInfo.tabWidth
                     self.appliedReplace = (self.status.stringValue, self.lastOutcome)
                     let report = try? await Task.detached(priority: .userInitiated) {
                         try SearchCore.search(
@@ -699,7 +699,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         resultBuffers = [
             Buffer(
                 editor: editor, text: text, revision: revision, anchor: editor.selectionAnchor,
-                caret: editor.selectionCaret, range: nil, tabWidth: editor.statusInfo["tabWidth"]?.intValue ?? 4)
+                caret: editor.selectionCaret, range: nil, tabWidth: editor.statusInfo.tabWidth)
         ]
         rows = report.hits.map { Row(buffer: 0, hit: $0) }
         resultKey = ResultKey(
@@ -707,7 +707,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             documents: [
                 ResultKey.Document(
                     editor: ObjectIdentifier(editor), revision: revision, range: nil,
-                    tabWidth: editor.statusInfo["tabWidth"]?.intValue ?? 4)
+                    tabWidth: editor.statusInfo.tabWidth)
             ],
             purpose: report.purpose)
         resultTruncated = report.truncated

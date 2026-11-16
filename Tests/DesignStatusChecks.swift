@@ -203,7 +203,7 @@ enum DesignStatusChecks {
             "fixture: native indentation menu")
         check(
             NSApp.sendAction(spaces.action!, to: spaces.target, from: spaces)
-                && controller.activeEditor.statusInfo["useTabs"]?.boolValue == false,
+                && controller.activeEditor.statusInfo.useTabs == false,
             "DB-R2 the actual native popup menu keeps its indentation dispatcher")
         indentPopup.menu!.delegate?.menuNeedsUpdate?(indentPopup.menu!)
         indentPopup.menu!.update()

@@ -28,7 +28,7 @@ import AppKit
         document.makeWindowControllers()
         defer { document.close() }
         check(
-            document.editor.statusInfo["tabWidth"]?.intValue == 7,
+            document.editor.statusInfo.tabWidth == 7,
             "F276 document windows use installed settings even when the application delegate is nil")
         check(reads > 0, "F276 the window resolves its settings provider at the existing apply boundary")
         let controller = try requireValue(
@@ -64,7 +64,7 @@ import AppKit
         plain.makeWindowControllers()
         defer { plain.close() }
         check(
-            plain.editor.statusInfo["tabWidth"]?.intValue == 4 && plain.editor.menu == nil,
+            plain.editor.statusInfo.tabWidth == 4 && plain.editor.menu == nil,
             "F276 nil services keep unconfigured document windows usable without implicit feature resolution")
 
     }

@@ -278,7 +278,7 @@ enum Audit26PresentationChecks {
                 _ = doc.editor.setSelectionAnchor(byte, caret: byte)
                 let info = doc.editor.statusInfo
                 check(
-                    position.line == info["line"]?.intValue && position.column == info["column"]?.intValue,
+                    position.line == info.line && position.column == info.column,
                     "G346 display position agrees with native at scalar/CRLF boundary \(location), tab width \(width)")
             }
         }

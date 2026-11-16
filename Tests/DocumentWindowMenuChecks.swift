@@ -326,7 +326,7 @@ extension DocumentChecks {
                 EditorWindowController.goToLine(3, in: document.editor)
                     && document.editor.selectionCaret == "één\r\ntwo 😀\r".utf8.count
                     && document.editor.selectionAnchor == document.editor.selectionCaret
-                    && document.editor.statusInfo["line"]?.intValue == 3,
+                    && document.editor.statusInfo.line == 3,
                 "Go to Line puts the caret at the start of the line, after CRLF, CR and multi-byte text")
             check(
                 EditorWindowController.goToLine(1, in: document.editor) && document.editor.selectionCaret == 0
@@ -366,7 +366,7 @@ extension DocumentChecks {
             waitForModelessForms()
             answer.invalidate()
             check(
-                answered && document.editor.statusInfo["line"]?.intValue == 2
+                answered && document.editor.statusInfo.line == 2
                     && (window.firstResponder as? NSView)?.isDescendant(of: document.editor) == true,
                 "the Go to Line dialog moves the caret to the line entered and returns to the editor")
             document.close()
@@ -1531,11 +1531,11 @@ extension DocumentChecks {
             changed.wrap = false
             try settings.save(changed)
             check(
-                document.editor.statusInfo["tabWidth"]?.intValue == 2
-                    && document.editor.statusInfo["useTabs"]?.boolValue == false && document.editor.wrap,
+                document.editor.statusInfo.tabWidth == 2
+                    && document.editor.statusInfo.useTabs == false && document.editor.wrap,
                 "a document's own indentation and wrapping survive a Settings save")
             check(
-                plain.editor.statusInfo["tabWidth"]?.intValue == 8,
+                plain.editor.statusInfo.tabWidth == 8,
                 "a document still on the old default takes the new one")
         }
     }

@@ -11,7 +11,7 @@ enum EditorSettingsApplication {
                 if let previous {
                     let info = editor.statusInfo
                     if previous.tabWidth != value.tabWidth || previous.useTabs != value.useTabs,
-                        info["tabWidth"]?.intValue == previous.tabWidth, info["useTabs"]?.boolValue == previous.useTabs
+                        info.tabWidth == previous.tabWidth, info.useTabs == previous.useTabs
                     {
                         editor.configureTabWidth(value.tabWidth, useTabs: value.useTabs)
                     }
