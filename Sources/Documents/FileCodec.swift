@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-package enum FileEncoding: String, Codable, CaseIterable {
+package enum FileEncoding: String, Codable, CaseIterable, Sendable {
     case utf8, utf16LE, utf16BE, windows1252, latin1
     package var displayName: String {
         switch self {
@@ -16,7 +16,7 @@ package enum FileEncoding: String, Codable, CaseIterable {
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-package struct FileFormat: Codable, Equatable {
+package struct FileFormat: Codable, Equatable, Sendable {
     package init(encoding: FileEncoding = .utf8, bom: Bool = false) {
         self.encoding = encoding
         self.bom = bom

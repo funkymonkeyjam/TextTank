@@ -4,7 +4,7 @@ import Darwin
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-package struct RecoverySnapshot: Codable, Equatable {
+package struct RecoverySnapshot: Codable, Equatable, Sendable {
     package init(
         schemaVersion: Int = 1, id: UUID, text: String, format: FileFormat, originalURL: String?, revision: UInt64,
         savedAt: Date = Date()
@@ -62,7 +62,10 @@ package enum RecoveryError: Error, LocalizedError {
 /// Inject a dedicated app-owned directory. Methods are serialized within this instance.
 /// Atomic replacement preserves the previous complete snapshot if writing fails.
 /// Does not restore to an original file: callers must present recovered text for review.
-final package class RecoveryStore {
+/// Sendable boundary: immutable directory and lock; written and snapshotReadCount
+/// are accessed under lock. All private cache/read helpers are called only by the
+/// locked save/load/scan/remove operations. Path-only helpers use immutable values.
+final package class RecoveryStore: @unchecked Sendable {
     /// Recovery has no smaller product ceiling than an addressable Data value. Do not import
     /// the session store's 512 MiB cap: large pending documents were already recoverable.
     static package let maximumSnapshotBytes = Int.max
@@ -78,7 +81,12 @@ final package class RecoveryStore {
     }
     private var written: [UUID: Written] = [:]
     /// How many snapshot files this instance has read and decoded in full; for checks and diagnosis.
-    private(set) package var snapshotReads = 0
+    private var snapshotReadCount = 0
+    package var snapshotReads: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshotReadCount
+    }
     /// Temporary files older than this belong to an earlier process that died during a write.
     static package let processStart: Date = {
         var info = kinfo_proc(), size = MemoryLayout<kinfo_proc>.stride
@@ -252,7 +260,7 @@ final package class RecoveryStore {
         { throw RecoveryError.unsafeLocation } catch  where error.posixCode == .ELOOP {
             throw RecoveryError.unsafeLocation
         }
-        snapshotReads += 1
+        snapshotReadCount += 1
         let snapshot: RecoverySnapshot
         do {
             try PersistedFormat.check(data, context: "Recovery snapshot")

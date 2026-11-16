@@ -279,7 +279,7 @@ import AppKit
         recoveryDeadlineTimer?.invalidate()
         recoveryDeadlineTimer = nil
     }
-    private func recoveryOperation() -> () throws -> Void {
+    private func recoveryOperation() -> @Sendable () throws -> Void {
         let store = Self.recovery, id = recoveryID, revision = recoveryRevision
         if shouldKeepRecoveryCopy {
             let snapshot = RecoverySnapshot(

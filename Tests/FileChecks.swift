@@ -300,13 +300,8 @@ import Darwin
                 "untitled exact recovery after crash")
             check(try Data(contentsOf: original) == originalBytes, "forced crash leaves original unchanged")
             let writer = RecoveryWriter(), entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
-            let eventsLock = NSLock()
-            var events: [String] = []
-            func record(_ event: String) {
-                eventsLock.lock()
-                events.append(event)
-                eventsLock.unlock()
-            }
+            let events = RecoveryEvents()
+            let record: @Sendable (String) -> Void = { events.record($0) }
             writer.submit {
                 entered.signal()
                 release.wait()
@@ -319,9 +314,7 @@ import Darwin
             // F114: finish now drops a snapshot that has not started, so wait for the coalesced
             // write before the cleanup. The order asserted is the one this check always pinned.
             func recorded() -> [String] {
-                eventsLock.lock()
-                defer { eventsLock.unlock() }
-                return events
+                events.read()
             }
             spinUntil("the coalesced recovery write") { recorded().count == 2 }
             writer.finish { record("cleanup") }
@@ -654,5 +647,21 @@ private func codecAgainstReference() {
                     && back?.format == format,
                 "a \(text.utf8.count)-byte document round-trips exactly as \(encoding) bom=\(bom)")
         }
+    }
+}
+
+/// Test-owned event state is shared only through this lock, including snapshot reads.
+private final class RecoveryEvents: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String] = []
+    func record(_ value: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        values.append(value)
+    }
+    func read() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
     }
 }

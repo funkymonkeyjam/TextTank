@@ -3,14 +3,17 @@ import Foundation
 
 /// Serial disk writer with at most one pending snapshot. Immutable snapshots cross
 /// the queue boundary; Scintilla and NSDocument are accessed only by the caller.
-final package class RecoveryWriter {
+/// Sendable boundary: queue/lock are immutable; pending and running are accessed only
+/// under lock. Only @Sendable operations cross the queue; operations and queue.sync
+/// execute after unlocking, so no client callback runs while the state lock is held.
+final package class RecoveryWriter: @unchecked Sendable {
     package init() {}
 
     private let queue = DispatchQueue(label: "TextTank.recovery", qos: .utility)
     private let lock = NSLock()
-    private var pending: (() -> Void)?
+    private var pending: (@Sendable () -> Void)?
     private var running = false
-    package func submit(_ operation: @escaping () -> Void) {
+    package func submit(_ operation: @escaping @Sendable () -> Void) {
         lock.lock()
         pending = operation
         let start = !running
@@ -35,7 +38,7 @@ final package class RecoveryWriter {
     /// cleanup, so an older snapshot cannot resurrect a document the user discarded. A snapshot
     /// that is queued but not started is dropped instead: the finishing operation supersedes
     /// it, and writing it only for the cleanup to replace or delete it would be wasted work.
-    package func finish(_ operation: () throws -> Void) rethrows {
+    package func finish(_ operation: @Sendable () throws -> Void) rethrows {
         lock.lock()
         pending = nil
         lock.unlock()
