@@ -291,24 +291,22 @@ import Darwin
         let outcome = MacroPlaybackOutcome()
         let timer = Timer(timeInterval: 0.005, repeats: true) { [weak self] timer in
             precondition(Thread.isMainThread)
-            MainActor.assumeIsolated {
-                guard let self else {
-                    timer.invalidate()
-                    NSApp.stopModal()
-                    return
-                }
+            let shouldStop = MainActor.assumeIsolated {
+                guard let self else { return true }
                 do {
                     let finished = try session.advance(budget: 50, shouldCancel: { self.playbackCancelled })
                     status.stringValue = "Played \(session.performed) steps. Stop preserves one Undo."
-                    if finished {
-                        timer.invalidate()
-                        NSApp.stopModal()
-                    }
+                    return finished
                 } catch {
                     outcome.failure = error
-                    timer.invalidate()
-                    NSApp.stopModal()
+                    return true
                 }
+            }
+            if shouldStop {
+                // Foundation's callback timer stays on this synchronous main entry. Publish
+                // outcome first, then invalidate before stopModal in this same timer turn.
+                timer.invalidate()
+                MainActor.assumeIsolated { NSApp.stopModal() }
             }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
