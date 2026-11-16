@@ -14,6 +14,7 @@ struct DocumentDependencies {
 /// Effects whose process-owned implementations can be supplied by an isolated host.
 /// Constructing the defaults does not read a pasteboard or create an EventKit store.
 struct RuntimeDependencies {
+    var sharedDefaultsProvider: (() -> UserDefaults)?
     var document: () -> DocumentDependencies = { DocumentDependencies() }
     var windowAnimation: NSWindow.AnimationBehavior?
     var announce: ((String, Any?) -> Void)?
@@ -37,4 +38,8 @@ enum RuntimeEnvironment {
     /// Nil selects production defaults; isolated hosts explicitly own their effects.
     static var dependencies: RuntimeDependencies?
     static var current: RuntimeDependencies { dependencies ?? RuntimeDependencies() }
+    static var legacyDefaults: UserDefaults? {
+        if let provider = current.sharedDefaultsProvider { return AppStorage.legacyDefaults(providing: provider) }
+        return AppStorage.legacyDefaults()
+    }
 }

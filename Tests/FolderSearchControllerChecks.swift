@@ -15,13 +15,15 @@ import NativeSearch
             let protected = try requireValue(UserDefaults(suiteName: protectedSuite), "fixture: protected defaults")
             protected.set(Data("sentinel".utf8), forKey: "TextTank.FolderSearch.v1")
             var providerCalls = 0
-            let provider = AppStorage.sharedDefaultsProvider
-            AppStorage.sharedDefaultsProvider = {
+            let provider = RuntimeEnvironment.dependencies
+            var effects = RuntimeEnvironment.current
+            effects.sharedDefaultsProvider = {
                 providerCalls += 1
                 return protected
             }
+            RuntimeEnvironment.dependencies = effects
             defer {
-                AppStorage.sharedDefaultsProvider = provider
+                RuntimeEnvironment.dependencies = provider
                 protected.removePersistentDomain(forName: protectedSuite)
             }
             let implicit = FolderSearchController()

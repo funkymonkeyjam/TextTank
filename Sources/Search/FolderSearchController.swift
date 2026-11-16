@@ -94,7 +94,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     var onUnrecordableCommand: ((String) -> Void)?
 
     init(defaults: UserDefaults? = nil, preferencesURL: URL? = nil) {
-        let legacy = defaults ?? AppStorage.legacyDefaults
+        let legacy = defaults ?? RuntimeEnvironment.legacyDefaults
         preferences = JSONFileStore(
             url: preferencesURL ?? AppStorage.url(.folderSearch), displayName: "Find in Folder settings",
             maximumBytes: FolderSearchSettings.maximumBytes, initial: FolderSearchSettings(),

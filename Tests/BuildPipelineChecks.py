@@ -303,12 +303,12 @@ sys.exit(93)
         for relative in ['Sources/Search/SearchController.swift', 'Sources/Search/FolderSearchController.swift']:
             source = (ROOT / relative).read_text()
             self.assertIn('defaults: UserDefaults? = nil', source)
-            self.assertIn('defaults ?? AppStorage.legacyDefaults', source)
-        self.assertIn('permitsLegacyDefaults ? sharedDefaultsProvider() : nil',
+            self.assertIn('defaults ?? RuntimeEnvironment.legacyDefaults', source)
+        self.assertIn('permitsLegacyDefaults ? provider() : nil',
                       (ROOT / owners[0]).read_text())
         frames = (ROOT / 'Sources/UI/WindowSupport.swift').read_text()
         self.assertIn('guard Bundle.main.bundleIdentifier != nil else { return nil }', frames)
-        self.assertIn('return AppStorage.legacyDefaults', frames)
+        self.assertIn('return RuntimeEnvironment.legacyDefaults', frames)
 
     def test_support_override_has_one_source(self):
         owners = [str(path.relative_to(ROOT)) for path in (ROOT / 'Sources').rglob('*.swift')

@@ -94,7 +94,7 @@ enum WindowFrames {
         get {
             if usesInjectedDefaults { return injectedDefaults }
             guard Bundle.main.bundleIdentifier != nil else { return nil }
-            return AppStorage.legacyDefaults
+            return RuntimeEnvironment.legacyDefaults
         }
         set {
             usesInjectedDefaults = true

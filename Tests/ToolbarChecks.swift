@@ -32,13 +32,15 @@ import NativeSearch
         let suite = "TextTank.ToolbarChecks." + UUID().uuidString
         let preferences = try requireValue(UserDefaults(suiteName: suite), "DT fixture: owned preferences")
         let priorPreferences = EditorToolbarPreferences.isolatedDefaults
-        let priorProvider = AppStorage.sharedDefaultsProvider
+        let priorProvider = RuntimeEnvironment.dependencies
         let priorDelegate = NSApp.delegate
         var forbiddenDefaultsAccesses = 0
-        AppStorage.sharedDefaultsProvider = {
+        var effects = RuntimeEnvironment.current
+        effects.sharedDefaultsProvider = {
             forbiddenDefaultsAccesses += 1
             return preferences
         }
+        RuntimeEnvironment.dependencies = effects
         EditorToolbarPreferences.isolatedDefaults = preferences
         NSApp.delegate = composition
         let original = try AutomationLibrary.decode(Data(contentsOf: AppStorage.url(.automations)))
@@ -48,7 +50,7 @@ import NativeSearch
             try? composition.automations.persistLibrary(original)
             preferences.removePersistentDomain(forName: suite)
             EditorToolbarPreferences.isolatedDefaults = priorPreferences
-            AppStorage.sharedDefaultsProvider = priorProvider
+            RuntimeEnvironment.dependencies = priorProvider
             NSApp.delegate = priorDelegate
         }
         var first = AutomationDefinition.example, second = AutomationDefinition.example

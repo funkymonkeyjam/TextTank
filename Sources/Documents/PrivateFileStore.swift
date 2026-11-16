@@ -28,9 +28,12 @@ package enum AppStorage {
         return !override.hasPrefix("/") || override.contains("\0")
     }
     /// Deferred so an isolated constructor never even asks for the shared defaults object.
-    /// Native checks replace this with a protected, test-owned domain.
-    static package var sharedDefaultsProvider: () -> UserDefaults = { UserDefaults.standard }
-    static package var legacyDefaults: UserDefaults? { permitsLegacyDefaults ? sharedDefaultsProvider() : nil }
+    /// The caller owns any injected provider; Core holds no mutable process state.
+    static package func legacyDefaults(providing provider: () -> UserDefaults = { UserDefaults.standard })
+        -> UserDefaults?
+    {
+        permitsLegacyDefaults ? provider() : nil
+    }
     static package func url(_ location: Location, under directory: URL? = nil) -> URL {
         (directory ?? supportDirectory).appendingPathComponent(location.rawValue, isDirectory: location.isDirectory)
     }

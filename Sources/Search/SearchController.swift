@@ -120,7 +120,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     /// Nil while a search is running and before the first action.
     private(set) var lastOutcome: SearchOutcome?
     init(defaults: UserDefaults? = nil, preferencesURL: URL? = nil) {
-        let legacy = defaults ?? AppStorage.legacyDefaults
+        let legacy = defaults ?? RuntimeEnvironment.legacyDefaults
         preferences = JSONFileStore(
             url: preferencesURL ?? AppStorage.url(.find), displayName: "Find and Replace settings",
             maximumBytes: FindPreferences.maximumBytes, initial: FindPreferences(), decode: FindPreferences.decode,

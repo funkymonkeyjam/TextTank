@@ -58,13 +58,15 @@ private final class SelectionReadCounterEditor: TTEditor {
             let protected = try requireValue(UserDefaults(suiteName: protectedSuite), "fixture: protected defaults")
             protected.set(Data("sentinel".utf8), forKey: "TextTank.Search.v1")
             var providerCalls = 0
-            let originalProvider = AppStorage.sharedDefaultsProvider
-            AppStorage.sharedDefaultsProvider = {
+            let originalProvider = RuntimeEnvironment.dependencies
+            var effects = RuntimeEnvironment.current
+            effects.sharedDefaultsProvider = {
                 providerCalls += 1
                 return protected
             }
+            RuntimeEnvironment.dependencies = effects
             defer {
-                AppStorage.sharedDefaultsProvider = originalProvider
+                RuntimeEnvironment.dependencies = originalProvider
                 protected.removePersistentDomain(forName: protectedSuite)
             }
             let implicit = SearchController()
