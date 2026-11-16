@@ -195,15 +195,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
                 "Edit the UDL 2.x XML settings, keyword groups, comments, folding, delimiters and styles. Save validates the entire definition before changing it. Renaming here preserves the saved language identifier."
             alert.addButton(withTitle: "Save")
             alert.addButton(withTitle: "Cancel", role: .cancel)
-            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 700, height: 420))
-            scroll.hasVerticalScroller = true
-            let text = NSTextView(frame: scroll.bounds)
-            text.isRichText = false
-            text.isAutomaticQuoteSubstitutionEnabled = false
-            text.isAutomaticDashSubstitutionEnabled = false
-            text.autoresizingMask = [.width]
-            text.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-            scroll.documentView = text
+            let content = JSONLibraryEditor.makeTextView(size: NSSize(width: 700, height: 420))
+            let scroll = content.scroll, text = content.editor
+            text.setAccessibilityLabel("User-defined language XML")
             text.string = String(data: try definition.encodedXML(), encoding: .utf8)!
             alert.accessoryView = scroll
             while alert.runModal() == .alertFirstButtonReturn {
@@ -482,60 +476,24 @@ final class LanguageController: NSObject, NSMenuDelegate {
             navigator?.showWindow(nil)
         } catch { TTAlert.present(error) }
     }
+    var jsonFilePanels = JSONLibraryEditor.FilePanels.standard
     @objc func configure() {
         do {
             guard try ensureWritable() else { return }
             guard let catalog else { return }
-            let alert = TTAlert()
-            alert.messageText = "Language Profiles"
-            alert.informativeText =
-                "Edit native lexer keywords, properties, style emphasis, extension detection and optional function patterns (capture group 1 is the name). This JSON profile format is not Notepad++ UDL XML. Imported files never execute code. Preserve identifiers to keep session language choices. Only your changes are saved, so built-in languages you leave alone follow later versions of TextTank. Removing a profile's \"comments\" turns comment commands off for it; an empty object does the same."
-            for (title, role) in [
-                ("Save", TTAlert.ButtonRole.action), ("Cancel", .cancel), ("Import…", .action), ("Export…", .action)
-            ] { alert.addButton(withTitle: title, role: role) }
-            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 700, height: 420))
-            scroll.hasVerticalScroller = true
-            let text = NSTextView(frame: scroll.bounds)
-            text.isRichText = false
-            text.isAutomaticQuoteSubstitutionEnabled = false
-            text.isAutomaticDashSubstitutionEnabled = false
-            text.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-            text.autoresizingMask = [.width]
-            scroll.documentView = text
-            text.string = String(data: try catalog.encoded(), encoding: .utf8)!
-            alert.accessoryView = scroll
-            while true {
-                enum LibraryChoice { case save, cancel, importFile, exportFile }
-                guard let choice = alert.choice([LibraryChoice.save, .cancel, .importFile, .exportFile]),
-                    choice != .cancel
-                else { return }
-                if choice == .cancel { return }
-                do {
-                    if choice == .importFile {
-                        let panel = NSOpenPanel()
-                        panel.canChooseDirectories = false
-                        panel.allowsMultipleSelection = false
-                        if panel.runModal() == .OK, let url = panel.url {
-                            text.string = String(
-                                data: try LanguageCatalog.decode(Self.readRegular(url)).encoded(), encoding: .utf8)!
-                        }
-                        continue
-                    }
-                    let proposed = try LanguageCatalog.decode(Data(text.string.utf8))
-                    if choice == .exportFile {
-                        let panel = NSSavePanel()
-                        panel.nameFieldStringValue = "TextTank-LanguageProfiles.json"
-                        if panel.runModal() == .OK, let url = panel.url {
-                            try proposed.encoded().write(to: url, options: .atomic)
-                        }
-                        continue
-                    }
+            try JSONLibraryEditor.edit(
+                catalog,
+                configuration: .init(
+                    title: "Language Profiles",
+                    information:
+                        "Edit native lexer keywords, properties, style emphasis, extension detection and optional function patterns (capture group 1 is the name). This JSON profile format is not Notepad++ UDL XML. Imported files never execute code. Preserve identifiers to keep session language choices. Only your changes are saved, so built-in languages you leave alone follow later versions of TextTank. Removing a profile's \"comments\" turns comment commands off for it; an empty object does the same.",
+                    accessibilityLabel: "Language profiles JSON", exportName: "TextTank-LanguageProfiles.json",
+                    identifier: "language.json", size: NSSize(width: 700, height: 420)),
+                panels: jsonFilePanels, read: { try Self.readRegular($0) },
+                save: { proposed in
                     try persist(proposed)
-                    // The whole catalog may have changed.
                     reapply(nil)
-                    return
-                } catch { TTAlert.present(error) }
-            }
+                })
         } catch { TTAlert.present(error) }
     }
     /// Saves what `proposed` changes in the bundled catalog. Never shows UI and never moves files:

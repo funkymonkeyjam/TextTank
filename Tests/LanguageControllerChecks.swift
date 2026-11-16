@@ -3,6 +3,268 @@ import AppKit
 /// Function-list navigation fronts the document window; these checks never put one on screen.
 final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sender: Any?) {} }
 @main struct LanguageControllerChecks {
+    static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    static func editingJSON(_ controller: LanguageController, _ act: @escaping (NSWindow, [NSView]) -> Bool) -> Bool {
+        var acted = false, timedOut = false
+        let deadline = Date().addingTimeInterval(10)
+        let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+            guard let window = NSApp.modalWindow, let content = window.contentView else { return }
+            if Date() > deadline {
+                timedOut = true
+                NSApp.abortModal()
+                return
+            }
+            if !acted { acted = act(window, descendants(content)) }
+        }
+        RunLoop.main.add(timer, forMode: .modalPanel)
+        defer { timer.invalidate() }
+        controller.configure()
+        return acted && !timedOut
+    }
+    static func jsonEditorChecks(bundledURL: URL) throws {
+        let isolated = try IsolatedSupportDirectory("LanguageJSONChecks")
+        defer { isolated.restore() }
+        let path = isolated.url.appendingPathComponent("LanguageProfiles.json")
+        let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        editor.text = "import os\n"
+        editor.resetUndoHistory()
+        editor.setSavePoint()
+        let revision = editor.revision
+        let controller = LanguageController(
+            editorProvider: { editor }, languageProvider: { "python" }, setLanguage: { _ in },
+            bundledCatalog: bundledURL)
+        let bundled = try requireValue(controller.catalog, "fixture: JSON language catalog exists")
+        try controller.persist(bundled)
+        _ = controller.apply(identifier: "python", to: editor)
+        var reapplyCalls = 0
+        controller.openDocuments = {
+            reapplyCalls += 1
+            return [(language: "python", editor: editor)]
+        }
+        var corrected = bundled
+        let index = try requireValue(
+            corrected.profiles.firstIndex { $0.id == "python" }, "fixture: Python profile exists")
+        corrected.profiles[index].title = "Python JSON draft"
+        for style in corrected.profiles[index].styles.indices {
+            corrected.profiles[index].styles[style].fontSize = 21
+        }
+        let correctedJSON = String(decoding: try corrected.encoded(), as: UTF8.self)
+        let before = try Data(contentsOf: path)
+        let invalid = "{ keep this Language JSON draft"
+        var stage = 0, nestedError = false, keptDraft = false, inlineError = false
+        var manager: NSWindow?
+        let retried = editingJSON(controller) { window, views in
+            if stage == 1, window !== manager {
+                nestedError = true
+                NSApp.abortModal()
+                return false
+            }
+            guard let text = views.compactMap({ $0 as? NSTextView }).first,
+                let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save" })
+            else { return false }
+            switch stage {
+            case 0:
+                manager = window
+                text.string = invalid
+                stage = 1
+                save.performClick(nil)
+            case 1:
+                keptDraft = text.string == invalid && (try? Data(contentsOf: path)) == before && reapplyCalls == 0
+                inlineError = text.accessibilityHelp()?.isEmpty == false
+                text.string = correctedJSON
+                stage = 2
+                save.performClick(nil)
+                return true
+            default: break
+            }
+            return false
+        }
+        check(
+            retried && stage == 2 && keptDraft,
+            "F155 Language JSON retry preserves the draft, storage and current styles")
+        check(!nestedError && inlineError, "F155 invalid Language JSON is marked inline without a nested error modal")
+        let stored = try Data(contentsOf: path)
+        struct Format: Decodable {
+            var overridesVersion: Int?
+            var version: Int?
+        }
+        let format = try JSONDecoder().decode(Format.self, from: stored)
+        check(
+            format.overridesVersion == 1 && format.version == nil,
+            "F155 Language JSON Save still stores overrides rather than a full catalog")
+        let loaded = try LanguageCatalog.load(stored: stored, over: bundled)
+        check(
+            PersistedValue.equal(loaded.profiles, corrected.profiles),
+            "F155 full Language JSON changes roundtrip through overrides")
+        let font = editor.attributedText(forSelection: false).attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        check(
+            reapplyCalls == 1 && font.map { abs($0.pointSize - 21) < 0.01 } == true,
+            "F155 Language JSON Save reapplies the actual changed styles to open documents")
+        check(
+            editor.text == "import os\n" && editor.revision == revision && !editor.modified,
+            "F155 Language JSON configuration never edits document bytes or dirty state")
+        var imported = corrected
+        imported.profiles[index].title = "Imported Language draft"
+        for style in imported.profiles[index].styles.indices { imported.profiles[index].styles[style].fontSize = 23 }
+        let importData = try imported.encoded()
+        let importURL = isolated.url.appendingPathComponent("language-import.json")
+        let futureURL = isolated.url.appendingPathComponent("language-newer-reader.json")
+        let exportURL = isolated.url.appendingPathComponent("language-export.json")
+        try importData.write(to: importURL)
+        var future = Data("{\"minimumReaderVersion\":2,".utf8)
+        future.append(importData.dropFirst())
+        try future.write(to: futureURL)
+        var chosenImport = futureURL, exportNames: [String] = []
+        controller.jsonFilePanels = .init(
+            importURL: { chosenImport },
+            exportURL: { name in
+                exportNames.append(name)
+                return exportURL
+            })
+        stage = 0
+        var refusedDraft = false, importedOnlyDraft = false, exportedDraft = false
+        let files = editingJSON(controller) { _, views in
+            guard let text = views.compactMap({ $0 as? NSTextView }).first,
+                let load = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.import"
+                }),
+                let export = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.export"
+                }),
+                let cancel = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.cancel"
+                })
+            else { return false }
+            switch stage {
+            case 0:
+                text.string = correctedJSON + "\n "
+                stage = 1
+                load.performClick(nil)
+            case 1:
+                refusedDraft =
+                    text.string == correctedJSON + "\n " && text.accessibilityHelp()?.isEmpty == false
+                    && (try? Data(contentsOf: path)) == stored
+                chosenImport = importURL
+                stage = 2
+                load.performClick(nil)
+            case 2:
+                importedOnlyDraft =
+                    text.accessibilityHelp() == nil
+                    && (try? LanguageCatalog.decode(Data(text.string.utf8))) == imported
+                    && (try? Data(contentsOf: path)) == stored && reapplyCalls == 1
+                stage = 3
+                export.performClick(nil)
+            case 3:
+                exportedDraft = (try? LanguageCatalog.decode(Data(contentsOf: exportURL))) == imported
+                stage = 4
+                cancel.performClick(nil)
+                return true
+            default: break
+            }
+            return false
+        }
+        check(
+            files && stage == 4 && refusedDraft, "F155 newer-reader Language import is refused without losing the draft"
+        )
+        check(
+            try Data(contentsOf: futureURL) == future && controller.loadError == nil,
+            "F155 refused external Language input stays unchanged and does not poison saved profiles")
+        check(
+            importedOnlyDraft && exportedDraft && exportNames == ["TextTank-LanguageProfiles.json"],
+            "F155 valid Language import/export uses a full-catalog draft and the documented export name")
+        check(
+            try Data(contentsOf: path) == stored && reapplyCalls == 1,
+            "F155 Cancel after Language import/export keeps stored overrides and live styles")
+        stage = 0
+        let accepted = editingJSON(controller) { _, views in
+            guard
+                let load = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.import"
+                }),
+                let save = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.save"
+                })
+            else { return false }
+            if stage == 0 {
+                stage = 1
+                load.performClick(nil)
+            } else if stage == 1 {
+                stage = 2
+                save.performClick(nil)
+                return true
+            }
+            return false
+        }
+        let importedStored = try Data(contentsOf: path)
+        let importedFormat = try JSONDecoder().decode(Format.self, from: importedStored)
+        let importedLoaded = try LanguageCatalog.load(stored: importedStored, over: bundled)
+        check(
+            accepted && importedFormat.overridesVersion == 1 && importedFormat.version == nil
+                && PersistedValue.equal(importedLoaded.profiles, imported.profiles),
+            "F155 imported Language Save still writes lossless overrides")
+        let importedFont =
+            editor.attributedText(forSelection: false).attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        check(
+            reapplyCalls == 2 && importedFont.map { abs($0.pointSize - 23) < 0.01 } == true
+                && editor.revision == revision && !editor.modified,
+            "F155 imported Language Save reapplies styles without changing document text")
+        controller.jsonFilePanels = .init(importURL: { nil }, exportURL: { _ in nil })
+        stage = 0
+        var cancelledChoicesKeptDraft = false
+        let cancelFiles = editingJSON(controller) { _, views in
+            guard let text = views.compactMap({ $0 as? NSTextView }).first,
+                let load = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.import"
+                }),
+                let export = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.export"
+                }),
+                let cancel = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.cancel"
+                })
+            else { return false }
+            switch stage {
+            case 0:
+                text.string = correctedJSON + "\n "
+                stage = 1
+                load.performClick(nil)
+            case 1:
+                cancelledChoicesKeptDraft = text.string == correctedJSON + "\n "
+                stage = 2
+                export.performClick(nil)
+            case 2:
+                cancelledChoicesKeptDraft = cancelledChoicesKeptDraft && text.string == correctedJSON + "\n "
+                stage = 3
+                cancel.performClick(nil)
+                return true
+            default: break
+            }
+            return false
+        }
+        check(
+            try cancelFiles && cancelledChoicesKeptDraft && Data(contentsOf: path) == importedStored
+                && reapplyCalls == 2,
+            "F155 cancelled Language file choices keep the draft, stored bytes and live styles")
+        let corrupt = Data("{ preserve unreadable language profiles".utf8)
+        try corrupt.write(to: path)
+        let blocked = LanguageController(
+            editorProvider: { editor }, languageProvider: { "python" }, setLanguage: { _ in },
+            bundledCatalog: bundledURL)
+        var recoveryOnly = false
+        let declined = editingJSON(blocked) { _, views in
+            guard
+                let cancel = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "store.recover.cancel"
+                })
+            else { return false }
+            recoveryOnly = !views.contains { $0 is NSTextView }
+            cancel.performClick(nil)
+            return true
+        }
+        check(
+            try declined && recoveryOnly && Data(contentsOf: path) == corrupt && blocked.storageDamaged,
+            "F155 unreadable Language storage requires explicit recovery before the JSON editor")
+    }
     static func main() {
         Checks.run("LanguageControllerChecks") {
             let isolatedSupport = try IsolatedSupportDirectory("LanguageChecks")
@@ -1246,6 +1508,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 picker.indexOfSelectedItem == 2
                     && picker.itemTitles == ["A", "B", "A (style 12)", "Style 13", "Style 14"],
                 "the selected row is the style's index (\(picker.itemTitles))")
+            Checks.section("F155 Language JSON editor") { try jsonEditorChecks(bundledURL: bundledURL) }
             withExtendedLifetime(hosts) {}
             print(
                 "LEXER CONFIGURATION: \(supported) available; missing \(missing). This proves loading and text integrity, not every lexical semantic."
