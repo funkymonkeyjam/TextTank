@@ -7,7 +7,9 @@ extension CommentCommand {
         }
         try editor.requireWritable()
         let original = editor.text, revision = editor.revision, selections = editor.selectionRanges
-        let proposed = try plan(text: original, selections: selections, profile: profile)
+        let proposed = try plan(
+            text: original, selections: selections.map { EditorSelection(anchor: $0.anchor, caret: $0.caret) },
+            profile: profile)
         guard proposed.text != original else { return }
         guard editor.revision == revision, editor.selectionRanges == selections else {
             throw LanguageError.invalid("The document changed; comments were not applied.")
@@ -22,7 +24,8 @@ extension CommentCommand {
         }
         // Selections that the edit collapsed onto one position cannot be restored as planned; the
         // selections Scintilla carried through the edits are then already in place.
-        if !editor.setSelectionRanges(proposed.selections) {
+        if !editor.setSelectionRanges(proposed.selections.map { TTSelectionRange(anchor: $0.anchor, caret: $0.caret) })
+        {
             let caret = editor.selectionCaret
             _ = editor.setSelectionAnchor(caret, caret: caret)
         }

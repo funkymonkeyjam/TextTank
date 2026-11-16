@@ -1192,7 +1192,9 @@ extension DocumentChecks {
             check(
                 document.editor.text == "alpha beta" && document.editor.revision == caretRevision,
                 "F17 Replace Selection refuses selected text that is not the query")
-            _ = document.editor.setSelectionRanges([["anchor": 0, "caret": 5], ["anchor": 6, "caret": 10]])
+            _ = document.editor.setSelectionRanges([
+                TTSelectionRange(anchor: 0, caret: 5), TTSelectionRange(anchor: 6, caret: 10)
+            ])
             try controller.replaceSelectionFromBar()
             check(
                 document.editor.text == "alpha beta" && document.editor.revision == caretRevision

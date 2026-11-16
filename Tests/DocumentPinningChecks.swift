@@ -136,7 +136,8 @@ extension DocumentChecks {
                 "refused read-only transform leaves text and revision unchanged")
             editor.readOnly = false
             try require(
-                editor.setSelectionRanges([["anchor": 0, "caret": 1], ["anchor": 2, "caret": 3]]),
+                editor.setSelectionRanges([TTSelectionRange(anchor: 0, caret: 1), TTSelectionRange(anchor: 2, caret: 3)]
+                ),
                 "fixture: two selections")
             rejects("transform refuses multiple selections", message: "This command works on a single selection") {
                 try EditorTransform.reverseLines.apply(to: editor)
@@ -1215,7 +1216,8 @@ extension DocumentChecks {
             document.editor.setSavePoint()
             try require(
                 document.editor.setSelectionRanges([
-                    ["anchor": 0, "caret": 1], ["anchor": 2, "caret": 3], ["anchor": 4, "caret": 4]
+                    TTSelectionRange(anchor: 0, caret: 1), TTSelectionRange(anchor: 2, caret: 3),
+                    TTSelectionRange(anchor: 4, caret: 4)
                 ]), "fixture: three column selections")
             let columnRevision = document.editor.revision, columnSelections = document.editor.selectionRanges
             check(
@@ -1292,7 +1294,8 @@ extension DocumentChecks {
                 document.editor.setSavePoint()
                 try require(
                     document.editor.setSelectionRanges([
-                        ["anchor": 0, "caret": 1], ["anchor": 2, "caret": 3], ["anchor": 4, "caret": 5]
+                        TTSelectionRange(anchor: 0, caret: 1), TTSelectionRange(anchor: 2, caret: 3),
+                        TTSelectionRange(anchor: 4, caret: 5)
                     ]), "fixture: three selected columns")
                 return document.editor.revision
             }

@@ -59,7 +59,7 @@ final class UtilityController: NSObject {
     /// Recheck after a dialog: `editor` must still be the captured editor in the captured state.
     /// Reports what actually changed rather than asking for a selection.
     static func recheck(
-        _ editor: TTEditor?, captured: TTEditor?, revision: UInt?, selection: [[String: NSNumber]]?
+        _ editor: TTEditor?, captured: TTEditor?, revision: UInt?, selection: [TTSelectionRange]?
     ) throws -> TTEditor {
         guard let editor, editor.window != nil else { throw UtilityFailure.noDocument }
         try editor.requireWritable()

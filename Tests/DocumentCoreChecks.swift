@@ -33,7 +33,7 @@ enum DocumentCoreChecks {
             Data(contentsOf: TestPaths.resources.appendingPathComponent("LanguageProfiles.json")))
         let python = try requireValue(catalog.profiles.first { $0.id == "python" }, "F285 fixture: Python comments")
         let plan = try CommentCommand.lineComment.plan(
-            text: "value\n", selections: [["anchor": 0, "caret": 0]], profile: python)
+            text: "value\n", selections: [EditorSelection(anchor: 0, caret: 0)], profile: python)
         check(
             plan.text == "# value\n" && plan.edits.count == 1,
             "F285 pure comment planning exposes the same bounded edit plan without AppKit")

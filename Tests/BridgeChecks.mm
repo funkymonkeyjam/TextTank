@@ -13,6 +13,7 @@
 @end
 @implementation TTFakeDrop
 @end
+static TTSelectionRange *S(NSInteger anchor, NSInteger caret) { return [[TTSelectionRange alloc] initWithAnchor:anchor caret:caret]; }
 static NSEvent *TTMouse(NSEventType type, NSView *content, NSPoint point, NSTimeInterval time) {
     return [NSEvent mouseEventWithType:type location:[content convertPoint:point toView:nil] modifierFlags:0 timestamp:time
                           windowNumber:content.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1];
@@ -38,12 +39,13 @@ int main() {
         [first configureTabWidth:4 useTabs:NO];
         [first setSelectionAnchor:9 caret:9];
         TTEditorStatus *details=first.statusInfo;
+        check(NSClassFromString(@"TTSelectionRange") != Nil && [first.selectionRanges.firstObject isKindOfClass:NSClassFromString(@"TTSelectionRange")], "F29 selections cross the bridge as immutable byte-position values");
         check(NSClassFromString(@"TTEditorStatus") != Nil && [first.statusInfo isKindOfClass:NSClassFromString(@"TTEditorStatus")], "F29 status crosses the bridge as an immutable typed value");
         check(details.line == 2 && details.column == 6, "Status caret uses one-based line and tab-expanded Unicode column");
         check(details.lines == 2 && details.tabWidth == 4 && !details.useTabs, "Status reports document line count and actual indentation settings");
         check([first.text isEqual:@"one\n\t😀"], "Status query never adds virtual gutter lines to document");
         check([details.copy isEqual:first.statusInfo], "F29 status snapshots compare by typed field values");
-        [first setSelectionRanges:@[@{@"anchor":@0,@"caret":@0},@{@"anchor":@5,@"caret":@9}]];
+        [first setSelectionRanges:@[S(0,0),S(5,9)]];
         check(first.selectedCharacterCount == 1, "Status counts Unicode selection with empty main caret without synthetic separators");
         first.text = @"\uFEFFa";
         check([first.text isEqual:@"\uFEFFa"], "Leading content U+FEFF is not consumed as a file BOM");
@@ -82,10 +84,12 @@ int main() {
         [second executeCommand:@"undo"];
         check([second.text isEqual:@"alpha 🦋 alpha"], "Selection transform undoes in one step");
         second.text = @"a😀b café";
-        NSArray *ranges=@[@{@"anchor":@1,@"caret":@5},@{@"anchor":@13,@"caret":@7}];
+        NSArray *ranges=@[S(1,5),S(13,7)];
         // café ends at byte 12, not 13: reject before any selection mutation.
         check(![second setSelectionRanges:ranges], "Invalid multi-selection rejected atomically");
-        ranges=@[@{@"anchor":@1,@"caret":@5},@{@"anchor":@12,@"caret":@7}];
+        NSArray *selectionBefore=second.selectionRanges; const NSUInteger selectionRevision=second.revision;
+        check(![second setSelectionRanges:(NSArray<TTSelectionRange *> *)@[@0]] && [second.selectionRanges isEqual:selectionBefore] && second.revision==selectionRevision, "F29 a foreign object cannot masquerade as a typed selection or change the editor");
+        ranges=@[S(1,5),S(12,7)];
         check([second setSelectionRanges:ranges] && second.selectionCount==2, "Multiple Unicode byte selections set");
         NSUInteger revision=second.revision;
         check([second replaceSelections:@[@"β",@"tea"] expectedRevision:revision], "Atomic multi-selection replacement succeeds");
@@ -93,8 +97,8 @@ int main() {
         [second executeCommand:@"undo"];
         check([second.text isEqual:@"a😀b café"], "Multi-selection replacement has one shared Undo");
         check(![second replaceSelections:@[@"x",@"y"] expectedRevision:revision], "Stale multi-selection replacement rejected");
-        check(![second setSelectionRanges:@[@{@"anchor":@2,@"caret":@5}]], "Split UTF8 scalar selection rejected");
-        check(![second setSelectionRanges:@[@{@"anchor":@0,@"caret":@5},@{@"anchor":@1,@"caret":@5}]], "Overlapping ranges rejected");
+        check(![second setSelectionRanges:@[S(2,5)]], "Split UTF8 scalar selection rejected");
+        check(![second setSelectionRanges:@[S(0,5),S(1,5)]], "Overlapping ranges rejected");
         second.readOnly=YES; revision=second.revision;
         [second replaceSelection:@"forbidden"]; [second convertLineEndings:@"CRLF"];
         check(second.revision==revision && [second.text isEqual:@"a😀b café"], "Read-only editing preserves bytes and revision");
@@ -271,7 +275,7 @@ int main() {
         TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
         ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
         ed.text=@"zero\none two\nthree four\n"; [ed resetUndoHistory]; [ed setSavePoint];
-        require([ed setSelectionRanges:@[@{@"anchor":@12,@"caret":@9},@{@"anchor":@0,@"caret":@4},@{@"anchor":@19,@"caret":@23}]] && ed.selectionCount==3, "fixture: three selections, the main one reversed");
+        require([ed setSelectionRanges:@[S(12,9),S(0,4),S(19,23)]] && ed.selectionCount==3, "fixture: three selections, the main one reversed");
         NSUInteger revision=ed.revision;
         [ed executeCommand:@"clearAdditionalSelections"];
         check(ed.selectionCount==1 && ed.selectionAnchor==12 && ed.selectionCaret==9, "clearAdditionalSelections keeps the main selection and its direction");
@@ -300,8 +304,8 @@ int main() {
         TTEditor *ranged=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
         ScintillaView *rangedNative=(ScintillaView *)ranged.subviews.firstObject;
         ranged.text=@"abcdef";
-        BOOL firstSet=[ranged setSelectionRanges:@[@{@"anchor":@0,@"caret":@0}]]; sptr_t firstExtend=[rangedNative message:SCI_GETMOVEEXTENDSSELECTION];
-        BOOL secondSet=[ranged setSelectionRanges:@[@{@"anchor":@0,@"caret":@0}]]; sptr_t secondExtend=[rangedNative message:SCI_GETMOVEEXTENDSSELECTION];
+        BOOL firstSet=[ranged setSelectionRanges:@[S(0,0)]]; sptr_t firstExtend=[rangedNative message:SCI_GETMOVEEXTENDSSELECTION];
+        BOOL secondSet=[ranged setSelectionRanges:@[S(0,0)]]; sptr_t secondExtend=[rangedNative message:SCI_GETMOVEEXTENDSSELECTION];
         check(firstSet && secondSet && firstExtend==0 && secondExtend==0, "setSelectionRanges never turns extend mode on, on the first call or the second");
         [ranged executeCommand:@"charRight"];
         check(ranged.selectionCount==1 && ranged.selectionAnchor==1 && ranged.selectionCaret==1, "an arrow key after setSelectionRanges moves the caret without selecting");
@@ -437,7 +441,7 @@ int main() {
         check([counted replaceSelection:@"1"] && moved(), "Replacing the selection moves the revision");
         [counted setSelectionAnchor:0 caret:1];
         check([counted replaceSelection:@""] && moved(), "Deleting the selection moves the revision");
-        [counted setSelectionRanges:@[@{@"anchor":@0,@"caret":@1},@{@"anchor":@2,@"caret":@3}]];
+        [counted setSelectionRanges:@[S(0,1),S(2,3)]];
         check([counted replaceSelections:@[@"x",@"y"] expectedRevision:counted.revision] && moved(), "Multi-selection replacement moves the revision");
         check([counted replaceRanges:@[[NSValue valueWithRange:NSMakeRange(0,1)]] withTexts:@[@"z"] expectedRevision:counted.revision] && moved(), "Batch range replacement moves the revision");
         [counted executeCommand:@"undo"];
@@ -471,7 +475,7 @@ int main() {
         BOOL (^untouched)(void)=^BOOL{ return [guarded.text isEqual:@"keep x keep"] && guarded.revision==guardedRevision && !guarded.modified && ![guardedNative message:SCI_CANUNDO] && guarded.selectionStart==5 && guarded.selectionEnd==6; };
         check(![guarded replaceSelection:lone] && untouched(), "Unencodable selection replacement is rejected without deleting the selection");
         check(![guarded replaceSelections:@[lone] expectedRevision:guardedRevision] && untouched(), "Unencodable multi-selection replacement is rejected before any edit");
-        check([guarded setSelectionRanges:@[@{@"anchor":@0,@"caret":@4},@{@"anchor":@5,@"caret":@6}]], "Fixture: two selections");
+        check([guarded setSelectionRanges:@[S(0,4),S(5,6)]], "Fixture: two selections");
         check(![guarded replaceSelections:@[@"ok",lone] expectedRevision:guardedRevision] && [guarded.text isEqual:@"keep x keep"] && guarded.revision==guardedRevision && ![guardedNative message:SCI_CANUNDO], "One unencodable text rejects the whole batch with no partial edit");
         [guarded setSelectionAnchor:5 caret:6];
         guarded.text=lone;
@@ -575,8 +579,8 @@ int main() {
         [sv message:SCI_CANCEL];
         ed.text=@"ab cd ab ef ab"; [ed setSelectionAnchor:0 caret:2];
         [ed executeCommand:@"addNextOccurrence"];
-        NSArray *two=ed.selectionRanges;
-        if (!check(ed.selectionCount==2 && [two[1][@"anchor"] integerValue]==6 && [two[1][@"caret"] integerValue]==8, "addNextOccurrence adds the next match of the selected text as a second selection"))
+        NSArray<TTSelectionRange *> *two=ed.selectionRanges;
+        if (!check(ed.selectionCount==2 && two[1].anchor==6 && two[1].caret==8, "addNextOccurrence adds the next match of the selected text as a second selection"))
             printf("NOTE addNextOccurrence gave %ld selections %s\n", (long)ed.selectionCount, two.description.UTF8String);
         [ed executeCommand:@"clearAdditionalSelections"];
         check(ed.selectionCount==1, "clearAdditionalSelections leaves one selection");
@@ -825,8 +829,8 @@ int main() {
         check([ed replaceDocumentText:@"new\nlines\na\nb\nc"] && [ed.bookmarkLines isEqual:@[@3]] && ed.selectionAnchor==13 && ed.selectionCaret==12, "Lines inserted above move bookmarks and the selection with their text");
         check([ed replaceDocumentText:@"a\nb\nc"] && [ed.bookmarkLines isEqual:@[@1]] && ed.selectionAnchor==3 && ed.selectionCaret==2, "Lines removed above move bookmarks and the selection back");
         check([ed replaceDocumentText:@"a\nb\nc\nd\n"] && [ed.bookmarkLines isEqual:@[@1]] && ed.selectionAnchor==3 && ed.selectionCaret==2, "Text appended below leaves bookmarks and the selection alone");
-        [ed setSelectionRanges:@[@{@"anchor":@0,@"caret":@1},@{@"anchor":@6,@"caret":@7}]];
-        check([ed replaceDocumentText:@"a\nb\nXX\nd\n"] && [ed.selectionRanges isEqual:(@[@{@"anchor":@0,@"caret":@1},@{@"anchor":@7,@"caret":@8}])], "Multiple selections outside the span follow their text");
+        [ed setSelectionRanges:@[S(0,1),S(6,7)]];
+        check([ed replaceDocumentText:@"a\nb\nXX\nd\n"] && [ed.selectionRanges isEqual:(@[S(0,1),S(7,8)])], "Multiple selections outside the span follow their text");
         // Byte-exact cuts: inside a multi-byte character, and CR against CRLF.
         ed.text=@"aé b";
         check([ed replaceDocumentText:@"aè b"] && [bytes(ed.text) isEqual:bytes(@"aè b")] && [sv message:SCI_GETTARGETSTART]==1 && [sv message:SCI_GETTARGETEND]==3, "A difference in a trailing UTF-8 byte replaces the whole character");
@@ -889,7 +893,7 @@ int main() {
         [ed executeCommand:@"redo"];
         check([ed.text isEqual:@"one 2 three four"] && ed.selectionCaret==5 && ed.selectionAnchor==5, "Redo restores the selection left by the edit");
         [ed executeCommand:@"undo"];
-        NSArray *carets=@[@{@"anchor":@0,@"caret":@3},@{@"anchor":@8,@"caret":@13}];
+        NSArray *carets=@[S(0,3),S(8,13)];
         [ed setSelectionRanges:carets];
         check([ed replaceSelections:@[@"1",@"3"] expectedRevision:ed.revision] && [ed.text isEqual:@"1 two 3 four"], "Fixture: multi-selection replacement");
         [ed executeCommand:@"undo"];
@@ -924,7 +928,7 @@ int main() {
         NSUInteger stale=ed.revision;
         for (int i=0;i<50;++i) [ed replaceSelection:@"y"];
         check(ed.revision>=before+50, "revision advances with every modification step inside an undo group");
-        [ed setSelectionRanges:@[@{@"anchor":@0,@"caret":@1}]];
+        [ed setSelectionRanges:@[S(0,1)]];
         check(![ed replaceSelections:@[@"z"] expectedRevision:stale] && [ed.text hasPrefix:@"xy"], "a revision captured before a grouped edit is stale after its first step");
         [ed beginUndoGroup];[ed replaceSelection:@"n"];[ed endUndoGroup];
         check(calls==0, "no change callback is delivered while an undo group is open, nested groups included");
@@ -936,7 +940,7 @@ int main() {
         calls=0;[ed executeCommand:@"redo"];
         check(calls==1 && [ed.text isEqual:grouped], "Redo of a multi-step group delivers one change callback");
         ed.text=@"one two three";calls=0;before=ed.revision;
-        [ed setSelectionRanges:@[@{@"anchor":@0,@"caret":@3},@{@"anchor":@4,@"caret":@7},@{@"anchor":@8,@"caret":@13}]];
+        [ed setSelectionRanges:@[S(0,3),S(4,7),S(8,13)]];
         check([ed replaceSelections:@[@"1",@"2",@"3"] expectedRevision:ed.revision] && calls==1 && ed.revision>=before+3, "a multi-selection replacement delivers one change callback");
         NSMutableString *padded=[NSMutableString string];for(int i=0;i<100;++i)[padded appendString:@"text   \n"];
         ed.text=padded;calls=0;before=ed.revision;
@@ -1035,9 +1039,9 @@ int main() {
         [ed executeCommand:@"undo"];[ed executeCommand:@"undo"];
         check([ed.text isEqual:multi] && [ed.utf8Data isEqual:bytesOf(multi)], "Undo after interleaved reads restores the exact text");
         ed.text=@"﻿ab cd";
-        [ed setSelectionRanges:@[@{@"anchor":@0,@"caret":@5},@{@"anchor":@6,@"caret":@8}]];
+        [ed setSelectionRanges:@[S(0,5),S(6,8)]];
         check([ed.selectedText isEqual:@"﻿ab\ncd"], "a multi-selection starting with U+FEFF joins with a line feed and keeps the scalar");
-        [ed setSelectionRanges:@[@{@"anchor":@6,@"caret":@8},@{@"anchor":@3,@"caret":@3}]];
+        [ed setSelectionRanges:@[S(6,8),S(3,3)]];
         check([ed.selectedText isEqual:@"cd\n"], "an empty additional selection contributes an empty row");
         [ed setSelectionAnchor:3 caret:3];
         check([ed.selectedText isEqual:@""], "an empty single selection reads as an empty string");
@@ -1046,7 +1050,7 @@ int main() {
         ttchecks::section("selection generation, bookmark count and state notification", [&] {
         TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
         ed.text=@"one two three\nfour\nfive\n";
-        NSArray *one=@[@{@"anchor":@0,@"caret":@3}],*two=@[@{@"anchor":@0,@"caret":@3},@{@"anchor":@4,@"caret":@7}];
+        NSArray *one=@[S(0,3)],*two=@[S(0,3),S(4,7)];
         [ed setSelectionRanges:one];NSUInteger generation=ed.selectionGeneration;
         [ed setSelectionRanges:two];
         check(ed.selectionGeneration!=generation, "selectionGeneration changes when a non-main selection is added");
@@ -1137,7 +1141,7 @@ int main() {
         [ed setSelectionAnchor:6 caret:13];
         NSAttributedString *part=[ed attributedTextForSelection:YES];
         check([part.string isEqual:@"é \U0001F600"] && [part isEqualToAttributedString:reference(6,13)], "a selection bounded by multi-byte scalars exports exactly those scalars with their styles");
-        [ed setSelectionRanges:@[@{@"anchor":@14,@"caret":@17},@{@"anchor":@0,@"caret":@2}]];
+        [ed setSelectionRanges:@[S(14,17),S(0,2)]];
         NSAttributedString *mainOnly=[ed attributedTextForSelection:YES];
         check([mainOnly.string isEqual:@"int"] && [mainOnly isEqualToAttributedString:reference(14,17)], "with several selections the styled export is the main selection only");
         [ed setSelectionAnchor:3 caret:3];

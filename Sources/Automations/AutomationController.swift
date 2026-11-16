@@ -712,7 +712,8 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             let bytes = Data(editor.text.utf8)
             var outputs: [String] = []
             for (index, range) in selections.enumerated() {
-                guard let anchor = range["anchor"]?.intValue, let caret = range["caret"]?.intValue, anchor != caret,
+                let anchor = range.anchor, caret = range.caret
+                guard anchor != caret,
                     min(anchor, caret) >= 0, max(anchor, caret) <= bytes.count,
                     let text = String(data: bytes.subdata(in: min(anchor, caret)..<max(anchor, caret)), encoding: .utf8)
                 else { throw AutomationError.invalid("Select text in every selection before running this automation.") }

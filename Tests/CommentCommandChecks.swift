@@ -9,8 +9,8 @@ import AppKit
                 try requireValue(catalog.profiles.first { $0.id == id }, "fixture: \(id) profile exists")
             }
             let python = try profile("python"), cpp = try profile("cpp"), html = try profile("html")
-            func selection(_ a: Int, _ c: Int) -> [[String: NSNumber]] {
-                [["anchor": NSNumber(value: a), "caret": NSNumber(value: c)]]
+            func selection(_ a: Int, _ c: Int) -> [EditorSelection] {
+                [EditorSelection(anchor: a, caret: c)]
             }
             let text = "  café 🥑\r\n\tvalue\r\nlast"
             let end = "  café 🥑\r\n\tvalue\r\n".utf8.count
@@ -19,7 +19,7 @@ import AppKit
                 first.text == "  # café 🥑\r\n\t# value\r\nlast",
                 "indent Unicode CRLF preserved; line-start endpoint excludes next line")
             check(
-                first.selections[0]["anchor"]!.intValue > first.selections[0]["caret"]!.intValue,
+                first.selections[0].anchor > first.selections[0].caret,
                 "reverse selection direction preserved")
             let restored = try CommentCommand.toggleLine.plan(
                 text: first.text, selections: first.selections, profile: python)
@@ -66,8 +66,8 @@ import AppKit
             // F3: a caret at the end of an unterminated last line is on that line.
             let eof = try CommentCommand.toggleLine.plan(text: "x = 1", selections: selection(5, 5), profile: python)
             check(
-                eof.text == "# x = 1" && eof.selections[0]["anchor"]!.intValue == 7
-                    && eof.selections[0]["caret"]!.intValue == 7,
+                eof.text == "# x = 1" && eof.selections[0].anchor == 7
+                    && eof.selections[0].caret == 7,
                 "toggle at end of unterminated last line comments it and maps the caret")
             check(
                 try CommentCommand.lineComment.plan(text: "x = 1", selections: selection(5, 5), profile: python).text
@@ -181,7 +181,8 @@ import AppKit
             editor.text = text
             editor.resetUndoHistory()
             editor.setSavePoint()
-            _ = editor.setSelectionRanges(selection(end, 0))
+            _ = editor.setSelectionRanges(
+                selection(end, 0).map { TTSelectionRange(anchor: $0.anchor, caret: $0.caret) })
             try CommentCommand.toggleLine.apply(to: editor, profile: python)
             check(
                 editor.text == first.text && editor.selectionAnchor > editor.selectionCaret,
@@ -212,7 +213,8 @@ import AppKit
             editor.resetUndoHistory()
             editor.setSavePoint()
             check(editor.setBookmarks([0, 3, 150]), "fixture: bookmarks on lines 0, 3 and 150")
-            _ = editor.setSelectionRanges(selection(line1, line1))
+            _ = editor.setSelectionRanges(
+                selection(line1, line1).map { TTSelectionRange(anchor: $0.anchor, caret: $0.caret) })
             check(editor.firstVisibleLine == 0, "fixture: the view starts at the top")
             try CommentCommand.toggleLine.apply(to: editor, profile: python)
             check(
@@ -225,21 +227,26 @@ import AppKit
                 editor.text == tall && !editor.modified && editor.bookmarkLines == [0, 3, 150],
                 "bookmarks survive the Undo of a comment toggle")
             let three = selection(line4, line1)
-            _ = editor.setSelectionRanges(three)
+            _ = editor.setSelectionRanges(three.map { TTSelectionRange(anchor: $0.anchor, caret: $0.caret) })
             let multi = try CommentCommand.lineComment.plan(text: tall, selections: three, profile: python)
             check(multi.edits.count == 3, "plan exposes one edit per changed line")
             try CommentCommand.lineComment.apply(to: editor, profile: python)
             check(
-                editor.text == multi.text && editor.selectionRanges == multi.selections
+                editor.text == multi.text
+                    && editor.selectionRanges.map { EditorSelection(anchor: $0.anchor, caret: $0.caret) }
+                        == multi.selections
                     && editor.bookmarkLines == [0, 3, 150],
                 "three-line comment applies the planned text and selection and keeps bookmarks")
             editor.executeCommand("undo")
             check(editor.text == tall && !editor.modified, "one Undo restores a multi-line comment and the save point")
-            check(editor.selectionRanges == three, "Undo restores the selection the comment command started from")
+            check(
+                editor.selectionRanges.map { EditorSelection(anchor: $0.anchor, caret: $0.caret) } == three,
+                "Undo restores the selection the comment command started from")
             // Two carets inside one removed marker map to the same position; the edit still applies.
             editor.text = "# x"
             editor.resetUndoHistory()
-            _ = editor.setSelectionRanges(selection(0, 0) + selection(1, 1))
+            _ = editor.setSelectionRanges(
+                (selection(0, 0) + selection(1, 1)).map { TTSelectionRange(anchor: $0.anchor, caret: $0.caret) })
             try CommentCommand.lineUncomment.apply(to: editor, profile: python)
             check(
                 editor.text == "x" && editor.selectionCaret == 0,

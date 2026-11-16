@@ -243,7 +243,8 @@ import zlib
             editor.resetUndoHistory()
             editor.setSavePoint()
             try require(
-                editor.setSelectionRanges([["anchor": 0, "caret": 3], ["anchor": 4, "caret": 7]]),
+                editor.setSelectionRanges([TTSelectionRange(anchor: 0, caret: 3), TTSelectionRange(anchor: 4, caret: 7)]
+                ),
                 "fixture: two selections")
             let multiRevision = editor.revision
             rejects(

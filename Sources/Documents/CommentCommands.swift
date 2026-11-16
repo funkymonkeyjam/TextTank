@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
+struct EditorSelection: Equatable, Sendable {
+    let anchor: Int
+    let caret: Int
+}
+
 enum CommentCommand: String, CaseIterable {
     case toggleLine, lineComment, lineUncomment, blockComment, blockUncomment
     var title: String {
@@ -14,8 +19,8 @@ enum CommentCommand: String, CaseIterable {
     }
     struct Edit: Hashable { var start: Int, end: Int, text: String }
     /// `edits` are ascending, non-overlapping byte ranges of the input; applying them yields `text`.
-    struct Plan { let text: String, selections: [[String: NSNumber]], edits: [Edit] }
-    func plan(text: String, selections: [[String: NSNumber]], profile: LanguageProfile) throws -> Plan {
+    struct Plan { let text: String, selections: [EditorSelection], edits: [Edit] }
+    func plan(text: String, selections: [EditorSelection], profile: LanguageProfile) throws -> Plan {
         guard text.utf8.count <= 16 * 1024 * 1024 else {
             throw LanguageError.invalid("Comment commands currently accept documents up to 16 MiB.")
         }
@@ -40,8 +45,8 @@ enum CommentCommand: String, CaseIterable {
         }
         var ranges: [(lower: Int, upper: Int)] = []
         for selection in selections {
-            guard let anchor = selection["anchor"]?.intValue, let caret = selection["caret"]?.intValue,
-                boundary(anchor), boundary(caret)
+            let anchor = selection.anchor, caret = selection.caret
+            guard boundary(anchor), boundary(caret)
             else { throw LanguageError.invalid("Invalid Unicode selection boundary.") }
             ranges.append((lower: min(anchor, caret), upper: max(anchor, caret)))
         }
@@ -186,10 +191,7 @@ enum CommentCommand: String, CaseIterable {
             return position + delta
         }
         let restored = selections.map {
-            [
-                "anchor": NSNumber(value: mapped($0["anchor"]!.intValue)),
-                "caret": NSNumber(value: mapped($0["caret"]!.intValue))
-            ]
+            EditorSelection(anchor: mapped($0.anchor), caret: mapped($0.caret))
         }
         return Plan(text: String(decoding: result, as: UTF8.self), selections: restored, edits: edits)
     }

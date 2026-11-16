@@ -1113,7 +1113,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             error.runModal()
         }
     }
-    static func applyColumn(_ values: [String], to editor: TTEditor, revision: UInt, selections: [[String: NSNumber]])
+    static func applyColumn(_ values: [String], to editor: TTEditor, revision: UInt, selections: [TTSelectionRange])
         -> Bool
     {
         guard editor.window != nil, editor.selectionRanges == selections else { return false }

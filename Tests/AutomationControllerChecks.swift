@@ -1509,8 +1509,8 @@ final class Audit24RecoverySpy: NSObject {
                 editor.setSavePoint()
                 check(
                     editor.setSelectionRanges([
-                        ["anchor": NSNumber(value: 0), "caret": NSNumber(value: 8)],
-                        ["anchor": NSNumber(value: multiSource.utf8.count), "caret": NSNumber(value: 11)]
+                        TTSelectionRange(anchor: 0, caret: 8),
+                        TTSelectionRange(anchor: multiSource.utf8.count, caret: 11)
                     ]), "set separate reversed Unicode selections")
                 try restarted.runSavedAutomation(id: AutomationDefinition.example.id)
                 check(
@@ -1525,8 +1525,8 @@ final class Audit24RecoverySpy: NSObject {
                 editor.resetUndoHistory()
                 editor.setSavePoint()
                 _ = editor.setSelectionRanges([
-                    ["anchor": NSNumber(value: 0), "caret": NSNumber(value: 4)],
-                    ["anchor": NSNumber(value: 7), "caret": NSNumber(value: multiFailure.utf8.count)]
+                    TTSelectionRange(anchor: 0, caret: 4),
+                    TTSelectionRange(anchor: 7, caret: multiFailure.utf8.count)
                 ])
                 rejects("a later selection that times out rejects the whole run") {
                     try restarted.runSavedAutomation(id: AutomationDefinition.example.id)
@@ -1546,8 +1546,8 @@ final class Audit24RecoverySpy: NSObject {
                 editor.resetUndoHistory()
                 editor.setSavePoint()
                 _ = editor.setSelectionRanges([
-                    ["anchor": NSNumber(value: 0), "caret": NSNumber(value: 6)],
-                    ["anchor": NSNumber(value: 7), "caret": NSNumber(value: 14)]
+                    TTSelectionRange(anchor: 0, caret: 6),
+                    TTSelectionRange(anchor: 7, caret: 14)
                 ])
                 try outputController.runSavedAutomation(id: AutomationDefinition.example.id)
                 check(

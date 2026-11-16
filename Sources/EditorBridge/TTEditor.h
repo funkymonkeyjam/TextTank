@@ -17,6 +17,15 @@ typedef NS_ERROR_ENUM(TTEditorErrorDomain, TTEditorError) {
 /// may listen. It says "look again", not what changed; Scintilla reports selection changes when
 /// it paints, so a periodic refresh is still needed for state no event covers.
 extern NSNotificationName const TTEditorStateDidChangeNotification;
+/// Immutable UTF-8 byte positions. Bounds and scalar alignment are checked by TTEditor,
+/// before any selection is changed; negative/out-of-document values remain rejectable inputs.
+__attribute__((objc_subclassing_restricted))
+@interface TTSelectionRange : NSObject <NSCopying>
+@property(nonatomic, readonly) NSInteger anchor;
+@property(nonatomic, readonly) NSInteger caret;
+- (instancetype)initWithAnchor:(NSInteger)anchor caret:(NSInteger)caret;
+- (instancetype)init NS_UNAVAILABLE;
+@end
 /// Immutable metadata copied from one main-thread engine observation. No view is retained.
 __attribute__((objc_subclassing_restricted))
 @interface TTEditorStatus : NSObject <NSCopying>
@@ -52,12 +61,12 @@ __attribute__((objc_subclassing_restricted))
 @property(nonatomic, readonly) NSUInteger revision;
 /// Byte positions of the primary selection; selectionCount includes additional selections.
 @property(nonatomic, readonly) NSInteger selectionCount;
-@property(nonatomic, readonly) NSArray<NSDictionary<NSString *, NSNumber *> *> *selectionRanges;
+@property(nonatomic, readonly) NSArray<TTSelectionRange *> *selectionRanges;
 /// Changes whenever any selection of this view may have changed: on every text modification, on
 /// every bridge call that can move a selection, and when Scintilla reports a selection update.
 /// A cache key only; it can change without the selection having changed.
 @property(nonatomic, readonly) NSUInteger selectionGeneration;
-- (BOOL)setSelectionRanges:(NSArray<NSDictionary<NSString *, NSNumber *> *> *)ranges;
+- (BOOL)setSelectionRanges:(NSArray<TTSelectionRange *> *)ranges;
 - (BOOL)replaceSelections:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision;
 /// Applies byte-range replacements ({"start","end","text"}, ascending, each start at or after the
 /// previous end) as one undo step without touching the rest of the document, so markers, folds

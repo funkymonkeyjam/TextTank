@@ -9,6 +9,18 @@
 #include <cmath>
 extern "C" Scintilla::ILexer5 *TextTankCreateUserLexer();
 
+@implementation TTSelectionRange
+- (instancetype)initWithAnchor:(NSInteger)anchor caret:(NSInteger)caret {
+    if ((self=[super init])) { _anchor=anchor; _caret=caret; }
+    return self;
+}
+- (id)copyWithZone:(NSZone *)zone { return self; }
+- (BOOL)isEqual:(id)other {
+    return other==self || ([other isKindOfClass:TTSelectionRange.class] && _anchor==((TTSelectionRange *)other).anchor && _caret==((TTSelectionRange *)other).caret);
+}
+- (NSUInteger)hash { return (NSUInteger)_anchor ^ ((NSUInteger)_caret << 1); }
+@end
+
 @interface TTEditorStatus ()
 - (instancetype)initWithLine:(NSInteger)line column:(NSInteger)column lines:(NSInteger)lines tabWidth:(NSInteger)tabWidth useTabs:(BOOL)useTabs fontSize:(double)fontSize eol:(NSInteger)eol;
 @end
@@ -737,10 +749,10 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [_engine message:SCI_SETEOLMODE wParam:value.integerValue];
     [self scheduleStateNotification];
 }
-- (NSArray<NSDictionary<NSString *, NSNumber *> *> *)selectionRanges {
+- (NSArray<TTSelectionRange *> *)selectionRanges {
     [self assertThread]; NSMutableArray *ranges = [NSMutableArray array];
     for (sptr_t i=0; i<[_engine message:SCI_GETSELECTIONS]; ++i) {
-        [ranges addObject:@{@"anchor":@([_engine message:SCI_GETSELECTIONNANCHOR wParam:i]), @"caret":@([_engine message:SCI_GETSELECTIONNCARET wParam:i])}];
+        [ranges addObject:[[TTSelectionRange alloc] initWithAnchor:[_engine message:SCI_GETSELECTIONNANCHOR wParam:i] caret:[_engine message:SCI_GETSELECTIONNCARET wParam:i]]];
     }
     return ranges;
 }
@@ -748,15 +760,14 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     if (![ranges isKindOfClass:NSArray.class] || ranges.count == 0 || ranges.count > 10000) return NO;
     const sptr_t length = [_engine message:SCI_GETLENGTH];
     NSMutableArray *intervals = [NSMutableArray array];
-    for (id range in ranges) {
-        if (![range isKindOfClass:NSDictionary.class]) return NO;
-        for (NSString *key in @[@"anchor",@"caret"]) {
-            id value = range[key]; if (![value isKindOfClass:NSNumber.class]) return NO;
-            NSInteger p=[value integerValue]; if ([value doubleValue] != (double)p || p<0 || p>length) return NO;
+    for (id value in ranges) {
+        if (![value isKindOfClass:TTSelectionRange.class]) return NO;
+        TTSelectionRange *range=value;
+        for (NSInteger p : {range.anchor, range.caret}) {
+            if (p<0 || p>length) return NO;
             if (p<length && ([_engine message:SCI_GETCHARAT wParam:p] & 0xC0)==0x80) return NO;
         }
-        NSInteger a=[range[@"anchor"] integerValue], c=[range[@"caret"] integerValue];
-        [intervals addObject:@[@(MIN(a,c)),@(MAX(a,c))]];
+        [intervals addObject:@[@(MIN(range.anchor,range.caret)),@(MAX(range.anchor,range.caret))]];
     }
     [intervals sortUsingComparator:^NSComparisonResult(NSArray *a, NSArray *b) { return [a[0] compare:b[0]]; }];
     for (NSUInteger i=1;i<intervals.count;++i) {
@@ -771,15 +782,15 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [_engine message:SCI_CHANGESELECTIONMODE wParam:SC_SEL_STREAM];
     [_engine message:SCI_SETMOVEEXTENDSSELECTION wParam:0];
 }
-- (BOOL)setSelectionRanges:(NSArray<NSDictionary<NSString *,NSNumber *> *> *)ranges {
+- (BOOL)setSelectionRanges:(NSArray<TTSelectionRange *> *)ranges {
     [self assertThread]; if (![self validSelectionRanges:ranges]) return NO;
     [self useStreamSelection];
-    [_engine message:SCI_SETSELECTION wParam:[ranges[0][@"caret"] integerValue] lParam:[ranges[0][@"anchor"] integerValue]];
-    for (NSUInteger i=1;i<ranges.count;++i) [_engine message:SCI_ADDSELECTION wParam:[ranges[i][@"caret"] integerValue] lParam:[ranges[i][@"anchor"] integerValue]];
+    [_engine message:SCI_SETSELECTION wParam:ranges[0].caret lParam:ranges[0].anchor];
+    for (NSUInteger i=1;i<ranges.count;++i) [_engine message:SCI_ADDSELECTION wParam:ranges[i].caret lParam:ranges[i].anchor];
     [_engine message:SCI_SETMAINSELECTION wParam:0]; [self noteStateChange]; return YES;
 }
 - (BOOL)replaceSelections:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision {
-    [self assertThread]; NSArray *ranges=self.selectionRanges;
+    [self assertThread]; NSArray<TTSelectionRange *> *ranges=self.selectionRanges;
     if (revision!=self.revision || self.readOnly || ![texts isKindOfClass:NSArray.class] || texts.count!=ranges.count || ![self validSelectionRanges:ranges]) return NO;
     // Encode everything before the first edit so an unencodable text rejects the whole batch.
     NSMutableArray<NSData *> *encoded=[NSMutableArray arrayWithCapacity:texts.count];
@@ -790,12 +801,12 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     }
     NSMutableArray *indices=[NSMutableArray array]; for (NSUInteger i=0;i<ranges.count;++i) [indices addObject:@(i)];
     [indices sortUsingComparator:^NSComparisonResult(NSNumber *a,NSNumber *b) {
-        NSDictionary *ra=ranges[a.unsignedIntegerValue], *rb=ranges[b.unsignedIntegerValue];
-        return [@(MIN([rb[@"anchor"] integerValue],[rb[@"caret"] integerValue])) compare:@(MIN([ra[@"anchor"] integerValue],[ra[@"caret"] integerValue]))];
+        TTSelectionRange *ra=ranges[a.unsignedIntegerValue], *rb=ranges[b.unsignedIntegerValue];
+        return [@(MIN(rb.anchor,rb.caret)) compare:@(MIN(ra.anchor,ra.caret))];
     }];
     [self openUndoGroup];
     for (NSNumber *index in indices) {
-        NSDictionary *range=ranges[index.unsignedIntegerValue]; NSInteger a=[range[@"anchor"] integerValue], c=[range[@"caret"] integerValue];
+        TTSelectionRange *range=ranges[index.unsignedIntegerValue]; NSInteger a=range.anchor, c=range.caret;
         NSData *bytes=encoded[index.unsignedIntegerValue];
         [_engine message:SCI_SETTARGETRANGE wParam:MIN(a,c) lParam:MAX(a,c)];
         [_engine message:SCI_REPLACETARGET wParam:bytes.length lParam:(sptr_t)bytes.bytes];

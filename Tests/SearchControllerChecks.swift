@@ -1547,7 +1547,8 @@ private final class SelectionReadCounterEditor: TTEditor {
             check(
                 SearchController.replace(typedHits, text: typedText, revision: typedRevision + 1, in: editor) == .stale
                     && untouched(), "a document at another revision is reported as changed and not edited")
-            _ = editor.setSelectionRanges([["anchor": 0, "caret": 0], ["anchor": 3, "caret": 3]])
+            _ = editor.setSelectionRanges([TTSelectionRange(anchor: 0, caret: 0), TTSelectionRange(anchor: 3, caret: 3)]
+            )
             check(
                 SearchController.replace(typedHits, text: typedText, revision: typedRevision, in: editor)
                     == .multipleSelections && untouched() && editor.selectionCount == 2,
@@ -1580,7 +1581,8 @@ private final class SelectionReadCounterEditor: TTEditor {
                     && controller.status.stringValue.contains("1 read-only") && unedited() && recorded.isEmpty,
                 "Replace All on a read-only document says read-only, not changed")
             editor.readOnly = false
-            _ = editor.setSelectionRanges([["anchor": 0, "caret": 0], ["anchor": 3, "caret": 3]])
+            _ = editor.setSelectionRanges([TTSelectionRange(anchor: 0, caret: 0), TTSelectionRange(anchor: 3, caret: 3)]
+            )
             await replaceAll()
             check(
                 controller.lastOutcome == .replaced(changed: 0, stale: 1)

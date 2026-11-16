@@ -1422,11 +1422,15 @@ import AppKit
                 check(
                     badge("status.selection.0") == nil,
                     "collapsing the selection removes the selected count")
-                _ = visible.editor.setSelectionRanges([["anchor": 0, "caret": 1], ["anchor": 4, "caret": 5]])
+                _ = visible.editor.setSelectionRanges([
+                    TTSelectionRange(anchor: 0, caret: 1), TTSelectionRange(anchor: 4, caret: 5)
+                ])
                 spinUntil("the multi-selection badges") {
                     badge("status.selection.0") == Strings.count(2, .character) && badges().contains("2 selections")
                 }
-                _ = visible.editor.setSelectionRanges([["anchor": 0, "caret": 1], ["anchor": 3, "caret": 5]])
+                _ = visible.editor.setSelectionRanges([
+                    TTSelectionRange(anchor: 0, caret: 1), TTSelectionRange(anchor: 3, caret: 5)
+                ])
                 spinUntil("a changed additional selection") {
                     badge("status.selection.0") == Strings.count(3, .character)
                 }
