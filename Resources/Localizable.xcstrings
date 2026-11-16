@@ -650,6 +650,17 @@
         }
       }
     },
+    "form.action.scope": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ in %@"
+          }
+        }
+      }
+    },
     "reminders.send.one": {
       "extractionState": "manual",
       "localizations": {
@@ -1156,6 +1167,17 @@
         }
       }
     },
+    "status.commandUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This editor command is unavailable."
+          }
+        }
+      }
+    },
     "status.document": {
       "extractionState": "manual",
       "localizations": {
@@ -1255,6 +1277,17 @@
         }
       }
     },
+    "status.messageDetails": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message details are available."
+          }
+        }
+      }
+    },
     "status.options": {
       "extractionState": "manual",
       "localizations": {
@@ -1284,6 +1317,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Document access"
+          }
+        }
+      }
+    },
+    "status.remindersAdded": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Items were added in Reminders. Editor Undo does not remove them."
+          }
+        }
+      }
+    },
+    "status.searchFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search could not complete."
           }
         }
       }
@@ -1328,6 +1383,156 @@
           "stringUnit": {
             "state": "translated",
             "value": "Line wrapping"
+          }
+        }
+      }
+    },
+    "toolbar.automation.run": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run “%@” with its saved input and output."
+          }
+        }
+      }
+    },
+    "toolbar.automations": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automations"
+          }
+        }
+      }
+    },
+    "toolbar.automations.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run a saved automation or manage automations."
+          }
+        }
+      }
+    },
+    "toolbar.customize": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Customize Toolbar…"
+          }
+        }
+      }
+    },
+    "toolbar.find": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find…"
+          }
+        }
+      }
+    },
+    "toolbar.find.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find text in the current document."
+          }
+        }
+      }
+    },
+    "toolbar.new": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New"
+          }
+        }
+      }
+    },
+    "toolbar.new.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create a new document."
+          }
+        }
+      }
+    },
+    "toolbar.open": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open…"
+          }
+        }
+      }
+    },
+    "toolbar.open.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a document to open."
+          }
+        }
+      }
+    },
+    "toolbar.save": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save"
+          }
+        }
+      }
+    },
+    "toolbar.save.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save the current document."
+          }
+        }
+      }
+    },
+    "toolbar.show": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Toolbar"
+          }
+        }
+      }
+    },
+    "toolbar.split": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clone in Split View"
+          }
+        }
+      }
+    },
+    "toolbar.split.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show another view of the current document."
           }
         }
       }
@@ -1383,167 +1588,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ hidden, symbolic-link or special entries skipped; %@-entry listing limit reached."
-          }
-        }
-      }
-    },
-    "toolbar.new": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "New"
-          }
-        }
-      }
-    },
-    "toolbar.open": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open…"
-          }
-        }
-      }
-    },
-    "toolbar.save": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Save"
-          }
-        }
-      }
-    },
-    "toolbar.find": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Find…"
-          }
-        }
-      }
-    },
-    "toolbar.split": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clone in Split View"
-          }
-        }
-      }
-    },
-    "toolbar.new.help": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Create a new document."
-          }
-        }
-      }
-    },
-    "toolbar.open.help": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose a document to open."
-          }
-        }
-      }
-    },
-    "toolbar.save.help": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Save the current document."
-          }
-        }
-      }
-    },
-    "toolbar.find.help": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Find text in the current document."
-          }
-        }
-      }
-    },
-    "toolbar.split.help": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Show another view of the current document."
-          }
-        }
-      }
-    },
-    "toolbar.automations": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Automations"
-          }
-        }
-      }
-    },
-    "toolbar.automations.help": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Run a saved automation or manage automations."
-          }
-        }
-      }
-    },
-    "toolbar.automation.run": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Run “%@” with its saved input and output."
-          }
-        }
-      }
-    },
-    "toolbar.show": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Show Toolbar"
-          }
-        }
-      }
-    },
-    "toolbar.customize": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Customize Toolbar…"
-          }
-        }
-      }
-    },
-    "form.action.scope": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ in %@"
           }
         }
       }
