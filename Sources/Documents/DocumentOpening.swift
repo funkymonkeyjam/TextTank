@@ -7,10 +7,7 @@ import AppKit
 /// Only interactive opens ask. `TextDocument.read(from:ofType:)` and every caller that
 /// opens without a person watching still get the error and never a modal.
 enum EncodingChoice {
-    static let titles: [(FileEncoding, String)] = [
-        (.utf8, "UTF-8"), (.utf16LE, "UTF-16 LE"), (.utf16BE, "UTF-16 BE"), (.windows1252, "Windows-1252"),
-        (.latin1, "ISO-8859-1")
-    ]
+    static let titles: [(FileEncoding, String)] = FileEncoding.allCases.map { ($0, $0.displayName) }
     /// The decode failure inside `error`, if that is what it is. AppKit may hand back the
     /// thrown error wrapped, so the underlying errors are searched as well.
     static func codecError(in error: Error) -> FileCodecError? {
@@ -20,7 +17,7 @@ enum EncodingChoice {
             if let failure = candidate as? FileCodecError {
                 switch failure {
                 case .invalidBytes, .unsupportedUTF32: return failure
-                case .unrepresentable, .unsupportedBOM: return nil
+                case .unrepresentable, .unsupportedBOM, .invalidConversionTarget: return nil
                 }
             }
             current = (candidate as NSError).userInfo[NSUnderlyingErrorKey] as? Error

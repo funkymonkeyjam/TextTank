@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
+enum MacroLimits {
+    static let recordedActions = 10_000
+    static let repeatCount = 10_000
+    static let playbackActions = 100_000
+}
+
 struct RecordedMacro: Codable, Identifiable, Equatable {
     struct Search: Codable, Equatable {
         var query: String, replacement: String, mode: Int
@@ -151,8 +157,9 @@ struct RecordedMacro: Codable, Identifiable, Equatable {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 120 else {
             throw MacroError.invalid("The macro name must contain 1–120 characters.")
         }
-        guard !steps.isEmpty, steps.count <= 10000 else {
-            throw MacroError.invalid("Macro “\(itemName)” requires 1–10000 supported actions.")
+        guard !steps.isEmpty, steps.count <= MacroLimits.recordedActions else {
+            throw MacroError.invalid(
+                "Macro “\(itemName)” requires 1–\(Strings.number(MacroLimits.recordedActions)) supported actions.")
         }
         for (index, step) in steps.enumerated() {
             do { try step.validate() } catch {

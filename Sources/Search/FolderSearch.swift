@@ -21,6 +21,8 @@ struct FolderSearchRequest: Sendable {
     var filenameFilters = "*.*"
     /// Canonical file paths already searched by another explicit root.
     var excludingSearchedFiles: Set<String> = []
+    /// Captured presentation setting only; never changes matching or byte/UTF-16 navigation.
+    var displayTabWidth = 4
     var maximumFiles = 10000
     var maximumEntries = 100000
     var maximumFileBytes = 32 * 1024 * 1024
@@ -45,6 +47,8 @@ struct FolderSearchMatch: Equatable, Sendable {
     let isMatchTruncatedInPreview: Bool
     var sourceSHA256: String? = nil
     var sourceRoot: URL? = nil
+    var displayColumn: Int = 1
+    var displayTabWidth: Int = 4
 }
 enum FolderSearchSkipReason: Hashable, Sendable {
     case symbolicLink, hidden, nonRecursiveDirectory, extensionFiltered, filenameFiltered, folderFiltered,
@@ -87,7 +91,17 @@ struct FolderSearchSkipped: Equatable, Sendable {
     let url: URL
     let reason: FolderSearchSkipReason
 }
-enum FolderSearchLimit: String, Sendable { case entries, files, totalBytes, results }
+enum FolderSearchLimit: String, Sendable {
+    case entries, files, totalBytes, results
+    var displayName: String {
+        switch self {
+        case .entries: return Strings.text("folder.limit.entries", "entries visited")
+        case .files: return Strings.text("folder.limit.files", "files considered")
+        case .totalBytes: return Strings.text("folder.limit.bytes", "total data read")
+        case .results: return Strings.text("folder.limit.results", "search results")
+        }
+    }
+}
 struct FolderSearchReport: Sendable {
     var matches: [FolderSearchMatch] = []
     /// Entries that should have been searched and were not. Policy exclusions are listed here
@@ -321,19 +335,21 @@ enum FolderSearch {
     /// Line, column and UTF-8 span of each match, in one forward pass. Nil when `stop` answers
     /// true or a range is out of order, outside the text or splits a character; the caller then
     /// skips this one file. Ranges must be ascending, as the engine reports them.
-    static func located(_ ranges: [NSRange], in text: String, stop: () -> Bool) -> [(
-        line: Int, columnUTF16: Int, utf8Range: SearchSpan
+    static func located(_ ranges: [NSRange], in text: String, tabWidth: Int = 4, stop: () -> Bool) -> [(
+        line: Int, columnUTF16: Int, utf8Range: SearchSpan, displayColumn: Int
     )]? {
-        var cursor = SearchCore.UTFCursor(text, tracksLines: true)
-        var output: [(line: Int, columnUTF16: Int, utf8Range: SearchSpan)] = []
+        var cursor = SearchCore.UTFCursor(text, tracksLines: true, tabWidth: tabWidth)
+        var output: [(line: Int, columnUTF16: Int, utf8Range: SearchSpan, displayColumn: Int)] = []
         output.reserveCapacity(ranges.count)
         for range in ranges {
             guard range.location >= 0, range.length >= 0, range.length <= Int.max - range.location,
                 cursor.advance(to: range.location, stop: stop)
             else { return nil }
-            let startByte = cursor.byteOffset, line = cursor.line, column = cursor.columnUTF16
+            let startByte = cursor.byteOffset, line = cursor.line, column = cursor.columnUTF16,
+                displayColumn = cursor.displayColumn
             guard cursor.advance(to: NSMaxRange(range), stop: stop) else { return nil }
-            output.append((line, column, .init(location: startByte, length: cursor.byteOffset - startByte)))
+            output.append(
+                (line, column, .init(location: startByte, length: cursor.byteOffset - startByte), displayColumn))
         }
         return output
     }
@@ -345,7 +361,8 @@ enum FolderSearch {
             !request.directory.path.contains("\0"), !request.query.isEmpty
         else { throw FolderSearchError.invalidRequest("Choose a local directory and nonempty search expression.") }
         guard request.maximumFiles > 0, request.maximumEntries > 0, request.maximumFileBytes > 0,
-            request.maximumTotalBytes > 0, request.maximumResults > 0, (16...8192).contains(request.previewUTF16Length)
+            request.maximumTotalBytes > 0, request.maximumResults > 0, (1...32).contains(request.displayTabWidth),
+            (16...8192).contains(request.previewUTF16Length)
         else {
             throw FolderSearchError.invalidRequest(
                 "Search limits must be positive and preview length must be 16–8192 UTF-16 units.")
@@ -519,7 +536,8 @@ enum FolderSearch {
             // of its matches is listed. The engine never reports one; this keeps it that way.
             guard
                 let positions = located(
-                    hits.hits.map(\.range), in: decoded.text, stop: { cancellation.isCancelled })
+                    hits.hits.map(\.range), in: decoded.text, tabWidth: request.displayTabWidth,
+                    stop: { cancellation.isCancelled })
             else {
                 if cancellation.isCancelled {
                     report.wasCancelled = true
@@ -542,7 +560,8 @@ enum FolderSearch {
                         url: url, line: position.line, columnUTF16: position.columnUTF16,
                         utf16Range: .init(location: match.location, length: match.length),
                         utf8Range: position.utf8Range, preview: snippet.text, previewMatchRange: snippet.range,
-                        isMatchTruncatedInPreview: snippet.truncated, sourceSHA256: fingerprint, sourceRoot: root))
+                        isMatchTruncatedInPreview: snippet.truncated, sourceSHA256: fingerprint, sourceRoot: root,
+                        displayColumn: position.displayColumn, displayTabWidth: request.displayTabWidth))
                 if report.matches.count >= request.maximumResults {
                     report.reachedLimit = .results
                     break searchLoop

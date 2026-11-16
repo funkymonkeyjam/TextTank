@@ -3,6 +3,15 @@ import Foundation
 
 enum FileEncoding: String, Codable, CaseIterable {
     case utf8, utf16LE, utf16BE, windows1252, latin1
+    var displayName: String {
+        switch self {
+        case .utf8: return Strings.text("encoding.utf8", "UTF-8")
+        case .utf16LE: return Strings.text("encoding.utf16le", "UTF-16 LE")
+        case .utf16BE: return Strings.text("encoding.utf16be", "UTF-16 BE")
+        case .windows1252: return Strings.text("encoding.windows1252", "Windows-1252")
+        case .latin1: return Strings.text("encoding.latin1", "ISO-8859-1")
+        }
+    }
 }
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
@@ -10,6 +19,24 @@ enum FileEncoding: String, Codable, CaseIterable {
 struct FileFormat: Codable, Equatable {
     var encoding: FileEncoding = .utf8
     var bom: Bool = false
+    struct Target {
+        let code: String
+        let format: FileFormat
+        var title: String {
+            if format.bom {
+                return String(format: Strings.text("encoding.bom", "%@ with BOM"), format.encoding.displayName)
+            }
+            return format.encoding.displayName
+        }
+    }
+    static let convertTargets: [Target] = [
+        .init(code: "utf8", format: .init(encoding: .utf8)),
+        .init(code: "utf8bom", format: .init(encoding: .utf8, bom: true)),
+        .init(code: "utf16LE", format: .init(encoding: .utf16LE, bom: true)),
+        .init(code: "utf16BE", format: .init(encoding: .utf16BE, bom: true)),
+        .init(code: "windows1252", format: .init(encoding: .windows1252)),
+        .init(code: "latin1", format: .init(encoding: .latin1))
+    ]
 }
 
 struct DecodedFile {
@@ -18,16 +45,21 @@ struct DecodedFile {
 }
 
 enum FileCodecError: Error, LocalizedError, Equatable {
-    case invalidBytes(FileEncoding), unrepresentable(FileEncoding), unsupportedBOM, unsupportedUTF32
+    case invalidBytes(FileEncoding), unrepresentable(FileEncoding), unsupportedBOM, unsupportedUTF32,
+        invalidConversionTarget
     var errorDescription: String? {
         switch self {
         case .invalidBytes(let e):
-            return "The file contains invalid \(e.rawValue) bytes. Choose an explicit encoding; no bytes were replaced."
+            return
+                "The file contains invalid \(e.displayName) bytes. Choose an explicit encoding; no bytes were replaced."
         case .unrepresentable(let e):
-            return "This text cannot be saved as \(e.rawValue) without losing characters. Choose a Unicode encoding."
+            return "This text cannot be saved as \(e.displayName) without losing characters. Choose a Unicode encoding."
         case .unsupportedUTF32:
             return
                 "This file begins with a UTF-32 signature. UTF-32 is not supported yet; choose UTF-16 explicitly only if the file is known to begin with a NUL character."
+        case .invalidConversionTarget:
+            return
+                "This encoding choice is unavailable. Choose an encoding from the menu; the document was not changed."
         case .unsupportedBOM: return "This encoding does not support a byte-order mark."
         }
     }

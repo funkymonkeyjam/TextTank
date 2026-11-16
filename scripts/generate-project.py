@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def resource_paths(root):
-    paths = ['Resources/AutomationTemplates/recipe-ingredient-cleanup.rules.json', 'Resources/AutomationTemplates/sort-unique-lines.rules.json', 'Resources/AutomationTemplates/trim-and-remove-empty-lines.rules.json', 'Resources/Brand/Inter-OFL.txt', 'Resources/Brand/SpaceGrotesk-OFL.txt', 'Resources/Credits.rtf', 'Resources/LanguageProfiles.json', 'Resources/TextTank-License.txt', 'Resources/TextTank.icns', 'Resources/boost-License.txt', 'Resources/lexilla-License.txt', 'Resources/scintilla-License.txt']
+    paths = ['Resources/AutomationTemplates/recipe-ingredient-cleanup.rules.json', 'Resources/AutomationTemplates/sort-unique-lines.rules.json', 'Resources/AutomationTemplates/trim-and-remove-empty-lines.rules.json', 'Resources/Brand/Inter-OFL.txt', 'Resources/Brand/SpaceGrotesk-OFL.txt', 'Resources/Credits.rtf', 'Resources/LanguageProfiles.json', 'Resources/Localizable.xcstrings', 'Resources/TextTank-License.txt', 'Resources/TextTank.icns', 'Resources/boost-License.txt', 'Resources/lexilla-License.txt', 'Resources/scintilla-License.txt']
     for path in paths:
         if not (root / path).is_file():
             raise ValueError(f"Required bundled resource missing: {path}")
@@ -49,7 +49,7 @@ def main():
     for relative in resource_paths(ROOT):
         path = Path(relative)
         if path.is_file():
-            f = add(str(path), 'PBXFileReference', lastKnownFileType='file', path=str(path), sourceTree='<group>')
+            f = add(str(path), 'PBXFileReference', lastKnownFileType='text.json.xcstrings' if path.suffix == '.xcstrings' else 'file', path=str(path), sourceTree='<group>')
             files.append(f)
             resources.append(add('build:' + str(path), 'PBXBuildFile', fileRef=f))
     framework = add('framework', 'PBXFileReference', lastKnownFileType='wrapper.framework', path='build/vendor/$(CONFIGURATION)/Scintilla.framework', sourceTree='<group>')

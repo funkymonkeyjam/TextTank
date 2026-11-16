@@ -4,7 +4,16 @@ import Foundation
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
 struct SearchOptions: Codable, Equatable, Sendable {
-    enum Mode: Int, Codable, Sendable { case normal = 0, extended = 1, regularExpression = 2 }
+    enum Mode: Int, Codable, Sendable, CaseIterable {
+        case normal = 0, extended = 1, regularExpression = 2
+        var displayName: String {
+            switch self {
+            case .normal: return Strings.text("search.mode.normal", "Normal")
+            case .extended: return Strings.text("search.mode.extended", "Extended (\\n, \\t, \\xNN)")
+            case .regularExpression: return Strings.text("search.mode.regex", "Regular expression (Boost)")
+            }
+        }
+    }
     var query = "", replacement = ""
     var mode: Mode = .normal
     var matchCase = false, wholeWord = false, dotMatchesNewline = false, wrap = true
@@ -36,9 +45,14 @@ struct FindPreferences: Codable {
         return try encoder.encode(self)
     }
 }
+struct SearchDisplayPosition: Equatable, Sendable {
+    let line: Int
+    let column: Int
+}
 struct SearchHit {
     let range: NSRange
     let replacement: String
+    var displayPosition: SearchDisplayPosition? = nil
 }
 struct SearchReport {
     let hits: [SearchHit]
@@ -47,6 +61,7 @@ struct SearchReport {
 }
 enum SearchFailure: LocalizedError, CustomNSError, Equatable {
     enum ReplacementCondition: Error, Equatable { case readOnly, multipleSelections, closed, stale }
+    case positionMapping
     case preferencesTooLarge, preferencesVersion, inlineResultLimit, inlineReplacement(ReplacementCondition)
     case invalidBookmarkLimit, bookmarkCancelled, bookmarkOffsetsUnordered, bookmarkOffsetOutOfBounds
     case replacementCancelled, invalidReplacementRange, macroResultLimit, macroReplacement(String)
@@ -56,6 +71,7 @@ enum SearchFailure: LocalizedError, CustomNSError, Equatable {
         switch self {
         case .inlineResultLimit: return 12
         case .inlineReplacement: return 13
+        case .positionMapping: return 14
         case .preferencesTooLarge: return 10
         case .preferencesVersion: return 11
         case .invalidReplacementRange: return 3
@@ -82,6 +98,9 @@ enum SearchFailure: LocalizedError, CustomNSError, Equatable {
         case .inlineReplacement(.stale):
             return
                 "The selected match could not be replaced because the document changed during the step. Nothing was changed."
+        case .positionMapping:
+            return
+                "Search positions could not be prepared within the work limit. Search again; the document was not changed."
         case .preferencesTooLarge:
             return
                 "The search text or replacement is too large to keep as saved settings. The search can still run; earlier saved settings were not changed."
@@ -152,16 +171,42 @@ enum SearchCore {
     static func search(
         _ text: String, options: SearchOptions, range: NSRange? = nil,
         cancellation: TTSearchCancellation = TTSearchCancellation(), limit: Int = 100000,
-        timeLimit: TimeInterval = defaultTimeLimit, purpose: Purpose = .allMatches
+        timeLimit: TimeInterval = defaultTimeLimit, purpose: Purpose = .allMatches, displayTabWidth: Int? = nil
     ) throws -> SearchReport {
+        let displayDeadline = Date().addingTimeInterval(timeLimit)
         let result = try TTSearchEngine.searchText(
             text, range: range ?? NSRange(location: 0, length: (text as NSString).length), query: options.query,
             replacement: options.replacement, mode: options.mode.rawValue, matchCase: options.matchCase,
             wholeWord: options.wholeWord, dotMatchesNewline: options.dotMatchesNewline, cancellation: cancellation,
             maximumMatches: limit, overlappingLiterals: purpose == .navigation, timeLimit: timeLimit)
+        var hits = result.matches.map { SearchHit(range: $0.range, replacement: $0.replacement) }
+        if let displayTabWidth {
+            let positions = try displayPositions(
+                hits.map { $0.range.location }, in: text,
+                tabWidth: displayTabWidth, cancellation: cancellation, deadline: displayDeadline)
+            for index in hits.indices { hits[index].displayPosition = positions[index] }
+        }
         return SearchReport(
-            hits: result.matches.map { SearchHit(range: $0.range, replacement: $0.replacement) },
+            hits: hits,
             truncated: result.truncated, purpose: purpose)
+    }
+    /// Presentation positions share one cancellable forward pass over existing immutable text.
+    /// Internal UTF-16 columns/ranges stay unchanged. Tabs advance to the captured tab stops;
+    /// astral and combining scalars each occupy one column, like native SCI_GETCOLUMN.
+    static func displayPositions(
+        _ locations: [Int], in text: String, tabWidth: Int,
+        cancellation: TTSearchCancellation, deadline: Date = Date().addingTimeInterval(defaultTimeLimit)
+    ) throws -> [SearchDisplayPosition] {
+        guard (1...32).contains(tabWidth), locations.count <= 100000 else { throw SearchFailure.positionMapping }
+        var cursor = UTFCursor(text, tracksLines: true, tabWidth: tabWidth), positions: [SearchDisplayPosition] = []
+        positions.reserveCapacity(locations.count)
+        let stop = { cancellation.cancelled || Date() >= deadline }
+        for location in locations {
+            guard !stop(), cursor.advance(to: location, stop: stop) else { throw SearchFailure.positionMapping }
+            positions.append(.init(line: cursor.line, column: cursor.displayColumn))
+        }
+        guard !stop() else { throw SearchFailure.positionMapping }
+        return positions
     }
     /// Scalar-granular like byteRanges: nil for surrogate splits, negative and out-of-range input.
     static func byteRange(_ range: NSRange, in text: String) -> NSRange? { byteRanges([range], in: text)?.first }
@@ -196,7 +241,10 @@ enum SearchCore {
         private(set) var byteOffset = 0
         private(set) var line = 1
         private(set) var columnUTF16 = 1
-        init(_ text: String, tracksLines: Bool = false) {
+        private(set) var displayColumn = 1
+        let tabWidth: Int
+        init(_ text: String, tracksLines: Bool = false, tabWidth: Int = 4) {
+            self.tabWidth = tabWidth
             self.text = text
             self.tracksLines = tracksLines
             index = text.unicodeScalars.startIndex
@@ -219,8 +267,15 @@ enum SearchCore {
                     if value == 10 || (value == 13 && (next == scalars.endIndex || scalars[next].value != 10)) {
                         line += 1
                         columnUTF16 = 1
+                        displayColumn = 1
                     } else {
                         columnUTF16 += width
+                        // Scintilla's column stops at CR even at the boundary inside CRLF.
+                        if value == 9 {
+                            displayColumn += tabWidth - ((displayColumn - 1) % tabWidth)
+                        } else if value != 13 {
+                            displayColumn += 1
+                        }
                     }
                 }
                 index = next

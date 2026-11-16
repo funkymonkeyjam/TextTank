@@ -100,6 +100,7 @@ final class WorkspaceBrowserStore {
     /// Entries read from one directory before the scan stops. Sorting needs every name, so
     /// this, not the display limit, bounds the work.
     static let maximumScannedEntries = 20000
+    static let defaultListingLimit = 2000
     /// Opens the folder itself, never through a symbolic link. The stream owns the descriptor.
     fileprivate static func openDirectory(_ folder: URL) throws -> (
         stream: UnsafeMutablePointer<DIR>, descriptor: Int32
@@ -129,7 +130,9 @@ final class WorkspaceBrowserStore {
     /// applies, so the entries shown do not depend on the order the filesystem returns them.
     /// `skipped` counts every hidden, symbolic-link or special entry that was read; those
     /// never count toward the limit.
-    static func list(_ folder: URL, limit: Int = 2000, showHidden: Bool = false) throws -> WorkspaceDirectoryListing {
+    static func list(_ folder: URL, limit: Int = defaultListingLimit, showHidden: Bool = false) throws
+        -> WorkspaceDirectoryListing
+    {
         try WorkspaceStore.validateLocalURL(folder)
         guard limit > 0 && limit <= 10000 else { throw WorkspaceError.invalid("Invalid directory listing limit.") }
         let (dir, fd) = try openDirectory(folder)

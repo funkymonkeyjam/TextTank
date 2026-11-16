@@ -1,0 +1,1370 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "automation.captured_document": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Captured document"
+          }
+        }
+      }
+    },
+    "automation.clipboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clipboard"
+          }
+        }
+      }
+    },
+    "automation.document": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Document"
+          }
+        }
+      }
+    },
+    "automation.file": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File"
+          }
+        }
+      }
+    },
+    "automation.new_document": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New document"
+          }
+        }
+      }
+    },
+    "automation.preview.document": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Input: %@. Replace the entire captured document. Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
+          }
+        }
+      }
+    },
+    "automation.preview.output": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Input: %@. Output: %@. Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
+          }
+        }
+      }
+    },
+    "automation.preview.selection": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Input: %@. Replace the captured selection. Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
+          }
+        }
+      }
+    },
+    "automation.reminders": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reminders"
+          }
+        }
+      }
+    },
+    "automation.selected_text": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected text"
+          }
+        }
+      }
+    },
+    "count.bookmark.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ bookmark"
+          }
+        }
+      }
+    },
+    "count.bookmark.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ bookmarks"
+          }
+        }
+      }
+    },
+    "count.character.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ character (code point)"
+          }
+        }
+      }
+    },
+    "count.character.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ characters (code points)"
+          }
+        }
+      }
+    },
+    "count.document.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ document"
+          }
+        }
+      }
+    },
+    "count.document.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ documents"
+          }
+        }
+      }
+    },
+    "count.file.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ file"
+          }
+        }
+      }
+    },
+    "count.file.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ files"
+          }
+        }
+      }
+    },
+    "count.folder.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ folder"
+          }
+        }
+      }
+    },
+    "count.folder.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ folders"
+          }
+        }
+      }
+    },
+    "count.item.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ item"
+          }
+        }
+      }
+    },
+    "count.item.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ items"
+          }
+        }
+      }
+    },
+    "count.line.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ line"
+          }
+        }
+      }
+    },
+    "count.line.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ lines"
+          }
+        }
+      }
+    },
+    "count.match.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ match"
+          }
+        }
+      }
+    },
+    "count.match.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ matches"
+          }
+        }
+      }
+    },
+    "count.recoveryCopy.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ recovery copy"
+          }
+        }
+      }
+    },
+    "count.recoveryCopy.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ recovery copies"
+          }
+        }
+      }
+    },
+    "count.rule.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ rule"
+          }
+        }
+      }
+    },
+    "count.rule.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ rules"
+          }
+        }
+      }
+    },
+    "count.selection.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ selection"
+          }
+        }
+      }
+    },
+    "count.selection.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ selections"
+          }
+        }
+      }
+    },
+    "encoding.bom": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ with BOM"
+          }
+        }
+      }
+    },
+    "encoding.latin1": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ISO-8859-1"
+          }
+        }
+      }
+    },
+    "encoding.utf16be": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "UTF-16 BE"
+          }
+        }
+      }
+    },
+    "encoding.utf16le": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "UTF-16 LE"
+          }
+        }
+      }
+    },
+    "encoding.utf8": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "UTF-8"
+          }
+        }
+      }
+    },
+    "encoding.windows1252": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Windows-1252"
+          }
+        }
+      }
+    },
+    "folder.cancelled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelled; partial results"
+          }
+        }
+      }
+    },
+    "folder.complete": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Complete"
+          }
+        }
+      }
+    },
+    "folder.limit.bytes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "total data read"
+          }
+        }
+      }
+    },
+    "folder.limit.entries": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "entries visited"
+          }
+        }
+      }
+    },
+    "folder.limit.files": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "files considered"
+          }
+        }
+      }
+    },
+    "folder.limit.results": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "search results"
+          }
+        }
+      }
+    },
+    "folder.limited": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Limit reached: %@; partial results"
+          }
+        }
+      }
+    },
+    "folder.limits": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Limits: %@ files; %@ entries; %@ per file; %@ total; %@ results. Symbolic links are excluded. Filename filters: %@."
+          }
+        }
+      }
+    },
+    "folder.progress.0.0": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Searching: %@ files; %@ matches; %@ read…"
+          }
+        }
+      }
+    },
+    "folder.progress.0.1": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Searching: %@ files; %@ match; %@ read…"
+          }
+        }
+      }
+    },
+    "folder.progress.1.0": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Searching: %@ file; %@ matches; %@ read…"
+          }
+        }
+      }
+    },
+    "folder.progress.1.1": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Searching: %@ file; %@ match; %@ read…"
+          }
+        }
+      }
+    },
+    "folder.replaced.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ file replaced · %@ unchanged/skipped/failed. Recovery copies retained."
+          }
+        }
+      }
+    },
+    "folder.replaced.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ files replaced · %@ unchanged/skipped/failed. Recovery copies retained."
+          }
+        }
+      }
+    },
+    "folder.summary.0.0": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ matches in %@ files searched. Not searched: %@. Excluded: %@. Status: %@."
+          }
+        }
+      }
+    },
+    "folder.summary.0.1": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ matches in %@ file searched. Not searched: %@. Excluded: %@. Status: %@."
+          }
+        }
+      }
+    },
+    "folder.summary.1.0": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ match in %@ files searched. Not searched: %@. Excluded: %@. Status: %@."
+          }
+        }
+      }
+    },
+    "folder.summary.1.1": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ match in %@ file searched. Not searched: %@. Excluded: %@. Status: %@."
+          }
+        }
+      }
+    },
+    "reminders.send.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send %@ Item"
+          }
+        }
+      }
+    },
+    "reminders.send.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send %@ Items"
+          }
+        }
+      }
+    },
+    "reminders.send.title.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send %@ Reminder Item"
+          }
+        }
+      }
+    },
+    "reminders.send.title.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send %@ Reminder Items"
+          }
+        }
+      }
+    },
+    "replacement.cancelled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelled"
+          }
+        }
+      }
+    },
+    "replacement.conflict": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changed since search"
+          }
+        }
+      }
+    },
+    "replacement.failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed"
+          }
+        }
+      }
+    },
+    "replacement.replaced": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replaced"
+          }
+        }
+      }
+    },
+    "replacement.skipped": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skipped"
+          }
+        }
+      }
+    },
+    "replacement.unchanged": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unchanged"
+          }
+        }
+      }
+    },
+    "rules.load.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load %@ rule from ‘%@’. Canceling the builder will still preserve the saved automation."
+          }
+        }
+      }
+    },
+    "rules.load.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load %@ rules from ‘%@’. Canceling the builder will still preserve the saved automation."
+          }
+        }
+      }
+    },
+    "search.bookmarked.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bookmarked matching lines; %@ changed document skipped."
+          }
+        }
+      }
+    },
+    "search.bookmarked.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bookmarked matching lines; %@ changed documents skipped."
+          }
+        }
+      }
+    },
+    "search.cleared.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cleared search highlights from %@ document."
+          }
+        }
+      }
+    },
+    "search.cleared.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cleared search highlights from %@ documents."
+          }
+        }
+      }
+    },
+    "search.found.many.many.complete": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ matches in %@ documents."
+          }
+        }
+      }
+    },
+    "search.found.many.many.truncated": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ matches in %@ documents; result limit reached."
+          }
+        }
+      }
+    },
+    "search.found.many.one.complete": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ matches in %@ document."
+          }
+        }
+      }
+    },
+    "search.found.many.one.truncated": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ matches in %@ document; result limit reached."
+          }
+        }
+      }
+    },
+    "search.found.one.many.complete": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ match in %@ documents."
+          }
+        }
+      }
+    },
+    "search.found.one.many.truncated": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ match in %@ documents; result limit reached."
+          }
+        }
+      }
+    },
+    "search.found.one.one.complete": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ match in %@ document."
+          }
+        }
+      }
+    },
+    "search.found.one.one.truncated": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ match in %@ document; result limit reached."
+          }
+        }
+      }
+    },
+    "search.marked.0.0.0": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marked %@ matches; %@ changed/closed documents skipped. %@ zero-width matches have no visible span."
+          }
+        }
+      }
+    },
+    "search.marked.0.0.1": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marked %@ matches; %@ changed/closed documents skipped. %@ zero-width match has no visible span."
+          }
+        }
+      }
+    },
+    "search.marked.0.1.0": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marked %@ matches; %@ changed/closed document skipped. %@ zero-width matches have no visible span."
+          }
+        }
+      }
+    },
+    "search.marked.0.1.1": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marked %@ matches; %@ changed/closed document skipped. %@ zero-width match has no visible span."
+          }
+        }
+      }
+    },
+    "search.marked.1.0.0": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marked %@ match; %@ changed/closed documents skipped. %@ zero-width matches have no visible span."
+          }
+        }
+      }
+    },
+    "search.marked.1.0.1": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marked %@ match; %@ changed/closed documents skipped. %@ zero-width match has no visible span."
+          }
+        }
+      }
+    },
+    "search.marked.1.1.0": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marked %@ match; %@ changed/closed document skipped. %@ zero-width matches have no visible span."
+          }
+        }
+      }
+    },
+    "search.marked.1.1.1": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marked %@ match; %@ changed/closed document skipped. %@ zero-width match has no visible span."
+          }
+        }
+      }
+    },
+    "search.mode.extended": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extended (\\n, \\t, \\xNN)"
+          }
+        }
+      }
+    },
+    "search.mode.normal": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Normal"
+          }
+        }
+      }
+    },
+    "search.mode.regex": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Regular expression (Boost)"
+          }
+        }
+      }
+    },
+    "search.replaced.0.0": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replaced %@ matches; %@ changed documents skipped. Undo is per document."
+          }
+        }
+      }
+    },
+    "search.replaced.0.1": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replaced %@ matches; %@ changed document skipped. Undo is per document."
+          }
+        }
+      }
+    },
+    "search.replaced.1.0": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replaced %@ match; %@ changed documents skipped. Undo is per document."
+          }
+        }
+      }
+    },
+    "search.replaced.1.1": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replaced %@ match; %@ changed document skipped. Undo is per document."
+          }
+        }
+      }
+    },
+    "search.replaced.reasons.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replaced %@ match; documents skipped: %@. Undo is per document."
+          }
+        }
+      }
+    },
+    "search.replaced.reasons.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replaced %@ matches; documents skipped: %@. Undo is per document."
+          }
+        }
+      }
+    },
+    "session.restore.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore %@ Document from %@?"
+          }
+        }
+      }
+    },
+    "session.restore.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore %@ Documents from %@?"
+          }
+        }
+      }
+    },
+    "status.basePoints": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Base %@ pt"
+          }
+        }
+      }
+    },
+    "status.bookmarks": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bookmarks"
+          }
+        }
+      }
+    },
+    "status.characters": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Character count"
+          }
+        }
+      }
+    },
+    "status.document": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Document"
+          }
+        }
+      }
+    },
+    "status.encoding": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encoding"
+          }
+        }
+      }
+    },
+    "status.eol": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Line endings"
+          }
+        }
+      }
+    },
+    "status.fieldValue": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %@"
+          }
+        }
+      }
+    },
+    "status.font": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text size"
+          }
+        }
+      }
+    },
+    "status.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Document status"
+          }
+        }
+      }
+    },
+    "status.indent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indentation"
+          }
+        }
+      }
+    },
+    "status.language": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Language"
+          }
+        }
+      }
+    },
+    "status.lines": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Line count"
+          }
+        }
+      }
+    },
+    "status.options": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@. Show options."
+          }
+        }
+      }
+    },
+    "status.position": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Position"
+          }
+        }
+      }
+    },
+    "status.readOnly": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Document access"
+          }
+        }
+      }
+    },
+    "status.selectedCharacters": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected characters"
+          }
+        }
+      }
+    },
+    "status.selections": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selections"
+          }
+        }
+      }
+    },
+    "status.showOptions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shows options for this field."
+          }
+        }
+      }
+    },
+    "status.wrap": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Line wrapping"
+          }
+        }
+      }
+    },
+    "tab.new": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Tab"
+          }
+        }
+      }
+    },
+    "tab.new.shortcut": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Tab (%@)"
+          }
+        }
+      }
+    },
+    "workspace.counts": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open documents: %@. Saved folders: %@. Recent files: %@."
+          }
+        }
+      }
+    },
+    "workspace.limit": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " · %@-entry listing limit reached"
+          }
+        }
+      }
+    },
+    "workspace.skipped.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ hidden, symbolic-link or special entry skipped"
+          }
+        }
+      }
+    },
+    "workspace.skipped.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ hidden, symbolic-link or special entries skipped"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

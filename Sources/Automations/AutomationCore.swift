@@ -3,8 +3,29 @@ import Foundation
 import Darwin
 
 struct AutomationDefinition: Codable, Equatable, Identifiable {
-    enum Input: String, Codable { case selection, document, clipboard, file }
-    enum Output: String, Codable { case editor, clipboard, newDocument, file, reminders }
+    enum Input: String, Codable, CaseIterable {
+        case selection, document, clipboard, file
+        var displayName: String {
+            switch self {
+            case .selection: return Strings.text("automation.selected_text", "Selected text")
+            case .document: return Strings.text("automation.document", "Document")
+            case .clipboard: return Strings.text("automation.clipboard", "Clipboard")
+            case .file: return Strings.text("automation.file", "File")
+            }
+        }
+    }
+    enum Output: String, Codable, CaseIterable {
+        case editor, clipboard, newDocument, file, reminders
+        var displayName: String {
+            switch self {
+            case .editor: return Strings.text("automation.captured_document", "Captured document")
+            case .clipboard: return Strings.text("automation.clipboard", "Clipboard")
+            case .newDocument: return Strings.text("automation.new_document", "New document")
+            case .file: return Strings.text("automation.file", "File")
+            case .reminders: return Strings.text("automation.reminders", "Reminders")
+            }
+        }
+    }
     struct Step: Codable, Equatable {
         /// Raw values are the persisted spellings in Automations.json and rule files and never
         /// change. The five `clear…` kinds empty a matching line and keep its line ending, so their
