@@ -367,6 +367,44 @@ import zlib
                 editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 return editor.revision
             }
+            // Only disposable PRIVATE boards participate in these explicit clipboard actions.
+            // The pre-repair direct-general branches are a source-only red: never execute them.
+            let ownedBoard = NSPasteboard.withUniqueName()
+            defer { ownedBoard.releaseGlobally() }
+            let previousEffects = RuntimeEnvironment.dependencies
+            var ownedEffects = RuntimeEnvironment.current
+            ownedEffects.generalPasteboard = { ownedBoard }
+            RuntimeEnvironment.dependencies = ownedEffects
+            defer { RuntimeEnvironment.dependencies = previousEffects }
+            let copyRevision = load("café")
+            let copyRecording = unrecordableEdits
+            check(
+                choose("Copy Styled Text as HTML", []),
+                "F269 styled-copy menu dispatch uses the owned clipboard capability")
+            check(
+                ownedBoard.string(forType: .string) == "café" && ownedBoard.data(forType: .html) != nil,
+                "F269 actual styled-copy action writes HTML and exact plain text to the private board")
+            check(
+                editor.revision == copyRevision && !editor.modified && unrecordableEdits == copyRecording,
+                "F269 styled clipboard export leaves document and recording state unchanged")
+            _ = load("255")
+            check(
+                choose("Number Conversion…", ["Convert", "Copy"]) && ownedBoard.string(forType: .string) == "FF",
+                "F269 actual radix Copy writes only the explicitly owned private board")
+            var deniedEffects = ownedEffects
+            deniedEffects.generalPasteboard = { nil }
+            RuntimeEnvironment.dependencies = deniedEffects
+            let sentinel = ownedBoard.string(forType: .string), beforeDenial = ownedBoard.changeCount
+            rejects("F269 nil clipboard capability refuses radix copy before clearing or writing") {
+                try controller.copyConvertedNumber("denied")
+            }
+            rejects("F269 nil clipboard capability refuses styled copy before clearing or writing") {
+                try controller.copyStyledToClipboard(format: "html")
+            }
+            check(
+                ownedBoard.string(forType: .string) == sentinel && ownedBoard.changeCount == beforeDenial,
+                "F269 refused clipboard actions preserve every private-board write boundary")
+            RuntimeEnvironment.dependencies = ownedEffects
             var dialogRevision = load("abc")
             check(
                 choose("UTF-8 to Hex with Options…", ["Cancel"]) && editor.text == "abc"

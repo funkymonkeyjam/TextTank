@@ -170,8 +170,7 @@ final class UtilityController: NSObject {
             result.addButton(withTitle: "Insert into Editor")
             let action = result.runModal()
             if action == .alertFirstButtonReturn {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(output, forType: .string)
+                try copyConvertedNumber(output)
             } else if action == .alertThirdButtonReturn {
                 // An empty single selection is allowed here: the result is inserted at the caret.
                 let editor = try Self.recheck(
@@ -200,16 +199,35 @@ final class UtilityController: NSObject {
             documentAttributes: [.documentType: type, .characterEncoding: String.Encoding.utf8.rawValue])
         return (data, snapshot.string)
     }
+    private func clipboardForExplicitAction() throws -> NSPasteboard {
+        guard let board = RuntimeEnvironment.current.generalPasteboard() else {
+            throw CocoaError(
+                .featureUnsupported,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Clipboard access is unavailable in this isolated session."
+                ])
+        }
+        return board
+    }
+    func copyConvertedNumber(_ output: String) throws {
+        let board = try clipboardForExplicitAction()
+        board.clearContents()
+        board.setString(output, forType: .string)
+    }
+    func copyStyledToClipboard(format: String) throws {
+        let (data, plain) = try exportData(format: format)
+        let board = try clipboardForExplicitAction()
+        board.clearContents()
+        board.setData(data, forType: format == "html" ? .html : .rtf)
+        board.setString(plain, forType: .string)
+    }
     @objc private func exportStyled(_ sender: NSMenuItem) {
         guard let choice = sender.representedObject as? [String: String], let format = choice["format"] else { return }
         do {
-            let (data, plain) = try exportData(format: format)
             if choice["destination"] == "clipboard" {
-                let pasteboard = NSPasteboard.general
-                pasteboard.clearContents()
-                pasteboard.setData(data, forType: format == "html" ? .html : .rtf)
-                pasteboard.setString(plain, forType: .string)
+                try copyStyledToClipboard(format: format)
             } else {
+                let (data, _) = try exportData(format: format)
                 let panel = NSSavePanel()
                 panel.nameFieldStringValue = "TextTank-export." + format
                 guard panel.runModal() == .OK, let url = panel.url else { return }
