@@ -848,6 +848,12 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         _ report: SearchReport, text: String, revision: UInt, options: SearchOptions, action: String, continuing: Bool,
         in editor: TTEditor
     ) throws -> Bool {
+        // Preserve the pre-extraction cheap rejection boundary: closed/stale/truncated
+        // results must not read selections or scan positions in a captured document.
+        guard !report.truncated else { throw SearchFailure.macroResultLimit }
+        guard editor.window != nil, editor.revision == revision else {
+            throw Self.recordedSearchStopped("the document changed or selection is not on a character boundary")
+        }
         let selection = SearchCore.utf16Range(
             NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart), in: text)
         let snapshot = SearchSession.Snapshot(

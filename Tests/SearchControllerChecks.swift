@@ -14,12 +14,35 @@ final class CountingWindow: NSWindow {
     override var isVisible: Bool { showing }
     override func makeKeyAndOrderFront(_ sender: Any?) { fronted += 1 }
 }
+/// A real native editor counts only the getters that must not run after an early rejection.
+private final class SelectionReadCounterEditor: TTEditor {
+    var selectionReads = 0
+    override var selectionStart: Int {
+        selectionReads += 1
+        return super.selectionStart
+    }
+    override var selectionEnd: Int {
+        selectionReads += 1
+        return super.selectionEnd
+    }
+}
 @main struct SearchControllerChecks {
     @MainActor static func main() async {
         await Checks.run("SearchControllerChecks") {
             let support = try IsolatedSupportDirectory("TextTankSearchControllerChecks")
             defer { support.restore() }
             _ = NSApplication.shared
+            let closedEditor = SelectionReadCounterEditor(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+            closedEditor.text = "alpha"
+            closedEditor.selectionReads = 0
+            rejects("F285 a legacy search rejects a closed native editor") {
+                _ = try SearchController.playLegacyFind(
+                    text: "alpha", matchCase: true, backwards: false, in: closedEditor)
+            }
+            check(
+                closedEditor.selectionReads == 0,
+                "F285 a closed search is rejected before reading or converting editor selections")
+
             // F255: the controller under test keeps its options in a suite of its own, never in the
             // real defaults domain, so nothing is inherited from an earlier run or left behind.
             let suite = "TextTankSearchControllerChecks-" + UUID().uuidString
