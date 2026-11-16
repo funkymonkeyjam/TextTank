@@ -164,6 +164,7 @@ extern NSNotificationName const TTEditorStateDidChangeNotification;
 - (BOOL)setSearchHighlights:(NSArray<NSValue *> *)ranges;
 - (void)clearSearchHighlights;
 
+/// Native Scintilla primitive retained for native control/performance checks. Product Find uses SearchController.
 - (BOOL)find:(NSString *)text matchCase:(BOOL)matchCase backwards:(BOOL)backwards;
 @end
 NS_ASSUME_NONNULL_END

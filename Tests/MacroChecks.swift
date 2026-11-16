@@ -392,54 +392,107 @@ import Foundation
             split.onFocus = nil
             splitWindow.contentView = nil
             reasons = []
-            // Audit27 pre-consolidation characterization, using valid legacy payload sizes.
+            // Audit27: the pre-consolidation accepted 65,537-unit legacy query is now bounded by
+            // the shared engine. Preserve rejection state rather than silently skipping a macro step.
             let longQuery = String(repeating: "q", count: 65_537)
             load(longQuery, caret: 0)
-            check(
-                editor.find(longQuery, matchCase: true, backwards: false),
-                "legacy literal find accepts a 65,537-unit query")
-            var limited = SearchOptions()
-            limited.query = longQuery
-            rejects("shared engine explicitly rejects that legacy query", message: "64 Ki") {
-                _ = try SearchCore.search(longQuery, options: limited)
+            let beforeLimit = editor.revision
+            let overLimit = RecordedMacro(
+                id: UUID(), name: "Old long query",
+                steps: [
+                    .findLiteral(text: longQuery, matchCase: true, backwards: false)
+                ])
+            rejects("legacy find reports the shared 64 Ki query limit", message: "64 Ki") {
+                try controller.play(overLimit, on: editor)
             }
-            for (text, query) in [("İ i", "i"), ("é e\u{301}", "é"), ("Σ σ ς", "σ"), ("Straße STRASSE", "ss")] {
-                load(text, caret: 0)
-                let legacy = editor.find(query, matchCase: false, backwards: false)
+            check(
+                editor.revision == beforeLimit && editor.selectionCaret == 0
+                    && editor.text.utf8.elementsEqual(longQuery.utf8),
+                "a legacy query rejected by the shared limit preserves bytes, revision and selection")
+            let boundaryQuery = String(repeating: "q", count: 65_536)
+            load(boundaryQuery, caret: 0)
+            check(
+                try SearchController.playLegacyFind(text: boundaryQuery, matchCase: true, backwards: false, in: editor),
+                "the shared legacy shim accepts the full 64 Ki query boundary")
+            for (text, query) in [
+                ("İ i", "i"), ("é e\u{301}", "é"), ("Σ σ ς", "σ"), ("Straße STRASSE", "ss"), ("alpha 🦋 alpha", "🦋")
+            ] {
+                load(text, caret: text.utf8.count)
                 var shared = SearchOptions()
                 shared.query = query
                 let first = try SearchCore.search(text, options: shared).hits.first
                 let bytes = first.flatMap { SearchCore.byteRange($0.range, in: text) }
-                print(
-                    "CHARACTERIZE literal \(query.debugDescription) in \(text.debugDescription): legacy=\(legacy ? "\(editor.selectionStart):\(editor.selectionEnd)" : "none") shared=\(bytes.map { "\($0.location):\(NSMaxRange($0))" } ?? "none")"
-                )
+                check(
+                    try SearchController.playLegacyFind(text: query, matchCase: false, backwards: false, in: editor)
+                        && bytes
+                            == NSRange(
+                                location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart),
+                    "legacy Unicode navigation wraps to the same shared-engine bytes")
             }
-            // Application-layer find and replace change the selection and the text outside Scintilla's
-            // recording and are recorded by the caller afterwards; they must stay recordable.
+            for (text, query, anchor, caret, backwards) in [
+                ("aaa", "aa", 1, 1, false), ("aaa", "aa", 3, 3, true),
+                ("ab", "ab", 1, 1, false), ("ab", "ab", 1, 1, true),
+                ("aaa", "aa", 0, 2, false), ("aaa", "aa", 0, 2, true),
+                ("aaa", "aa", 2, 0, true), ("aaa", "aa", 3, 1, false),
+                ("😀😀😀", "😀😀", 4, 4, false)
+            ] {
+                load(text, caret: caret)
+                _ = editor.setSelectionAnchor(anchor, caret: caret)
+                let originalMatched = editor.find(query, matchCase: true, backwards: backwards)
+                let originalStart = editor.selectionStart, originalEnd = editor.selectionEnd
+                let originalAnchor = editor.selectionAnchor, originalCaret = editor.selectionCaret
+                load(text, caret: caret)
+                _ = editor.setSelectionAnchor(anchor, caret: caret)
+                let sharedMatched = try SearchController.playLegacyFind(
+                    text: query, matchCase: true, backwards: backwards, in: editor)
+                print(
+                    "CHARACTERIZE navigation \(text.debugDescription) q=\(query.debugDescription) sel=\(anchor):\(caret) back=\(backwards): native=\(originalMatched):\(originalStart):\(originalEnd) shared=\(sharedMatched):\(editor.selectionStart):\(editor.selectionEnd)"
+                )
+                check(
+                    sharedMatched == originalMatched && editor.selectionStart == originalStart
+                        && editor.selectionEnd == originalEnd,
+                    "shared navigation preserves native literal overlap/interior/wrap boundaries")
+                check(
+                    editor.selectionAnchor == originalAnchor && editor.selectionCaret == originalCaret,
+                    "shared literal navigation preserves native output anchor/caret direction")
+            }
+            // Application actions capture full search parameters, using the same v1 format as the Find window.
+            let sharedFinder = SearchController()
+            var barOptions = SearchOptions()
+            barOptions.query = "egg"
+            barOptions.matchCase = true
             load("egg and egg", caret: 0)
             controller.startRecording()
-            let found = editor.find("egg", matchCase: true, backwards: false)
-            controller.recordFind(text: "egg", matchCase: true, backwards: false, matched: found, editor: editor)
-            if editor.replaceSelection("milk") { controller.recordReplace(text: "milk", editor: editor) }
+            try sharedFinder.playRecorded(options: barOptions, action: "next", on: editor)
+            controller.recordSearch(.init(options: barOptions, action: "next"), editor: editor)
+            barOptions.replacement = "milk"
+            try sharedFinder.playRecorded(options: barOptions, action: "replaceOne", on: editor)
+            controller.recordSearch(.init(options: barOptions, action: "replaceOne"), editor: editor)
             let literal = try controller.finishRecording()
+            var findOptions = barOptions
+            findOptions.replacement = ""
             check(
                 literal?.steps == [
-                    .findLiteral(text: "egg", matchCase: true, backwards: false),
-                    .replaceSelection("milk")
-                ] && editor.text == "milk and egg" && reasons.isEmpty,
-                "a live recording keeps exactly the literal find and the replacement made through the application")
-
-            // F68: a find that matched nothing is not a step.
+                    .search(.init(options: findOptions, action: "next")),
+                    .search(.init(options: barOptions, action: "replaceOne"))
+                ]
+                    && editor.text == "milk and egg" && reasons.isEmpty,
+                "a live recording keeps only shared search steps for Find and strict replacement")
+            // F68: failed navigation is never reported to the recorder as a completed search action.
             load("alpha beta", caret: 0)
             controller.startRecording()
             editor.executeCommand("charRight")
-            let missed = editor.find("absent", matchCase: false, backwards: false)
-            controller.recordFind(text: "absent", matchCase: false, backwards: false, matched: missed, editor: editor)
+            barOptions.query = "absent"
+            rejects("a missed shared navigation reports no match", message: "did not match") {
+                try sharedFinder.playRecorded(options: barOptions, action: "next", on: editor)
+            }
             check(
-                try !missed && controller.finishRecording()?.steps == [.command("charRight")],
-                "a literal find that did not match is left out of the recording")
+                try controller.finishRecording()?.steps == [.command("charRight")],
+                "a find that did not match is left out of the recording")
             controller.startRecording()
-            controller.recordFind(text: "absent", matchCase: false, backwards: false, matched: false, editor: editor)
+            rejects("an unmatched search reports failure", message: "did not match") {
+                try sharedFinder.playRecorded(options: barOptions, action: "next", on: editor)
+            }
             rejects("a recording of only an unmatched find saves nothing", message: "No supported editing actions") {
                 _ = try controller.finishRecording()
             }
@@ -897,7 +950,9 @@ import Foundation
                 // F207: a recorded replacement is not appended when the editor refused it.
                 controller.startRecording()
                 editor.executeCommand("charRight")
-                if editor.replaceSelection("never") { controller.recordReplace(text: "never", editor: editor) }
+                if editor.replaceSelection("never") {
+                    controller.recordSearch(.init(options: SearchOptions(), action: "replaceOne"), editor: editor)
+                }
                 check(
                     try controller.finishRecording()?.steps.map(\.kind) == [.command],
                     "a replacement the read-only editor refused is not recorded as a macro step")

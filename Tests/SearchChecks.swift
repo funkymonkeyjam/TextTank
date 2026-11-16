@@ -529,6 +529,34 @@ final class CancelAfterPolls: TTSearchCancellation {
             check(
                 message { _ = try SearchCore.search("a", options: bad) }.contains("search expression"),
                 "oversized search expression is named")
+            var overlapping = SearchOptions(query: "aa", replacement: "X", matchCase: true)
+            let allAA = try SearchCore.search("aaa", options: overlapping)
+            let nextAA = try SearchCore.search("aaa", options: overlapping, purpose: .navigation)
+            check(
+                allAA.hits.map(\.range) == [NSRange(location: 0, length: 2)]
+                    && nextAA.hits.map(\.range) == [NSRange(location: 0, length: 2), NSRange(location: 1, length: 2)],
+                "navigation purpose enumerates overlapping literals while Find All remains nonoverlap")
+            let boundedAA = try SearchCore.search("aaa", options: overlapping, limit: 1, purpose: .navigation)
+            check(
+                boundedAA.hits.count == 1 && boundedAA.truncated, "overlapping navigation keeps the existing result cap"
+            )
+            overlapping.query = "😀😀"
+            check(
+                try SearchCore.search("😀😀😀", options: overlapping, purpose: .navigation).hits.map(\.range)
+                    == [NSRange(location: 0, length: 4), NSRange(location: 2, length: 4)],
+                "overlapping navigation advances past whole astral scalars")
+            overlapping.query = "\u{301}\u{301}"
+            check(
+                try SearchCore.search("e\u{301}\u{301}\u{301}", options: overlapping, purpose: .navigation).hits.map(
+                    \.range)
+                    == [NSRange(location: 1, length: 2), NSRange(location: 2, length: 2)],
+                "overlapping navigation advances by scalar rather than grapheme")
+            overlapping.query = #"\x61\x61"#
+            overlapping.mode = .extended
+            check(
+                try SearchCore.search("aaa", options: overlapping, purpose: .navigation).hits.count == 2
+                    && SearchCore.search("aaa", options: overlapping).hits.count == 1,
+                "extended literals share the navigation-purpose matcher")
             bad.query = ""
             check(
                 message { _ = try SearchCore.search("a", options: bad) }.contains("nonempty"),

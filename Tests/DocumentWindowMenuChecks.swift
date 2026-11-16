@@ -8,6 +8,12 @@
 import AppKit
 import UniformTypeIdentifiers
 
+/// Lets the real application dispatcher observe an open Find window without putting it on screen.
+private final class OffscreenFindRoutingWindow: NSWindow {
+    override var isVisible: Bool { true }
+    override func makeKeyAndOrderFront(_ sender: Any?) {}
+}
+
 extension DocumentChecks {
     @MainActor static func windowMenuAndKeyboard(
         root: URL, app: NSApplication, sessionDelegate: AppDelegate, section: SectionRunner
@@ -730,32 +736,273 @@ extension DocumentChecks {
             check(
                 !isOpen(spare) && isOpen(document) && isOpen(plain),
                 "File > Close still closes only the current tab and leaves the others open")
+            controller.findField.stringValue = "alpha"
+            controller.replaceField.stringValue = "changed"
+            document.editor.text = "alpha beta"
+            _ = document.editor.setSelectionAnchor(0, caret: 0)
+            let caretRevision = document.editor.revision
+            let barButtons = descendants(try requireValue(controller.findBar, "fixture: find bar")).compactMap {
+                $0 as? NSButton
+            }
+            let replaceMatchButton = try requireValue(
+                barButtons.first { $0.title == "Replace Selection" }, "fixture: Replace Selection button")
+            let nextMatchButton = try requireValue(barButtons.first { $0.title == "Next" }, "fixture: Next button")
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            check(
+                !replaceMatchButton.isEnabled && nextMatchButton.isEnabled,
+                "DS21 caret disables Replace Selection while Find Next remains available")
+            try controller.replaceSelectionFromBar()
+            check(
+                document.editor.text == "alpha beta" && document.editor.revision == caretRevision,
+                "F17 Replace Selection with only a caret never inserts text")
+            _ = document.editor.setSelectionAnchor(6, caret: 10)
+            try controller.replaceSelectionFromBar()
+            spinUntil("a nonmatching selected replacement to finish") { !controller.inlineSearchPending }
+            check(
+                document.editor.text == "alpha beta" && document.editor.revision == caretRevision,
+                "F17 Replace Selection refuses selected text that is not the query")
+            _ = document.editor.setSelectionRanges([["anchor": 0, "caret": 5], ["anchor": 6, "caret": 10]])
+            try controller.replaceSelectionFromBar()
+            check(
+                document.editor.text == "alpha beta" && document.editor.revision == caretRevision
+                    && document.editor.selectionCount == 2,
+                "F17 Replace Selection refuses multiple selections before any edit")
+            _ = document.editor.setSelectionAnchor(5, caret: 0)
+            spinUntil("the single selection to enable Replace") { replaceMatchButton.isEnabled }
+            document.editor.readOnly = true
+            spinUntil("read-only metadata to disable Replace") { !replaceMatchButton.isEnabled }
+            check(nextMatchButton.isEnabled, "DS21 read-only keeps Find Next available")
+            document.editor.readOnly = false
+            spinUntil("writable metadata to re-enable Replace") { replaceMatchButton.isEnabled }
+            controller.findField.stringValue = ""
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            check(
+                !replaceMatchButton.isEnabled && !nextMatchButton.isEnabled,
+                "DS21 an empty query disables both inline buttons")
+            controller.findField.stringValue = String(repeating: "q", count: 65_537)
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            check(
+                !replaceMatchButton.isEnabled && !nextMatchButton.isEnabled,
+                "DS21 a known oversized query disables both inline buttons")
+            controller.findField.stringValue = "alpha"
+            controller.replaceField.stringValue = String(repeating: "x", count: 1_048_577)
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.replaceField))
+            check(
+                !replaceMatchButton.isEnabled && nextMatchButton.isEnabled,
+                "DS21 an oversized replacement disables Replace without blocking Find")
+            controller.replaceField.stringValue = "changed"
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.replaceField))
+            check(
+                replaceMatchButton.isEnabled && nextMatchButton.isEnabled,
+                "DS21 valid query, replacement and writable selection enable both buttons")
+            document.editor.resetUndoHistory()
+            try controller.replaceSelectionFromBar()
+            check(
+                !replaceMatchButton.isEnabled && !nextMatchButton.isEnabled,
+                "DS21 pending inline work disables both buttons until completion")
+            spinUntil("a selected-match replacement to finish") { !controller.inlineSearchPending }
+
+            check(
+                document.editor.text == "changed beta" && document.editor.selectionAnchor == 7
+                    && document.editor.selectionCaret == 0,
+                "F17 strict replacement carries the reversed selection through the replacement")
+            document.editor.executeCommand("undo")
+            check(
+                document.editor.text == "alpha beta" && document.editor.selectionAnchor == 5
+                    && document.editor.selectionCaret == 0,
+                "one Undo restores the inline replacement and its reversed selection")
+            document.editor.text = "aaa"
+            controller.findField.stringValue = "aa"
+            controller.replaceField.stringValue = "X"
+            _ = document.editor.setSelectionAnchor(1, caret: 1)
+            controller.findFromMenu(backwards: false)
+            spinUntil("inline overlapping navigation to finish") { !controller.inlineSearchPending }
+            check(
+                document.editor.selectionStart == 1 && document.editor.selectionEnd == 3,
+                "inline navigation selects the overlapping literal from an interior caret")
+            try controller.replaceSelectionFromBar()
+            spinUntil("inline overlapping strict replacement to finish") { !controller.inlineSearchPending }
+            check(document.editor.text == "aX", "inline strict replacement accepts the overlapping selected match")
+            document.editor.executeCommand("undo")
+            check(
+                document.editor.text == "aaa" && document.editor.selectionStart == 1
+                    && document.editor.selectionEnd == 3,
+                "one Undo restores the inline overlapping match")
+            controller.findField.stringValue = ""
             // N6: the find bar is out of the way until asked for, and works from the keyboard path.
             check(!controller.findBarVisible, "the find bar is hidden until Find is chosen")
             document.editor.text = "alpha beta alpha\n"
             EditorWindowController.findPasteboardText = ""
             controller.findFromMenu(backwards: false)
+            spinUntil("inline Find to finish") { !controller.inlineSearchPending }
             check(controller.findBarVisible, "Find Next with nothing to find opens the find bar")
             controller.findField.stringValue = "alpha"
             controller.findFromMenu(backwards: false)
+            spinUntil("inline Find to finish") { !controller.inlineSearchPending }
+            check(
+                (controller.window?.firstResponder as? NSView)?.isDescendant(of: document.editor) == true,
+                "DS35 menu Find Next leaves keyboard focus in the document")
             let firstMatch = document.editor.selectionStart
             check(document.editor.selectedText == "alpha", "Find Next selects a match of the find bar's text")
             controller.findFromMenu(backwards: false)
+            spinUntil("inline Find to finish") { !controller.inlineSearchPending }
             check(
                 document.editor.selectedText == "alpha" && document.editor.selectionStart != firstMatch,
                 "Find Next again moves to the following match")
             check(
                 EditorWindowController.findPasteboardText == "alpha",
                 "the text searched for is shared through the find pasteboard")
+            controller.showFind(nil)
             let field = controller.findField
+            let fieldEditor = controller.window?.firstResponder
             check(
                 controller.control(
                     field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:))),
                 "Return in the find field is handled as Find Next")
+            spinUntil("Return Find to finish") { !controller.inlineSearchPending }
+            check(
+                controller.window?.firstResponder === fieldEditor && field.currentEditor() === fieldEditor,
+                "DS35 Return retains the Find field editor for repeated navigation")
+            let afterReturn = document.editor.selectionStart
+            controller.performFind(backwards: true, focusEditor: false)
+            spinUntil("backwards field Find to finish") { !controller.inlineSearchPending }
+            check(
+                document.editor.selectedText == "alpha" && document.editor.selectionStart != afterReturn
+                    && controller.window?.firstResponder === fieldEditor,
+                "DS35 backwards field navigation retains the field editor")
+            // A real bar action records shared search only after the asynchronous result applies.
+            sessionDelegate.lastDocumentController = controller
+            let beforeBarRecording = document.editor.text
+            let recordingAnchor = document.editor.selectionAnchor, recordingCaret = document.editor.selectionCaret
+            sessionDelegate.macros.startRecording()
+            controller.findFromMenu(backwards: false)
+            spinUntil("recorded bar Find to finish") { !controller.inlineSearchPending }
+            controller.replaceField.stringValue = "ALPHA"
+            try controller.replaceSelectionFromBar()
+            spinUntil("recorded bar replacement to finish") { !controller.inlineSearchPending }
+            let capturedBar = try sessionDelegate.macros.finishRecording()
+            check(
+                capturedBar?.steps.map(\.kind) == [.search, .search]
+                    && capturedBar?.steps.compactMap(\.search).map(\.action) == ["next", "replaceOne"],
+                "the actual bar captures search steps for navigation and strict replacement")
+            let replayedText = document.editor.text
+            // Native control: the original literal primitive plus its first edit. Scintilla Undo
+            // remembers the first edit's selection; the preceding pure navigation is not an edit.
+            document.editor.text = beforeBarRecording
+            _ = document.editor.setSelectionAnchor(recordingAnchor, caret: recordingCaret)
+            document.editor.resetUndoHistory()
+            var firstEditAnchor = 0, firstEditCaret = 0
+            do {
+                document.editor.beginUndoGroup()
+                defer { document.editor.endUndoGroup() }
+                try require(
+                    document.editor.find("alpha", matchCase: false, backwards: false),
+                    "fixture: native primitive control finds the same match")
+                firstEditAnchor = document.editor.selectionAnchor
+                firstEditCaret = document.editor.selectionCaret
+                try require(
+                    document.editor.replaceSelection("ALPHA"),
+                    "fixture: native primitive control replaces its first match")
+            }
+            check(
+                document.editor.text.utf8.elementsEqual(replayedText.utf8),
+                "native primitive control reaches the same text as the captured bar flow")
+            document.editor.executeCommand("undo")
+            check(
+                document.editor.text == beforeBarRecording && document.editor.selectionAnchor == firstEditAnchor
+                    && document.editor.selectionCaret == firstEditCaret,
+                "native control Undo restores the first edit selection rather than pre-navigation selection")
+            document.editor.text = beforeBarRecording
+            _ = document.editor.setSelectionAnchor(recordingAnchor, caret: recordingCaret)
+            document.editor.resetUndoHistory()
+            let priorPlayback = sessionDelegate.macros.searchPlayback
+            sessionDelegate.macros.searchPlayback = { search, target in
+                var options = SearchOptions()
+                options.query = search.query
+                options.replacement = search.replacement
+                options.matchCase = search.matchCase
+                try sessionDelegate.searchController.playRecorded(options: options, action: search.action, on: target)
+            }
+            defer { sessionDelegate.macros.searchPlayback = priorPlayback }
+            try sessionDelegate.macros.play(
+                try requireValue(capturedBar, "fixture: captured inline macro"), on: document.editor)
+            check(
+                document.editor.text.utf8.elementsEqual(replayedText.utf8),
+                "captured bar search steps replay to the exact same document bytes")
+            document.editor.executeCommand("undo")
+            check(
+                document.editor.text == beforeBarRecording && document.editor.selectionAnchor == firstEditAnchor
+                    && document.editor.selectionCaret == firstEditCaret,
+                "one Undo of the replay restores the same text and first-edit selection as the native control")
+            // The previously accepted oversized query is explicitly refused by the bounded shared path.
+            sessionDelegate.macros.startRecording()
+            document.editor.executeCommand("charRight")
+            let beforeLimitRevision = document.editor.revision, beforeLimitAnchor = document.editor.selectionAnchor,
+                beforeLimitCaret = document.editor.selectionCaret, beforeLimitText = document.editor.text
+            controller.findField.stringValue = String(repeating: "q", count: 65_537)
+            controller.findFromMenu(backwards: false)
+            spinUntil("the bounded inline query refusal to finish") { !controller.inlineSearchPending }
+            check(
+                controller.status.stringValue.contains("64 Ki") && document.editor.revision == beforeLimitRevision
+                    && document.editor.selectionAnchor == beforeLimitAnchor
+                    && document.editor.selectionCaret == beforeLimitCaret
+                    && document.editor.text.utf8.elementsEqual(beforeLimitText.utf8),
+                "an oversized inline query reports the limit and preserves bytes, revision and selection")
+            check(
+                try sessionDelegate.macros.finishRecording()?.steps == [.command("charRight")],
+                "an inline query refused by the shared limit adds no recording step")
+            controller.findField.stringValue = "alpha"
+            // Query changes invalidate captured requests before selection, editing or recording.
+            let beforePending = document.editor.revision
+            _ = document.editor.setSelectionAnchor(0, caret: 0)
+            controller.findFromMenu(backwards: false)
+            controller.findField.stringValue = "other"
+            spinUntil("a query-stale bar Find to finish") { !controller.inlineSearchPending }
+            check(
+                document.editor.revision == beforePending && document.editor.selectionCaret == 0,
+                "a changed Find query drops its pending selection")
+            controller.findField.stringValue = "alpha"
+            controller.findFromMenu(backwards: false)
+            controller.hideFind(nil)
+            // FIFO main-actor completion is observed by issuing and finishing a fresh request.
+            controller.findFromMenu(backwards: false)
+            spinUntil("a new bar Find after Escape to finish") { !controller.inlineSearchPending }
+            let advanced = sessionDelegate.searchController
+            let originalFindWindow = advanced.window
+            let routingWindow = OffscreenFindRoutingWindow(
+                contentRect: .zero, styleMask: .titled, backing: .buffered, defer: false)
+            advanced.window = routingWindow
+            defer { advanced.window = originalFindWindow }
+            EditorWindowController.findPasteboardText = "beta"
+            advanced.showSearch(nil)
+            check(advanced.queryField.stringValue == "beta", "the advanced Find window imports the shared Find text")
+            advanced.mode.selectItem(at: 0)
+            advanced.scope.selectItem(at: 0)
+            sessionDelegate.lastDocumentController = controller
+            sessionDelegate.findNextShared(nil)
+            spinUntil("menu navigation through the open advanced window") { !advanced.isSearching }
+            check(
+                document.editor.selectedText == "beta" && !controller.inlineSearchPending
+                    && controller.findField.stringValue == "beta"
+                    && EditorWindowController.findPasteboardText == "beta",
+                "DS35 menu navigation uses the open advanced window and shares its query back to the bar")
+            advanced.queryField.stringValue = "alpha"
+            sessionDelegate.findPreviousShared(nil)
+            spinUntil("previous navigation through the open advanced window") { !advanced.isSearching }
+            check(
+                document.editor.selectedText == "alpha" && controller.findField.stringValue == "alpha",
+                "DS35 Find Previous also routes to the open advanced window")
+            advanced.window = originalFindWindow
             // N4: a failed find is put into words and announced, not only beeped.
             Announce.spoken.removeAll()
             controller.findField.stringValue = "zebra"
             controller.findFromMenu(backwards: false)
+            spinUntil("inline Find to finish") { !controller.inlineSearchPending }
             check(
                 controller.status.stringValue == "No matches for “zebra”."
                     && Announce.spoken.contains("No matches for “zebra”."),

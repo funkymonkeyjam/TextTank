@@ -163,18 +163,8 @@ final class MacroController: NSObject, NSMenuDelegate {
     @objc func stopRecording() {
         do { _ = try finishRecording() } catch { TTAlert.present(error) }
     }
-    /// Root calls only after application-layer literal find; parameters are captured, not read at playback.
-    /// A find that did not match changed nothing and would stop playback, so it is left out (F68).
-    func recordFind(text: String, matchCase: Bool, backwards: Bool, matched: Bool, editor: TTEditor) {
-        guard matched else { return }
-        append(.findLiteral(text: text, matchCase: matchCase, backwards: backwards), editor: editor)
-    }
     func recordSearch(_ search: RecordedMacro.Search, editor: TTEditor) {
         append(.search(search), editor: editor)
-    }
-    /// The bridge's target-based replaceSelection is not SCN_MACRORECORD text input.
-    func recordReplace(text: String, editor: TTEditor) {
-        append(.replaceSelection(text), editor: editor)
     }
     private func append(_ step: RecordedMacro.Step, editor: TTEditor) {
         guard recordingEditor != nil, !playing, captureError == nil else { return }
@@ -461,7 +451,10 @@ private final class MacroPlayback {
                 }
                 try searchPlayback(search, editor)
             case .findLiteral(let text, let matchCase, let backwards):
-                guard editor.find(text, matchCase: matchCase, backwards: backwards) else {
+                guard
+                    try SearchController.playLegacyFind(
+                        text: text, matchCase: matchCase, backwards: backwards, in: editor)
+                else {
                     throw MacroError.invalid("Macro stopped: literal find did not match. Prior edits remain undoable.")
                 }
             case .replaceSelection(let text):
@@ -488,5 +481,15 @@ private final class MacroPlayback {
             }
         }
         return false
+    }
+}
+
+/// Capture immutable options once for both the bar and the advanced Find window.
+extension RecordedMacro.Search {
+    init(options: SearchOptions, action: String) {
+        self.init(
+            query: options.query, replacement: options.replacement, mode: options.mode.rawValue,
+            matchCase: options.matchCase, wholeWord: options.wholeWord,
+            dotMatchesNewline: options.dotMatchesNewline, wrap: options.wrap, action: action)
     }
 }

@@ -27,6 +27,13 @@ NS_ASSUME_NONNULL_BEGIN
     matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord dotMatchesNewline:(BOOL)dotMatchesNewline
     cancellation:(TTSearchCancellation *)cancellation maximumMatches:(NSInteger)maximumMatches
     timeLimit:(NSTimeInterval)timeLimit error:(NSError **)error;
+/// Navigation/strict-single-replacement variant. Only literal/extended matching enumerates
+/// overlapping hits, advancing one Unicode scalar at a time; regex and all safety budgets are unchanged.
++ (nullable TTSearchResult *)searchText:(NSString *)text range:(NSRange)range
+    query:(NSString *)query replacement:(NSString *)replacement mode:(NSInteger)mode
+    matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord dotMatchesNewline:(BOOL)dotMatchesNewline
+    cancellation:(TTSearchCancellation *)cancellation maximumMatches:(NSInteger)maximumMatches
+    overlappingLiterals:(BOOL)overlappingLiterals timeLimit:(NSTimeInterval)timeLimit error:(NSError **)error;
 /// The whole text, as a dictionary: "matches" is an array of {"range": NSValue, "replacement":
 /// NSString} and "truncated" an NSNumber. Kept as a thin wrapper over searchText:range:.
 + (nullable NSDictionary<NSString *, id> *)matchesInText:(NSString *)text

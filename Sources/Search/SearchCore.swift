@@ -43,15 +43,18 @@ struct SearchHit {
 struct SearchReport {
     let hits: [SearchHit]
     let truncated: Bool
+    let purpose: SearchCore.Purpose
 }
 enum SearchFailure: LocalizedError, CustomNSError, Equatable {
-    case preferencesTooLarge, preferencesVersion
+    case preferencesTooLarge, preferencesVersion, inlineResultLimit, inlineReplacement(String)
     case invalidBookmarkLimit, bookmarkCancelled, bookmarkOffsetsUnordered, bookmarkOffsetOutOfBounds
     case replacementCancelled, invalidReplacementRange, macroResultLimit, macroReplacement(String)
     case unknownRecordedAction, macroStopped(String)
     static var errorDomain: String { "TextTank.Search" }
     var errorCode: Int {
         switch self {
+        case .inlineResultLimit: return 12
+        case .inlineReplacement: return 13
         case .preferencesTooLarge: return 10
         case .preferencesVersion: return 11
         case .invalidReplacementRange: return 3
@@ -65,6 +68,10 @@ enum SearchFailure: LocalizedError, CustomNSError, Equatable {
     }
     var errorDescription: String? {
         switch self {
+        case .inlineResultLimit:
+            return "The search reached the result limit. Narrow the Find text and search again; nothing was changed."
+        case .inlineReplacement(let reason):
+            return "The selected match could not be replaced because \(reason). Nothing was changed."
         case .preferencesTooLarge:
             return
                 "The search text or replacement is too large to keep as saved settings. The search can still run; earlier saved settings were not changed."
@@ -88,6 +95,7 @@ enum SearchFailure: LocalizedError, CustomNSError, Equatable {
 }
 
 enum SearchCore {
+    enum Purpose: Sendable, Equatable { case allMatches, navigation }
     /// One forward UTF-16 pass over zero-based lines. A break is counted once its terminator has
     /// been passed in full, so an offset between CR and LF is still on the line that owns the
     /// CRLF, as in Scintilla.
@@ -134,16 +142,16 @@ enum SearchCore {
     static func search(
         _ text: String, options: SearchOptions, range: NSRange? = nil,
         cancellation: TTSearchCancellation = TTSearchCancellation(), limit: Int = 100000,
-        timeLimit: TimeInterval = defaultTimeLimit
+        timeLimit: TimeInterval = defaultTimeLimit, purpose: Purpose = .allMatches
     ) throws -> SearchReport {
         let result = try TTSearchEngine.searchText(
             text, range: range ?? NSRange(location: 0, length: (text as NSString).length), query: options.query,
             replacement: options.replacement, mode: options.mode.rawValue, matchCase: options.matchCase,
             wholeWord: options.wholeWord, dotMatchesNewline: options.dotMatchesNewline, cancellation: cancellation,
-            maximumMatches: limit, timeLimit: timeLimit)
+            maximumMatches: limit, overlappingLiterals: purpose == .navigation, timeLimit: timeLimit)
         return SearchReport(
             hits: result.matches.map { SearchHit(range: $0.range, replacement: $0.replacement) },
-            truncated: result.truncated)
+            truncated: result.truncated, purpose: purpose)
     }
     /// Scalar-granular like byteRanges: nil for surrogate splits, negative and out-of-range input.
     static func byteRange(_ range: NSRange, in text: String) -> NSRange? { byteRanges([range], in: text)?.first }
@@ -224,6 +232,15 @@ enum SearchCore {
         backwards
             ? NSMaxRange(range) <= selection.location && !(continuing && range == selection)
             : range.location >= NSMaxRange(selection) && !(continuing && range == selection)
+    }
+    /// A literal wrap searches the other side of the original boundary, never a match crossing
+    /// that boundary. Regex navigation retains its whole-report/zero-width semantics.
+    static func isWrappedNavigationCandidate(
+        _ range: NSRange, from selection: NSRange, backwards: Bool,
+        mode: SearchOptions.Mode
+    ) -> Bool {
+        mode == .regularExpression
+            || (backwards ? range.location >= selection.location : NSMaxRange(range) <= NSMaxRange(selection))
     }
     static func utf16Range(_ range: NSRange, in text: String) -> NSRange? {
         let bytes = text.utf8

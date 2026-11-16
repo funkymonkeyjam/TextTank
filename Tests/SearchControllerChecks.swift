@@ -77,6 +77,158 @@ final class CountingWindow: NSWindow {
             controller.mode.selectItem(at: 0)
             controller.caseButton.state = .off
             controller.queryField.stringValue = ""
+            // Navigation reports are distinct from nonoverlapping Find All/Replace All reports.
+            editor.text = "aaa"
+            controller.queryField.stringValue = "aa"
+            controller.replacementField.stringValue = "X"
+            controller.caseButton.state = .on
+            controller.findAll(nil)
+            await finished()
+            check(
+                controller.lastOutcome == .found(matches: 1, documents: 1, truncated: false),
+                "Find All keeps the nonoverlapping literal report")
+            let beforePurposeReuse = controller.reusedResults
+            _ = editor.setSelectionAnchor(1, caret: 1)
+            controller.next(nil)
+            await finished()
+            check(
+                editor.selectionStart == 1 && editor.selectionEnd == 3 && controller.reusedResults == beforePurposeReuse
+                    && controller.lastOutcome == .found(matches: 2, documents: 1, truncated: false),
+                "advanced Next requests overlapping navigation instead of reusing Find All rows")
+            _ = editor.setSelectionAnchor(3, caret: 3)
+            controller.previous(nil)
+            check(
+                !controller.isSearching && editor.selectionStart == 1 && editor.selectionEnd == 3
+                    && controller.reusedResults == beforePurposeReuse + 1,
+                "advanced Previous reuses the overlapping navigation report")
+            controller.replaceAll(nil)
+            await finished()
+            check(editor.text == "Xa", "Replace All never applies overlapping navigation rows")
+            editor.executeCommand("undo")
+            check(editor.text == "aaa", "nonoverlapping Replace All remains one Undo")
+            _ = editor.setSelectionAnchor(3, caret: 1)
+            controller.replaceOne(nil)
+            await finished()
+            check(editor.text == "aX", "strict single Replace accepts an overlapping selected match")
+            editor.executeCommand("undo")
+            check(
+                editor.text == "aaa" && editor.selectionAnchor == 3 && editor.selectionCaret == 1,
+                "Undo of overlapping single Replace restores its reversed match selection")
+            editor.text = "ab"
+            _ = editor.setSelectionAnchor(1, caret: 1)
+            controller.queryField.stringValue = "ab"
+            controller.next(nil)
+            await finished()
+            check(
+                editor.selectionCaret == 1 && controller.lastOutcome == .noFurtherMatches,
+                "advanced literal wrap never crosses its original interior caret boundary")
+            controller.previous(nil)
+            check(
+                editor.selectionCaret == 1 && controller.lastOutcome == .noFurtherMatches,
+                "backwards literal wrap also excludes the cross-boundary match")
+            controller.queryField.stringValue = ""
+            controller.replacementField.stringValue = ""
+            controller.caseButton.state = .off
+            // Audit27: inline scheduling is separate from the Find window's cache/scopes, but
+            // applies the same report with exact capture/revalidation and cooperative cancellation.
+            var inlineOptions = SearchOptions()
+            inlineOptions.query = "alpha"
+            inlineOptions.replacement = "X"
+            var inlineResult: InlineSearchOutcome?
+            @MainActor func inlineFinished() async {
+                await waitUntil("the inline search completion") { inlineResult != nil }
+            }
+            editor.text = "alpha beta"
+            _ = editor.setSelectionAnchor(0, caret: 5)
+            let capturedInline = editor.revision
+            controller.performInline(
+                options: inlineOptions, action: "replaceOne", on: editor,
+                cancellation: TTSearchCancellation(), isCurrent: { true }, completion: { inlineResult = $0 })
+            _ = editor.setSelectionAnchor(6, caret: 10)
+            await inlineFinished()
+            if case .stale = inlineResult {
+                check(true, "selection changes discard pending inline replacement")
+            } else {
+                check(false, "selection changes discard pending inline replacement")
+            }
+            check(
+                editor.text == "alpha beta" && editor.revision == capturedInline && editor.selectionStart == 6,
+                "stale inline replacement preserves bytes, revision and the new selection")
+            inlineResult = nil
+            _ = editor.setSelectionAnchor(0, caret: 5)
+            let cancelInline = TTSearchCancellation()
+            controller.performInline(
+                options: inlineOptions, action: "replaceOne", on: editor,
+                cancellation: cancelInline, isCurrent: { true }, completion: { inlineResult = $0 })
+            cancelInline.cancel()
+            await inlineFinished()
+            if case .cancelled = inlineResult {
+                check(true, "inline cancellation reports normal completion without replacement")
+            } else {
+                check(false, "inline cancellation reports normal completion without replacement")
+            }
+            check(
+                editor.text == "alpha beta" && editor.revision == capturedInline,
+                "cancelled inline replacement preserves text and revision")
+            inlineResult = nil
+            controller.performInline(
+                options: inlineOptions, action: "next", on: editor,
+                cancellation: TTSearchCancellation(), isCurrent: { false }, completion: { inlineResult = $0 })
+            await inlineFinished()
+            if case .stale = inlineResult {
+                check(true, "caller query-generation guard blocks pending selection")
+            } else {
+                check(false, "caller query-generation guard blocks pending selection")
+            }
+            inlineResult = nil
+            controller.performInline(
+                options: inlineOptions, action: "replaceOne", on: editor,
+                cancellation: TTSearchCancellation(), isCurrent: { true }, completion: { inlineResult = $0 })
+            editor.text = "edited while searching"
+            let editedInlineRevision = editor.revision
+            await inlineFinished()
+            if case .stale = inlineResult {
+                check(true, "document revision changes discard inline replacement")
+            } else {
+                check(false, "document revision changes discard inline replacement")
+            }
+            check(
+                editor.text == "edited while searching" && editor.revision == editedInlineRevision,
+                "stale inline completion never overwrites a concurrent edit")
+            inlineResult = nil
+            editor.text = "alpha beta"
+            _ = editor.setSelectionAnchor(0, caret: 5)
+            controller.performInline(
+                options: inlineOptions, action: "replaceOne", on: editor,
+                cancellation: TTSearchCancellation(), isCurrent: { true }, completion: { inlineResult = $0 })
+            window.contentView = nil
+            await inlineFinished()
+            if case .stale = inlineResult {
+                check(true, "a detached editor cannot receive inline replacement")
+            } else {
+                check(false, "a detached editor cannot receive inline replacement")
+            }
+            window.contentView = editor
+            inlineResult = nil
+            editor.text = String(repeating: "a", count: 100_001)
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            var frequent = SearchOptions()
+            frequent.query = "a"
+            let frequentRevision = editor.revision
+            controller.performInline(
+                options: frequent, action: "next", on: editor,
+                cancellation: TTSearchCancellation(), isCurrent: { true }, completion: { inlineResult = $0 })
+            await inlineFinished()
+            if case .failed(let error) = inlineResult {
+                check(
+                    error as? SearchFailure == .inlineResultLimit,
+                    "inline navigation reports the shared 100,000-result limit")
+            } else {
+                check(false, "inline navigation reports the shared 100,000-result limit")
+            }
+            check(
+                editor.revision == frequentRevision && editor.selectionCaret == 0,
+                "truncated shared results never move the inline selection")
             editor.text = "one needle"
             let damagedURL = support.url.appendingPathComponent("damaged-find.json"),
                 damagedBytes = Data("keep unreadable settings".utf8)

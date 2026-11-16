@@ -1194,7 +1194,10 @@ extension DocumentChecks {
             ) { try controller.replaceSelectionFromBar() }
             check(unchangedWhileLocked(), "a refused Replace Selection changes neither the text nor the selection")
             document.editor.readOnly = false
+            controller.findField.stringValue = "b"
             try controller.replaceSelectionFromBar()
+            spinUntil("the strict inline replacement to finish") { !controller.inlineSearchPending }
+
             check(
                 same(document.editor.text, "forbidden\r\na\n"),
                 "Replace Selection in the bar replaces the selection once the document is writable")

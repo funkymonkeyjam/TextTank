@@ -1182,7 +1182,8 @@ final class Audit24RecoverySpy: NSObject {
                 editor.text = selectionSource
                 editor.resetUndoHistory()
                 check(
-                    editor.find("- 2 eggs\n- ½ cup flour\n", matchCase: true, backwards: false),
+                    editor.setSelectionAnchor(
+                        "before\n".utf8.count, caret: "before\n- 2 eggs\n- ½ cup flour\n".utf8.count),
                     "selection test captures exact ingredient range")
                 try restarted.runSavedAutomation(id: AutomationDefinition.example.id)
                 check(

@@ -164,6 +164,9 @@ SearchRegex compiledRegex(const std::wstring &pattern,bool matchCase){
     return @{@"matches":rows,@"truncated":@(result.truncated)};
 }
 + (TTSearchResult *)searchText:(NSString *)text range:(NSRange)scope query:(NSString *)query replacement:(NSString *)replacement mode:(NSInteger)mode matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord dotMatchesNewline:(BOOL)dotMatchesNewline cancellation:(TTSearchCancellation *)cancellation maximumMatches:(NSInteger)maximumMatches timeLimit:(NSTimeInterval)timeLimit error:(NSError **)error {
+    return [self searchText:text range:scope query:query replacement:replacement mode:mode matchCase:matchCase wholeWord:wholeWord dotMatchesNewline:dotMatchesNewline cancellation:cancellation maximumMatches:maximumMatches overlappingLiterals:NO timeLimit:timeLimit error:error];
+}
++ (TTSearchResult *)searchText:(NSString *)text range:(NSRange)scope query:(NSString *)query replacement:(NSString *)replacement mode:(NSInteger)mode matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord dotMatchesNewline:(BOOL)dotMatchesNewline cancellation:(TTSearchCancellation *)cancellation maximumMatches:(NSInteger)maximumMatches overlappingLiterals:(BOOL)overlappingLiterals timeLimit:(NSTimeInterval)timeLimit error:(NSError **)error {
     @try { try {
         if(mode<0||mode>2)throw std::runtime_error("Unknown search mode.");
         if(query.length==0)throw std::runtime_error("Enter a nonempty search expression.");
@@ -236,9 +239,11 @@ SearchRegex compiledRegex(const std::wstring &pattern,bool matchCase){
                 NSRange r=[text rangeOfString:needle options:options range:remainder];if(r.location==NSNotFound)break;
                 bool accept=!wholeWord||(!wordBefore(text,r.location)&&!wordAfter(text,NSMaxRange(r)));
                 if(accept){if(matches.count>=(NSUInteger)maximumMatches){truncated=true;break;}outputSize+=replacementText.length;if(outputSize>maximumUnits)throw std::runtime_error("Replacement expansion exceeded the 64 Mi UTF-16 safety limit.");[matches addObject:[[TTSearchMatch alloc]initWithRange:r replacement:replacementText]];}
-                // A rejected whole-word candidate may overlap a valid one, so step one unit past
-                // its start; an accepted match is skipped whole so hits never overlap.
-                NSUInteger next=accept?NSMaxRange(r):r.location+1;
+                // Find All/Replace All skip accepted hits whole. Navigation and strict single
+                // Replace need overlapping candidates; rejected whole-word candidates can overlap
+                // too. Step one scalar from the start, never into a surrogate pair.
+                NSUInteger next=accept&&!overlappingLiterals?NSMaxRange(r):r.location+1;
+                while(next<scopeEnd&&!boundary(text,next))++next;
                 remainder=NSMakeRange(next,scopeEnd-next);
             }
         }

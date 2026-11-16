@@ -22,6 +22,8 @@ enum SearchOutcome: Equatable {
 }
 /// What a replacement did to one document; nothing is changed unless it is `applied`.
 enum ReplaceOutcome: Equatable { case applied(Int), readOnly, multipleSelections, closed, stale }
+/// A bar request has its own cancellation token; it never replaces the Find window's held results.
+enum InlineSearchOutcome { case applied, noMatch, stale, cancelled, failed(Error) }
 /// Documents the last Replace or Replace All left untouched, by reason.
 struct ReplaceSkips: Equatable {
     var readOnly = 0, multipleSelections = 0, closed = 0, stale = 0
@@ -33,6 +35,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     var currentEditor: () -> TTEditor? = { nil }
     var openEditors: () -> [TTEditor] = { [] }
     var onCommand: ((SearchOptions, String, TTEditor) -> Void)?
+    var readFindText: () -> String? = { nil }
+    var writeFindText: (String) -> Void = { _ in }
     var onUnrecordableCommand: ((String) -> Void)?
     let queryField = NSTextField(), replacementField = NSTextField()
     let mode = NSPopUpButton(), scope = NSPopUpButton()
@@ -64,10 +68,11 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             let editor: ObjectIdentifier?, revision: UInt, range: NSRange?
         }
         let options: SearchOptions, scope: Int, documents: [Document]
+        let purpose: SearchCore.Purpose
         // Swift String equality folds canonical equivalents, but Boost regexes and replacement
         // output distinguish their scalar sequences. Cache only identical engine input bytes.
         static func == (lhs: Self, rhs: Self) -> Bool {
-            lhs.scope == rhs.scope && lhs.documents == rhs.documents
+            lhs.scope == rhs.scope && lhs.documents == rhs.documents && lhs.purpose == rhs.purpose
                 && lhs.options.query.utf8.elementsEqual(rhs.options.query.utf8)
                 && lhs.options.replacement.utf8.elementsEqual(rhs.options.replacement.utf8)
                 && lhs.options.mode == rhs.options.mode && lhs.options.matchCase == rhs.options.matchCase
@@ -212,6 +217,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
     deinit { if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) } }
     @objc func showSearch(_ sender: Any?) {
+        if let shared = readFindText(), !shared.isEmpty { queryField.stringValue = shared }
         showWindow(sender)
         window?.makeKeyAndOrderFront(sender)
         window?.makeFirstResponder(queryField)
@@ -233,6 +239,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             preferenceNotice.isHidden = true
         } catch { showPreferenceFailure(error) }
         options = o
+        writeFindText(o.query)
         return o
     }
     private func showPreferenceFailure(_ error: Error) {
@@ -394,11 +401,12 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             scopeIndex == 2 ? allOpenOrigin(in: buffers, current: current).flatMap { buffers[$0].editor } : current
         var keyOptions = opts
         keyOptions.wrap = false
+        let purpose: SearchCore.Purpose = navigating || action == .replaceOne ? .navigation : .allMatches
         let key = ResultKey(
             options: keyOptions, scope: scopeIndex,
             documents: buffers.map { b in
                 ResultKey.Document(editor: b.editor.map { ObjectIdentifier($0) }, revision: b.revision, range: b.range)
-            })
+            }, purpose: purpose)
         // F223: the same editors at the same revisions with the same options have the same hits,
         // so Next and Previous walk the rows already held instead of searching again.
         if navigating, key == resultKey, resultBuffers.allSatisfy({ $0.editor != nil }) {
@@ -439,7 +447,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             do {
                 let computed = try await Task.detached(priority: .userInitiated) {
                     let reports = try snapshots.map {
-                        try SearchCore.search($0.text, options: opts, range: $0.scope, cancellation: flag)
+                        try SearchCore.search(
+                            $0.text, options: opts, range: $0.scope, cancellation: flag, purpose: purpose)
                     }
                     let lines =
                         needsBookmarks
@@ -460,7 +469,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     let text = editor.text, revision = editor.revision
                     self.appliedReplace = (self.status.stringValue, self.lastOutcome)
                     let report = try? await Task.detached(priority: .userInitiated) {
-                        try SearchCore.search(text, options: opts, cancellation: flag)
+                        try SearchCore.search(text, options: opts, cancellation: flag, purpose: .navigation)
                     }.value
                     guard self.generation == token, !flag.cancelled else { return }
                     if let report {
@@ -538,13 +547,15 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 // F36: a single Replace edits the document it was pressed in, never a background one.
                 if action == .replaceOne && (active == nil || buffer.editor !== active) { continue }
                 let hits = reports[index].hits
-                let chosen =
-                    action == .replaceOne
-                    ? SearchCore.hits(
-                        hits,
-                        selectedBy: NSRange(
-                            location: min(buffer.anchor, buffer.caret),
-                            length: abs(buffer.anchor - buffer.caret)), in: buffer.text) : hits
+                let chosen: [SearchHit]
+                if action == .replaceOne {
+                    let selected = SearchCore.utf16Range(
+                        NSRange(location: min(buffer.anchor, buffer.caret), length: abs(buffer.anchor - buffer.caret)),
+                        in: buffer.text)
+                    chosen = hits.filter { $0.range == selected }
+                } else {
+                    chosen = hits
+                }
                 if chosen.isEmpty { continue }
                 guard let editor = buffer.editor else {
                     skips.closed += 1
@@ -648,7 +659,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         rows = report.hits.map { Row(buffer: 0, hit: $0) }
         resultKey = ResultKey(
             options: key.options, scope: key.scope,
-            documents: [ResultKey.Document(editor: ObjectIdentifier(editor), revision: revision, range: nil)])
+            documents: [ResultKey.Document(editor: ObjectIdentifier(editor), revision: revision, range: nil)],
+            purpose: report.purpose)
         resultTruncated = report.truncated
         table.reloadData()
         let moved = navigate(backwards: false, wrap: opts.wrap, freshScope: false, allOpen: false, audible: false)
@@ -675,46 +687,143 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         timeLimit: TimeInterval = SearchController.recordedStepTimeLimit
     ) throws {
         let text = editor.text, revision = editor.revision
-        let report = try SearchCore.search(text, options: options, timeLimit: timeLimit)
-        guard !report.truncated else {
-            throw SearchFailure.macroResultLimit
+        let report = try SearchCore.search(
+            text, options: options, timeLimit: timeLimit,
+            purpose: action == "replaceAll" ? .allMatches : .navigation)
+        let matched = try applySingleReport(
+            report, text: text, revision: revision, options: options, action: action, in: editor)
+        if !matched && (action == "next" || action == "previous") {
+            throw Self.recordedSearchStopped("recorded search did not match")
         }
-        guard
+    }
+    /// Legacy v1 findLiteral is read-only migration input. It uses the same engine and application
+    /// rules as a new search step; old replaceSelection retains its captured-text caret semantics.
+    static func playLegacyFind(text query: String, matchCase: Bool, backwards: Bool, in editor: TTEditor) throws -> Bool
+    {
+        var options = SearchOptions()
+        options.query = query
+        options.matchCase = matchCase
+        let text = editor.text, revision = editor.revision
+        let report = try SearchCore.search(text, options: options, purpose: .navigation)
+        return try applySingleReport(
+            report, text: text, revision: revision, options: options, action: backwards ? "previous" : "next",
+            continuing: false, in: editor)
+    }
+    /// The bar uses immutable snapshots off-main, then validates document/window/selection and the
+    /// caller's query generation before applying. A cancelled or stale request cannot select, edit or record.
+    /// Macro playback deliberately retains bounded synchronous scheduling over the same engine/apply path.
+    func performInline(
+        options: SearchOptions, action: String, on editor: TTEditor, cancellation: TTSearchCancellation,
+        isCurrent: @escaping () -> Bool, completion: @escaping (InlineSearchOutcome) -> Void
+    ) {
+        let text = editor.text, revision = editor.revision, selections = editor.selectionRanges
+        let anchor = editor.selectionAnchor, caret = editor.selectionCaret
+        let window = editor.window
+        Task { @MainActor [weak self, weak editor, weak window] in
+            do {
+                let report = try await Task.detached(priority: .userInitiated) {
+                    try SearchCore.search(
+                        text, options: options, cancellation: cancellation,
+                        purpose: action == "replaceAll" ? .allMatches : .navigation)
+                }.value
+                guard !cancellation.cancelled else {
+                    completion(.cancelled)
+                    return
+                }
+                guard let self, let editor, let window, editor.window === window,
+                    editor.revision == revision, editor.selectionRanges == selections,
+                    editor.selectionAnchor == anchor, editor.selectionCaret == caret, isCurrent()
+                else {
+                    completion(.stale)
+                    return
+                }
+                let matched = try self.applySingleReport(
+                    report, text: text, revision: revision, options: options, action: action, in: editor)
+                completion(matched ? .applied : .noMatch)
+            } catch {
+                guard !cancellation.cancelled else {
+                    completion(.cancelled)
+                    return
+                }
+                guard self != nil, let editor, let window, editor.window === window,
+                    editor.revision == revision, editor.selectionRanges == selections,
+                    editor.selectionAnchor == anchor, editor.selectionCaret == caret, isCurrent()
+                else {
+                    completion(.stale)
+                    return
+                }
+                if let failure = error as? SearchFailure, failure == .macroResultLimit {
+                    completion(.failed(SearchFailure.inlineResultLimit))
+                } else if let failure = error as? SearchFailure, case .macroReplacement(let reason) = failure {
+                    completion(.failed(SearchFailure.inlineReplacement(reason)))
+                } else {
+                    completion(.failed(error))
+                }
+            }
+        }
+    }
+    private func applySingleReport(
+        _ report: SearchReport, text: String, revision: UInt, options: SearchOptions, action: String,
+        in editor: TTEditor
+    ) throws -> Bool {
+        let selection = SearchCore.utf16Range(
+            NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart), in: text)
+        let continuing =
+            lastNavigation.map {
+                $0.editor === editor && $0.revision == revision && $0.range == selection
+            } ?? false
+        let matched = try Self.applySingleReport(
+            report, text: text, revision: revision, options: options, action: action, continuing: continuing, in: editor
+        )
+        if matched && (action == "next" || action == "previous"),
+            let range = SearchCore.utf16Range(
+                NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart), in: text)
+        {
+            lastNavigation = Navigation(editor: editor, revision: revision, range: range, from: nil)
+        }
+        return matched
+    }
+    private static func applySingleReport(
+        _ report: SearchReport, text: String, revision: UInt, options: SearchOptions, action: String, continuing: Bool,
+        in editor: TTEditor
+    ) throws -> Bool {
+        guard !report.truncated else { throw SearchFailure.macroResultLimit }
+        guard editor.window != nil, editor.revision == revision,
             let selection = SearchCore.utf16Range(
                 NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart), in: text)
-        else { throw Self.recordedSearchStopped("the selection is not on a character boundary") }
+        else { throw Self.recordedSearchStopped("the document changed or selection is not on a character boundary") }
         if action == "replaceAll" || action == "replaceOne" {
             let hits = action == "replaceAll" ? report.hits : report.hits.filter { $0.range == selection }
-            if !hits.isEmpty {
-                let reason: String
-                switch Self.replace(hits, text: text, revision: revision, in: editor) {
-                case .applied: return
-                case .readOnly: reason = "the document is read-only"
-                case .multipleSelections: reason = "multiple selections are not supported"
-                case .closed: reason = "the document is not in a window"
-                case .stale: reason = "the document changed during the step"
-                }
-                throw SearchFailure.macroReplacement(reason)
+            guard !hits.isEmpty else { return false }
+            let reason: String
+            switch Self.replace(hits, text: text, revision: revision, in: editor) {
+            case .applied: return true
+            case .readOnly: reason = "the document is read-only"
+            case .multipleSelections: reason = "multiple selections are not supported"
+            case .closed: reason = "the document is not in a window"
+            case .stale: reason = "the document changed during the step"
             }
+            throw SearchFailure.macroReplacement(reason)
         } else if action == "next" || action == "previous" {
             let backwards = action == "previous"
-            let continuing =
-                lastNavigation.map { $0.editor === editor && $0.revision == revision && $0.range == selection } ?? false
             let candidates = report.hits.filter {
                 SearchCore.isNavigationCandidate(
                     $0.range, from: selection, backwards: backwards, continuing: continuing)
             }
+            let wrapped = report.hits.filter {
+                SearchCore.isWrappedNavigationCandidate(
+                    $0.range, from: selection, backwards: backwards, mode: options.mode)
+            }
             let hit =
                 (backwards ? candidates.last : candidates.first)
-                ?? (options.wrap ? (backwards ? report.hits.last : report.hits.first) : nil)
-            guard let hit else { throw Self.recordedSearchStopped("recorded search did not match") }
+                ?? (options.wrap ? (backwards ? wrapped.last : wrapped.first) : nil)
+            guard let hit else { return false }
             guard let bytes = SearchCore.byteRange(hit.range, in: text),
                 editor.setSelectionAnchor(bytes.location, caret: NSMaxRange(bytes))
             else { throw Self.recordedSearchStopped("the match could not be selected") }
-            lastNavigation = Navigation(editor: editor, revision: revision, range: hit.range, from: nil)
-        } else {
-            throw SearchFailure.unknownRecordedAction
+            return true
         }
+        throw SearchFailure.unknownRecordedAction
     }
     private static func recordedSearchStopped(_ reason: String) -> SearchFailure { .macroStopped(reason) }
     /// `revision` is the staleness authority: every insert and delete moves it, in every view of a
@@ -802,6 +911,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             origin = 0
         }
         var available: [Row] = [], row: Row?
+        var originSelection: NSRange?
         if let origin {
             let b = buffers[origin]
             guard let e = b.editor, e.revision == b.revision,
@@ -811,6 +921,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 fail("Result is stale; search again. Selection unchanged.", .staleResult, audible: audible)
                 return false
             }
+            originSelection = selection
             available = rows.filter { $0.buffer == origin }
             if freshScope {
                 row = backwards ? available.last : available.first
@@ -848,7 +959,15 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 }
             }
         }
-        if row == nil, wrap { row = backwards ? available.last : available.first }
+        if row == nil, wrap {
+            let wrapped = available.filter { row in
+                guard let selection = originSelection else { return true }
+                return SearchCore.isWrappedNavigationCandidate(
+                    row.hit.range, from: selection, backwards: backwards,
+                    mode: resultKey?.options.mode ?? .normal)
+            }
+            row = backwards ? wrapped.last : wrapped.first
+        }
         guard let row else {
             fail("No further matches.", .noFurtherMatches, audible: audible)
             return false
