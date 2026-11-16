@@ -6,6 +6,9 @@ typedef NS_ENUM(NSInteger, TTSearchMode) {
     TTSearchModeExtended NS_SWIFT_NAME(TTSearchMode.extended) = 1,
     TTSearchModeRegularExpression NS_SWIFT_NAME(TTSearchMode.regularExpression) = 2,
 };
+/// Thread-safe cancellation: the sole mutable field is std::atomic<bool>; init publishes
+/// its initial value before use, and cancel/read only perform atomic operations.
+NS_SWIFT_SENDABLE
 @interface TTSearchCancellation : NSObject
 - (void)cancel;
 @property(nonatomic, readonly) BOOL cancelled;

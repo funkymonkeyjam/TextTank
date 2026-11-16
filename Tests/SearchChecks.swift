@@ -3,16 +3,24 @@ import Foundation
 import NativeSearch
 /// Reports "not cancelled" for the first polls and "cancelled" from then on, so
 /// a search is cancelled while it is running without a timer or a second thread.
-final class CancelAfterPolls: TTSearchCancellation {
+final class CancelAfterPolls: TTSearchCancellation, @unchecked Sendable {
     private let allowed: Int
-    private(set) var polls = 0
+    private let lock = NSLock()
+    private var pollCount = 0
+    var polls: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return pollCount
+    }
     init(allowed: Int) {
         self.allowed = allowed
         super.init()
     }
     override var cancelled: Bool {
-        polls += 1
-        return polls > allowed
+        lock.lock()
+        defer { lock.unlock() }
+        pollCount += 1
+        return pollCount > allowed
     }
 }
 @main struct SearchChecks {

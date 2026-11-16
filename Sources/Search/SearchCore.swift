@@ -80,7 +80,7 @@ package struct SearchDisplayPosition: Equatable, Sendable {
     package let line: Int
     package let column: Int
 }
-package struct SearchHit {
+package struct SearchHit: Sendable {
     package init(range: NSRange, replacement: String, displayPosition: SearchDisplayPosition? = nil) {
         self.range = range
         self.replacement = replacement
@@ -91,7 +91,7 @@ package struct SearchHit {
     package let replacement: String
     package var displayPosition: SearchDisplayPosition?
 }
-package struct SearchReport {
+package struct SearchReport: Sendable {
     package init(hits: [SearchHit], truncated: Bool, purpose: SearchCore.Purpose) {
         self.hits = hits
         self.truncated = truncated
