@@ -7,7 +7,7 @@ import AppKit
 /// name of the Swift module.
 @objc(TextDocument) final class TextDocument: NSDocument {
     /// The type name used where a document has none of its own. Reading ignores the type.
-    static let plainTextType = "public.plain-text"
+    nonisolated static let plainTextType = "public.plain-text"
     /// No File Format pop-up in the Save panel. Every content type in Info.plist is a writable
     /// type and nearly all are named "Plain Text"; choosing one would only switch the type name
     /// and, for some, add that type's extension. The text is written the same way for all.
@@ -124,7 +124,7 @@ import AppKit
     private var inPlaceWriteURL: URL?
     /// realpath(3) of the file; for a name that does not exist yet, of its folder. Falls back
     /// to the URL as given.
-    static func canonicalDiskURL(_ url: URL) -> URL {
+    nonisolated static func canonicalDiskURL(_ url: URL) -> URL {
         guard url.isFileURL else { return url }
         func resolved(_ path: String) -> String? {
             guard let pointer = realpath(path, nil) else { return nil }

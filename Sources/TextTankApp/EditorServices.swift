@@ -5,7 +5,7 @@ import AppKit
 
 /// The composition root installs these providers after the document-controller singleton exists.
 /// Reading the environment never constructs a feature controller until that provider is used.
-struct EditorServices {
+@MainActor struct EditorServices {
     private static var installed: EditorServices?
     static var current: EditorServices? {
         get {

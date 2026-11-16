@@ -4,7 +4,7 @@ import NativeSearch
 import AppKit
 
 /// Synchronous application effects installed by the composition root, outside the value/store layer.
-enum EditorSettingsApplication {
+@MainActor enum EditorSettingsApplication {
     static func apply(_ value: EditorSettings, replacing previous: EditorSettings?) {
         NSApp.appearance =
             value.appearance == "system" ? nil : NSAppearance(named: value.appearance == "dark" ? .darkAqua : .aqua)
@@ -25,7 +25,7 @@ enum EditorSettingsApplication {
                 }
             }
         }
-        func update(_ menu: NSMenu) {
+        @MainActor func update(_ menu: NSMenu) {
             for item in menu.items {
                 if let id = item.representedObject as? String, EditorSettings.commands.contains(id) {
                     item.keyEquivalent = value.shortcuts[id] ?? EditorCommand.defaultShortcuts[id] ?? ""

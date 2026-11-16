@@ -13,9 +13,9 @@ struct DocumentDependencies {
 
 /// Effects whose process-owned implementations can be supplied by an isolated host.
 /// Constructing the defaults does not read a pasteboard or create an EventKit store.
-struct RuntimeDependencies {
+@MainActor struct RuntimeDependencies {
     var sharedDefaultsProvider: (() -> UserDefaults)?
-    var document: () -> DocumentDependencies = { DocumentDependencies() }
+    var document: @MainActor () -> DocumentDependencies = { DocumentDependencies() }
     var windowAnimation: NSWindow.AnimationBehavior?
     var announce: ((String, Any?) -> Void)?
     var readFindText: () -> String = {
@@ -33,7 +33,7 @@ struct RuntimeDependencies {
     }
 }
 
-enum RuntimeEnvironment {
+@MainActor enum RuntimeEnvironment {
     /// Installed by the composition root before any document/service consumers.
     /// Nil selects production defaults; isolated hosts explicitly own their effects.
     static var dependencies: RuntimeDependencies?

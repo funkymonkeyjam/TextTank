@@ -4,7 +4,7 @@ import NativeSearch
 import AppKit
 
 extension CommentCommand {
-    func apply(to editor: TTEditor, profile: LanguageProfile) throws {
+    @MainActor func apply(to editor: TTEditor, profile: LanguageProfile) throws {
         guard editor.window != nil else {
             throw LanguageError.invalid("The comment command requires an open document.")
         }

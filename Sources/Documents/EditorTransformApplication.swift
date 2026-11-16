@@ -4,7 +4,7 @@ import NativeSearch
 import AppKit
 
 extension EditorTransform {
-    func apply(to editor: TTEditor) throws {
+    @MainActor func apply(to editor: TTEditor) throws {
         try editor.requireWritable()
         guard editor.selectionCount == 1 else {
             throw DocumentActionError.multipleSelections

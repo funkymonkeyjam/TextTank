@@ -6,7 +6,7 @@ import AppKit
 
 /// Shared explicit recovery for app-owned settings/libraries. Checks inject reveal; merely
 /// loading an unreadable file never opens Finder, renames data, or retries a write.
-enum StoreRecovery {
+@MainActor enum StoreRecovery {
     static var reveal: (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
     static func ensureWritable(_ state: StoreLoadState, allowSymbolicLink: Bool = true) throws -> Bool {
         guard let error = state.error else { return true }

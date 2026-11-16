@@ -4,7 +4,7 @@ import NativeSearch
 import AppKit
 
 /// File > Open Recent, filled from the system's recent-documents list each time it opens.
-final class RecentDocumentsMenu: NSObject, NSMenuDelegate {
+@MainActor final class RecentDocumentsMenu: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let urls = NSDocumentController.shared.recentDocumentURLs

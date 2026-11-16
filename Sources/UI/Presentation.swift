@@ -5,7 +5,7 @@ import NativeSearch
 import AppKit
 
 /// Presentation-only helpers. Stored identifiers and model validation never depend on these labels.
-enum ControlPresentation {
+@MainActor enum ControlPresentation {
     static func populate(_ popup: NSPopUpButton, choices: [(id: String, title: String)], selected: String) {
         popup.removeAllItems()
         for choice in choices {
@@ -70,7 +70,7 @@ private final class NumericDraftFormatter: Formatter {
     }
 }
 
-final class NumericInput: NSObject {
+@MainActor final class NumericInput: NSObject {
     private static var association = 0
     let locale: Locale
     private init(locale: Locale) { self.locale = locale }
@@ -98,7 +98,7 @@ final class NumericInput: NSObject {
     static func integer(_ field: NSTextField, signed: Bool = false) -> Int? {
         Strings.integer(text(field), locale: owner(field)?.locale ?? .current, signed: signed)
     }
-    static func editable(_ value: Double, locale: Locale = .current) -> String {
+    nonisolated static func editable(_ value: Double, locale: Locale = .current) -> String {
         // Shortest round-tripping Double spelling, separate from concise one-decimal status text.
         String(value).replacingOccurrences(of: ".", with: locale.decimalSeparator ?? ".")
     }

@@ -5,7 +5,7 @@ import AppKit
 
 /// Product-created documents share type, registration and window setup. NSDocumentController's
 /// stock File/Open/Finder path still constructs its NSDocumentClass in the normal AppKit way.
-enum DocumentFactory {
+@MainActor enum DocumentFactory {
     @discardableResult static func makeUntitled(
         display: Bool = true, focus: Bool = true,
         prepare: (TextDocument) -> Void = { _ in }, populate: (TextDocument) -> Void = { _ in }

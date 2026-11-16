@@ -41,7 +41,7 @@ enum EncodingChoice {
         if failed == preferred { preferred = .latin1 }
         return (encodings, preferred)
     }
-    static func popUp(after error: Error) -> NSPopUpButton {
+    @MainActor static func popUp(after error: Error) -> NSPopUpButton {
         let choice = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 260, height: 28))
         let offer = offered(after: error)
         for (encoding, title) in titles where offer.encodings.contains(encoding) {
@@ -53,11 +53,11 @@ enum EncodingChoice {
         choice.identifier = .init("open.encoding")
         return choice
     }
-    static func selection(of choice: NSPopUpButton) -> FileEncoding? {
+    @MainActor static func selection(of choice: NSPopUpButton) -> FileEncoding? {
         (choice.selectedItem?.representedObject as? String).flatMap(FileEncoding.init(rawValue:))
     }
     /// The chooser itself. Returns nil when the person cancels.
-    static func present(_ url: URL, _ failure: Error) -> FileEncoding? {
+    @MainActor static func present(_ url: URL, _ failure: Error) -> FileEncoding? {
         let alert = TTAlert()
         alert.messageText = "Choose an encoding for “\(url.lastPathComponent)”"
         alert.informativeText =
@@ -72,7 +72,7 @@ enum EncodingChoice {
     }
     /// Asks until an encoding decodes the file or the person cancels (nil). An error that is
     /// not a decode failure is thrown as it is, without asking.
-    static func retry(
+    @MainActor static func retry(
         _ url: URL, after failure: Error, choose: (URL, Error) -> FileEncoding?,
         open: (FileEncoding) throws -> TextDocument
     ) throws -> TextDocument? {
@@ -90,7 +90,7 @@ enum EncodingChoice {
 /// the stock controller cannot do there. Create it before anything touches
 /// `NSDocumentController.shared`.
 final class TextDocumentController: NSDocumentController {
-    var chooseEncoding: (URL, Error) -> FileEncoding? = EncodingChoice.present
+    var chooseEncoding: @MainActor (URL, Error) -> FileEncoding? = EncodingChoice.present
     /// A session snapshot is restored through its own review prompt, never opened as editable JSON.
     var openSessionFile: (URL) -> Void = { url in EditorServices.current?.openSessionFile(url) }
     override func openDocument(

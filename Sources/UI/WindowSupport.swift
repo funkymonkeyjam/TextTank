@@ -84,7 +84,7 @@ final class ActivatingTableView: NSTableView {
 /// AppKit's own frame autosave allows one window per name at a time. Document tabs are separate
 /// windows that share one frame, and a Function List or Run result window is created anew each
 /// time, so the frame is saved here whenever a visible window with the name moves or is resized.
-enum WindowFrames {
+@MainActor enum WindowFrames {
     /// Where frames are kept. Only the bundled application keeps them: a check executable has no
     /// bundle identifier, so a check run neither reads nor leaves window positions unless it
     /// supplies defaults of its own.
@@ -103,7 +103,7 @@ enum WindowFrames {
     }
     private static var trackerKey = 0
 
-    static func defaultsKey(_ name: String) -> String { "TextTank Window Frame " + name }
+    nonisolated static func defaultsKey(_ name: String) -> String { "TextTank Window Frame " + name }
     static func description(of window: NSWindow) -> String { NSStringFromRect(window.frame) }
     /// A saved frame is used only if enough of it is on a screen that is connected now to see
     /// the window and take hold of its title bar.
@@ -128,7 +128,7 @@ enum WindowFrames {
     }
 }
 
-private final class FrameTracker: NSObject {
+@MainActor private final class FrameTracker: NSObject {
     private weak var window: NSWindow?
     private let name: String, defaults: UserDefaults
     init(window: NSWindow, name: String, defaults: UserDefaults) {
@@ -153,7 +153,7 @@ private final class FrameTracker: NSObject {
 /// Speaks a result to assistive technology. A status label that only changes its text is silent
 /// to VoiceOver unless the person moves to it; a finished search, a failed find or a refused
 /// edit is announced so that they keep their place.
-enum Announce {
+@MainActor enum Announce {
     static func say(_ text: String, from element: Any? = nil) {
         guard !text.isEmpty else { return }
         if let announce = RuntimeEnvironment.current.announce {

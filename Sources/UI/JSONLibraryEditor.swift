@@ -6,10 +6,10 @@ import AppKit
 
 /// The existing advanced JSON editors share a working-copy editor, not storage or execution.
 /// Controllers retain their own recovery, busy state, persistence and post-save effects.
-enum JSONLibraryEditor {
+@MainActor enum JSONLibraryEditor {
     struct FilePanels {
-        var importURL: () -> URL?
-        var exportURL: (String) -> URL?
+        var importURL: @MainActor () -> URL?
+        var exportURL: @MainActor (String) -> URL?
         static var standard: Self {
             Self(
                 importURL: {
@@ -75,7 +75,7 @@ enum JSONLibraryEditor {
         }
         form.add(text.scroll)
         text.scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 150).isActive = true
-        func perform(_ action: Action) {
+        @MainActor func perform(_ action: Action) {
             do {
                 switch action {
                 case .cancel: form.close()

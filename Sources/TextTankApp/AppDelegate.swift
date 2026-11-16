@@ -3,7 +3,7 @@ import EditorBridge
 import NativeSearch
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor override init() { super.init() }
     @MainActor lazy var workspace: WorkspaceController = {
         let controller = WorkspaceController()
@@ -241,12 +241,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) { _ = runner.cancelAndWait(timeout: 1.0) }
     /// The two AppKit calls of the dirty-quit path. They are properties only so that a check
     /// can observe the request and the reply without presenting the review or ending the process.
-    var requestUnsavedReview: (AppDelegate) -> Void = { delegate in
+    var requestUnsavedReview: @MainActor (AppDelegate) -> Void = { delegate in
         NSDocumentController.shared.reviewUnsavedDocuments(
             withAlertTitle: "Quit TextTank?", cancellable: true, delegate: delegate,
             didReviewAllSelector: #selector(AppDelegate.reviewed(_:didReviewAll:contextInfo:)), contextInfo: nil)
     }
-    var replyToTerminate: (Bool) -> Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
+    var replyToTerminate: @MainActor (Bool) -> Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
     @objc func reviewed(_ controller: NSDocumentController, didReviewAll: Bool, contextInfo: UnsafeMutableRawPointer?) {
         if didReviewAll { closeAllForTermination() }
         replyToTerminate(didReviewAll)
@@ -254,7 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor func buildMenus() {
         let bar = NSMenu()
         NSApp.mainMenu = bar
-        func menu(_ title: String) -> NSMenu {
+        @MainActor func menu(_ title: String) -> NSMenu {
             let item = NSMenuItem()
             item.title = title
             let m = NSMenu(title: title)
@@ -328,22 +328,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let edit = menu("Edit")
         // Grouped by what the command acts on. Every item keeps its command identifier as its
         // represented object, so shortcuts, macros and validation find it wherever it sits.
-        func group(_ title: String) -> NSMenu {
+        @MainActor func group(_ title: String) -> NSMenu {
             let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             let child = NSMenu(title: title)
             parent.submenu = child
             edit.addItem(parent)
             return child
         }
-        func command(_ m: NSMenu, _ title: String, _ id: String, _ key: String = "") {
+        @MainActor func command(_ m: NSMenu, _ title: String, _ id: String, _ key: String = "") {
             m.addItem(
                 title: title, action: #selector(EditorWindowController.command(_:)), keyEquivalent: key,
                 representedObject: id)
         }
-        func command(_ menu: NSMenu, _ value: EditorCommand, _ key: String? = nil) {
+        @MainActor func command(_ menu: NSMenu, _ value: EditorCommand, _ key: String? = nil) {
             command(menu, value.title, value.rawValue, key ?? value.defaultMenuShortcut)
         }
-        func transform(_ m: NSMenu, _ value: EditorTransform) {
+        @MainActor func transform(_ m: NSMenu, _ value: EditorTransform) {
             command(m, value.title, "transform." + value.rawValue)
         }
         edit.addItem(
@@ -575,13 +575,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     /// Full paths, because the Recovery folder is inside the hidden Library folder.
-    static func recoveryIssueText(_ issues: [RecoveryIssue]) -> String {
+    nonisolated static func recoveryIssueText(_ issues: [RecoveryIssue]) -> String {
         "These files were left untouched and are not recovered automatically.\n\n"
             + issues.map { $0.url.path + "\n" + $0.message }.joined(separator: "\n\n")
     }
     /// The launch prompt's text: what each snapshot is a draft of and when it was written, so the
     /// person can tell the drafts apart before recovering or discarding them. Display only.
-    static func recoveryPromptText(_ snapshots: [RecoverySnapshot], limit: Int = 12) -> String {
+    nonisolated static func recoveryPromptText(_ snapshots: [RecoverySnapshot], limit: Int = 12) -> String {
         let listed = snapshots.prefix(limit).map { "• " + SnapshotLabel.line(for: $0) }
         let more = snapshots.count > limit ? ["…and \(snapshots.count - limit) more"] : []
         return
@@ -649,7 +649,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// so they cannot disagree with Finder's Get Info; only the preview notice is added to the
     /// version. The credits are the bundled Credits.rtf, in the label colour so that they stay
     /// readable in dark mode. Without that file the panel shows its standard contents.
-    static func aboutOptions(info: [String: Any]?, credits: URL?) -> [NSApplication.AboutPanelOptionKey: Any] {
+    nonisolated static func aboutOptions(info: [String: Any]?, credits: URL?) -> [NSApplication.AboutPanelOptionKey:
+        Any]
+    {
         var options: [NSApplication.AboutPanelOptionKey: Any] = [:]
         if let version = info?["CFBundleShortVersionString"] as? String, !version.isEmpty {
             options[.applicationVersion] = version + " — INCOMPLETE PREVIEW"

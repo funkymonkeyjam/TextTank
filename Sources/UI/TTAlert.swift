@@ -7,7 +7,7 @@ import AppKit
 /// An app-owned panel for decisions and existing forms, with horizontal actions and stable
 /// response indices. It never re-parents NSAlert internals. Native NSError recovery stays in
 /// `present(_:)`; icon/suppression customization belongs to NSAlert, not this panel.
-final class TTAlert: NSObject, NSWindowDelegate {
+@MainActor final class TTAlert: NSObject, NSWindowDelegate {
     enum ButtonRole { case action, cancel }
     enum Result: Equatable {
         case button(Int), dismissed
@@ -68,7 +68,7 @@ final class TTAlert: NSObject, NSWindowDelegate {
     /// share this path; flattening the error into strings would discard its recovery behavior.
     static func errorAlert(_ error: Error) -> NSAlert { NSAlert(error: error) }
     static func present(_ error: Error) { _ = NSApp.presentError(error) }
-    static func requiresNativePresentation(_ error: Error) -> Bool {
+    nonisolated static func requiresNativePresentation(_ error: Error) -> Bool {
         let native = error as NSError
         return native.recoveryAttempter != nil || native.localizedRecoveryOptions != nil
             || native.localizedRecoverySuggestion != nil

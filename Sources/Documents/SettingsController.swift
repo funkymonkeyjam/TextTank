@@ -60,11 +60,11 @@ import AppKit
     var loadError: Error? { store.loadError }
     var url: URL { store.url }
     var loadFailureMessage: String? { store.loadFailureMessage }
-    private let onApply: (EditorSettings, EditorSettings?) -> Void
-    private let onStatus: (String) -> Void
+    private let onApply: @MainActor (EditorSettings, EditorSettings?) -> Void
+    private let onStatus: @MainActor (String) -> Void
     init(
-        url: URL? = nil, onApply: @escaping (EditorSettings, EditorSettings?) -> Void = { _, _ in },
-        onStatus: @escaping (String) -> Void = { _ in }
+        url: URL? = nil, onApply: @escaping @MainActor (EditorSettings, EditorSettings?) -> Void = { _, _ in },
+        onStatus: @escaping @MainActor (String) -> Void = { _ in }
     ) {
         store = SettingsStore(url: url, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
         self.onApply = onApply

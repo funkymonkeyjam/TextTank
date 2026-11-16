@@ -5,14 +5,14 @@ import AppKit
 
 /// Recovery attempter for a file whose bytes need an explicit encoding choice. It only
 /// decodes and opens; nothing on disk is changed.
-final class ExplicitEncodingOpener: NSObject {
+@MainActor final class ExplicitEncodingOpener: NSObject {
     let url: URL, typeName: String, encoding: FileEncoding
-    init(url: URL, typeName: String, encoding: FileEncoding) {
+    nonisolated init(url: URL, typeName: String, encoding: FileEncoding) {
         self.url = url
         self.typeName = typeName
         self.encoding = encoding
     }
-    func error() -> NSError {
+    nonisolated func error() -> NSError {
         NSError(
             domain: "TextTank", code: 4,
             userInfo: [

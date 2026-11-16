@@ -5,7 +5,7 @@ import NativeSearch
 import AppKit
 
 /// Presentation only. Controllers own the typed working copy, validation and persistence.
-final class LibraryManager: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+@MainActor final class LibraryManager: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
     struct Row { let id: UUID, name: String }
     let form: FormPanel
     let table = NSTableView()
@@ -67,7 +67,10 @@ final class LibraryManager: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
         sheetObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didEndSheetNotification, object: form.window, queue: .main
-        ) { [weak self] _ in self?.refresh() }
+        ) { [weak self] _ in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { self?.refresh() }
+        }
         saveButton.keyEquivalent = "\r"
         form.button("Cancel", identifier: identifier + ".cancel", cancel: true) { [weak self] in self?.form.close() }
     }
@@ -89,7 +92,13 @@ final class LibraryManager: NSObject, NSTableViewDataSource, NSTableViewDelegate
         callback?()
         controllerOwner = nil
     }
-    deinit { if let sheetObserver { NotificationCenter.default.removeObserver(sheetObserver) } }
+    deinit {
+        // The presentation owner and window callbacks release this UI controller on main.
+        precondition(Thread.isMainThread)
+        MainActor.assumeIsolated {
+            if let sheetObserver { NotificationCenter.default.removeObserver(sheetObserver) }
+        }
+    }
     @discardableResult func action(
         _ title: String, identifier: String, needsSelection: Bool = false, _ body: @escaping () -> Void
     ) -> NSButton {
@@ -205,8 +214,8 @@ final class LibraryManager: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
 }
 
-final class ClosureAction: NSObject {
-    private let action: () -> Void
-    init(_ action: @escaping () -> Void) { self.action = action }
+@MainActor final class ClosureAction: NSObject {
+    private let action: @MainActor () -> Void
+    init(_ action: @escaping @MainActor () -> Void) { self.action = action }
     @objc func invoke(_ sender: Any?) { action() }
 }

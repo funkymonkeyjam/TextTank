@@ -44,7 +44,7 @@ enum EditorToolbarCommand: String, CaseIterable {
         case .split: return Strings.text("toolbar.split.help", "Show another view of the current document.")
         }
     }
-    func makeItem() -> NSToolbarItem {
+    @MainActor func makeItem() -> NSToolbarItem {
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label = title
         item.paletteLabel = title
@@ -60,7 +60,7 @@ enum EditorToolbarCommand: String, CaseIterable {
 
 /// AppKit autosave is production-only: it writes standard defaults directly. An explicit owned
 /// defaults domain can exercise the same arrangement round trip without reading the owner's domain.
-enum EditorToolbarPreferences {
+@MainActor enum EditorToolbarPreferences {
     static var isolatedDefaults: UserDefaults?
     static let key = "TextTank.ToolbarArrangement.v1"
     static var nativeAutosaveAllowed: Bool {
@@ -77,7 +77,7 @@ enum EditorToolbarPreferences {
         var identifiers: [String]
         var displayMode: UInt
         var visible: Bool
-        static func capture(_ toolbar: NSToolbar) -> Arrangement {
+        @MainActor static func capture(_ toolbar: NSToolbar) -> Arrangement {
             Arrangement(
                 identifiers: toolbar.items.map { $0.itemIdentifier.rawValue },
                 displayMode: toolbar.displayMode.rawValue, visible: toolbar.isVisible)
@@ -100,7 +100,7 @@ enum EditorToolbarPreferences {
 
 /// Standard toolbar items expose native button cells in the unignored accessibility tree.
 /// Give those real elements a scoped name, retaining their system drawing, action and role.
-enum EditorToolbarAccessibility {
+@MainActor enum EditorToolbarAccessibility {
     static func apply(to window: NSWindow) {
         guard let toolbar = window.toolbar else { return }
         let descriptions = Set(toolbar.items.compactMap(\.toolTip))

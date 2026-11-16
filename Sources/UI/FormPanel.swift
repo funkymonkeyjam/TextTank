@@ -6,7 +6,7 @@ import AppKit
 
 /// An owned, resizable form. Opening it never enters an application modal loop.
 /// Sheets disable only their parent; ordinary panels leave document commands available.
-final class FormPanel: NSObject, NSWindowDelegate {
+@MainActor final class FormPanel: NSObject, NSWindowDelegate {
     private static var openForms: [FormPanel] = []
     static var frontWindow: NSWindow? { openForms.last { $0.window.isVisible }?.window }
     static var visible: [FormPanel] { openForms.filter { $0.window.isVisible } }
