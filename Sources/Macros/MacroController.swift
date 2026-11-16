@@ -330,66 +330,28 @@ final class MacroController: NSObject, NSMenuDelegate {
             lastRecording = macro
         } catch { TTAlert.present(error) }
     }
+    var jsonFilePanels = JSONLibraryEditor.FilePanels.standard
     @objc private func manage() {
         guard !playing, recordingEditor == nil else { return }
         do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
             TTAlert.present(error)
             return
         }
-        let alert = TTAlert()
-        alert.messageText = "Manage Saved Macros"
-        alert.informativeText =
-            "Edit names or steps, or remove entries. Preserve id to rename. Only validated text, editor commands and literal find/replace steps are accepted. Saving never executes macros."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel", role: .cancel)
-        alert.addButton(withTitle: "Import…")
-        alert.addButton(withTitle: "Export…")
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 650, height: 400))
-        scroll.hasVerticalScroller = true
-        let text = NSTextView(frame: scroll.bounds)
-        text.isRichText = false
-        text.isAutomaticQuoteSubstitutionEnabled = false
-        text.isAutomaticDashSubstitutionEnabled = false
-        text.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        text.autoresizingMask = [.width]
-        text.isVerticallyResizable = true
-        text.textContainer?.widthTracksTextView = true
-        scroll.documentView = text
-        text.string = String(data: (try? library.encoded()) ?? Data(), encoding: .utf8) ?? ""
-        alert.accessoryView = scroll
-        while true {
-            enum LibraryChoice { case save, cancel, importFile, exportFile }
-            guard let response = alert.choice([LibraryChoice.save, .cancel, .importFile, .exportFile]),
-                response != .cancel
-            else { return }
-            if response == .cancel { return }
-            do {
-                if response == .importFile {
-                    let panel = NSOpenPanel()
-                    panel.allowsMultipleSelection = false
-                    panel.canChooseDirectories = false
-                    if panel.runModal() == .OK, let url = panel.url {
-                        text.string = String(
-                            data: try MacroLibrary.decode(
-                                PrivateFileStore.read(
-                                    url, maximumBytes: MacroLibrary.maximumBytes, parent: .selectedInput)
-                            ).encoded(), encoding: .utf8)!
-                    }
-                    continue
-                }
-                let proposed = try MacroLibrary.decode(Data(text.string.utf8))
-                if response == .exportFile {
-                    let panel = NSSavePanel()
-                    panel.nameFieldStringValue = "TextTank-Macros.json"
-                    if panel.runModal() == .OK, let url = panel.url {
-                        try proposed.encoded().write(to: url, options: .atomic)
-                    }
-                    continue
-                }
-                try persist(proposed)
-                return
-            } catch { TTAlert.present(error) }
-        }
+        do {
+            try JSONLibraryEditor.edit(
+                library,
+                configuration: .init(
+                    title: "Manage Saved Macros",
+                    information:
+                        "Edit names or steps, or remove entries. Preserve id to rename. Only validated text, editor commands and literal find/replace steps are accepted. Saving never executes macros.",
+                    accessibilityLabel: "Macro library JSON", exportName: "TextTank-Macros.json",
+                    identifier: "macro.json", size: NSSize(width: 650, height: 400)),
+                panels: jsonFilePanels,
+                read: {
+                    try PrivateFileStore.read($0, maximumBytes: MacroLibrary.maximumBytes, parent: .selectedInput)
+                },
+                save: { try persist($0) })
+        } catch { TTAlert.present(error) }
     }
     /// One guarded save boundary for the manager, recording commands and native checks.
     func persist(_ proposed: MacroLibrary) throws {

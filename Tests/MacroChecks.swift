@@ -117,6 +117,146 @@ import Foundation
                     && item("saveLast", in: restarted)?.isEnabled == false,
                 "a restarted controller has no last recording to play or save")
         }
+        static func jsonManagerChecks(editor: TTEditor) throws {
+            let isolated = try IsolatedSupportDirectory("MacroJSONChecks")
+            defer { isolated.restore() }
+            let path = isolated.url.appendingPathComponent("Macros.json")
+            let macro = RecordedMacro(id: UUID(), name: "JSON manager", steps: [.insertText("é\0e\u{301}")])
+            let initial = MacroLibrary(macros: [macro])
+            try initial.encoded().write(to: path)
+            let controller = MacroController(editorProvider: { editor })
+            let manage = try requireValue(item("manage", in: controller), "fixture: the macro JSON manager item")
+            let before = try Data(contentsOf: path)
+            let editorText = editor.text, revision = editor.revision, modified = editor.modified
+            var corrected = macro
+            corrected.name = "Renamed in JSON"
+            let correctedLibrary = MacroLibrary(macros: [corrected])
+            let correctedJSON = String(decoding: try correctedLibrary.encoded(), as: UTF8.self)
+            let invalid = "{ preserve the macro JSON draft"
+            var stage = 0, nestedError = false, keptDraft = false, inlineError = false
+            var manager: NSWindow?
+            let retried = choosing(manage) { views in
+                if stage == 1, NSApp.modalWindow !== manager {
+                    nestedError = true
+                    NSApp.abortModal()
+                    return false
+                }
+                guard let text = views.compactMap({ $0 as? NSTextView }).first,
+                    let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save" })
+                else { return false }
+                switch stage {
+                case 0:
+                    manager = NSApp.modalWindow
+                    text.string = invalid
+                    stage = 1
+                    save.performClick(nil)
+                case 1:
+                    keptDraft = text.string == invalid && (try? Data(contentsOf: path)) == before
+                    inlineError = text.accessibilityHelp()?.isEmpty == false
+                    text.string = correctedJSON
+                    stage = 2
+                    save.performClick(nil)
+                    return true
+                default: break
+                }
+                return false
+            }
+            check(retried && stage == 2 && keptDraft, "F155 Macro JSON retry retains the draft and saved bytes")
+            check(!nestedError && inlineError, "F155 invalid Macro JSON is marked inline without a nested error modal")
+            check(
+                try MacroLibrary.decode(Data(contentsOf: path)) == correctedLibrary,
+                "F155 explicit corrected Macro JSON Save roundtrips exact typed steps")
+            let restarted = MacroController(editorProvider: { editor })
+            check(
+                item("playSaved:", in: restarted, id: macro.id)?.title == corrected.name,
+                "F155 a JSON rename keeps the macro identity after restart")
+            check(
+                editor.text == editorText && editor.revision == revision && editor.modified == modified,
+                "F155 editing a Macro library never executes its steps")
+            var imported = corrected
+            imported.name = "Imported Macro draft"
+            let importedLibrary = MacroLibrary(macros: [imported])
+            let source = isolated.url.appendingPathComponent("macro-import.json")
+            let exported = isolated.url.appendingPathComponent("macro-export.json")
+            try importedLibrary.encoded().write(to: source)
+            let saved = try Data(contentsOf: path)
+            var exportNames: [String] = []
+            controller.jsonFilePanels = .init(
+                importURL: { source },
+                exportURL: { name in
+                    exportNames.append(name)
+                    return exported
+                })
+            stage = 0
+            var draftOnly = false, exportedDraft = false
+            let cancelled = choosing(manage) { views in
+                guard let text = control("macro.json.text", NSTextView.self, in: views),
+                    let load = control("macro.json.import", NSButton.self, in: views),
+                    let export = control("macro.json.export", NSButton.self, in: views),
+                    let cancel = control("macro.json.cancel", NSButton.self, in: views)
+                else { return false }
+                switch stage {
+                case 0:
+                    stage = 1
+                    load.performClick(nil)
+                case 1:
+                    draftOnly =
+                        (try? MacroLibrary.decode(Data(text.string.utf8))) == importedLibrary
+                        && (try? Data(contentsOf: path)) == saved
+                    stage = 2
+                    export.performClick(nil)
+                case 2:
+                    exportedDraft = (try? MacroLibrary.decode(Data(contentsOf: exported))) == importedLibrary
+                    stage = 3
+                    cancel.performClick(nil)
+                    return true
+                default: break
+                }
+                return false
+            }
+            check(
+                cancelled && stage == 3 && draftOnly && exportedDraft,
+                "F155 Macro import and export use the draft without saving it")
+            check(
+                try Data(contentsOf: path) == saved, "F155 Cancel after Macro import and export preserves saved bytes")
+            check(exportNames == ["TextTank-Macros.json"], "F155 Macro export keeps its documented filename")
+            stage = 0
+            let accepted = choosing(manage) { views in
+                guard let load = control("macro.json.import", NSButton.self, in: views),
+                    let save = control("macro.json.save", NSButton.self, in: views)
+                else { return false }
+                if stage == 0 {
+                    stage = 1
+                    load.performClick(nil)
+                } else if stage == 1 {
+                    stage = 2
+                    save.performClick(nil)
+                    return true
+                }
+                return false
+            }
+            check(
+                try accepted && MacroLibrary.decode(Data(contentsOf: path)) == importedLibrary,
+                "F155 explicit Save commits the imported Macro draft")
+            check(
+                editor.text == editorText && editor.revision == revision,
+                "F155 imported Macro Save executes no recorded text")
+            let corrupt = Data("{ preserve unreadable macros".utf8)
+            try corrupt.write(to: path)
+            let blocked = MacroController(editorProvider: { editor })
+            let blockedManager = try requireValue(
+                item("manage", in: blocked), "fixture: unreadable Macro manager remains recoverable")
+            var recoveryOnly = false
+            let declined = choosing(blockedManager) { views in
+                guard let cancel = control("store.recover.cancel", NSButton.self, in: views) else { return false }
+                recoveryOnly = !views.contains { $0 is NSTextView }
+                cancel.performClick(nil)
+                return true
+            }
+            check(
+                try declined && recoveryOnly && Data(contentsOf: path) == corrupt && blocked.loadingError != nil,
+                "F155 unreadable Macro storage requires explicit recovery before opening the JSON editor")
+        }
         /// Navigation from the Find window fronts the document window; checks never put one on screen.
         final class QuietWindow: NSWindow { override func makeKeyAndOrderFront(_ sender: Any?) {} }
         /// Stands in for the system's drag information, so a real drop runs through a content view.
@@ -1095,6 +1235,7 @@ import Foundation
                 Checks.section("Macros menu save and playback") {
                     try menuFlowChecks(editor: editor, support: isolatedSupport.url)
                 }
+                Checks.section("F155 Macro JSON manager") { try jsonManagerChecks(editor: editor) }
             #endif
             Checks.summary {
                 "PASS MacroChecks: \(Checks.count) assertions; persistence/security checks; native integration only when TEXTTANK_NATIVE_MACRO_TEST is defined"
