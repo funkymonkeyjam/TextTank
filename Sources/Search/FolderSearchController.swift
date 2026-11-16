@@ -446,8 +446,9 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         // The confirmation is modal; nothing may have started meanwhile.
         guard cancellation == nil, !matches.isEmpty else { return }
         window?.makeFirstResponder(nil)
-        var options = searchedOptions
-        options.replacement = replacementField.stringValue
+        var capturedOptions = searchedOptions
+        capturedOptions.replacement = replacementField.stringValue
+        let options = capturedOptions
         let excluded = Set(NSDocumentController.shared.documents.compactMap { $0.fileURL }), snapshot = matches,
             flag = FolderSearchCancellation(), token = UUID(), beforeCommit = replacementBeforeCommit
         generation = token
