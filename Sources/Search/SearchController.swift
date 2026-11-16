@@ -690,8 +690,20 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         let report = try SearchCore.search(
             text, options: options, timeLimit: timeLimit,
             purpose: action == "replaceAll" ? .allMatches : .navigation)
-        let matched = try applySingleReport(
-            report, text: text, revision: revision, options: options, action: action, in: editor)
+        let matched: Bool
+        do {
+            matched = try applySingleReport(
+                report, text: text, revision: revision, options: options, action: action, in: editor)
+        } catch let condition as SearchFailure.ReplacementCondition {
+            // Keep the existing recorded-macro error API and wording. Inline feedback receives
+            // typed conditions directly and selects complete templates instead of these fragments.
+            switch condition {
+            case .readOnly: throw SearchFailure.macroReplacement("the document is read-only")
+            case .multipleSelections: throw SearchFailure.macroReplacement("multiple selections are not supported")
+            case .closed: throw SearchFailure.macroReplacement("the document is not in a window")
+            case .stale: throw SearchFailure.macroReplacement("the document changed during the step")
+            }
+        }
         if !matched && (action == "next" || action == "previous") {
             throw Self.recordedSearchStopped("recorded search did not match")
         }
@@ -754,8 +766,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 }
                 if let failure = error as? SearchFailure, failure == .macroResultLimit {
                     completion(.failed(SearchFailure.inlineResultLimit))
-                } else if let failure = error as? SearchFailure, case .macroReplacement(let reason) = failure {
-                    completion(.failed(SearchFailure.inlineReplacement(reason)))
+                } else if let condition = error as? SearchFailure.ReplacementCondition {
+                    completion(.failed(SearchFailure.inlineReplacement(condition)))
                 } else {
                     completion(.failed(error))
                 }
@@ -795,15 +807,15 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         if action == "replaceAll" || action == "replaceOne" {
             let hits = action == "replaceAll" ? report.hits : report.hits.filter { $0.range == selection }
             guard !hits.isEmpty else { return false }
-            let reason: String
+            let condition: SearchFailure.ReplacementCondition
             switch Self.replace(hits, text: text, revision: revision, in: editor) {
             case .applied: return true
-            case .readOnly: reason = "the document is read-only"
-            case .multipleSelections: reason = "multiple selections are not supported"
-            case .closed: reason = "the document is not in a window"
-            case .stale: reason = "the document changed during the step"
+            case .readOnly: condition = .readOnly
+            case .multipleSelections: condition = .multipleSelections
+            case .closed: condition = .closed
+            case .stale: condition = .stale
             }
-            throw SearchFailure.macroReplacement(reason)
+            throw condition
         } else if action == "next" || action == "previous" {
             let backwards = action == "previous"
             let candidates = report.hits.filter {

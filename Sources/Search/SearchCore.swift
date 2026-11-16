@@ -46,7 +46,8 @@ struct SearchReport {
     let purpose: SearchCore.Purpose
 }
 enum SearchFailure: LocalizedError, CustomNSError, Equatable {
-    case preferencesTooLarge, preferencesVersion, inlineResultLimit, inlineReplacement(String)
+    enum ReplacementCondition: Error, Equatable { case readOnly, multipleSelections, closed, stale }
+    case preferencesTooLarge, preferencesVersion, inlineResultLimit, inlineReplacement(ReplacementCondition)
     case invalidBookmarkLimit, bookmarkCancelled, bookmarkOffsetsUnordered, bookmarkOffsetOutOfBounds
     case replacementCancelled, invalidReplacementRange, macroResultLimit, macroReplacement(String)
     case unknownRecordedAction, macroStopped(String)
@@ -70,8 +71,17 @@ enum SearchFailure: LocalizedError, CustomNSError, Equatable {
         switch self {
         case .inlineResultLimit:
             return "The search reached the result limit. Narrow the Find text and search again; nothing was changed."
-        case .inlineReplacement(let reason):
-            return "The selected match could not be replaced because \(reason). Nothing was changed."
+        case .inlineReplacement(.readOnly):
+            return "The selected match could not be replaced because the document is read-only. Nothing was changed."
+        case .inlineReplacement(.multipleSelections):
+            return
+                "The selected match could not be replaced because multiple selections are not supported. Nothing was changed."
+        case .inlineReplacement(.closed):
+            return
+                "The selected match could not be replaced because the document is not in a window. Nothing was changed."
+        case .inlineReplacement(.stale):
+            return
+                "The selected match could not be replaced because the document changed during the step. Nothing was changed."
         case .preferencesTooLarge:
             return
                 "The search text or replacement is too large to keep as saved settings. The search can still run; earlier saved settings were not changed."
