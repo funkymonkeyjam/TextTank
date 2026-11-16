@@ -14,6 +14,15 @@
 @implementation TTFakeDrop
 @end
 static TTByteRange *R(NSRange range) { return [[TTByteRange alloc] initWithLocation:(NSInteger)range.location length:(NSInteger)range.length]; }
+// Foreign malformed values are explicit id casts: the typed constructor cannot express
+// missing keys or fractional offsets. They still have to fail before the first edit.
+static TTTextEdit *E(NSNumber *start, NSNumber *end, id text) {
+    if (![start isKindOfClass:NSNumber.class] || ![end isKindOfClass:NSNumber.class] || ![text isKindOfClass:NSString.class]) return (TTTextEdit *)(id)NSNull.null;
+    const NSInteger a=start.integerValue,b=end.integerValue;
+    NSInteger amount=0;
+    if (start.doubleValue!=(double)a || end.doubleValue!=(double)b || __builtin_sub_overflow(b,a,&amount)) return (TTTextEdit *)(id)NSNull.null;
+    return [[TTTextEdit alloc] initWithRange:[[TTByteRange alloc] initWithLocation:a length:amount] text:text];
+}
 static TTSelectionRange *S(NSInteger anchor, NSInteger caret) { return [[TTSelectionRange alloc] initWithAnchor:anchor caret:caret]; }
 static NSEvent *TTMouse(NSEventType type, NSView *content, NSPoint point, NSTimeInterval time) {
     return [NSEvent mouseEventWithType:type location:[content convertPoint:point toView:nil] modifierFlags:0 timestamp:time
@@ -29,6 +38,12 @@ int main() {
             check(![editor executeCommand:@"noSuchCommand"] && ![editor executeCommand:@"bookmarkBogus"], "F281 unknown and unmatched bookmark commands report refusal");
             check(editor.revision == revision && editor.selectionGeneration == generation && [editor.text isEqual:@"safe"] && editor.selectionCaret == 1, "F281 unknown commands preserve bytes, revision and selection generation");
             check([TTEditor respondsToSelector:NSSelectorFromString(@"supportedCommandIdentifiers")], "F281 bridge exposes its exact supported command identifiers");
+        });
+        ttchecks::section("typed edit boundary", [&] {
+            TTEditor *editor=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,300,200)];
+            editor.text=@"safe"; const NSUInteger revision=editor.revision;
+            NSArray *foreign=@[@{@"start":@0,@"end":@1,@"text":@"x"}];
+            check(![editor applyEdits:foreign expectedRevision:revision expectedLength:4] && [editor.text isEqual:@"safe"] && editor.revision==revision, "F29 a dictionary cannot cross the typed byte-edit boundary");
         });
         // Shared by the first three sections; later sections make their own editors.
         TTEditor *second = nil;
@@ -760,7 +775,7 @@ int main() {
         NSInteger line1=[sv message:SCI_POSITIONFROMLINE wParam:1],line2=[sv message:SCI_POSITIONFROMLINE wParam:2],line3=[sv message:SCI_POSITIONFROMLINE wParam:3];
         [ed setSelectionAnchor:line1 caret:line1];
         check(ed.firstVisibleLine==0, "Fixture: the view starts at the top");
-        NSArray *edits=@[@{@"start":@(line1),@"end":@(line1),@"text":@"# "},@{@"start":@(line2),@"end":@(line2),@"text":@"# "},@{@"start":@(line3),@"end":@(line3+4),@"text":@"LINE"}];
+        NSArray *edits=@[E(@(line1),@(line1),@"# "),E(@(line2),@(line2),@"# "),E(@(line3),@(line3+4),@"LINE")];
         NSUInteger revision=ed.revision; NSInteger length=[sv message:SCI_GETLENGTH];
         check([ed applyEdits:edits expectedRevision:revision expectedLength:length], "applyEdits accepts ordered in-bounds edits");
         NSString *expected=[original stringByReplacingOccurrencesOfString:@"line 1\nline 2\nline 3\n" withString:@"# line 1\n# line 2\nLINE 3\n"];
@@ -775,21 +790,21 @@ int main() {
         BOOL (^untouched)(void)=^BOOL{ return [ed.text isEqual:original] && ed.revision==revision && !ed.modified && ![sv message:SCI_CANUNDO] && ed.selectionAnchor==line1 && ed.selectionCaret==line2 && [ed.bookmarkLines isEqual:@[@0,@3,@300]]; };
         check(![ed applyEdits:edits expectedRevision:revision+1 expectedLength:length] && untouched(), "applyEdits rejects a stale revision untouched");
         check(![ed applyEdits:edits expectedRevision:revision expectedLength:length-1] && untouched(), "applyEdits rejects an unexpected document length untouched");
-        check(![ed applyEdits:@[@{@"start":@0,@"end":@(length+1),@"text":@""}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects an out-of-range end untouched");
-        check(![ed applyEdits:@[@{@"start":@(-1),@"end":@0,@"text":@""}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects a negative start untouched");
-        check(![ed applyEdits:@[@{@"start":@4,@"end":@2,@"text":@""}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects a reversed range untouched");
-        check(![ed applyEdits:@[@{@"start":@0,@"end":@1,@"text":@"ok"},@{@"start":@0.5,@"end":@3,@"text":@""}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects a fractional offset before any edit");
-        check(![ed applyEdits:@[@{@"start":@0,@"end":@4,@"text":@"a"},@{@"start":@3,@"end":@5,@"text":@"b"}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects overlapping edits before any edit");
-        check(![ed applyEdits:@[@{@"start":@8,@"end":@9,@"text":@"a"},@{@"start":@1,@"end":@2,@"text":@"b"}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects unordered edits before any edit");
+        check(![ed applyEdits:@[E(@0,@(length+1),@"")] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects an out-of-range end untouched");
+        check(![ed applyEdits:@[E(@(-1),@0,@"")] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects a negative start untouched");
+        check(![ed applyEdits:@[E(@4,@2,@"")] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects a reversed range untouched");
+        check(![ed applyEdits:@[E(@0,@1,@"ok"),E(@0.5,@3,@"")] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects a foreign fractional-offset edit before any mutation");
+        check(![ed applyEdits:@[E(@0,@4,@"a"),E(@3,@5,@"b")] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects overlapping edits before any edit");
+        check(![ed applyEdits:@[E(@8,@9,@"a"),E(@1,@2,@"b")] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects unordered edits before any edit");
         const unichar loneUnit[]={0xD83D};
-        check(![ed applyEdits:@[@{@"start":@0,@"end":@1,@"text":@"ok"},@{@"start":@2,@"end":@3,@"text":[NSString stringWithCharacters:loneUnit length:1]}] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects unencodable text before any edit");
-        check(![ed applyEdits:@[@{@"start":@0,@"end":@1}] expectedRevision:revision expectedLength:length] && ![ed applyEdits:(NSArray *)@"x" expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects malformed input untouched");
+        check(![ed applyEdits:@[E(@0,@1,@"ok"),E(@2,@3,[NSString stringWithCharacters:loneUnit length:1])] expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects unencodable text before any edit");
+        check(![ed applyEdits:@[E(@0,@1,nil)] expectedRevision:revision expectedLength:length] && ![ed applyEdits:(NSArray *)@"x" expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects malformed input untouched");
         ed.readOnly=YES;
         check(![ed applyEdits:edits expectedRevision:revision expectedLength:length] && untouched(), "applyEdits rejects a read-only document untouched");
         ed.readOnly=NO;
         ed.text=@"a😀b";[ed resetUndoHistory];[ed setSavePoint];
-        check(![ed applyEdits:@[@{@"start":@1,@"end":@3,@"text":@""}] expectedRevision:ed.revision expectedLength:6] && ![ed applyEdits:@[@{@"start":@2,@"end":@5,@"text":@""}] expectedRevision:ed.revision expectedLength:6] && [ed.text isEqual:@"a😀b"] && !ed.modified && ![sv message:SCI_CANUNDO], "applyEdits rejects offsets inside a UTF-8 sequence untouched");
-        check([ed applyEdits:@[@{@"start":@0,@"end":@0,@"text":@"<"},@{@"start":@0,@"end":@1,@"text":@"A"},@{@"start":@1,@"end":@5,@"text":@"é"},@{@"start":@6,@"end":@6,@"text":@">"}] expectedRevision:ed.revision expectedLength:6] && [ed.text isEqual:@"<Aéb>"], "Touching edits apply in list order, including an insertion at the start of the next edit");
+        check(![ed applyEdits:@[E(@1,@3,@"")] expectedRevision:ed.revision expectedLength:6] && ![ed applyEdits:@[E(@2,@5,@"")] expectedRevision:ed.revision expectedLength:6] && [ed.text isEqual:@"a😀b"] && !ed.modified && ![sv message:SCI_CANUNDO], "applyEdits rejects offsets inside a UTF-8 sequence untouched");
+        check([ed applyEdits:@[E(@0,@0,@"<"),E(@0,@1,@"A"),E(@1,@5,@"é"),E(@6,@6,@">")] expectedRevision:ed.revision expectedLength:6] && [ed.text isEqual:@"<Aéb>"], "Touching edits apply in list order, including an insertion at the start of the next edit");
         [ed executeCommand:@"undo"];
         check([ed.text isEqual:@"a😀b"] && !ed.modified, "Touching edits undo as one step");
         NSUInteger emptyRevision=ed.revision;
@@ -903,7 +918,7 @@ int main() {
         check([ed.text isEqual:@"one two three four"] && [ed.selectionRanges isEqual:carets] && !ed.modified, "Undo restores every selection of a multi-selection edit");
         ed.text=numbered(400);[ed resetUndoHistory];
         [ed goToLine:301];NSInteger top=ed.firstVisibleLine,caret=ed.selectionCaret;
-        check([ed applyEdits:@[@{@"start":@0,@"end":@4,@"text":@"LINE"}] expectedRevision:ed.revision expectedLength:(NSInteger)[ed.text lengthOfBytesUsingEncoding:NSUTF8StringEncoding]], "Fixture: an edit far from the caret");
+        check([ed applyEdits:@[E(@0,@4,@"LINE")] expectedRevision:ed.revision expectedLength:(NSInteger)[ed.text lengthOfBytesUsingEncoding:NSUTF8StringEncoding]], "Fixture: an edit far from the caret");
         [ed goToLine:1];
         [ed executeCommand:@"undo"];
         check(ed.selectionCaret==caret && ed.firstVisibleLine==top, "Undo restores the caret and scroll position the edit was made from");

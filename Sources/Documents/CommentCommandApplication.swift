@@ -17,7 +17,7 @@ extension CommentCommand {
         // Only the changed byte ranges are replaced, so bookmarks, folds and the viewport survive.
         // The bridge rechecks revision and length and validates every offset before the first edit.
         let edits = proposed.edits.map {
-            ["start": NSNumber(value: $0.start), "end": NSNumber(value: $0.end), "text": $0.text] as [String: Any]
+            TTTextEdit(range: TTByteRange(location: $0.start, length: $0.end - $0.start), text: $0.text)
         }
         guard editor.applyEdits(edits, expectedRevision: revision, expectedLength: original.utf8.count) else {
             throw LanguageError.invalid("The document changed; comments were not applied.")

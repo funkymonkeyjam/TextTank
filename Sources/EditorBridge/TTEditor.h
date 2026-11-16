@@ -26,6 +26,14 @@ __attribute__((objc_subclassing_restricted))
 - (instancetype)initWithLocation:(NSInteger)location length:(NSInteger)length;
 - (instancetype)init NS_UNAVAILABLE;
 @end
+/// One immutable replacement of a byte span; the entire edit list is validated before mutation.
+__attribute__((objc_subclassing_restricted))
+@interface TTTextEdit : NSObject <NSCopying>
+@property(nonatomic, readonly, strong) TTByteRange *range;
+@property(nonatomic, readonly, copy) NSString *text;
+- (instancetype)initWithRange:(TTByteRange *)range text:(NSString *)text;
+- (instancetype)init NS_UNAVAILABLE;
+@end
 /// Immutable UTF-8 byte positions. Bounds and scalar alignment are checked by TTEditor,
 /// before any selection is changed; negative/out-of-document values remain rejectable inputs.
 __attribute__((objc_subclassing_restricted))
@@ -77,12 +85,12 @@ __attribute__((objc_subclassing_restricted))
 @property(nonatomic, readonly) NSUInteger selectionGeneration;
 - (BOOL)setSelectionRanges:(NSArray<TTSelectionRange *> *)ranges;
 - (BOOL)replaceSelections:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision;
-/// Applies byte-range replacements ({"start","end","text"}, ascending, each start at or after the
+/// Applies typed byte-range replacements (ascending, each start at or after the
 /// previous end) as one undo step without touching the rest of the document, so markers, folds
 /// and the viewport outside the ranges survive. Everything is validated first: revision,
 /// writability, document length, bounds, UTF-8 boundaries, order and encodability. Returns NO
 /// with nothing changed otherwise. Does not move the selection explicitly or scroll.
-- (BOOL)applyEdits:(NSArray<NSDictionary<NSString *, id> *> *)edits expectedRevision:(NSUInteger)revision expectedLength:(NSInteger)length;
+- (BOOL)applyEdits:(NSArray<TTTextEdit *> *)edits expectedRevision:(NSUInteger)revision expectedLength:(NSInteger)length NS_SWIFT_NAME(applyEdits(_:expectedRevision:expectedLength:));
 /// Replaces the content of a live document with one minimal-span edit (common prefix and suffix
 /// are kept), preserving bookmarks, the caret line and the first visible line. Identical text
 /// changes nothing, including revision. NO when read-only or unencodable. setText: remains the

@@ -31,6 +31,14 @@ static BOOL TTValidatedByteRange(id candidate, NSUInteger documentLength, NSRang
     return YES;
 }
 
+@implementation TTTextEdit
+- (instancetype)initWithRange:(TTByteRange *)range text:(NSString *)text {
+    if ((self=[super init])) { _range=range; _text=[text copy]; }
+    return self;
+}
+- (id)copyWithZone:(NSZone *)zone { return self; }
+@end
+
 @implementation TTSelectionRange
 - (instancetype)initWithAnchor:(NSInteger)anchor caret:(NSInteger)caret {
     if ((self=[super init])) { _anchor=anchor; _caret=caret; }
@@ -835,28 +843,24 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     }
     [self closeUndoGroup]; return YES;
 }
-- (BOOL)applyEdits:(NSArray<NSDictionary<NSString *, id> *> *)edits expectedRevision:(NSUInteger)revision expectedLength:(NSInteger)expectedLength {
+- (BOOL)applyEdits:(NSArray<TTTextEdit *> *)edits expectedRevision:(NSUInteger)revision expectedLength:(NSInteger)expectedLength {
     [self assertThread];
     const sptr_t length = [_engine message:SCI_GETLENGTH];
     if (revision != self.revision || self.readOnly || length != expectedLength || ![edits isKindOfClass:NSArray.class]) return NO;
     struct Edit { sptr_t start, end; NSData *bytes; };
     std::vector<Edit> validated; validated.reserve(edits.count);
     sptr_t previousEnd = 0;
-    for (id edit in edits) {
-        if (![edit isKindOfClass:NSDictionary.class]) return NO;
-        sptr_t bounds[2];
-        NSString *keys[2] = {@"start", @"end"};
-        for (int i = 0; i < 2; ++i) {
-            id value = edit[keys[i]]; if (![value isKindOfClass:NSNumber.class]) return NO;
-            NSInteger p = [value integerValue]; if ([value doubleValue] != (double)p || p < 0 || p > length) return NO;
-            if (p < length && ([_engine message:SCI_GETCHARAT wParam:p] & 0xC0) == 0x80) return NO;
-            bounds[i] = p;
-        }
-        if (bounds[0] > bounds[1] || bounds[0] < previousEnd) return NO;
-        id text = edit[@"text"]; if (![text isKindOfClass:NSString.class]) return NO;
-        NSData *bytes = TTUTF8(text); if (!bytes) return NO;
-        validated.push_back({bounds[0], bounds[1], bytes});
-        previousEnd = bounds[1];
+    for (id candidate in edits) {
+        if (![candidate isKindOfClass:TTTextEdit.class]) return NO;
+        TTTextEdit *edit=candidate;
+        NSRange range;
+        if (!TTValidatedByteRange(edit.range,(NSUInteger)length,&range) || range.location<(NSUInteger)previousEnd) return NO;
+        for (NSUInteger position : {range.location,NSMaxRange(range)})
+            if (position<(NSUInteger)length && ([_engine message:SCI_GETCHARAT wParam:position]&0xC0)==0x80) return NO;
+        if (![edit.text isKindOfClass:NSString.class]) return NO;
+        NSData *bytes=TTUTF8(edit.text); if (!bytes) return NO;
+        validated.push_back({(sptr_t)range.location,(sptr_t)NSMaxRange(range),bytes});
+        previousEnd=(sptr_t)NSMaxRange(range);
     }
     // The revision is compared once, above: it advances with every replacement below.
     [self openUndoGroup];
