@@ -579,7 +579,8 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
             forName: .TTEditorWillRetire, object: editor, queue: nil
         ) { [weak self] note in
             precondition(Thread.isMainThread)
-            MainActor.assumeIsolated { self?.editor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor }
+            let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor
+            MainActor.assumeIsolated { self?.editor = successor }
         }
         window.title = "Function List"
         window.listedInWindowMenu = true

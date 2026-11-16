@@ -146,11 +146,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             forName: .TTEditorWillRetire, object: nil, queue: nil
         ) { [weak self] note in
             precondition(Thread.isMainThread)
+            let retiring = note.object as? TTEditor
+            let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor
             MainActor.assumeIsolated {
-
-                guard let self, let retiring = note.object as? TTEditor,
-                    let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor
-                else { return }
+                guard let self, let retiring, let successor else { return }
                 for index in self.resultBuffers.indices where self.resultBuffers[index].editor === retiring {
                     self.resultBuffers[index].editor = successor
                 }

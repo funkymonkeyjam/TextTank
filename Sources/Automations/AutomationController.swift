@@ -249,8 +249,9 @@ extension Notification.Name {
                 NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) {
                     [weak panel, weak capturedEditor] note in
                     precondition(Thread.isMainThread)
+                    let changed = note.object as? TTEditor
                     MainActor.assumeIsolated {
-                        guard let editor = capturedEditor, let changed = note.object as? TTEditor,
+                        guard let editor = capturedEditor, let changed,
                             changed === editor || changed.sharesDocument(with: editor)
                         else { return }
                         MainRunLoop.perform { [weak panel] in panel?.refresh() }

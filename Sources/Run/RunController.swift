@@ -38,11 +38,13 @@ import AppKit
         ) { [weak self] note in
             // TTEditor posts retirement synchronously from its main-thread-only route.
             precondition(Thread.isMainThread)
+            let retiring = note.object as? TTEditor
+            let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor
             MainActor.assumeIsolated {
-                guard let self, let pending = self.pending, let retiring = note.object as? TTEditor,
+                guard let self, let pending = self.pending, let retiring,
                     pending.editor === retiring
                 else { return }
-                if !pending.selection, let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor {
+                if !pending.selection, let successor {
                     // A whole-document result does not depend on which view shows the document.
                     self.pending?.editor = successor
                 } else {

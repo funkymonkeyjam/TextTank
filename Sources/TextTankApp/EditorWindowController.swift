@@ -275,9 +275,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             forName: .TTEditorStateDidChange, object: nil, queue: nil
         ) { [weak self] note in
             precondition(Thread.isMainThread)
+            let changed = note.object as? TTEditor
             MainActor.assumeIsolated {
-
-                guard let self, !self.statusClosed, let editor = note.object as? TTEditor else { return }
+                guard let self, !self.statusClosed, let editor = changed else { return }
                 if editor === self.primaryEditor || editor === self.secondary {
                     self.updateInlineFindValidation()
                     if self.window?.isVisible == true { self.refreshStatusDetails(source: .editorEvent) }
