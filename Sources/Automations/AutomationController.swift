@@ -474,6 +474,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         stack.frame = NSRect(x: 0, y: 0, width: 550, height: CGFloat(rows.count * 34 + options.count * 28))
         return stack
     }
+    var jsonFilePanels = JSONLibraryEditor.FilePanels.standard
     func manageAdvanced() {
         guard idleOrExplain() else { return }
         do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
@@ -483,72 +484,31 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         busy = true
         defer { busy = false }
         retryInstall()
-        let alert = TTAlert()
-        alert.messageText = "Advanced Automation Configuration"
-        alert.informativeText = AutomationDefinition.advancedHelp
-        for (title, id) in [
-            ("Save", "automation.json.save"), ("Cancel", "automation.json.cancel"),
-            ("Import…", "automation.json.import"),
-            ("Export…", "automation.json.export"), ("Insert Example", "automation.json.example")
-        ] {
-            alert.addButton(withTitle: title, role: id == "automation.json.cancel" ? .cancel : .action).identifier =
-                NSUserInterfaceItemIdentifier(id)
-        }
-        // The rule kinds, generated from the kinds themselves, above the editable JSON.
-        let reference = makeTextView(height: 96)
-        reference.editor.isEditable = false
-        reference.editor.string = AutomationDefinition.ruleKindReference
-        reference.editor.setAccessibilityLabel("Rule kinds reference")
-        let text = makeTextView(height: 330)
-        text.editor.setAccessibilityLabel("Automation library JSON")
-        // An empty library is shown as an empty library; Insert Example adds the example on request.
-        text.editor.string = String(data: (try? library.encoded()) ?? Data(), encoding: .utf8) ?? ""
-        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 650, height: 434))
-        reference.scroll.frame.origin = NSPoint(x: 0, y: 338)
-        accessory.addSubview(reference.scroll)
-        accessory.addSubview(text.scroll)
-        alert.accessoryView = accessory
-        while true {
-            enum LibraryChoice { case save, cancel, importFile, exportFile, insertExample }
-            guard let response = alert.choice([LibraryChoice.save, .cancel, .importFile, .exportFile, .insertExample]),
-                response != .cancel
-            else { return }
-            if response == .cancel { return }
-            do {
-                if response == .importFile {
-                    let panel = NSOpenPanel()
-                    panel.allowsMultipleSelection = false
-                    panel.canChooseDirectories = false
-                    if panel.runModal() == .OK, let url = panel.url {
-                        let imported = try AutomationLibrary.decode(
-                            AutomationFileInput.readData(url, limit: AutomationLibrary.maximumBytes))
-                        text.editor.string = String(data: try imported.encoded(), encoding: .utf8)!
-                    }
-                    continue
-                }
-                var proposed = try AutomationLibrary.decode(Data(text.editor.string.utf8))
-                if response == .exportFile {
-                    let panel = NSSavePanel()
-                    panel.nameFieldStringValue = "TextTank-Automations.json"
-                    if panel.runModal() == .OK, let url = panel.url {
-                        try proposed.encoded().write(to: url, options: .atomic)
-                    }
-                    continue
-                }
-                if response == .insertExample {
-                    // The example shows the shape of an automation. It joins the JSON in the editor
-                    // only; nothing is saved until Save.
+        do {
+            try JSONLibraryEditor.edit(
+                library,
+                configuration: .init(
+                    title: "Advanced Automation Configuration", information: AutomationDefinition.advancedHelp,
+                    accessibilityLabel: "Automation library JSON", exportName: "TextTank-Automations.json",
+                    identifier: "automation.json", size: NSSize(width: 650, height: 330),
+                    reference: .init(
+                        text: AutomationDefinition.ruleKindReference, accessibilityLabel: "Rule kinds reference",
+                        height: 96),
+                    extraTitle: "Insert Example", extraIdentifier: "automation.json.example"),
+                panels: jsonFilePanels,
+                read: { try AutomationFileInput.readData($0, limit: AutomationLibrary.maximumBytes) },
+                extraAction: { proposed in
+                    var proposed = proposed
                     var example = AutomationDefinition.example
                     if proposed.workflows.contains(where: { $0.id == example.id }) { example.id = UUID() }
                     proposed.workflows.append(example)
-                    text.editor.string = String(data: try proposed.encoded(), encoding: .utf8)!
-                    continue
-                }
-                try checkShortcutCollisions(proposed)
-                try persistLibrary(proposed)
-                return
-            } catch { showError(error) }
-        }
+                    return proposed
+                },
+                save: { proposed in
+                    try checkShortcutCollisions(proposed)
+                    try persistLibrary(proposed)
+                })
+        } catch { showError(error) }
     }
     /// Shared private persistence for edited workflows and explicitly selected destinations.
     func persistLibrary(_ proposed: AutomationLibrary) throws {
@@ -1151,19 +1111,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         return nil
     }
     private func makeTextView(height: CGFloat) -> (scroll: NSScrollView, editor: NSTextView) {
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 650, height: height))
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        let editor = NSTextView(frame: scroll.bounds)
-        editor.isRichText = false
-        editor.isAutomaticQuoteSubstitutionEnabled = false
-        editor.isAutomaticDashSubstitutionEnabled = false
-        editor.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        editor.autoresizingMask = [.width]
-        editor.isVerticallyResizable = true
-        editor.textContainer?.widthTracksTextView = true
-        scroll.documentView = editor
-        return (scroll, editor)
+        JSONLibraryEditor.makeTextView(size: NSSize(width: 650, height: height))
     }
     private func showError(_ error: Error) {
         // A declined or restricted permission is an ordinary state with a way forward, not a dead end.

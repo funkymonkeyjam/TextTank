@@ -774,7 +774,9 @@ enum AutomationError: LocalizedError {
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct AutomationLibrary: Codable, Equatable {
+struct AutomationLibrary: VersionedLibrary, Equatable {
+    static let libraryContext = "Automations"
+    static var librarySizeError: Error { AutomationError.invalid("Automation configuration exceeds 32 MiB.") }
     static let maximumBytes = 32 * 1024 * 1024
     var version: Int = 1
     var workflows: [AutomationDefinition]
@@ -792,25 +794,6 @@ struct AutomationLibrary: Codable, Equatable {
                 throw AutomationError.invalid("Two automations use Command-Option-\(key.uppercased()).")
             }
         }
-    }
-    static func decode(_ data: Data) throws -> AutomationLibrary {
-        guard data.count <= maximumBytes else {
-            throw AutomationError.invalid("Automation configuration exceeds 32 MiB.")
-        }
-        try PersistedFormat.check(data, context: "Automations")
-        let result = try JSONInputFailure.decode(AutomationLibrary.self, from: data, context: "Automations")
-        try result.validate()
-        return result
-    }
-    func encoded() throws -> Data {
-        try validate()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(self)
-        guard data.count <= Self.maximumBytes else {
-            throw AutomationError.invalid("Automation configuration exceeds 32 MiB.")
-        }
-        return data
     }
 }
 
@@ -867,7 +850,11 @@ enum AutomationFileInput {
 }
 
 /// Portable processing rules only. Loading never changes a workflow's identity or output.
-struct AutomationRuleSet: Codable {
+struct AutomationRuleSet: VersionedLibrary {
+    static let libraryContext = "Rules"
+    static var librarySizeError: Error { AutomationError.invalid("Rule files must be at most 1 MiB.") }
+    static let maximumBytes = 1_048_576
+    static let libraryEncodingOptions: JSONEncoder.OutputFormatting = [.prettyPrinted, .sortedKeys]
     var version: Int = 1
     var name: String
     var steps: [AutomationDefinition.Step]
@@ -875,21 +862,6 @@ struct AutomationRuleSet: Codable {
         let probe = AutomationDefinition(id: UUID(), name: name, input: .document, steps: steps, output: .editor)
         guard version == 1 else { throw AutomationError.invalid("Unsupported rule-set version.") }
         try probe.validate()
-    }
-    static func decode(_ data: Data) throws -> AutomationRuleSet {
-        guard data.count <= 1_048_576 else { throw AutomationError.invalid("Rule files must be at most 1 MiB.") }
-        try PersistedFormat.check(data, context: "Rules")
-        let value = try JSONInputFailure.decode(Self.self, from: data, context: "Rules")
-        try value.validate()
-        return value
-    }
-    func encoded() throws -> Data {
-        try validate()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(self)
-        guard data.count <= 1_048_576 else { throw AutomationError.invalid("Rule files must be at most 1 MiB.") }
-        return data
     }
 }
 

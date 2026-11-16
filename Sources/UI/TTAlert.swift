@@ -29,6 +29,12 @@ final class TTAlert: NSObject, NSWindowDelegate {
         field?.toolTip = validationMessage
         if let field { window.initialFirstResponder = field }
     }
+    func clearValidation() {
+        validationField?.setAccessibilityHelp(nil)
+        validationField?.toolTip = nil
+        validationField = nil
+        validationMessage = nil
+    }
     private(set) var buttons: [NSButton] = []
     private var cancelButtons: Set<ObjectIdentifier> = []
     let window = NSPanel(

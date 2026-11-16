@@ -171,7 +171,11 @@ enum MacroError: LocalizedError {
 }
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct MacroLibrary: Codable, Equatable {
+struct MacroLibrary: VersionedLibrary, Equatable {
+    static let libraryContext = "Saved macros"
+    static var librarySizeError: Error {
+        MacroError.invalid("Saved macros exceed the 32 MiB limit. The file was not changed.")
+    }
     /// Same 32 MiB resource envelope as saved automations; bound both import and persistence.
     static let maximumBytes = 32 * 1024 * 1024
     var version: Int = 1
@@ -201,24 +205,5 @@ struct MacroLibrary: Codable, Equatable {
                 try consume(step.search?.replacement)
             }
         }
-    }
-    static func decode(_ data: Data) throws -> MacroLibrary {
-        guard data.count <= maximumBytes else {
-            throw MacroError.invalid("Saved macros exceed the 32 MiB limit. The file was not changed.")
-        }
-        try PersistedFormat.check(data, context: "Saved macros")
-        let library = try JSONInputFailure.decode(Self.self, from: data, context: "Saved macros")
-        try library.validate()
-        return library
-    }
-    func encoded() throws -> Data {
-        try validate()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(self)
-        guard data.count <= Self.maximumBytes else {
-            throw MacroError.invalid("Saved macros exceed the 32 MiB limit. The file was not changed.")
-        }
-        return data
     }
 }

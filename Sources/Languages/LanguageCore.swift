@@ -152,7 +152,9 @@ struct LanguageProfile: Codable, Equatable, Identifiable {
 }
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct LanguageCatalog: Codable, Equatable {
+struct LanguageCatalog: VersionedLibrary, Equatable {
+    static let libraryContext = "Language profiles"
+    static var librarySizeError: Error { LanguageError.invalid("Language catalog exceeds 16 MiB.") }
     var version: Int = 1
     var sourceCommit: String
     var sourceHashes: [String: String]
@@ -171,21 +173,6 @@ struct LanguageCatalog: Codable, Equatable {
     }
     /// The reader's size limit; writers check against the same constant.
     static let maximumBytes = 16 * 1024 * 1024
-    static func decode(_ data: Data) throws -> Self {
-        guard data.count <= maximumBytes else { throw LanguageError.invalid("Language catalog exceeds 16 MiB.") }
-        try PersistedFormat.check(data, context: "Language profiles")
-        let value = try JSONInputFailure.decode(Self.self, from: data, context: "Language profiles")
-        try value.validate()
-        return value
-    }
-    func encoded() throws -> Data {
-        try validate()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(self)
-        guard data.count <= Self.maximumBytes else { throw LanguageError.invalid("Language catalog exceeds 16 MiB.") }
-        return data
-    }
     /// The catalog a stored LanguageProfiles.json stands for. The current format holds only the
     /// user's changes (`LanguageOverrides`); a file written before that is a full copy of the
     /// catalog, and is read as the changes it makes to today's bundled catalog.

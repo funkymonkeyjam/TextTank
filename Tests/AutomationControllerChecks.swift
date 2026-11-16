@@ -782,6 +782,159 @@ final class Audit24RecoverySpy: NSObject {
                 helpShown && referenceText == AutomationDefinition.ruleKindReference
                     && Step.Kind.allCases.allSatisfy { referenceText.contains($0.rawValue) },
                 "G381 the Advanced JSON dialog shows the generated help and every rule kind")
+            var correctedDefinition = AutomationDefinition.example
+            correctedDefinition.name = "Library JSON retry"
+            let correctedLibrary = AutomationLibrary(workflows: [correctedDefinition])
+            let correctedJSON = String(decoding: try correctedLibrary.encoded(), as: UTF8.self)
+            let invalidJSON = "{ keep this invalid JSON draft"
+            var jsonStage = 0, nestedJSONError = false, retryKeptDraft = false
+            var retryKeptStorage = false, inlineJSONError = false
+            var jsonWindow: NSWindow?
+            let retryJSON = drivingModal(
+                timeout: 20,
+                { window, views in
+                    if jsonStage == 1, window !== jsonWindow {
+                        nestedJSONError = true
+                        NSApp.abortModal()
+                        return false
+                    }
+                    guard let json = textView("Automation library JSON", in: views),
+                        let save = button("automation.json.save", in: views)
+                    else { return false }
+                    switch jsonStage {
+                    case 0:
+                        jsonWindow = window
+                        json.string = invalidJSON
+                        jsonStage = 1
+                        save.performClick(nil)
+                    case 1:
+                        retryKeptDraft = json.string == invalidJSON
+                        retryKeptStorage = (try? Data(contentsOf: path)) == empty
+                        inlineJSONError = json.accessibilityHelp()?.isEmpty == false
+                        json.string = correctedJSON
+                        jsonStage = 2
+                        save.performClick(nil)
+                        return true
+                    default: break
+                    }
+                    return false
+                }
+            ) { controller.manageAdvanced() }
+            check(
+                retryJSON.acted && !retryJSON.timedOut && jsonStage == 2, "F155 JSON retry completes after correction")
+            check(retryKeptDraft && retryKeptStorage, "F155 rejected JSON keeps the draft and saved library unchanged")
+            check(
+                !nestedJSONError && inlineJSONError,
+                "F155 invalid library JSON is marked in its editor without a nested error modal")
+            check(try stored() == correctedLibrary, "F155 corrected JSON saves only on the explicit second Save")
+            var importedDefinition = correctedDefinition
+            importedDefinition.id = UUID()
+            importedDefinition.name = "Imported library draft"
+            let importedLibrary = AutomationLibrary(workflows: [importedDefinition])
+            let importURL = path.deletingLastPathComponent().appendingPathComponent("library-import.json")
+            let exportURL = path.deletingLastPathComponent().appendingPathComponent("library-export.json")
+            try importedLibrary.encoded().write(to: importURL)
+            let beforeImport = try Data(contentsOf: path)
+            let originalPanels = controller.jsonFilePanels
+            defer { controller.jsonFilePanels = originalPanels }
+            var chosenImport: URL? = importURL, exportNames: [String] = []
+            controller.jsonFilePanels = .init(
+                importURL: { chosenImport },
+                exportURL: { name in
+                    exportNames.append(name)
+                    return exportURL
+                })
+            var fileStage = 0, importedOnlyDraft = false, exportedOnlyDraft = false
+            let files = drivingModal(
+                timeout: 20,
+                { _, views in
+                    guard let json = textView("Automation library JSON", in: views),
+                        let load = button("automation.json.import", in: views),
+                        let export = button("automation.json.export", in: views),
+                        let cancel = button("automation.json.cancel", in: views)
+                    else { return false }
+                    switch fileStage {
+                    case 0:
+                        fileStage = 1
+                        load.performClick(nil)
+                    case 1:
+                        importedOnlyDraft =
+                            (try? AutomationLibrary.decode(Data(json.string.utf8))) == importedLibrary
+                            && (try? Data(contentsOf: path)) == beforeImport
+                        fileStage = 2
+                        export.performClick(nil)
+                    case 2:
+                        exportedOnlyDraft =
+                            (try? AutomationLibrary.decode(Data(contentsOf: exportURL))) == importedLibrary
+                            && (try? Data(contentsOf: path)) == beforeImport
+                        fileStage = 3
+                        cancel.performClick(nil)
+                        return true
+                    default: break
+                    }
+                    return false
+                }
+            ) { controller.manageAdvanced() }
+            check(
+                files.acted && !files.timedOut && fileStage == 3,
+                "F155 Automation Import and Export run through isolated file choices")
+            check(
+                importedOnlyDraft && exportedOnlyDraft,
+                "F155 import and export only change or copy the Automation draft")
+            check(
+                try Data(contentsOf: path) == beforeImport && stored() == correctedLibrary,
+                "F155 Cancel after import and export leaves the saved Automation library untouched")
+            check(exportNames == ["TextTank-Automations.json"], "F155 Automation export keeps its documented filename")
+            let refusedURL = path.deletingLastPathComponent().appendingPathComponent("library-import-link.json")
+            try FileManager.default.createSymbolicLink(at: refusedURL, withDestinationURL: importURL)
+            chosenImport = refusedURL
+            fileStage = 0
+            var refusedDraft = false, clearedImportError = false
+            let refusedImport = drivingModal(
+                timeout: 20,
+                { _, views in
+                    guard let json = textView("Automation library JSON", in: views),
+                        let load = button("automation.json.import", in: views),
+                        let save = button("automation.json.save", in: views)
+                    else { return false }
+                    switch fileStage {
+                    case 0:
+                        json.string = correctedJSON + "\n "
+                        fileStage = 1
+                        load.performClick(nil)
+                    case 1:
+                        refusedDraft =
+                            json.string == correctedJSON + "\n "
+                            && json.accessibilityHelp()?.isEmpty == false
+                            && (try? Data(contentsOf: path)) == beforeImport
+                        chosenImport = importURL
+                        fileStage = 2
+                        load.performClick(nil)
+                    case 2:
+                        clearedImportError =
+                            json.accessibilityHelp() == nil
+                            && (try? AutomationLibrary.decode(Data(json.string.utf8))) == importedLibrary
+                        fileStage = 3
+                        save.performClick(nil)
+                        return true
+                    default: break
+                    }
+                    return false
+                }
+            ) { controller.manageAdvanced() }
+            check(
+                refusedImport.acted && !refusedImport.timedOut && refusedDraft,
+                "F155 refused symlink import keeps the Automation draft and saved bytes")
+            check(clearedImportError, "F155 a corrected import clears the previous inline error")
+            check(
+                try stored() == importedLibrary
+                    && controller.menu().items.contains {
+                        $0.representedObject as? String == importedDefinition.id.uuidString
+                    }, "F155 explicit imported Save persists and rebuilds the Automation menu")
+            check(
+                try Data(contentsOf: importURL) == importedLibrary.encoded()
+                    && FileManager.default.destinationOfSymbolicLink(atPath: refusedURL.path) == importURL.path,
+                "F155 a refused import preserves the link and its target")
             let restoreItem = controller.menu().items.first { $0.title == "Restore Default Automations…" }
             check(
                 restoreItem != nil && restoreItem?.target === controller
