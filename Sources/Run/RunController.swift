@@ -4,7 +4,7 @@ import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
-final class RunController: NSObject, NSMenuItemValidation {
+@MainActor final class RunController: NSObject, NSMenuItemValidation {
     var editor: () -> TTEditor? = { nil }
     var file: () -> URL? = { nil }
     /// Called when a configured command is actually started and again before its result is
@@ -36,16 +36,20 @@ final class RunController: NSObject, NSMenuItemValidation {
         retirementObserver = NotificationCenter.default.addObserver(
             forName: .TTEditorWillRetire, object: nil, queue: nil
         ) { [weak self] note in
-            guard let self, let pending = self.pending, let retiring = note.object as? TTEditor,
-                pending.editor === retiring
-            else { return }
-            if !pending.selection, let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor {
-                // A whole-document result does not depend on which view shows the document.
-                self.pending?.editor = successor
-            } else {
-                // A selection result belongs to the closed view's selection and cannot be applied.
-                self.pending = nil
-                self.applyButton?.isEnabled = false
+            // TTEditor posts retirement synchronously from its main-thread-only route.
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated {
+                guard let self, let pending = self.pending, let retiring = note.object as? TTEditor,
+                    pending.editor === retiring
+                else { return }
+                if !pending.selection, let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor {
+                    // A whole-document result does not depend on which view shows the document.
+                    self.pending?.editor = successor
+                } else {
+                    // A selection result belongs to the closed view's selection and cannot be applied.
+                    self.pending = nil
+                    self.applyButton?.isEnabled = false
+                }
             }
         }
         do {
@@ -56,7 +60,12 @@ final class RunController: NSObject, NSMenuItemValidation {
             commands = []
         }
     }
-    deinit { if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) } }
+    deinit {
+        precondition(Thread.isMainThread)
+        MainActor.assumeIsolated {
+            if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) }
+        }
+    }
     func makeMenu() -> NSMenu {
         rebuild()
         return menu
@@ -364,16 +373,17 @@ final class RunController: NSObject, NSMenuItemValidation {
                 ? Data((selected ? (target?.selectedText ?? "") : (target?.text ?? "")).utf8) : Data()
             let run = RunExecution()
             execution = run
-            // The editor is main-thread only, so the worker's block holds it weakly: its last
-            // reference must not be dropped on the worker, and a run must not keep it alive.
-            DispatchQueue.global(qos: .userInitiated).async { [weak self, weak target] in
+            // Capture weak UI references on main; the worker holds only this delivery
+            // and immutable command/input values, never strengthening an editor/controller.
+            let deliver: @MainActor @Sendable (Result<RunResult, Error>) -> Void = { [weak self, weak target] outcome in
+                self?.execution = nil
+                self?.show(
+                    outcome, command: command, target: target, revision: revision, selection: selected,
+                    anchor: anchor, caret: caret)
+            }
+            DispatchQueue.global(qos: .userInitiated).async {
                 let outcome = Result { try run.execute(command, input: input, workingDirectory: directory) }
-                DispatchQueue.main.async { [weak target] in
-                    self?.execution = nil
-                    self?.show(
-                        outcome, command: command, target: target, revision: revision, selection: selected,
-                        anchor: anchor, caret: caret)
-                }
+                DispatchQueue.main.async { deliver(outcome) }
             }
         }
     }

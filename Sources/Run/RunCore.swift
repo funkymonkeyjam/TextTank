@@ -3,7 +3,7 @@ import Foundation
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-package struct ConfiguredRun: Codable, Equatable {
+package struct ConfiguredRun: Codable, Equatable, Sendable {
     package init(
         version: Int = 1, id: UUID = UUID(), name: String, executable: String, arguments: [String],
         shellMode: Bool = false, extensionMode: Bool = false
@@ -199,7 +199,7 @@ package enum RunFailure: Error, LocalizedError, Equatable {
     }
 }
 /// Why a run ended. Exactly one applies; only `finished` leaves complete output.
-package enum RunTermination: Equatable, CaseIterable {
+package enum RunTermination: Equatable, CaseIterable, Sendable {
     /// The command exited by itself and all of its output was read.
     case finished
     /// The user cancelled it, or TextTank was quitting.
@@ -222,7 +222,7 @@ package enum RunTermination: Equatable, CaseIterable {
         }
     }
 }
-package struct RunResult {
+package struct RunResult: Sendable {
     package init(stdout: Data, stderr: Data, status: Int32, reason: RunTermination) {
         self.stdout = stdout
         self.stderr = stderr

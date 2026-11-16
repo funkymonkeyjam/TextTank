@@ -63,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }()
     // The providers below only answer "which editor". A macro recording is invalidated where
     // an action is committed, through each controller's hook, never by asking for the editor.
-    lazy var runner: RunController = {
+    @MainActor lazy var runner: RunController = {
         let controller = RunController()
         controller.editor = { [weak self] in self?.currentEditor }
         controller.onUnrecordableAction = { [weak self] in
