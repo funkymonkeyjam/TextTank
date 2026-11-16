@@ -57,3 +57,9 @@ For an exact-source archive build, pass its `build/artifacts/Debug/manifest.json
 `TEXTTANK_ARTIFACT_MANIFEST`; current checkout inputs must still match. This establishes local
 input/artifact identity, not archive binding, source stability or package provenance. Swift
 product sources are still compiled by the legacy test configurations during this stage.
+
+Dependency inspection failures are fatal for native check executables; a missing inspector
+cannot turn required image proofs into an empty list. The user-lexer provenance suite keeps
+its eight contracts: the former second-compilation assertion now checks delegation to the
+actual signed EditorBridge producer, with canonical per-file C++ flags and hashed compiler
+log, response files and object evidence. Existing source/patch/upstream contracts remain.

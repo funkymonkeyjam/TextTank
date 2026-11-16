@@ -82,6 +82,30 @@ func rawMode() throws {
                 text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_native_suite_rejects_dependency_inspection_failure(self):
+        with tempfile.TemporaryDirectory(prefix='image-inspection-', dir=ROOT / 'build/tests') as work:
+            fixture = Path(work)
+            source = fixture / 'probe.c'
+            source.write_text('#include <stdio.h>\nint main(void) { puts("PASS InspectionChecks: 1 assertions"); return 0; }\n')
+            executable = fixture / 'probe'
+            built = subprocess.run(['xcrun', 'clang', str(source), '-o', str(executable)], capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            environment = dict(os.environ, TEXTTANK_SUITE_RESULTS='')
+            runner = ['bash', '-c', 'source scripts/suite-lib.sh; suite_begin; suite_run dependency-inspection "$1" "$2"; suite_finish',
+                      'fixture', str(fixture / 'run.log'), str(executable)]
+            positive = subprocess.run(runner, cwd=ROOT, env=environment, capture_output=True, text=True)
+            self.assertEqual(positive.returncode, 0, positive.stdout + positive.stderr)
+            tools = fixture / 'bin'
+            tools.mkdir()
+            inspector = tools / 'otool'
+            inspector.write_text('#!/bin/sh\necho "fixture dependency inspector failed" >&2\nexit 47\n')
+            inspector.chmod(0o755)
+            failed = subprocess.run(runner, cwd=ROOT, env={**environment, 'PATH': str(tools) + os.pathsep + environment['PATH']},
+                                    capture_output=True, text=True)
+            self.assertNotEqual(failed.returncode, 0, 'A real native binary passed with failed dependency inspection')
+            self.assertIn('dependency inspection failed', failed.stdout)
+            self.assertIn('fixture dependency inspector failed', failed.stdout)
+
     def test_runtime_linkage_rejects_real_absolute_framework_install_names(self):
         linkage = module('check_runtime_linkage', 'check-runtime-linkage.py')
         with tempfile.TemporaryDirectory(prefix='runtime-linkage-', dir=ROOT / 'tmp') as work:

@@ -111,14 +111,20 @@ suite_run() {
     status=1
   fi
   if [[ "$status" == 0 && ( "$1" == build/tests/* || "$1" == "$PWD"/build/tests/* ) ]]; then
-    local expected_images image_name
-    expected_images=$(otool -L "$1" 2>/dev/null | sed -nE 's@.*[/](NativeSearch|EditorBridge|Scintilla)\.framework/.*@\1@p' | sort -u || true)
-    for image_name in $expected_images; do
-      if ! grep -q "^ARTIFACT_IMAGE $image_name " "$log"; then
-        echo "FAIL $name: missing actual loaded signed $image_name image proof" | tee -a "$log"
-        status=1
-      fi
-    done
+    local native_dependencies image_name inspection_status
+    if native_dependencies=$(otool -L "$1" 2>&1); then
+      for image_name in NativeSearch EditorBridge Scintilla; do
+        if [[ "$native_dependencies" == *"/$image_name.framework/"* ]] && ! grep -q "^ARTIFACT_IMAGE $image_name " "$log"; then
+          echo "FAIL $name: missing actual loaded signed $image_name image proof" | tee -a "$log"
+          status=1
+        fi
+      done
+    else
+      inspection_status=$?
+      echo "FAIL $name: dependency inspection failed (otool exit $inspection_status)" | tee -a "$log"
+      printf '%s\n' "$native_dependencies" | tee -a "$log"
+      status=1
+    fi
   fi
   if [[ "$status" == 0 ]]; then
     suite_record "PASS" "$name" "$(tail -n 1 "$log" | cut -c1-110)"

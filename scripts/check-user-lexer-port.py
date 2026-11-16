@@ -8,7 +8,10 @@ Always, with nothing but this repository:
     of the pinned upstream lexilla/lexers/LexUser.cxx, so port = pinned upstream + patch holds
     without the upstream file being present;
   - the Xcode project compiles LexUser.cxx as plain C++ with the flags in
-    scripts/user-lexer-flags.txt, the same flags scripts/build-user-lexer.sh gives the test object.
+    scripts/user-lexer-flags.txt.
+After a canonical build, the eighth contract checks actual signed EditorBridge producer
+evidence (compiler invocation, per-file flags, response/object bytes and artifact manifest);
+checks consume this producer instead of compiling a second user lexer.
 
 With an upstream checkout (TEXTTANK_NOTEPAD_SOURCE=<checkout>, or --upstream <checkout>):
   - every recorded source file has its recorded SHA-256;
@@ -18,7 +21,7 @@ With an upstream checkout (TEXTTANK_NOTEPAD_SOURCE=<checkout>, or --upstream <ch
 --update <checkout> rewrites LexUser.patch and the recorded hashes after a deliberate change to the
 port. Nothing here downloads anything.
 """
-import difflib, hashlib, json, os, re, sys
+import difflib, hashlib, json, os, re, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -149,8 +152,25 @@ def main(argv):
           'the Xcode project compiles LexUser.cxx as plain C++, not Objective-C++')
     check('-std=c++17' in flags and '"COMPILER_FLAGS" = %s' % json.dumps(' '.join(flags)) in project,
           'the Xcode project gives LexUser.cxx the flags in scripts/user-lexer-flags.txt (%s)' % ' '.join(flags))
-    check('scripts/user-lexer-flags.txt' in (ROOT / 'scripts/build-user-lexer.sh').read_text(),
-          'scripts/build-user-lexer.sh compiles the test object with the same flags file')
+    # F269 intentionally retires the second compilation. Keep the eighth contract, now
+    # against the real signed application's producer and its actual compiler evidence.
+    delegated = False
+    try:
+        import runtime_artifacts
+        configuration = os.environ.get('CONFIGURATION', 'Debug')
+        manifest = Path(os.environ.get('TEXTTANK_ARTIFACT_MANIFEST',
+                                      str(ROOT / 'build/artifacts' / configuration / 'manifest.json')))
+        artifacts = runtime_artifacts.validate(ROOT, manifest, configuration)
+        producer = artifacts['user_lexer_producer']
+        entry = (ROOT / 'scripts/build-user-lexer.sh').read_text()
+        delegated = ('runtime_artifacts.py validate' in entry and 'clang++' not in entry
+                     and producer is not None and producer['target'] == 'EditorBridge'
+                     and producer['canonical_flags'] == flags
+                     and producer['flags_sha256'] == sha((ROOT / 'scripts/user-lexer-flags.txt').read_bytes())
+                     and 'EditorBridge' in artifacts['images'])
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
+        print('NOTE actual user-lexer artifact evidence unavailable: %s' % error)
+    check(delegated, 'native checks delegate to the actual signed EditorBridge producer with canonical per-file flags and compiler evidence')
 
     if root is None:
         print('NOTE no upstream checkout given (TEXTTANK_NOTEPAD_SOURCE); the recorded hashes and the '
