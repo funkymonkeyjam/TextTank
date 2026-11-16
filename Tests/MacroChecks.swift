@@ -58,9 +58,9 @@ import Foundation
             editor.setSavePoint()
             _ = editor.setSelectionAnchor(1, caret: 1)
             controller.startRecording()
-            editor.executeCommand("newLine")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
             let recording = try requireValue(try controller.finishRecording(), "fixture: a one-step recording")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             try require(editor.text == "ab", "fixture: the recorded edit is undone")
             func answer(_ field: String, _ value: String?, _ button: String) -> ([NSView]) -> Bool {
                 { views in
@@ -116,7 +116,7 @@ import Foundation
                 choosing(savedItem, answer("macro.play.count", "3", "macro.play.confirm")),
                 "a saved macro plays from its menu item with a repeat count")
             check(editor.text == "a\n\n\nb", "saved macro playback repeats the recorded edit at the caret")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "ab" && !editor.modified, "menu playback of a saved macro is one Undo")
             _ = editor.setSelectionAnchor(1, caret: 1)
             revision = editor.revision
@@ -127,7 +127,7 @@ import Foundation
             check(
                 choosing(lastItem, answer("macro.play.count", "2", "macro.play.confirm")) && editor.text == "a\n\nb",
                 "Play Last Recording replays the unsaved recording through the same dialog")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "ab" && !editor.modified, "Play Last Recording is one Undo")
             check(
                 item("playLast", in: restarted)?.isEnabled == false
@@ -146,7 +146,7 @@ import Foundation
                 control("macro.save.confirm", NSButton.self, in: descendants(pending.window.contentView!)),
                 "fixture: recording save action")
             check(!savePending.isEnabled, "DG an actual active recording disables the open recording-name Save action")
-            editor.executeCommand("newLine")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
             let intervening = try requireValue(
                 try controller.finishRecording(), "fixture: intervening completed recording")
             check(
@@ -172,7 +172,7 @@ import Foundation
                     $0.id == intervening.id && $0.name == "Newer recording" && $0.steps == intervening.steps
                 },
                 "DG stale-save refusal preserves the actual newer recording for later Save")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
         }
         static func jsonManagerChecks(editor: TTEditor) throws {
             let isolated = try IsolatedSupportDirectory("MacroJSONChecks")
@@ -331,7 +331,7 @@ import Foundation
             var reasons: [String] = []
             controller.onInvalidated = { reasons.append($0) }
             func load(_ text: String, caret: Int = 0) {
-                editor.executeCommand("streamSelection")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "streamSelection"))
                 editor.text = text
                 editor.resetUndoHistory()
                 editor.setSavePoint()
@@ -387,7 +387,7 @@ import Foundation
             load(lines, caret: 2)
             try controller.play(prefix, on: editor, repeats: 3)
             check(editor.text == "// one\n// two\n// three", "the recorded prefix macro prefixes each line on replay")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == lines && !editor.modified, "the replayed prefix macro is one Undo")
             load("alpha beta\ngamma", caret: 10)
             controller.startRecording()
@@ -407,24 +407,27 @@ import Foundation
             let messages = try requireValue(
                 fixture["bridge_replay_messages"] as? [String: Int], "fixture: frozen recording numbers")
             check(
-                TTEditor.macroCommandMessages().mapValues(\.intValue) == messages,
+                Dictionary(
+                    uniqueKeysWithValues: TTEditor.macroCommandMessages().map { ($0.key.rawValue, $0.value.intValue) })
+                    == messages,
                 "F281 canonical command names keep every exact accepted Scintilla message number")
             let supported = Set(
                 try requireValue(fixture["bridge_supported"] as? [String], "fixture: supported identifiers"))
             check(
-                Set(TTEditor.supportedCommandIdentifiers()) == supported
+                Set(TTEditor.supportedCommandIdentifiers().map(\.rawValue)) == supported
                     && supported == Set(EditorCommand.allCases.map(\.rawValue)),
                 "F281 Swift catalog and full bridge dispatch support the frozen exact identifier set")
             let modifies = Set(
                 try requireValue(fixture["modifies_text"] as? [String], "fixture: text modifying commands"))
             check(
-                Set(supported.filter(TTEditor.commandModifiesText)) == modifies,
+                Set(supported.filter { TTEditor.commandModifiesText(TTEditorCommandIdentifier(rawValue: $0)) })
+                    == modifies,
                 "F281 read-only classification preserves the exact accepted editing subset")
             check(
                 messages["indent"] == nil && messages["unindent"] == nil && messages["tab"] != nil
                     && messages["backTab"] != nil,
                 "F281 playback-only indent aliases never compete for canonical Tab recording names")
-            let bridgeNames = Set(TTEditor.macroCommandNames())
+            let bridgeNames = Set(TTEditor.macroCommandNames().map(\.rawValue))
             check(
                 bridgeNames.union(["indent", "unindent"]) == RecordedMacro.Step.commands,
                 "the bridge's command table and the macro format's command list name the same commands")
@@ -470,14 +473,14 @@ import Foundation
             // F67 and G367: a named reason, at once, and the previous recording survives.
             load("alpha beta", caret: 0)
             controller.startRecording()
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             let kept = try requireValue(try controller.finishRecording(), "fixture: a good recording to keep")
             controller.startRecording()
             check(
                 controller.discardReason == nil && item("stopRecording", in: controller)?.title == "Stop Recording",
                 "a live recording offers Stop Recording and has no discard reason")
-            editor.executeCommand("charRight")
-            editor.executeCommand("rectangularSelection")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "rectangularSelection"))
             check(
                 reasons.count == 1 && reasons[0].contains("Rectangular selection")
                     && reasons[0].contains("is not recordable yet") && controller.discardReason == reasons[0],
@@ -486,7 +489,7 @@ import Foundation
                 item("stopRecording", in: controller)?.title == "Stop Recording (Already Discarded)"
                     && item("stopRecording", in: controller)?.isEnabled == true,
                 "the menu says the recording in progress is already discarded and can still be stopped")
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             controller.invalidateRecording(reason: "a second reason")
             check(reasons.count == 1, "a discarded recording reports once; later reasons are not announced")
             var stopMessage = ""
@@ -509,7 +512,7 @@ import Foundation
                 item("playLast", in: controller)?.isEnabled == true,
                 "the previous recording is still offered after an empty one")
             controller.startRecording()
-            editor.executeCommand("charLeft")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charLeft"))
             let newer = try requireValue(try controller.finishRecording(), "fixture: a newer good recording")
             check(
                 newer.id != kept.id && newer.steps != kept.steps, "a new successful recording replaces the previous one"
@@ -523,14 +526,14 @@ import Foundation
             let clicked = editor.selectionCaret
             try require(clicked > 0 && clicked < 10, "fixture: a synthesized click places the caret in the first line")
             controller.startRecording()
-            editor.executeCommand("charRight")
-            editor.executeCommand("charLeft")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charLeft"))
             try click(at: near, in: content)
             check(
                 try controller.finishRecording()?.steps.count == 2 && reasons.isEmpty,
                 "a click that changes neither caret nor text leaves the recording saveable")
             controller.startRecording()
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             try click(at: below, in: content)
             check(
                 reasons.count == 1 && reasons[0].contains("mouse") && editor.selectionCaret != clicked,
@@ -546,7 +549,7 @@ import Foundation
                 descendants(editor).first { $0.className == "SCIMarginView" }, "fixture: the editor's margin view")
             load("alpha beta\n  gamma delta\nlast line\n", caret: 0)
             controller.startRecording()
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             clock += 5
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                 let event = try requireValue(
@@ -598,7 +601,7 @@ import Foundation
             drop.draggingLocation = splitContent.convert(near, to: nil)
             let dropInfo = unsafeBitCast(drop, to: NSDraggingInfo.self)
             controller.startRecording()
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             let beforeDrop = editor.revision
             _ = splitContent.draggingEntered(dropInfo)
             _ = splitContent.draggingUpdated(dropInfo)
@@ -704,7 +707,7 @@ import Foundation
             // F68: failed navigation is never reported to the recorder as a completed search action.
             load("alpha beta", caret: 0)
             controller.startRecording()
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             barOptions.query = "absent"
             rejects("a missed shared navigation reports no match", message: "did not match") {
                 try sharedFinder.playRecorded(options: barOptions, action: "next", on: editor)
@@ -731,12 +734,12 @@ import Foundation
             rejects("completion popup invalidates recording", message: "completion list") {
                 _ = try controller.finishRecording()
             }
-            editor.executeCommand("cancel")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "cancel"))
             reasons = []
             load("call(", caret: 0)
             controller.startRecording()
             editor.showCallTip("call(argument)")
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             check(
                 try controller.finishRecording()?.steps.count == 1 && reasons.isEmpty,
                 "a call tip leaves the recording saveable")
@@ -744,7 +747,7 @@ import Foundation
             // F277: application-layer caret jumps.
             load("one\ntwo\nthree", caret: 0)
             controller.startRecording()
-            editor.executeCommand("newLine")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
             check(
                 controller.unrecordedJump(in: editor, reason: "Go to Line is not recorded in macros yet.") {
                     editor.goToLine(3)
@@ -756,7 +759,7 @@ import Foundation
             reasons = []
             load("one\ntwo\nthree", caret: 0)
             controller.startRecording()
-            editor.executeCommand("charRightExtend")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRightExtend"))
             check(
                 controller.unrecordedJump(in: editor, reason: "Clear Selection is not recorded in macros yet.") {
                     editor.setSelectionAnchor(editor.selectionCaret, caret: editor.selectionCaret)
@@ -768,7 +771,7 @@ import Foundation
             reasons = []
             load("one\ntwo\nthree", caret: 4)
             controller.startRecording()
-            editor.executeCommand("newLine")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
             let caret = editor.selectionCaret
             check(
                 try !controller.unrecordedJump(in: editor, reason: "unused") { editor.goToLine(99) }
@@ -778,7 +781,7 @@ import Foundation
                 "a refused jump and a jump to where the caret already is leave the recording saveable")
             load("one\ntwo\nthree", caret: 4)
             controller.startRecording()
-            editor.executeCommand("newLine")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
             check(
                 try controller.unrecordedJump(in: editor, reason: "unused") { editor.goToLine(3) }
                     && editor.selectionCaret == caret && reasons.isEmpty
@@ -841,7 +844,7 @@ import Foundation
             finder.findAll(nil)
             _ = spinUntil("the Find All search to finish") { !finder.isSearching }
             controller.startRecording()
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             finder.open(row: 1)
             check(
                 editor.selectionStart == 7 && reasons.count == 1 && reasons[0].contains("search result"),
@@ -866,7 +869,7 @@ import Foundation
             load("aaa x", caret: 0)
             try controller.play(try requireValue(golden.macros.first, "fixture: the golden macro"), on: editor)
             check(editor.text == "cbféb y", "the golden saved macro library decodes and plays as before")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "aaa x" && !editor.modified, "the golden macro replay is one Undo")
 
             // F222: until-end compares the caret with the byte length, never a copy of the document.
@@ -1100,9 +1103,9 @@ import Foundation
                     ])
                 try controller.play(edit, on: editor, repeats: 2)
                 check(editor.text == "café milk milk 👩🏽‍💻", "native literal find/replace repeat captures parameters")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == original, "native repeated macro is one Undo group")
-                editor.executeCommand("selectAll")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 let failing = RecordedMacro(
                     id: UUID(), name: "Stop on missing search",
                     steps: [
@@ -1111,63 +1114,63 @@ import Foundation
                     ])
                 rejects("native missing search aborts") { try controller.play(failing, on: editor) }
                 check(editor.text == "changed", "native earlier edit retained for explicit Undo")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == original, "native partial replay remains one Undo")
                 controller.startRecording()
-                editor.executeCommand("newLine")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
                 let captured = try controller.finishRecording()
                 check(
                     captured?.steps.contains(where: { $0.kind == .insertText }) == true,
                     "actual native newline recording remains saveable")
                 controller.startRecording()
-                editor.executeCommand("charRight")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
                 controller.willExecuteCommand("trimTrailing", on: editor)
-                editor.executeCommand("trimTrailing")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "trimTrailing"))
                 rejects("target-based trim cannot silently save partial recording") {
                     _ = try controller.finishRecording()
                 }
                 let clone = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 400))
                 clone.shareDocument(with: editor)
                 controller.startRecording()
-                editor.executeCommand("charRight")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
                 controller.editorDidFocus(clone)
-                clone.executeCommand("newLine")
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
                 rejects("clone focus switch invalidates incomplete recording") { _ = try controller.finishRecording() }
                 // G337: reload and close announce the document through its primary view; a
                 // recording started in the clone belongs to the same document.
                 let cloneController = MacroController(editorProvider: { clone })
                 cloneController.startRecording()
-                clone.executeCommand("charRight")
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
                 cloneController.editorWillReset(editor, reason: "Reloaded")
                 rejects("reload through primary invalidates clone recording", message: "Reloaded") {
                     _ = try cloneController.finishRecording()
                 }
                 let unrelated = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 400))
                 cloneController.startRecording()
-                clone.executeCommand("newLine")
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
                 cloneController.editorWillReset(unrelated, reason: "Another document reloaded")
                 check(
                     (try cloneController.finishRecording())?.steps.isEmpty == false,
                     "a reload of another document leaves the recording saveable")
-                clone.executeCommand("undo")
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 controller.startRecording()
-                editor.executeCommand("charRight")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
                 controller.invalidateRecording(reason: "Automation invoked")
                 rejects("automation invocation invalidates incomplete recording") {
                     _ = try controller.finishRecording()
                 }
                 controller.startRecording()
-                editor.executeCommand("charRight")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
                 controller.editorWillReset(editor, reason: "Reloaded")
                 rejects("reload cannot leave saveable partial macro") { _ = try controller.finishRecording() }
                 controller.startRecording()
-                editor.executeCommand("newLine")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 rejects("native Undo cannot silently save partial recording") { _ = try controller.finishRecording() }
                 controller.startRecording()
-                editor.executeCommand("charRight")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
                 controller.willExecuteCommand("zoomIn", on: editor)
-                editor.executeCommand("zoomIn")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "zoomIn"))
                 check(
                     try controller.finishRecording()?.steps.count == 1,
                     "view-only zoom does not invalidate valid edit recording")
@@ -1192,7 +1195,7 @@ import Foundation
                     "refused playback leaves text, revision and save point unchanged")
                 // F207: a recorded replacement is not appended when the editor refused it.
                 controller.startRecording()
-                editor.executeCommand("charRight")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
                 if editor.replaceSelection("never") {
                     controller.recordSearch(.init(options: SearchOptions(), action: "replaceOne"), editor: editor)
                 }
@@ -1229,7 +1232,7 @@ import Foundation
                         })
                 }
                 check(editor.text == "xxxoriginal", "cancel retains only completed steps")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == "original", "cancelled playback remains one Undo")
                 let search = RecordedMacro.Search(
                     query: "(egg)", replacement: "$1s", mode: 2, matchCase: true, wholeWord: false,
@@ -1287,7 +1290,7 @@ import Foundation
                     check(
                         editor.text == "keep\ntail one\ntail two\n",
                         "\(label) playback removes exactly the matching lines and leaves the rest")
-                    editor.executeCommand("undo")
+                    editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                     check(editor.text == todoSource && !editor.modified, "\(label) stopped playback is one Undo")
                 }
                 Checks.section("Recording fidelity") { try fidelityChecks(editor: editor, window: window) }

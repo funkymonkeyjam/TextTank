@@ -23,7 +23,7 @@ extension DocumentChecks {
             return lstat(url.path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFLNK
         }
         @MainActor func edit(_ document: TextDocument, _ text: String) {
-            document.editor.executeCommand("selectAll")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
             document.editor.replaceSelection(text)
         }
 
@@ -48,7 +48,7 @@ extension DocumentChecks {
                 "explicit Latin-1 open decodes the text and records the format without a BOM")
             check(try latin.diskState() == .unchanged, "explicitly opened legacy file has an exact disk baseline")
             edit(latin, "changed")
-            latin.editor.executeCommand("undo")
+            latin.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 try latin.data(ofType: "Plain Text") == latinBytes,
                 "edit and undo leave the legacy file's bytes exact")

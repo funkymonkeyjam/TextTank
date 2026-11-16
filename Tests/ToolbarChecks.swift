@@ -233,7 +233,7 @@ import AppKit
             NSApp.sendAction(overflow.action!, to: overflow.target, from: overflow)
                 && document.editor.text == "2 eggs\n",
             "DT-R5 favorite overflow executes the selected saved automation, not another identical title")
-        document.editor.executeCommand("undo")
+        document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
         check(
             document.editor.text == "- 2 eggs\n",
             "DT-R5 automation invoked from overflow remains one authoritative Undo step")

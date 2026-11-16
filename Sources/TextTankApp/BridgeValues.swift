@@ -10,3 +10,7 @@ extension LineEnding {
         }
     }
 }
+
+extension EditorCommand {
+    var nativeIdentifier: TTEditorCommandIdentifier { TTEditorCommandIdentifier(rawValue: rawValue) }
+}

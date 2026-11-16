@@ -111,7 +111,7 @@ extension DocumentChecks {
             _ = editor.setSelectionAnchor(0, caret: 6)
             try EditorTransform.sortAscending.apply(to: editor)
             check(editor.text == "a\nb\nc\nz\ny\n", "a transform with a selection changes only the selected rows")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 editor.text == "c\nb\na\nz\ny\n" && !editor.modified,
                 "selection transform is one Undo back to the save point")
@@ -491,8 +491,8 @@ extension DocumentChecks {
                         && clone.revision - cloneRevision == document.editor.revision - primaryRevision,
                     "both views' revision counters advance by the same amount for edits from either side")
                 check(clone.revision == document.editor.revision, "the two views report the same revision")
-                document.editor.executeCommand("undo")
-                clone.executeCommand("undo")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     document.editor.text == "zero\none\ntwo\n" && !document.isDocumentEdited,
                     "undo from each view returns the shared buffer to its save point")
@@ -514,7 +514,7 @@ extension DocumentChecks {
                         && document.editor.selectionEnd == 8,
                     "a menu command with the clone active uses the clone's selection and leaves the primary view's selection alone"
                 )
-                clone.executeCommand("undo")
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     document.editor.text == "zero\none\ntwo\n" && !document.isDocumentEdited,
                     "the command sent through the clone is one Undo in the shared history")
@@ -1225,7 +1225,7 @@ extension DocumentChecks {
                     ["1", "2", "3"], to: document.editor, revision: columnRevision, selections: columnSelections)
                     && document.editor.text == "1\n2\n3x\n",
                 "column insertion replaces each selection with its own value in selection order")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 document.editor.text == "x\nx\nx\n" && !document.editor.modified,
                 "column insertion is one Undo back to the save point")
@@ -1304,7 +1304,7 @@ extension DocumentChecks {
                 columnDialog(text: "ab", numbered: false, start: "1", step: "1")
                     && document.editor.text == "ab\nab\nab\n",
                 "Insert into Each Selection puts the typed text in every selection")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 document.editor.text == "x\nx\nx\n" && !document.editor.modified,
                 "the dialog's insertion is one Undo back to the save point")
@@ -1425,7 +1425,7 @@ extension DocumentChecks {
             document.editor.setSavePoint()
             _ = document.editor.setSelectionAnchor(0, caret: 0)
             recorder.startRecording()
-            document.editor.executeCommand("charRight")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             check(
                 !EditorWindowController.goToLine(9, in: document.editor, macros: recorder)
                     && EditorWindowController.clearSelection(in: document.editor, macros: recorder)
@@ -1435,7 +1435,7 @@ extension DocumentChecks {
                 try recorder.finishRecording()?.steps.count == 1,
                 "the recording is still saveable after a refused Go to Line and a no-op Clear Selection")
             recorder.startRecording()
-            document.editor.executeCommand("charRightExtend")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRightExtend"))
             check(
                 EditorWindowController.clearSelection(in: document.editor, macros: recorder)
                     && document.editor.selectionAnchor == document.editor.selectionCaret
@@ -1445,7 +1445,7 @@ extension DocumentChecks {
                 _ = try recorder.finishRecording()
             }
             recorder.startRecording()
-            document.editor.executeCommand("charRight")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             check(
                 EditorWindowController.goToLine(3, in: document.editor, macros: recorder)
                     && document.editor.selectionCaret == 8 && discarded.count == 2

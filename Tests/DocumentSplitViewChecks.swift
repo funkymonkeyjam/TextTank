@@ -31,12 +31,12 @@ extension DocumentChecks {
         @MainActor func recordOneStep(_ delegate: AppDelegate, in editor: TTEditor) throws {
             delegate.macros.startRecording()
             _ = editor.setSelectionAnchor(0, caret: 0)
-            editor.executeCommand("newLine")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
         }
         /// Finishes the recording and undoes its one step, so each case starts from the same text.
         @MainActor func finishes(_ delegate: AppDelegate, in editor: TTEditor) -> Bool {
             let macro = try? delegate.macros.finishRecording()
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             return macro?.steps.isEmpty == false
         }
 
@@ -115,7 +115,7 @@ extension DocumentChecks {
             check(
                 document.editor.text == "2 eggs\nplain text\n",
                 "an editor-output automation runs on the current editor while another window is main")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             let session = try delegate.workspace.capture(name: "current")
             check(
                 session.activeDocumentID == document.recoveryID,
@@ -154,11 +154,11 @@ extension DocumentChecks {
             check(
                 !finishes(delegate, in: document.editor),
                 "a text utility that changes the document discards the recording")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             try recordOneStep(delegate, in: document.editor)
             try delegate.automations.runSavedAutomation(id: AutomationDefinition.example.id)
             check(!finishes(delegate, in: document.editor), "running an automation discards the recording")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             try require(
                 document.editor.text == "- **2 eggs**\n- plain text\n", "fixture: the text is back to its start")
             @MainActor func applyButton() throws -> NSButton {
@@ -232,8 +232,8 @@ extension DocumentChecks {
                 "the status menu still says text size belongs to the view")
             // Choices made for this document and this view after it opened.
             document.editor.configureTabWidth(2, useTabs: true)
-            for _ in 0..<3 { document.editor.executeCommand("zoomIn") }
-            document.editor.executeCommand("showWhitespace")
+            for _ in 0..<3 { document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "zoomIn")) }
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "showWhitespace"))
             document.editor.wrap = true
             let revision = document.editor.revision
             let closeItem = NSMenuItem(
@@ -420,7 +420,7 @@ extension DocumentChecks {
             delegate.noteActive(controller)
             _ = window.makeFirstResponder(clone)
             delegate.macros.startRecording()
-            clone.executeCommand("newLine")
+            clone.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
             try document.reload(using: .utf8, discard: true)
             rejects("reloading the document discards a recording started in its clone", message: "reloaded") {
                 _ = try delegate.macros.finishRecording()
@@ -438,7 +438,7 @@ extension DocumentChecks {
             _ = window.makeFirstResponder(clone)
             try require(delegate.currentEditor === clone, "fixture: the clone is the current editor")
             delegate.macros.startRecording()
-            clone.executeCommand("newLine")
+            clone.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
             controller.closeSplit(nil)
             rejects("closing the split discards a recording started in the clone") {
                 _ = try delegate.macros.finishRecording()
@@ -506,7 +506,7 @@ extension DocumentChecks {
             check(
                 document.editor.text == "def three():\n    pass\n",
                 "Apply Extension Result reaches the document after the split it was captured in closed")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             apply.window?.close()
             // A result for a selection belongs to the closed view's selection and is dropped.
             try autoreleasepool {

@@ -470,8 +470,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     command.isShortcutAssignable
                     ? app?.settings?.value.shortcut(for: value) ?? command.defaultMenuShortcut
                     : command.defaultMenuShortcut
-                item.isEnabled = enabled && (!TTEditor.commandModifiesText(value) || !editor.readOnly)
-                if command.isToggle { item.state = editor.commandIsChecked(value) ? .on : .off }
+                item.isEnabled =
+                    enabled && (!TTEditor.commandModifiesText(command.nativeIdentifier) || !editor.readOnly)
+                if command.isToggle { item.state = editor.commandIsChecked(command.nativeIdentifier) ? .on : .off }
             }
         }
         func command(_ value: EditorCommand) { add(value.title, #selector(statusOption(_:)), self, value.rawValue) }
@@ -785,10 +786,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             try transform.apply(to: editor)
             return
         }
-        guard EditorCommand(rawValue: id) != nil else { throw EditorCommandFailure.unsupported }
-        if TTEditor.commandModifiesText(id) { try editor.requireWritable() }
+        guard let command = EditorCommand(rawValue: id) else { throw EditorCommandFailure.unsupported }
+        if TTEditor.commandModifiesText(command.nativeIdentifier) { try editor.requireWritable() }
         EditorServices.current?.macros?.willExecuteCommand(id, on: editor)
-        guard editor.executeCommand(id) else { throw EditorCommandFailure.unsupported }
+        guard editor.executeCommand(command.nativeIdentifier) else { throw EditorCommandFailure.unsupported }
     }
     deinit {
         statusTimer?.invalidate()
@@ -1025,8 +1026,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 return !activeEditor.readOnly
             }
             guard let command = EditorCommand(rawValue: id) else { return false }
-            item.state = command.isToggle && activeEditor.commandIsChecked(id) ? .on : .off
-            return !TTEditor.commandModifiesText(id) || !activeEditor.readOnly
+            item.state = command.isToggle && activeEditor.commandIsChecked(command.nativeIdentifier) ? .on : .off
+            return !TTEditor.commandModifiesText(command.nativeIdentifier) || !activeEditor.readOnly
         case #selector(toggleWrap(_:)):
             // Wrapping belongs to the view, as the status bar's Wrap field shows it.
             item.state = activeEditor.wrap ? .on : .off

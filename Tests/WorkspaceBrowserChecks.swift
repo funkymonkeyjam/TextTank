@@ -333,8 +333,8 @@ import Darwin
             let staleRevision = watched.editor.revision
             watched.editor.replaceSelection("newer")
             rejects("monitor rejects stale explicit reload") { try monitor.reload(expectedRevision: staleRevision) }
-            watched.editor.executeCommand("undo")
-            watched.editor.executeCommand("undo")
+            watched.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            watched.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             try monitor.reload(expectedRevision: watched.editor.revision)
             check(watched.editor.text == "changed on disk", "explicit clean monitor reload")
             try FileManager.default.removeItem(at: fresh)

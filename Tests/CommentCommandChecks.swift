@@ -187,7 +187,7 @@ import AppKit
             check(
                 editor.text == first.text && editor.selectionAnchor > editor.selectionCaret,
                 "native comment applies with reversed mapped selection")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == text && !editor.modified, "one Undo restores exact original and save point")
             editor.readOnly = true
             let originalSelection = editor.selectionRanges
@@ -204,7 +204,7 @@ import AppKit
             check(
                 editor.text == "# x = 1" && editor.selectionAnchor == 7 && editor.selectionCaret == 7,
                 "native toggle at end of unterminated last line")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "x = 1" && !editor.modified, "native end-of-file toggle is one Undo")
             // F4: comment commands edit only the bytes they change.
             let tall = (0..<200).map { "value\($0) = \($0)\n" }.joined()
@@ -222,7 +222,7 @@ import AppKit
                 "native toggle changes only the caret line")
             check(editor.bookmarkLines == [0, 3, 150], "comment toggle keeps bookmarks on their lines")
             check(editor.firstVisibleLine == 0, "comment toggle leaves the view at the caret, not at the document end")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 editor.text == tall && !editor.modified && editor.bookmarkLines == [0, 3, 150],
                 "bookmarks survive the Undo of a comment toggle")
@@ -237,7 +237,7 @@ import AppKit
                         == multi.selections
                     && editor.bookmarkLines == [0, 3, 150],
                 "three-line comment applies the planned text and selection and keeps bookmarks")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == tall && !editor.modified, "one Undo restores a multi-line comment and the save point")
             check(
                 editor.selectionRanges.map { EditorSelection(anchor: $0.anchor, caret: $0.caret) } == three,
@@ -251,7 +251,7 @@ import AppKit
             check(
                 editor.text == "x" && editor.selectionCaret == 0,
                 "carets that collapse onto one position still apply the comment edit")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "# x", "collapsed-caret comment edit is one Undo")
             Checks.summary { "PASS CommentCommandChecks: \(Checks.count) assertions" }
         }

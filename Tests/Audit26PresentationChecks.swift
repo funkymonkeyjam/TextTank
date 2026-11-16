@@ -292,7 +292,7 @@ enum Audit26PresentationChecks {
         doc.editor.resetUndoHistory()
         try controller.perform(command: "transform.sortLength")
         check(doc.editor.text == "é\nab\ne\u{301}\n👨‍👩‍👧‍👦\n", "G346 length sort uses scalar count, with stable ties")
-        _ = doc.editor.executeCommand("undo")
+        _ = doc.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
         check(doc.editor.text.utf8.elementsEqual(sortInput.utf8), "G346 Unicode length sort is one native Undo action")
 
         var acted = false, timedOut = false, cancelled = false

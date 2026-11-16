@@ -1144,7 +1144,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self closeUndoGroup];
     return YES;
 }
-+ (BOOL)commandModifiesText:(NSString *)identifier {
++ (BOOL)commandModifiesText:(TTEditorCommandIdentifier)identifier {
     if (![identifier isKindOfClass:NSString.class]) return NO;
     static NSSet<NSString *> *editing; static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -1155,8 +1155,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     });
     return [editing containsObject:identifier];
 }
-- (BOOL)commandIsChecked:(NSString *)identifier {
+- (BOOL)commandIsChecked:(TTEditorCommandIdentifier)identifier {
     [self assertThread];
+    if (![identifier isKindOfClass:NSString.class]) return NO;
     if ([identifier isEqualToString:@"showWhitespace"]) return [_engine message:SCI_GETVIEWWS] != SCWS_INVISIBLE;
     if ([identifier isEqualToString:@"toggleEOL"]) return [_engine message:SCI_GETVIEWEOL] != 0;
     if ([identifier isEqualToString:@"toggleLineNumbers"]) return [_engine message:SCI_GETMARGINWIDTHN wParam:0] != 0;
@@ -1169,7 +1170,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     }
     return NO;
 }
-- (BOOL)executeCommand:(NSString *)identifier {
+- (BOOL)executeCommand:(TTEditorCommandIdentifier)identifier {
     [self assertThread];
     if (![self runCommand:identifier]) return NO;
     // Folding, the margin toggle and selection commands raise no synchronous notification.
@@ -1262,17 +1263,17 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         return YES;
     }
     NSNumber *message = TTDispatchCommands()[identifier];
-    if (!message) return NO;
+    if (message == nil) return NO;
     [_engine message:message.unsignedIntValue];
     return YES;
 }
-+ (NSArray<NSString *> *)supportedCommandIdentifiers {
++ (NSArray<TTEditorCommandIdentifier> *)supportedCommandIdentifiers {
     NSMutableArray *identifiers = [NSMutableArray array];
     for (const auto &entry : TTCommandEntries) [identifiers addObject:[NSString stringWithUTF8String:entry.identifier]];
     return [identifiers sortedArrayUsingSelector:@selector(compare:)];
 }
-+ (NSArray<NSString *> *)macroCommandNames { return [TTMacroCommands().allKeys sortedArrayUsingSelector:@selector(compare:)]; }
-+ (NSDictionary<NSString *, NSNumber *> *)macroCommandMessages { return TTMacroCommands(); }
++ (NSArray<TTEditorCommandIdentifier> *)macroCommandNames { return [TTMacroCommands().allKeys sortedArrayUsingSelector:@selector(compare:)]; }
++ (NSDictionary<TTEditorCommandIdentifier, NSNumber *> *)macroCommandMessages { return TTMacroCommands(); }
 - (TTInteractionState)interactionState {
     return {_revision, [_engine message:SCI_GETSELECTIONS], [_engine message:SCI_GETANCHOR], [_engine message:SCI_GETCURRENTPOS]};
 }
@@ -1348,7 +1349,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         // Only symbolic editing commands can reach Scintilla; no imported message
         // number, pointer, executable, or arbitrary parameter is ever dispatched.
         NSNumber *message = TTReplayCommands()[command];
-        if (!message) return NO;
+        if (message == nil) return NO;
         [_engine message:message.unsignedIntValue]; [self noteStateChange]; return YES;
     }
     return NO;

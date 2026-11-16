@@ -410,7 +410,7 @@ import AppKit
                 inverted.editor.setSavePoint()
                 try EditorTransform.invertCase.apply(to: inverted.editor)
                 check(bytesEqual(inverted.editor.text, "sTRA\u{DF}E\nABC\n"), "invert case edits the document buffer")
-                inverted.editor.executeCommand("undo")
+                inverted.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     bytesEqual(inverted.editor.text, "Stra\u{DF}e\nabc\n") && !inverted.editor.modified,
                     "invert case is one Undo back to the save point")
@@ -420,7 +420,7 @@ import AppKit
                 transformed.editor.resetUndoHistory()
                 try EditorTransform.sortAscending.apply(to: transformed.editor)
                 check(transformed.editor.text == "a\nb\n", "native line sorting changes authoritative buffer")
-                transformed.editor.executeCommand("undo")
+                transformed.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(transformed.editor.text == "b\na\n", "native line sorting one Undo")
                 // G368: a whole-document transform keeps bookmarks and the caret line.
                 let indented = (0..<60).map { "  row \($0)\n" }.joined()
@@ -434,7 +434,7 @@ import AppKit
                         && transformed.editor.bookmarkLines == [7, 40]
                         && transformed.editor.statusInfo.line == 41,
                     "whole-document transform keeps bookmarks and the caret line")
-                transformed.editor.executeCommand("undo")
+                transformed.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     transformed.editor.text == indented && transformed.editor.statusInfo.line == 41,
                     "whole-document transform is one Undo, which also returns the caret to its line")
@@ -474,7 +474,7 @@ import AppKit
                 let eolDocument = TextDocument()
                 try eolDocument.read(from: Data("a\r\nb".utf8), ofType: "Plain Text")
                 _ = eolDocument.editor.setSelectionAnchor(4, caret: 4)
-                eolDocument.editor.executeCommand("newLine")
+                eolDocument.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
                 check(
                     eolDocument.editor.text.utf8.elementsEqual("a\r\nb\r\n".utf8),
                     "Return in a CRLF file inserts CRLF, not a bare LF")
@@ -522,7 +522,7 @@ import AppKit
                 check(
                     window.contentView != nil && document.editor.window === window,
                     "editor attached to visible document window")
-                document.editor.executeCommand("selectAll")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 document.editor.replaceSelection("local edits 😀\r\n")
                 check(
                     document.editor.modified && document.isDocumentEdited, "editing marks engine and NSDocument dirty")
@@ -554,7 +554,7 @@ import AppKit
                     !document.editor.modified && !document.isDocumentEdited,
                     "successful save clears engine/document dirty state")
                 document.fileURL = saved
-                document.editor.executeCommand("selectAll")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 document.editor.replaceSelection("copy-only text")
                 let copy = root.appendingPathComponent("copy.txt")
                 try document.writeSafely(to: copy, ofType: "Plain Text", for: .saveToOperation)
@@ -563,9 +563,9 @@ import AppKit
                 check(
                     try Data(contentsOf: saved) == Data("local edits 😀\r\n".utf8), "Save Copy does not overwrite source"
                 )
-                document.editor.executeCommand("undo")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: saved.path)
-                document.editor.executeCommand("selectAll")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 document.editor.replaceSelection("normal save")
                 try document.writeSafely(to: saved, ofType: "Plain Text", for: .saveOperation)
                 check(try Data(contentsOf: saved) == Data("normal save".utf8), "normal Save writes existing file")
@@ -573,7 +573,7 @@ import AppKit
                     (try FileManager.default.attributesOfItem(atPath: saved.path)[.posixPermissions] as! NSNumber)
                     .intValue
                 check(mode == 0o640, "native Save preserves file permission metadata")
-                document.editor.executeCommand("selectAll")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 document.editor.replaceSelection("local edits 😀\r\n")
                 try document.writeSafely(to: saved, ofType: "Plain Text", for: .saveOperation)
                 window.contentView?.layoutSubtreeIfNeeded()
@@ -613,7 +613,7 @@ import AppKit
                         }
                     }
                 }
-                clone.executeCommand("selectAll")
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 clone.replaceSelection("clone changed shared document")
                 check(document.editor.text == clone.text, "clone changes authoritative shared bytes")
                 check(document.isDocumentEdited && document.editor.modified, "clone notifications mark owner dirty")
@@ -621,16 +621,16 @@ import AppKit
                 check(
                     controller.secondary == nil && document.editor.text == "clone changed shared document",
                     "closing clone preserves owner buffer")
-                document.editor.executeCommand("undo")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(document.editor.text == "local edits 😀\r\n", "shared undo survives closing clone")
-                document.editor.executeCommand("selectAll")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 document.editor.replaceSelection("unsaved before read")
                 try document.read(from: Data("reloaded".utf8), ofType: "Plain Text")
-                document.editor.executeCommand("undo")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     document.editor.text == "reloaded" && !document.editor.modified,
                     "read resets undo history and engine dirty state")
-                document.editor.executeCommand("selectAll")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 document.editor.replaceSelection("unsaved before actual revert")
                 // F7: the discarded draft's snapshot must not outlive Revert to Saved.
                 document.flushRecovery()
@@ -657,7 +657,7 @@ import AppKit
                 check(
                     try !TextDocument.recovery.loadAll().contains { $0.id == document.recoveryID },
                     "revert removes discarded recovery snapshot")
-                document.editor.executeCommand("undo")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     document.editor.text == "reverted from disk",
                     "actual NSDocument revert replaces text and clears undo")
@@ -706,7 +706,7 @@ import AppKit
                 check(
                     try !document.editor.modified && !document.isDocumentEdited && document.diskState() == .unchanged,
                     "bookmark-preserving reload still resets dirty state and the disk baseline")
-                document.editor.executeCommand("undo")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(document.editor.text == externallyEdited, "bookmark-preserving reload still clears undo")
                 document.editor.readOnly = true
                 try Data("locked reload".utf8).write(to: saved)
@@ -790,7 +790,7 @@ import AppKit
                     emptyRestored[0].isDocumentEdited && emptyRecovery?.text == "",
                     "empty dirty session restoration retains a recovery snapshot")
                 emptyRestored[0].editor.replaceSelection("x")
-                emptyRestored[0].editor.executeCommand("undo")
+                emptyRestored[0].editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     emptyRestored[0].editor.text.isEmpty && emptyRestored[0].isDocumentEdited,
                     "type-then-undo cannot make an empty restored document clean")
@@ -802,7 +802,7 @@ import AppKit
                     selection: SessionSelection(anchorByte: 0, caretByte: 0))
                 let plain = try WorkspaceController().restore(
                     WorkspaceSession(id: UUID(), name: "Plain UTF-8 restored document", documents: [plainSnapshot]))[0]
-                plain.editor.executeCommand("undo")
+                plain.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 plain.flushRecovery()
                 check(
                     plain.editor.text == plainText && plain.isDocumentEdited,
@@ -811,7 +811,7 @@ import AppKit
                     try TextDocument.recovery.load(id: plain.recoveryID).text == plainText,
                     "Undo after session restore keeps the recovery snapshot")
                 plain.editor.replaceSelection("x")
-                plain.editor.executeCommand("undo")
+                plain.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 plain.flushRecovery()
                 check(
                     plain.editor.text == plainText && !plain.editor.modified && plain.isDocumentEdited,
@@ -842,7 +842,7 @@ import AppKit
                     recovered.editor.statusInfo.eol.rawValue == 0, "recovered document inserts its own line ending")
                 recovered.automaticRecoveryDelay = 0.02
                 recovered.maximumRecoveryDelay = 0.02
-                recovered.editor.executeCommand("undo")
+                recovered.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 RunLoop.current.run(until: Date().addingTimeInterval(0.2))
                 recovered.flushRecovery()
                 check(
@@ -853,7 +853,7 @@ import AppKit
                     rewritten.text == crashedText && rewritten.revision > 7,
                     "Undo after recovery keeps the only on-disk copy")
                 recovered.editor.replaceSelection("x")
-                recovered.editor.executeCommand("undo")
+                recovered.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 RunLoop.current.run(until: Date().addingTimeInterval(0.2))
                 recovered.flushRecovery()
                 check(
@@ -941,14 +941,14 @@ import AppKit
                 changed.format = FileFormat(encoding: .utf16LE, bom: true)
                 changed.afterWriteForTesting = {
                     changed.format = FileFormat(encoding: .utf8, bom: false)
-                    changed.editor.executeCommand("undo")
+                    changed.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 }
                 try changed.writeSafely(to: changedURL, ofType: "Plain Text", for: .saveOperation)
                 check(
                     changed.isDocumentEdited && changed.format.encoding == .utf8,
                     "change during Save retains newer format and dirty state")
                 changed.editor.replaceSelection("x")
-                changed.editor.executeCommand("undo")
+                changed.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(changed.isDocumentEdited, "old engine savepoint cannot clear dirty state after stale save")
                 check(
                     try FileCodec.decode(Data(contentsOf: changedURL)).text == "submitted",
@@ -1441,7 +1441,7 @@ import AppKit
                 // Earlier sections change the default settings, so wrap may start either way.
                 let wrapBadge = controller.activeEditor.wrap ? "No Wrap" : "Wrap"
                 controller.toggleWrap(nil)
-                visible.editor.executeCommand("bookmarkToggle")
+                visible.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "bookmarkToggle"))
                 visible.editor.readOnly = true
                 spinUntil("wrap, bookmark and read-only badges") {
                     badges().contains(wrapBadge) && badges().contains(Strings.count(1, .bookmark))
@@ -1599,7 +1599,7 @@ import AppKit
                     midGroup.map { !$0.text.isEmpty && groupOpenText.hasPrefix($0.text) } == true,
                     "the deadline recovery snapshot is written while the group is still open")
                 doc.editor.endUndoGroup()
-                doc.editor.executeCommand("undo")
+                doc.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(doc.editor.text.isEmpty, "the group held open across turns is still one Undo step")
                 doc.close()
             }

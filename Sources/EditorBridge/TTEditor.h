@@ -17,6 +17,9 @@ typedef NS_ERROR_ENUM(TTEditorErrorDomain, TTEditorError) {
 /// may listen. It says "look again", not what changed; Scintilla reports selection changes when
 /// it paints, so a periodic refresh is still needed for state no event covers.
 extern NSNotificationName const TTEditorStateDidChangeNotification;
+/// Stable symbolic identifiers remain raw strings on disk; Swift callers carry a distinct type.
+/// Foreign/unknown identifiers are still validated before engine dispatch.
+typedef NSString *TTEditorCommandIdentifier NS_TYPED_EXTENSIBLE_ENUM;
 /// Values match Scintilla's insertion-ending codes; they are not file-format strings.
 typedef NS_ENUM(NSInteger, TTLineEndingMode) {
     TTLineEndingModeCRLF NS_SWIFT_NAME(TTLineEndingMode.crlf) = 0,
@@ -160,9 +163,9 @@ __attribute__((objc_subclassing_restricted))
 /// completion list, native Undo, an unmapped Scintilla message); the recording must be discarded.
 @property(nonatomic, copy, nullable) void (^onMacroStep)(NSDictionary<NSString *, id> *step);
 /// The symbolic command names a recorded step may carry; the only names playback dispatches.
-+ (NSArray<NSString *> *)macroCommandNames;
++ (NSArray<TTEditorCommandIdentifier> *)macroCommandNames;
 /// Immutable canonical recording map; playback-only aliases are deliberately excluded.
-+ (NSDictionary<NSString *, NSNumber *> *)macroCommandMessages;
++ (NSDictionary<TTEditorCommandIdentifier, NSNumber *> *)macroCommandMessages;
 - (void)startRecording;
 - (void)stopRecording;
 - (BOOL)executeMacroStep:(NSDictionary<NSString *, id> *)step;
@@ -188,12 +191,12 @@ __attribute__((objc_subclassing_restricted))
 /// them. Posts nothing unless the two views share a document.
 - (void)retireInFavorOf:(TTEditor *)successor;
 /// NO for an unknown identifier, without changing text, selection or notifications.
-- (BOOL)executeCommand:(NSString *)identifier;
-+ (NSArray<NSString *> *)supportedCommandIdentifiers;
+- (BOOL)executeCommand:(TTEditorCommandIdentifier)identifier;
++ (NSArray<TTEditorCommandIdentifier> *)supportedCommandIdentifiers;
 /// YES for executeCommand: identifiers that edit text, which callers guard with requireWritable:.
-+ (BOOL)commandModifiesText:(NSString *)identifier;
++ (BOOL)commandModifiesText:(TTEditorCommandIdentifier)identifier;
 /// The actual focused-view state of a known toggle; NO for non-toggle/unknown identifiers.
-- (BOOL)commandIsChecked:(NSString *)identifier;
+- (BOOL)commandIsChecked:(TTEditorCommandIdentifier)identifier;
 /// Returns NO, changing nothing (selection included), when the text cannot be encoded as
 /// UTF-8 (an unpaired surrogate) or the document is read-only.
 - (BOOL)replaceSelection:(NSString *)text;

@@ -26,6 +26,29 @@ def module(name, filename):
 
 
 class BuildPipelineChecks(unittest.TestCase):
+    def swift_header_probe(self, header, body):
+        with tempfile.TemporaryDirectory(prefix='bridge-types-', dir=ROOT / 'tmp') as work:
+            folder = Path(work)
+            copied = folder / header.name
+            shutil.copyfile(header, copied)
+            probe = folder / 'probe.swift'
+            probe.write_text(body)
+            return subprocess.run(
+                ['xcrun', 'swiftc', '-swift-version', '5', '-warnings-as-errors',
+                 '-target', 'arm64-apple-macos14.0', '-module-cache-path',
+                 str(ROOT / 'build/ModuleCache'), '-typecheck',
+                 '-import-objc-header', str(copied), str(probe)],
+                text=True, capture_output=True)
+
+    def test_command_boundary_rejects_an_untyped_swift_string(self):
+        result = self.swift_header_probe(ROOT / 'Sources/EditorBridge/TTEditor.h', '''
+import AppKit
+@MainActor func rawCommand(_ editor: TTEditor) { _ = editor.executeCommand("typo") }
+''')
+        self.assertNotEqual(result.returncode, 0, 'An untyped String crossed the command boundary')
+        self.assertIn('cannot convert value', result.stderr)
+        self.assertIn('TTEditorCommandIdentifier', result.stderr)
+
     def test_editor_header_compiles_without_the_search_tree(self):
         # The public editor interface uses AppKit, not the snapshot search engine.
         # Compile a copied header with no neighbouring Search directory; a hidden

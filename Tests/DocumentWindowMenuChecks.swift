@@ -673,7 +673,7 @@ extension DocumentChecks {
             controller.clone(nil)
             let clone = try requireValue(controller.secondary, "fixture: catalog toggle clone")
             _ = controller.window?.makeFirstResponder(clone)
-            clone.executeCommand("toggleEOL")
+            clone.executeCommand(TTEditorCommandIdentifier(rawValue: "toggleEOL"))
             check(
                 controller.validateMenuItem(endings) && endings.state == .on,
                 "DS22 catalog toggle checkmarks follow the focused clone's own view state")
@@ -1243,7 +1243,7 @@ extension DocumentChecks {
                 document.editor.text == "changed beta" && document.editor.selectionAnchor == 7
                     && document.editor.selectionCaret == 0,
                 "F17 strict replacement carries the reversed selection through the replacement")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 document.editor.text == "alpha beta" && document.editor.selectionAnchor == 5
                     && document.editor.selectionCaret == 0,
@@ -1260,7 +1260,7 @@ extension DocumentChecks {
             try controller.replaceSelectionFromBar()
             spinUntil("inline overlapping strict replacement to finish") { !controller.inlineSearchPending }
             check(document.editor.text == "aX", "inline strict replacement accepts the overlapping selected match")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 document.editor.text == "aaa" && document.editor.selectionStart == 1
                     && document.editor.selectionEnd == 3,
@@ -1344,7 +1344,7 @@ extension DocumentChecks {
             check(
                 document.editor.text.utf8.elementsEqual(replayedText.utf8),
                 "native primitive control reaches the same text as the captured bar flow")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 document.editor.text == beforeBarRecording && document.editor.selectionAnchor == firstEditAnchor
                     && document.editor.selectionCaret == firstEditCaret,
@@ -1366,14 +1366,14 @@ extension DocumentChecks {
             check(
                 document.editor.text.utf8.elementsEqual(replayedText.utf8),
                 "captured bar search steps replay to the exact same document bytes")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 document.editor.text == beforeBarRecording && document.editor.selectionAnchor == firstEditAnchor
                     && document.editor.selectionCaret == firstEditCaret,
                 "one Undo of the replay restores the same text and first-edit selection as the native control")
             // The previously accepted oversized query is explicitly refused by the bounded shared path.
             sessionDelegate.macros.startRecording()
-            document.editor.executeCommand("charRight")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             let beforeLimitRevision = document.editor.revision, beforeLimitAnchor = document.editor.selectionAnchor,
                 beforeLimitCaret = document.editor.selectionCaret, beforeLimitText = document.editor.text
             controller.findField.stringValue = String(repeating: "q", count: 65_537)
@@ -1444,7 +1444,7 @@ extension DocumentChecks {
                     field, textView: NSTextView(), doCommandBy: #selector(NSResponder.cancelOperation(_:)))
                     && !controller.findBarVisible, "Escape in the find field closes the find bar")
             document.editor.text = "pick me\n"
-            document.editor.executeCommand("selectAll")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
             controller.useSelectionForFind(nil)
             check(
                 controller.findField.stringValue == "zebra" && controller.status.stringValue.contains("one line"),

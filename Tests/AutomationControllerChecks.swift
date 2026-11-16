@@ -1385,7 +1385,7 @@ final class Audit24RecoverySpy: NSObject {
                 check(
                     editor.text == "2 eggs\n½ cup flour\n",
                     "cleanup applies directly to actual editor without preview dialog")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == source, "direct cleanup is one Undo action")
                 saved.workflows[0].name = "My recipe tidy"
                 saved.workflows[0].shortcut = "k"
@@ -1434,7 +1434,7 @@ final class Audit24RecoverySpy: NSObject {
                     editor.window === window && window.contentView === editor && NSApp.windows.count == windowCount,
                     "recipe cleanup stays in same editor and window")
                 check(newDocumentCalls == 0, "recipe cleanup never invokes new-document output")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == browserInput, "one native Undo restores exact original browser clipboard text")
                 let ambiguous = browserInput + "\nunmarked ingredient continuation\n"
                 editor.text = ambiguous
@@ -1501,7 +1501,7 @@ final class Audit24RecoverySpy: NSObject {
                 check(
                     editor.text == "before\n2 eggs\n½ cup flour\nafter",
                     "configured selection cleanup preserves surrounding document")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == selectionSource, "selection cleanup undoes together")
                 let multiSource = "- 2 eggs | - ½ cup flour"
                 editor.text = multiSource
@@ -1516,7 +1516,7 @@ final class Audit24RecoverySpy: NSObject {
                 check(
                     editor.text == "2 eggs | ½ cup flour", "automation transforms each captured selection independently"
                 )
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == multiSource, "multiple automation selections undo together")
                 saved.workflows[0].steps = [.init(kind: .clearLinesMatching, find: "(a+)+$")]
                 try restarted.persistLibrary(saved)
@@ -1652,7 +1652,7 @@ final class Audit24RecoverySpy: NSObject {
                     check(
                         editor.window === window && window.contentView === editor
                             && NSApp.windows.count == sampleWindows, "sample \(sample) uses same editor and window")
-                    editor.executeCommand("undo")
+                    editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                     check(
                         editor.text.utf8.elementsEqual(input.utf8) && !editor.modified,
                         "sample \(sample) one Undo restores original bytes and savepoint")
@@ -1817,7 +1817,7 @@ final class Audit24RecoverySpy: NSObject {
                     "a run that outlasts the short wait runs behind the modal progress panel, which closes itself")
                 check(progressCancelKey == "\u{1b}", "Escape presses Cancel in the automation progress panel")
                 check(editor.text == largeExpected, "the worker result replaces the large document exactly")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     editor.text == largeInput && !editor.modified,
                     "a large-input automation is one Undo back to the save point")
@@ -1928,7 +1928,7 @@ final class Audit24RecoverySpy: NSObject {
                     editor.text == smallInput && editor.revision == revision && !editor.modified
                         && NSApp.modalWindow == nil,
                     "G409 the cancelled small-input run leaves text, revision and save point untouched")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == smallInput, "G409 the cancelled small-input run left nothing to undo")
                 try restarted.persistLibrary(saved)
             }

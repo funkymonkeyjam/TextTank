@@ -44,6 +44,7 @@ int main() {
             check(![editor executeCommand:@"noSuchCommand"] && ![editor executeCommand:@"bookmarkBogus"], "F281 unknown and unmatched bookmark commands report refusal");
             check(editor.revision == revision && editor.selectionGeneration == generation && [editor.text isEqual:@"safe"] && editor.selectionCaret == 1, "F281 unknown commands preserve bytes, revision and selection generation");
             check([TTEditor respondsToSelector:NSSelectorFromString(@"supportedCommandIdentifiers")], "F281 bridge exposes its exact supported command identifiers");
+            check(![editor commandIsChecked:(id)@0] && ![TTEditor commandModifiesText:(id)@0] && ![editor executeCommand:(id)@0] && editor.revision==revision && editor.selectionGeneration==generation, "F29 foreign command objects are rejected before state or callback changes");
         });
         ttchecks::section("typed edit boundary", [&] {
             TTEditor *editor=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,300,200)];

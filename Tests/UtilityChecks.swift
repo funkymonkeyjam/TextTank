@@ -222,7 +222,7 @@ import zlib
             check(NSApplication.shared.sendAction(item.action!, to: item.target, from: item), "menu dispatch")
             check(editor.text == "before Y2Fmw6k= after", "menu changes selected UTF8")
             check(unrecordableEdits == 1, "a utility that changes the document reports one unrecordable edit")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "before café after", "one Undo restores exact text")
             editor.text = "bad %GG"
             editor.resetUndoHistory()
@@ -356,7 +356,7 @@ import zlib
                 editor.text = text
                 editor.resetUndoHistory()
                 editor.setSavePoint()
-                editor.executeCommand("selectAll")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 return editor.revision
             }
             var dialogRevision = load("abc")
@@ -411,7 +411,7 @@ import zlib
                 choose("Number Conversion…", ["Convert", "Insert into Editor"]) && editor.text.uppercased() == "FF"
                     && unrecordableEdits == 3,
                 "Insert into Editor from Number Conversion reports one unrecordable edit")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "255" && !editor.modified, "the inserted conversion is one Undo")
             editor.readOnly = true
             let lockedRevision = editor.revision

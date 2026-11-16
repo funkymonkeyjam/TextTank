@@ -127,13 +127,13 @@ private final class SelectionReadCounterEditor: TTEditor {
             controller.replaceAll(nil)
             await finished()
             check(editor.text == "Xa", "Replace All never applies overlapping navigation rows")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "aaa", "nonoverlapping Replace All remains one Undo")
             _ = editor.setSelectionAnchor(3, caret: 1)
             controller.replaceOne(nil)
             await finished()
             check(editor.text == "aX", "strict single Replace accepts an overlapping selected match")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 editor.text == "aaa" && editor.selectionAnchor == 3 && editor.selectionCaret == 1,
                 "Undo of overlapping single Replace restores its reversed match selection")
@@ -309,7 +309,7 @@ private final class SelectionReadCounterEditor: TTEditor {
                 SearchController.apply(report.hits, text: original, revision: revision, to: editor),
                 "regex replacement applied in native editor")
             check(editor.text == "🥑 one:12 two:34" && editor.modified, "exact captures and dirty state")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == original && !editor.modified, "one Undo restores full original and save point")
             // G374: the matches are replaced without using the selection as the edit cursor.
             editor.text = "a1 b22 c333"
@@ -326,7 +326,7 @@ private final class SelectionReadCounterEditor: TTEditor {
                 SearchController.apply(digitHits, text: numbered, revision: numberedRevision, to: editor)
                     && editor.text == "a# b# c#" && editor.selectionAnchor == 8 && editor.selectionCaret == 3,
                 "replace all keeps the reversed selection around the text it covered")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 editor.text == numbered && !editor.modified && editor.selectionAnchor == 11
                     && editor.selectionCaret == 3, "one Undo of replace all restores the text and the selection")
@@ -335,7 +335,7 @@ private final class SelectionReadCounterEditor: TTEditor {
                 SearchController.apply(digitHits, text: numbered, revision: editor.revision, to: editor)
                     && editor.selectionAnchor == 7 && editor.selectionCaret == 7,
                 "a caret inside a replaced match moves to the start of its replacement")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 editor.text == numbered && editor.selectionAnchor == 9 && editor.selectionCaret == 9,
                 "Undo returns the caret to where it was inside the match")
@@ -344,7 +344,7 @@ private final class SelectionReadCounterEditor: TTEditor {
                 SearchController.apply([digitHits[1]], text: numbered, revision: editor.revision, to: editor)
                     && editor.text == "a1 b# c333" && editor.selectionAnchor == 4 && editor.selectionCaret == 5,
                 "replacing the selected match leaves its replacement selected")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 editor.text == numbered && editor.selectionAnchor == 4 && editor.selectionCaret == 6,
                 "Undo of a single replacement reselects the match")
@@ -381,7 +381,7 @@ private final class SelectionReadCounterEditor: TTEditor {
             check(editor.selectedText == "one=12", "recorded regex find selects UTF8 mapped match")
             try controller.playRecorded(options: o, action: "replaceOne", on: editor)
             check(editor.text == "🥑 one:12 two=34", "recorded regex selected replacement")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == original, "recorded replacement one Undo")
             editor.text = "ab"
             o.query = "(?=.)|$"
@@ -427,7 +427,7 @@ private final class SelectionReadCounterEditor: TTEditor {
                 reopened.queryField.stringValue == "([a-z]+)=(\\d+)" && reopened.replacementField.stringValue == "$1:$2"
                     && reopened.mode.indexOfSelectedItem == 2,
                 "a second controller on the same defaults restores the saved options")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "one=12 two=34", "native focused-field replace all one Undo")
             editor.setSavePoint()
             editor.readOnly = true
@@ -686,7 +686,7 @@ private final class SelectionReadCounterEditor: TTEditor {
                 replaceElapsed < 10,
                 "single Replace on a \(hitCount)-hit buffer stays within its time bound (\(String(format:"%.2f",replaceElapsed)) s)"
             )
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == big && !editor.modified, "many-hit single Replace is one Undo back to the save point")
             _ = editor.setSelectionAnchor(chosenHit * hitBytes + 3, caret: chosenHit * hitBytes + 8)
             recorded = []
@@ -766,7 +766,7 @@ private final class SelectionReadCounterEditor: TTEditor {
                 check(
                     split.lastOutcome == .replaced(changed: 1, stale: 0) && primary.text == "one DONE two TODO three",
                     "Replace acts on the match selected in the focused pane, once")
-                pane.executeCommand("undo")
+                pane.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(primary.text == "one TODO two TODO three" && !primary.modified, "that replacement is one Undo")
                 split.scope.selectItem(at: 0)
                 split.findAll(nil)
@@ -780,7 +780,7 @@ private final class SelectionReadCounterEditor: TTEditor {
                     split.activateResult(at: 1) && split.lastOutcome != .staleResult && primary.selectionStart == 13
                         && primary.selectedText == "TODO",
                     "a result listed through a closed pane still selects its match in the remaining view")
-                primary.executeCommand("selectAll")
+                primary.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 primary.replaceSelection("edited since")
                 check(
                     !split.activateResult(at: 0) && split.lastOutcome == .staleResult,
@@ -906,7 +906,7 @@ private final class SelectionReadCounterEditor: TTEditor {
             check(
                 editor.text == "foobar X" && controller.lastOutcome == .replaced(changed: 1, stale: 0),
                 "Selection scope Whole word replaces the selected whole word in place")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "foobar foo" && !editor.modified, "Selection scope replace all is one Undo")
             // "🥑é " is 7 bytes and 4 UTF-16 units: a double-applied or byte offset would miss.
             await selectionReplaceAll(
@@ -921,7 +921,7 @@ private final class SelectionReadCounterEditor: TTEditor {
             await selectionReplaceAll("ab ab", select: NSRange(location: 4, length: 1), query: "(?<=a)b", regex: true)
             check(editor.text == "ab aX", "Selection scope lookbehind sees the character before the selection")
             await selectionReplaceAll("l1\nl2 foo\nl3 foo\n", select: NSRange(location: 11, length: 6), query: "foo")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             _ = editor.setBookmarks([])
             _ = editor.setSelectionAnchor(11, caret: 17)
             controller.bookmark(nil)
@@ -1040,7 +1040,7 @@ private final class SelectionReadCounterEditor: TTEditor {
                 editor.text == "xb a a ax" && controller.lastOutcome == .replaced(changed: 1, stale: 0)
                     && recorded.isEmpty,
                 "Selection scope Replace right after a Selection scope Next replaces the selected match")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "xa a a ax" && !editor.modified, "that Selection scope Replace is one Undo")
             literal("a", "b", scope: 0, wrap: false)
             _ = editor.setSelectionAnchor(0, caret: 0)
@@ -1081,15 +1081,15 @@ private final class SelectionReadCounterEditor: TTEditor {
                 second.text == "y=1 x=2" && controller.lastOutcome == .replaced(changed: 1, stale: 0)
                     && controller.status.stringValue.hasPrefix("Replaced 1 match") && recorded.isEmpty,
                 "All open documents Replace replaces the selected match of the current document")
-            second.executeCommand("undo")
+            second.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(second.text == "x=1 x=2" && !second.modified, "that Replace is one Undo in the current document")
             await replaceAll()
             check(
                 editor.text == "y=1 y=2" && second.text == "y=1 y=2"
                     && controller.lastOutcome == .replaced(changed: 4, stale: 0),
                 "All open documents Replace All still replaces in every open document")
-            editor.executeCommand("undo")
-            second.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            second.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 editor.text == "x=1 x=2" && second.text == "x=1 x=2" && !editor.modified && !second.modified,
                 "All open documents Replace All is one Undo in each document")
@@ -1202,7 +1202,7 @@ private final class SelectionReadCounterEditor: TTEditor {
                 second.text == "b a" && controller.lastOutcome == .replaced(changed: 1, stale: 0)
                     && controller.status.stringValue.hasPrefix("Replaced 1 match") && recorded.isEmpty,
                 "Replace after a cross-document Next replaces the match that Next selected")
-            second.executeCommand("undo")
+            second.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(second.text == "a a" && !second.modified, "that Replace is one Undo in the document navigated to")
             load(editor, "none")
             load(second, "a a")
@@ -1360,9 +1360,9 @@ private final class SelectionReadCounterEditor: TTEditor {
                     && replay.selectionEnd == editor.selectionEnd,
                 "the steps recorded by Replace play back to the same text and selection")
             _ = replayWindow
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "one=12 two=34" && !editor.modified, "a Replace that moved on is one Undo")
-            editor.executeCommand("redo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "redo"))
             _ = editor.setSelectionAnchor(7, caret: 13)
             recorded = []
             await replaceOne()
@@ -1446,7 +1446,7 @@ private final class SelectionReadCounterEditor: TTEditor {
                     && !controller.status.stringValue.contains("no pending replacements applied")
                     && !controller.isSearching && recorded == ["replaceOne"],
                 "Cancel during the search that follows a Replace still reports the replacement")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "a a" && !editor.modified, "that cancelled Replace is one Undo")
             controller.replaceAll(nil)
             controller.cancel(nil)
@@ -1569,7 +1569,7 @@ private final class SelectionReadCounterEditor: TTEditor {
                     && editor.text == "c bb c" && editor.selectionCount == 1 && editor.selectionAnchor == 3
                     && editor.selectionCaret == 3,
                 "a batch replacement reports its count and keeps the caret at the text it was on (G374)")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(unedited(), "a batch replacement is one Undo back to the save point")
             literal("aa", "c", scope: 0, wrap: false)
             editor.readOnly = true
@@ -1604,7 +1604,7 @@ private final class SelectionReadCounterEditor: TTEditor {
             check(
                 changeCallbacks >= 2 && changeCallbacks <= 5,
                 "Replace All of two matches reports only its own inserts and deletes (\(changeCallbacks) callbacks)")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(unedited(), "Replace All is one Undo back to the save point")
 
             // F223: unchanged editors, revisions and options reuse the held results; revision

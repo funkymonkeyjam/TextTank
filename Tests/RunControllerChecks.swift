@@ -64,7 +64,7 @@ import AppKit
             controller.apply(current)
             check(document.editor.text == "SECOND", "current preview applies explicit matching result")
             check(unrecordable == 1, "applying an extension result reports one unrecordable action")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(document.editor.text == "original", "extension apply one Undo")
             let special = "\u{FEFF}identity\0tail"
             controller.show(
@@ -165,7 +165,7 @@ import AppKit
             check(
                 document.editor.text == "FIRST" && !moved.isEnabled,
                 "a whole-document result captured through a closed pane applies through the remaining view")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             _ = pane.setSelectionAnchor(0, caret: 3)
             controller.show(
                 .success(result), command: sample, target: pane, revision: pane.revision, selection: true, anchor: 0,
