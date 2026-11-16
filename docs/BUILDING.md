@@ -42,3 +42,7 @@ verification failures. Its public module exports only TTSearchEngine.h.
 The build also inspects actual application code images (including the Debug dylib) and
 NativeSearch install names before signing. Embedded runtime dependencies must use @rpath;
 an absolute /Library/Frameworks dependency fails rather than passing build-only evidence.
+
+EditorBridge builds the editor bridge and user lexer once for the application target,
+linking the existing pinned engines. Its module exports TTEditor.h; it is signed before
+the app alongside NativeSearch and Scintilla. Check-source migration is still pending.

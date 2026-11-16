@@ -1,0 +1,5 @@
+framework module EditorBridge {
+    umbrella header "TTEditor.h"
+    export *
+    module * { export * }
+}

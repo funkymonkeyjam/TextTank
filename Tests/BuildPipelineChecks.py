@@ -90,16 +90,24 @@ func rawMode() throws {
             executable = app / 'Contents/MacOS/TextTank'
             image.parent.mkdir(parents=True)
             executable.parent.mkdir(parents=True)
+            editor_image = app / 'Contents/Frameworks/EditorBridge.framework/Versions/A/EditorBridge'
+            editor_image.parent.mkdir(parents=True)
+            editor_source = fixture / 'editor.c'
+            editor_source.write_text('int fixture_editor(void) { return 0; }\n')
+            editor_built = subprocess.run(['xcrun', 'clang', '-dynamiclib', str(editor_source), '-install_name',
+                                           '@rpath/EditorBridge.framework/Versions/A/EditorBridge', '-o', str(editor_image)],
+                                          capture_output=True, text=True)
+            self.assertEqual(editor_built.returncode, 0, editor_built.stderr)
             library_source = fixture / 'search.c'
             library_source.write_text('int fixture_search(void) { return 0; }\n')
             main_source = fixture / 'main.c'
-            main_source.write_text('extern int fixture_search(void); int main(void) { return fixture_search(); }\n')
+            main_source.write_text('extern int fixture_search(void); extern int fixture_editor(void); int main(void) { return fixture_search() + fixture_editor(); }\n')
             for identity, accepted in [('/Library/Frameworks/NativeSearch.framework/Versions/A/NativeSearch', False),
                                        ('@rpath/NativeSearch.framework/Versions/A/NativeSearch', True)]:
                 built = subprocess.run(['xcrun', 'clang', '-dynamiclib', str(library_source),
                                         '-install_name', identity, '-o', str(image)], capture_output=True, text=True)
                 self.assertEqual(built.returncode, 0, built.stderr)
-                linked = subprocess.run(['xcrun', 'clang', str(main_source), str(image), '-o', str(executable)],
+                linked = subprocess.run(['xcrun', 'clang', str(main_source), str(image), str(editor_image), '-o', str(executable)],
                                         capture_output=True, text=True)
                 self.assertEqual(linked.returncode, 0, linked.stderr)
                 if accepted:
@@ -107,6 +115,14 @@ func rawMode() throws {
                 else:
                     with self.assertRaisesRegex(ValueError, 'install name'):
                         linkage.verify(app)
+
+            editor_source.write_text('extern int fixture_search(void); int fixture_editor(void) { return fixture_search(); }\n')
+            illegal_edge = subprocess.run(['xcrun', 'clang', '-dynamiclib', str(editor_source), str(image),
+                                           '-install_name', '@rpath/EditorBridge.framework/Versions/A/EditorBridge',
+                                           '-o', str(editor_image)], capture_output=True, text=True)
+            self.assertEqual(illegal_edge.returncode, 0, illegal_edge.stderr)
+            with self.assertRaisesRegex(ValueError, 'snapshot search engine'):
+                linkage.verify(app)
 
     def test_signing_cleans_metadata_at_each_boundary_and_keeps_failures_fatal(self):
         # Simulate metadata arriving between signing steps; this does not attribute
@@ -132,6 +148,8 @@ export APP_PATH
             framework.mkdir(parents=True)
             search_framework = app / 'Contents/Frameworks/NativeSearch.framework'
             search_framework.mkdir()
+            editor_framework = app / 'Contents/Frameworks/EditorBridge.framework'
+            editor_framework.mkdir()
             binary = fixture / 'bin'
             binary.mkdir()
             tool_source = '''#!/usr/bin/env python3
@@ -155,6 +173,8 @@ if tool == 'xattr':
     sys.exit(0)
 if tool != 'codesign':
     sys.exit(92)
+if args == ['--force', '--sign', '-', str(app / 'Contents/Frameworks/EditorBridge.framework')]:
+    sys.exit(76 if scenario == 'editor-sign-error' else 0)
 if args == ['--force', '--sign', '-', str(app / 'Contents/Frameworks/NativeSearch.framework')]:
     sys.exit(75 if scenario == 'nested-sign-error' else 0)
 if args == ['--force', '--sign', '-', str(framework)]:
@@ -181,11 +201,12 @@ sys.exit(93)
             expected = [
                 ['--force', '--sign', '-', str(framework)],
                 ['--force', '--sign', '-', str(search_framework)],
+                ['--force', '--sign', '-', str(editor_framework)],
                 ['--force', '--sign', '-', str(app)],
                 ['--verify', '--deep', '--strict', str(app)],
             ]
             for scenario, code in [('arrival-between-steps', 0), ('persistent-metadata', 1),
-                                   ('ordinary-sign-error', 73), ('strict-verify-error', 74), ('nested-sign-error', 75)]:
+                                   ('ordinary-sign-error', 73), ('strict-verify-error', 74), ('nested-sign-error', 75), ('editor-sign-error', 76)]:
                 with self.subTest(scenario=scenario):
                     events.write_text('')
                     if metadata.exists():
@@ -199,7 +220,7 @@ sys.exit(93)
                     self.assertEqual(result.returncode, code, result.stderr)
                     trace = [json.loads(line) for line in events.read_text().splitlines()]
                     signing = [args for tool, args in trace if tool == 'codesign']
-                    self.assertEqual(signing, expected if code in (0, 74) else expected[:2 if code == 75 else 3])
+                    self.assertEqual(signing, expected if code in (0, 74) else expected[:2 if code == 75 else 3 if code == 76 else 4])
                     for tool, args in trace:
                         if tool == 'xattr':
                             self.assertEqual(args[0], '-dr')

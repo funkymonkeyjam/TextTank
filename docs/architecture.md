@@ -394,3 +394,7 @@ search engine and its typed public interface. The application depends on and emb
 framework; EditorBridge has no dependency on it. Remaining Swift sources still share the
 application target during the staged module migration. Native checks still compile their
 legacy source sets at this stage; shared artifact acceptance is not yet established.
+
+EditorBridge is now a separate AppKit Objective-C++ framework owning TTEditor and the
+ported user lexer. It links Scintilla and Lexilla; it has no dependency on NativeSearch
+or the remaining Swift application target. The application embeds both native frameworks.
