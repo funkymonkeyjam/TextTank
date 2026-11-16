@@ -1285,7 +1285,7 @@ import AppKit
                 sameB.title = "same.txt"
                 let choices = navigation.documentTabChoices([sameA, sameB])
                 check(
-                    choices.numberOfItems == 2 && choices.itemArray.map(\.tag) == [0, 1],
+                    choices.count == 2 && Set(choices.map(\.id)).count == 2,
                     "document chooser preserves same-title document identities")
                 navigation.nextDocumentTab(nil)
                 check(

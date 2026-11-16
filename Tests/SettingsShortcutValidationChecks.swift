@@ -42,7 +42,7 @@ enum SettingsShortcutValidationChecks {
                 let deadline = Date().addingTimeInterval(10)
                 let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                     MainActor.assumeIsolated {
-                        guard let window = NSApp.modalWindow, let content = window.contentView else { return }
+                        guard let window = presentedFormWindow, let content = window.contentView else { return }
                         if Date() > deadline {
                             NSApp.abortModal()
                             return
@@ -76,7 +76,9 @@ enum SettingsShortcutValidationChecks {
                             stage = 1
                             views.compactMap { $0 as? NSButton }.first { $0.title == "Save" }?.performClick(nil)
                         } else if stage == 1
-                            && views.contains(where: { $0.accessibilityLabel() == "Input needs correction" })
+                            && views.contains(where: {
+                                $0.accessibilityLabel()?.hasPrefix("Input needs correction") == true
+                            })
                         {
                             correctRow =
                                 popup.selectedItem?.representedObject as? String == scenario.expected
@@ -96,6 +98,7 @@ enum SettingsShortcutValidationChecks {
                 }
                 RunLoop.main.add(timer, forMode: .modalPanel)
                 controller.showSettings(nil)
+                waitForModelessForms()
                 timer.invalidate()
                 check(
                     correctRow,

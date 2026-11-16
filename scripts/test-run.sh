@@ -9,6 +9,6 @@ suite_build "run-checks" swiftc Sources/Documents/Strings.swift Sources/Document
 suite_run run-checks harness/logs/run-checks.log build/tests/run-checks
 suite_build "run-controller-checks" build_bridge_object
 suite_build "run-controller-checks" build_search_object
-suite_build "run-controller-checks" swiftc -D TESTING "${SWIFT_BASE[@]}" -import-objc-header Sources/EditorBridge/TTEditor.h -F "$VENDOR_BUILD" -framework Scintilla Sources/UI/*.swift -framework Cocoa -framework EventKit -lc++ -Xlinker -rpath -Xlinker "$VENDOR_BUILD" "${APP_SOURCES[@]}" "$SUITE_SUPPORT" Tests/RunControllerChecks.swift "$BRIDGE_OBJECT" "$SEARCH_OBJECT" "$USER_LEXER_OBJECT" "$LEXILLA_LIBRARY" -o build/tests/run-controller-checks
+suite_build "run-controller-checks" swiftc -D TESTING "${SWIFT_BASE[@]}" -import-objc-header Sources/EditorBridge/TTEditor.h -F "$VENDOR_BUILD" -framework Scintilla Sources/UI/*.swift -framework Cocoa -framework EventKit -lc++ -Xlinker -rpath -Xlinker "$VENDOR_BUILD" "${APP_SOURCES[@]}" "$SUITE_SUPPORT" Tests/Support/ModelessForms.swift Tests/RunControllerChecks.swift "$BRIDGE_OBJECT" "$SEARCH_OBJECT" "$USER_LEXER_OBJECT" "$LEXILLA_LIBRARY" -o build/tests/run-controller-checks
 suite_run run-controller-checks harness/logs/run-controller-checks.log build/tests/run-controller-checks
 suite_finish

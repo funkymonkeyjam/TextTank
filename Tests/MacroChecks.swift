@@ -16,7 +16,7 @@ import Foundation
             var acted = false, timedOut = false
             let deadline = Date().addingTimeInterval(10)
             let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-                guard let content = NSApp.modalWindow?.contentView else { return }
+                guard let content = presentedFormWindow?.contentView else { return }
                 if Date() > deadline {
                     timedOut = true
                     NSApp.abortModal()
@@ -27,7 +27,21 @@ import Foundation
             RunLoop.main.add(timer, forMode: .modalPanel)
             defer { timer.invalidate() }
             guard let action = item.action, NSApp.sendAction(action, to: item.target, from: item) else { return false }
+            waitForModelessForms()
             return acted && !timedOut
+        }
+        static func choosingAdvanced(_ item: NSMenuItem, commit: Bool, _ act: @escaping ([NSView]) -> Bool) -> Bool {
+            MainActor.assumeIsolated {
+                let route = ManagerChildRoute(
+                    managerID: "macro.manager", openerID: "macro.manager.advanced", childID: "macro.json",
+                    commit: commit)
+                return choosing(item) { views in
+                    MainActor.assumeIsolated {
+                        guard let window = presentedFormWindow else { return false }
+                        return route.step(window, views: views) { _ = act(views) }
+                    }
+                }
+            }
         }
         static func item(_ selector: String, in controller: MacroController, id: UUID? = nil) -> NSMenuItem? {
             controller.menu().items.first {
@@ -53,7 +67,10 @@ import Foundation
                     guard let press = control(button, NSButton.self, in: views),
                         let input = control(field, NSTextField.self, in: views)
                     else { return false }
-                    if let value { input.stringValue = value }
+                    if let value {
+                        input.window?.makeFirstResponder(nil)
+                        input.stringValue = value
+                    }
                     press.performClick(nil)
                     return true
                 }
@@ -116,6 +133,46 @@ import Foundation
                 item("playLast", in: restarted)?.isEnabled == false
                     && item("saveLast", in: restarted)?.isEnabled == false,
                 "a restarted controller has no last recording to play or save")
+            let savedBeforeConflict = try Data(contentsOf: storage)
+            _ = NSApp.sendAction(saveItem.action!, to: saveItem.target, from: saveItem)
+            let pending = try requireValue(FormPanel.visible.last, "fixture: modeless recording name")
+            pending.window.makeFirstResponder(nil)
+            let pendingName = try requireValue(
+                control("macro.save.name", NSTextField.self, in: descendants(pending.window.contentView!)),
+                "fixture: pending recording name")
+            pendingName.stringValue = "Kept pending name"
+            controller.startRecording()
+            let savePending = try requireValue(
+                control("macro.save.confirm", NSButton.self, in: descendants(pending.window.contentView!)),
+                "fixture: recording save action")
+            check(!savePending.isEnabled, "DG an actual active recording disables the open recording-name Save action")
+            editor.executeCommand("newLine")
+            let intervening = try requireValue(
+                try controller.finishRecording(), "fixture: intervening completed recording")
+            check(
+                savePending.isEnabled,
+                "DG recording completion re-enables Save without treating the manager as execution busy")
+            savePending.performClick(nil)
+            check(
+                pending.window.isVisible && pendingName.stringValue == "Kept pending name"
+                    && descendants(pending.window.contentView!).compactMap { $0 as? NSTextField }.contains {
+                        $0.stringValue.contains("changed while this window was open")
+                    },
+                "DG a real intervening recording completion preserves and explains the stale name draft")
+            check(
+                try Data(contentsOf: storage) == savedBeforeConflict,
+                "DG a stale recording-name Save never overwrites the saved library")
+            control("macro.save.cancel", NSButton.self, in: descendants(pending.window.contentView!))?.performClick(nil)
+            check(
+                choosing(saveItem, answer("macro.save.name", "Newer recording", "macro.save.confirm")),
+                "DG a reopened name form saves the newer recording")
+            let afterConflict = try MacroLibrary.decode(Data(contentsOf: storage))
+            check(
+                afterConflict.macros.contains {
+                    $0.id == intervening.id && $0.name == "Newer recording" && $0.steps == intervening.steps
+                },
+                "DG stale-save refusal preserves the actual newer recording for later Save")
+            editor.executeCommand("undo")
         }
         static func jsonManagerChecks(editor: TTEditor) throws {
             let isolated = try IsolatedSupportDirectory("MacroJSONChecks")
@@ -135,18 +192,20 @@ import Foundation
             let invalid = "{ preserve the macro JSON draft"
             var stage = 0, nestedError = false, keptDraft = false, inlineError = false
             var manager: NSWindow?
-            let retried = choosing(manage) { views in
-                if stage == 1, NSApp.modalWindow !== manager {
+            let retried = choosingAdvanced(manage, commit: true) { views in
+                if stage == 1, presentedFormWindow !== manager {
                     nestedError = true
                     NSApp.abortModal()
                     return false
                 }
                 guard let text = views.compactMap({ $0 as? NSTextView }).first,
-                    let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save" })
+                    let save = views.compactMap({ $0 as? NSButton }).first(where: {
+                        $0.identifier?.rawValue == "macro.json.save"
+                    })
                 else { return false }
                 switch stage {
                 case 0:
-                    manager = NSApp.modalWindow
+                    manager = presentedFormWindow
                     text.string = invalid
                     stage = 1
                     save.performClick(nil)
@@ -189,7 +248,7 @@ import Foundation
                 })
             stage = 0
             var draftOnly = false, exportedDraft = false
-            let cancelled = choosing(manage) { views in
+            let cancelled = choosingAdvanced(manage, commit: false) { views in
                 guard let text = control("macro.json.text", NSTextView.self, in: views),
                     let load = control("macro.json.import", NSButton.self, in: views),
                     let export = control("macro.json.export", NSButton.self, in: views),
@@ -221,7 +280,7 @@ import Foundation
                 try Data(contentsOf: path) == saved, "F155 Cancel after Macro import and export preserves saved bytes")
             check(exportNames == ["TextTank-Macros.json"], "F155 Macro export keeps its documented filename")
             stage = 0
-            let accepted = choosing(manage) { views in
+            let accepted = choosingAdvanced(manage, commit: true) { views in
                 guard let load = control("macro.json.import", NSButton.self, in: views),
                     let save = control("macro.json.save", NSButton.self, in: views)
                 else { return false }

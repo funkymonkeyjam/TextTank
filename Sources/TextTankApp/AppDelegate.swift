@@ -526,32 +526,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let index = windows.firstIndex(where: { $0.isVisible }) ?? 0
         windows[(index + direction + windows.count) % windows.count].makeKeyAndOrderFront(nil)
     }
+    private var documentsPanel: ChoicePanel?
     @objc func showDocumentTabs(_ sender: Any?) {
-        let windows = DocumentTabWindow.documents
-        guard !windows.isEmpty else { return }
-        let alert = TTAlert()
-        alert.messageText = "Open Documents"
-        let choice = documentTabChoices(windows)
-        choice.selectItem(at: windows.firstIndex(where: { $0.isVisible }) ?? 0)
-        alert.accessoryView = choice
-        alert.addButton(withTitle: "Switch")
-        alert.addButton(withTitle: "Cancel", role: .cancel)
-        guard alert.runModal() == .alertFirstButtonReturn, let index = choice.selectedItem?.tag,
-            windows.indices.contains(index), DocumentTabWindow.documents.contains(where: { $0 === windows[index] })
-        else { return }
-        windows[index].makeKeyAndOrderFront(nil)
+        if let documentsPanel {
+            documentsPanel.form.window.makeKeyAndOrderFront(nil)
+            return
+        }
+        guard !DocumentTabWindow.documents.isEmpty else { return }
+        let identities = NSMapTable<NSWindow, NSString>(keyOptions: .weakMemory, valueOptions: .strongMemory)
+        func identity(_ window: NSWindow) -> String {
+            if let existing = identities.object(forKey: window) { return existing as String }
+            let token = UUID().uuidString
+            identities.setObject(token as NSString, forKey: window)
+            return token
+        }
+        let panel = ChoicePanel(
+            title: "Open Documents", identifier: "TextTank.OpenDocuments", action: "Switch",
+            filterLabel: "Filter open documents by name or path")
+        documentsPanel = panel
+        panel.retainController(self)
+        panel.onClose = { [weak self] in self?.documentsPanel = nil }
+        panel.rows = { [weak self] in self?.documentTabChoices(DocumentTabWindow.documents, identity: identity) ?? [] }
+        panel.choose = { id in
+            guard
+                let window = DocumentTabWindow.documents.first(where: { identities.object(forKey: $0) as String? == id }
+                )
+            else { throw FormFailure.documentChanged }
+            window.makeKeyAndOrderFront(nil)
+            return true
+        }
+        panel.show()
     }
-    func documentTabChoices(_ windows: [NSWindow]) -> NSPopUpButton {
-        let choice = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 420, height: 30))
-        choice.setAccessibilityLabel("Open document to switch to")
-        for (index, window) in windows.enumerated() {
+    func documentTabChoices(
+        _ windows: [NSWindow], identity: (NSWindow) -> String = { String(describing: ObjectIdentifier($0)) }
+    ) -> [ChoicePanel.Row] {
+        windows.map { window in
             let path = (window.windowController?.document as? NSDocument)?.fileURL?.deletingLastPathComponent().path
             let title = window.title + (window.isDocumentEdited ? " •" : "") + (path.map { " — \($0)" } ?? "")
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            item.tag = index
-            choice.menu?.addItem(item)
+            return ChoicePanel.Row(id: identity(window), title: title)
         }
-        return choice
     }
     /// Full paths, because the Recovery folder is inside the hidden Library folder.
     static func recoveryIssueText(_ issues: [RecoveryIssue]) -> String {

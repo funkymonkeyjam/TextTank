@@ -13,7 +13,7 @@ final class RunController: NSObject, NSMenuItemValidation {
         get { loadState.error }
         set { loadState.error = newValue }
     }
-    private var execution: RunExecution?
+    private var execution: RunExecution? { didSet { manager?.refresh() } }
     private let menu = NSMenu(title: "Run")
     private var resultWindow: NSWindow?
     private weak var applyButton: NSButton?
@@ -113,44 +113,110 @@ final class RunController: NSObject, NSMenuItemValidation {
     }
     static let manageHelp =
         "Each entry is one saved command: name, executable (an absolute path), arguments, shellMode and extensionMode. Edit an entry to change it, or remove an entry to delete it. Keep id to keep a command's identity. Saving never runs a command."
+    private var manager: LibraryManager?
     @objc private func manage(_ sender: Any?) {
-        do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
-            TTAlert.present(error)
+        if let manager {
+            manager.form.window.makeKeyAndOrderFront(nil)
             return
         }
-        let alert = TTAlert()
-        alert.messageText = "Manage Run Commands"
-        alert.informativeText = Self.manageHelp
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel", role: .cancel)
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 650, height: 400))
-        scroll.hasVerticalScroller = true
-        let text = NSTextView(frame: scroll.bounds)
-        text.isRichText = false
-        text.isAutomaticQuoteSubstitutionEnabled = false
-        text.isAutomaticDashSubstitutionEnabled = false
-        text.isAutomaticTextReplacementEnabled = false
-        text.isAutomaticSpellingCorrectionEnabled = false
-        text.allowsUndo = true
-        text.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        text.autoresizingMask = [.width]
-        text.isVerticallyResizable = true
-        text.textContainer?.widthTracksTextView = true
-        text.identifier = NSUserInterfaceItemIdentifier("run.manage.text")
-        text.setAccessibilityLabel("Saved Run commands as JSON")
-        scroll.documentView = text
-        do { text.string = try libraryText() } catch {
-            TTAlert.present(error)
-            return
-        }
-        alert.accessoryView = scroll
-        alert.window.initialFirstResponder = text
-        while alert.runModal() == .alertFirstButtonReturn {
-            do {
-                try replaceLibrary(json: Data(text.string.utf8))
-                return
-            } catch { TTAlert.present(error) }
-        }
+        do {
+            guard try StoreRecovery.ensureWritable(loadState) else { return }
+            var working = commands
+            let baseline = try SavedConfiguration.bytes(commands)
+            let panel = LibraryManager(title: "Run Commands", identifier: "run.manager")
+            manager = panel
+            panel.retainController(self)
+            panel.onClose = { [weak self] in self?.manager = nil }
+            panel.rows = { working.map { .init(id: $0.id, name: $0.name) } }
+            panel.canEdit = { [weak self] in self.map { !$0.isRunning } ?? false }
+            panel.rename = { id, name in
+                if let i = working.firstIndex(where: { $0.id == id }) { working[i].name = name }
+            }
+            panel.save = { [weak self, weak panel] in
+                guard let self, !self.isRunning else { throw FormFailure.busy }
+                for command in working {
+                    do { try command.validate() } catch {
+                        panel?.reveal(command.id)
+                        throw error
+                    }
+                }
+                try ConfiguredRun.validateLibrary(working)
+                try SavedConfiguration.requireUnchanged(self.commands, since: baseline)
+                guard try StoreRecovery.ensureWritable(self.loadState) else { return false }
+                try SavedConfiguration.requireUnchanged(self.commands, since: baseline)
+                // The existing byte-exact no-op path preserves file identity and Unicode bytes.
+                let encoder = JSONEncoder()
+                try self.replaceLibrary(json: encoder.encode(working))
+                return true
+            }
+            panel.add = { [weak self, weak panel] in
+                guard let self, let panel else { return }
+                self.editCommand(nil, parent: panel.form.window) { command in
+                    working.append(command)
+                    panel.reload(select: command.id)
+                }
+            }
+            panel.action("Add…", identifier: "run.manager.add") { [weak panel] in panel?.beginAdd() }
+            panel.action("Edit…", identifier: "run.manager.edit", needsSelection: true) { [weak self, weak panel] in
+                guard let self, let panel, let id = panel.selectedID,
+                    let command = working.first(where: { $0.id == id })
+                else { return }
+                self.editCommand(command, parent: panel.form.window) { updated in
+                    if let i = working.firstIndex(where: { $0.id == id }) { working[i] = updated }
+                    panel.reload(select: id)
+                }
+            }
+            panel.action("Duplicate", identifier: "run.manager.duplicate", needsSelection: true) { [weak panel] in
+                guard let panel, let id = panel.selectedID, var command = working.first(where: { $0.id == id }) else {
+                    return
+                }
+                command.id = UUID()
+                working.append(command)
+                panel.reload(select: command.id)
+            }
+            panel.action("Delete…", identifier: "run.manager.delete", needsSelection: true) { [weak panel] in
+                panel?.confirmDelete { id in working.removeAll { $0.id == id } }
+            }
+            panel.secondaryAction("Advanced JSON…", identifier: "run.manager.advanced") { [weak panel] in
+                guard let panel, panel.canEdit() else { return }
+                let form = FormPanel(
+                    title: "Advanced Run Command Configuration", identifier: "run.json",
+                    size: NSSize(width: 700, height: 530))
+                form.note(Self.manageHelp)
+                let text = JSONLibraryEditor.makeTextView(size: NSSize(width: 640, height: 330))
+                text.editor.setAccessibilityLabel("Saved Run commands as JSON")
+                text.editor.identifier = NSUserInterfaceItemIdentifier("run.manage.text")
+                do {
+                    let encoder = JSONEncoder()
+                    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+                    text.editor.string = String(decoding: try encoder.encode(working), as: UTF8.self)
+                } catch {
+                    panel.form.showValidation(error)
+                    return
+                }
+                form.add(text.scroll)
+                text.scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 150).isActive = true
+                form.button("Use Changes", identifier: "run.json.save") {
+                    guard form.commitEditing() else { return }
+                    do {
+                        let data = Data(text.editor.string.utf8)
+                        guard data.count <= 4 * ConfiguredRun.maximumLibraryBytes else {
+                            throw RunFailure.configurationTooLarge
+                        }
+                        let updated = try JSONInputFailure.decode(
+                            [ConfiguredRun].self, from: data, context: "Run commands")
+                        _ = try ConfiguredRun.encodeLibrary(updated)
+                        working = updated
+                        form.close()
+                        panel.reload()
+                    } catch { form.showValidation(error, field: text.editor) }
+                }
+                form.button("Cancel", identifier: "run.json.cancel", cancel: true) { form.close() }
+                form.show(parent: panel.form.window)
+                panel.refresh()
+            }
+            panel.show()
+        } catch { TTAlert.present(error) }
     }
     @objc private func addSample(_ sender: Any?) {
         do {
@@ -163,34 +229,48 @@ final class RunController: NSObject, NSMenuItemValidation {
     static let configureHelp =
         "Runs only when explicitly selected. Arguments stay separate; use {file}, {directory}, or {selection} as a complete argument. A selection that begins with - is read by the tool as an option, so put -- or the tool's own pattern flag (for example -e) before {selection} where the tool supports it. The command starts in the saved document's folder, or in your home folder. Shell mode deliberately executes the argument as shell code."
     @objc private func configure(_ sender: Any?) {
-        do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
-            TTAlert.present(error)
-            return
+        manage(sender)
+        manager?.beginAdd()
+        manager?.refresh()
+    }
+    private func editCommand(_ initial: ConfiguredRun?, parent: NSWindow, accept: @escaping (ConfiguredRun) -> Void) {
+        let form = FormPanel(
+            title: initial == nil ? "New Run Command" : "Edit Run Command", identifier: "run.command",
+            size: NSSize(width: 720, height: 520))
+        form.window.contentMinSize = NSSize(width: 680, height: 440)
+        form.note(Self.configureHelp)
+        form.note(
+            "Use Changes returns to the manager. The command runs only when you explicitly invoke its saved definition."
+        )
+        let name = form.field("Name", value: initial?.name ?? "", identifier: "run.command.name")
+        let path = form.field(
+            "Executable", value: initial?.executable ?? "/usr/bin/printf", identifier: "run.command.executable")
+        let argumentText: String
+        if let initial {
+            argumentText =
+                initial.shellMode
+                ? initial.arguments[1]
+                : String(decoding: (try? JSONEncoder().encode(initial.arguments)) ?? Data(), as: UTF8.self)
+        } else {
+            argumentText = "[\"%s\\n\",\"{file}\"]"
         }
-        let alert = TTAlert()
-        alert.messageText = "Configure Run Command"
-        alert.informativeText =
-            Self.configureHelp
-        let name = NSTextField(string: ""), path = NSTextField(string: "/usr/bin/printf"),
-            args = NSTextField(string: "[\"%s\\n\",\"{file}\"]")
+        let args = form.field("Arguments", value: argumentText, identifier: "run.command.arguments")
         let shell = NSButton(checkboxWithTitle: "Intentional shell mode (/bin/zsh -c)", target: nil, action: nil)
+        shell.identifier = NSUserInterfaceItemIdentifier("run.command.shell")
+        shell.state = initial?.shellMode == true ? .on : .off
+        shell.setAccessibilityLabel("Intentional shell mode for this Run command")
+        shell.cell?.setAccessibilityLabel("Intentional shell mode for this Run command")
         let ext = NSButton(
-            checkboxWithTitle: "Version 1 text extension (stdin → preview → explicit Apply)", target: nil, action: nil)
-        let stack = NSStackView(views: [
-            NSTextField(labelWithString: "Name"), name, NSTextField(labelWithString: "Executable"), path,
-            NSTextField(labelWithString: "Arguments as JSON array (or shell script in shell mode)"), args, shell, ext
-        ])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 6
-        stack.frame = NSRect(x: 0, y: 0, width: 550, height: 250)
-        alert.accessoryView = stack
-        alert.addButton(withTitle: "Save Command")
-        alert.addButton(withTitle: "Cancel", role: .cancel)
-        name.setAccessibilityLabel("Run command name")
-        path.setAccessibilityLabel("Executable path")
-        args.setAccessibilityLabel("Command arguments")
-        while alert.runModal() == .alertFirstButtonReturn {
+            checkboxWithTitle: "Text extension (input → preview → explicit Apply)", target: nil, action: nil)
+        ext.identifier = NSUserInterfaceItemIdentifier("run.command.extension")
+        ext.state = initial?.extensionMode == true ? .on : .off
+        ext.setAccessibilityLabel("Text extension mode for this Run command")
+        ext.cell?.setAccessibilityLabel("Text extension mode for this Run command")
+        form.add(shell)
+        form.add(ext)
+        let id = initial?.id ?? UUID()
+        form.button("Use Changes", identifier: "run.command.save") {
+            guard form.commitEditing() else { return }
             do {
                 let shellMode = shell.state == .on
                 let argv =
@@ -198,34 +278,41 @@ final class RunController: NSObject, NSMenuItemValidation {
                     ? ["-c", args.stringValue]
                     : try JSONInputFailure.decode(
                         [String].self, from: Data(args.stringValue.utf8), context: "Arguments")
-                let command = ConfiguredRun(
+                var command = ConfiguredRun(
                     name: name.stringValue, executable: shellMode ? "/bin/zsh" : path.stringValue, arguments: argv,
                     shellMode: shellMode, extensionMode: ext.state == .on)
-                try persist(commands + [command])
-                return
+                command.id = id
+                try command.validate()
+                accept(command)
+                form.close()
             } catch {
-                let invalidField: NSView?
-                if case RunFailure.configuration(let field, _) = error {
-                    switch field {
-                    case .name: invalidField = name
-                    case .executable: invalidField = path
-                    case .arguments, .argument: invalidField = args
-                    case .mode, .shell: invalidField = ext
-                    default: invalidField = nil
+                let field: NSView
+                if case RunFailure.configuration(let invalid, _) = error {
+                    switch invalid {
+                    case .name: field = name
+                    case .executable: field = path
+                    case .arguments, .argument: field = args
+                    case .mode, .shell: field = ext
+                    default: field = name
                     }
                 } else {
-                    invalidField = error is JSONInputFailure ? args : nil
+                    field = args
                 }
-                alert.showValidation(error, field: invalidField)
+                form.showValidation(error, field: field)
             }
         }
+        form.button("Cancel", identifier: "run.command.cancel", cancel: true) { form.close() }
+        form.window.initialFirstResponder = name
+        form.show(parent: parent)
     }
     @objc private func cancel(_ sender: Any?) { execution?.cancel() }
     /// True while a configured command is running.
     var isRunning: Bool { execution != nil }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         // Cancel Running Command is available only while there is something to cancel.
-        item.action == #selector(cancel(_:)) ? isRunning : true
+        if item.action == #selector(cancel(_:)) { return isRunning }
+        if item.action == #selector(configure(_:)) { return !isRunning }
+        return true
     }
     /// For quitting: stops a running command and waits, on the worker's own signal, until its
     /// process group is gone. It does not depend on the main queue, so it may block the main thread.

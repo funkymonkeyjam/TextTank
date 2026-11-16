@@ -8,7 +8,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
         var acted = false, timedOut = false
         let deadline = Date().addingTimeInterval(10)
         let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-            guard let window = NSApp.modalWindow, let content = window.contentView else { return }
+            guard let window = presentedFormWindow, let content = window.contentView else { return }
             if Date() > deadline {
                 timedOut = true
                 NSApp.abortModal()
@@ -19,6 +19,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
         RunLoop.main.add(timer, forMode: .modalPanel)
         defer { timer.invalidate() }
         controller.configure()
+        waitForModelessForms()
         return acted && !timedOut
     }
     static func jsonEditorChecks(bundledURL: URL) throws {

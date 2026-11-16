@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
-/// The existing advanced JSON editors share a draft loop, not storage or execution.
+/// The existing advanced JSON editors share a working-copy editor, not storage or execution.
 /// Controllers retain their own recovery, busy state, persistence and post-save effects.
 enum JSONLibraryEditor {
     struct FilePanels {
@@ -37,98 +37,81 @@ enum JSONLibraryEditor {
         var reference: Reference?
         var extraTitle: String?
         var extraIdentifier: String?
+        var saveTitle = "Save"
     }
     private enum Action { case save, cancel, importFile, exportFile, extra }
 
     /// File choices are injectable per invocation. A cancelled choice never changes the draft,
     /// and imported or example values only reach storage through the explicit Save closure.
-    static func edit<Library: VersionedLibrary>(
+    @discardableResult static func edit<Library: VersionedLibrary>(
         _ initial: Library, configuration: Configuration, panels: FilePanels = .standard,
-        read: (URL) throws -> Data, extraAction: ((Library) throws -> Library)? = nil,
-        save: (Library) throws -> Void
-    ) throws {
-        let alert = TTAlert()
-        alert.messageText = configuration.title
-        alert.informativeText = configuration.information
-        var actions: [Action] = [.save, .cancel, .importFile, .exportFile]
-        for (title, suffix, role) in [
-            ("Save", "save", TTAlert.ButtonRole.action), ("Cancel", "cancel", .cancel),
-            ("Import…", "import", .action), ("Export…", "export", .action)
-        ] {
-            alert.addButton(withTitle: title, role: role).identifier = NSUserInterfaceItemIdentifier(
-                configuration.identifier + "." + suffix)
-        }
-        if let title = configuration.extraTitle, let identifier = configuration.extraIdentifier,
-            extraAction != nil
-        {
-            alert.addButton(withTitle: title).identifier = NSUserInterfaceItemIdentifier(identifier)
-            actions.append(.extra)
-        }
+        parent: NSWindow? = nil, current: (() throws -> Library)? = nil,
+        read: @escaping (URL) throws -> Data, extraAction: ((Library) throws -> Library)? = nil,
+        save: @escaping (Library) throws -> Void
+    ) throws -> FormPanel {
+        let baseline = try SavedConfiguration.bytes(initial)
+        let initialText = String(decoding: try initial.encoded(), as: UTF8.self)
+        let form = FormPanel(
+            title: configuration.title, identifier: configuration.identifier,
+            size: NSSize(
+                width: configuration.size.width + 40,
+                height: configuration.size.height + (configuration.reference?.height ?? 0) + 180))
+        form.window.contentMinSize = NSSize(width: 600, height: 400)
+        form.note(configuration.information)
         let text = makeTextView(size: configuration.size)
         text.editor.setAccessibilityLabel(configuration.accessibilityLabel)
         text.editor.identifier = NSUserInterfaceItemIdentifier(configuration.identifier + ".text")
-        text.editor.string = String(decoding: try initial.encoded(), as: UTF8.self)
+        text.editor.string = initialText
         if let reference = configuration.reference {
             let help = makeTextView(size: NSSize(width: configuration.size.width, height: reference.height))
             help.editor.isEditable = false
             help.editor.string = reference.text
             help.editor.setAccessibilityLabel(reference.accessibilityLabel)
-            let body = NSStackView(views: [help.scroll, text.scroll])
-            body.orientation = .vertical
-            body.alignment = .leading
-            body.spacing = 8
-            body.frame = NSRect(
-                origin: .zero,
-                size: NSSize(width: configuration.size.width, height: configuration.size.height + reference.height + 8))
-            NSLayoutConstraint.activate([
-                help.scroll.heightAnchor.constraint(equalToConstant: reference.height),
-                text.scroll.heightAnchor.constraint(equalToConstant: configuration.size.height),
-                help.scroll.widthAnchor.constraint(equalTo: body.widthAnchor),
-                text.scroll.widthAnchor.constraint(equalTo: body.widthAnchor)
-            ])
-            alert.accessoryView = body
-        } else {
-            alert.accessoryView = text.scroll
+            form.add(help.scroll)
+            help.scroll.heightAnchor.constraint(equalToConstant: reference.height).isActive = true
         }
-        alert.window.initialFirstResponder = text.editor
-        while let action = alert.choice(actions), action != .cancel {
+        form.add(text.scroll)
+        text.scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 150).isActive = true
+        func perform(_ action: Action) {
             do {
                 switch action {
-                case .cancel: return
+                case .cancel: form.close()
                 case .importFile:
-                    guard let url = panels.importURL() else { continue }
+                    guard let url = panels.importURL() else { return }
                     let imported = try Library.decode(read(url))
                     text.editor.string = String(decoding: try imported.encoded(), as: UTF8.self)
-                    alert.clearValidation()
+                    form.clearValidation()
                 case .exportFile:
                     let proposed = try Library.decode(Data(text.editor.string.utf8))
                     let data = try proposed.encoded()
-                    guard let url = panels.exportURL(configuration.exportName) else { continue }
+                    guard let url = panels.exportURL(configuration.exportName) else { return }
                     try data.write(to: url, options: .atomic)
-                    alert.clearValidation()
+                    form.clearValidation()
                 case .extra:
-                    guard let extraAction else { continue }
+                    guard let extraAction else { return }
                     let proposed = try extraAction(Library.decode(Data(text.editor.string.utf8)))
                     text.editor.string = String(decoding: try proposed.encoded(), as: UTF8.self)
-                    alert.clearValidation()
+                    form.clearValidation()
                 case .save:
+                    guard form.commitEditing() else { return }
                     let proposed = try Library.decode(Data(text.editor.string.utf8))
+                    if let current { try SavedConfiguration.requireUnchanged(try current(), since: baseline) }
                     try save(proposed)
-                    return
+                    form.close()
                 }
-            } catch {
-                // Preserve real NSError recovery when one exists, while ordinary validation
-                // stays beside the draft instead of opening a nested error-management loop.
-                let native = error as NSError
-                if native.recoveryAttempter != nil || native.localizedRecoveryOptions != nil
-                    || native.localizedRecoverySuggestion != nil
-                {
-                    TTAlert.present(error)
-                } else {
-                    alert.showValidation(error, field: text.editor)
-                }
-            }
+            } catch { form.showValidation(error, field: text.editor) }
         }
+        form.button(configuration.saveTitle, identifier: configuration.identifier + ".save") { perform(.save) }
+            .keyEquivalent = "\r"
+        form.button("Cancel", identifier: configuration.identifier + ".cancel", cancel: true) { perform(.cancel) }
+        form.button("Import…", identifier: configuration.identifier + ".import") { perform(.importFile) }
+        form.button("Export…", identifier: configuration.identifier + ".export") { perform(.exportFile) }
+        if let title = configuration.extraTitle, let identifier = configuration.extraIdentifier, extraAction != nil {
+            form.button(title, identifier: identifier) { perform(.extra) }
+        }
+        form.window.initialFirstResponder = text.editor
+        form.show(parent: parent)
+        return form
     }
 
     static func makeTextView(size: NSSize) -> (scroll: NSScrollView, editor: NSTextView) {

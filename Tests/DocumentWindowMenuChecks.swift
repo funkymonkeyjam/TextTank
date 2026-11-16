@@ -52,6 +52,117 @@ extension DocumentChecks {
             }
         }
 
+        section("DG-R1 Settings leaves the document usable", #line) {
+            let settings = SettingsController(url: root.appendingPathComponent("modeless-settings-red.json"))
+            let (document, documentController, documentWindow) = try tab("settings-document-stays-usable")
+            defer { document.close() }
+            var returned = false, observedModeless = false, inspected = false, usable = false
+            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+                MainActor.assumeIsolated {
+                    guard
+                        let window = NSApp.windows.first(where: {
+                            $0.isVisible && ($0.title == "Settings" || $0.title == "Editor Settings")
+                        }), let content = window.contentView
+                    else { return }
+                    observedModeless = returned && NSApp.modalWindow == nil
+                    usable =
+                        documentWindow.canBecomeKey
+                        && documentController.validateMenuItem(
+                            item(#selector(EditorWindowController.perform(_:)), "upper"))
+                    inspected = true
+                    DesignSettingsChecks.checkNativeButtons(window)
+                    descendants(content).compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(
+                        nil)
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            RunLoop.main.add(timer, forMode: .modalPanel)
+            settings.showSettings(nil)
+            returned = true
+            _ = spinUntil("Settings presentation is inspected") { inspected }
+            timer.invalidate()
+            check(observedModeless, "DG-R1 opening Settings returns without entering an application modal loop")
+            check(usable, "DG-R1 the document stays key-capable and its commands validate while Settings is open")
+        }
+
+        section("DG Settings keyboard, restoration and minimum layout", #line) {
+            try DesignSettingsChecks.settingsFrameChecks(root: root)
+        }
+
+        section("DG Settings refuses an intervening controller save", #line) {
+            let settings = SettingsController(url: root.appendingPathComponent("modeless-settings-stale.json"))
+            try settings.save(EditorSettings())
+            settings.showSettings(nil)
+            let window = try requireValue(FormPanel.frontWindow, "fixture: Settings modeless window")
+            let views = descendants(try requireValue(window.contentView, "fixture: Settings content"))
+            let field = try requireValue(
+                views.compactMap { $0 as? NSTextField }.first { $0.isEditable }, "fixture: tab width")
+            window.makeFirstResponder(nil)
+            field.stringValue = "7"
+            var intervening = settings.value
+            intervening.wrap = true
+            try settings.save(intervening)
+            let bytes = try Data(contentsOf: settings.url)
+            views.compactMap { $0 as? NSButton }.first { $0.title == "Save" }?.performClick(nil)
+            check(
+                window.isVisible && field.stringValue == "7" && field.window != nil,
+                "DG stale Settings keeps the pending native fields open")
+            let after = try Data(contentsOf: settings.url)
+            check(
+                settings.value.wrap && settings.value.tabWidth == 4 && after == bytes,
+                "DG stale Settings never overwrites an intervening real controller save")
+            check(
+                views.compactMap { $0 as? NSTextField }.contains {
+                    $0.stringValue.contains("changed while this window was open")
+                },
+                "DG stale Settings explains the conflict beside the retained fields")
+            views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
+        }
+
+        section("DG Go to Line owns its captured document lifetime", #line) {
+            let (document, controller, _) = try tab("goto-owner-close")
+            document.editor.text = "one\ntwo"
+            document.editor.setSavePoint()
+            controller.goToLine(nil)
+            let form = try requireValue(FormPanel.visible.last, "fixture: owned Go to Line form")
+            let caret = document.editor.selectionCaret
+            document.close()
+            check(!form.window.isVisible, "DG closing the captured document closes its Go to Line form")
+            check(
+                document.editor.selectionCaret == caret,
+                "DG closing a Go to Line target never navigates a retired editor")
+        }
+
+        section("DG explicit filtered choice activation", #line) { try DesignSettingsChecks.choicePanelChecks() }
+        section("DG Open Documents Cancel never switches documents", #line) {
+            let (first, _, firstWindow) = try tab("docs-cancel-first")
+            let (second, _, secondWindow) = try tab("docs-cancel-second")
+            firstWindow.makeKeyAndOrderFront(nil)
+            let shown = (firstWindow.isVisible, secondWindow.isVisible)
+            sessionDelegate.showDocumentTabs(nil)
+            let form = try requireValue(FormPanel.visible.last, "fixture: actual Open Documents panel")
+            let filter = try DesignSettingsChecks.field("TextTank.OpenDocuments.filter", form.window)
+            filter.selectText(nil)
+            DesignSettingsChecks.type("docs-cancel-second", in: form.window)
+            try DesignSettingsChecks.button("TextTank.OpenDocuments.cancel", form.window).performClick(nil)
+            check(
+                firstWindow.isVisible == shown.0 && secondWindow.isVisible == shown.1,
+                "DG filtering and cancelling Open Documents never switches the captured tab")
+            sessionDelegate.showDocumentTabs(nil)
+            let switching = try requireValue(FormPanel.visible.last, "fixture: reopened Open Documents panel")
+            let secondFilter = try DesignSettingsChecks.field("TextTank.OpenDocuments.filter", switching.window)
+            secondFilter.selectText(nil)
+            DesignSettingsChecks.type("docs-cancel-second", in: switching.window)
+            try DesignSettingsChecks.button("TextTank.OpenDocuments.choose", switching.window).performClick(nil)
+            check(
+                secondWindow.isVisible && !firstWindow.isVisible,
+                "DG explicit Switch opens the filtered document by its live identity")
+            first.close()
+            second.close()
+        }
+
+        section("DG native managers and lifetimes", #line) { try DesignSettingsChecks.managerChecks() }
+
         section("standard customizable toolbar", #line) { try ToolbarChecks.run(composition: sessionDelegate) }
 
         // F294
@@ -236,12 +347,13 @@ extension DocumentChecks {
             let giveUp = Date().addingTimeInterval(10)
             let answer = Timer(timeInterval: 0.05, repeats: true) { _ in
                 MainActor.assumeIsolated {
-                    guard !answered, let modal = NSApp.modalWindow, let content = modal.contentView else { return }
+                    guard !answered, let modal = presentedFormWindow, let content = modal.contentView else { return }
                     let views = descendants(content)
                     if let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
                         let go = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Go" })
                     {
                         answered = true
+                        modal.makeFirstResponder(nil)
                         field.stringValue = "2"
                         go.performClick(nil)
                     } else if Date() > giveUp {
@@ -251,6 +363,7 @@ extension DocumentChecks {
             }
             RunLoop.main.add(answer, forMode: .modalPanel)
             controller.goToLine(nil)
+            waitForModelessForms()
             answer.invalidate()
             check(
                 answered && document.editor.statusInfo["line"]?.intValue == 2
@@ -369,7 +482,7 @@ extension DocumentChecks {
             let deadline = Date().addingTimeInterval(10)
             let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                 MainActor.assumeIsolated {
-                    guard let content = NSApp.modalWindow?.contentView else { return }
+                    guard let content = presentedFormWindow?.contentView else { return }
                     if Date() > deadline {
                         NSApp.abortModal()
                         return
@@ -399,6 +512,7 @@ extension DocumentChecks {
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             dialog.showSettings(nil)
+            waitForModelessForms()
             timer.invalidate()
             check(
                 observed && readable && current,
@@ -437,7 +551,7 @@ extension DocumentChecks {
             let deadline = Date().addingTimeInterval(10)
             let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                 MainActor.assumeIsolated {
-                    guard let content = NSApp.modalWindow?.contentView else { return }
+                    guard let content = presentedFormWindow?.contentView else { return }
                     if Date() > deadline {
                         NSApp.abortModal()
                         return
@@ -483,6 +597,7 @@ extension DocumentChecks {
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             settings.showSettings(nil)
+            waitForModelessForms()
             timer.invalidate()
             check(
                 acted && kept && cleared && defaultRestored,
@@ -575,21 +690,22 @@ extension DocumentChecks {
             let original = settings.value
             var aborted = false
             let abort = Timer(timeInterval: 0.02, repeats: true) { _ in
-                guard NSApp.modalWindow != nil else { return }
+                guard let window = presentedFormWindow else { return }
                 aborted = true
-                NSApp.abortModal()
+                window.performClose(nil)
             }
             RunLoop.main.add(abort, forMode: .modalPanel)
             settings.showSettings(nil)
+            waitForModelessForms()
             abort.invalidate()
             check(
                 aborted && settings.value == original && !FileManager.default.fileExists(atPath: settings.url.path),
-                "F16 aborting Settings never saves defaults or creates its file")
+                "F16 closing modeless Settings never saves defaults or creates its file")
             var stage = 0, keptDraft = false
             let deadline = Date().addingTimeInterval(10)
             let retry = Timer(timeInterval: 0.02, repeats: true) { _ in
                 MainActor.assumeIsolated {
-                    guard let content = NSApp.modalWindow?.contentView else { return }
+                    guard let content = presentedFormWindow?.contentView else { return }
                     let views = descendants(content)
                     if Date() > deadline {
                         NSApp.abortModal()
@@ -620,6 +736,7 @@ extension DocumentChecks {
             }
             RunLoop.main.add(retry, forMode: .modalPanel)
             settings.showSettings(nil)
+            waitForModelessForms()
             retry.invalidate()
             check(stage == 2 && keptDraft, "F214 Settings preserves invalid input and identifies its tab-width field")
             check(

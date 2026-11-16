@@ -558,38 +558,54 @@ import AppKit
     /// Opens Manage Commands… from its menu item and calls `step` each time a modal window is up,
     /// with a count of the calls so far, until the dialogs are gone. False if it had to be aborted.
     @MainActor static func manage(
-        _ controller: RunController, title: String = "Manage Commands…", _ step: @escaping (Int, [NSView]) -> Void
+        _ controller: RunController, title: String = "Manage Commands…", commit: Bool = true,
+        _ step: @escaping (Int, [NSView]) -> Void
     ) throws -> Bool {
         let item = try requireValue(
             controller.makeMenu().items.first { $0.title == title }, "the requested Run configuration item")
+        let configure = title == "Configure Command…"
+        let route = ManagerChildRoute(
+            managerID: "run.manager", openerID: configure ? "run.manager.add" : "run.manager.advanced",
+            childID: configure ? "run.command" : "run.json", commit: commit)
         let deadline = Date().addingTimeInterval(8)
-        var calls = 0, aborted = false
+        var calls = 0, aborted = false, finished = false
         let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
-            guard let content = NSApp.modalWindow?.contentView else { return }
-            if Date() > deadline {
-                aborted = true
-                NSApp.abortModal()
-                return
+            MainActor.assumeIsolated {
+                guard let window = presentedFormWindow, let content = window.contentView else { return }
+                if Date() > deadline {
+                    aborted = true
+                    window.performClose(nil)
+                    return
+                }
+                let views = descendants(content)
+                if !finished {
+                    finished = route.step(window, views: views) {
+                        step(calls, views)
+                        calls += 1
+                    }
+                }
             }
-            step(calls, descendants(content))
-            calls += 1
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         defer { timer.invalidate() }
         NSApp.sendAction(try requireValue(item.action, "its action"), to: item.target, from: item)
-        return !aborted
+        waitForModelessForms(timeout: 8)
+        return finished && !aborted
     }
     @MainActor static func configureRetryChecks(_ controller: RunController) throws {
         var stage = 0, kept = false
         let completed = try manage(controller, title: "Configure Command…") { _, views in
             let fields = views.compactMap { $0 as? NSTextField }.filter { $0.isEditable }
             guard fields.count >= 3,
-                let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save Command" })
+                let save = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "run.command.save"
+                })
             else {
                 views.compactMap { $0 as? NSButton }.first { $0.title == "OK" }?.performClick(nil)
                 return
             }
             if stage == 0 {
+                fields[0].window?.makeFirstResponder(nil)
                 fields[0].stringValue = "Fixture retained Run draft"
                 fields[2].stringValue = "[ invalid JSON"
                 stage = 1
@@ -597,6 +613,7 @@ import AppKit
             } else if stage == 1 {
                 kept =
                     fields[0].stringValue == "Fixture retained Run draft" && fields[2].stringValue == "[ invalid JSON"
+                fields[2].window?.makeFirstResponder(nil)
                 fields[2].stringValue = "[]"
                 stage = 2
                 save.performClick(nil)
@@ -615,14 +632,15 @@ import AppKit
                 let fields = views.compactMap { $0 as? NSTextField }.filter { $0.isEditable }
                 let buttons = views.compactMap { $0 as? NSButton }
                 guard fields.count >= 3,
-                    let save = buttons.first(where: { $0.title == "Save Command" }),
-                    let shell = buttons.first(where: { $0.title.hasPrefix("Intentional shell mode") }),
-                    let ext = buttons.first(where: { $0.title.hasPrefix("Version 1 text extension") })
+                    let save = buttons.first(where: { $0.identifier?.rawValue == "run.command.save" }),
+                    let shell = buttons.first(where: { $0.identifier?.rawValue == "run.command.shell" }),
+                    let ext = buttons.first(where: { $0.identifier?.rawValue == "run.command.extension" })
                 else {
                     buttons.first { $0.title == "OK" }?.performClick(nil)
                     return
                 }
                 if fieldStage == 0 {
+                    fields[0].window?.makeFirstResponder(nil)
                     fields[0].stringValue = invalidKind == "name" ? "" : expectedName
                     fields[1].stringValue = invalidKind == "executable" ? "relative" : "/usr/bin/printf"
                     fields[2].stringValue = "[]"
@@ -635,12 +653,13 @@ import AppKit
                 } else if fieldStage == 1 {
                     let invalidControl: NSView =
                         invalidKind == "name" ? fields[0] : invalidKind == "executable" ? fields[1] : ext
-                    let firstResponder = NSApp.modalWindow?.firstResponder
+                    let firstResponder = presentedFormWindow?.firstResponder
                     let focusedField = (firstResponder as? NSTextView)?.delegate as AnyObject?
                     focusedCorrectly =
                         (firstResponder === invalidControl || focusedField === invalidControl)
                         && invalidControl.accessibilityHelp()?.isEmpty == false
                     retainedName = fields[0].stringValue == (invalidKind == "name" ? "" : expectedName)
+                    fields[0].window?.makeFirstResponder(nil)
                     fields[0].stringValue = expectedName
                     fields[1].stringValue = "/usr/bin/printf"
                     shell.state = .off
@@ -671,7 +690,7 @@ import AppKit
         let both = try Data(contentsOf: controller.storage)
         let onlySample = String(decoding: try JSONEncoder().encode([sample]), as: UTF8.self)
         var opened = "", labelled = false
-        let cancelled = try manage(controller) { _, views in
+        let cancelled = try manage(controller, commit: false) { _, views in
             guard let text = editor(views) else { return }
             opened = text.string
             labelled = text.accessibilityLabel() == "Saved Run commands as JSON" && text.isEditable
@@ -683,11 +702,11 @@ import AppKit
             "F137 Manage Commands… opens on the saved commands in a labelled editor")
         check(try Data(contentsOf: controller.storage) == both, "F137 Cancel in Manage Commands saves nothing")
         var keptAfterError = false
-        let refused = try manage(controller) { call, views in
+        let refused = try manage(controller, commit: false) { call, views in
             if let text = editor(views) {
                 if call == 0 {
                     text.string = "[ not a library"
-                    press("Save", views)
+                    press("Use Changes", views)
                 } else {
                     keptAfterError = text.string == "[ not a library"
                     press("Cancel", views)
@@ -702,7 +721,7 @@ import AppKit
         let saved = try manage(controller) { _, views in
             guard let text = editor(views) else { return }
             text.string = onlySample
-            press("Save", views)
+            press("Use Changes", views)
         }
         check(saved && ids() == [sample.id.uuidString], "F137 Save in Manage Commands deletes the removed command")
         try controller.persist([sample])

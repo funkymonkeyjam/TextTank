@@ -10,6 +10,6 @@ suite_build "folder-search-checks" swiftc Sources/Documents/Strings.swift Source
 suite_run folder-search-checks harness/logs/folder-search-checks.log build/tests/folder-search-checks
 suite_build "folder-search-controller-checks" build_bridge_object
 suite_build "folder-search-controller-checks" build_search_object
-suite_build "folder-search-controller-checks" swiftc -swift-version 5 -D TESTING "${SWIFT_BASE[@]}" -import-objc-header Sources/EditorBridge/TTEditor.h -F "$VENDOR_BUILD" -framework Scintilla Sources/UI/*.swift -framework Cocoa -framework EventKit -lc++ -Xlinker -rpath -Xlinker "$VENDOR_BUILD" "${APP_SOURCES[@]}" "$SUITE_SUPPORT" Tests/FolderSearchControllerChecks.swift "$BRIDGE_OBJECT" "$SEARCH_OBJECT" "$USER_LEXER_OBJECT" "$LEXILLA_LIBRARY" -o build/tests/folder-search-controller-checks
+suite_build "folder-search-controller-checks" swiftc -swift-version 5 -D TESTING "${SWIFT_BASE[@]}" -import-objc-header Sources/EditorBridge/TTEditor.h -F "$VENDOR_BUILD" -framework Scintilla Sources/UI/*.swift -framework Cocoa -framework EventKit -lc++ -Xlinker -rpath -Xlinker "$VENDOR_BUILD" "${APP_SOURCES[@]}" "$SUITE_SUPPORT" Tests/Support/ModelessForms.swift Tests/FolderSearchControllerChecks.swift "$BRIDGE_OBJECT" "$SEARCH_OBJECT" "$USER_LEXER_OBJECT" "$LEXILLA_LIBRARY" -o build/tests/folder-search-controller-checks
 suite_run folder-search-controller-checks harness/logs/folder-search-controller-checks.log build/tests/folder-search-controller-checks
 suite_finish

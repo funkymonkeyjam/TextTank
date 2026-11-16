@@ -29,7 +29,7 @@ Editor Settings keeps version 1 and `shortcuts: [String: String]`. Missing requi
 
 The historical pre-menu reserved fallback remains available. Effective protection additionally includes Command-E/window cycling and fixed Command/Command-Shift keys from the built menu, preserving modifier distinctions; Command-Option keys do not reserve unrelated Command keys. Startup reconciles again after menus exist, so a new fixed menu key does not discard unrelated editor settings. This deliberately changes shortcut-only load rejection, while save validation remains strict. Clearing a custom binding removes its override; clearing Duplicate Line restores Command-D. Empty strings are never a new stored unbinding vocabulary, and visiting/saving the default does not add a redundant override. The Settings working copy commits each row before popup changes, preserving earlier edits and invalid drafts. Shared shortcut validation also returns the stable offending command identity while strict saves retain their existing error cases. A rejected earlier row is selected again, its exact draft is shown and marked/focused, and every other row remains in the working copy. Conflicts with implicit defaults identify an editable conflicting override. All drafts are validated before recovery can move saved data aside.
 
-DS-27 remains an explicit limitation: the catalog supplies action names, but Undo/Redo still have generic native labels. Scintilla's undo metadata describes primitive edits/coalescing and exposes container tokens, not command captions; native responder Undo/Redo bypass the app dispatcher. No parallel history, container-token changes or `NSUndoManager` were added to guess captions. Precise labels need a separately validated provenance/lifecycle design that preserves Scintilla's authoritative grouped history, clones, coalescing and history branches. Settings remains the existing modal form until the scheduled Settings design unit; this change adds no management screen or modal call.
+DS-27 remains an explicit limitation: the catalog supplies action names, but Undo/Redo still have generic native labels. Scintilla's undo metadata describes primitive edits/coalescing and exposes container tokens, not command captions; native responder Undo/Redo bypass the app dispatcher. No parallel history, container-token changes or `NSUndoManager` were added to guess captions. Precise labels need a separately validated provenance/lifecycle design that preserves Scintilla's authoritative grouped history, clones, coalescing and history branches. Settings now uses the modeless form described below; the Undo/Redo limitation is unchanged.
 
 ## Standard document toolbar
 
@@ -89,16 +89,41 @@ The user's `LanguageProfiles.json` is the one store that is not a whole value: i
 
 ## Library codecs and advanced JSON editing
 
+Settings uses an owned, resizable `FormPanel`, opened by Command-comma and titled
+“Settings”. Save explicitly applies its working copy; Cancel, Escape and Close abandon
+pending changes. Reset Defaults remains a destructive, explicitly confirmed action.
+Frames use the existing `WindowFrames` policy, including isolated test defaults.
+
+Automation, Macro and Run managers use `LibraryManager` with native tables, inline
+rename, Add, Duplicate and confirmed Delete. Automation Favorite shows its pending
+checked state. Automation settings and Rules open as owned sheets; the Rules editor and its
+rule configuration use completion callbacks, without application-modal manager loops.
+Children use “Use Changes” to update the manager's working copy. Only the outer
+Save persists it. New macros contain a validated nonempty Insert Text action.
+Management never starts a macro, process, automation or external export. Busy state
+follows actual execution or recording, not the lifetime of an open manager.
+
 The advanced Automation, Macro and Language JSON editors share `JSONLibraryEditor`
-in `Sources/UI/`. Its text, import, export and optional example actions operate on
-an unsaved value. Only explicit Save invokes the controller's guarded persistence
-closure. Language still writes overrides and then reapplies profiles; Automation
-still checks menu shortcut collisions. Cancelled file choices and invalid input
-leave the current text and stored library intact. Ordinary validation remains
-inline with the draft; errors carrying native recovery metadata retain the native
-error presenter. These are the existing advanced forms, still app-modal pending
-the separately scheduled Settings/manager presentation redesign, not new manager
-screens or a claim of modeless editing.
+in `Sources/UI/`. Import, export and examples retain their common codec, capacity,
+recovery and file policies. Language uses an owned modeless editor and still writes
+overrides before reapplying profiles. Automation and Macro use advanced sheets over
+the manager's working copy. Run retains its existing JSON array format in an advanced
+sheet. Invalid values stay beside the marked field with exact pending text retained;
+errors carrying native recovery metadata retain native error presentation.
+
+Before recovery can move data aside or a Save can persist it, the controller checks
+a captured stable encoded-byte baseline against its current saved model. Intervening
+controller writes, including recording completion and canonically equivalent NFC/NFD
+text changes, keep the pending form open with an explanation. The recording-name
+form checks both the saved library and the last completed recording. This is an
+in-process stale-working-copy guard, not universal compare-and-swap protection
+against late writes by another process.
+
+Run Automation and Open Documents use `ChoicePanel` with live filtering and stable
+identities independent of displayed names. Typing, focus changes and Cancel never
+invoke an action. Return, table activation or the explicit action button chooses
+exactly once. Go to Line is an owned modeless panel; closing its captured document
+closes the panel, and a changed or retired target cannot navigate a stale editor.
 
 `VersionedLibrary` in `Sources/Documents/` shares their Foundation-only codec with
 `AutomationRuleSet`. Each model retains its required version, optional minimum-reader

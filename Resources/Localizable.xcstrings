@@ -1536,6 +1536,17 @@
           }
         }
       }
+    },
+    "form.action.scope": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ in %@"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

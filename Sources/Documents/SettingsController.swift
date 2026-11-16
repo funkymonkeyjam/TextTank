@@ -102,11 +102,23 @@ final class SettingsController: NSObject {
         if let menu { walk(menu) }
         return keys
     }
+    private var settingsForm: FormPanel?
     @objc func showSettings(_ sender: Any?) {
-        let alert = TTAlert()
-        alert.messageText = "Editor Settings"
-        alert.informativeText =
-            "Applies to new views, and to open views that still use the previous defaults. Indentation or wrapping you chose for one document in the status bar is kept. Shortcut keys use Command; uppercase adds Shift."
+        if let settingsForm {
+            settingsForm.window.makeKeyAndOrderFront(nil)
+            return
+        }
+        let baseline: Data
+        do { baseline = try SavedConfiguration.bytes(value) } catch {
+            TTAlert.present(error)
+            return
+        }
+        let form = FormPanel(title: "Settings", identifier: "TextTank.Settings", size: NSSize(width: 600, height: 560))
+        settingsForm = form
+        form.onClose = { [weak self] in self?.settingsForm = nil }
+        form.note(
+            "Changes apply when you save. Indentation and wrapping chosen for an individual document are kept. Shortcut keys use Command; uppercase adds Shift."
+        )
         let width = NSTextField(string: String(value.tabWidth))
         NumericInput.configure(width)
         let tabs = NSButton(checkboxWithTitle: "Indent with tabs", target: nil, action: nil)
@@ -123,6 +135,7 @@ final class SettingsController: NSObject {
             title: "Clear Custom Shortcut", target: shortcuts,
             action: #selector(SettingsShortcutEditor.clearShortcut(_:)))
         clear.setAccessibilityLabel("Clear the selected command's custom shortcut")
+        clear.cell?.setAccessibilityLabel("Clear the selected command's custom shortcut")
         clear.identifier = NSUserInterfaceItemIdentifier("settings.shortcut.clear")
         width.setAccessibilityLabel("Tab width")
         tabs.setAccessibilityLabel("Indent with tabs")
@@ -153,17 +166,12 @@ final class SettingsController: NSObject {
             scroll.heightAnchor.constraint(equalToConstant: 96).isActive = true
             stack.frame.size.height += 104
         }
-        alert.accessoryView = stack
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel", role: .cancel)
-        // The ellipsis says a confirmation follows (DS-22); the confirmation holds the destructive button.
-        alert.addButton(withTitle: "Reset Defaults…")
-        while true {
-            let result = alert.runModal()
-            guard result == .alertFirstButtonReturn || result == .alertThirdButtonReturn else { return }
+        form.add(stack)
+        func submit(reset: Bool) {
+            guard form.commitEditing() else { return }
             do {
                 var updated = shortcuts.settings()
-                if result == .alertThirdButtonReturn {
+                if reset {
                     let confirm = TTAlert()
                     confirm.messageText = "Reset all editor settings to their defaults?"
                     confirm.informativeText =
@@ -173,28 +181,27 @@ final class SettingsController: NSObject {
                     guard confirm.runModal() == .alertSecondButtonReturn else { return }
                     updated = EditorSettings()
                 } else {
-                    guard let tabWidth = NumericInput.integer(width),
-                        (1...32).contains(tabWidth)
-                    else { throw SettingsError.tabWidth }
+                    guard let tabWidth = NumericInput.integer(width), (1...32).contains(tabWidth) else {
+                        throw SettingsError.tabWidth
+                    }
                     updated.tabWidth = tabWidth
                     updated.useTabs = tabs.state == .on
                     updated.wrap = wrap.state == .on
                     updated.appearance = ControlPresentation.selectedID(appearance) ?? "system"
                 }
-                // Validate every retained draft before any modal recovery can move saved data aside.
                 try updated.validate(reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
-                let replacing = false
+                try SavedConfiguration.requireUnchanged(value, since: baseline)
                 if loadError != nil {
-                    // Save and Reset Defaults both arrive here; neither may silently replace the unread file.
                     guard try StoreRecovery.ensureWritable(loadState, allowSymbolicLink: false) else { return }
                 }
-                if let backup = try save(updated, replacingUnreadable: replacing) {
+                try SavedConfiguration.requireUnchanged(value, since: baseline)
+                if let backup = try save(updated) {
                     let message =
                         "Settings replaced. The previous settings file was kept as “\(backup.lastPathComponent)”."
                     onStatus(message)
                     Announce.say(message)
                 }
-                return
+                form.close()
             } catch {
                 let field: NSView?
                 var presentedError = error
@@ -212,8 +219,13 @@ final class SettingsController: NSObject {
                 case SettingsError.tabWidth: field = width
                 default: field = nil
                 }
-                alert.showValidation(presentedError, field: field)
+                form.showValidation(presentedError, field: field)
             }
         }
+        form.button("Save", identifier: "settings.save") { submit(reset: false) }.keyEquivalent = "\r"
+        form.button("Cancel", identifier: "settings.cancel", cancel: true) { form.close() }
+        form.button("Reset Defaults…", identifier: "settings.reset") { submit(reset: true) }
+        form.window.initialFirstResponder = width
+        form.show()
     }
 }

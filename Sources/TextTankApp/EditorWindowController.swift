@@ -551,33 +551,42 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         refreshStatusDetails()
     }
     /// Search > Go to Line… and the position field of the status bar.
+    private var linePanel: FormPanel?
     @objc func goToLine(_ sender: Any?) {
-        let editor = activeEditor
-        let alert = TTAlert()
-        alert.messageText = "Go to Line"
-        let input = NSTextField(string: String(editor.statusInfo["line"]?.intValue ?? 1))
-        input.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
-        input.identifier = NSUserInterfaceItemIdentifier("goToLine.line")
-        input.setAccessibilityLabel("Line number")
-        NumericInput.configure(input)
-        alert.accessoryView = input
-        alert.addButton(withTitle: "Go")
-        alert.addButton(withTitle: "Cancel", role: .cancel)
-        alert.window.initialFirstResponder = input
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        // The engine's own line model decides which lines exist; a folded target is revealed.
-        guard editor.window != nil else { return }
-        guard let line = NumericInput.integer(input, signed: true),
-            Self.goToLine(line, in: editor, macros: EditorServices.current?.macros)
-        else {
-            TTAlert.explain(
-                NumericInput.integer(input, signed: true) == nil
-                    ? "Enter a whole line number" : "There is no line \(input.stringValue)",
-                detail: "Enter a line number from 1 to \(editor.statusInfo["lines"]?.intValue ?? 1).")
+        guard !statusClosed else { return }
+        if let linePanel {
+            linePanel.window.makeKeyAndOrderFront(nil)
             return
         }
-        window?.makeFirstResponder(editor)
-        refreshStatusDetails()
+        let editor = activeEditor
+        let revision = editor.revision
+        let macros = EditorServices.current?.macros
+        let form = FormPanel(
+            title: "Go to Line", identifier: "TextTank.GoToLine", size: NSSize(width: 480, height: 300))
+        linePanel = form
+        form.onClose = { [weak self] in self?.linePanel = nil }
+        let input = form.field(
+            "Line number", value: String(editor.statusInfo["line"]?.intValue ?? 1), identifier: "goToLine.line")
+        NumericInput.configure(input)
+        form.button("Go", identifier: "goToLine.go") { [weak self, weak editor] in
+            guard let self, form.commitEditing() else { return }
+            do {
+                guard !self.statusClosed, let editor, editor.window != nil, editor.revision == revision else {
+                    throw FormFailure.documentChanged
+                }
+                guard let line = NumericInput.integer(input, signed: true),
+                    Self.goToLine(line, in: editor, macros: macros)
+                else {
+                    throw GoToLineFailure(last: editor.statusInfo["lines"]?.intValue ?? 1)
+                }
+                form.close()
+                self.window?.makeFirstResponder(editor)
+                self.refreshStatusDetails()
+            } catch { form.showValidation(error, field: input) }
+        }.keyEquivalent = "\r"
+        form.button("Cancel", identifier: "goToLine.cancel", cancel: true) { form.close() }
+        form.window.initialFirstResponder = input
+        form.show()
     }
     /// Puts the caret at the start of a line, counted from 1, on the engine's own line model.
     /// False, with nothing changed, for a line the document does not have or a view that has
@@ -666,6 +675,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         saveToolbarArrangement()
     }
     func prepareForClose() {
+        linePanel?.close()
         saveToolbarArrangement()
         toolbarObservations.forEach { $0.invalidate() }
         toolbarObservations = []
@@ -1069,5 +1079,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         guard editor.convertLineEndings(mode) else {
             throw DocumentActionError.lineEndingsRejected
         }
+    }
+}
+
+private struct GoToLineFailure: LocalizedError {
+    let last: Int
+    var errorDescription: String? {
+        "Enter a whole line number from 1 to \(Strings.number(last)). The document has not been changed."
     }
 }

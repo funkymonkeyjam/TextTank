@@ -42,7 +42,7 @@ final class Audit24RecoverySpy: NSObject {
         var actionSent = false, fieldsEnabled = false, acted = false
         let deadline = Date().addingTimeInterval(5)
         let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
-            guard let modal = NSApp.modalWindow, let content = modal.contentView else { return }
+            guard let modal = presentedFormWindow, let content = modal.contentView else { return }
             if Date() > deadline {
                 NSApp.abortModal()
                 return
@@ -73,7 +73,7 @@ final class Audit24RecoverySpy: NSObject {
             save.performClick(nil)
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
-        let result = AutomationStepEditor.editStep(.init(kind: .removeBlankLines))
+        let result = capturedStep(.init(kind: .removeBlankLines), timeout: 5)
         timer.invalidate()
         return (actionSent, fieldsEnabled, result)
     }
@@ -82,59 +82,61 @@ final class Audit24RecoverySpy: NSObject {
         var nestedRule: (Bool, Bool, AutomationDefinition.Step?) = (false, false, nil)
         let deadline = Date().addingTimeInterval(8)
         let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
-            guard let modal = NSApp.modalWindow, let content = modal.contentView else { return }
-            let views = descendants(content), buttons = views.compactMap { $0 as? NSButton }
+            guard let window = presentedFormWindow, let content = window.contentView else { return }
+            let views = descendants(content)
             if Date() > deadline {
                 timedOut = true
-                NSApp.abortModal()
+                window.performClose(nil)
                 return
             }
-            if stage == 0, let create = buttons.first(where: { $0.identifier?.rawValue == "automation.create" }) {
+            switch stage {
+            case 0:
+                guard let create = button("automation.create", in: views) else { return }
                 stage = 1
                 create.performClick(nil)
-            } else if stage == 1,
-                let name = views.compactMap({ $0 as? NSTextField }).first(where: {
-                    $0.stringValue == "My Automation" && $0.isEditable
-                })
-            {
-                stage = 2
+            case 1:
+                guard let name = field("automation.settings.name", in: views),
+                    let use = button("automation.settings.save", in: views)
+                else { return }
                 name.selectText(nil)
-                typeKeys("Keyboard Recipe", in: modal)
-                modal.makeFirstResponder(nil)
+                typeKeys("Keyboard Recipe", in: window)
+                window.makeFirstResponder(nil)
                 nameAccepted = name.stringValue == "Keyboard Recipe" && name.isEditable
-                // A guarded management call must return without creating another modal.
-                // A nested watchdog closes a regression-created alert so the test never hangs.
-                var openedNested = false
-                let guardTimer = Timer(timeInterval: 0.1, repeats: false) { _ in
-                    if NSApp.modalWindow !== modal {
-                        openedNested = true
-                        NSApp.abortModal()
-                    }
-                }
-                RunLoop.main.add(guardTimer, forMode: .modalPanel)
+                let manager = FormPanel.visible.first { $0.window.identifier?.rawValue == "automation.manager" }
                 controller.manage()
-                guardTimer.invalidate()
-                reentryBlocked = !openedNested && NSApp.modalWindow === modal
-            } else if stage == 2, let cancel = buttons.first(where: { $0.title == "Cancel" }),
-                let sample = views.compactMap({ $0 as? NSTextView }).first(where: {
-                    $0.accessibilityLabel() == "Sample input"
-                })
-            {
+                reentryBlocked =
+                    FormPanel.visible.filter { $0.window.identifier?.rawValue == "automation.manager" }.count == 1
+                    && FormPanel.visible.first { $0.window.identifier?.rawValue == "automation.manager" } === manager
+                stage = 2
+                use.performClick(nil)
+            case 2:
+                guard let rules = button("automation.rules", in: views), rules.isEnabled else { return }
                 stage = 3
-                modal.makeFirstResponder(sample)
-                typeKeys("2 eggs", in: modal)
-                sampleAccepted = sample.string == "2 eggs" && modal.firstResponder === sample
+                rules.performClick(nil)
+            case 3:
+                guard let sample = textView("Sample input", in: views), let cancel = button("rules.cancel", in: views)
+                else { return }
+                window.makeFirstResponder(sample)
+                typeKeys("2 eggs", in: window)
+                sampleAccepted = sample.string == "2 eggs" && window.firstResponder === sample
                 nestedRule = ruleKeyboardCheck()
+                stage = 4
                 cancel.performClick(nil)
+            case 4:
+                guard let cancel = button("automation.manager.cancel", in: views) else { return }
+                stage = 5
+                cancel.performClick(nil)
+            default: break
             }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         controller.manage()
+        waitForModelessForms(timeout: 8)
         timer.invalidate()
-        check(!timedOut && stage == 3, "native Create Automation and Rules modal chain completed")
+        check(!timedOut && stage == 5, "native Create Automation and Rules modeless chain completed")
         check(nameAccepted, "Create Automation name accepts dispatched keyboard events")
         check(sampleAccepted, "Sample Input accepts dispatched keyboard events")
-        check(reentryBlocked, "management cannot open another dialog during Create Automation")
+        check(reentryBlocked, "management reentry keeps the same single owned manager")
         check(nestedRule.0, "nested rule popup dispatch reaches retained controller target")
         check(nestedRule.1, "changing rule kind enables find and replacement fields")
         check(
@@ -150,7 +152,7 @@ final class Audit24RecoverySpy: NSObject {
         var acted = false, timedOut = false
         let deadline = Date().addingTimeInterval(timeout)
         let timer = Timer(timeInterval: 0.005, repeats: true) { _ in
-            guard let modal = NSApp.modalWindow, let content = modal.contentView else { return }
+            guard let modal = presentedFormWindow, let content = modal.contentView else { return }
             if Date() > deadline {
                 timedOut = true
                 NSApp.abortModal()
@@ -160,8 +162,38 @@ final class Audit24RecoverySpy: NSObject {
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         defer { timer.invalidate() }
+        let priorForms = Set(FormPanel.visible.map(ObjectIdentifier.init))
         let value = try body()
+        waitForModelessForms(timeout: timeout, excluding: priorForms)
         return (value, acted, timedOut)
+    }
+    static func drivingAdvanced(
+        timeout: TimeInterval, controller: AutomationController, commit: Bool,
+        _ act: @escaping (NSWindow, [NSView]) -> Bool
+    ) -> (value: Void, acted: Bool, timedOut: Bool) {
+        let route = ManagerChildRoute(
+            managerID: "automation.manager", openerID: "automation.json", childID: "automation.json", commit: commit)
+        return drivingModal(
+            timeout: timeout,
+            { window, views in
+                route.step(window, views: views) { _ = act(window, views) }
+            }
+        ) { controller.manageAdvanced() }
+    }
+    static func capturedRules(_ original: AutomationDefinition, timeout: TimeInterval) -> AutomationDefinition? {
+        var result: AutomationDefinition?
+        let before = Set(FormPanel.visible.map(ObjectIdentifier.init))
+        AutomationStepEditor.present(original) { result = $0 }
+        waitForModelessForms(timeout: timeout, excluding: before)
+        return result
+    }
+    static func capturedStep(_ original: AutomationDefinition.Step, timeout: TimeInterval) -> AutomationDefinition.Step?
+    {
+        var result: AutomationDefinition.Step?
+        let before = Set(FormPanel.visible.map(ObjectIdentifier.init))
+        AutomationStepEditor.presentStep(original, parent: presentedFormWindow) { result = $0 }
+        waitForModelessForms(timeout: timeout, excluding: before)
+        return result
     }
     static func button(_ identifier: String, in views: [NSView]) -> NSButton? {
         views.compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == identifier }
@@ -207,19 +239,9 @@ final class Audit24RecoverySpy: NSObject {
                 remove.performClick(nil)
                 note()
                 // Add Rule opens the nested Configure Rule dialog; accept its default rule.
-                let nested = Timer(timeInterval: 0.1, repeats: false) { _ in
-                    guard let alert = NSApp.modalWindow?.contentView,
-                        let save = button("rule.save", in: descendants(alert))
-                    else {
-                        NSApp.abortModal()
-                        return
-                    }
-                    nestedSaved = true
-                    save.performClick(nil)
-                }
-                RunLoop.main.add(nested, forMode: .modalPanel)
-                add.performClick(nil)
-                nested.invalidate()
+                nestedSaved = nestedModal({ _, fields in
+                    button("rule.save", in: fields)?.performClick(nil)
+                }) { add.performClick(nil) }
                 note()
                 up.performClick(nil)
                 note()
@@ -236,7 +258,7 @@ final class Audit24RecoverySpy: NSObject {
                 use.performClick(nil)
                 return true
             }
-        ) { AutomationStepEditor.edit(definition) }
+        ) { capturedRules(definition, timeout: 10) }
         check(
             keyLoopClosed && keyLoopReaches,
             "the rule editor's Tab order starts at its first field, reaches its buttons and closes into a loop")
@@ -276,7 +298,7 @@ final class Audit24RecoverySpy: NSObject {
                 cancel.performClick(nil)
                 return true
             }
-        ) { AutomationStepEditor.edit(definition) }
+        ) { capturedRules(definition, timeout: 10) }
         check(
             cancelled.acted && !cancelled.timedOut && cancelled.value == nil,
             "Cancel after removing a rule returns no draft")
@@ -286,21 +308,24 @@ final class Audit24RecoverySpy: NSObject {
     /// running, so the nested modal needs a timer of its own. Returns whether `act` ran.
     @discardableResult
     static func nestedModal(_ act: @escaping (NSWindow, [NSView]) -> Void, _ trigger: () -> Void) -> Bool {
-        let outer = NSApp.modalWindow, deadline = Date().addingTimeInterval(8)
+        let outer = presentedFormWindow, deadline = Date().addingTimeInterval(8)
         var acted = false
         let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-            guard let modal = NSApp.modalWindow, modal !== outer, let content = modal.contentView else {
-                return
-            }
-            if acted || Date() > deadline {
-                if Date() > deadline { NSApp.abortModal() }
-                return
-            }
+            guard let nested = presentedFormWindow, nested !== outer, let content = nested.contentView else { return }
+            if acted || Date() > deadline { return }
             acted = true
-            act(modal, descendants(content))
+            act(nested, descendants(content))
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         trigger()
+        while let current = presentedFormWindow, current !== outer, Date() < deadline {
+            _ = RunLoop.main.run(mode: .modalPanel, before: Date().addingTimeInterval(0.01))
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        if let current = presentedFormWindow, current !== outer {
+            check(false, "the nested native editor closes through its controls")
+            current.performClose(nil)
+        }
         timer.invalidate()
         return acted
     }
@@ -341,13 +366,26 @@ final class Audit24RecoverySpy: NSObject {
             first.id = UUID()
             second.id = UUID()
             second.steps = [Step(kind: .trimWhitespace)]
-            let third = AutomationDefinition.remindersExample
-            let popup = AutomationController.workflowPopup(for: [first, second, third])
-            check(popup.numberOfItems == 3, "G375 Manage Automations lists both automations that share a name")
+            var third = AutomationDefinition.remindersExample
+            let initialBytes = try Data(contentsOf: path)
+            first.shortcut = nil
+            second.shortcut = nil
+            third.shortcut = nil
+            try controller.persistLibrary(AutomationLibrary(workflows: [first, second, third]))
+            controller.manage()
+            let managerWindow = try requireValue(FormPanel.frontWindow, "fixture: actual automation manager")
+            let table = try requireValue(
+                descendants(managerWindow.contentView!).compactMap { $0 as? NSTableView }.first,
+                "fixture: actual automation list")
+            check(table.numberOfRows == 3, "G375 Manage Automations lists both automations that share a name")
+            let identities = (0..<table.numberOfRows).compactMap {
+                table.view(atColumn: 0, row: $0, makeIfNecessary: true)?.identifier?.rawValue
+            }
             check(
-                popup.itemArray.map { $0.representedObject as? String }
-                    == [first.id.uuidString, second.id.uuidString, third.id.uuidString],
-                "G375 each Manage Automations item carries its own automation's identifier, in order")
+                identities == [first.id.uuidString, second.id.uuidString, third.id.uuidString],
+                "G375 each actual manager row carries its own automation identifier, in order")
+            button("automation.manager.cancel", in: descendants(managerWindow.contentView!))?.performClick(nil)
+            try controller.persistLibrary(AutomationLibrary.decode(initialBytes))
             let saved = [first, second, third].map { AutomationRuleSet(name: $0.name, steps: $0.steps) }
             let templates = AutomationTemplates.loadAll().sets
             try require(templates.count == 3, "fixture: the three bundled templates load")
@@ -402,7 +440,7 @@ final class Audit24RecoverySpy: NSObject {
                     cancel.performClick(nil)
                     return true
                 }
-            ) { AutomationStepEditor.editStep(Step(kind: .clearLinesEqualTo, find: "x")) }
+            ) { capturedStep(Step(kind: .clearLinesEqualTo, find: "x"), timeout: 8) }
             check(
                 configured.acted && !configured.timedOut && configured.value == nil,
                 "the Configure Rule dialog was driven and cancelled")
@@ -482,10 +520,11 @@ final class Audit24RecoverySpy: NSObject {
                         }
                         rowCountAfterAdd = table.numberOfRows
                         // The name is still blank: Use These Rules reports it and the builder stays.
-                        nestedModal({ _, nested in
-                            nameError = errorAlertText(in: nested)
-                            errorAlertButton(in: nested)?.performClick(nil)
-                        }) { use.performClick(nil) }
+                        use.performClick(nil)
+                        nameError = status.stringValue
+                        check(
+                            modal.isVisible && name.accessibilityHelp() == nameError,
+                            "DG invalid Rules name stays in the same builder and marks the name")
                         stage = 2
                     case 2:
                         name.selectText(nil)
@@ -496,7 +535,7 @@ final class Audit24RecoverySpy: NSObject {
                     }
                     return false
                 }
-            ) { AutomationStepEditor.edit(definition) }
+            ) { capturedRules(definition, timeout: 20) }
             check(
                 edited.acted && !edited.timedOut && stage == 2, "the rule builder was driven through to Use These Rules"
             )
@@ -554,52 +593,58 @@ final class Audit24RecoverySpy: NSObject {
             NSApp.mainMenu = menu
             var stage = 0, errorText = "", reopened = false, keptName = "", keptShortcut = "",
                 unchangedOnFailure = false
+            var settingsWindow: NSWindow?
             let managed = drivingModal(
                 timeout: 20,
                 { modal, views in
                     switch stage {
                     case 0:
-                        guard let edit = button("automation.edit", in: views) else { return false }
+                        guard let rules = button("automation.rules", in: views) else { return false }
                         stage = 1
-                        edit.performClick(nil)
-                    case 1:
-                        guard let rules = button("automation.settings.rules", in: views) else { return false }
-                        stage = 2
                         rules.performClick(nil)
-                    case 2:
+                    case 1:
                         guard let remove = button("rules.remove", in: views), let use = button("rules.use", in: views)
                         else { return false }
-                        stage = 3
+                        stage = 2
                         remove.performClick(nil)
                         use.performClick(nil)
+                    case 2:
+                        guard let edit = button("automation.edit", in: views), edit.isEnabled else { return false }
+                        stage = 3
+                        edit.performClick(nil)
                     case 3:
                         guard let save = button("automation.settings.save", in: views),
                             let name = field("automation.settings.name", in: views),
                             let shortcut = field("automation.settings.shortcut", in: views)
                         else { return false }
-                        stage = 4
+                        settingsWindow = modal
                         name.selectText(nil)
                         typeKeys("Renamed after rule edits", in: modal)
                         shortcut.selectText(nil)
                         typeKeys("j", in: modal)
+                        stage = 4
                         save.performClick(nil)
                     case 4:
-                        guard let ok = errorAlertButton(in: views) else { return false }
-                        stage = 5
-                        errorText = errorAlertText(in: views)
-                        ok.performClick(nil)
-                    case 5:
                         guard let save = button("automation.settings.save", in: views),
                             let name = field("automation.settings.name", in: views),
-                            let shortcut = field("automation.settings.shortcut", in: views)
+                            let shortcut = field("automation.settings.shortcut", in: views),
+                            shortcut.accessibilityHelp() != nil
                         else { return false }
-                        stage = 6
-                        reopened = shows("Edit Automation", in: views)
+                        errorText = shortcut.accessibilityHelp() ?? ""
+                        reopened =
+                            modal === settingsWindow && modal.title == "Edit Automation" && NSApp.modalWindow == nil
                         keptName = name.stringValue
                         keptShortcut = shortcut.stringValue
                         unchangedOnFailure = (try? Data(contentsOf: path)) == seeded
                         modal.makeFirstResponder(nil)
                         shortcut.stringValue = ""
+                        stage = 5
+                        save.performClick(nil)
+                    case 5:
+                        guard let save = button("automation.manager.save", in: views), save.isEnabled else {
+                            return false
+                        }
+                        stage = 6
                         save.performClick(nil)
                         return true
                     default: break
@@ -613,7 +658,7 @@ final class Audit24RecoverySpy: NSObject {
             check(
                 errorText.contains("Command-Option-J is already assigned"),
                 "a shortcut taken by an application command is refused on Save")
-            check(reopened, "F203 after the error the Edit Automation dialog is open again")
+            check(reopened, "F203 after the error the same modeless Edit Automation form stays open")
             check(
                 keptName == "Renamed after rule edits" && keptShortcut == "j",
                 "F203 the typed name and shortcut are still in the fields")
@@ -648,38 +693,38 @@ final class Audit24RecoverySpy: NSObject {
                         stage = 1
                         create.performClick(nil)
                     case 1:
-                        guard let use = button("rules.use", in: views),
-                            let name = views.compactMap({ $0 as? NSTextField }).first(where: {
-                                $0.stringValue == "My Automation" && $0.isEditable
-                            })
-                        else { return false }
-                        stage = 2
-                        name.selectText(nil)
-                        typeKeys("Created through settings", in: modal)
-                        use.performClick(nil)
-                    case 2:
-                        guard let save = button("automation.settings.save", in: views),
+                        guard let use = button("automation.settings.save", in: views),
+                            let name = field("automation.settings.name", in: views),
                             let shortcut = field("automation.settings.shortcut", in: views)
                         else { return false }
-                        stage = 3
-                        settingsShown =
-                            shows("New Automation", in: views)
-                            && field("automation.settings.name", in: views)?.stringValue == "Created through settings"
-                        unsavedAtSettings = (try? Data(contentsOf: path)) == before
+                        name.selectText(nil)
+                        typeKeys("Created through settings", in: modal)
                         shortcut.selectText(nil)
                         typeKeys("q", in: modal)
+                        modal.makeFirstResponder(nil)
+                        settingsShown =
+                            modal.title == "New Automation" && name.stringValue == "Created through settings"
+                        unsavedAtSettings = (try? Data(contentsOf: path)) == before
+                        stage = 2
+                        use.performClick(nil)
+                    case 2:
+                        guard let save = button("automation.manager.save", in: views), save.isEnabled else {
+                            return false
+                        }
+                        stage = 3
                         save.performClick(nil)
                     case 3:
-                        // No rules: the first answer is Cancel, which returns to the settings.
                         guard button("automation.settings.saveEmpty", in: views) != nil,
                             let cancel = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
                         else { return false }
                         stage = 4
                         cancel.performClick(nil)
                     case 4:
-                        guard let save = button("automation.settings.save", in: views) else { return false }
-                        stage = 5
+                        guard let save = button("automation.manager.save", in: views), save.isEnabled else {
+                            return false
+                        }
                         unsavedAfterDeclining = (try? Data(contentsOf: path)) == before
+                        stage = 5
                         save.performClick(nil)
                     case 5:
                         guard let confirm = button("automation.settings.saveEmpty", in: views) else { return false }
@@ -694,15 +739,15 @@ final class Audit24RecoverySpy: NSObject {
             check(created.acted && !created.timedOut && stage == 6, "the Create Automation chain was driven to Save")
             check(
                 settingsShown,
-                "G384 Use These Rules in a new automation opens the settings dialog with the draft's name")
-            check(unsavedAtSettings, "G384 nothing is saved when the rule builder returns")
+                "G384 Add opens editable automation settings before any saved-library change")
+            check(unsavedAtSettings, "G384 using new settings changes only the manager working copy")
             check(unsavedAfterDeclining, "G384 declining to save an automation with no rules saves nothing")
             let after = try stored()
             check(
                 after.workflows.count == countBefore + 1 && after.workflows.last?.name == "Created through settings"
                     && after.workflows.last?.shortcut == "q" && after.workflows.last?.steps == []
                     && after.workflows.last?.input == .document && after.workflows.last?.output == .editor,
-                "G384 Save in the settings dialog stores the new automation with its chosen settings")
+                "G384 explicit manager Save stores the new automation with its chosen settings")
             let saved = try Data(contentsOf: path)
             stage = 0
             let abandoned = drivingModal(
@@ -714,11 +759,13 @@ final class Audit24RecoverySpy: NSObject {
                         stage = 1
                         create.performClick(nil)
                     case 1:
-                        guard let use = button("rules.use", in: views) else { return false }
-                        stage = 2
-                        use.performClick(nil)
-                    case 2:
                         guard let cancel = button("automation.settings.cancel", in: views) else { return false }
+                        stage = 2
+                        cancel.performClick(nil)
+                    case 2:
+                        guard let cancel = button("automation.manager.cancel", in: views), cancel.isEnabled else {
+                            return false
+                        }
                         stage = 3
                         cancel.performClick(nil)
                         return true
@@ -737,8 +784,8 @@ final class Audit24RecoverySpy: NSObject {
             let empty = try Data(contentsOf: path)
             var stage = 0, initialJSON = "", referenceText = "", helpShown = false
             var afterFirst: AutomationLibrary?, afterSecond: AutomationLibrary?
-            let advanced = drivingModal(
-                timeout: 20,
+            let advanced = drivingAdvanced(
+                timeout: 20, controller: controller, commit: false,
                 { _, views in
                     guard let json = textView("Automation library JSON", in: views),
                         let example = button("automation.json.example", in: views),
@@ -764,7 +811,7 @@ final class Audit24RecoverySpy: NSObject {
                     }
                     return false
                 }
-            ) { controller.manageAdvanced() }
+            )
             check(advanced.acted && !advanced.timedOut && stage == 3, "the Advanced JSON dialog was driven")
             check(
                 (try? AutomationLibrary.decode(Data(initialJSON.utf8)))?.workflows.isEmpty == true,
@@ -790,8 +837,8 @@ final class Audit24RecoverySpy: NSObject {
             var jsonStage = 0, nestedJSONError = false, retryKeptDraft = false
             var retryKeptStorage = false, inlineJSONError = false
             var jsonWindow: NSWindow?
-            let retryJSON = drivingModal(
-                timeout: 20,
+            let retryJSON = drivingAdvanced(
+                timeout: 20, controller: controller, commit: true,
                 { window, views in
                     if jsonStage == 1, window !== jsonWindow {
                         nestedJSONError = true
@@ -819,7 +866,7 @@ final class Audit24RecoverySpy: NSObject {
                     }
                     return false
                 }
-            ) { controller.manageAdvanced() }
+            )
             check(
                 retryJSON.acted && !retryJSON.timedOut && jsonStage == 2, "F155 JSON retry completes after correction")
             check(retryKeptDraft && retryKeptStorage, "F155 rejected JSON keeps the draft and saved library unchanged")
@@ -845,8 +892,8 @@ final class Audit24RecoverySpy: NSObject {
                     return exportURL
                 })
             var fileStage = 0, importedOnlyDraft = false, exportedOnlyDraft = false
-            let files = drivingModal(
-                timeout: 20,
+            let files = drivingAdvanced(
+                timeout: 20, controller: controller, commit: false,
                 { _, views in
                     guard let json = textView("Automation library JSON", in: views),
                         let load = button("automation.json.import", in: views),
@@ -874,7 +921,7 @@ final class Audit24RecoverySpy: NSObject {
                     }
                     return false
                 }
-            ) { controller.manageAdvanced() }
+            )
             check(
                 files.acted && !files.timedOut && fileStage == 3,
                 "F155 Automation Import and Export run through isolated file choices")
@@ -890,8 +937,8 @@ final class Audit24RecoverySpy: NSObject {
             chosenImport = refusedURL
             fileStage = 0
             var refusedDraft = false, clearedImportError = false
-            let refusedImport = drivingModal(
-                timeout: 20,
+            let refusedImport = drivingAdvanced(
+                timeout: 20, controller: controller, commit: true,
                 { _, views in
                     guard let json = textView("Automation library JSON", in: views),
                         let load = button("automation.json.import", in: views),
@@ -921,7 +968,7 @@ final class Audit24RecoverySpy: NSObject {
                     }
                     return false
                 }
-            ) { controller.manageAdvanced() }
+            )
             check(
                 refusedImport.acted && !refusedImport.timedOut && refusedDraft,
                 "F155 refused symlink import keeps the Automation draft and saved bytes")
@@ -964,7 +1011,7 @@ final class Audit24RecoverySpy: NSObject {
                     if suggestionStage == 0 {
                         suggestionWindow = window
                         suggestionStage = 1
-                        save.performClick(nil)
+                        MainRunLoop.perform { save.performClick(nil) }
                     } else if suggestionStage == 1 {
                         suggestionStage = 2
                         cancel.performClick(nil)
@@ -1066,7 +1113,7 @@ final class Audit24RecoverySpy: NSObject {
                             ok.performClick(nil)
                             return false
                         }
-                        guard let cancel = button("automation.cancel", in: views) else { return false }
+                        guard let cancel = button("automation.manager.cancel", in: views) else { return false }
                         manageOpened += 1
                         cancel.performClick(nil)
                         return true
@@ -1148,7 +1195,7 @@ final class Audit24RecoverySpy: NSObject {
         }
         let recoveryAnswer = Timer(timeInterval: 0.02, repeats: true) { _ in
             MainActor.assumeIsolated {
-                guard let content = NSApp.modalWindow?.contentView else { return }
+                guard let content = presentedFormWindow?.contentView else { return }
                 if Date() > recoveryDeadline {
                     NSApp.abortModal()
                     return
@@ -1233,6 +1280,46 @@ final class Audit24RecoverySpy: NSObject {
                 "horizontal dialog preserves accessory on presentation \(index)")
         }
     }
+    static func staleModelessJSONCheck() throws {
+        let isolated = try IsolatedSupportDirectory("ModelessUnicodeConfiguration")
+        defer { isolated.restore() }
+        let controller = AutomationController(editorProvider: { nil }, newDocument: { _ in })
+        var definition = AutomationDefinition.example
+        definition.name = "Caf\u{e9}"
+        let original = AutomationLibrary(workflows: [definition])
+        try controller.persistLibrary(original)
+        controller.manageAdvanced()
+        let window = try requireValue(FormPanel.frontWindow, "fixture: native advanced configuration window")
+        let views = descendants(try requireValue(window.contentView, "fixture: advanced content"))
+        let text = try requireValue(textView("Automation library JSON", in: views), "fixture: advanced JSON text")
+        check(NSApp.modalWindow == nil && window.isVisible, "DG advanced JSON is a real modeless editor")
+        var pending = original
+        pending.workflows[0].name = "Pending name"
+        let pendingText = String(decoding: try pending.encoded(), as: UTF8.self)
+        text.string = pendingText
+        var intervening = original
+        intervening.workflows[0].name = "Cafe\u{301}"
+        try controller.persistLibrary(intervening)
+        let path = isolated.url.appendingPathComponent("Automations.json")
+        let saved = try Data(contentsOf: path)
+        button("automation.json.save", in: views)?.performClick(nil)
+        check(
+            window.isVisible && text.string == pendingText,
+            "DG an intervening native controller write preserves pending JSON and its window")
+        let after = try Data(contentsOf: path)
+        let held = try AutomationLibrary.decode(saved)
+        check(
+            after == saved && Data(held.workflows[0].name.utf8) == Data("Cafe\u{301}".utf8),
+            "DG byte-distinct NFC/NFD controller saves cannot be overwritten by an older modeless form")
+        check(
+            text.accessibilityHelp()?.contains("changed while this window was open") == true,
+            "DG the stale JSON field is marked with the conflict and how to recover")
+        button("automation.json.cancel", in: views)?.performClick(nil)
+        if let manager = FormPanel.frontWindow, manager.identifier?.rawValue == "automation.manager" {
+            button("automation.manager.cancel", in: descendants(manager.contentView!))?.performClick(nil)
+        }
+    }
+
     static func main() {
         Checks.run("AutomationControllerChecks") {
             let isolatedSupport = try IsolatedSupportDirectory("TextTankAutomationControllerChecks"),
@@ -1240,6 +1327,7 @@ final class Audit24RecoverySpy: NSObject {
             defer { isolatedSupport.restore() }
             _ = NSApplication.shared
             Checks.section("horizontal dialog actions") { try horizontalDialogChecks() }
+            Checks.section("modeless Unicode controller conflict") { try staleModelessJSONCheck() }
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 800, height: 500), styleMask: [.titled], backing: .buffered,
                 defer: false)
@@ -1269,9 +1357,19 @@ final class Audit24RecoverySpy: NSObject {
                 controller.onInvocation = { invocations += 1 }
                 let palette = drivingModal(
                     timeout: 20,
-                    { _, views in
+                    { paletteWindow, views in
                         guard let cancel = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
                         else { return false }
+                        if let filter = field("automation.palette.filter", in: views),
+                            let table = views.compactMap({ $0 as? NSTableView }).first
+                        {
+                            filter.selectText(nil)
+                            typeKeys(AutomationDefinition.example.name, in: paletteWindow)
+                            paletteWindow.makeFirstResponder(table)
+                            check(
+                                invocations == 0 && table.numberOfRows == 1,
+                                "DG typing and leaving the actual automation filter never invokes it")
+                        }
                         cancel.performClick(nil)
                         return true
                     }

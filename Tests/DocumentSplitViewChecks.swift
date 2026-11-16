@@ -49,7 +49,7 @@ extension DocumentChecks {
             let deadline = Date().addingTimeInterval(10)
             let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
                 MainActor.assumeIsolated {
-                    guard let modal = NSApp.modalWindow, modal !== answered || Date() > deadline else { return }
+                    guard let modal = presentedFormWindow, modal !== answered || Date() > deadline else { return }
                     guard Date() <= deadline, let answer = pending.first, let content = modal.contentView,
                         let button = answer(descendants(content))
                     else {
@@ -63,6 +63,7 @@ extension DocumentChecks {
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             command()
+            waitForModelessForms()
             timer.invalidate()
             return pending.isEmpty
         }

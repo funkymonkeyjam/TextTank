@@ -65,6 +65,11 @@ final class TTAlert: NSObject, NSWindowDelegate {
     /// share this path; flattening the error into strings would discard its recovery behavior.
     static func errorAlert(_ error: Error) -> NSAlert { NSAlert(error: error) }
     static func present(_ error: Error) { _ = NSApp.presentError(error) }
+    static func requiresNativePresentation(_ error: Error) -> Bool {
+        let native = error as NSError
+        return native.recoveryAttempter != nil || native.localizedRecoveryOptions != nil
+            || native.localizedRecoverySuggestion != nil
+    }
 
     /// States why a command the person chose did nothing. Only for an explicit action, never
     /// from menu validation or a timer.

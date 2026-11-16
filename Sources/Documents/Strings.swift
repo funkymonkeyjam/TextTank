@@ -15,6 +15,9 @@ enum Strings {
         #endif
         return bundle.localizedString(forKey: key, value: english, table: nil)
     }
+    static func formAction(_ action: String, scope: String) -> String {
+        String(format: text("form.action.scope", "%@ in %@"), action, scope)
+    }
     static func number(_ value: Int, locale: Locale = .current) -> String { value.formatted(.number.locale(locale)) }
     static func points(_ value: Double, locale: Locale = .current) -> String {
         value.formatted(.number.locale(locale).precision(.fractionLength(0...1)))

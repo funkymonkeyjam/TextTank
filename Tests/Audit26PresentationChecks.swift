@@ -127,17 +127,21 @@ enum Audit26PresentationChecks {
                 NSApp.abortModal()
                 return
             }
-            guard let content = NSApp.modalWindow?.contentView else { return }
+            guard let content = presentedFormWindow?.contentView else { return }
             let views = descendants(content)
-            guard let popup = views.compactMap({ $0 as? NSPopUpButton }).first,
+            guard let table = views.compactMap({ $0 as? NSTableView }).first,
                 let cancel = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
             else { return }
             paletteSeen = true
-            paletteOrder = invocationIDs(popup.menu!) == [ordinary.id.uuidString, favorite.id.uuidString]
+            paletteOrder =
+                (0..<table.numberOfRows).compactMap {
+                    table.view(atColumn: 0, row: $0, makeIfNecessary: true)?.identifier?.rawValue
+                } == [ordinary.id.uuidString, favorite.id.uuidString]
             cancel.performClick(nil)
         }
         RunLoop.main.add(paletteTimer, forMode: .modalPanel)
         automation.showPalette()
+        waitForModelessForms(timeout: 5)
         paletteTimer.invalidate()
         check(
             paletteSeen && paletteOrder && !paletteTimedOut,
@@ -370,7 +374,7 @@ enum Audit26PresentationChecks {
                 NSApp.abortModal()
                 return
             }
-            guard let content = NSApp.modalWindow?.contentView else { return }
+            guard let content = presentedFormWindow?.contentView else { return }
             let views = descendants(content)
             recoveryHeading = views.compactMap { $0 as? NSTextField }.contains {
                 $0.stringValue == "TextTank could not use “Write-failure settings”"

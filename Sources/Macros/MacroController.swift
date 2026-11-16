@@ -11,11 +11,16 @@ final class MacroController: NSObject, NSMenuDelegate {
         get { loadState.error }
         set { loadState.error = newValue }
     }
-    private var recordingEditor: TTEditor?
+    private var recordingEditor: TTEditor? {
+        didSet {
+            manager?.refresh()
+            namePanel?.setActionEnabled("macro.save.confirm", recordingEditor == nil)
+        }
+    }
     private var recorded: [RecordedMacro.Step] = []
     private var lastRecording: RecordedMacro?
     private var captureError: Error?
-    private var playing = false
+    private var playing = false { didSet { manager?.refresh() } }
     private var playbackCancelled = false
     /// Called once, at the moment a recording becomes unsaveable, with the reason (F67).
     var onInvalidated: ((String) -> Void)?
@@ -313,56 +318,153 @@ final class MacroController: NSObject, NSMenuDelegate {
         }
         while try !session.advance(budget: 100, shouldCancel: shouldCancel) {}
     }
+    private var namePanel: FormPanel?
     @objc private func saveLast() {
-        guard var macro = lastRecording else { return }
-        do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
-            TTAlert.present(error)
+        if let namePanel {
+            namePanel.window.makeKeyAndOrderFront(nil)
             return
         }
-        let alert = TTAlert()
-        alert.messageText = "Name Recorded Macro"
-        alert.addButton(withTitle: "Save").identifier = NSUserInterfaceItemIdentifier("macro.save.confirm")
-        alert.addButton(withTitle: "Cancel", role: .cancel).identifier = NSUserInterfaceItemIdentifier(
-            "macro.save.cancel")
-        let name = NSTextField(string: macro.name)
-        name.setAccessibilityLabel("Macro name")
-        name.frame = NSRect(x: 0, y: 0, width: 400, height: 24)
-        name.identifier = NSUserInterfaceItemIdentifier("macro.save.name")
-        alert.accessoryView = name
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard let recorded = lastRecording, recordingEditor == nil else { return }
         do {
-            macro.name = name.stringValue
-            var proposed = library
-            if let i = proposed.macros.firstIndex(where: { $0.id == macro.id }) {
-                proposed.macros[i] = macro
-            } else {
-                proposed.macros.append(macro)
-            }
-            try persist(proposed)
-            lastRecording = macro
+            guard try StoreRecovery.ensureWritable(loadState) else { return }
+            let baseline = try SavedConfiguration.bytes(library)
+            let recordingBaseline = try SavedConfiguration.bytes(lastRecording)
+            let form = FormPanel(
+                title: "Name Recorded Macro", identifier: "macro.save", size: NSSize(width: 540, height: 300))
+            namePanel = form
+            form.retainPresentationOwner(self)
+            form.onClose = { [weak self] in self?.namePanel = nil }
+            let name = form.field("Macro name", value: recorded.name, identifier: "macro.save.name")
+            form.button("Save", identifier: "macro.save.confirm") { [weak self] in
+                guard let self, form.commitEditing() else { return }
+                do {
+                    guard self.recordingEditor == nil else { throw FormFailure.busy }
+                    var macro = recorded
+                    macro.name = name.stringValue
+                    var proposed = self.library
+                    if let i = proposed.macros.firstIndex(where: { $0.id == macro.id }) {
+                        proposed.macros[i] = macro
+                    } else {
+                        proposed.macros.append(macro)
+                    }
+                    try proposed.validate()
+                    try SavedConfiguration.requireUnchanged(self.library, since: baseline)
+                    try SavedConfiguration.requireUnchanged(self.lastRecording, since: recordingBaseline)
+                    guard try StoreRecovery.ensureWritable(self.loadState) else { return }
+                    try SavedConfiguration.requireUnchanged(self.library, since: baseline)
+                    try SavedConfiguration.requireUnchanged(self.lastRecording, since: recordingBaseline)
+                    try self.persist(proposed)
+                    self.lastRecording = macro
+                    form.close()
+                } catch { form.showValidation(error, field: name) }
+            }.keyEquivalent = "\r"
+            form.button("Cancel", identifier: "macro.save.cancel", cancel: true) { form.close() }
+            form.window.initialFirstResponder = name
+            form.show()
         } catch { TTAlert.present(error) }
     }
     var jsonFilePanels = JSONLibraryEditor.FilePanels.standard
+    private var manager: LibraryManager?
     @objc private func manage() {
-        guard !playing, recordingEditor == nil else { return }
-        do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
-            TTAlert.present(error)
+        if let manager {
+            manager.form.window.makeKeyAndOrderFront(nil)
             return
         }
+        guard !playing, recordingEditor == nil else { return }
         do {
-            try JSONLibraryEditor.edit(
-                library,
-                configuration: .init(
-                    title: "Manage Saved Macros",
-                    information:
-                        "Edit names or steps, or remove entries. Preserve id to rename. Only validated text, editor commands and literal find/replace steps are accepted. Saving never executes macros.",
-                    accessibilityLabel: "Macro library JSON", exportName: "TextTank-Macros.json",
-                    identifier: "macro.json", size: NSSize(width: 650, height: 400)),
-                panels: jsonFilePanels,
-                read: {
-                    try PrivateFileStore.read($0, maximumBytes: MacroLibrary.maximumBytes, parent: .selectedInput)
-                },
-                save: { try persist($0) })
+            guard try StoreRecovery.ensureWritable(loadState) else { return }
+            var working = library
+            let baseline = try SavedConfiguration.bytes(library)
+            let panel = LibraryManager(title: "Saved Macros", identifier: "macro.manager")
+            manager = panel
+            panel.retainController(self)
+            panel.onClose = { [weak self] in self?.manager = nil }
+            panel.rows = { working.macros.map { .init(id: $0.id, name: $0.name) } }
+            panel.canEdit = { [weak self] in self.map { !$0.playing && $0.recordingEditor == nil } ?? false }
+            panel.rename = { id, name in
+                if let index = working.macros.firstIndex(where: { $0.id == id }) { working.macros[index].name = name }
+            }
+            panel.save = { [weak self, weak panel] in
+                guard let self, !self.playing, self.recordingEditor == nil else { throw FormFailure.busy }
+                for macro in working.macros {
+                    do { try macro.validate() } catch {
+                        panel?.reveal(macro.id)
+                        throw error
+                    }
+                }
+                try working.validate()
+                try SavedConfiguration.requireUnchanged(self.library, since: baseline)
+                guard try StoreRecovery.ensureWritable(self.loadState) else { return false }
+                try SavedConfiguration.requireUnchanged(self.library, since: baseline)
+                try self.persist(working)
+                return true
+            }
+            panel.action("Add…", identifier: "macro.manager.add") { [weak panel] in
+                guard let panel else { return }
+                let form = FormPanel(title: "New Macro", identifier: "macro.new", size: NSSize(width: 620, height: 430))
+                form.note(
+                    "Create a macro that inserts this text. Saving a macro never runs it. Record editing actions from the Macros menu to capture more complex macros."
+                )
+                let name = form.field("Name", value: "My Macro", identifier: "macro.new.name")
+                let text = JSONLibraryEditor.makeTextView(size: NSSize(width: 560, height: 180))
+                text.editor.setAccessibilityLabel("Text inserted by the new macro")
+                text.editor.identifier = NSUserInterfaceItemIdentifier("macro.new.text")
+                form.add(text.scroll)
+                text.scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
+                form.button("Add Macro", identifier: "macro.new.save") {
+                    guard form.commitEditing() else { return }
+                    do {
+                        guard !text.editor.string.isEmpty else {
+                            throw MacroError.invalid("Enter the text this macro will insert. Nothing has been saved.")
+                        }
+                        let macro = RecordedMacro(
+                            id: UUID(), name: name.stringValue, steps: [.insertText(text.editor.string)])
+                        try macro.validate()
+                        working.macros.append(macro)
+                        form.close()
+                        panel.reload(select: macro.id)
+                    } catch { form.showValidation(error, field: name.stringValue.isEmpty ? name : text.editor) }
+                }
+                form.button("Cancel", identifier: "macro.new.cancel", cancel: true) {
+                    form.close()
+                    panel.refresh()
+                }
+                form.show(parent: panel.form.window)
+            }
+            panel.action("Duplicate", identifier: "macro.manager.duplicate", needsSelection: true) { [weak panel] in
+                guard let panel, let id = panel.selectedID, var copy = working.macros.first(where: { $0.id == id })
+                else { return }
+                copy.id = UUID()
+                working.macros.append(copy)
+                panel.reload(select: copy.id)
+            }
+            panel.action("Delete…", identifier: "macro.manager.delete", needsSelection: true) { [weak panel] in
+                panel?.confirmDelete { id in working.macros.removeAll { $0.id == id } }
+            }
+            panel.secondaryAction("Advanced JSON…", identifier: "macro.manager.advanced") { [weak self, weak panel] in
+                guard let self, let panel, panel.canEdit() else { return }
+                do {
+                    try JSONLibraryEditor.edit(
+                        working,
+                        configuration: .init(
+                            title: "Advanced Macro Configuration",
+                            information:
+                                "Changes return to the macro manager. Choose Save in the manager to save the library. Saving never runs macros.",
+                            accessibilityLabel: "Macro library JSON", exportName: "TextTank-Macros.json",
+                            identifier: "macro.json", size: NSSize(width: 650, height: 400), saveTitle: "Use Changes"),
+                        panels: self.jsonFilePanels, parent: panel.form.window, current: { working },
+                        read: {
+                            try PrivateFileStore.read(
+                                $0, maximumBytes: MacroLibrary.maximumBytes, parent: .selectedInput)
+                        },
+                        save: { proposed in
+                            working = proposed
+                            panel.reload()
+                        })
+                    panel.refresh()
+                } catch { panel.form.showValidation(error) }
+            }
+            panel.show()
         } catch { TTAlert.present(error) }
     }
     /// One guarded save boundary for the manager, recording commands and native checks.

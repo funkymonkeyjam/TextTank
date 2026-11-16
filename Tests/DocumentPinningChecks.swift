@@ -1339,40 +1339,50 @@ extension DocumentChecks {
             // F12: Go to Line through its real dialog, on the engine's own line model.
             func goToLineDialog(_ entry: String, confirm: Bool = true) -> Bool {
                 var acted = false, timedOut = false
-                var dialog: NSWindow?
                 explanation = ""
                 let deadline = Date().addingTimeInterval(10)
                 let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                     MainActor.assumeIsolated {
-                        guard let modal = NSApp.modalWindow, let content = modal.contentView else { return }
+                        guard let window = presentedFormWindow, let content = window.contentView else { return }
                         if Date() > deadline {
                             timedOut = true
-                            NSApp.abortModal()
-                            return
-                        }
-                        guard !acted else {
-                            dismissExplanation(modal, after: dialog)
+                            window.performClose(nil)
                             return
                         }
                         let views = descendants(content)
                         guard
                             let field = views.compactMap({ $0 as? NSTextField }).first(where: {
                                 $0.identifier?.rawValue == "goToLine.line"
-                            }),
-                            let press = views.compactMap({ $0 as? NSButton }).first(where: {
+                            })
+                        else { return }
+                        if acted {
+                            // Invalid input remains in this same modeless form, instead of a replacement alert.
+                            explanation =
+                                views.compactMap { $0 as? NSTextField }.first {
+                                    $0.accessibilityLabel()?.hasPrefix("Input needs correction") == true
+                                }?.stringValue ?? ""
+                            check(
+                                field.stringValue == entry && field.accessibilityHelp() != nil,
+                                "DG Go to Line keeps and marks the rejected input")
+                            views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
+                            return
+                        }
+                        guard
+                            let button = views.compactMap({ $0 as? NSButton }).first(where: {
                                 $0.title == (confirm ? "Go" : "Cancel")
                             })
                         else { return }
                         acted = true
-                        dialog = modal
+                        window.makeFirstResponder(nil)
                         field.stringValue = entry
-                        press.performClick(nil)
+                        button.performClick(nil)
                     }
                 }
                 RunLoop.main.add(timer, forMode: .modalPanel)
                 let item = NSMenuItem(title: "Go to Line…", action: nil, keyEquivalent: "")
                 item.representedObject = "goToLine"
                 controller.perform(NSSelectorFromString("statusOption:"), with: item)
+                waitForModelessForms()
                 timer.invalidate()
                 return acted && !timedOut
             }
@@ -1389,9 +1399,7 @@ extension DocumentChecks {
             for entry in ["5", "0", "two", "-1"] {
                 check(
                     goToLineDialog(entry) && document.editor.selectionCaret == 11
-                        && explanation.contains(
-                            entry == "two" ? "Enter a whole line number" : "There is no line \(entry)")
-                        && explanation.contains("Enter a line number from 1 to 4."),
+                        && explanation.contains("Enter a whole line number from 1 to 4."),
                     "Go to Line \(entry) says that line does not exist and names the valid range")
             }
             check(

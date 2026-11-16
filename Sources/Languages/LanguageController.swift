@@ -491,10 +491,14 @@ final class LanguageController: NSObject, NSMenuDelegate {
                         "Edit native lexer keywords, properties, style emphasis, extension detection and optional function patterns (capture group 1 is the name). This JSON profile format is not Notepad++ UDL XML. Imported files never execute code. Preserve identifiers to keep session language choices. Only your changes are saved, so built-in languages you leave alone follow later versions of TextTank. Removing a profile's \"comments\" turns comment commands off for it; an empty object does the same.",
                     accessibilityLabel: "Language profiles JSON", exportName: "TextTank-LanguageProfiles.json",
                     identifier: "language.json", size: NSSize(width: 700, height: 420)),
-                panels: jsonFilePanels, read: { try Self.readRegular($0) },
+                panels: jsonFilePanels,
+                current: {
+                    guard let live = self.catalog else { throw FormFailure.changed }
+                    return live
+                }, read: { try Self.readRegular($0) },
                 save: { proposed in
-                    try persist(proposed)
-                    reapply(nil)
+                    try self.persist(proposed)
+                    self.reapply(nil)
                 })
         } catch { TTAlert.present(error) }
     }
