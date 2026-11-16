@@ -383,3 +383,8 @@ menu and style callbacks never apply the lexer again. Lifecycle/focus state has 
 production status labels and utility providers are private while checks retain focused read access.
 The authoritative read-only flag still belongs to the shared Scintilla document and covers both
 panes. No second document buffer, search engine or Undo history was introduced.
+
+The native bridge reports acceptance for indentation, syntax style/font, call tips and
+completion requests. Bounds and installed-font rules remain unchanged; completion lists still
+filter invalid words before requesting presentation. `setLanguage(keywordLists:properties:)`
+retains its compound fallback, clamp and skip behavior rather than promising atomic refusal.

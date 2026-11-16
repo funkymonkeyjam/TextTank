@@ -110,6 +110,19 @@ int main() {
             TTTextEdit *overflow=[[TTTextEdit alloc] initWithRange:[[TTByteRange alloc] initWithLocation:1 length:NSIntegerMax] text:@"y"];
             check(![editor applyEdits:@[first,overflow] expectedRevision:revision expectedLength:4] && same(),"F29 direct typed edit overflow rejects the whole batch before the valid first edit");
         });
+        ttchecks::section("rejectable setter outcomes", [&] {
+            TTEditor *editor=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,300,200)];
+            for (NSString *name in @[@"configureTabWidth:useTabs:",@"setSyntaxStyle:foreground:background:bold:italic:",@"setSyntaxFont:name:size:",@"showCallTip:",@"showCompletions:"])
+                check(std::strcmp([editor methodSignatureForSelector:NSSelectorFromString(name)].methodReturnType,@encode(BOOL))==0, [[NSString stringWithFormat:@"F29 %@ reports acceptance or rejection",name] UTF8String]);
+            check([editor configureTabWidth:7 useTabs:NO],"F29 a supported indentation request reports acceptance");
+            TTEditorStatus *configured=editor.statusInfo;
+            check(![editor configureTabWidth:0 useTabs:YES] && ![editor configureTabWidth:33 useTabs:YES] && [editor.statusInfo isEqual:configured],"F29 rejected indentation keeps every status field");
+            check([editor setSyntaxStyle:STYLE_DEFAULT foreground:NSColor.labelColor background:nil bold:NO italic:NO] && ![editor setSyntaxStyle:-1 foreground:NSColor.labelColor background:nil bold:NO italic:NO] && ![editor setSyntaxStyle:0 foreground:(id)@0 background:nil bold:NO italic:NO],"F29 style requests report valid acceptance and invalid-index/foreign-colour refusal");
+            check([editor setSyntaxFont:STYLE_DEFAULT name:@"Menlo" size:14] && ![editor setSyntaxFont:STYLE_DEFAULT name:@"Menlo" size:NAN] && ![editor setSyntaxFont:-1 name:@"Menlo" size:14] && ![editor setSyntaxFont:STYLE_DEFAULT name:@"TextTank-No-Such-Font" size:14],"F29 font requests report finite installed-font acceptance and invalid refusal");
+            const unichar nulText[]={ 'x',0,'y' },badText[]={0xD83D};
+            check(![editor showCallTip:[NSString stringWithCharacters:nulText length:3]] && ![editor showCallTip:[NSString stringWithCharacters:badText length:1]] && ![editor showCallTip:(id)@0],"F29 invalid call-tip text is refused before native presentation");
+            check(![editor showCompletions:@[]] && ![editor showCompletions:@[@"two words",@"tab\there"]],"F29 empty or wholly filtered completion requests report refusal");
+        });
         // Shared by the first three sections; later sections make their own editors.
         TTEditor *second = nil;
         ttchecks::section("status, exact text and shared clone", [&] {

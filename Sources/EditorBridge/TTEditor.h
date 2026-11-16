@@ -145,7 +145,8 @@ __attribute__((objc_subclassing_restricted))
 /// Sets only the ending inserted by later edits (LF, CRLF or CR). Never rewrites existing
 /// bytes and creates no undo step; convertLineEndings: is the only converting operation.
 - (BOOL)setLineEndingMode:(TTLineEndingMode)mode;
-- (void)configureTabWidth:(NSInteger)width useTabs:(BOOL)useTabs;
+/// NO for an unsupported width; a valid request keeps the existing document-scope policy.
+- (BOOL)configureTabWidth:(NSInteger)width useTabs:(BOOL)useTabs;
 
 @property(nonatomic, readonly) NSInteger selectionStart;
 @property(nonatomic, readonly) NSInteger selectionEnd;
@@ -227,10 +228,14 @@ __attribute__((objc_subclassing_restricted))
 /// Styled text of the whole document, or of the main selection only when `selection` is YES;
 /// additional selections are not included.
 - (NSAttributedString *)attributedTextForSelection:(BOOL)selection;
-- (void)showCompletions:(NSArray<NSString *> *)words;
-- (void)setSyntaxStyle:(NSInteger)index foreground:(NSColor *)foreground background:(nullable NSColor *)background bold:(BOOL)bold italic:(BOOL)italic;
-- (void)showCallTip:(NSString *)text;
-- (void)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size;
+/// Filters invalid words as before. YES when a nonempty filtered list was requested.
+- (BOOL)showCompletions:(NSArray<NSString *> *)words;
+/// NO for an invalid index/foreign colour; valid non-RGB colours retain the existing fallback.
+- (BOOL)setSyntaxStyle:(NSInteger)index foreground:(NSColor *)foreground background:(nullable NSColor *)background bold:(BOOL)bold italic:(BOOL)italic;
+/// NO for NUL-containing or unencodable text.
+- (BOOL)showCallTip:(NSString *)text;
+/// NO for invalid bounds, an unavailable font or an invalid name; existing state is kept.
+- (BOOL)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size;
 - (BOOL)setSearchHighlights:(NSArray<TTByteRange *> *)ranges;
 - (void)clearSearchHighlights;
 

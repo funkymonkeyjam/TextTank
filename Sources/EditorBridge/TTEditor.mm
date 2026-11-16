@@ -778,10 +778,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         NSLocalizedRecoverySuggestionErrorKey:@"Turn off Read Only in the File menu to edit this document."}];
     return NO;
 }
-- (void)configureTabWidth:(NSInteger)width useTabs:(BOOL)useTabs {
-    [self assertThread]; if (width < 1 || width > 32) return;
+- (BOOL)configureTabWidth:(NSInteger)width useTabs:(BOOL)useTabs {
+    [self assertThread]; if (width < 1 || width > 32) return NO;
     [_engine message:SCI_SETTABWIDTH wParam:width]; [_engine message:SCI_SETUSETABS wParam:useTabs];
     [self scheduleStateNotification];
+    return YES;
 }
 - (BOOL)convertLineEndings:(TTLineEndingMode)mode {
     [self assertThread];
@@ -1468,8 +1469,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [result endEditing];
     return result;
 }
-- (void)setSyntaxStyle:(NSInteger)index foreground:(NSColor *)foreground background:(NSColor *)background bold:(BOOL)bold italic:(BOOL)italic {
-    [self assertThread]; if(index<0 || index>255)return;
+- (BOOL)setSyntaxStyle:(NSInteger)index foreground:(NSColor *)foreground background:(NSColor *)background bold:(BOOL)bold italic:(BOOL)italic {
+    [self assertThread]; if(index<0 || index>255 || ![foreground isKindOfClass:NSColor.class] || (background!=nil && ![background isKindOfClass:NSColor.class]))return NO;
     NSMutableDictionary *configuration=[@{@"foreground":foreground,@"bold":@(bold),@"italic":@(italic)} mutableCopy];if(background)configuration[@"background"]=background;_syntaxStyles[@(index)]=configuration;
     // A dynamic colour is resolved for this view's appearance, the one applyPalette chose the base
     // palette from, not for whatever appearance happens to be current on the thread. The dynamic
@@ -1485,6 +1486,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [_engine message:SCI_STYLESETBOLD wParam:index lParam:bold];[_engine message:SCI_STYLESETITALIC wParam:index lParam:italic];
     // The filler line numbers are drawn in this style's colour and no notification follows.
     if (index == STYLE_LINENUMBER) _emptyLineNumbers.needsDisplay = YES;
+    return YES;
 }
 - (void)clearSearchHighlights {
     [self assertThread];[_engine message:SCI_SETINDICATORCURRENT wParam:TTSearchIndicator];[_engine message:SCI_INDICATORCLEARRANGE wParam:0 lParam:[_engine message:SCI_GETLENGTH]];
@@ -1504,27 +1506,36 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         [_engine message:SCI_INDICATORFILLRANGE wParam:range.location lParam:range.length];
     return YES;
 }
-- (void)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size {
-    [self assertThread];if(index<0 || index>255 || !std::isfinite(size) || size<6 || size>96 || name.length>200 || [name rangeOfString:@"\0"].location!=NSNotFound)return;
-    NSFont *font=[NSFont fontWithName:name size:size];if(!font)return;
+- (BOOL)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size {
+    [self assertThread];
+    if(index<0 || index>255 || !std::isfinite(size) || size<6 || size>96 || ![name isKindOfClass:NSString.class] || name.length>200 || [name rangeOfString:@"\0"].location!=NSNotFound)return NO;
+    NSFont *font=[NSFont fontWithName:name size:size];if(font==nil)return NO;
     _syntaxFonts[@(index)]=@{@"name":name,@"size":@(size)};
     [_engine message:SCI_STYLESETFONT wParam:index lParam:(sptr_t)name.UTF8String];[_engine message:SCI_STYLESETSIZEFRACTIONAL wParam:index lParam:(sptr_t)lround(size*100)];
     if (index == STYLE_LINENUMBER || index == STYLE_DEFAULT) { [self updateLineNumberMargin:NO]; _emptyLineNumbers.needsDisplay = YES; }
+    return YES;
 }
-- (void)showCallTip:(NSString *)text {
-    [self assertThread];if([text rangeOfString:@"\0"].location!=NSNotFound)return;
-    [_engine message:SCI_CALLTIPSHOW wParam:[_engine message:SCI_GETCURRENTPOS] lParam:(sptr_t)text.UTF8String];
+- (BOOL)showCallTip:(NSString *)text {
+    [self assertThread];
+    if(![text isKindOfClass:NSString.class] || [text rangeOfString:@"\0"].location!=NSNotFound)return NO;
+    const char *utf8=text.UTF8String; if(utf8==nullptr)return NO;
+    [_engine message:SCI_CALLTIPSHOW wParam:[_engine message:SCI_GETCURRENTPOS] lParam:(sptr_t)utf8];
+    return YES;
 }
-- (void)showCompletions:(NSArray<NSString *> *)words {
-    [self assertThread]; if(words.count==0)return;
+- (BOOL)showCompletions:(NSArray<NSString *> *)words {
+    [self assertThread]; if(![words isKindOfClass:NSArray.class] || words.count==0)return NO;
     sptr_t caret=[_engine message:SCI_GETCURRENTPOS],start=[_engine message:SCI_WORDSTARTPOSITION wParam:caret lParam:1];
-    NSMutableArray *safe=[NSMutableArray array];for(NSString *word in words) if([word rangeOfCharacterFromSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]].location==NSNotFound && [word rangeOfString:@"\0"].location==NSNotFound) [safe addObject:word];
+    NSMutableArray *safe=[NSMutableArray array];
+    for(id word in words)
+        if([word isKindOfClass:NSString.class] && [word rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].location==NSNotFound && [word rangeOfString:@"\0"].location==NSNotFound && [word UTF8String]!=nullptr)
+            [safe addObject:word];
     NSString *list=[[safe sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@" "];
-    if(!list.length)return;
+    if(!list.length)return NO;
     // G371: once the list is open Scintilla records Tab, Return and the arrow keys as caret
     // commands although they drive the list, and accepting an entry edits with no notification.
     if (_macroRecording && _onMacroStep) [self reportMacroStep:TTUnrecordableStep(SCI_AUTOCSHOW)];
     [_engine message:SCI_AUTOCSHOW wParam:caret-start lParam:(sptr_t)list.UTF8String];
+    return YES;
 }
 - (BOOL)find:(NSString *)text matchCase:(BOOL)matchCase backwards:(BOOL)backwards {
     [self assertThread];
