@@ -34,19 +34,26 @@ struct EditorSettings: Codable, Equatable {
         guard version == 1, (1...32).contains(tabWidth), ["system", "light", "dark"].contains(appearance) else {
             throw SettingsError.invalid
         }
+        if let failure = shortcutValidationFailure(reservedKeys: reservedKeys) { throw failure.error }
+    }
+    /// The same deterministic validation supplies identity to editors and errors to strict saves.
+    /// An implicit default cannot be edited in isolation; identify its conflicting explicit override.
+    func shortcutValidationFailure(reservedKeys: Set<String>) -> ShortcutValidationFailure? {
         var effective = EditorCommand.defaultShortcuts
         effective.merge(shortcuts) { _, new in new }
         var owners: [String: String] = [:]
         for id in effective.keys.sorted() {
             let key = effective[id] ?? ""
-            guard Self.commands.contains(id) else { throw SettingsError.unknownShortcut }
-            guard Self.validShortcutKey(key) else { throw SettingsError.invalidShortcut }
-            guard !reservedKeys.contains(key) else { throw SettingsError.conflict }
+            guard Self.commands.contains(id) else { return .init(command: id, error: .unknownShortcut) }
+            guard Self.validShortcutKey(key) else { return .init(command: id, error: .invalidShortcut) }
+            guard !reservedKeys.contains(key) else { return .init(command: id, error: .conflict) }
             if let owner = owners[key] {
-                throw SettingsError.duplicateShortcut(first: owner, second: id, key: key)
+                let command = shortcuts[id] == nil ? owner : id
+                return .init(command: command, error: .duplicateShortcut(first: owner, second: id, key: key))
             }
             owners[key] = id
         }
+        return nil
     }
     /// Strict decode remains available to validation/import callers; tolerant startup is explicit.
     static func decode(_ data: Data) throws -> Self {
@@ -151,6 +158,22 @@ enum SettingsError: Error, LocalizedError, Equatable {
     }
 }
 
+struct ShortcutValidationFailure: LocalizedError {
+    let command: String
+    let error: SettingsError
+    var errorDescription: String? {
+        let title = EditorCommand(rawValue: command)?.title ?? "Unavailable command"
+        switch error {
+        case .invalidShortcut:
+            return "The shortcut for “\(title)” must be one printable ASCII character. The settings were not changed."
+        case .conflict:
+            return
+                "The shortcut for “\(title)” is reserved for another action. Choose a different key. The settings were not changed."
+        default: return error.localizedDescription
+        }
+    }
+}
+
 /// A working copy keeps edits made for earlier popup rows; selection is never inferred from a title.
 struct SettingsShortcutDraft {
     private(set) var settings: EditorSettings
@@ -194,11 +217,23 @@ private final class SettingsShortcutEditor: NSObject {
     @objc func selectCommand(_ sender: NSPopUpButton) {
         sender.window?.makeFirstResponder(sender)
         guard let id = sender.selectedItem?.representedObject as? String else { return }
+        if draft.selected != id {
+            key.setAccessibilityHelp(nil)
+            key.toolTip = nil
+        }
         key.stringValue = draft.select(id, committing: key.stringValue)
     }
     @objc func clearShortcut(_ sender: Any?) {
         key.window?.makeFirstResponder(popup)
         key.stringValue = draft.clear()
+    }
+    func revealValidation(_ failure: ShortcutValidationFailure) -> NSView? {
+        guard let item = popup.itemArray.first(where: { $0.representedObject as? String == failure.command }) else {
+            return nil
+        }
+        popup.select(item)
+        key.stringValue = draft.select(failure.command, committing: key.stringValue)
+        return key
     }
     func settings() -> EditorSettings {
         draft.commit(key.stringValue)
@@ -412,6 +447,8 @@ final class SettingsController: NSObject {
                     updated.wrap = wrap.state == .on
                     updated.appearance = appearance.titleOfSelectedItem ?? "system"
                 }
+                // Validate every retained draft before any modal recovery can move saved data aside.
+                try updated.validate(reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
                 let replacing = false
                 if loadError != nil {
                     // Save and Reset Defaults both arrive here; neither may silently replace the unread file.
@@ -426,14 +463,22 @@ final class SettingsController: NSObject {
                 return
             } catch {
                 let field: NSView?
+                var presentedError = error
                 switch error {
                 case SettingsError.conflict, SettingsError.invalidShortcut, SettingsError.unknownShortcut,
                     SettingsError.duplicateShortcut:
-                    field = key
+                    if let failure = shortcuts.draft.settings.shortcutValidationFailure(
+                        reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
+                    {
+                        field = shortcuts.revealValidation(failure)
+                        presentedError = failure
+                    } else {
+                        field = nil
+                    }
                 case SettingsError.tabWidth: field = width
                 default: field = nil
                 }
-                alert.showValidation(error, field: field)
+                alert.showValidation(presentedError, field: field)
             }
         }
     }

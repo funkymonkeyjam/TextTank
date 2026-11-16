@@ -490,6 +490,8 @@ extension DocumentChecks {
             try settings.save(EditorSettings())
         }
 
+        SettingsShortcutValidationChecks.run(root: root)
+
         section("audit25 command refusal and menu validation", #line) {
             let (doc, controller, _) = try tab("audit25-commands")
             doc.editor.text = "safe"
