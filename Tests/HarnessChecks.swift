@@ -45,10 +45,40 @@ enum DemoError: Error, Equatable { case intended, other }
             Checks.summary { "PASS HarnessDemo: \(Checks.count) assertions" }
         }
     }
-    static func child(_ environment: [String: String]) throws -> (status: Int32, output: String) {
+    static func concurrentRecording() -> Never {
+        Checks.run("HarnessConcurrent") {
+            DispatchQueue.concurrentPerform(iterations: 100) { index in
+                check(true, "concurrent pass \(index)")
+                fixtureCheck(true, "concurrent fixture \(index)")
+                knownDefect("F000", "concurrent defect \(index)", fixed: false)
+                Checks.fail("concurrent failure \(index)", file: #filePath, line: #line)
+            }
+            print(
+                "HARNESS_CONCURRENT_STATE pass=\(Checks.count) fixtures=\(Checks.fixtureCount) defects=\(Checks.knownDefects.count) failures=\(Checks.failures.count)"
+            )
+        }
+    }
+    static func summaryReentry() -> Never {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) { exit(70) }
+        Checks.run("HarnessSummaryReentry") {
+            let destroyed = DispatchSemaphore(value: 0)
+            installSummaryCapture(destroyed)
+            Checks.summary { "PASS HarnessSummaryReentry: \(Checks.count) assertions" }
+            check(
+                destroyed.wait(timeout: .now() + 1) == .success,
+                "summary captured deinitializer reenters after unlock")
+        }
+    }
+    static func installSummaryCapture(_ destroyed: DispatchSemaphore) {
+        let token = SummaryCapture(destroyed)
+        Checks.summary { withExtendedLifetime(token) { "unused summary" } }
+    }
+    static func child(_ environment: [String: String], arguments: [String] = ["--demonstration"]) throws -> (
+        status: Int32, output: String
+    ) {
         let process = Process(), pipe = Pipe()
         process.executableURL = Checks.executable
-        process.arguments = ["--demonstration"]
+        process.arguments = arguments
         var merged = ProcessInfo.processInfo.environment
         merged["TEXTTANK_FORCE_FAIL"] = nil
         merged["HARNESS_DEMO_FAULTS"] = nil
@@ -63,6 +93,8 @@ enum DemoError: Error, Equatable { case intended, other }
     }
     static func main() async {
         if CommandLine.arguments.dropFirst().first == "--demonstration" { await demonstration() }
+        if CommandLine.arguments.dropFirst().first == "--concurrent-recording" { concurrentRecording() }
+        if CommandLine.arguments.dropFirst().first == "--summary-reentry" { summaryReentry() }
         await Checks.run("HarnessChecks") {
             let clean = try child([:])
             let cleanLines = clean.output.split(separator: "\n").map(String.init)
@@ -179,7 +211,32 @@ enum DemoError: Error, Equatable { case intended, other }
                 getenv("TEXTTANK_SUPPORT_DIRECTORY").map { String(cString: $0) } == before
                     && !FileManager.default.fileExists(atPath: inside.path),
                 "isolated support directory is removed and the previous value restored")
+            let concurrent = try child([:], arguments: ["--concurrent-recording"])
+            check(concurrent.status == 1, "concurrent recorded failures retain the child's failure exit")
+            check(
+                concurrent.output.contains("HARNESS_CONCURRENT_STATE pass=100 fixtures=100 defects=100 failures=100"),
+                "concurrent recorder updates preserve all four exact counts")
+            check(
+                concurrent.output.contains("FAILED HarnessConcurrent: 100 failed, 100 passed"),
+                "concurrent recording preserves the complete failure summary")
+            let reentry = try child([:], arguments: ["--summary-reentry"])
+            check(
+                reentry.status == 0 && reentry.output.contains("PASS HarnessSummaryReentry: 1 assertions"),
+                "summary capture destruction and summary invocation can reenter the recorder")
+            check(
+                reentry.output.contains("FIXTURES HarnessSummaryReentry: 1 fixture integrity checks"),
+                "summary replacement releases its displaced capture before normal completion")
             Checks.summary { "PASS HarnessChecks: \(Checks.count) assertions; shared check harness" }
         }
+    }
+}
+
+/// Only an immutable semaphore is stored; deinit intentionally reenters the recorder.
+private final class SummaryCapture: Sendable {
+    let destroyed: DispatchSemaphore
+    init(_ destroyed: DispatchSemaphore) { self.destroyed = destroyed }
+    deinit {
+        Checks.fixturePass()
+        destroyed.signal()
     }
 }
