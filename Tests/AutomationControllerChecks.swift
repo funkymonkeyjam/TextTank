@@ -236,7 +236,7 @@ final class Audit24RecoverySpy: NSObject {
                     let up = button("rules.up", in: views),
                     let down = button("rules.down", in: views), let remove = button("rules.remove", in: views)
                 else { return false }
-                func note() {
+                @MainActor func note() {
                     trail.append(
                         RuleListState(
                             rows: table.numberOfRows, selected: table.selectedRow, up: up.isEnabled,
@@ -1825,7 +1825,7 @@ final class Audit24RecoverySpy: NSObject {
                     largeExpected = rows.joined(separator: "\n") + "\n"
                 try require(
                     largeInput.utf8.count > 4 * 262144, "fixture: the input is well over the 256 KiB worker threshold")
-                func load(_ text: String) -> UInt {
+                @MainActor func load(_ text: String) -> UInt {
                     editor.text = text
                     editor.resetUndoHistory()
                     editor.setSavePoint()
