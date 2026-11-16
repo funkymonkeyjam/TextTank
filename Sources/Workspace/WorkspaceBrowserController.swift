@@ -156,11 +156,10 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             return
         }
         guard !document.isDocumentEdited else {
-            NSAlert(
-                error: WorkspaceError.invalid(
+            TTAlert.present(
+                WorkspaceError.invalid(
                     "The document has unsaved edits. Use Save As to keep them, or explicitly Revert to Saved; monitoring will not discard them."
-                )
-            ).runModal()
+                ))
             return
         }
         let revision = document.editor.revision
