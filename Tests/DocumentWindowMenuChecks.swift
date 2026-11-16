@@ -257,6 +257,313 @@ extension DocumentChecks {
             document.close()
         }
 
+        section("audit25 shortcut settings keep unrelated values", #line) {
+            var stored = EditorSettings()
+            stored.tabWidth = 9
+            stored.wrap = true
+            stored.shortcuts = ["upper": "u", "lower": "s", "removedCommand": "k"]
+            let bytes = try JSONEncoder().encode(stored)
+            let url = root.appendingPathComponent("audit25-shortcuts-load.json")
+            try bytes.write(to: url)
+            let settings = SettingsController(url: url)
+            check(
+                settings.value.tabWidth == 9 && settings.value.wrap && settings.value.shortcuts == ["upper": "u"],
+                "G362 invalid shortcut entries leave valid shortcuts and unrelated settings usable")
+            check(try Data(contentsOf: url) == bytes, "G362 loading ignored shortcuts does not rewrite original bytes")
+            check(
+                settings.loadError == nil
+                    && settings.ignoredShortcutBindings.map(\.command) == ["lower", "removedCommand"]
+                    && settings.shortcutLoadNotice?.contains("Lowercase") == true,
+                "G362 ignored bindings are reported individually without pretending the entire file failed")
+            var invalid = settings.value
+            invalid.shortcuts["upper"] = ","
+            rejects("G362 tolerant loading does not weaken strict validation on save") { try settings.save(invalid) }
+            check(
+                try Data(contentsOf: url) == bytes,
+                "G362 rejected repair save leaves original bytes in place before backup")
+            let repairedBackup = try requireValue(
+                try settings.save(settings.value), "fixture: explicit shortcut repair retains backup")
+            check(
+                try Data(contentsOf: repairedBackup) == bytes && SettingsController(url: url).value == settings.value
+                    && settings.ignoredShortcutBindings.isEmpty,
+                "G362 only explicit Save writes repaired settings and keeps the exact original in a backup")
+            var edited = EditorSettings()
+            edited.setShortcut("k", for: "deleteLine")
+            let model = SettingsController(url: root.appendingPathComponent("audit25-shortcut-model.json"))
+            try model.save(edited)
+            check(
+                SettingsController(url: model.url).value.shortcuts["deleteLine"] == "k",
+                "G396 shortcut assignment survives a controller restart")
+            edited.setShortcut("", for: "deleteLine")
+            try model.save(edited)
+            check(
+                SettingsController(url: model.url).value == EditorSettings(),
+                "G396 clearing one custom shortcut restores the original settings without an empty wire value")
+            edited.setShortcut("d", for: "duplicateLine")
+            check(
+                edited.shortcuts["duplicateLine"] == nil,
+                "G396 assigning the built-in default never pollutes persisted overrides")
+            var draft = SettingsShortcutDraft(EditorSettings())
+            _ = draft.select("upper", committing: "")
+            _ = draft.select("deleteLine", committing: "u")
+            check(
+                draft.select("upper", committing: "k") == "u" && draft.settings.shortcuts["deleteLine"] == "k",
+                "G396 changing popup commands commits and retains every previous draft")
+            var collision = EditorSettings()
+            collision.setShortcut("j", for: "duplicateLine")
+            collision.setShortcut("d", for: "upper")
+            collision.setShortcut("", for: "duplicateLine")
+            rejects("G396 restoring the default reports the other command holding its key", message: "Uppercase") {
+                try model.save(collision)
+            }
+            check(
+                SettingsController(url: model.url).value == EditorSettings(),
+                "G396 conflicting default restoration leaves the previous settings file intact")
+            var explicitDefault = EditorSettings()
+            explicitDefault.shortcuts = ["duplicateLine": "d"]
+            check(
+                try EditorSettings.decode(JSONEncoder().encode(explicitDefault)) == explicitDefault,
+                "G396 legacy explicit default entries remain readable")
+            let frozen = try requireValue(
+                JSONSerialization.jsonObject(
+                    with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("editor-commands-wave-3.json")))
+                    as? [String: Any], "fixture: reserved key baseline")
+            check(
+                EditorSettings.reserved
+                    == Set(try requireValue(frozen["reserved"] as? [String], "fixture: historical reserved fallback")),
+                "F281 the historical pre-menu reserved fallback remains unchanged")
+            let temporary = NSMenu()
+            let protected = temporary.addItem(title: "New Fixed Action", action: nil, keyEquivalent: "k")
+            protected.keyEquivalentModifierMask = [.command, .shift]
+            let own = temporary.addItem(title: "Duplicate Line", action: nil, keyEquivalent: "d")
+            own.representedObject = EditorCommand.duplicateLine.rawValue
+            let option = temporary.addItem(title: "Option Action", action: nil, keyEquivalent: "b")
+            option.keyEquivalentModifierMask = [.command, .option]
+            let reserved = SettingsController.reservedShortcuts(in: temporary)
+            check(
+                !reserved.contains("b") && SettingsController.reservedShortcuts(in: nil).isSuperset(of: ["e", "`"]),
+                "G362 unrelated Command-Option keys stay available while headless validation protects system shortcuts")
+            check(
+                reserved.contains("K") && !reserved.contains("d") && reserved.isSuperset(of: ["e", "`"]),
+                "G362 reserved keys follow actual menu modifiers and protect system Find/window shortcuts before menus exist"
+            )
+            var changedMenuSettings = EditorSettings()
+            changedMenuSettings.tabWidth = 7
+            changedMenuSettings.shortcuts = ["upper": "K", "lower": "u"]
+            let changedURL = root.appendingPathComponent("audit25-menu-upgrade.json")
+            let changedBytes = try JSONEncoder().encode(changedMenuSettings)
+            try changedBytes.write(to: changedURL)
+            let upgraded = SettingsController(url: changedURL)
+            upgraded.reconcileShortcuts(with: temporary)
+            let unchangedMenuBytes = try Data(contentsOf: changedURL)
+            check(
+                upgraded.value.tabWidth == 7 && upgraded.value.shortcuts == ["lower": "u"]
+                    && upgraded.ignoredShortcutBindings.map(\.command) == ["upper"]
+                    && unchangedMenuBytes == changedBytes,
+                "G362 a newly reserved menu key drops only its conflicting binding after startup and preserves original bytes"
+            )
+            let dialog = SettingsController(url: root.appendingPathComponent("audit25-shortcuts-dialog.json"))
+            var observed = false, readable = false, current = false
+            let deadline = Date().addingTimeInterval(10)
+            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+                MainActor.assumeIsolated {
+                    guard let content = NSApp.modalWindow?.contentView else { return }
+                    if Date() > deadline {
+                        NSApp.abortModal()
+                        return
+                    }
+                    let views = descendants(content)
+                    guard
+                        let popup = views.compactMap({ $0 as? NSPopUpButton }).first(where: {
+                            $0.accessibilityLabel() == "Command shortcut to assign"
+                        }),
+                        let key = views.compactMap({ $0 as? NSTextField }).first(where: {
+                            $0.accessibilityLabel() == "Shortcut key"
+                        })
+                    else { return }
+                    observed = true
+                    readable = popup.itemArray.contains {
+                        $0.title == "Duplicate Line" && $0.representedObject as? String == "duplicateLine"
+                    }
+                    if let entry = popup.itemArray.first(where: {
+                        $0.representedObject as? String == "duplicateLine" || $0.title == "duplicateLine"
+                    }) {
+                        popup.select(entry)
+                        if let action = popup.action { _ = NSApp.sendAction(action, to: popup.target, from: popup) }
+                        current = key.stringValue == "d"
+                    }
+                    views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
+                }
+            }
+            RunLoop.main.add(timer, forMode: .modalPanel)
+            dialog.showSettings(nil)
+            timer.invalidate()
+            check(
+                observed && readable && current,
+                "G396 Settings shows readable command names and the selected current shortcut")
+            check(
+                !FileManager.default.fileExists(atPath: dialog.url.path),
+                "G396 Cancel after reading a shortcut leaves settings absent")
+        }
+
+        section("audit25 actual shortcut drafts and menu updates", #line) {
+            let settings = SettingsController(url: root.appendingPathComponent("audit25-live-shortcuts.json"))
+            do {
+                let previousMenu = NSApp.mainMenu
+                defer { NSApp.mainMenu = previousMenu }
+                let menu = NSMenu()
+                let delete = menu.addItem(title: EditorCommand.deleteLine.title, action: nil)
+                delete.representedObject = EditorCommand.deleteLine.rawValue
+                let duplicate = menu.addItem(title: EditorCommand.duplicateLine.title, action: nil)
+                duplicate.representedObject = EditorCommand.duplicateLine.rawValue
+                NSApp.mainMenu = menu
+                var value = EditorSettings()
+                value.setShortcut("k", for: "deleteLine")
+                try settings.save(value)
+                check(
+                    delete.keyEquivalent == "k" && duplicate.keyEquivalent == "d",
+                    "G396 saving a custom shortcut updates its actual menu item and the built-in default")
+                value.setShortcut("", for: "deleteLine")
+                try settings.save(value)
+                check(
+                    delete.keyEquivalent.isEmpty && duplicate.keyEquivalent == "d",
+                    "G396 clearing a custom shortcut removes its menu key and keeps Command-D")
+            }
+            var acted = false, kept = false, cleared = false, defaultRestored = false
+            let deadline = Date().addingTimeInterval(10)
+            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+                MainActor.assumeIsolated {
+                    guard let content = NSApp.modalWindow?.contentView else { return }
+                    if Date() > deadline {
+                        NSApp.abortModal()
+                        return
+                    }
+                    let views = descendants(content)
+                    guard !acted,
+                        let popup = views.compactMap({ $0 as? NSPopUpButton }).first(where: {
+                            $0.identifier?.rawValue == "settings.shortcut.command"
+                        }),
+                        let key = views.compactMap({ $0 as? NSTextField }).first(where: {
+                            $0.identifier?.rawValue == "settings.shortcut.key"
+                        }),
+                        let clear = views.compactMap({ $0 as? NSButton }).first(where: {
+                            $0.identifier?.rawValue == "settings.shortcut.clear"
+                        }),
+                        let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save" })
+                    else { return }
+                    @MainActor func select(_ id: String) {
+                        guard let entry = popup.itemArray.first(where: { $0.representedObject as? String == id }) else {
+                            return
+                        }
+                        popup.select(entry)
+                        if let action = popup.action { _ = NSApp.sendAction(action, to: popup.target, from: popup) }
+                    }
+                    select("upper")
+                    key.stringValue = "u"
+                    select("deleteLine")
+                    key.stringValue = "k"
+                    select("upper")
+                    kept = key.stringValue == "u"
+                    clear.performClick(nil)
+                    cleared = key.stringValue.isEmpty
+                    select("duplicateLine")
+                    key.stringValue = "j"
+                    select("deleteLine")
+                    kept = kept && key.stringValue == "k"
+                    select("duplicateLine")
+                    clear.performClick(nil)
+                    defaultRestored = key.stringValue == "d"
+                    acted = true
+                    save.performClick(nil)
+                }
+            }
+            RunLoop.main.add(timer, forMode: .modalPanel)
+            settings.showSettings(nil)
+            timer.invalidate()
+            check(
+                acted && kept && cleared && defaultRestored,
+                "G396 the real Settings popup retains multiple drafts and Clear restores each command's default")
+            check(
+                settings.value.shortcuts == ["deleteLine": "k"]
+                    && SettingsController(url: settings.url).value == settings.value,
+                "G396 one explicit Save persists all popup edits without adding default or empty overrides")
+            try settings.save(EditorSettings())
+        }
+
+        section("audit25 command refusal and menu validation", #line) {
+            let (doc, controller, _) = try tab("audit25-commands")
+            doc.editor.text = "safe"
+            let font = try requireValue(controller.statusOptionsMenu("font"), "fixture: catalog font menu")
+            let zoom = try requireValue(
+                font.items.first { $0.representedObject as? String == "zoomIn" }, "fixture: Zoom In context action")
+            check(
+                zoom.title == EditorCommand.zoomIn.title
+                    && zoom.keyEquivalent == EditorCommand.zoomIn.defaultMenuShortcut,
+                "DS20 status commands share catalog titles and fixed menu shortcuts")
+            let priorSettings = sessionDelegate.settings.value
+            var shortcutSettings = priorSettings
+            shortcutSettings.setShortcut("k", for: "bookmarkNext")
+            try sessionDelegate.settings.save(shortcutSettings)
+            let bookmarks = try requireValue(
+                controller.statusOptionsMenu("bookmarks"), "fixture: catalog bookmark menu")
+            let next = try requireValue(
+                bookmarks.items.first { $0.representedObject as? String == "bookmarkNext" },
+                "fixture: Next Bookmark context action")
+            check(
+                next.title == EditorCommand.bookmarkNext.title && next.keyEquivalent == "k",
+                "DS20 status commands share the user's current main-menu shortcut")
+            try sessionDelegate.settings.save(priorSettings)
+            let before = doc.editor.revision, generation = doc.editor.selectionGeneration
+            rejects("F281 the shared dispatcher rejects an unknown command") {
+                try controller.perform(command: "noSuchCommand")
+            }
+            check(
+                doc.editor.text == "safe" && doc.editor.revision == before
+                    && doc.editor.selectionGeneration == generation, "F281 refused dispatch never changes editor state")
+            controller.window?.makeFirstResponder(doc.editor)
+            controller.command(item(#selector(EditorWindowController.command(_:)), "noSuchCommand"))
+            check(
+                controller.status.stringValue == EditorCommandFailure.unsupported.localizedDescription
+                    && doc.editor.revision == before,
+                "F281 an unknown UI command reports visible words without an alert or edit")
+            check(
+                !doc.validateUserInterfaceItem(item(#selector(TextDocument.checkExternalChanges(_:)))),
+                "F18 Check for External Changes is disabled for an untitled document")
+            let unavailable = item(#selector(EditorWindowController.command(_:)), "noSuchCommand")
+            check(
+                !controller.validateMenuItem(unavailable),
+                "DS21 an unknown routed command is disabled before invocation")
+            let duplicate = item(#selector(EditorWindowController.command(_:)), "duplicateLine")
+            doc.editor.readOnly = true
+            check(
+                !controller.validateMenuItem(duplicate),
+                "DS21 a text-changing catalog command is disabled for a read-only document")
+            check(
+                controller.validateMenuItem(item(#selector(EditorWindowController.command(_:)), "charLeft"))
+                    && controller.validateMenuItem(item(#selector(EditorWindowController.command(_:)), "toggleEOL")),
+                "DS21 navigation and view toggles remain enabled in a read-only document")
+            doc.editor.readOnly = false
+            let endings = item(#selector(EditorWindowController.command(_:)), "toggleEOL")
+            try controller.perform(command: "toggleEOL")
+            check(
+                controller.validateMenuItem(endings) && endings.state == .on,
+                "DS22 a catalog toggle validates with its actual checked state")
+            try controller.perform(command: "toggleEOL")
+            controller.clone(nil)
+            let clone = try requireValue(controller.secondary, "fixture: catalog toggle clone")
+            _ = controller.window?.makeFirstResponder(clone)
+            clone.executeCommand("toggleEOL")
+            check(
+                controller.validateMenuItem(endings) && endings.state == .on,
+                "DS22 catalog toggle checkmarks follow the focused clone's own view state")
+            _ = controller.window?.makeFirstResponder(doc.editor)
+            check(
+                controller.validateMenuItem(endings) && endings.state == .off,
+                "DS22 returning to the source pane restores that view's toggle checkmark")
+            controller.closeSplit(nil)
+            doc.close()
+        }
+
         section("audit24 settings invalid drafts and unexpected termination", #line) {
             let settings = SettingsController(url: root.appendingPathComponent("audit24-settings.json"))
             let original = settings.value

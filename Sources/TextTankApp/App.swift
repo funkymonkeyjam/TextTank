@@ -183,6 +183,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = message
             _ = alert.runModal()
         }
+        if settings.shortcutLoadNotice != nil {
+            let message =
+                "Some saved shortcuts were ignored. Other settings remain in use. Open Settings to review them; the original settings file is preserved."
+            Announce.say(message)
+            lastDocumentController?.showTransientStatus(message, seconds: 8, announce: false)
+        }
         if let message = languages.loadFailureMessage {
             let alert = TTAlert()
             alert.alertStyle = .warning
@@ -336,29 +342,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 title: title, action: #selector(EditorWindowController.command(_:)), keyEquivalent: key,
                 representedObject: id)
         }
+        func command(_ menu: NSMenu, _ value: EditorCommand, _ key: String? = nil) {
+            command(menu, value.title, value.rawValue, key ?? value.defaultMenuShortcut)
+        }
         func transform(_ m: NSMenu, _ value: EditorTransform) {
             command(m, value.title, "transform." + value.rawValue)
         }
         edit.addItem(
-            title: "Undo", action: NSSelectorFromString("undo:"), keyEquivalent: "z", representedObject: "undo")
+            title: EditorCommand.undo.title, action: NSSelectorFromString("undo:"),
+            keyEquivalent: EditorCommand.undo.defaultMenuShortcut,
+            representedObject: EditorCommand.undo.rawValue)
         edit.addItem(
-            title: "Redo", action: NSSelectorFromString("redo:"), keyEquivalent: "Z", representedObject: "redo")
+            title: EditorCommand.redo.title, action: NSSelectorFromString("redo:"),
+            keyEquivalent: EditorCommand.redo.defaultMenuShortcut,
+            representedObject: EditorCommand.redo.rawValue)
         edit.addItem(.separator())
-        edit.addItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x", representedObject: "cut")
-        edit.addItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c", representedObject: "copy")
         edit.addItem(
-            title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v", representedObject: "paste")
+            title: EditorCommand.cut.title, action: #selector(NSText.cut(_:)),
+            keyEquivalent: EditorCommand.cut.defaultMenuShortcut,
+            representedObject: EditorCommand.cut.rawValue)
         edit.addItem(
-            title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a",
-            representedObject: "selectAll")
+            title: EditorCommand.copy.title, action: #selector(NSText.copy(_:)),
+            keyEquivalent: EditorCommand.copy.defaultMenuShortcut,
+            representedObject: EditorCommand.copy.rawValue)
+        edit.addItem(
+            title: EditorCommand.paste.title, action: #selector(NSText.paste(_:)),
+            keyEquivalent: EditorCommand.paste.defaultMenuShortcut,
+            representedObject: EditorCommand.paste.rawValue)
+        edit.addItem(
+            title: EditorCommand.selectAll.title, action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: EditorCommand.selectAll.defaultMenuShortcut,
+            representedObject: EditorCommand.selectAll.rawValue)
         edit.addItem(.separator())
         let lines = group("Lines")
-        command(lines, "Duplicate Line", "duplicateLine", "d")
-        command(lines, "Delete Line", "deleteLine")
-        command(lines, "Transpose Lines", "transposeLine")
-        command(lines, "Move Line Up", "moveLineUp")
-        command(lines, "Move Line Down", "moveLineDown")
-        command(lines, "Join Selected Lines", "joinLines")
+        command(lines, .duplicateLine)
+        command(lines, .deleteLine)
+        command(lines, .transposeLine)
+        command(lines, .moveLineUp)
+        command(lines, .moveLineDown)
+        command(lines, .joinLines)
         lines.addItem(.separator())
         for value: EditorTransform in [
             .sortAscending, .sortDescending, .sortCaseInsensitive, .sortLocalized, .sortLength
@@ -366,15 +388,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lines.addItem(.separator())
         for value: EditorTransform in [.reverseLines, .uniqueLines, .removeEmptyLines] { transform(lines, value) }
         let whitespace = group("Indentation and Whitespace")
-        command(whitespace, "Indent", "indent", "]")
-        command(whitespace, "Unindent", "unindent", "[")
+        command(whitespace, .indent)
+        command(whitespace, .unindent)
         whitespace.addItem(.separator())
         transform(whitespace, .trimLeading)
-        command(whitespace, "Trim Trailing Whitespace", "trimTrailing")
+        command(whitespace, .trimTrailing)
         transform(whitespace, .trimBoth)
         let letterCase = group("Convert Case")
-        command(letterCase, "Uppercase", "upper")
-        command(letterCase, "Lowercase", "lower")
+        command(letterCase, .upper)
+        command(letterCase, .lower)
         transform(letterCase, .titleCase)
         transform(letterCase, .invertCase)
         let comments = group("Comment")
@@ -384,18 +406,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 representedObject: comment.rawValue)
         }
         let selection = group("Selection")
-        for (title, id) in [
-            ("Rectangular Selection", "rectangularSelection"), ("Stream Selection", "streamSelection"),
-            ("Add Next Occurrence", "addNextOccurrence"), ("Select All Occurrences", "selectAllOccurrences"),
-            ("Clear Additional Selections", "clearAdditionalSelections"), ("Duplicate Selection", "duplicateSelection")
-        ] { command(selection, title, id) }
+        for value: EditorCommand in [
+            .rectangularSelection, .streamSelection, .addNextOccurrence, .selectAllOccurrences,
+            .clearAdditionalSelections, .duplicateSelection
+        ] { command(selection, value) }
         selection.addItem(.separator())
         selection.addItem(title: "Column Insert / Number…", action: #selector(EditorWindowController.columnInsert(_:)))
         let deletion = group("Delete")
-        for (title, id) in [
-            ("Delete Word Left", "deleteWordLeft"), ("Delete Word Right", "deleteWordRight"),
-            ("Delete to Line Start", "deleteLineLeft"), ("Delete to Line End", "deleteLineRight")
-        ] { command(deletion, title, id) }
+        for value: EditorCommand in [.deleteWordLeft, .deleteWordRight, .deleteLineLeft, .deleteLineRight] {
+            command(deletion, value)
+        }
         let endings = group("Line Endings")
         for mode in ["LF", "CRLF", "CR"] {
             endings.addItem(
@@ -403,7 +423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 representedObject: mode)
         }
         edit.addItem(.separator())
-        command(edit, "Toggle Overtype", "toggleOvertype")
+        command(edit, .toggleOvertype)
         // Every transform has a place above; a new case must be given one.
         assert(
             Set(EditorTransform.allCases).isSubset(of: [
@@ -430,11 +450,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "Find in Folder…", action: #selector(FolderSearchController.showSearch(_:)), keyEquivalent: "F",
             target: folderSearch)
         search.addItem(title: "Go to Line…", action: #selector(EditorWindowController.goToLine(_:)), keyEquivalent: "l")
-        for (label, id) in [
-            ("Matching Brace", "gotoMatchingBrace"), ("Select to Matching Brace", "selectMatchingBrace"),
-            ("Toggle Bookmark", "bookmarkToggle"), ("Next Bookmark", "bookmarkNext"),
-            ("Previous Bookmark", "bookmarkPrevious")
-        ] { search.addItem(title: label, action: #selector(EditorWindowController.command(_:)), representedObject: id) }
+        for value: EditorCommand in [
+            .gotoMatchingBrace, .selectMatchingBrace, .bookmarkToggle, .bookmarkNext, .bookmarkPrevious
+        ] { command(search, value) }
         let runRoot = NSMenuItem()
         runRoot.title = "Run"
         runRoot.submenu = runner.makeMenu()
@@ -447,16 +465,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         view.addItem(title: "Clone in Split View", action: #selector(EditorWindowController.clone(_:)))
         view.addItem(title: "Close Split View", action: #selector(EditorWindowController.closeSplit(_:)))
         view.addItem(title: "Wrap Lines", action: #selector(EditorWindowController.toggleWrap(_:)))
-        view.addItem(
-            title: "Zoom In", action: #selector(EditorWindowController.command(_:)), keyEquivalent: "+",
-            representedObject: "zoomIn")
-        view.addItem(
-            title: "Zoom Out", action: #selector(EditorWindowController.command(_:)), keyEquivalent: "-",
-            representedObject: "zoomOut")
-        for (label, id) in [
-            ("Fold All", "foldAll"), ("Unfold All", "unfoldAll"), ("Show Whitespace", "showWhitespace"),
-            ("Show Line Endings", "toggleEOL"), ("Show Line Numbers", "toggleLineNumbers")
-        ] { view.addItem(title: label, action: #selector(EditorWindowController.command(_:)), representedObject: id) }
+        command(view, .zoomIn)
+        command(view, .zoomOut)
+        for value: EditorCommand in [.foldAll, .unfoldAll, .showWhitespace, .toggleEOL, .toggleLineNumbers] {
+            command(view, value)
+        }
         let languageRoot = NSMenuItem()
         languageRoot.title = "Language"
         languageRoot.submenu = languages.menu()
@@ -488,6 +501,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let help = menu("Help")
         NSApp.helpMenu = help
         help.addItem(title: "TextTank Help (Online)", action: #selector(openOnlineHelp(_:)), keyEquivalent: "?")
+        settings.reconcileShortcuts(with: bar)
     }
     /// The project page, which carries the review guide and where each command lives. There is no
     /// bundled help book yet.
@@ -833,6 +847,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     /// Everything NSDocument validates itself (Save, Revert to Saved and the rest) is left to it.
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(checkExternalChanges(_:)) { return fileURL != nil }
         if item.action == #selector(toggleReadOnly(_:)) {
             (item as? NSMenuItem)?.state = editor.readOnly ? .on : .off
             return true
@@ -840,6 +855,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return super.validateUserInterfaceItem(item)
     }
     @objc func checkExternalChanges(_ sender: Any?) {
+        guard fileURL != nil else { return }
         do {
             let state = try diskState()
             let alert = TTAlert()
@@ -2191,10 +2207,19 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             _ title: String, _ action: Selector, _ target: AnyObject, _ value: String? = nil, _ checked: Bool = false,
             _ enabled: Bool = true
         ) {
-            menu.addItem(
+            let item = menu.addItem(
                 title: title, action: action, target: target, representedObject: value,
                 isEnabled: enabled, state: checked ? .on : .off)
+            if let value, let command = EditorCommand(rawValue: value) {
+                item.keyEquivalent =
+                    command.isShortcutAssignable
+                    ? app?.settings.value.shortcut(for: value) ?? command.defaultMenuShortcut
+                    : command.defaultMenuShortcut
+                item.isEnabled = enabled && (!TTEditor.commandModifiesText(value) || !editor.readOnly)
+                if command.isToggle { item.state = editor.commandIsChecked(value) ? .on : .off }
+            }
         }
+        func command(_ value: EditorCommand) { add(value.title, #selector(statusOption(_:)), self, value.rawValue) }
         func heading(_ title: String) {
             menu.addItem(title: title, action: nil, isEnabled: false)
         }
@@ -2243,8 +2268,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             add("No Wrap", #selector(statusOption(_:)), self, "wrap.off", !editor.wrap)
         case "font":
             heading("Text size for this view")
-            add("Larger", #selector(statusOption(_:)), self, "zoomIn")
-            add("Smaller", #selector(statusOption(_:)), self, "zoomOut")
+            command(.zoomIn)
+            command(.zoomOut)
             if let languages = app?.languages {
                 menu.addItem(.separator())
                 menu.addItem(languages.styleSettingsMenuItem())
@@ -2257,10 +2282,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
                 }
             }
         case "bookmarks":
-            for (name, code) in [
-                ("Toggle Bookmark on Current Line", "bookmarkToggle"), ("Next Bookmark", "bookmarkNext"),
-                ("Previous Bookmark", "bookmarkPrevious")
-            ] { add(name, #selector(statusOption(_:)), self, code) }
+            for value: EditorCommand in [.bookmarkToggle, .bookmarkNext, .bookmarkPrevious] { command(value) }
         case "position":
             add("Go to Line…", #selector(statusOption(_:)), self, "goToLine")
         case "document":
@@ -2268,7 +2290,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             add("Save As…", #selector(NSDocument.saveAs(_:)), doc)
             add("Read Only", #selector(TextDocument.toggleReadOnly(_:)), doc, nil, editor.readOnly)
         default:
-            add("Select All", #selector(statusOption(_:)), self, "selectAll")
+            command(.selectAll)
             add("Clear Selection", #selector(statusOption(_:)), self, "clearSelection")
         }
         return menu
@@ -2300,7 +2322,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             if id.hasPrefix("width."), let width = Int(id.dropFirst(6)) {
                 editor.configureTabWidth(width, useTabs: info["useTabs"]?.boolValue ?? true)
             } else {
-                do { try perform(command: id) } catch { TTAlert.explain(error) }
+                do { try perform(command: id) } catch is EditorCommandFailure {
+                    reportCommandFailure(EditorCommandFailure.unsupported.localizedDescription)
+                } catch { TTAlert.explain(error) }
             }
         }
         refreshStatusDetails()
@@ -2390,10 +2414,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         guard let id = sender.representedObject as? String else { return }
         if (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder is NSTextView {
             // Native editing selectors reach the field directly; this is only the custom-command path.
-            NSSound.beep()
+            reportCommandFailure(
+                "This command is unavailable while a text field is being edited. Return to the document, then try again."
+            )
             return
         }
-        do { try perform(command: id) } catch { TTAlert.present(error) }
+        do { try perform(command: id) } catch is EditorCommandFailure {
+            reportCommandFailure(EditorCommandFailure.unsupported.localizedDescription)
+        } catch { TTAlert.present(error) }
+    }
+    private func reportCommandFailure(_ message: String) {
+        NSSound.beep()
+        showTransientStatus(message)
     }
     /// Runs one editor command on the active editor. A command that edits text is refused with the
     /// read-only reason before anything else happens, so a macro recording is left as it was.
@@ -2406,9 +2438,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
             try transform.apply(to: editor)
             return
         }
+        guard EditorCommand(rawValue: id) != nil else { throw EditorCommandFailure.unsupported }
         if TTEditor.commandModifiesText(id) { try editor.requireWritable() }
         (NSApp.delegate as? AppDelegate)?.macros.willExecuteCommand(id, on: editor)
-        editor.executeCommand(id)
+        guard editor.executeCommand(id) else { throw EditorCommandFailure.unsupported }
     }
     deinit {
         statusTimer?.invalidate()
@@ -2636,6 +2669,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         switch item.action {
         case #selector(clone(_:)): return secondary == nil
         case #selector(closeSplit(_:)): return secondary != nil
+        case #selector(command(_:)):
+            if (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder is NSTextView { return false }
+            guard let id = item.representedObject as? String else { return false }
+            if id.hasPrefix("transform."), EditorTransform(rawValue: String(id.dropFirst(10))) != nil {
+                return !activeEditor.readOnly
+            }
+            guard let command = EditorCommand(rawValue: id) else { return false }
+            item.state = command.isToggle && activeEditor.commandIsChecked(id) ? .on : .off
+            return !TTEditor.commandModifiesText(id) || !activeEditor.readOnly
         case #selector(toggleWrap(_:)):
             // Wrapping belongs to the view, as the status bar's Wrap field shows it.
             item.state = activeEditor.wrap ? .on : .off

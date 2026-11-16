@@ -139,8 +139,9 @@ final class MacroController: NSObject, NSMenuDelegate {
         editorDidFocus(editor)
         let viewOnly = EditorCommand.viewOnlyIdentifiers
         if !RecordedMacro.Step.commands.contains(command) && !viewOnly.contains(command) {
+            let title = EditorCommand(rawValue: command)?.title ?? "Unavailable command"
             invalidateRecording(
-                reason: "The command ‘\(command)’ is not recordable yet. No partial macro will be saved.")
+                reason: "The command ‘\(title)’ is not recordable yet. No partial macro will be saved.")
         }
     }
     /// Testable finish path used by the Stop menu. Invalidations are errors, never partial success.

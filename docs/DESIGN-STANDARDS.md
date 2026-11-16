@@ -258,7 +258,7 @@ budget is a departure and needs the owner's agreement.
 
 These are the remaining actions from the review. Each names the work that owns it.
 
-1. One command catalogue and the split of `App.swift` (DS-20 to DS-22, DS-27): audit packages 25 and 29.
+1. The typed command catalogue, current-key and toggle validation are implemented by audit 25. Precise Undo/Redo action labels remain an explicit DS-27 gap; Scintilla history provenance has not been replaced or guessed. The split of `App.swift` remains audit 29.
 2. The workspace-window host, full screen and tab accessibility (DS-D1, DS-13, DS-14): tab stage 0.
 3. Session restore and recovered copies that keep their file (DS-92): tab stage 4 and package 23.
 4. A real toolbar (DS-30).

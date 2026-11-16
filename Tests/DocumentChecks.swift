@@ -121,12 +121,9 @@ import AppKit
                 // F199: a settings file that failed to load is never overwritten without explicit confirmation.
                 var futureSettings = configured
                 futureSettings.version = 2
-                var reservedSettings = configured
-                reservedSettings.shortcuts = ["upper": "s"]
-                let futureJSON = String(decoding: try JSONEncoder().encode(futureSettings), as: UTF8.self),
-                    reservedJSON = String(decoding: try JSONEncoder().encode(reservedSettings), as: UTF8.self)
+                let futureJSON = String(decoding: try JSONEncoder().encode(futureSettings), as: UTF8.self)
                 for (label, contents) in [
-                    ("future version", futureJSON), ("reserved shortcut", reservedJSON), ("malformed JSON", "{not json")
+                    ("future version", futureJSON), ("malformed JSON", "{not json")
                 ] {
                     let folder = root.appendingPathComponent("unreadable-settings-" + UUID().uuidString)
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

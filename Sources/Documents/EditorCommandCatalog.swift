@@ -4,10 +4,29 @@ import Foundation
 /// Stable editor identifiers are storage and bridge contracts. Menu placement remains literal;
 /// recording and shortcut assignment are explicit security/behavior subsets, never inferred from a title.
 enum EditorCommand: String, CaseIterable {
-    case addNextOccurrence, backTab, bookmarkNext, bookmarkPrevious, bookmarkToggle, cancel, charLeft, charLeftExtend, charRight, charRightExtend, clearAdditionalSelections, copy, cut, deleteBack, deleteForward, deleteLine, deleteLineLeft, deleteLineRight, deleteWordLeft, deleteWordRight, documentEnd, documentEndExtend, documentStart, documentStartExtend, duplicateLine, duplicateSelection, foldAll, gotoMatchingBrace, home, homeDisplay, homeExtend, indent, joinLines, lineCopy, lineCut, lineDown, lineDownExtend, lineEnd, lineEndDisplay, lineEndExtend, lineUp, lineUpExtend, lower, moveLineDown, moveLineUp, newLine, pageDown, pageDownExtend, pageUp, pageUpExtend, paraDown, paraDownExtend, paraUp, paraUpExtend, paste, rectangularSelection, redo, selectAll, selectAllOccurrences, selectMatchingBrace, showWhitespace, streamSelection, tab, toggleEOL, toggleLineNumbers, toggleOvertype, transposeLine, trimTrailing, undo, unfoldAll, unindent, upper, vcHome, vcHomeExtend, wordLeft, wordLeftExtend, wordPartLeft, wordPartLeftExtend, wordPartRight, wordPartRightExtend, wordRight, wordRightExtend, zoomIn, zoomOut
+    case addNextOccurrence, backTab, bookmarkNext, bookmarkPrevious, bookmarkToggle, cancel, charLeft, charLeftExtend,
+        charRight, charRightExtend, clearAdditionalSelections, copy, cut, deleteBack, deleteForward, deleteLine,
+        deleteLineLeft, deleteLineRight, deleteWordLeft, deleteWordRight, documentEnd, documentEndExtend, documentStart,
+        documentStartExtend, duplicateLine, duplicateSelection, foldAll, gotoMatchingBrace, home, homeDisplay,
+        homeExtend, indent, joinLines, lineCopy, lineCut, lineDown, lineDownExtend, lineEnd, lineEndDisplay,
+        lineEndExtend, lineUp, lineUpExtend, lower, moveLineDown, moveLineUp, newLine, pageDown, pageDownExtend, pageUp,
+        pageUpExtend, paraDown, paraDownExtend, paraUp, paraUpExtend, paste, rectangularSelection, redo, selectAll,
+        selectAllOccurrences, selectMatchingBrace, showWhitespace, streamSelection, tab, toggleEOL, toggleLineNumbers,
+        toggleOvertype, transposeLine, trimTrailing, undo, unfoldAll, unindent, upper, vcHome, vcHomeExtend, wordLeft,
+        wordLeftExtend, wordPartLeft, wordPartLeftExtend, wordPartRight, wordPartRightExtend, wordRight,
+        wordRightExtend, zoomIn, zoomOut
     var isRecordable: Bool {
         switch self {
-        case .backTab, .cancel, .charLeft, .charLeftExtend, .charRight, .charRightExtend, .copy, .cut, .deleteBack, .deleteForward, .deleteLine, .deleteLineLeft, .deleteLineRight, .deleteWordLeft, .deleteWordRight, .documentEnd, .documentEndExtend, .documentStart, .documentStartExtend, .duplicateLine, .duplicateSelection, .home, .homeDisplay, .homeExtend, .indent, .lineCopy, .lineCut, .lineDown, .lineDownExtend, .lineEnd, .lineEndDisplay, .lineEndExtend, .lineUp, .lineUpExtend, .lower, .moveLineDown, .moveLineUp, .newLine, .pageDown, .pageDownExtend, .pageUp, .pageUpExtend, .paraDown, .paraDownExtend, .paraUp, .paraUpExtend, .paste, .selectAll, .tab, .transposeLine, .unindent, .upper, .vcHome, .vcHomeExtend, .wordLeft, .wordLeftExtend, .wordPartLeft, .wordPartLeftExtend, .wordPartRight, .wordPartRightExtend, .wordRight, .wordRightExtend: return true
+        case .backTab, .cancel, .charLeft, .charLeftExtend, .charRight, .charRightExtend, .copy, .cut, .deleteBack,
+            .deleteForward, .deleteLine, .deleteLineLeft, .deleteLineRight, .deleteWordLeft, .deleteWordRight,
+            .documentEnd, .documentEndExtend, .documentStart, .documentStartExtend, .duplicateLine, .duplicateSelection,
+            .home, .homeDisplay, .homeExtend, .indent, .lineCopy, .lineCut, .lineDown, .lineDownExtend, .lineEnd,
+            .lineEndDisplay, .lineEndExtend, .lineUp, .lineUpExtend, .lower, .moveLineDown, .moveLineUp, .newLine,
+            .pageDown, .pageDownExtend, .pageUp, .pageUpExtend, .paraDown, .paraDownExtend, .paraUp, .paraUpExtend,
+            .paste, .selectAll, .tab, .transposeLine, .unindent, .upper, .vcHome, .vcHomeExtend, .wordLeft,
+            .wordLeftExtend, .wordPartLeft, .wordPartLeftExtend, .wordPartRight, .wordPartRightExtend, .wordRight,
+            .wordRightExtend:
+            return true
         default: return false
         }
     }
@@ -19,14 +38,17 @@ enum EditorCommand: String, CaseIterable {
     }
     var isShortcutAssignable: Bool {
         switch self {
-        case .bookmarkNext, .bookmarkPrevious, .bookmarkToggle, .deleteLine, .duplicateLine, .joinLines, .lower, .moveLineDown, .moveLineUp, .transposeLine, .trimTrailing, .upper: return true
+        case .bookmarkNext, .bookmarkPrevious, .bookmarkToggle, .deleteLine, .duplicateLine, .joinLines, .lower,
+            .moveLineDown, .moveLineUp, .transposeLine, .trimTrailing, .upper:
+            return true
         default: return false
         }
     }
     var isToggle: Bool {
         switch self {
         case .showWhitespace, .toggleEOL, .toggleLineNumbers, .toggleOvertype, .bookmarkToggle,
-             .rectangularSelection, .streamSelection: return true
+            .rectangularSelection, .streamSelection:
+            return true
         default: return false
         }
     }
@@ -123,6 +145,22 @@ enum EditorCommand: String, CaseIterable {
     static let shortcutIdentifiers = Set(allCases.filter(\.isShortcutAssignable).map(\.rawValue))
     static let defaultShortcuts: [String: String] = [EditorCommand.duplicateLine.rawValue: "d"]
     var defaultShortcut: String { Self.defaultShortcuts[rawValue] ?? "" }
+    /// Fixed system/editor menu keys remain distinct from assignable override defaults.
+    var defaultMenuShortcut: String {
+        switch self {
+        case .undo: return "z"
+        case .redo: return "Z"
+        case .cut: return "x"
+        case .copy: return "c"
+        case .paste: return "v"
+        case .selectAll: return "a"
+        case .indent: return "]"
+        case .unindent: return "["
+        case .zoomIn: return "+"
+        case .zoomOut: return "-"
+        default: return defaultShortcut
+        }
+    }
 }
 
 /// An invalid routed identifier never changes the editor or starts a recording action.
