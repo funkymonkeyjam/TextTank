@@ -62,112 +62,176 @@ struct StatusItem: Equatable {
     let text: String
 }
 
-private final class StatusBadge: NSButton {
-    var activate: ((StatusBadge) -> Void)?
-    init(_ text: String) {
-        super.init(frame: .zero)
-        title = text
+/// Native pop-up cells supply their own menu tracking, keyboard behavior and accessibility role.
+private final class StatusPopup: NSPopUpButton {
+    let field: StatusField
+    var measuredWidth: CGFloat { max(24, ceil(intrinsicContentSize.width)) }
+    init(field: StatusField) {
+        self.field = field
+        super.init(frame: .zero, pullsDown: true)
         isBordered = false
-        bezelStyle = .regularSquare
-        font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        contentTintColor = .secondaryLabelColor
-        toolTip = text + " — click for options"
-        setButtonType(.momentaryChange)
-        target = self
-        action = #selector(showOptions)
+        controlSize = .small
+        font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        translatesAutoresizingMaskIntoConstraints = false
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+        heightAnchor.constraint(greaterThanOrEqualToConstant: 22).isActive = true
     }
-    @objc private func showOptions() { activate?(self) }
-    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
-    var preferredWidth: CGFloat { ceil((title as NSString).size(withAttributes: [.font: font!]).width) + 20 }
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.10 : 0.035).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 3, yRadius: 3).fill()
-        super.draw(dirtyRect)
-    }
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
-    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
 }
 
-final class StatusBadgeRow: NSView {
-    var onActivate: ((StatusField, NSView) -> Void)?
+/// One Auto Layout row. Less important fields disappear before the essential state or position
+/// could be compressed. Their menus remain available inside Position.
+final class StatusBadgeRow: NSView, NSMenuDelegate {
+    var menuProvider: ((StatusField) -> NSMenu?)?
+    private let stack = NSStackView()
+    private let spacer = NSView()
+    private var popups: [StatusPopup] = []
     private var values: [StatusItem] = []
-    private var badges: [StatusBadge] = []
-    private var identities: [String] = []
-    private var measuredWidth: CGFloat = -1
-    override var isFlipped: Bool { true }
-    func update(_ items: [StatusItem]) {
+    private var leadingLabel: NSTextField?
+    private var fullLeadingText = "Ready", compactLeadingText = "Ready"
+    private var widths: [StatusField: NSLayoutConstraint] = [:]
+    private var rebuildingMenu = false
+    private(set) var collapsedFields: [StatusField] = []
+    /// Position remains present at the supported 800-point minimum. Selection follows it in priority.
+    static let collapseOrder: [StatusField] = [.language, .indent, .eol, .encoding, .selections, .selectedCharacters]
+    private static let rowFields: Set<StatusField> = [
+        .position, .selectedCharacters, .selections, .language, .indent, .encoding, .eol
+    ]
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        identifier = NSUserInterfaceItemIdentifier("status.row")
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel(Strings.text("status.group", "Document status"))
-        var counts: [String: Int] = [:]
-        let ids = items.map { item -> String in
-            let key = item.field.identityGroup, n = counts[key, default: 0]
-            counts[key] = n + 1
-            return "\(key).\(n)"
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 8
+        stack.detachesHiddenViews = true
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        stack.addArrangedSubview(spacer)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(equalToConstant: 24)
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
+    func setLeadingStatus(_ label: NSTextField, fullText: String, compactText: String) {
+        if leadingLabel !== label {
+            leadingLabel?.removeFromSuperview()
+            leadingLabel = label
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.setContentCompressionResistancePriority(.required, for: .horizontal)
+            stack.insertArrangedSubview(label, at: 0)
         }
-        guard items != values || ids != identities else { return }
-        let existing = Dictionary(uniqueKeysWithValues: zip(identities, badges))
-        let updated = zip(items, ids).map { item, id -> StatusBadge in
-            let badge = existing[id] ?? StatusBadge(item.text)
-            badge.title = item.text
-            let description = String(
-                format: Strings.text("status.fieldValue", "%@: %@"), item.field.displayName, item.text)
-            badge.toolTip = String(format: Strings.text("status.options", "%@. Show options."), description)
-            badge.setAccessibilityLabel(description)
-            // AppKit exposes the button cell, not its host view, in the native AX tree.
-            badge.cell?.setAccessibilityLabel(description)
-            badge.setAccessibilityHelp(Strings.text("status.showOptions", "Shows options for this field."))
-            badge.identifier = NSUserInterfaceItemIdentifier("status." + id)
-            badge.activate = { [weak self] button in self?.onActivate?(item.field, button) }
-            if badge.superview == nil { addSubview(badge) }
-            return badge
-        }
-        for (id, badge) in existing where !ids.contains(id) { badge.removeFromSuperview() }
-        values = items
-        identities = ids
-        badges = updated
-        invalidateIntrinsicContentSize()
+        fullLeadingText = fullText
+        compactLeadingText = compactText
+        label.stringValue = fullText
+        ControlPresentation.label(fullText, control: label)
         needsLayout = true
     }
-    private func rows() -> [[StatusBadge]] {
-        let width = max(1, bounds.width)
-        var result: [[StatusBadge]] = [], row: [StatusBadge] = []
-        var used: CGFloat = 0
-        for badge in badges {
-            let size = min(width, badge.preferredWidth)
-            if !row.isEmpty && used + 6 + size > width {
-                result.append(row)
-                row = []
-                used = 0
+    func update(_ items: [StatusItem]) {
+        let shown = items.filter { Self.rowFields.contains($0.field) }
+        guard shown != values else { return }
+        values = shown
+        let prior = Dictionary(uniqueKeysWithValues: popups.map { ($0.field, $0) })
+        var occurrences: [String: Int] = [:]
+        popups = shown.map { item in
+            let popup = prior[item.field] ?? StatusPopup(field: item.field)
+            let menu = popup.menu ?? NSMenu()
+            menu.delegate = self
+            menu.autoenablesItems = false
+            popup.menu = menu
+            if menu.items.isEmpty { menu.addItem(withTitle: item.text, action: nil, keyEquivalent: "") }
+            menu.items[0].title = item.text
+            popup.selectItem(at: 0)
+            let group = item.field.identityGroup, number = occurrences[group, default: 0]
+            occurrences[group] = number + 1
+            popup.identifier = NSUserInterfaceItemIdentifier("status.\(group).\(number)")
+            let description = String(
+                format: Strings.text("status.fieldValue", "%@: %@"), item.field.displayName, item.text)
+            ControlPresentation.label(
+                String(format: Strings.text("status.options", "%@. Show options."), description), control: popup)
+            let help = Strings.text("status.showOptions", "Shows options for this field.")
+            popup.setAccessibilityHelp(help)
+            popup.cell?.setAccessibilityHelp(help)
+            popup.toolTip = String(format: Strings.text("status.options", "%@. Show options."), description)
+            if popup.superview == nil { stack.addArrangedSubview(popup) }
+            if let constraint = widths[item.field] {
+                constraint.constant = popup.measuredWidth
+            } else {
+                let constraint = popup.widthAnchor.constraint(equalToConstant: popup.measuredWidth)
+                constraint.isActive = true
+                widths[item.field] = constraint
             }
-            if !row.isEmpty { used += 6 }
-            row.append(badge)
-            used += size
+            return popup
         }
-        if !row.isEmpty { result.append(row) }
-        return result
+        for (field, popup) in prior where !shown.contains(where: { $0.field == field }) {
+            stack.removeArrangedSubview(popup)
+            popup.removeFromSuperview()
+            widths.removeValue(forKey: field)?.isActive = false
+        }
+        // Keep a stable visual order even when selection controls appear between existing fields.
+        for popup in popups { stack.removeArrangedSubview(popup) }
+        for popup in popups { stack.addArrangedSubview(popup) }
+        needsLayout = true
     }
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: CGFloat(max(1, rows().count)) * 26 - 4)
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard !rebuildingMenu, let popup = popups.first(where: { $0.menu === menu }) else { return }
+        rebuildingMenu = true
+        defer { rebuildingMenu = false }
+        let title = values.first { $0.field == popup.field }?.text ?? popup.title
+        menu.removeAllItems()
+        menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
+        if let supplied = menuProvider?(popup.field) {
+            for item in supplied.items {
+                supplied.removeItem(item)
+                menu.addItem(item)
+            }
+        }
+        popup.selectItem(at: 0)
     }
     override func layout() {
-        super.layout()
-        if measuredWidth != bounds.width {
-            measuredWidth = bounds.width
-            invalidateIntrinsicContentSize()
+        guard let label = leadingLabel else {
+            super.layout()
+            return
         }
-        for (index, row) in rows().enumerated() {
-            let width =
-                row.reduce(CGFloat(0)) { $0 + min(bounds.width, $1.preferredWidth) } + CGFloat(max(0, row.count - 1))
-                * 6
-            var x = bounds.width - width
-            for badge in row {
-                let size = min(bounds.width, badge.preferredWidth)
-                badge.frame = NSRect(x: x, y: CGFloat(index) * 26, width: size, height: 22)
-                x += size + 6
+        var hidden = Set<StatusField>()
+        func requiredWidth(_ text: String) -> CGFloat {
+            let visible = popups.filter { !hidden.contains($0.field) }
+            let textWidth =
+                ceil(
+                    (text as NSString).size(withAttributes: [
+                        .font: label.font ?? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+                    ]).width) + 2
+            return textWidth + visible.reduce(0) { $0 + (widths[$1.field]?.constant ?? 0) }
+                + CGFloat(visible.count + 1) * stack.spacing
+        }
+        func collapse(_ text: String) {
+            hidden = []
+            for field in Self.collapseOrder where requiredWidth(text) > max(0, bounds.width - 8) {
+                if popups.contains(where: { $0.field == field }) { hidden.insert(field) }
             }
         }
+        var text = fullLeadingText
+        collapse(text)
+        if requiredWidth(text) > max(0, bounds.width - 8) {
+            // The full message remains the real native accessibility name and tooltip. Only
+            // path/diagnostic prose yields to the concise essential save/failure state.
+            text = compactLeadingText
+            collapse(text)
+        }
+        collapsedFields = Self.collapseOrder.filter { hidden.contains($0) }
+        for popup in popups {
+            let shouldHide = hidden.contains(popup.field)
+            if popup.isHidden != shouldHide { popup.isHidden = shouldHide }
+        }
+        if label.stringValue != text { label.stringValue = text }
+        super.layout()
     }
 }

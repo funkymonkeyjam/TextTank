@@ -39,6 +39,42 @@ Automations use `NSMenuToolbarItem`; favorites use standard image items and UUID
 
 Native configuration autosave is enabled only for the bundled application without an absolute support override or explicitly injected isolated defaults. Isolated checks use unique composition identifiers, disable native autosave and exercise arrangement capture/restoration through an explicit owned defaults domain. They do not inspect the person's configuration. Scoped accessibility names are assigned to the actual standard toolbar's native accessibility elements, retaining the system controls and drawing; metadata updates traverse only that toolbar, never the editor text or tab/status trees.
 
+## One-row document status
+
+The status area uses one Auto Layout row. Its leading label preserves the full
+save, transient or recovery message; trailing native borderless `NSPopUpButton`
+controls show position, selection, language, indentation, encoding and line endings.
+The native pull-down cells expose AppKit's menu-button role. Both their real host
+and cell names state the field, value and “Show options”; native menu tracking and
+keyboard focus remain system behavior. The former custom badge drawing is removed.
+
+At the 800-point minimum content width, fields collapse in this order: language,
+indentation, line endings, encoding, selection count, selected characters. Position
+and the essential save/failure words remain. Fields return when width permits, with
+existing controls reused. Position's menu retains character and line totals,
+bookmark count/actions, text size and wrap; it also offers the options of collapsed
+fields. The filename remains in the title bar and tab. No command's action,
+read-only validation, shortcut or checkmark changes.
+
+An unbounded path, error or transient cannot fit in a finite row. The full message
+stays in `statusText`, the actual native accessibility name and the tooltip. Only
+when necessary, the visible leading label uses the document's unchanged save-state
+words, “Recovered copy — Save As to keep”, or “⚠︎ Recovery copy not written”. This
+is an explicit DB-R1 presentation departure for path/diagnostic overflow, preserving
+essential state without a giant minimum window width. Recovery failure remains
+latched above transient messages until the document reports successful recovery.
+The original full recovered-copy and error wording is retained in the model.
+
+The visible-only 0.2-second polling timer remains under DB-R8. In the native check,
+a real Language menu action changes the document's profile but queued editor events
+do not update the field; an actual polling tick does. This is evidence from the
+owned fixture, not a claim about every running-app/OS event sequence. Existing
+checks still require no recurring work in hidden/minimized tabs, no whole-text
+capture during continuous edits in either event/tick order, one capture after an
+idle interval, one in-flight worker and exact revision checks before publication.
+Metrics still scan an immutable UTF-8 copy off the main thread. Moving totals to a
+menu does not turn menu construction or editor events into full-text captures.
+
 ## Search semantics
 
 `TTSearchEngine` searches immutable text snapshots and reports UTF-16 ranges. Regular expressions run over Unicode code points, not UTF-16 units, so `.`, classes and quantifiers take a whole astral character and a match never splits a surrogate pair; this departs on purpose from the Windows reference, which walks UTF-16 units. The regex carries its own UTF-8 locale (the process locale is never changed), so case folding, `\w`, `\b` and `\s` follow Unicode as literal mode and Whole word do; `\d` and `[[:digit:]]` stay `0-9`. Replacement output that would contain half a surrogate pair is refused.

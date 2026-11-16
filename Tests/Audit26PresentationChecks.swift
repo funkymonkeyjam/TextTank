@@ -30,15 +30,21 @@ enum Audit26PresentationChecks {
             exposedGroup && row.isAccessibilityElement() && row.accessibilityRole() == .group
                 && row.accessibilityLabel() == "Document status",
             "G401 native unignored status tree contains its named group")
-        let nativeChildren =
-            exposedGroup
-            ? (row.accessibilityChildren() ?? []).flatMap { NSAccessibility.unignoredChildrenForOnlyChild(from: $0) }
-            : roots
-        let controls = descendants(row).compactMap { $0 as? NSButton }.filter {
+        var nativeChildren: [Any] = [], seen = Set<ObjectIdentifier>()
+        func collect(_ element: Any) {
+            guard let object = element as? NSObject, seen.insert(ObjectIdentifier(object)).inserted else { return }
+            nativeChildren.append(element)
+            let selector = NSSelectorFromString("accessibilityChildren")
+            if object.responds(to: selector), let children = object.perform(selector)?.takeUnretainedValue() as? [Any] {
+                children.forEach(collect)
+            }
+        }
+        roots.forEach(collect)
+        let controls = descendants(row).compactMap { $0 as? NSPopUpButton }.filter {
             $0.identifier?.rawValue.hasPrefix("status.") == true
         }
         check(
-            !controls.isEmpty && nativeChildren.count == controls.count,
+            !controls.isEmpty && nativeChildren.count >= controls.count,
             "G401 native group exposes every visible status control")
         for control in controls {
             let expected = NSAccessibility.unignoredChildrenForOnlyChild(from: control)
@@ -48,7 +54,6 @@ enum Audit26PresentationChecks {
             let name = actual.map { nativeAttribute($0, "accessibilityLabel") } ?? ""
             let description =
                 actual.map { nativeAttribute($0, "accessibilityAttributeValue:", argument: "AXDescription") } ?? ""
-            let title = actual.map { nativeAttribute($0, "accessibilityTitle") } ?? ""
             let role = actual.map { nativeAttribute($0, "accessibilityRole") } ?? ""
             let help = actual.map { nativeAttribute($0, "accessibilityHelp") } ?? ""
             let scopedName = control.accessibilityLabel() ?? ""
@@ -58,9 +63,9 @@ enum Audit26PresentationChecks {
                 help)
             check(
                 actual != nil && !scopedName.isEmpty
-                    && [name, description, title].contains(scopedName)
-                    && role == NSAccessibility.Role.button.rawValue && !help.isEmpty,
-                "G401 real native status element has scoped name, button role and options help: \(control.identifier!.rawValue)"
+                    && name == scopedName
+                    && role == NSAccessibility.Role.menuButton.rawValue && !help.isEmpty,
+                "G401 real native status element has scoped name, native menu-button role and options help: \(control.identifier!.rawValue)"
             )
         }
     }
@@ -163,7 +168,7 @@ enum Audit26PresentationChecks {
         defer { doc.close() }
         let controller = doc.windowControllers.first as! EditorWindowController
         controller.refreshStatusDetails()
-        let badges = descendants(controller.window!.contentView!).compactMap { $0 as? NSButton }
+        let badges = descendants(controller.window!.contentView!).compactMap { $0 as? NSPopUpButton }
             .filter { $0.identifier?.rawValue.hasPrefix("status.") == true }
         check(
             !badges.isEmpty

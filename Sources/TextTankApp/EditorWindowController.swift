@@ -14,12 +14,39 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     private var splitBelowTabs: NSLayoutConstraint?
     var findBarVisible: Bool { findBar?.isHidden == false }
     private let statusLabel = NSTextField(labelWithString: "Ready")
-    var statusText: String { statusLabel.stringValue }
+    private var fullStatusText = "Ready"
+    private var recoveryStatusFailed = false
+    var statusText: String { fullStatusText }
     #if TESTING
         var status: NSTextField { statusLabel }
     #endif
-    func setStatusMessage(_ message: String) { statusLabel.stringValue = message }
-    func appendStatusMessage(_ suffix: String) { statusLabel.stringValue += suffix }
+    func setStatusMessage(_ message: String) {
+        guard !recoveryStatusFailed else { return }
+        applyStatusMessage(message)
+    }
+    private func applyStatusMessage(_ message: String) {
+        fullStatusText = message
+        updateLeadingStatus()
+    }
+    func appendStatusMessage(_ suffix: String) { setStatusMessage(fullStatusText + suffix) }
+    private func updateLeadingStatus() {
+        let doc = document as? TextDocument
+        let compact: String
+        if recoveryStatusFailed {
+            compact = "⚠︎ Recovery copy not written"
+        } else if doc?.recoveredOrigin != nil {
+            compact = "Recovered copy — Save As to keep"
+        } else {
+            compact = doc?.currentSaveStateStatus ?? fullStatusText
+        }
+        statusDetails.setLeadingStatus(statusLabel, fullText: fullStatusText, compactText: compact)
+        if recoveryStatusFailed {
+            statusLabel.toolTip =
+                "\(fullStatusText)\n\nCrash-recovery copies of this document are not being written. Save the document to keep your work. This message clears when a recovery copy is written again."
+        } else {
+            statusLabel.toolTip = fullStatusText == compact ? nil : fullStatusText
+        }
+    }
     private let statusDetails = StatusBadgeRow()
     private let documentTabs = DocumentTabStrip()
     private var statusTimer: Timer?
@@ -58,6 +85,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     private var cachedSelectionKey: SelectionKey?
     private var cachedSelectedCount = 0
     private var cachedEndings = "LF"
+    private var statusSummaryItems: [StatusItem] = []
     private(set) var secondary: TTEditor?
     /// The pane focused last. Written when the window's first responder moves into a pane, by
     /// each view's onFocus (see `wire`) and by closeSplit.
@@ -193,7 +221,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         search.isHidden = true
         findBar = search
         documentTabs.owner = window
-        [documentTabs, search, split, statusLabel, statusDetails].forEach {
+        [documentTabs, search, split, statusDetails].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview($0)
         }
@@ -213,18 +241,21 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             split.bottomAnchor.constraint(equalTo: statusDetails.topAnchor, constant: -5),
             statusDetails.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             statusDetails.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
-            statusDetails.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -2),
-            statusLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
-            statusLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
-            statusLabel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6)
+            statusDetails.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6)
         ])
         splitBelowFindBar = split.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 10)
         splitBelowTabs = split.topAnchor.constraint(equalTo: documentTabs.bottomAnchor)
         splitBelowTabs?.isActive = true
-        statusLabel.font = .systemFont(ofSize: 11)
+        statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         statusLabel.textColor = .secondaryLabelColor
-        statusLabel.lineBreakMode = .byTruncatingTail
-        statusDetails.onActivate = { [weak self] key, view in self?.showStatusOptions(key, at: view) }
+        statusLabel.lineBreakMode = .byClipping
+        updateLeadingStatus()
+        statusDetails.menuProvider = { [weak self] field in
+            guard let self else { return nil }
+            EditorServices.current?.noteActiveController(self)
+            self.lastEditor = self.activeEditor
+            return self.statusOptionsMenu(field)
+        }
         // Editor events make the bar follow an edit or a selection change in the same turn of
         // the run loop; the timer started by visibilityChanged() covers state no event reports.
         stateObserver = NotificationCenter.default.addObserver(
@@ -296,27 +327,25 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     func showTransientStatus(_ message: String, seconds: TimeInterval = 4, announce: Bool = true) {
         guard transientStatus != message else { return }
         if announce { Announce.say(message, from: window) }
-        guard let doc = document as? TextDocument, doc.lastRecoveryError == nil else { return }
+        guard let doc = document as? TextDocument, doc.lastRecoveryError == nil, !recoveryStatusFailed else { return }
         transientStatus = message
-        statusLabel.stringValue = message
+        setStatusMessage(message)
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self, weak doc] in
             guard let self, self.transientStatus == message else { return }
             self.transientStatus = nil
-            if let doc, doc.lastRecoveryError == nil { self.statusLabel.stringValue = doc.currentSaveStateStatus }
+            if let doc, doc.lastRecoveryError == nil { self.setStatusMessage(doc.currentSaveStateStatus) }
         }
     }
     func showRecoveryStatus(_ message: String, failed: Bool) {
         transientStatus = nil
-        if failed, statusLabel.stringValue != message { Announce.say(message, from: window) }
-        statusLabel.stringValue = message
+        recoveryStatusFailed = failed
+        if failed, fullStatusText != message { Announce.say(message, from: window) }
+        applyStatusMessage(message)
         // The failure is carried by the words and the symbol; full-strength label colour keeps it
         // readable in both appearances, where small red text was not.
         statusLabel.textColor = failed ? .labelColor : .secondaryLabelColor
-        statusLabel.font = failed ? .boldSystemFont(ofSize: 11) : .systemFont(ofSize: 11)
-        statusLabel.toolTip =
-            failed
-            ? "Crash-recovery copies of this document are not being written. Save the document to keep your work. This message clears when a recovery copy is written again."
-            : nil
+        statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: failed ? .semibold : .regular)
+        updateLeadingStatus()
     }
     enum StatusRefreshSource {
         case explicit, editorEvent, pollingTick
@@ -405,15 +434,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             .init(field: .eol, text: eol), .init(field: .wrap, text: editor.wrap ? "Wrap" : "No Wrap")
         ]
         if editor.readOnly { items.append(.init(field: .readOnly, text: "Read Only")) }
-        statusDetails.update(items)
-    }
-    private func showStatusOptions(_ key: StatusField, at view: NSView) {
-        let editor = activeEditor
-        EditorServices.current?.noteActiveController(self)
-        lastEditor = editor
-        guard let menu = statusOptionsMenu(key) else { return }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height), in: view)
-        refreshStatusDetails()
+        statusSummaryItems = items
+        let rowOrder: [StatusField] = [.position, .selectedCharacters, .selections, .language, .indent, .encoding, .eol]
+        statusDetails.update(rowOrder.compactMap { field in items.first { $0.field == field } })
     }
     /// The menu a status bar field opens, for the active pane. Building it changes nothing, so
     /// its wording can be checked without showing it.
@@ -506,6 +529,17 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             for value: EditorCommand in [.bookmarkToggle, .bookmarkNext, .bookmarkPrevious] { command(value) }
         case .position:
             add("Go to Line…", #selector(statusOption(_:)), self, "goToLine")
+            menu.addItem(.separator())
+            for item in statusSummaryItems
+            where [.bookmarks, .characters, .lines, .font, .wrap, .readOnly].contains(item.field) {
+                heading(item.text)
+            }
+            for field: StatusField in [.bookmarks, .font, .wrap, .language, .indent, .encoding, .eol] {
+                guard let submenu = statusOptionsMenu(field) else { continue }
+                let item = NSMenuItem(title: field.displayName, action: nil, keyEquivalent: "")
+                item.submenu = submenu
+                menu.addItem(item)
+            }
         case .document, .readOnly:
             add("Save", #selector(NSDocument.save(_:)), doc)
             add("Save As…", #selector(NSDocument.saveAs(_:)), doc)

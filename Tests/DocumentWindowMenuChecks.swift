@@ -316,7 +316,7 @@ extension DocumentChecks {
             let (document, controller, window) = try tab("p21-goto")
             check(
                 controller.responds(to: #selector(EditorWindowController.goToLine(_:)))
-                    && controller.statusOptionsMenu("position")?.items.map(\.title) == ["Go to Line…"],
+                    && controller.statusOptionsMenu("position")?.items.first?.title == "Go to Line…",
                 "the document window implements Go to Line and the status bar keeps its own entry")
             let text = "één\r\ntwo 😀\rthree\nfour"
             document.editor.text = text

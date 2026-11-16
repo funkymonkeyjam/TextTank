@@ -96,6 +96,7 @@ import AppKit
             section("audit29 factory") { try Audit29FactoryChecks.run(root: root) }
             section("audit29 Foundation core") { try DocumentCoreChecks.run(root: root) }
             section("audit29 intent") { try Audit29IntentChecks.run() }
+            section("one-row status") { try DesignStatusChecks.run() }
             // Written by the single-document section and read by the session and recovery section.
             let saved = root.appendingPathComponent("saved-as.txt")
             section("automation configuration and settings") {
@@ -1293,13 +1294,14 @@ import AppKit
                     firstController.statusRefreshCount == hiddenRefreshes,
                     "hidden tabs perform no recurring status refresh")
                 secondController.refreshStatusDetails()
-                let eolBefore = descendants(secondController.window!.contentView!).compactMap { $0 as? NSButton }.first
-                { $0.identifier?.rawValue == "status.eol.0" }!
+                let eolBefore = descendants(secondController.window!.contentView!).compactMap { $0 as? NSPopUpButton }
+                    .first { $0.identifier?.rawValue == "status.eol.0" }!
                 second.editor.text = "new text"
                 secondController.refreshStatusDetails()
-                let eolAfter = descendants(secondController.window!.contentView!).compactMap { $0 as? NSButton }.first {
-                    $0.identifier?.rawValue == "status.eol.0"
-                }!
+                let eolAfter = descendants(secondController.window!.contentView!).compactMap { $0 as? NSPopUpButton }
+                    .first {
+                        $0.identifier?.rawValue == "status.eol.0"
+                    }!
                 check(eolBefore === eolAfter, "unrelated status changes retain existing control identity")
                 check(eolAfter.title == "LF", "the line-ending badge found by identifier shows the document's ending")
                 let navigation = AppDelegate()
@@ -1372,9 +1374,14 @@ import AppKit
                 }
                 let controller = visible.windowControllers[0] as! EditorWindowController
                 let hiddenController = hidden.windowControllers[0] as! EditorWindowController
-                let buttons = { descendants(controller.window!.contentView!).compactMap { $0 as? NSButton } }
+                let buttons = { descendants(controller.window!.contentView!).compactMap { $0 as? NSPopUpButton } }
                 let badges = {
+                    // DB-R3: totals, wrap and access state moved to the position menu. These
+                    // retain the original asynchronous metrics/state assertions at that surface.
                     buttons().filter { $0.identifier?.rawValue.hasPrefix("status.") == true }.map(\.title)
+                        + (controller.statusOptionsMenu(.position)?.items.filter {
+                            $0.action == nil && $0.submenu == nil
+                        }.map(\.title) ?? [])
                 }
                 let badge = { (identifier: String) in buttons().first { $0.identifier?.rawValue == identifier }?.title }
                 try require(
@@ -1396,7 +1403,7 @@ import AppKit
                 }
                 check(
                     badgeMismatches.isEmpty,
-                    "the chars and line-ending badges reach the previous implementation's values with no explicit refresh \(badgeMismatches)"
+                    "the position-menu character totals and line-ending field reach the previous implementation's values with no explicit refresh \(badgeMismatches)"
                 )
                 visible.editor.text = "a\r\nb\nc\u{1F600}"
                 spinUntil("exact character count and Mixed EOL") {
@@ -1439,11 +1446,12 @@ import AppKit
                 check(
                     badges().contains(wrapBadge) && badges().contains(Strings.count(1, .bookmark))
                         && badges().contains("Read Only"),
-                    "wrap, bookmark and read-only changes reach the badges with no explicit refresh \(badges())")
+                    "wrap, bookmark and read-only details reach the position menu with no explicit refresh \(badges())")
                 visible.editor.readOnly = false
                 controller.toggleWrap(nil)
                 let hiddenTabTitle = {
-                    buttons().first { $0.toolTip == hidden.windowControllers[0].window!.title }?.title
+                    descendants(controller.window!.contentView!).compactMap { $0 as? NSButton }
+                        .first { $0.toolTip == hidden.windowControllers[0].window!.title }?.title
                 }
                 try require(hiddenTabTitle()?.hasSuffix("•") == false, "fixture: the hidden tab starts unedited")
                 _ = hidden.editor.replaceSelection("edited while hidden")
