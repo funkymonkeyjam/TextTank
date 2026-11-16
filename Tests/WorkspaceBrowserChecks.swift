@@ -575,12 +575,12 @@ import Darwin
             let cancelTimer = Timer(timeInterval: 0.001, repeats: true) { _ in
                 precondition(Thread.isMainThread)
                 MainActor.assumeIsolated {
-                    guard !cancelState.pressed else { return }
                     if Date() > cancelDeadline {
                         cancelState.timedOut = true
                         NSApp.abortModal()
                         return
                     }
+                    guard !cancelState.pressed else { return }
                     guard let content = NSApp.modalWindow?.contentView,
                         let button = descendants(content).compactMap({ $0 as? NSButton }).first(where: {
                             $0.title == "Cancel"
