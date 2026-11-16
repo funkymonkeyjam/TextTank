@@ -15,6 +15,7 @@
 #include <boost/regex.hpp>
 
 @implementation TTSearchCancellation { std::atomic<bool> _cancelled; }
++ (BOOL)accessInstanceVariablesDirectly { return NO; }
 - (instancetype)init { if ((self=[super init])) _cancelled=false; return self; }
 - (void)cancel { _cancelled=true; }
 - (BOOL)cancelled { return _cancelled.load(); }

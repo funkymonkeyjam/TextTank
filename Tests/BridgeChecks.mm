@@ -48,10 +48,29 @@ static NSEvent *TTMouse(NSEventType type, NSView *content, NSPoint point, NSTime
     return [NSEvent mouseEventWithType:type location:[content convertPoint:point toView:nil] modifierFlags:0 timestamp:time
                           windowNumber:content.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1];
 }
+static void cancellationContract() {
+    TTSearchCancellation *token=[TTSearchCancellation new];
+    check(!token.cancelled && ![[token valueForKey:@"cancelled"] boolValue], "F316 native cancellation starts false and retains its safe KVC getter");
+    check(![TTSearchCancellation accessInstanceVariablesDirectly], "F316 native cancellation denies direct-ivar KVC so only atomic cancel mutates it");
+    for(NSString *key in @[@"cancelled",@"_cancelled"]) {
+        TTSearchCancellation *attempt=[TTSearchCancellation new];
+        BOOL refused=NO;
+        @try { [attempt setValue:@YES forKey:key]; } @catch(NSException *exception) { refused=YES; }
+        if(!refused || attempt.cancelled) std::printf("CANCELLATION_KVC %s accepted=%d cancelled=%d\n",key.UTF8String,!refused,attempt.cancelled);
+        check(refused && !attempt.cancelled, [[NSString stringWithFormat:@"F316 %@ KVC mutation is refused without changing cancellation",key] UTF8String]);
+    }
+    [token cancel];
+    check(token.cancelled && [[token valueForKey:@"cancelled"] boolValue], "F316 atomic cancel remains observable through direct and KVC reads");
+}
 int main(int argc, char **argv) {
     @autoreleasepool {
         if (argc == 2 && std::strcmp(argv[1], "--artifact-identity-only") == 0)
             return ttchecks::finish("BridgeArtifactChecks", "loaded signed native artifacts; no NSApplication construction");
+        if (argc == 2 && std::strcmp(argv[1], "--cancellation-contract") == 0) {
+            cancellationContract();
+            return ttchecks::finish("CancellationContractChecks", "actual native atomic cancellation; no NSApplication construction");
+        }
+        cancellationContract();
         [NSApplication sharedApplication];
         ttchecks::section("audit25 unknown command refusal", [&] {
             TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 300, 200)];
