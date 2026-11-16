@@ -9,6 +9,28 @@
 #include <cmath>
 extern "C" Scintilla::ILexer5 *TextTankCreateUserLexer();
 
+@implementation TTByteRange
+- (instancetype)initWithLocation:(NSInteger)location length:(NSInteger)length {
+    if ((self=[super init])) { _location=location; _length=length; }
+    return self;
+}
+- (id)copyWithZone:(NSZone *)zone { return self; }
+- (BOOL)isEqual:(id)other {
+    return other==self || ([other isKindOfClass:TTByteRange.class] && _location==((TTByteRange *)other).location && _length==((TTByteRange *)other).length);
+}
+- (NSUInteger)hash { return (NSUInteger)_location ^ ((NSUInteger)_length << 1); }
+@end
+/// Reject a foreign range type, negatives and overflow before forming NSMaxRange.
+static BOOL TTValidatedByteRange(id candidate, NSUInteger documentLength, NSRange *result) {
+    if (![candidate isKindOfClass:TTByteRange.class]) return NO;
+    TTByteRange *value=candidate;
+    if (value.location<0 || value.length<0) return NO;
+    const NSUInteger location=(NSUInteger)value.location, length=(NSUInteger)value.length;
+    if (location>documentLength || length>documentLength-location) return NO;
+    *result=NSMakeRange(location,length);
+    return YES;
+}
+
 @implementation TTSelectionRange
 - (instancetype)initWithAnchor:(NSInteger)anchor caret:(NSInteger)caret {
     if ((self=[super init])) { _anchor=anchor; _caret=caret; }
@@ -952,14 +974,13 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (void)scrollCaretIntoView { [self assertThread]; [_engine message:SCI_SCROLLCARET]; }
 - (NSInteger)firstVisibleLine { [self assertThread]; return [_engine message:SCI_GETFIRSTVISIBLELINE]; }
-- (BOOL)replaceRanges:(NSArray<NSValue *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision {
+- (BOOL)replaceRanges:(NSArray<TTByteRange *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision {
     [self assertThread];
     if (revision!=self.revision || self.readOnly || ![ranges isKindOfClass:NSArray.class] || ![texts isKindOfClass:NSArray.class] || ranges.count==0 || texts.count!=ranges.count) return NO;
     const NSUInteger length=(NSUInteger)[_engine message:SCI_GETLENGTH]; NSUInteger previousEnd=0;
     for (id value in ranges) {
-        if (![value isKindOfClass:NSValue.class] || std::strcmp([value objCType], @encode(NSRange))!=0) return NO;
-        const NSRange range=[value rangeValue];
-        if (range.location>length || range.length>length-range.location || range.location<previousEnd) return NO;
+        NSRange range;
+        if (!TTValidatedByteRange(value,length,&range) || range.location<previousEnd) return NO;
         for (NSUInteger position : {range.location, NSMaxRange(range)}) {
             if (position<length && ([_engine message:SCI_GETCHARAT wParam:position] & 0xC0)==0x80) return NO;
         }
@@ -975,12 +996,12 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     // Last range first, so the offsets of the ranges still to be replaced stay valid.
     [_engine message:SCI_BEGINUNDOACTION];
     for (NSUInteger i=ranges.count;i-->0;) {
-        const NSRange range=[ranges[i] rangeValue];
+        const NSRange range=NSMakeRange((NSUInteger)ranges[i].location,(NSUInteger)ranges[i].length);
         [_engine message:SCI_SETTARGETRANGE wParam:range.location lParam:NSMaxRange(range)];
         [_engine message:SCI_REPLACETARGET wParam:encoded[i].length lParam:(sptr_t)encoded[i].bytes];
     }
     [_engine message:SCI_ENDUNDOACTION];
-    const sptr_t caret=(sptr_t)([ranges[0] rangeValue].location+encoded[0].length);
+    const sptr_t caret=(sptr_t)((NSUInteger)ranges[0].location+encoded[0].length);
     [_engine message:SCI_SETSEL wParam:caret lParam:caret];
     [_engine message:SCI_SCROLLCARET];
     return YES;
@@ -1442,14 +1463,20 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (void)clearSearchHighlights {
     [self assertThread];[_engine message:SCI_SETINDICATORCURRENT wParam:TTSearchIndicator];[_engine message:SCI_INDICATORCLEARRANGE wParam:0 lParam:[_engine message:SCI_GETLENGTH]];
 }
-- (BOOL)setSearchHighlights:(NSArray<NSValue *> *)ranges {
-    [self assertThread];if(ranges.count>100000)return NO;const NSUInteger length=[_engine message:SCI_GETLENGTH];
-    for(NSValue *value in ranges){if(![value isKindOfClass:NSValue.class] || strcmp(value.objCType,@encode(NSRange))!=0)return NO;NSRange r=value.rangeValue;
-        if(r.location>length || r.length>length-r.location)return NO;
-        for(NSUInteger p : {r.location,NSMaxRange(r)})if(p<length && ([_engine message:SCI_GETCHARAT wParam:p]&0xC0)==0x80)return NO;
+- (BOOL)setSearchHighlights:(NSArray<TTByteRange *> *)ranges {
+    [self assertThread];
+    if (![ranges isKindOfClass:NSArray.class] || ranges.count>100000) return NO;
+    const NSUInteger length=[_engine message:SCI_GETLENGTH];
+    for (id value in ranges) {
+        NSRange range;
+        if (!TTValidatedByteRange(value,length,&range)) return NO;
+        for (NSUInteger p : {range.location,NSMaxRange(range)})
+            if(p<length && ([_engine message:SCI_GETCHARAT wParam:p]&0xC0)==0x80) return NO;
     }
-    [self clearSearchHighlights];[self applySearchIndicatorStyle];
-    for(NSValue *value in ranges){NSRange r=value.rangeValue;[_engine message:SCI_INDICATORFILLRANGE wParam:r.location lParam:r.length];}return YES;
+    [self clearSearchHighlights]; [self applySearchIndicatorStyle];
+    for (TTByteRange *range in ranges)
+        [_engine message:SCI_INDICATORFILLRANGE wParam:range.location lParam:range.length];
+    return YES;
 }
 - (void)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size {
     [self assertThread];if(index<0 || index>255 || !std::isfinite(size) || size<6 || size>96 || name.length>200 || [name rangeOfString:@"\0"].location!=NSNotFound)return;

@@ -13,6 +13,7 @@
 @end
 @implementation TTFakeDrop
 @end
+static TTByteRange *R(NSRange range) { return [[TTByteRange alloc] initWithLocation:(NSInteger)range.location length:(NSInteger)range.length]; }
 static TTSelectionRange *S(NSInteger anchor, NSInteger caret) { return [[TTSelectionRange alloc] initWithAnchor:anchor caret:caret]; }
 static NSEvent *TTMouse(NSEventType type, NSView *content, NSPoint point, NSTimeInterval time) {
     return [NSEvent mouseEventWithType:type location:[content convertPoint:point toView:nil] modifierFlags:0 timestamp:time
@@ -108,7 +109,9 @@ int main() {
         [second executeCommand:@"undo"];
         check([second.text isEqual:@"a\r\nb\rc\n"], "EOL conversion single Undo preserves original mix");
         [second resetUndoHistory];[second setSavePoint];NSUInteger markedRevision=second.revision;
-        check([second setSearchHighlights:@[[NSValue valueWithRange:NSMakeRange(0,1)]]], "Mark accepts validated byte range");
+        NSValue *foreignRange=[NSValue valueWithRange:NSMakeRange(0,1)];
+        check(![second setSearchHighlights:(NSArray *)@[foreignRange]], "F29 an untyped NSRange cannot cross the byte-range boundary");
+        check([second setSearchHighlights:@[R(NSMakeRange(0,1))]], "Mark accepts validated byte range");
         check(second.revision==markedRevision && !second.modified, "Mark does not edit document");
         TTEditor *markClone=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,500,300)];[markClone shareDocumentWith:second];
         ScintillaView *markNative=(ScintillaView *)markClone.subviews.firstObject;
@@ -403,19 +406,19 @@ int main() {
         [batch setSelectionAnchor:3 caret:8];
         NSUInteger batchRevision=batch.revision;
         BOOL (^same)(void)=^BOOL{ return [batch.text isEqual:batchText] && batch.revision==batchRevision && !batch.modified && ![batchNative message:SCI_CANUNDO] && batch.selectionStart==3 && batch.selectionEnd==8; };
-        NSArray<NSValue *> *two=@[[NSValue valueWithRange:NSMakeRange(3,5)],[NSValue valueWithRange:NSMakeRange(14,5)]];
+        NSArray<TTByteRange *> *two=@[R(NSMakeRange(3,5)),R(NSMakeRange(14,5))];
         const unichar batchLoneUnit[]={0xD83D};
         NSString *batchLone=[NSString stringWithCharacters:batchLoneUnit length:1];
         check(![batch replaceRanges:two withTexts:@[@"a",@"b"] expectedRevision:batchRevision+1] && same(), "Batch replacement with a stale revision changes nothing");
         check(![batch replaceRanges:two withTexts:@[@"a"] expectedRevision:batchRevision] && same(), "Batch replacement with mismatched counts changes nothing");
         check(![batch replaceRanges:@[] withTexts:@[] expectedRevision:batchRevision] && same(), "Empty batch replacement is rejected");
         check(![batch replaceRanges:@[two[1],two[0]] withTexts:@[@"a",@"b"] expectedRevision:batchRevision] && same(), "Descending batch ranges change nothing");
-        check(![batch replaceRanges:@[[NSValue valueWithRange:NSMakeRange(3,5)],[NSValue valueWithRange:NSMakeRange(7,3)]] withTexts:@[@"a",@"b"] expectedRevision:batchRevision] && same(), "Overlapping batch ranges change nothing");
-        check(![batch replaceRanges:@[two[0],[NSValue valueWithRange:NSMakeRange(20,9)]] withTexts:@[@"a",@"b"] expectedRevision:batchRevision] && same(), "A batch range past the end changes nothing, including the valid range before it");
-        check(![batch replaceRanges:@[two[0],[NSValue valueWithRange:NSMakeRange(10,2)]] withTexts:@[@"a",@"b"] expectedRevision:batchRevision] && same(), "A batch range splitting a UTF-8 sequence changes nothing");
-        check(![batch replaceRanges:@[[NSValue valueWithRange:NSMakeRange(1,2)]] withTexts:@[@"a"] expectedRevision:batchRevision] && same(), "A batch range starting inside a UTF-8 sequence changes nothing");
+        check(![batch replaceRanges:@[R(NSMakeRange(3,5)),R(NSMakeRange(7,3))] withTexts:@[@"a",@"b"] expectedRevision:batchRevision] && same(), "Overlapping batch ranges change nothing");
+        check(![batch replaceRanges:@[two[0],R(NSMakeRange(20,9))] withTexts:@[@"a",@"b"] expectedRevision:batchRevision] && same(), "A batch range past the end changes nothing, including the valid range before it");
+        check(![batch replaceRanges:@[two[0],R(NSMakeRange(10,2))] withTexts:@[@"a",@"b"] expectedRevision:batchRevision] && same(), "A batch range splitting a UTF-8 sequence changes nothing");
+        check(![batch replaceRanges:@[R(NSMakeRange(1,2))] withTexts:@[@"a"] expectedRevision:batchRevision] && same(), "A batch range starting inside a UTF-8 sequence changes nothing");
         check(![batch replaceRanges:two withTexts:@[@"a",batchLone] expectedRevision:batchRevision] && same(), "One unencodable batch text rejects the whole batch");
-        check(![batch replaceRanges:@[@1,@2] withTexts:@[@"a",@"b"] expectedRevision:batchRevision] && same(), "Batch ranges that are not NSRange values are rejected");
+        check(![batch replaceRanges:(NSArray *)@[@1,@2] withTexts:@[@"a",@"b"] expectedRevision:batchRevision] && same(), "Foreign byte-range objects are rejected");
         batch.readOnly=YES;
         check(![batch replaceRanges:two withTexts:@[@"a",@"b"] expectedRevision:batchRevision] && same(), "Read-only batch replacement changes nothing");
         batch.readOnly=NO;
@@ -428,7 +431,7 @@ int main() {
         [batch executeCommand:@"undo"];
         check([batch.text isEqual:batchText] && !batch.modified && ![batchNative message:SCI_CANUNDO], "Batch replacement is one undo step back to the save point");
         batch.text=@"ab";[batch resetUndoHistory];batchRevision=batch.revision;
-        check([batch replaceRanges:@[[NSValue valueWithRange:NSMakeRange(0,0)],[NSValue valueWithRange:NSMakeRange(1,0)],[NSValue valueWithRange:NSMakeRange(2,0)]] withTexts:@[@"_",@"_",@"_"] expectedRevision:batchRevision] && [batch.text isEqual:@"_a_b_"] && batch.selectionCaret==1, "Zero-width batch ranges insert at each position, including the end");
+        check([batch replaceRanges:@[R(NSMakeRange(0,0)),R(NSMakeRange(1,0)),R(NSMakeRange(2,0))] withTexts:@[@"_",@"_",@"_"] expectedRevision:batchRevision] && [batch.text isEqual:@"_a_b_"] && batch.selectionCaret==1, "Zero-width batch ranges insert at each position, including the end");
         // F223: revision is the staleness authority, so every way of changing text must move it.
         TTEditor *counted=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,300)];
         ScintillaView *countedNative=(ScintillaView *)counted.subviews.firstObject;
@@ -443,7 +446,7 @@ int main() {
         check([counted replaceSelection:@""] && moved(), "Deleting the selection moves the revision");
         [counted setSelectionRanges:@[S(0,1),S(2,3)]];
         check([counted replaceSelections:@[@"x",@"y"] expectedRevision:counted.revision] && moved(), "Multi-selection replacement moves the revision");
-        check([counted replaceRanges:@[[NSValue valueWithRange:NSMakeRange(0,1)]] withTexts:@[@"z"] expectedRevision:counted.revision] && moved(), "Batch range replacement moves the revision");
+        check([counted replaceRanges:@[R(NSMakeRange(0,1))] withTexts:@[@"z"] expectedRevision:counted.revision] && moved(), "Batch range replacement moves the revision");
         [counted executeCommand:@"undo"];
         check(moved(), "Undo moves the revision");
         [counted executeCommand:@"redo"];

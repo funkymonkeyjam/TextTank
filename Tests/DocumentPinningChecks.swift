@@ -523,7 +523,7 @@ extension DocumentChecks {
                     "with the primary view focused it is the current editor again")
                 let indicatorAllOnFor: UInt32 = 2506, searchIndicator = 1 << 20
                 check(
-                    document.editor.setSearchHighlights([NSValue(range: NSRange(location: 0, length: 4))])
+                    document.editor.setSearchHighlights([TTByteRange(location: 0, length: 4)])
                         && sci(clone, indicatorAllOnFor, 1) & searchIndicator != 0
                         && sci(clone, indicatorAllOnFor, 5) & searchIndicator == 0,
                     "a search highlight set through the primary view is present in the clone")

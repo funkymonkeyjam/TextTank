@@ -890,7 +890,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         guard editor.window != nil, editor.revision == revision,
             let ranges = SearchCore.byteRanges(hits.map(\.range), in: text)
         else { return false }
-        return editor.setSearchHighlights(ranges.filter { $0.length > 0 }.map { NSValue(range: $0) })
+        return editor.setSearchHighlights(
+            ranges.filter { $0.length > 0 }.map { TTByteRange(location: $0.location, length: $0.length) })
     }
     @discardableResult static func apply(_ hits: [SearchHit], text: String, revision: UInt, to editor: TTEditor) -> Bool
     {
@@ -911,7 +912,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         let anchor = editor.selectionAnchor, caret = editor.selectionCaret
         guard let ranges = SearchCore.byteRanges(hits.map(\.range), in: text),
             editor.replaceRanges(
-                ranges.map { NSValue(range: $0) }, withTexts: hits.map(\.replacement), expectedRevision: revision)
+                ranges.map { TTByteRange(location: $0.location, length: $0.length) },
+                withTexts: hits.map(\.replacement), expectedRevision: revision)
         else { return .stale }
         let edits = zip(ranges, hits).map {
             SearchSession.Edit(range: $0.0, replacementBytes: $0.1.replacement.utf8.count)

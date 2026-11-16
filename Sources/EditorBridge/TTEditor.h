@@ -17,6 +17,15 @@ typedef NS_ERROR_ENUM(TTEditorErrorDomain, TTEditorError) {
 /// may listen. It says "look again", not what changed; Scintilla reports selection changes when
 /// it paints, so a periodic refresh is still needed for state no event covers.
 extern NSNotificationName const TTEditorStateDidChangeNotification;
+/// A UTF-8 byte span, distinct from Foundation NSRange values used for UTF-16 search.
+/// Construction does not assert document bounds; the editor validates the complete batch.
+__attribute__((objc_subclassing_restricted))
+@interface TTByteRange : NSObject <NSCopying>
+@property(nonatomic, readonly) NSInteger location;
+@property(nonatomic, readonly) NSInteger length;
+- (instancetype)initWithLocation:(NSInteger)location length:(NSInteger)length;
+- (instancetype)init NS_UNAVAILABLE;
+@end
 /// Immutable UTF-8 byte positions. Bounds and scalar alignment are checked by TTEditor,
 /// before any selection is changed; negative/out-of-document values remain rejectable inputs.
 __attribute__((objc_subclassing_restricted))
@@ -83,11 +92,11 @@ __attribute__((objc_subclassing_restricted))
 /// history is emptied and the result is the save point. NO, changing nothing, when read-only
 /// or unencodable.
 - (BOOL)loadDocumentText:(NSString *)text;
-/// Replaces ascending, non-overlapping byte ranges (NSRange values) under one undo action,
+/// Replaces ascending, non-overlapping byte ranges (TTByteRange values) under one undo action,
 /// without driving the selection per range. Revision, read-only state, bounds, UTF-8
 /// lead-byte alignment and encodability are all checked before the first edit; NO changes
 /// nothing. Afterwards there is one caret, just after the first replacement, scrolled into view.
-- (BOOL)replaceRanges:(NSArray<NSValue *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision;
+- (BOOL)replaceRanges:(NSArray<TTByteRange *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision NS_SWIFT_NAME(replaceRanges(_:withTexts:expectedRevision:));
 @property(nonatomic) BOOL readOnly;
 /// The one read-only guard: every command that edits text calls it before anything else,
 /// including before any dialog, so the reason is always the same and always stated first.
@@ -187,7 +196,7 @@ __attribute__((objc_subclassing_restricted))
 - (void)setSyntaxStyle:(NSInteger)index foreground:(NSColor *)foreground background:(nullable NSColor *)background bold:(BOOL)bold italic:(BOOL)italic;
 - (void)showCallTip:(NSString *)text;
 - (void)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size;
-- (BOOL)setSearchHighlights:(NSArray<NSValue *> *)ranges;
+- (BOOL)setSearchHighlights:(NSArray<TTByteRange *> *)ranges;
 - (void)clearSearchHighlights;
 
 /// Native Scintilla primitive retained for native control/performance checks. Product Find uses SearchController.
