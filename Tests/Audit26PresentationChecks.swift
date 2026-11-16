@@ -5,6 +5,65 @@ enum Audit26PresentationChecks {
     @MainActor private static func descendants(_ view: NSView) -> [NSView] {
         [view] + view.subviews.flatMap(descendants)
     }
+    /// These fixtures install timers only on RunLoop.main. Transport a Sendable actor-bound
+    /// action, rather than capturing AppKit objects directly in Timer's nonisolated callback.
+    @MainActor private static func mainTimer(
+        _ interval: TimeInterval, action: @escaping @MainActor @Sendable () -> Void
+    ) -> Timer {
+        Timer(timeInterval: interval, repeats: true) { _ in
+            MainActor.assumeIsolated { action() }
+        }
+    }
+    @MainActor private static func nativeAttribute(_ element: Any, _ name: String, argument: String? = nil) -> String {
+        guard let object = element as? NSObject else { return "" }
+        let selector = NSSelectorFromString(name)
+        guard object.responds(to: selector) else { return "" }
+        let result = argument.map { object.perform(selector, with: $0) } ?? object.perform(selector)
+        return result?.takeUnretainedValue() as? String ?? ""
+    }
+    /// NSButton hosts can be ignored while their NSButtonCells are the real accessible controls.
+    /// Inspect the native unignored tree, descending the group when it is exposed.
+    @MainActor private static func checkNativeStatus(_ row: NSView) {
+        let roots = NSAccessibility.unignoredChildrenForOnlyChild(from: row)
+        let exposedGroup = roots.contains { ($0 as AnyObject) === row }
+        check(
+            exposedGroup && row.isAccessibilityElement() && row.accessibilityRole() == .group
+                && row.accessibilityLabel() == "Document status",
+            "G401 native unignored status tree contains its named group")
+        let nativeChildren =
+            exposedGroup
+            ? (row.accessibilityChildren() ?? []).flatMap { NSAccessibility.unignoredChildrenForOnlyChild(from: $0) }
+            : roots
+        let controls = descendants(row).compactMap { $0 as? NSButton }.filter {
+            $0.identifier?.rawValue.hasPrefix("status.") == true
+        }
+        check(
+            !controls.isEmpty && nativeChildren.count == controls.count,
+            "G401 native group exposes every visible status control")
+        for control in controls {
+            let expected = NSAccessibility.unignoredChildrenForOnlyChild(from: control)
+            let actual = nativeChildren.first { child in
+                expected.contains { ($0 as AnyObject) === (child as AnyObject) }
+            }
+            let name = actual.map { nativeAttribute($0, "accessibilityLabel") } ?? ""
+            let description =
+                actual.map { nativeAttribute($0, "accessibilityAttributeValue:", argument: "AXDescription") } ?? ""
+            let title = actual.map { nativeAttribute($0, "accessibilityTitle") } ?? ""
+            let role = actual.map { nativeAttribute($0, "accessibilityRole") } ?? ""
+            let help = actual.map { nativeAttribute($0, "accessibilityHelp") } ?? ""
+            let scopedName = control.accessibilityLabel() ?? ""
+            print(
+                "AX_STATUS_ELEMENT", control.identifier!.rawValue, "role=", role, "modernLabel=", name,
+                "legacyDescription=", description, "help=",
+                help)
+            check(
+                actual != nil && !scopedName.isEmpty
+                    && [name, description, title].contains(scopedName)
+                    && role == NSAccessibility.Role.button.rawValue && !help.isEmpty,
+                "G401 real native status element has scoped name, button role and options help: \(control.identifier!.rawValue)"
+            )
+        }
+    }
     @MainActor static func run() throws {
         let search = SearchController(
             preferencesURL: URL(fileURLWithPath: ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]!)
@@ -62,7 +121,7 @@ enum Audit26PresentationChecks {
             "G416 advanced help states current favorite scope accurately")
         var paletteSeen = false, paletteOrder = false, paletteTimedOut = false
         let paletteDeadline = Date().addingTimeInterval(5)
-        let paletteTimer = Timer(timeInterval: 0.05, repeats: true) { _ in
+        let paletteTimer = mainTimer(0.05) {
             if Date() > paletteDeadline {
                 paletteTimedOut = true
                 NSApp.abortModal()
@@ -106,6 +165,11 @@ enum Audit26PresentationChecks {
             !badges.isEmpty
                 && badges.allSatisfy { !($0.accessibilityLabel() ?? "").isEmpty && $0.accessibilityLabel() != $0.title },
             "G401 every status badge has a descriptive accessibility label")
+        let nativeRow = try requireValue(
+            descendants(controller.window!.contentView!).first { $0.accessibilityLabel() == "Document status" },
+            "fixture: native status row")
+        checkNativeStatus(nativeRow)
+
         for n in [0, 1, 2] {
             check(
                 Strings.count(n, .match) == "\(n) \(n == 1 ? "match" : "matches")",
@@ -232,7 +296,7 @@ enum Audit26PresentationChecks {
         let cancel = alert.addButton(withTitle: "Cancel", role: .cancel)
         alert.window.initialFirstResponder = numeric
         let deadline = Date().addingTimeInterval(5)
-        let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
+        let timer = mainTimer(0.05) {
             if Date() > deadline {
                 timedOut = true
                 NSApp.abortModal()
@@ -268,7 +332,7 @@ enum Audit26PresentationChecks {
         let leave = retry.addButton(withTitle: "Cancel", role: .cancel)
         var retryStage = 0, retryKept = false, retryTimedOut = false
         let retryDeadline = Date().addingTimeInterval(5)
-        let retryTimer = Timer(timeInterval: 0.05, repeats: true) { _ in
+        let retryTimer = mainTimer(0.05) {
             if Date() > retryDeadline {
                 retryTimedOut = true
                 NSApp.abortModal()
@@ -301,7 +365,7 @@ enum Audit26PresentationChecks {
         state.error = FileOperationFailure(EACCES, operation: "save settings", path: state.url.path)
         var recoveryHeading = false, recoveryCancelled = false
         let recoveryDeadline = Date().addingTimeInterval(5)
-        let recoveryTimer = Timer(timeInterval: 0.05, repeats: true) { _ in
+        let recoveryTimer = mainTimer(0.05) {
             if Date() > recoveryDeadline {
                 NSApp.abortModal()
                 return

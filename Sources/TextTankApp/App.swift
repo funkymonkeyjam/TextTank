@@ -1509,6 +1509,8 @@ private final class StatusBadgeRow: NSView {
     private var measuredWidth: CGFloat = -1
     override var isFlipped: Bool { true }
     func update(_ items: [StatusItem]) {
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
         setAccessibilityLabel(Strings.text("status.group", "Document status"))
         var counts: [String: Int] = [:]
         let ids = items.map { item -> String in
@@ -1525,6 +1527,8 @@ private final class StatusBadgeRow: NSView {
                 format: Strings.text("status.fieldValue", "%@: %@"), item.field.displayName, item.text)
             badge.toolTip = String(format: Strings.text("status.options", "%@. Show options."), description)
             badge.setAccessibilityLabel(description)
+            // AppKit exposes the button cell, not its host view, in the native AX tree.
+            badge.cell?.setAccessibilityLabel(description)
             badge.setAccessibilityHelp(Strings.text("status.showOptions", "Shows options for this field."))
             badge.identifier = NSUserInterfaceItemIdentifier("status." + id)
             badge.activate = { [weak self] button in self?.onActivate?(item.field, button) }
