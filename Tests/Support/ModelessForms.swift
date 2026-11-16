@@ -82,7 +82,7 @@ enum NativeFixtureEnvironment {
         precondition(!AppStorage.permitsLegacyDefaults, "Install owned support isolation before runtime effects")
         previous = RuntimeEnvironment.dependencies
         var effects = RuntimeDependencies()
-        effects.windowAnimation = .none
+        effects.windowAnimation = NSWindow.AnimationBehavior.none
         effects.document = {
             DocumentDependencies(recoveryFailureNotice: { document, error in
                 guard let notice = recoveryFailureNotice else { return false }
