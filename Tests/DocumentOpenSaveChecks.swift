@@ -45,19 +45,20 @@ extension DocumentChecks {
             direct.receive(nil, true, nil)
             check(directCalls == 1, "F316 actual production completion transport invokes main input synchronously once")
             for releaseOwner in [false, true] {
-                var owner: TextDocumentController? = releaseOwner ? TextDocumentController() : documents
                 let weakOwner = NSHashTable<TextDocumentController>.weakObjects()
-                weakOwner.add(owner!)
                 var callbacks = 0, onMain = false, receivedAlreadyOpen = false
                 var receivedCode: Int?
-                let delivery = TextDocumentController.OpenDelivery(owner!, url: url, display: false) {
-                    document, alreadyOpen, error in
-                    callbacks += 1
-                    onMain = Thread.isMainThread && document == nil
-                    receivedAlreadyOpen = alreadyOpen
-                    receivedCode = (error as NSError?)?.code
+                let delivery = autoreleasepool {
+                    let owner = releaseOwner ? TextDocumentController() : documents
+                    weakOwner.add(owner)
+                    return TextDocumentController.OpenDelivery(owner, url: url, display: false) {
+                        document, alreadyOpen, error in
+                        callbacks += 1
+                        onMain = Thread.isMainThread && document == nil
+                        receivedAlreadyOpen = alreadyOpen
+                        receivedCode = (error as NSError?)?.code
+                    }
                 }
-                owner = nil
                 check(
                     !releaseOwner || weakOwner.allObjects.isEmpty,
                     "F316 released secondary document controller is not retained by its production delivery")
