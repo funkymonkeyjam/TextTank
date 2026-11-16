@@ -67,7 +67,7 @@ def main():
      'MACOSX_DEPLOYMENT_TARGET': identity['deploymentTarget'],
      'SWIFT_VERSION': '5.0',
      'SWIFT_TREAT_WARNINGS_AS_ERRORS': 'YES',
-     'SWIFT_OBJC_BRIDGING_HEADER': 'Sources/EditorBridge/TTEditor.h',
+     'SWIFT_OBJC_BRIDGING_HEADER': 'Sources/TextTankApp/TextTank-Bridging-Header.h',
      'CLANG_CXX_LANGUAGE_STANDARD': 'c++17',
      'CLANG_ENABLE_OBJC_ARC': 'YES',
      'FRAMEWORK_SEARCH_PATHS': ['$(inherited)', '$(PROJECT_DIR)/build/vendor/$(CONFIGURATION)'],

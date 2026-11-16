@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <AppKit/AppKit.h>
-#import "../Search/TTSearchEngine.h"
 NS_ASSUME_NONNULL_BEGIN
 /// Posted by -retireInFavorOf: on the main thread. The object is the view about to leave its
 /// window; userInfo[TTEditorSuccessorKey] is the remaining view of the same document.

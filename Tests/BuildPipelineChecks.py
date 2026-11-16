@@ -26,6 +26,24 @@ def module(name, filename):
 
 
 class BuildPipelineChecks(unittest.TestCase):
+    def test_editor_header_compiles_without_the_search_tree(self):
+        # The public editor interface uses AppKit, not the snapshot search engine.
+        # Compile a copied header with no neighbouring Search directory; a hidden
+        # transitive import is a real compiler failure rather than a text match.
+        sdk = subprocess.check_output(['xcrun', '--show-sdk-path'], text=True).strip()
+        with tempfile.TemporaryDirectory(prefix='editor-header-', dir=ROOT / 'tmp') as work:
+            folder = Path(work)
+            header = folder / 'EditorBridge/TTEditor.h'
+            header.parent.mkdir()
+            shutil.copyfile(ROOT / 'Sources/EditorBridge/TTEditor.h', header)
+            probe = folder / 'probe.m'
+            probe.write_text('#import "EditorBridge/TTEditor.h"\nTTEditor *editor;\n')
+            result = subprocess.run(
+                ['xcrun', 'clang', '-fsyntax-only', '-fobjc-arc', '-fmodules',
+                 '-isysroot', sdk, '-mmacosx-version-min=14.0', str(probe)],
+                text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_signing_cleans_metadata_at_each_boundary_and_keeps_failures_fatal(self):
         # Simulate metadata arriving between signing steps; this does not attribute
         # the real metadata recurrence to codesign, Finder or a file provider.
