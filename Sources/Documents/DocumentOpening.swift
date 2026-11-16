@@ -105,17 +105,13 @@ final class TextDocumentController: NSDocumentController {
         }
         let delivery = OpenDelivery(self, url: url, display: displayDocument, completion: completionHandler)
         super.openDocument(withContentsOf: url, display: displayDocument) { document, alreadyOpen, error in
-            let finish: @MainActor @Sendable () -> Void = { delivery.finish(document, alreadyOpen, error) }
-            if Thread.isMainThread {
-                MainActor.assumeIsolated { finish() }
-            } else {
-                DispatchQueue.main.async(execute: finish)
-            }
+            delivery.receive(document, alreadyOpen, error)
         }
     }
     /// The framework completion transports this actor-owned callback; it never weak-loads the
-    /// UI controller on a worker. The original main/Dispatch.main delivery order is preserved.
-    @MainActor private final class OpenDelivery {
+    /// UI controller on a worker. Alive owners retain the original main-direct/Dispatch.main
+    /// ordering. Released owners also deliver on main so caller UI captures stay actor-owned.
+    @MainActor final class OpenDelivery {
         private weak var controller: TextDocumentController?
         private let url: URL, display: Bool
         private let completion: (NSDocument?, Bool, Error?) -> Void
@@ -128,7 +124,15 @@ final class TextDocumentController: NSDocumentController {
             self.display = display
             self.completion = completion
         }
-        func finish(_ document: NSDocument?, _ alreadyOpen: Bool, _ error: Error?) {
+        nonisolated func receive(_ document: NSDocument?, _ alreadyOpen: Bool, _ error: Error?) {
+            let finish: @MainActor @Sendable () -> Void = { self.finish(document, alreadyOpen, error) }
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { finish() }
+            } else {
+                DispatchQueue.main.async(execute: finish)
+            }
+        }
+        private func finish(_ document: NSDocument?, _ alreadyOpen: Bool, _ error: Error?) {
             guard let controller else {
                 completion(document, alreadyOpen, error)
                 return

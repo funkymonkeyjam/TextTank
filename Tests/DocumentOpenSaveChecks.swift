@@ -31,6 +31,56 @@ extension DocumentChecks {
             document.editor.replaceSelection(text)
         }
 
+        section("F316 actual document completion transport ownership", #line) {
+            let shared = NSDocumentController.shared
+            let url = area.appendingPathComponent("completion-owned.txt")
+            var directCalls = 0
+            let direct = TextDocumentController.OpenDelivery(documents, url: url, display: false) {
+                document, alreadyOpen, error in
+                directCalls += 1
+                check(
+                    Thread.isMainThread && document == nil && alreadyOpen && error == nil,
+                    "F316 live-owner completion preserves its arguments and direct main turn")
+            }
+            direct.receive(nil, true, nil)
+            check(directCalls == 1, "F316 actual production completion transport invokes main input synchronously once")
+            for releaseOwner in [false, true] {
+                var owner: TextDocumentController? = releaseOwner ? TextDocumentController() : documents
+                weak var weakOwner = owner
+                var callbacks = 0, onMain = false, receivedAlreadyOpen = false
+                var receivedCode: Int?
+                let delivery = TextDocumentController.OpenDelivery(owner!, url: url, display: false) {
+                    document, alreadyOpen, error in
+                    callbacks += 1
+                    onMain = Thread.isMainThread && document == nil
+                    receivedAlreadyOpen = alreadyOpen
+                    receivedCode = (error as NSError?)?.code
+                }
+                owner = nil
+                check(
+                    !releaseOwner || weakOwner == nil,
+                    "F316 released secondary document controller is not retained by its production delivery")
+                let posted = DispatchSemaphore(value: 0)
+                let worker = Thread {
+                    delivery.receive(nil, true, CocoaError(.fileReadUnknown))
+                    posted.signal()
+                }
+                worker.start()
+                try require(
+                    posted.wait(timeout: .now() + 5) == .success,
+                    "F316 framework-style worker completion returns without waiting for main")
+                check(callbacks == 0, "F316 worker completion does not invoke caller UI captures inline")
+                spinUntil(timeout: 1, "F316 completion reaches its owned main turn") { callbacks == 1 }
+                check(
+                    onMain && receivedAlreadyOpen && receivedCode == CocoaError.fileReadUnknown.rawValue,
+                    "F316 live and released-owner deliveries preserve callback arguments on main")
+                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+                check(
+                    callbacks == 1 && NSDocumentController.shared === shared,
+                    "F316 production delivery completes exactly once without replacing the shared document controller")
+            }
+        }
+
         // F127
         section("legacy encodings open by explicit choice", #line) {
             check(NSDocumentController.shared === documents, "the shared document controller is TextTank's own")
@@ -296,7 +346,9 @@ extension DocumentChecks {
             check(
                 setterDocument.recoveryBase == setterBase,
                 "F316 off-main setter preserves queued recovery metadata timing")
-            spinUntil(timeout: 1) { setterDocument.recoveryBase == setterBase + 1 }
+            spinUntil(timeout: 1, "F316 owned setter recovery metadata reaches main") {
+                setterDocument.recoveryBase == setterBase + 1
+            }
             check(
                 setterDocument.recoveryBase == setterBase + 1,
                 "F316 off-main setter increments recovery metadata on its original main-queue turn")
