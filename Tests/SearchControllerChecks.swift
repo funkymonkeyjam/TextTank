@@ -1683,8 +1683,9 @@ final class CountingWindow: NSWindow {
             let normalItem = controller.mode.item(at: 0)!
             controller.mode.menu?.removeItem(normalItem)
             controller.mode.menu?.addItem(normalItem)
-            controller.mode.selectItem(normalItem)
-            controller.queryField.stringValue = "x"
+            controller.mode.select(normalItem)
+            editor.text = "x.x"
+            controller.queryField.stringValue = "."
             controller.findAll(nil)
             await finished()
             check(
