@@ -119,7 +119,10 @@ enum JSONLibraryEditor {
             } catch {
                 // Preserve real NSError recovery when one exists, while ordinary validation
                 // stays beside the draft instead of opening a nested error-management loop.
-                if (error as NSError).recoveryAttempter != nil {
+                let native = error as NSError
+                if native.recoveryAttempter != nil || native.localizedRecoveryOptions != nil
+                    || native.localizedRecoverySuggestion != nil
+                {
                     TTAlert.present(error)
                 } else {
                     alert.showValidation(error, field: text.editor)

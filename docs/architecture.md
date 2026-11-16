@@ -81,6 +81,24 @@ The user's `LanguageProfiles.json` is the one store that is not a whole value: i
 
 ## Reminders export journal
 
+The advanced Automation, Macro and Language JSON editors share `JSONLibraryEditor`
+in `Sources/UI/`. Its text, import, export and optional example actions operate on
+an unsaved value. Only explicit Save invokes the controller's guarded persistence
+closure. Language still writes overrides and then reapplies profiles; Automation
+still checks menu shortcut collisions. Cancelled file choices and invalid input
+leave the current text and stored library intact. Ordinary validation remains
+inline with the draft; errors carrying native recovery metadata retain the native
+error presenter. These are the existing advanced forms, still app-modal pending
+the separately scheduled Settings/manager presentation redesign, not new manager
+screens or a claim of modeless editing.
+
+`VersionedLibrary` in `Sources/Documents/` shares their Foundation-only codec with
+`AutomationRuleSet`. Each model retains its required version, optional minimum-reader
+gate, validation, byte capacity and diagnostic vocabulary. Encoding validates and
+checks the same capacity used by decoding. The three libraries retain pretty,
+sorted, unescaped-slash JSON; portable rule files retain their escaped-slash
+format. No stored keys or version-1 fixture bytes change.
+
 Each export batch is one version-1 JSON file in `ReminderExports`. A row is recorded as uncertain, and that record is synced, before the row is handed to Reminders; it becomes confirmed or failed only afterwards, and an uncertain row is never resent automatically.
 
 - The first write of an export replaces the file atomically (private temporary file, fsync, rename) in a slotted layout: one row per line, each ending in a space-padded slot for its status, reminder identifier and message. JSON permits that whitespace, so the file decodes like the compact form earlier builds wrote, which still loads.

@@ -935,6 +935,62 @@ final class Audit24RecoverySpy: NSObject {
                 try Data(contentsOf: importURL) == importedLibrary.encoded()
                     && FileManager.default.destinationOfSymbolicLink(atPath: refusedURL.path) == importURL.path,
                 "F155 a refused import preserves the link and its target")
+            let suggestedRecovery = "Keep this isolated JSON draft and choose Cancel."
+            let suggestedError = NSError(
+                domain: "Fixture.JSONRecovery", code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Fixture JSON operation failed",
+                    NSLocalizedRecoverySuggestionErrorKey: suggestedRecovery
+                ])
+            var suggestionStage = 0, sawNativeSuggestion = false, suggestionSaves = 0
+            var suggestionWindow: NSWindow?
+            let suggestionDraft = AutomationLibrary(workflows: [])
+            let suggestionRun = try drivingModal(
+                timeout: 10,
+                { window, views in
+                    if suggestionStage == 1, window !== suggestionWindow {
+                        sawNativeSuggestion = shows(suggestedRecovery, in: views)
+                        if let accept = views.compactMap({ $0 as? NSButton }).first(where: { $0.keyEquivalent == "\r" })
+                        {
+                            accept.performClick(nil)
+                        } else {
+                            NSApp.abortModal()
+                        }
+                        return false
+                    }
+                    guard let save = button("fixture.json.save", in: views),
+                        let cancel = button("fixture.json.cancel", in: views)
+                    else { return false }
+                    if suggestionStage == 0 {
+                        suggestionWindow = window
+                        suggestionStage = 1
+                        save.performClick(nil)
+                    } else if suggestionStage == 1 {
+                        suggestionStage = 2
+                        cancel.performClick(nil)
+                        return true
+                    }
+                    return false
+                }
+            ) {
+                try JSONLibraryEditor.edit(
+                    suggestionDraft,
+                    configuration: .init(
+                        title: "Fixture JSON recovery", information: "Isolated error recovery check.",
+                        accessibilityLabel: "Fixture library JSON", exportName: "fixture.json",
+                        identifier: "fixture.json", size: NSSize(width: 420, height: 160)),
+                    read: { _ in Data() },
+                    save: { _ in
+                        suggestionSaves += 1
+                        throw suggestedError
+                    })
+            }
+            check(
+                suggestionRun.acted && !suggestionRun.timedOut && suggestionStage == 2 && suggestionSaves == 1,
+                "F155 a shared JSON operation failure returns to its unchanged draft")
+            check(
+                sawNativeSuggestion,
+                "F155 shared JSON errors retain native recovery suggestions even without a recovery attempter")
             let restoreItem = controller.menu().items.first { $0.title == "Restore Default Automations…" }
             check(
                 restoreItem != nil && restoreItem?.target === controller
