@@ -4,7 +4,7 @@ import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
-private final class SettingsShortcutEditor: NSObject {
+@MainActor private final class SettingsShortcutEditor: NSObject {
     var draft: SettingsShortcutDraft
     let popup = NSPopUpButton()
     let key = NSTextField(string: "")
@@ -51,7 +51,7 @@ private final class SettingsShortcutEditor: NSObject {
     }
 }
 
-final class SettingsController: NSObject {
+@MainActor final class SettingsController: NSObject {
     private let store: SettingsStore
     var value: EditorSettings { store.value }
     var ignoredShortcutBindings: [ShortcutLoadIssue] { store.ignoredShortcutBindings }

@@ -4,6 +4,7 @@ import NativeSearch
 import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    @MainActor override init() { super.init() }
     @MainActor lazy var workspace: WorkspaceController = {
         let controller = WorkspaceController()
         controller.activeDocument = { [weak self] in self?.currentDocument }
@@ -14,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.currentDocument = { [weak self] in self?.currentDocument }
         return controller
     }()
-    let settings = SettingsController(
+    @MainActor let settings = SettingsController(
         onApply: EditorSettingsApplication.apply,
         onStatus: { message in
             (NSApp.mainWindow?.windowController as? EditorWindowController)?.showTransientStatus(message)
