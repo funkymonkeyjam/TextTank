@@ -98,6 +98,9 @@ caption relationships attached to the caption cell. Dynamic rule and inline
 rename labels follow their current purpose. Native checks traverse actual window
 children and table accessibility edges, retain native roles/values, and type into
 focused fields; they do not certify physical VoiceOver interaction.
+The document test script always runs the full document checks and these input checks
+as separate required processes of one compiled executable, preserving both native
+completion gates and every assertion.
 
 Automation, Macro and Run managers use `LibraryManager` with native tables, inline
 rename, Add, Duplicate and confirmed Delete. Automation Favorite shows its pending

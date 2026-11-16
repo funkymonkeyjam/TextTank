@@ -10,6 +10,17 @@ Each native suite remains a real script with explicit source lists, test defines
 
 The document-check executable drives many owned document-window transitions without running the normal application event loop. A long CLI prefix on this Mac accumulated AppKit animation workers and blocked native save-panel creation; the same prefix from the accepted pre-catalog source reproduced it. The `TESTING` build therefore disables only its owned document-window transition animations. Production builds retain system animations, and the actual native save panels, review sheets, close routes, Cancel actions and deadlines remain unchanged. Functional check results do not certify physical transition animations. Diagnostic controls and source identities are execution evidence, not source-archive package certification.
 
+`scripts/test-documents.sh` compiles one native check executable, then always runs two
+required processes: the existing document checks and configuration input accessibility
+checks (`--configuration-input-accessibility`). Each retains its own watchdog, status
+and normal completion marker; a failure in either fails acceptance. The complete test
+runner therefore records 32 suites, including all prior 31 and the new input checks.
+A combined CLI prefix failed native review/save-panel creation with saturated AppKit
+animation workers; paired controls passed the full original document checks and all
+input checks in separate processes on identical product bytes. This isolates test
+process state without omitting assertions, changing deadlines or changing production
+animation, sheet or document behavior. It does not establish a universal framework cause.
+
 The isolated toolbar fixture exercises synchronized windows, display modes, visibility and actual overflow actions. AppKit emits `NSToolbarLabelStack` constraint-invalidation runtime warnings during this sequence. Removing the added accessibility assignment/traversal or toolbar KVO observations did not remove them, and a smaller matched AppKit-only control did not reproduce them; their cause is not established. Subsequent viewport, dispatch, UUID and Undo checks pass. These runtime messages are retained separately from compiler diagnostics and do not establish physical layout or running-app accessibility certification.
 
 Acceptance records a clean starting git tree, runs every suite even after a failure, refuses native exit-zero runs without their normal completion summary, then compares the final tree and dirty state. The exit code and acceptance-log hash are recorded atomically. A source archive without its own git checkout root can run checks but cannot produce a stable source-tree claim; an unrelated enclosing repository does not supply that identity. Packaging requires matching clean-tree evidence and the original log hash; it labels manually supplied CI metadata as self-reported. Public logs normalize local filesystem prefixes and retain both original and public log hashes.

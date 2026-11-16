@@ -162,9 +162,6 @@ extension DocumentChecks {
         }
 
         section("DG native managers and lifetimes", #line) { try DesignSettingsChecks.managerChecks() }
-        section("DG native input accessibility", #line) {
-            try DesignSettingsChecks.inputAccessibilityChecks(root: root, composition: sessionDelegate)
-        }
 
         section("standard customizable toolbar", #line) { try ToolbarChecks.run(composition: sessionDelegate) }
 
