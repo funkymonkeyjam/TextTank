@@ -11,6 +11,10 @@ import Foundation
 @main struct MacroChecks {
     #if TEXTTANK_NATIVE_MACRO_TEST
         @MainActor final class ChoosingState { var acted = false, timedOut = false }
+        @MainActor final class InteractiveStopState {
+            var pressed = false, timedOut = false, acknowledged = false
+            var prefix = ""
+        }
         @MainActor static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         @MainActor static func control<T: NSView>(_ identifier: String, _ type: T.Type, in views: [NSView]) -> T? {
             views.compactMap { $0 as? T }.first { $0.identifier?.rawValue == identifier }
@@ -147,45 +151,48 @@ import Foundation
             editor.setSavePoint()
             _ = editor.setSelectionAnchor(1, caret: 1)
             let stopRevision = editor.revision
-            var stopPressed = false, stopTimedOut = false, errorAcknowledged = false
-            var retainedPrefix = ""
+            let stopState = InteractiveStopState()
             let stopDeadline = Date().addingTimeInterval(10)
             let stopTimer = Timer(timeInterval: 0.01, repeats: true) { _ in
-                guard let content = NSApp.modalWindow?.contentView else { return }
-                let views = descendants(content)
-                if Date() > stopDeadline {
-                    stopTimedOut = true
-                    NSApp.abortModal()
-                    return
-                }
-                if !stopPressed, editor.revision > stopRevision,
-                    let stop = views.compactMap({ $0 as? NSButton }).first(where: {
-                        $0.action == NSSelectorFromString("cancelPlayback")
-                    })
-                {
-                    retainedPrefix = editor.text
-                    stopPressed = true
-                    stop.performClick(nil)
-                } else if stopPressed,
-                    let acknowledge = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "OK" })
-                {
-                    errorAcknowledged = true
-                    acknowledge.performClick(nil)
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated {
+                    guard let content = NSApp.modalWindow?.contentView else { return }
+                    let views = descendants(content)
+                    if Date() > stopDeadline {
+                        stopState.timedOut = true
+                        NSApp.abortModal()
+                        return
+                    }
+                    if !stopState.pressed, editor.revision > stopRevision,
+                        let stop = views.compactMap({ $0 as? NSButton }).first(where: {
+                            $0.action == NSSelectorFromString("cancelPlayback")
+                        })
+                    {
+                        stopState.prefix = editor.text
+                        stopState.pressed = true
+                        stop.performClick(nil)
+                    } else if stopState.pressed,
+                        let acknowledge = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "OK" })
+                    {
+                        stopState.acknowledged = true
+                        acknowledge.performClick(nil)
+                    }
                 }
             }
             RunLoop.main.add(stopTimer, forMode: .modalPanel)
             let stopped = choosing(savedItem, answer("macro.play.count", "1000", "macro.play.confirm"))
             stopTimer.invalidate()
             check(
-                stopped && stopPressed && !stopTimedOut && errorAcknowledged && NSApp.modalWindow == nil,
+                stopped && stopState.pressed && !stopState.timedOut && stopState.acknowledged
+                    && NSApp.modalWindow == nil,
                 "F316 real interactive Macro Stop returns from playback and its native error notice")
-            let completed = retainedPrefix.utf8.count - 2
+            let completed = stopState.prefix.utf8.count - 2
             check(
                 completed > 0 && completed < 1000
-                    && retainedPrefix == "a" + String(repeating: "\n", count: completed) + "b",
+                    && stopState.prefix == "a" + String(repeating: "\n", count: completed) + "b",
                 "F316 real Stop retains an exact nonempty incomplete prefix of completed editing steps")
             check(
-                editor.text == retainedPrefix && editor.modified,
+                editor.text == stopState.prefix && editor.modified,
                 "F316 the interactive timer stops without advancing after the Stop turn")
             editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
