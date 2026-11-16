@@ -219,7 +219,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         menu.addItem(manage)
     }
     private var palette: ChoicePanel?
-    func showPalette() {
+    @MainActor func showPalette() {
         if let palette {
             palette.form.window.makeKeyAndOrderFront(nil)
             return
@@ -298,7 +298,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         }
     }
     @MainActor @objc private func manageAction() { manage() }
-    @objc private func paletteAction() { showPalette() }
+    @MainActor @objc private func paletteAction() { showPalette() }
     @objc private func restoreDefaultsAction() { restoreDefaultAutomations() }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(restoreDefaultsAction) { return !busy && !exportInProgress }
