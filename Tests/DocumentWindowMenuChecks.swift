@@ -407,7 +407,9 @@ extension DocumentChecks {
         }
 
         section("audit25 actual shortcut drafts and menu updates", #line) {
-            let settings = SettingsController(url: root.appendingPathComponent("audit25-live-shortcuts.json"))
+            let settings = SettingsController(
+                url: root.appendingPathComponent("audit25-live-shortcuts.json"),
+                onApply: EditorSettingsApplication.apply)
             do {
                 let previousMenu = NSApp.mainMenu
                 defer { NSApp.mainMenu = previousMenu }

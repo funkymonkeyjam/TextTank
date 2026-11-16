@@ -16,6 +16,7 @@ final class CancelAfterPolls: TTSearchCancellation {
 @main struct SearchChecks {
     static func main() {
         Checks.run("SearchChecks") {
+            try SearchSessionChecks.run()
             rejects(
                 "F181 bookmark work-limit failures have a distinct typed identity",
                 expecting: SearchFailure.invalidBookmarkLimit

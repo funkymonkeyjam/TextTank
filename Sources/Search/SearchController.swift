@@ -848,14 +848,21 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         _ report: SearchReport, text: String, revision: UInt, options: SearchOptions, action: String, continuing: Bool,
         in editor: TTEditor
     ) throws -> Bool {
-        guard !report.truncated else { throw SearchFailure.macroResultLimit }
-        guard editor.window != nil, editor.revision == revision,
-            let selection = SearchCore.utf16Range(
-                NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart), in: text)
-        else { throw Self.recordedSearchStopped("the document changed or selection is not on a character boundary") }
-        if action == "replaceAll" || action == "replaceOne" {
-            let hits = action == "replaceAll" ? report.hits : report.hits.filter { $0.range == selection }
-            guard !hits.isEmpty else { return false }
+        let selection = SearchCore.utf16Range(
+            NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart), in: text)
+        let snapshot = SearchSession.Snapshot(
+            text: text, revision: revision, currentRevision: editor.revision,
+            selection: selection, isOpen: editor.window != nil)
+        switch try SearchSession.plan(
+            report, snapshot: snapshot, options: options, action: action, continuing: continuing)
+        {
+        case .noMatch: return false
+        case .select(let bytes):
+            guard editor.setSelectionAnchor(bytes.location, caret: NSMaxRange(bytes)) else {
+                throw Self.recordedSearchStopped("the match could not be selected")
+            }
+            return true
+        case .replace(let hits):
             let condition: SearchFailure.ReplacementCondition
             switch Self.replace(hits, text: text, revision: revision, in: editor) {
             case .applied: return true
@@ -865,27 +872,9 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             case .stale: condition = .stale
             }
             throw condition
-        } else if action == "next" || action == "previous" {
-            let backwards = action == "previous"
-            let candidates = report.hits.filter {
-                SearchCore.isNavigationCandidate(
-                    $0.range, from: selection, backwards: backwards, continuing: continuing)
-            }
-            let wrapped = report.hits.filter {
-                SearchCore.isWrappedNavigationCandidate(
-                    $0.range, from: selection, backwards: backwards, mode: options.mode)
-            }
-            let hit =
-                (backwards ? candidates.last : candidates.first)
-                ?? (options.wrap ? (backwards ? wrapped.last : wrapped.first) : nil)
-            guard let hit else { return false }
-            guard let bytes = SearchCore.byteRange(hit.range, in: text),
-                editor.setSelectionAnchor(bytes.location, caret: NSMaxRange(bytes))
-            else { throw Self.recordedSearchStopped("the match could not be selected") }
-            return true
         }
-        throw SearchFailure.unknownRecordedAction
     }
+
     private static func recordedSearchStopped(_ reason: String) -> SearchFailure { .macroStopped(reason) }
     /// `revision` is the staleness authority: every insert and delete moves it, in every view of a
     /// shared document, so an equal revision means `text` is still the editor's text (F223).
@@ -918,24 +907,11 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             editor.replaceRanges(
                 ranges.map { NSValue(range: $0) }, withTexts: hits.map(\.replacement), expectedRevision: revision)
         else { return .stale }
-        // Its start stays before a replacement that begins at or covers it, its end stays after one
-        // that ends at or covers it.
-        func carried(_ position: Int, upper: Bool) -> Int {
-            var delta = 0
-            for (hit, range) in zip(hits, ranges) {
-                let start = range.location, end = NSMaxRange(range), length = hit.replacement.utf8.count
-                if position < start || (position == start && (!upper || end > start)) { break }
-                if position < end { return start + delta + (upper ? length : 0) }
-                delta += length - range.length
-            }
-            return position + delta
+        let edits = zip(ranges, hits).map {
+            SearchSession.Edit(range: $0.0, replacementBytes: $0.1.replacement.utf8.count)
         }
-        // A caret at a zero-width match ends after the text inserted there, as typing would leave
-        // it, so a following Next or Replace moves on instead of meeting the same place again.
-        let atInsertion = anchor == caret && ranges.contains { $0.location == caret && $0.length == 0 }
-        let low = carried(min(anchor, caret), upper: atInsertion)
-        let high = anchor == caret ? low : carried(max(anchor, caret), upper: true)
-        _ = editor.setSelectionAnchor(anchor <= caret ? low : high, caret: anchor <= caret ? high : low)
+        let carried = SearchSession.carriedSelection(anchor: anchor, caret: caret, edits: edits)
+        _ = editor.setSelectionAnchor(carried.anchor, caret: carried.caret)
         return .applied(hits.count)
     }
     /// All open documents: the buffer of the document the person is in, for Next, Previous and

@@ -11,7 +11,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.currentDocument = { [weak self] in self?.currentDocument }
         return controller
     }()
-    let settings = SettingsController()
+    let settings = SettingsController(
+        onApply: EditorSettingsApplication.apply,
+        onStatus: { message in
+            (NSApp.mainWindow?.windowController as? EditorWindowController)?.showTransientStatus(message)
+        })
     let recentDocumentsMenu = RecentDocumentsMenu()
     lazy var folderSearch: FolderSearchController = {
         let controller = FolderSearchController()
