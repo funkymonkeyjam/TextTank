@@ -1,0 +1,629 @@
+import AppKit
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    lazy var workspace: WorkspaceController = {
+        let controller = WorkspaceController()
+        controller.activeDocument = { [weak self] in self?.currentDocument }
+        return controller
+    }()
+    lazy var workspaceBrowser: WorkspaceBrowserController = {
+        let controller = WorkspaceBrowserController()
+        controller.currentDocument = { [weak self] in self?.currentDocument }
+        return controller
+    }()
+    let settings = SettingsController()
+    let recentDocumentsMenu = RecentDocumentsMenu()
+    lazy var folderSearch: FolderSearchController = {
+        let controller = FolderSearchController()
+        controller.displayTabWidth = { [weak self] in self?.settings.value.tabWidth ?? 4 }
+        controller.workspaceRoots = { [weak self] in self?.workspaceBrowser.store.state.folders ?? [] }
+        return controller
+    }()
+    /// The document window focused last. Written where focus changes (a view's onFocus, a
+    /// document window becoming main, the status menu); never by a getter.
+    weak var lastDocumentController: EditorWindowController?
+    /// The one definition of "current" for every controller: the main window when it is a
+    /// document window, otherwise the document window focused last, because Find and Replace,
+    /// a Run result or another auxiliary window may be main. Nil once that document has closed.
+    var currentDocumentController: EditorWindowController? {
+        let controller = (NSApp.mainWindow?.windowController as? EditorWindowController) ?? lastDocumentController
+        return controller?.document == nil ? nil : controller
+    }
+    var currentDocument: TextDocument? { currentDocumentController?.document as? TextDocument }
+    var currentEditor: TTEditor? { currentDocumentController?.activeEditor }
+    lazy var languages: LanguageController = {
+        let controller = LanguageController(
+            editorProvider: { [weak self] in self?.currentEditor },
+            languageProvider: { [weak self] in
+                self?.currentDocument?.languageIdentifier ?? LanguageProfile.plainTextID
+            },
+            setLanguage: { [weak self] id in self?.currentDocument?.languageIdentifier = id })
+        controller.siblingViews = { editor in
+            for document in NSDocumentController.shared.documents {
+                for case let window as EditorWindowController in document.windowControllers
+                where window.views.contains(where: { $0 === editor }) {
+                    return window.views.filter { $0 !== editor }
+                }
+            }
+            return []
+        }
+        controller.openDocuments = {
+            NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }.map {
+                ($0.languageIdentifier, $0.editor)
+            }
+        }
+        return controller
+    }()
+    // The providers below only answer "which editor". A macro recording is invalidated where
+    // an action is committed, through each controller's hook, never by asking for the editor.
+    lazy var runner: RunController = {
+        let controller = RunController()
+        controller.editor = { [weak self] in self?.currentEditor }
+        controller.onUnrecordableAction = { [weak self] in
+            self?.macros.invalidateRecording(reason: "External execution is never recorded in macros.")
+        }
+        controller.file = { [weak self] in self?.currentDocument?.fileURL }
+        return controller
+    }()
+    lazy var utilities: UtilityController = {
+        let controller = UtilityController(activeEditor: { [weak self] in self?.currentEditor })
+        controller.onUnrecordableEdit = { [weak self] in
+            self?.macros.invalidateRecording(reason: "Text utilities are not recorded in macros yet.")
+        }
+        return controller
+    }()
+    lazy var searchController: SearchController = {
+        let controller = SearchController()
+        controller.readFindText = { EditorWindowController.findPasteboardText }
+        controller.writeFindText = { [weak self] text in
+            EditorWindowController.findPasteboardText = text
+            self?.currentDocumentController?.acceptSharedFindText(text)
+        }
+        controller.currentEditor = { [weak self] in self?.currentEditor }
+        // One view per document, and the one the person last worked in: Find Next compares
+        // these with the current editor, and a replace reads that view's selection.
+        controller.openEditors = {
+            NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.activeEditor }
+        }
+        return controller
+    }()
+    lazy var macros = MacroController(editorProvider: { [weak self] in self?.currentEditor })
+    lazy var automations: AutomationController = {
+        let controller = AutomationController(
+            editorProvider: { [weak self] in self?.currentEditor }, newDocument: AppDelegate.openAutomationOutput)
+        controller.onQuietExportResult = { [weak self] message in
+            let window = (NSApp.mainWindow?.windowController as? EditorWindowController) ?? self?.lastDocumentController
+            window?.showTransientStatus(message, seconds: 8, announce: false)
+        }
+        controller.onInvocation = { [weak self] in
+            self?.macros.invalidateRecording(
+                reason: "An automation was invoked during macro recording. Automation side effects are not recorded.")
+        }
+        return controller
+    }()
+    private static func openAutomationOutput(_ text: String) {
+        let doc = TextDocument()
+        NSDocumentController.shared.addDocument(doc)
+        doc.makeWindowControllers()
+        doc.editor.text = text
+        doc.editor.setLineEndingMode(LineEnding.detect(in: text).rawValue)
+        doc.showWindows()
+        doc.windowControllers.first?.window?.makeFirstResponder(doc.editor)
+    }
+    /// The reason often arrives inside an editor callback, and for a click while the button is
+    /// still down. A modal alert then would swallow the mouse-up and leave the editor dragging,
+    /// so the alert waits for a later turn with no button pressed.
+    private func explainDiscardedRecording(_ reason: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard NSEvent.pressedMouseButtons == 0 else {
+                self?.explainDiscardedRecording(reason)
+                return
+            }
+            TTAlert.explain(
+                "Macro recording was discarded",
+                detail: reason + " Choose Stop Recording, then Start Recording to record again."
+                    + " The previous recording is kept.")
+        }
+    }
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        buildMenus()
+        settings.apply()
+        searchController.onCommand = { [weak self] options, action, editor in
+            self?.macros.recordSearch(.init(options: options, action: action), editor: editor)
+        }
+        searchController.onUnrecordableCommand = { [weak self] reason in
+            self?.macros.invalidateRecording(reason: reason)
+        }
+        folderSearch.onUnrecordableCommand = { [weak self] reason in
+            self?.macros.invalidateRecording(reason: reason)
+        }
+        languages.onUnrecordableCommand = { [weak self] reason in
+            self?.macros.invalidateRecording(reason: reason)
+        }
+        // F67: the person hears and reads at once that the recording can no longer be saved.
+        macros.onInvalidated = { [weak self] reason in
+            NSSound.beep()
+            self?.explainDiscardedRecording(reason)
+        }
+        macros.searchPlayback = { [weak self] search, editor in
+            guard let self else { throw MacroError.invalid("Search controller unavailable.") }
+            var options = SearchOptions()
+            options.query = search.query
+            options.replacement = search.replacement
+            options.mode = SearchOptions.Mode(rawValue: search.mode) ?? .normal
+            options.matchCase = search.matchCase
+            options.wholeWord = search.wholeWord
+            options.dotMatchesNewline = search.dotMatchesNewline
+            options.wrap = search.wrap
+            try self.searchController.playRecorded(options: options, action: search.action, on: editor)
+        }
+        if let message = settings.loadFailureMessage {
+            let alert = TTAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Settings could not be read"
+            alert.informativeText = message
+            _ = alert.runModal()
+        }
+        if settings.shortcutLoadNotice != nil {
+            let message =
+                "Some saved shortcuts were ignored. Other settings remain in use. Open Settings to review them; the original settings file is preserved."
+            Announce.say(message)
+            lastDocumentController?.showTransientStatus(message, seconds: 8, announce: false)
+        }
+        if let message = languages.loadFailureMessage {
+            let alert = TTAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Language profiles could not be read"
+            alert.informativeText = message
+            _ = alert.runModal()
+        }
+        NSApp.activate()
+        if NSDocumentController.shared.documents.isEmpty {
+            newDocument(nil)
+        } else {
+            for document in NSDocumentController.shared.documents {
+                if document.windowControllers.isEmpty { document.makeWindowControllers() }
+                document.showWindows()
+            }
+        }
+        restoreRecovery()
+    }
+    @objc func newDocument(_ sender: Any?) {
+        let doc = TextDocument()
+        NSDocumentController.shared.addDocument(doc)
+        doc.makeWindowControllers()
+        doc.showWindows()
+        doc.windowControllers.first?.window?.makeFirstResponder(doc.editor)
+    }
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
+    /// Saved window state is decoded with secure coding only.
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+    /// Closes every document once quitting is certain, never while the review can still be
+    /// cancelled. The tab windows are taken off screen first: closing a visible tab shows the
+    /// tab that takes its place, and at quit that would show and lay out each remaining document.
+    func closeAllForTermination() {
+        let documents = NSDocumentController.shared.documents
+        DocumentTabWindow.documents.forEach { $0.orderOut(nil) }
+        for document in documents { document.close() }
+    }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if NSDocumentController.shared.documents.allSatisfy({ !$0.isDocumentEdited }) {
+            closeAllForTermination()
+            return .terminateNow
+        }
+        DispatchQueue.main.async { self.requestUnsavedReview(self) }
+        return .terminateLater
+    }
+    /// Runs once the quit is committed, never while the unsaved-documents review can still be
+    /// cancelled. A running Run command is a scoped job: its process group is stopped here, with
+    /// a bounded wait, instead of being left to run on after TextTank has gone.
+    func applicationWillTerminate(_ notification: Notification) { _ = runner.cancelAndWait(timeout: 1.0) }
+    /// The two AppKit calls of the dirty-quit path. They are properties only so that a check
+    /// can observe the request and the reply without presenting the review or ending the process.
+    var requestUnsavedReview: (AppDelegate) -> Void = { delegate in
+        NSDocumentController.shared.reviewUnsavedDocuments(
+            withAlertTitle: "Quit TextTank?", cancellable: true, delegate: delegate,
+            didReviewAllSelector: #selector(AppDelegate.reviewed(_:didReviewAll:contextInfo:)), contextInfo: nil)
+    }
+    var replyToTerminate: (Bool) -> Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
+    @objc func reviewed(_ controller: NSDocumentController, didReviewAll: Bool, contextInfo: UnsafeMutableRawPointer?) {
+        if didReviewAll { closeAllForTermination() }
+        replyToTerminate(didReviewAll)
+    }
+    func buildMenus() {
+        let bar = NSMenu()
+        NSApp.mainMenu = bar
+        func menu(_ title: String) -> NSMenu {
+            let item = NSMenuItem()
+            item.title = title
+            let m = NSMenu(title: title)
+            item.submenu = m
+            bar.addItem(item)
+            return m
+        }
+        let app = menu("TextTank")
+        app.addItem(title: "About TextTank", action: #selector(about))
+        app.addItem(
+            title: "Settings…", action: #selector(SettingsController.showSettings(_:)), keyEquivalent: ",",
+            target: settings)
+        app.addItem(.separator())
+        // The standard application items. AppKit fills the Services menu.
+        let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+        let services = NSMenu(title: "Services")
+        servicesItem.submenu = services
+        NSApp.servicesMenu = services
+        app.addItem(servicesItem)
+        app.addItem(.separator())
+        app.addItem(title: "Hide TextTank", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        app.addItem(
+            title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h",
+            modifiers: [.command, .option])
+        app.addItem(title: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)))
+        app.addItem(.separator())
+        app.addItem(title: "Quit TextTank", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let file = menu("File")
+        file.addItem(title: "New", action: #selector(newDocument(_:)), keyEquivalent: "n")
+        file.addItem(title: "Open…", action: #selector(NSDocumentController.openDocument(_:)), keyEquivalent: "o")
+        let recentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        let recentMenu = NSMenu(title: "Open Recent")
+        recentMenu.delegate = recentDocumentsMenu
+        recentItem.submenu = recentMenu
+        file.addItem(recentItem)
+        file.addItem(title: "Save", action: #selector(NSDocument.save(_:)), keyEquivalent: "s")
+        file.addItem(title: "Save As…", action: #selector(NSDocument.saveAs(_:)), keyEquivalent: "S")
+        file.addItem(title: "Save Copy…", action: #selector(TextDocument.saveCopy(_:)))
+        file.addItem(title: "Save All", action: #selector(NSDocumentController.saveAllDocuments(_:)))
+        file.addItem(title: "Revert to Saved…", action: #selector(NSDocument.revertToSaved(_:)))
+        file.addItem(title: "Check for External Changes", action: #selector(TextDocument.checkExternalChanges(_:)))
+        file.addItem(title: "Read Only", action: #selector(TextDocument.toggleReadOnly(_:)))
+        file.addItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        file.addItem(.separator())
+        file.addItem(title: "Page Setup…", action: #selector(NSDocument.runPageLayout(_:)))
+        file.addItem(title: "Print…", action: #selector(NSDocument.printDocument(_:)), keyEquivalent: "p")
+        file.addItem(
+            title: "Save Session Snapshot…", action: #selector(WorkspaceController.saveSession(_:)), target: workspace)
+        file.addItem(
+            title: "Open Session Snapshot…", action: #selector(WorkspaceController.openSession(_:)), target: workspace)
+        let workspaceRoot = NSMenuItem()
+        workspaceRoot.title = "Workspace"
+        workspaceRoot.submenu = workspaceBrowser.menu()
+        bar.addItem(workspaceRoot)
+        let encoding = menu("Encoding")
+        for target in FileFormat.convertTargets {
+            let title = target.title, code = target.code
+            encoding.addItem(
+                title: "Convert to \(title)", action: #selector(TextDocument.convertEncoding(_:)),
+                representedObject: code)
+        }
+        encoding.addItem(.separator())
+        // The same names as the Convert items above, never the stored identifier.
+        for value in FileEncoding.allCases {
+            encoding.addItem(
+                title: "Reload as \(value.displayName)…",
+                action: #selector(TextDocument.reloadEncoding(_:)), representedObject: value.rawValue)
+        }
+        let edit = menu("Edit")
+        // Grouped by what the command acts on. Every item keeps its command identifier as its
+        // represented object, so shortcuts, macros and validation find it wherever it sits.
+        func group(_ title: String) -> NSMenu {
+            let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let child = NSMenu(title: title)
+            parent.submenu = child
+            edit.addItem(parent)
+            return child
+        }
+        func command(_ m: NSMenu, _ title: String, _ id: String, _ key: String = "") {
+            m.addItem(
+                title: title, action: #selector(EditorWindowController.command(_:)), keyEquivalent: key,
+                representedObject: id)
+        }
+        func command(_ menu: NSMenu, _ value: EditorCommand, _ key: String? = nil) {
+            command(menu, value.title, value.rawValue, key ?? value.defaultMenuShortcut)
+        }
+        func transform(_ m: NSMenu, _ value: EditorTransform) {
+            command(m, value.title, "transform." + value.rawValue)
+        }
+        edit.addItem(
+            title: EditorCommand.undo.title, action: NSSelectorFromString("undo:"),
+            keyEquivalent: EditorCommand.undo.defaultMenuShortcut,
+            representedObject: EditorCommand.undo.rawValue)
+        edit.addItem(
+            title: EditorCommand.redo.title, action: NSSelectorFromString("redo:"),
+            keyEquivalent: EditorCommand.redo.defaultMenuShortcut,
+            representedObject: EditorCommand.redo.rawValue)
+        edit.addItem(.separator())
+        edit.addItem(
+            title: EditorCommand.cut.title, action: #selector(NSText.cut(_:)),
+            keyEquivalent: EditorCommand.cut.defaultMenuShortcut,
+            representedObject: EditorCommand.cut.rawValue)
+        edit.addItem(
+            title: EditorCommand.copy.title, action: #selector(NSText.copy(_:)),
+            keyEquivalent: EditorCommand.copy.defaultMenuShortcut,
+            representedObject: EditorCommand.copy.rawValue)
+        edit.addItem(
+            title: EditorCommand.paste.title, action: #selector(NSText.paste(_:)),
+            keyEquivalent: EditorCommand.paste.defaultMenuShortcut,
+            representedObject: EditorCommand.paste.rawValue)
+        edit.addItem(
+            title: EditorCommand.selectAll.title, action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: EditorCommand.selectAll.defaultMenuShortcut,
+            representedObject: EditorCommand.selectAll.rawValue)
+        edit.addItem(.separator())
+        let lines = group("Lines")
+        command(lines, .duplicateLine)
+        command(lines, .deleteLine)
+        command(lines, .transposeLine)
+        command(lines, .moveLineUp)
+        command(lines, .moveLineDown)
+        command(lines, .joinLines)
+        lines.addItem(.separator())
+        for value: EditorTransform in [
+            .sortAscending, .sortDescending, .sortCaseInsensitive, .sortLocalized, .sortLength
+        ] { transform(lines, value) }
+        lines.addItem(.separator())
+        for value: EditorTransform in [.reverseLines, .uniqueLines, .removeEmptyLines] { transform(lines, value) }
+        let whitespace = group("Indentation and Whitespace")
+        command(whitespace, .indent)
+        command(whitespace, .unindent)
+        whitespace.addItem(.separator())
+        transform(whitespace, .trimLeading)
+        command(whitespace, .trimTrailing)
+        transform(whitespace, .trimBoth)
+        let letterCase = group("Convert Case")
+        command(letterCase, .upper)
+        command(letterCase, .lower)
+        transform(letterCase, .titleCase)
+        transform(letterCase, .invertCase)
+        let comments = group("Comment")
+        for comment in CommentCommand.allCases {
+            comments.addItem(
+                title: comment.title, action: #selector(EditorWindowController.comment(_:)),
+                representedObject: comment.rawValue)
+        }
+        let selection = group("Selection")
+        for value: EditorCommand in [
+            .rectangularSelection, .streamSelection, .addNextOccurrence, .selectAllOccurrences,
+            .clearAdditionalSelections, .duplicateSelection
+        ] { command(selection, value) }
+        selection.addItem(.separator())
+        selection.addItem(title: "Column Insert / Number…", action: #selector(EditorWindowController.columnInsert(_:)))
+        let deletion = group("Delete")
+        for value: EditorCommand in [.deleteWordLeft, .deleteWordRight, .deleteLineLeft, .deleteLineRight] {
+            command(deletion, value)
+        }
+        let endings = group("Line Endings")
+        for mode in ["LF", "CRLF", "CR"] {
+            endings.addItem(
+                title: "Convert to \(mode)", action: #selector(EditorWindowController.convertEOL(_:)),
+                representedObject: mode)
+        }
+        edit.addItem(.separator())
+        command(edit, .toggleOvertype)
+        // Every transform has a place above; a new case must be given one.
+        assert(
+            Set(EditorTransform.allCases).isSubset(of: [
+                .sortAscending, .sortDescending, .sortCaseInsensitive, .sortLocalized, .sortLength, .reverseLines,
+                .uniqueLines, .removeEmptyLines, .trimLeading, .trimBoth, .titleCase, .invertCase
+            ]), "an EditorTransform has no Edit menu item")
+        let search = menu("Search")
+        // One Find. Command-F opens the find bar in the document window; Find Next, Find Previous
+        // and Use Selection for Find share its text with the system find pasteboard. Find and
+        // Replace is the window with scopes, regular expressions and results.
+        search.addItem(title: "Find…", action: #selector(EditorWindowController.showFind(_:)), keyEquivalent: "f")
+        search.addItem(
+            title: "Find and Replace…", action: #selector(SearchController.showSearch(_:)), keyEquivalent: "f",
+            modifiers: [.command, .option], target: searchController)
+        for (title, action, key) in [
+            ("Find Next", #selector(findNextShared(_:)), "g"), ("Find Previous", #selector(findPreviousShared(_:)), "G")
+        ] {
+            search.addItem(title: title, action: action, keyEquivalent: key, target: self)
+        }
+        search.addItem(
+            title: "Use Selection for Find", action: #selector(EditorWindowController.useSelectionForFind(_:)),
+            keyEquivalent: "e")
+        search.addItem(
+            title: "Find in Folder…", action: #selector(FolderSearchController.showSearch(_:)), keyEquivalent: "F",
+            target: folderSearch)
+        search.addItem(title: "Go to Line…", action: #selector(EditorWindowController.goToLine(_:)), keyEquivalent: "l")
+        for value: EditorCommand in [
+            .gotoMatchingBrace, .selectMatchingBrace, .bookmarkToggle, .bookmarkNext, .bookmarkPrevious
+        ] { command(search, value) }
+        let runRoot = NSMenuItem()
+        runRoot.title = "Run"
+        runRoot.submenu = runner.makeMenu()
+        bar.addItem(runRoot)
+        let utilityRoot = NSMenuItem()
+        utilityRoot.title = "Text Utilities"
+        utilityRoot.submenu = utilities.makeMenu()
+        bar.addItem(utilityRoot)
+        let view = menu("View")
+        view.addItem(title: "Clone in Split View", action: #selector(EditorWindowController.clone(_:)))
+        view.addItem(title: "Close Split View", action: #selector(EditorWindowController.closeSplit(_:)))
+        view.addItem(title: "Wrap Lines", action: #selector(EditorWindowController.toggleWrap(_:)))
+        command(view, .zoomIn)
+        command(view, .zoomOut)
+        for value: EditorCommand in [.foldAll, .unfoldAll, .showWhitespace, .toggleEOL, .toggleLineNumbers] {
+            command(view, value)
+        }
+        let languageRoot = NSMenuItem()
+        languageRoot.title = "Language"
+        languageRoot.submenu = languages.menu()
+        bar.addItem(languageRoot)
+        let macroRoot = NSMenuItem()
+        macroRoot.title = "Macros"
+        macroRoot.submenu = macros.menu()
+        bar.addItem(macroRoot)
+        let automationRoot = NSMenuItem()
+        automationRoot.title = "Automations"
+        automationRoot.submenu = automations.menu()
+        bar.addItem(automationRoot)
+        // The palette's one menu entry, with Shift-Command-P, is in the Automations menu.
+        let window = menu("Window")
+        NSApp.windowsMenu = window
+        window.addItem(
+            title: "Next Tab", action: #selector(nextDocumentTab(_:)), keyEquivalent: "\t", modifiers: [.control],
+            target: self)
+        window.addItem(
+            title: "Previous Tab", action: #selector(previousDocumentTab(_:)), keyEquivalent: "\t",
+            modifiers: [.control, .shift], target: self)
+        window.addItem(title: "Open Documents…", action: #selector(showDocumentTabs(_:)))
+        window.addItem(.separator())
+        window.addItem(title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        window.addItem(title: "Zoom", action: #selector(NSWindow.performZoom(_:)))
+        window.addItem(.separator())
+        window.addItem(title: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)))
+        // AppKit puts its search field in the Help menu; it finds any command in the menus above.
+        let help = menu("Help")
+        NSApp.helpMenu = help
+        help.addItem(title: "TextTank Help (Online)", action: #selector(openOnlineHelp(_:)), keyEquivalent: "?")
+        settings.reconcileShortcuts(with: bar)
+    }
+    /// The project page, which carries the review guide and where each command lives. There is no
+    /// bundled help book yet.
+    @objc func openOnlineHelp(_ sender: Any?) {
+        if let url = URL(string: "https://github.com/funkymonkeyjam/TextTank#readme") { NSWorkspace.shared.open(url) }
+    }
+    /// Find Next and Find Previous act on whichever Find the person is using: the Find and Replace
+    /// window while it is open, otherwise the find bar of the current document window.
+    @objc func findNextShared(_ sender: Any?) { findShared(backwards: false) }
+    @objc func findPreviousShared(_ sender: Any?) { findShared(backwards: true) }
+    private func findShared(backwards: Bool) {
+        if searchController.isWindowLoaded, searchController.window?.isVisible == true {
+            if backwards { searchController.previous(nil) } else { searchController.next(nil) }
+        } else {
+            let controller =
+                (NSApp.mainWindow?.windowController as? EditorWindowController) ?? lastDocumentController
+            controller?.findFromMenu(backwards: backwards)
+        }
+    }
+    @objc func nextDocumentTab(_ sender: Any?) { cycleDocumentTab(1) }
+    @objc func previousDocumentTab(_ sender: Any?) { cycleDocumentTab(-1) }
+    private func cycleDocumentTab(_ direction: Int) {
+        let windows = DocumentTabWindow.documents
+        guard !windows.isEmpty else { return }
+        let index = windows.firstIndex(where: { $0.isVisible }) ?? 0
+        windows[(index + direction + windows.count) % windows.count].makeKeyAndOrderFront(nil)
+    }
+    @objc func showDocumentTabs(_ sender: Any?) {
+        let windows = DocumentTabWindow.documents
+        guard !windows.isEmpty else { return }
+        let alert = TTAlert()
+        alert.messageText = "Open Documents"
+        let choice = documentTabChoices(windows)
+        choice.selectItem(at: windows.firstIndex(where: { $0.isVisible }) ?? 0)
+        alert.accessoryView = choice
+        alert.addButton(withTitle: "Switch")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
+        guard alert.runModal() == .alertFirstButtonReturn, let index = choice.selectedItem?.tag,
+            windows.indices.contains(index), DocumentTabWindow.documents.contains(where: { $0 === windows[index] })
+        else { return }
+        windows[index].makeKeyAndOrderFront(nil)
+    }
+    func documentTabChoices(_ windows: [NSWindow]) -> NSPopUpButton {
+        let choice = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 420, height: 30))
+        choice.setAccessibilityLabel("Open document to switch to")
+        for (index, window) in windows.enumerated() {
+            let path = (window.windowController?.document as? NSDocument)?.fileURL?.deletingLastPathComponent().path
+            let title = window.title + (window.isDocumentEdited ? " •" : "") + (path.map { " — \($0)" } ?? "")
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.tag = index
+            choice.menu?.addItem(item)
+        }
+        return choice
+    }
+    /// Full paths, because the Recovery folder is inside the hidden Library folder.
+    static func recoveryIssueText(_ issues: [RecoveryIssue]) -> String {
+        "These files were left untouched and are not recovered automatically.\n\n"
+            + issues.map { $0.url.path + "\n" + $0.message }.joined(separator: "\n\n")
+    }
+    /// The launch prompt's text: what each snapshot is a draft of and when it was written, so the
+    /// person can tell the drafts apart before recovering or discarding them. Display only.
+    static func recoveryPromptText(_ snapshots: [RecoverySnapshot], limit: Int = 12) -> String {
+        let listed = snapshots.prefix(limit).map { "• " + SnapshotLabel.line(for: $0) }
+        let more = snapshots.count > limit ? ["…and \(snapshots.count - limit) more"] : []
+        return
+            "Found \(snapshots.count) recovery snapshot\(snapshots.count == 1 ? "" : "s"). Recovered content opens as new unsaved documents; original files are not changed. Later keeps the snapshots and asks again at the next launch.\n\n"
+            + (listed + more).joined(separator: "\n")
+    }
+    /// The Recover branch of the launch prompt. Documents are opened one at a time, so the
+    /// snapshots before one that fails stay open when the error is shown.
+    @discardableResult func openRecovered(_ snapshots: [RecoverySnapshot]) throws -> [TextDocument] {
+        var opened = [TextDocument]()
+        for snapshot in snapshots { opened.append(try TextDocument.openRecovered(snapshot)) }
+        return opened
+    }
+    private func restoreRecovery() {
+        do {
+            let scan = try TextDocument.recovery.scan()
+            let snapshots = scan.snapshots
+            if !scan.issues.isEmpty {
+                let warning = TTAlert()
+                warning.messageText = "Some recovery files need review"
+                warning.informativeText = Self.recoveryIssueText(scan.issues)
+                warning.addButton(withTitle: "OK")
+                warning.addButton(withTitle: "Reveal in Finder")
+                if warning.runModal() == .alertSecondButtonReturn {
+                    NSWorkspace.shared.activateFileViewerSelecting(scan.issues.map(\.url))
+                }
+            }
+            guard !snapshots.isEmpty else { return }
+            let alert = TTAlert()
+            alert.messageText = "Recover unsaved documents?"
+            alert.informativeText = Self.recoveryPromptText(snapshots)
+            alert.addButton(withTitle: "Recover")
+            alert.addButton(withTitle: "Later")
+            alert.addButton(withTitle: "Discard…")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                try openRecovered(snapshots)
+            case .alertThirdButtonReturn:
+                let confirm = TTAlert()
+                confirm.alertStyle = .warning
+                confirm.messageText = "Discard \(snapshots.count) recovery snapshots?"
+                confirm.informativeText =
+                    "The unsaved text in these snapshots will be permanently deleted. Original files are not changed. This cannot be undone."
+                confirm.addButton(withTitle: "Cancel", role: .cancel)
+                confirm.addButton(withTitle: "Discard")
+                confirm.buttons.last?.hasDestructiveAction = true
+                guard confirm.runModal() == .alertSecondButtonReturn else { return }
+                // Only the snapshots listed above, at the revision that was scanned.
+                let kept = TextDocument.recovery.discard(snapshots)
+                if !kept.isEmpty {
+                    let summary = TTAlert()
+                    summary.messageText = "\(kept.count) recovery snapshots were not discarded"
+                    summary.informativeText = Self.recoveryIssueText(kept)
+                    summary.addButton(withTitle: "OK")
+                    summary.addButton(withTitle: "Reveal in Finder")
+                    if summary.runModal() == .alertSecondButtonReturn {
+                        NSWorkspace.shared.activateFileViewerSelecting(kept.map(\.url))
+                    }
+                }
+            default: return
+            }
+        } catch { TTAlert.present(error) }
+    }
+    /// The About panel's options. The name, version, build and copyright come from the bundle,
+    /// so they cannot disagree with Finder's Get Info; only the preview notice is added to the
+    /// version. The credits are the bundled Credits.rtf, in the label colour so that they stay
+    /// readable in dark mode. Without that file the panel shows its standard contents.
+    static func aboutOptions(info: [String: Any]?, credits: URL?) -> [NSApplication.AboutPanelOptionKey: Any] {
+        var options: [NSApplication.AboutPanelOptionKey: Any] = [:]
+        if let version = info?["CFBundleShortVersionString"] as? String, !version.isEmpty {
+            options[.applicationVersion] = version + " — INCOMPLETE PREVIEW"
+        }
+        if let credits, let data = try? Data(contentsOf: credits),
+            let text = NSMutableAttributedString(rtf: data, documentAttributes: nil)
+        {
+            text.addAttribute(
+                .foregroundColor, value: NSColor.labelColor, range: NSRange(location: 0, length: text.length))
+            options[.credits] = text
+        }
+        return options
+    }
+    @objc func about() {
+        NSApp.orderFrontStandardAboutPanel(
+            options: Self.aboutOptions(
+                info: Bundle.main.infoDictionary,
+                credits: Bundle.main.url(forResource: "Credits", withExtension: "rtf")))
+    }
+}

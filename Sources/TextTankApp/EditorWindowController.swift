@@ -1,0 +1,982 @@
+import AppKit
+
+final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMenuItemValidation, NSSearchFieldDelegate {
+    let split = NSSplitView()
+    let findField = NSSearchField()
+    let replaceField = NSTextField()
+    let caseBox = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
+    let findNextButton = NSButton(title: "Next", target: nil, action: nil)
+    let replaceMatchButton = NSButton(title: "Replace Selection", target: nil, action: nil)
+    private(set) var findBar: NSView?
+    private var splitBelowFindBar: NSLayoutConstraint?
+    private var splitBelowTabs: NSLayoutConstraint?
+    var findBarVisible: Bool { findBar?.isHidden == false }
+    let status = NSTextField(labelWithString: "Ready")
+    private let statusDetails = StatusBadgeRow()
+    private let documentTabs = DocumentTabStrip()
+    private var statusTimer: Timer?
+    /// Nil when the caller supplies timer ticks itself. The normal window polls every 0.2 s;
+    /// checks can drive the exact same tick path without depending on run-loop scheduling speed.
+    var statusTimerInterval: TimeInterval? = 0.2
+    /// True while the recurring refresh is scheduled, which is only while the window is on screen.
+    var statusTimerActive: Bool { statusTimer != nil }
+    #if TESTING
+        /// Drops the timer without any visibility change, as a lost timer would look.
+        func stopStatusTimerForChecks() {
+            statusTimer?.invalidate()
+            statusTimer = nil
+        }
+    #endif
+    private var statusClosed = false
+    private var inlineSearchGeneration = UUID()
+    private var inlineCancellation: TTSearchCancellation?
+    private(set) var inlineSearchPending = false
+    private var stateObserver: NSObjectProtocol?
+    private var visibilityObservers: [NSObjectProtocol] = []
+    private(set) var statusRefreshCount = 0
+    /// Whole-document captures started for the character count and line-ending badges.
+    private(set) var statusMetricsCaptureCount = 0
+    private var statusRevision: UInt?
+    /// The revision the previous timer tick saw; a recurring refresh captures the document only
+    /// once the revision has stayed the same for a whole tick.
+    private var statusTickRevision: UInt?
+    private var statusMetricsPending = false
+    private var cachedCharacterCount = 0
+    private struct SelectionKey: Equatable {
+        let editor: ObjectIdentifier
+        let revision: UInt, generation: UInt
+        let count: Int, anchor: Int, caret: Int
+    }
+    private var cachedSelectionKey: SelectionKey?
+    private var cachedSelectedCount = 0
+    private var cachedEndings = "LF"
+    var secondary: TTEditor?
+    /// The pane focused last. Written when the window's first responder moves into a pane, by
+    /// each view's onFocus (see `wire`) and by closeSplit.
+    weak var lastEditor: TTEditor?
+    /// Scintilla reports focus only while the window is key and the application active, so the
+    /// first responder is observed as well: a pane chosen in a background window still counts.
+    var focusObservation: NSKeyValueObservation?
+    var automationObserver: NSObjectProtocol?
+    let primaryEditor: TTEditor
+    /// The primary view and, while the window is split, the clone.
+    var views: [TTEditor] { [primaryEditor] + (secondary.map { [$0] } ?? []) }
+    /// The pane that holds the first responder, otherwise the pane focused last (focus may be
+    /// in the find field or another window). A pure read.
+    var activeEditor: TTEditor {
+        if let responder = window?.firstResponder as? NSView,
+            let focused = views.last(where: { responder.isDescendant(of: $0) })
+        {
+            return focused
+        }
+        return lastEditor ?? primaryEditor
+    }
+    /// Per-view wiring shared by the primary view and a clone.
+    private func wire(_ editor: TTEditor) {
+        editor.onFocus = { [weak self, weak editor] in
+            guard let self, let editor else { return }
+            self.lastEditor = editor
+            self.updateInlineFindValidation()
+            let app = NSApp.delegate as? AppDelegate
+            app?.lastDocumentController = self
+            app?.macros.editorDidFocus(editor)
+        }
+        editor.menu = (NSApp.delegate as? AppDelegate)?.automations.contextMenu()
+    }
+    /// Copies the active pane's syntax styles to the other pane after a language or style
+    /// change. The lexer itself belongs to the shared document and is never applied twice.
+    func syncPaneStyles(from source: TTEditor) {
+        for view in views where view !== source { view.adoptSyntaxStyles(from: source) }
+    }
+    init(document: TextDocument) {
+        primaryEditor = document.editor
+        let window = DocumentTabWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        super.init(window: window)
+        #if TESTING
+            // The CLI checks drive many document transitions without NSApplication.run.
+            // Their native animations exhausted AppKit workers before a save panel could open.
+            // Suppress only this owned fixture transition; native sheets and production keep their behavior.
+            window.animationBehavior = .none
+        #endif
+        lastEditor = document.editor
+        wire(document.editor)
+        focusObservation = window.observe(\.firstResponder) { [weak self] window, _ in
+            guard let self, let responder = window.firstResponder as? NSView,
+                let pane = self.views.last(where: { responder.isDescendant(of: $0) })
+            else { return }
+            self.lastEditor = pane
+            self.updateInlineFindValidation()
+        }
+        if let app = NSApp.delegate as? AppDelegate {
+            app.settings.apply(to: document.editor)
+            let toolbar = NSToolbar(identifier: "TextTankToolbar")
+            toolbar.delegate = self
+            toolbar.displayMode = .iconOnly
+            window.toolbar = toolbar
+            automationObserver = NotificationCenter.default.addObserver(
+                forName: .textTankAutomationsDidChange, object: app.automations, queue: .main
+            ) { [weak self] _ in self?.refreshAutomationToolbar() }
+        }
+        window.title = "TextTank"
+        window.center()
+        window.tabbingMode = .disallowed
+        // Tabs are separate windows of which one is shown. A full-screen window cannot be
+        // swapped for another that way, so the tab windows do not enter full screen.
+        window.collectionBehavior.insert(.fullScreenNone)
+        window.titleVisibility = .visible
+        window.titlebarAppearsTransparent = false
+        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window.standardWindowButton(button)?.isHidden = false
+        }
+        window.routeCloseButtonToQuit()
+        window.contentMinSize = NSSize(width: 800, height: 500)
+        let root = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+        window.contentView = root
+        split.isVertical = true
+        split.dividerStyle = .thin
+        split.addArrangedSubview(document.editor)
+        findField.placeholderString = "Find literal text"
+        replaceField.placeholderString = "Replace with"
+        findNextButton.target = self
+        findNextButton.action = #selector(findNext(_:))
+        findNextButton.setAccessibilityLabel("Find next match in document")
+        replaceMatchButton.target = self
+        replaceMatchButton.action = #selector(replaceSelection(_:))
+        replaceMatchButton.setAccessibilityLabel("Replace selected match in document")
+        let doneButton = NSButton(title: "Done", target: self, action: #selector(hideFind(_:)))
+        doneButton.setAccessibilityLabel("Close Find in document")
+        caseBox.setAccessibilityLabel("Match case in document search")
+        let search = NSStackView(views: [
+            findField, replaceField, caseBox, findNextButton, replaceMatchButton, doneButton
+        ])
+        search.spacing = 8
+        // Return in the field finds the next match, Shift-Return the previous one, Escape closes.
+        findField.delegate = self
+        replaceField.delegate = self
+        caseBox.target = self
+        caseBox.action = #selector(inlineFindOptionsChanged(_:))
+        findField.target = self
+        findField.action = #selector(findFieldAction(_:))
+        findField.sendsWholeSearchString = true
+        findField.setAccessibilityLabel("Find in document")
+        replaceField.setAccessibilityLabel("Replace selection with")
+        // The bar is out of the way until Find is chosen, so the text is the window's main surface.
+        search.isHidden = true
+        findBar = search
+        documentTabs.owner = window
+        [documentTabs, search, split, status, statusDetails].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview($0)
+        }
+        NSLayoutConstraint.activate([
+            split.heightAnchor.constraint(greaterThanOrEqualToConstant: 200),
+            documentTabs.topAnchor.constraint(equalTo: root.topAnchor),
+            documentTabs.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            documentTabs.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            documentTabs.heightAnchor.constraint(equalToConstant: 36),
+            search.topAnchor.constraint(equalTo: documentTabs.bottomAnchor, constant: 10),
+            search.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            search.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            findField.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
+            replaceField.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
+            split.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            split.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            split.bottomAnchor.constraint(equalTo: statusDetails.topAnchor, constant: -5),
+            statusDetails.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            statusDetails.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            statusDetails.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -2),
+            status.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            status.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            status.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6)
+        ])
+        splitBelowFindBar = split.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 10)
+        splitBelowTabs = split.topAnchor.constraint(equalTo: documentTabs.bottomAnchor)
+        splitBelowTabs?.isActive = true
+        status.font = .systemFont(ofSize: 11)
+        status.textColor = .secondaryLabelColor
+        status.lineBreakMode = .byTruncatingTail
+        statusDetails.onActivate = { [weak self] key, view in self?.showStatusOptions(key, at: view) }
+        // Editor events make the bar follow an edit or a selection change in the same turn of
+        // the run loop; the timer started by visibilityChanged() covers state no event reports.
+        stateObserver = NotificationCenter.default.addObserver(
+            forName: .TTEditorStateDidChange, object: nil, queue: nil
+        ) { [weak self] note in
+            guard let self, !self.statusClosed, let editor = note.object as? TTEditor else { return }
+            if editor === self.primaryEditor || editor === self.secondary {
+                self.updateInlineFindValidation()
+                if self.window?.isVisible == true { self.refreshStatusDetails(source: .editorEvent) }
+            } else if self.window?.isVisible == true {
+                // Another document changed: only its title in this window's tab strip can differ.
+                self.documentTabs.refresh()
+            }
+        }
+        // Minimising and restoring a window changes isVisible without any order call.
+        visibilityObservers = [
+            NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification,
+            NSWindow.didBecomeKeyNotification, NSWindow.didChangeOcclusionStateNotification
+        ].map {
+            NotificationCenter.default.addObserver(forName: $0, object: window, queue: nil) { [weak self] _ in
+                self?.visibilityChanged()
+            }
+        }
+        visibilityChanged()
+        refreshStatusDetails(for: document)
+        updateInlineFindValidation()
+        // The first document window opens where the last one was left. A later tab takes the
+        // frame of the visible tab when it is shown, which replaces whatever is applied here.
+        // This comes last: the title bar and toolbar set up above change the window's height.
+        WindowFrames.track(window, as: "TextTank.Document")
+    }
+    private func removeVisibilityObservers() {
+        visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        visibilityObservers = []
+    }
+    /// Starts the recurring status refresh when the window comes on screen and stops it when the
+    /// window leaves, so a hidden tab has no timer at all.
+    func visibilityChanged() {
+        let visible = window?.isVisible == true && !statusClosed && statusTimerInterval != nil
+        if !visible {
+            statusTimer?.invalidate()
+            statusTimer = nil
+            return
+        }
+        guard statusTimer == nil else { return }
+        let timer = Timer(timeInterval: statusTimerInterval ?? 0.2, repeats: true) { [weak self] _ in
+            self?.statusTimerTick()
+        }
+        timer.tolerance = 0.05
+        RunLoop.main.add(timer, forMode: .default)
+        statusTimer = timer
+    }
+    /// One polling tick. Kept separate from Timer so checks can insert an edit before every tick
+    /// and an idle tick after the last edit, even on a busy runner.
+    func statusTimerTick() {
+        guard window?.isVisible == true else {
+            visibilityChanged()
+            return
+        }
+        refreshStatusDetails(source: .pollingTick)
+        statusTickRevision = (document as? TextDocument)?.editor.revision
+    }
+    /// A failed recovery write is shown in red with a tooltip as well as in words, and stays
+    /// until the document reports a successful write.
+    private var transientStatus: String?
+    /// Says why something the person just did had no effect, in the status line for a few seconds
+    /// and to assistive technology, then shows the save state again. A standing recovery failure
+    /// is never replaced.
+    func showTransientStatus(_ message: String, seconds: TimeInterval = 4, announce: Bool = true) {
+        guard transientStatus != message else { return }
+        if announce { Announce.say(message, from: window) }
+        guard let doc = document as? TextDocument, doc.lastRecoveryError == nil else { return }
+        transientStatus = message
+        status.stringValue = message
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self, weak doc] in
+            guard let self, self.transientStatus == message else { return }
+            self.transientStatus = nil
+            if let doc, doc.lastRecoveryError == nil { self.status.stringValue = doc.currentSaveStateStatus }
+        }
+    }
+    func showRecoveryStatus(_ message: String, failed: Bool) {
+        transientStatus = nil
+        if failed, status.stringValue != message { Announce.say(message, from: window) }
+        status.stringValue = message
+        // The failure is carried by the words and the symbol; full-strength label colour keeps it
+        // readable in both appearances, where small red text was not.
+        status.textColor = failed ? .labelColor : .secondaryLabelColor
+        status.font = failed ? .boldSystemFont(ofSize: 11) : .systemFont(ofSize: 11)
+        status.toolTip =
+            failed
+            ? "Crash-recovery copies of this document are not being written. Save the document to keep your work. This message clears when a recovery copy is written again."
+            : nil
+    }
+    enum StatusRefreshSource {
+        case explicit, editorEvent, pollingTick
+    }
+    /// Updates the cheap badges immediately. Only a polling tick can recognize an idle interval;
+    /// a queued editor event after the tick observed an edit is not an idle observation (V32-01).
+    /// Explicit action refreshes keep their immediate metrics capture.
+    func refreshStatusDetails(for suppliedDocument: TextDocument? = nil, source: StatusRefreshSource = .explicit) {
+        guard let doc = suppliedDocument ?? document as? TextDocument else { return }
+        statusRefreshCount += 1
+        // Any refresh in a window on screen restarts a missing timer, the editor-event path included.
+        if statusTimer == nil { visibilityChanged() }
+        documentTabs.refresh()
+        let editor = activeEditor, info = editor.statusInfo
+        let revision = doc.editor.revision
+        let allowsMetricsCapture =
+            source == .explicit || (source == .pollingTick && statusTickRevision == revision)
+        if statusRevision != revision && !statusMetricsPending && allowsMetricsCapture {
+            // Capture the authoritative bytes in one copy on main; the scan happens off-main.
+            // One in-flight task bounds work for rapid edits.
+            let bytes = doc.editor.utf8Data
+            statusMetricsPending = true
+            statusMetricsCaptureCount += 1
+            DispatchQueue.global(qos: .utility).async { [weak self, weak doc] in
+                let (count, eol) = StatusMetrics.scan(bytes)
+                DispatchQueue.main.async { [weak self, weak doc] in
+                    guard let self else { return }
+                    self.statusMetricsPending = false
+                    guard let doc, self.document === doc, doc.editor.revision == revision else { return }
+                    self.cachedCharacterCount = count
+                    self.cachedEndings = eol
+                    self.statusRevision = revision
+                    if self.window?.isVisible == true { self.refreshStatusDetails() }
+                }
+            }
+        }
+        let language =
+            (NSApp.delegate as? AppDelegate)?.languages.profile(identifier: doc.languageIdentifier)?.title
+            ?? (doc.languageIdentifier == LanguageProfile.plainTextID ? "Plain Text" : doc.languageIdentifier)
+        let eol =
+            cachedEndings.isEmpty ? ([0: "CRLF", 1: "CR", 2: "LF"][info["eol"]?.intValue ?? 2] ?? "LF") : cachedEndings
+        let indentation =
+            (info["useTabs"]?.boolValue == true ? "Tabs" : "Spaces") + ": \(info["tabWidth"]?.intValue ?? 4)"
+        // VoiceOver names each text area after its document, and after its pane in a split view.
+        for (index, pane) in views.enumerated() {
+            let name =
+                (doc.displayName ?? "Untitled")
+                + (views.count > 1 ? (index == 0 ? ", first pane" : ", second pane") : "")
+            if pane.accessibilityDocumentName != name { pane.accessibilityDocumentName = name }
+        }
+        var items: [StatusItem] = [
+            .init(field: .document, text: doc.displayName + (doc.isDocumentEdited ? " *" : "")),
+            .init(field: .bookmarks, text: Strings.count(doc.editor.bookmarkCount, .bookmark)),
+            .init(field: .language, text: language),
+            .init(
+                field: .position,
+                text:
+                    "Ln \(Strings.number(info["line"]?.intValue ?? 1)), Col \(Strings.number(info["column"]?.intValue ?? 1))"
+            ),
+            .init(field: .characters, text: Strings.count(cachedCharacterCount, .character)),
+            .init(field: .lines, text: Strings.count(info["lines"]?.intValue ?? 1, .line))
+        ]
+        // The generation changes with every edit, every bridge call that can move a selection
+        // and every selection update Scintilla reports; the main range is compared as well.
+        let selectionKey = SelectionKey(
+            editor: ObjectIdentifier(editor), revision: revision, generation: editor.selectionGeneration,
+            count: editor.selectionCount, anchor: editor.selectionAnchor, caret: editor.selectionCaret)
+        if cachedSelectionKey != selectionKey {
+            cachedSelectedCount = editor.selectedCharacterCount
+            cachedSelectionKey = selectionKey
+        }
+        if cachedSelectedCount > 0 {
+            items.append(.init(field: .selectedCharacters, text: Strings.count(cachedSelectedCount, .character)))
+        }
+        if editor.selectionCount > 1 {
+            items.append(.init(field: .selections, text: Strings.count(editor.selectionCount, .selection)))
+        }
+        items += [
+            .init(
+                field: .font,
+                text: String(
+                    format: Strings.text("status.basePoints", "Base %@ pt"),
+                    Strings.points(info["fontSize"]?.doubleValue ?? 14))),
+            .init(field: .indent, text: indentation),
+            .init(field: .encoding, text: doc.format.encoding.displayName + (doc.format.bom ? " BOM" : "")),
+            .init(field: .eol, text: eol), .init(field: .wrap, text: editor.wrap ? "Wrap" : "No Wrap")
+        ]
+        if editor.readOnly { items.append(.init(field: .readOnly, text: "Read Only")) }
+        statusDetails.update(items)
+    }
+    private func showStatusOptions(_ key: StatusField, at view: NSView) {
+        let editor = activeEditor
+        (NSApp.delegate as? AppDelegate)?.lastDocumentController = self
+        lastEditor = editor
+        guard let menu = statusOptionsMenu(key) else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height), in: view)
+        refreshStatusDetails()
+    }
+    /// The menu a status bar field opens, for the active pane. Building it changes nothing, so
+    /// its wording can be checked without showing it.
+    func statusOptionsMenu(_ key: String) -> NSMenu? {
+        let field =
+            key == "count"
+            ? StatusField.characters : (key == "selection" ? .selectedCharacters : StatusField(rawValue: key))
+        guard let field else { return nil }
+        return statusOptionsMenu(field)
+    }
+    func statusOptionsMenu(_ key: StatusField) -> NSMenu? {
+        guard let doc = document as? TextDocument else { return nil }
+        let editor = activeEditor, info = editor.statusInfo
+        let app = NSApp.delegate as? AppDelegate
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        func add(
+            _ title: String, _ action: Selector, _ target: AnyObject, _ value: String? = nil, _ checked: Bool = false,
+            _ enabled: Bool = true
+        ) {
+            let item = menu.addItem(
+                title: title, action: action, target: target, representedObject: value,
+                isEnabled: enabled, state: checked ? .on : .off)
+            if let value, let command = EditorCommand(rawValue: value) {
+                item.keyEquivalent =
+                    command.isShortcutAssignable
+                    ? app?.settings.value.shortcut(for: value) ?? command.defaultMenuShortcut
+                    : command.defaultMenuShortcut
+                item.isEnabled = enabled && (!TTEditor.commandModifiesText(value) || !editor.readOnly)
+                if command.isToggle { item.state = editor.commandIsChecked(value) ? .on : .off }
+            }
+        }
+        func command(_ value: EditorCommand) { add(value.title, #selector(statusOption(_:)), self, value.rawValue) }
+        func heading(_ title: String) {
+            menu.addItem(title: title, action: nil, isEnabled: false)
+        }
+        switch key {
+        case .encoding:
+            heading("Reload using encoding…")
+            for encoding in FileEncoding.allCases {
+                add(
+                    encoding.displayName, #selector(TextDocument.reloadEncoding(_:)), doc, encoding.rawValue,
+                    doc.format.encoding == encoding, doc.fileURL != nil)
+            }
+            menu.addItem(.separator())
+            heading("Convert document encoding (save separately)")
+            for target in FileFormat.convertTargets {
+                add(
+                    target.title, #selector(TextDocument.convertEncoding(_:)), doc, target.code,
+                    doc.format == target.format, !editor.readOnly)
+            }
+        case .indent:
+            heading("Indentation for this document")
+            add("Tabs", #selector(statusOption(_:)), self, "tabs", info["useTabs"]?.boolValue == true)
+            add("Spaces", #selector(statusOption(_:)), self, "spaces", info["useTabs"]?.boolValue == false)
+            menu.addItem(.separator())
+            for n in [2, 3, 4, 8] {
+                add("Width: \(n)", #selector(statusOption(_:)), self, "width.\(n)", info["tabWidth"]?.intValue == n)
+            }
+            if let settings = app?.settings {
+                menu.addItem(.separator())
+                add("Default Editor Settings…", #selector(SettingsController.showSettings(_:)), settings)
+            }
+        case .eol:
+            heading("Convert document line endings")
+            for (name, code) in [("LF — Unix / macOS", "LF"), ("CRLF — Windows", "CRLF"), ("CR — Classic Mac", "CR")] {
+                let current =
+                    cachedEndings.isEmpty ? [0: "CRLF", 1: "CR", 2: "LF"][info["eol"]?.intValue ?? 2] : cachedEndings
+                add(name, #selector(convertEOL(_:)), self, code, current == code, !editor.readOnly)
+            }
+        case .wrap:
+            add("Wrap Lines", #selector(statusOption(_:)), self, "wrap.on", editor.wrap)
+            add("No Wrap", #selector(statusOption(_:)), self, "wrap.off", !editor.wrap)
+        case .font:
+            heading("Text size for this view")
+            command(.zoomIn)
+            command(.zoomOut)
+            if let languages = app?.languages {
+                menu.addItem(.separator())
+                menu.addItem(languages.styleSettingsMenuItem())
+            }
+        case .language:
+            if let languages = app?.languages {
+                for item in languages.languageMenuItems() {
+                    item.state = (item.representedObject as? String) == doc.languageIdentifier ? .on : .off
+                    menu.addItem(item)
+                }
+            }
+        case .bookmarks:
+            for value: EditorCommand in [.bookmarkToggle, .bookmarkNext, .bookmarkPrevious] { command(value) }
+        case .position:
+            add("Go to Line…", #selector(statusOption(_:)), self, "goToLine")
+        case .document, .readOnly:
+            add("Save", #selector(NSDocument.save(_:)), doc)
+            add("Save As…", #selector(NSDocument.saveAs(_:)), doc)
+            add("Read Only", #selector(TextDocument.toggleReadOnly(_:)), doc, nil, editor.readOnly)
+        case .characters, .lines, .selectedCharacters, .selections:
+            command(.selectAll)
+            add("Clear Selection", #selector(statusOption(_:)), self, "clearSelection")
+        }
+        return menu
+    }
+    /// F277: neither jump has a recordable step, so a recording is discarded when the caret or the
+    /// selection actually moves, and not for a cancelled dialog, a line that does not exist or a
+    /// selection that was already empty.
+    static func goToLine(_ line: Int, in editor: TTEditor, macros: MacroController?) -> Bool {
+        guard let macros else { return editor.goToLine(line) }
+        return macros.unrecordedJump(in: editor, reason: "Go to Line is not recorded in macros yet.") {
+            editor.goToLine(line)
+        }
+    }
+    @discardableResult static func clearSelection(in editor: TTEditor, macros: MacroController?) -> Bool {
+        let clear = { editor.setSelectionAnchor(editor.selectionCaret, caret: editor.selectionCaret) }
+        guard let macros else { return clear() }
+        return macros.unrecordedJump(
+            in: editor, reason: "Clear Selection is not recorded in macros yet.", clear)
+    }
+    @objc private func statusOption(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        let editor = activeEditor, info = editor.statusInfo
+        switch id {
+        case "tabs", "spaces": editor.configureTabWidth(info["tabWidth"]?.intValue ?? 4, useTabs: id == "tabs")
+        case "wrap.on", "wrap.off": editor.wrap = id == "wrap.on"
+        case "clearSelection": Self.clearSelection(in: editor, macros: (NSApp.delegate as? AppDelegate)?.macros)
+        case "goToLine": goToLine(sender)
+        default:
+            if id.hasPrefix("width."), let width = Int(id.dropFirst(6)) {
+                editor.configureTabWidth(width, useTabs: info["useTabs"]?.boolValue ?? true)
+            } else {
+                do { try perform(command: id) } catch is EditorCommandFailure {
+                    reportCommandFailure(EditorCommandFailure.unsupported.localizedDescription)
+                } catch { TTAlert.explain(error) }
+            }
+        }
+        refreshStatusDetails()
+    }
+    /// Search > Go to Line… and the position field of the status bar.
+    @objc func goToLine(_ sender: Any?) {
+        let editor = activeEditor
+        let alert = TTAlert()
+        alert.messageText = "Go to Line"
+        let input = NSTextField(string: String(editor.statusInfo["line"]?.intValue ?? 1))
+        input.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        input.identifier = NSUserInterfaceItemIdentifier("goToLine.line")
+        input.setAccessibilityLabel("Line number")
+        NumericInput.configure(input)
+        alert.accessoryView = input
+        alert.addButton(withTitle: "Go")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
+        alert.window.initialFirstResponder = input
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        // The engine's own line model decides which lines exist; a folded target is revealed.
+        guard editor.window != nil else { return }
+        guard let line = NumericInput.integer(input, signed: true),
+            Self.goToLine(line, in: editor, macros: (NSApp.delegate as? AppDelegate)?.macros)
+        else {
+            TTAlert.explain(
+                NumericInput.integer(input, signed: true) == nil
+                    ? "Enter a whole line number" : "There is no line \(input.stringValue)",
+                detail: "Enter a line number from 1 to \(editor.statusInfo["lines"]?.intValue ?? 1).")
+            return
+        }
+        window?.makeFirstResponder(editor)
+        refreshStatusDetails()
+    }
+    /// Puts the caret at the start of a line, counted from 1, on the engine's own line model.
+    /// False, with nothing changed, for a line the document does not have or a view that has
+    /// left its window. Does not touch a macro recording; the dialog passes the recorder.
+    static func goToLine(_ line: Int, in editor: TTEditor) -> Bool {
+        guard editor.window != nil else { return false }
+        return goToLine(line, in: editor, macros: nil)
+    }
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarDefaultItemIdentifiers(toolbar)
+    }
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        // No Close Tab item: every tab has its own close button, and Command-W closes the current one.
+        [.flexibleSpace, .init("TextTank.Automations")]
+    }
+    func toolbar(
+        _ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar: Bool
+    ) -> NSToolbarItem? {
+        guard let automations = (NSApp.delegate as? AppDelegate)?.automations else { return nil }
+        return identifier.rawValue == "TextTank.Automations"
+            ? automations.makeToolbarItem() : automations.makeToolbarItem(identifier: identifier)
+    }
+    func refreshAutomationToolbar() {
+        guard let toolbar = window?.toolbar else { return }
+        while !toolbar.items.isEmpty { toolbar.removeItem(at: 0) }
+        for (index, id) in toolbarDefaultItemIdentifiers(toolbar).enumerated() {
+            toolbar.insertItem(withItemIdentifier: id, at: index)
+        }
+    }
+    func prepareForClose() {
+        cancelInlineSearch()
+        statusClosed = true
+        updateInlineFindValidation()
+        statusTimer?.invalidate()
+        statusTimer = nil
+        if let stateObserver {
+            NotificationCenter.default.removeObserver(stateObserver)
+            self.stateObserver = nil
+        }
+        removeVisibilityObservers()
+        if let automationObserver {
+            NotificationCenter.default.removeObserver(automationObserver)
+            self.automationObserver = nil
+        }
+        focusObservation?.invalidate()
+        focusObservation = nil
+        // TextDocument.close has already made the shared document read-only for both panes.
+        primaryEditor.onFocus = nil
+        secondary?.onFocus = nil
+        primaryEditor.onReadOnlyAttempt = nil
+        secondary?.onReadOnlyAttempt = nil
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+    @objc func command(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        if (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder is NSTextView {
+            // Native editing selectors reach the field directly; this is only the custom-command path.
+            reportCommandFailure(
+                "This command is unavailable while a text field is being edited. Return to the document, then try again."
+            )
+            return
+        }
+        do { try perform(command: id) } catch is EditorCommandFailure {
+            reportCommandFailure(EditorCommandFailure.unsupported.localizedDescription)
+        } catch { TTAlert.present(error) }
+    }
+    private func reportCommandFailure(_ message: String) {
+        NSSound.beep()
+        showTransientStatus(message)
+    }
+    /// Runs one editor command on the active editor. A command that edits text is refused with the
+    /// read-only reason before anything else happens, so a macro recording is left as it was.
+    func perform(command id: String) throws {
+        let editor = activeEditor
+        if id.hasPrefix("transform."), let transform = EditorTransform(rawValue: String(id.dropFirst(10))) {
+            try editor.requireWritable()
+            (NSApp.delegate as? AppDelegate)?.macros.invalidateRecording(
+                reason: "This text transform is not yet recorded.")
+            try transform.apply(to: editor)
+            return
+        }
+        guard EditorCommand(rawValue: id) != nil else { throw EditorCommandFailure.unsupported }
+        if TTEditor.commandModifiesText(id) { try editor.requireWritable() }
+        (NSApp.delegate as? AppDelegate)?.macros.willExecuteCommand(id, on: editor)
+        guard editor.executeCommand(id) else { throw EditorCommandFailure.unsupported }
+    }
+    deinit {
+        statusTimer?.invalidate()
+        focusObservation?.invalidate()
+        if let stateObserver { NotificationCenter.default.removeObserver(stateObserver) }
+        visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
+    }
+    private func setFindBar(visible: Bool) {
+        guard let findBar, findBar.isHidden == visible else { return }
+        splitBelowTabs?.isActive = !visible
+        findBar.isHidden = !visible
+        splitBelowFindBar?.isActive = visible
+    }
+    /// The text other apps and the Find and Replace window last searched for.
+    #if TESTING
+        /// Checks never read or write the Mac's shared find pasteboard.
+        static var findPasteboardText = ""
+    #else
+        static var findPasteboardText: String {
+            get { NSPasteboard(name: .find).string(forType: .string) ?? "" }
+            set {
+                let board = NSPasteboard(name: .find)
+                board.clearContents()
+                board.setString(newValue, forType: .string)
+            }
+        }
+    #endif
+    /// The advanced window and inline bar share the query without scheduling another search.
+    func acceptSharedFindText(_ text: String) {
+        cancelInlineSearch()
+        findField.stringValue = text
+        updateInlineFindValidation()
+    }
+    @objc func showFind(_ sender: Any?) {
+        cancelInlineSearch()
+        // Remember the pane the find bar acts on before focus leaves it.
+        lastEditor = activeEditor
+        setFindBar(visible: true)
+        if findField.stringValue.isEmpty { findField.stringValue = Self.findPasteboardText }
+        window?.makeFirstResponder(findField)
+        findField.selectText(nil)
+        updateInlineFindValidation()
+    }
+    @objc func hideFind(_ sender: Any?) {
+        cancelInlineSearch()
+        let editor = activeEditor
+        setFindBar(visible: false)
+        window?.makeFirstResponder(editor)
+    }
+    /// Command-E: the selected text becomes the text to find, here and in other apps.
+    @objc func useSelectionForFind(_ sender: Any?) {
+        cancelInlineSearch()
+        let selected = activeEditor.selectedText
+        guard !selected.isEmpty, !selected.contains(where: \.isNewline) else {
+            NSSound.beep()
+            showTransientStatus("Select text on one line to use it for Find.")
+            return
+        }
+        findField.stringValue = selected
+        Self.findPasteboardText = selected
+        (NSApp.delegate as? AppDelegate)?.searchController.queryField.stringValue = selected
+        updateInlineFindValidation()
+    }
+    /// Find Next and Find Previous from the menu. With nothing to find yet, the bar opens instead.
+    func findFromMenu(backwards: Bool) {
+        if findField.stringValue.isEmpty { findField.stringValue = Self.findPasteboardText }
+        guard !findField.stringValue.isEmpty else {
+            showFind(nil)
+            return
+        }
+        performFind(backwards: backwards)
+    }
+    @objc func findFieldAction(_ sender: Any?) {
+        // The search field also sends its action when its text is cleared.
+        guard !findField.stringValue.isEmpty else { return }
+        performFind(backwards: NSApp.currentEvent?.modifierFlags.contains(.shift) == true, focusEditor: false)
+    }
+    func controlTextDidChange(_ notification: Notification) {
+        if let field = notification.object as? NSTextField, field === findField || field === replaceField {
+            cancelInlineSearch()
+        }
+    }
+    @objc private func inlineFindOptionsChanged(_ sender: Any?) { cancelInlineSearch() }
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === findField else { return false }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            hideFind(nil)
+            return true
+        }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            findFieldAction(nil)
+            return true
+        }
+        return false
+    }
+    @objc func findNext(_ sender: Any?) { performFind(backwards: false) }
+    func performFind(backwards: Bool, focusEditor: Bool = true) {
+        beginInlineSearch(action: backwards ? "previous" : "next", focusEditor: focusEditor)
+    }
+    @objc func replaceSelection(_ sender: Any?) {
+        do { try replaceSelectionFromBar() } catch { TTAlert.explain(error) }
+    }
+    /// Replacing is strict: a caret, several selections or text that is not a match is never inserted into.
+    func replaceSelectionFromBar() throws {
+        let editor = activeEditor
+        try editor.requireWritable()
+        guard editor.selectionCount == 1, editor.selectionStart < editor.selectionEnd else {
+            cancelInlineSearch()
+            showTransientStatus("Select one match of the Find text before replacing it.")
+            return
+        }
+        beginInlineSearch(action: "replaceOne", focusEditor: true)
+    }
+    /// Only metadata and bounded field prefixes are read here; validation never captures document text
+    /// or runs a search. A selected range can still fail the worker's exact-match/revision checks.
+    private func updateInlineFindValidation() {
+        let editor = activeEditor
+        let query = findField.stringValue
+        let ready =
+            !statusClosed && !inlineSearchPending && !query.isEmpty && query.utf16.prefix(65_537).count <= 65_536
+        findNextButton.isEnabled = ready
+        replaceMatchButton.isEnabled =
+            ready && !editor.readOnly && editor.selectionCount == 1
+            && editor.selectionStart < editor.selectionEnd
+            && replaceField.stringValue.utf16.prefix(1_048_577).count <= 1_048_576
+    }
+    private func cancelInlineSearch() {
+        inlineCancellation?.cancel()
+        inlineCancellation = nil
+        inlineSearchGeneration = UUID()
+        inlineSearchPending = false
+        updateInlineFindValidation()
+    }
+    /// Only scheduling and feedback belong to the bar. SearchController owns engine, navigation and replacement.
+    private func beginInlineSearch(action: String, focusEditor: Bool) {
+        let editor = activeEditor
+        // Menu/button actions commit the field editor and restore typing to the document. Return
+        // keeps the field editor, so repeated Return and Shift-Return continue to work (DS-35).
+        if focusEditor { window?.makeFirstResponder(editor) }
+        var captured = SearchOptions()
+        captured.query = findField.stringValue
+        captured.replacement = action == "replaceOne" ? replaceField.stringValue : ""
+        captured.matchCase = caseBox.state == .on
+        let options = captured
+        cancelInlineSearch()
+        guard !options.query.isEmpty, let delegate = NSApp.delegate as? AppDelegate, let capturedWindow = window else {
+            return
+        }
+        Self.findPasteboardText = options.query
+        delegate.searchController.queryField.stringValue = options.query
+        let token = inlineSearchGeneration, flag = TTSearchCancellation()
+        inlineCancellation = flag
+        inlineSearchPending = true
+        updateInlineFindValidation()
+        delegate.searchController.performInline(
+            options: options, action: action, on: editor, cancellation: flag,
+            isCurrent: { [weak self, weak editor, weak capturedWindow] in
+                guard let self, let editor, let capturedWindow else { return false }
+                return !self.statusClosed && self.inlineSearchGeneration == token && self.window === capturedWindow
+                    && self.activeEditor === editor && self.findField.stringValue.utf8.elementsEqual(options.query.utf8)
+                    && (self.caseBox.state == .on) == options.matchCase
+                    && (action != "replaceOne"
+                        || self.replaceField.stringValue.utf8.elementsEqual(options.replacement.utf8))
+            },
+            completion: { [weak self, weak editor] result in
+                guard let self, self.inlineSearchGeneration == token else { return }
+                self.inlineSearchPending = false
+                self.inlineCancellation = nil
+                self.updateInlineFindValidation()
+                switch result {
+                case .applied:
+                    guard let editor else { return }
+                    delegate.macros.recordSearch(.init(options: options, action: action), editor: editor)
+                    if action == "replaceOne" {
+                        self.showTransientStatus("Replaced the selected match. Undo restores it.")
+                    }
+                case .noMatch:
+                    NSSound.beep()
+                    if action == "replaceOne" {
+                        self.showTransientStatus("Select one match of the Find text before replacing it.")
+                    } else {
+                        let query = options.query
+                        self.showTransientStatus(
+                            "No matches for “\(query.count > 60 ? String(query.prefix(60)) + "…" : query)”.")
+                    }
+                case .stale:
+                    self.showTransientStatus("The document, selection or Find text changed. Search again.")
+                case .cancelled: break
+                case .failed(let error): self.showTransientStatus(error.localizedDescription)
+                }
+            })
+    }
+    @objc func clone(_ sender: Any?) {
+        guard secondary == nil else { return }
+        let source = primaryEditor
+        let clone = TTEditor(frame: split.bounds)
+        // Everything document-level (text, read-only, tab settings, lexer and keyword lists,
+        // undo) arrives with the shared document and is not written again here. The new pane
+        // copies only what a view owns, from the pane it was cloned from.
+        clone.shareDocument(with: source)
+        clone.adoptViewState(from: source)
+        wire(clone)
+        clone.onReadOnlyAttempt = { [weak self] in (self?.document as? TextDocument)?.noteReadOnlyAttempt() }
+        secondary = clone
+        split.addArrangedSubview(clone)
+        split.adjustSubviews()
+        split.layoutSubtreeIfNeeded()
+        clone.layoutSubtreeIfNeeded()
+        window?.makeFirstResponder(clone)
+    }
+    @objc func closeSplit(_ sender: Any?) {
+        guard let clone = secondary else { return }
+        clone.onFocus = nil
+        lastEditor = primaryEditor
+        window?.makeFirstResponder(primaryEditor)
+        // Recording across views is not supported; say so even if no focus event was sent.
+        (NSApp.delegate as? AppDelegate)?.macros.editorDidFocus(primaryEditor)
+        // Deferred results that do not depend on the clone's selection move to the primary view.
+        clone.retire(inFavorOf: primaryEditor)
+        clone.removeFromSuperview()
+        secondary = nil
+    }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(clone(_:)): return secondary == nil
+        case #selector(closeSplit(_:)): return secondary != nil
+        case #selector(command(_:)):
+            if (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder is NSTextView { return false }
+            guard let id = item.representedObject as? String else { return false }
+            if id.hasPrefix("transform."), EditorTransform(rawValue: String(id.dropFirst(10))) != nil {
+                return !activeEditor.readOnly
+            }
+            guard let command = EditorCommand(rawValue: id) else { return false }
+            item.state = command.isToggle && activeEditor.commandIsChecked(id) ? .on : .off
+            return !TTEditor.commandModifiesText(id) || !activeEditor.readOnly
+        case #selector(toggleWrap(_:)):
+            // Wrapping belongs to the view, as the status bar's Wrap field shows it.
+            item.state = activeEditor.wrap ? .on : .off
+            return true
+        default: return true
+        }
+    }
+    @objc func toggleWrap(_ sender: Any?) { activeEditor.wrap.toggle() }
+    @objc func comment(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let command = CommentCommand(rawValue: raw),
+            let app = NSApp.delegate as? AppDelegate, let document = document as? TextDocument
+        else { return }
+        guard let profile = app.languages.profile(identifier: document.languageIdentifier) else {
+            TTAlert.explain(
+                "Comments are not available for this language",
+                detail: "Choose a language with comment syntax in the Language menu, then try again.")
+            return
+        }
+        do {
+            try activeEditor.requireWritable()
+            app.macros.invalidateRecording(reason: "Language-specific comments are not yet recorded.")
+            try command.apply(to: activeEditor, profile: profile)
+        } catch { TTAlert.present(error) }
+    }
+    @objc func columnInsert(_ sender: Any?) {
+        let editor = activeEditor
+        do { try editor.requireWritable() } catch {
+            TTAlert.explain(error)
+            return
+        }
+        let revision = editor.revision, selections = editor.selectionRanges
+        let alert = TTAlert()
+        alert.messageText = "Insert into Each Selection"
+        alert.informativeText =
+            "Use Option-drag for a rectangle or add multiple carets. Text replaces each selected range; numbering follows selection order."
+        let text = NSTextField(string: "")
+        text.placeholderString = "Text to insert"
+        let number = NSButton(checkboxWithTitle: "Insert sequential numbers", target: nil, action: nil)
+        let start = NSTextField(string: "1"), step = NSTextField(string: "1")
+        text.setAccessibilityLabel("Text to insert into each selection")
+        number.setAccessibilityLabel("Insert sequential numbers into each selection")
+        start.setAccessibilityLabel("Starting column number")
+        step.setAccessibilityLabel("Column number increment")
+        let stack = NSStackView(views: [
+            text, number, NSTextField(labelWithString: "Start"), start, NSTextField(labelWithString: "Increment"), step
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.frame = NSRect(x: 0, y: 0, width: 400, height: 180)
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Insert").identifier = NSUserInterfaceItemIdentifier("column.insert")
+        alert.addButton(withTitle: "Cancel", role: .cancel).identifier = NSUserInterfaceItemIdentifier("column.cancel")
+        for (control, name) in [(text as NSView, "text"), (number, "number"), (start, "start"), (step, "step")] {
+            control.identifier = NSUserInterfaceItemIdentifier("column." + name)
+        }
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        var values = Array(repeating: text.stringValue, count: editor.selectionCount)
+        if number.state == .on {
+            guard let first = Int(start.stringValue), let increment = Int(step.stringValue) else {
+                TTAlert.explain(
+                    "Start and Increment must be whole numbers", detail: "No column insertion was applied.")
+                return
+            }
+            values = []
+            var value = first
+            for i in 0..<editor.selectionCount {
+                values.append(String(value))
+                if i + 1 < editor.selectionCount {
+                    let (next, overflow) = value.addingReportingOverflow(increment)
+                    guard !overflow else {
+                        TTAlert.explain(
+                            "The number sequence is too large", detail: "No column insertion was applied.")
+                        return
+                    }
+                    value = next
+                }
+            }
+        }
+        (NSApp.delegate as? AppDelegate)?.macros.invalidateRecording(reason: "Column insertion is not yet recorded.")
+        if !Self.applyColumn(values, to: editor, revision: revision, selections: selections) {
+            let error = TTAlert()
+            error.messageText = "Selections changed or are not writable"
+            error.informativeText = "No column insertion was applied."
+            error.runModal()
+        }
+    }
+    static func applyColumn(_ values: [String], to editor: TTEditor, revision: UInt, selections: [[String: NSNumber]])
+        -> Bool
+    {
+        guard editor.window != nil, editor.selectionRanges == selections else { return false }
+        return editor.replaceSelections(values, expectedRevision: revision)
+    }
+    @objc func convertEOL(_ sender: NSMenuItem) {
+        guard let mode = sender.representedObject as? String else { return }
+        do { try convertLineEndings(to: mode) } catch { TTAlert.explain(error) }
+    }
+    /// Refused with the read-only reason before a macro recording is touched.
+    func convertLineEndings(to mode: String) throws {
+        let editor = activeEditor
+        try editor.requireWritable()
+        (NSApp.delegate as? AppDelegate)?.macros.invalidateRecording(
+            reason: "Line-ending conversion is not yet recorded.")
+        guard editor.convertLineEndings(mode) else {
+            throw DocumentActionError.lineEndingsRejected
+        }
+    }
+}

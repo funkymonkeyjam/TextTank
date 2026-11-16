@@ -858,7 +858,7 @@
       "verification_state": "focused checks present; consult exact-candidate validation",
       "implementation_paths": [
         {
-          "path": "Sources/TextTankApp/App.swift",
+          "path": "Sources/TextTankApp/TextDocument.swift",
           "symbol": "writeSafely"
         }
       ],
@@ -943,8 +943,8 @@
       "verification_state": "focused checks present; consult exact-candidate validation",
       "implementation_paths": [
         {
-          "path": "Sources/TextTankApp/App.swift",
-          "symbol": "setLineEnding"
+          "path": "Sources/TextTankApp/EditorWindowController.swift",
+          "symbol": "convertLineEndings"
         }
       ],
       "checks": [
