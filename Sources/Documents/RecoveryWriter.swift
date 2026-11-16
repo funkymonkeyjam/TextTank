@@ -15,10 +15,14 @@ final package class RecoveryWriter: @unchecked Sendable {
     private var running = false
     package func submit(_ operation: @escaping @Sendable () -> Void) {
         lock.lock()
+        let displaced = pending
         pending = operation
         let start = !running
         running = true
         lock.unlock()
+        // Releasing a closure can run captured deinitializers, including client reentry.
+        // Keep its last reference alive until the state lock has been released.
+        withExtendedLifetime(displaced) {}
         if start { queue.async { self.drain() } }
     }
     private func drain() {
@@ -38,10 +42,14 @@ final package class RecoveryWriter: @unchecked Sendable {
     /// cleanup, so an older snapshot cannot resurrect a document the user discarded. A snapshot
     /// that is queued but not started is dropped instead: the finishing operation supersedes
     /// it, and writing it only for the cleanup to replace or delete it would be wasted work.
+    /// Callers must not finish from an operation already running on this writer's queue.
     package func finish(_ operation: @Sendable () throws -> Void) rethrows {
+        dispatchPrecondition(condition: .notOnQueue(queue))
         lock.lock()
+        let displaced = pending
         pending = nil
         lock.unlock()
+        withExtendedLifetime(displaced) {}
         try queue.sync(execute: operation)
     }
 }

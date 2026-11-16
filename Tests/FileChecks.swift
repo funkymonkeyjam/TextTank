@@ -22,6 +22,20 @@ import Darwin
                 kill(getpid(), SIGKILL)
                 fatalError("SIGKILL unexpectedly returned")
             }
+            if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--writer-reentrancy" {
+                try writerReentrancy(CommandLine.arguments[2])
+                return
+            }
+            for mode in ["submit", "finish"] {
+                let child = Process()
+                child.executableURL = Checks.executable
+                child.arguments = ["--writer-reentrancy", mode]
+                try child.run()
+                child.waitUntilExit()
+                check(
+                    child.terminationReason == .exit && child.terminationStatus == 0,
+                    "F316 displaced recovery capture can reenter writer during " + mode)
+            }
             codecAgainstReference()
             let samples = ["", "\0", "\0hello", "A\0B\r\nC\nD\rE", "½ cup — café 👩🏽‍💻 e\u{301}", "\u{FEFF}inside"]
             for encoding in [FileEncoding.utf8, .utf16LE, .utf16BE] {
@@ -664,4 +678,47 @@ private final class RecoveryEvents: @unchecked Sendable {
         defer { lock.unlock() }
         return values
     }
+}
+
+/// The pending closure is the sole owner after enqueue returns. Its destruction reenters
+/// the actual linked writer; a child watchdog turns lock reentrancy into a bounded failure.
+private final class WriterReentryToken: Sendable {
+    let writer: RecoveryWriter
+    let destroyed: DispatchSemaphore
+    init(writer: RecoveryWriter, destroyed: DispatchSemaphore) {
+        self.writer = writer
+        self.destroyed = destroyed
+    }
+    deinit {
+        writer.submit {}
+        destroyed.signal()
+    }
+}
+private func enqueueReentryToken(_ writer: RecoveryWriter, destroyed: DispatchSemaphore) {
+    let token = WriterReentryToken(writer: writer, destroyed: destroyed)
+    writer.submit { withExtendedLifetime(token) {} }
+}
+private func writerReentrancy(_ mode: String) throws {
+    DispatchQueue.global().asyncAfter(deadline: .now() + 3) { exit(70) }
+    let writer = RecoveryWriter(), entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0), destroyed = DispatchSemaphore(value: 0)
+    writer.submit {
+        entered.signal()
+        release.wait()
+    }
+    try require(entered.wait(timeout: .now() + 1) == .success, "fixture: writer operation is blocked")
+    enqueueReentryToken(writer, destroyed: destroyed)
+    if mode == "submit" {
+        writer.submit {}
+        release.signal()
+        writer.finish {}
+    } else if mode == "finish" {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { release.signal() }
+        writer.finish {}
+    } else {
+        throw NSError(domain: "WriterReentryFixture", code: 64)
+    }
+    check(
+        destroyed.wait(timeout: .now() + 1) == .success,
+        "displaced closure is destroyed after unlocking during " + mode)
 }
