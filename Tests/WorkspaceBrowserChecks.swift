@@ -8,6 +8,9 @@ import Darwin
 @MainActor private final class SessionCancelState { var pressed = false, timedOut = false }
 
 @main struct WorkspaceBrowserChecks {
+    @MainActor static func descendants(_ view: NSView) -> [NSView] {
+        [view] + view.subviews.flatMap(descendants)
+    }
     @MainActor static func main() {
         Checks.run("WorkspaceBrowserChecks") {
             // F148: there is no bundle here, so the suite names the bundled language catalog itself.
