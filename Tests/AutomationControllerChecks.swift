@@ -171,14 +171,17 @@ final class Audit24RecoverySpy: NSObject {
         timeout: TimeInterval, controller: AutomationController, commit: Bool,
         _ act: @escaping (NSWindow, [NSView]) -> Bool
     ) -> (value: Void, acted: Bool, timedOut: Bool) {
-        let route = ManagerChildRoute(
-            managerID: "automation.manager", openerID: "automation.json", childID: "automation.json", commit: commit)
-        return drivingModal(
-            timeout: timeout,
-            { window, views in
-                route.step(window, views: views) { _ = act(window, views) }
-            }
-        ) { controller.manageAdvanced() }
+        MainActor.assumeIsolated {
+            let route = ManagerChildRoute(
+                managerID: "automation.manager", openerID: "automation.json", childID: "automation.json", commit: commit
+            )
+            return drivingModal(
+                timeout: timeout,
+                { window, views in
+                    MainActor.assumeIsolated { route.step(window, views: views) { _ = act(window, views) } }
+                }
+            ) { controller.manageAdvanced() }
+        }
     }
     static func capturedRules(_ original: AutomationDefinition, timeout: TimeInterval) -> AutomationDefinition? {
         var result: AutomationDefinition?

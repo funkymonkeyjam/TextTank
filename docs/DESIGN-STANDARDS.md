@@ -262,7 +262,7 @@ These are the remaining actions from the review. Each names the work that owns i
 2. The workspace-window host, full screen and tab accessibility (DS-D1, DS-13, DS-14): tab stage 0.
 3. Session restore and recovered copies that keep their file (DS-92): tab stage 4 and package 23.
 4. Physical toolbar customization and VoiceOver interaction remain unverified. Standard items, favorites, native accessibility names and isolated configuration round trips have native check coverage (DS-30, DS-70).
-5. Settings and the automation, macro and Run managers out of alerts (DS-44, DS-45): packages 24 and 34.
+5. Physical keyboard and VoiceOver interaction with Settings and the automation, macro and Run managers remain unverified. Modeless windows, owned Rules/JSON sheets, explicit Save/Cancel working copies, retained invalid input, filtered pickers and scoped native accessibility names have native check coverage (DS-44, DS-45, DS-70).
 6. A one-row status bar (DS-67).
 7. Glossary, plurals and a string catalogue (DS-80 to DS-84); labels on every dialog field (DS-70):
    package 26.
