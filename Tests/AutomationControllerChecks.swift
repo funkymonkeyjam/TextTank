@@ -1297,10 +1297,12 @@ final class Audit24RecoverySpy: NSObject {
                 toolbar.delegate = toolbarHost
                 window.toolbar = toolbar
                 let button = try requireValue(
-                    toolbar.items.first(where: { $0.itemIdentifier == identifier })?.view as? NSButton,
-                    "fixture: direct toolbar button is installed")
-                check(button.window === window, "named automation button is installed in native window toolbar")
-                check(button.title == "My recipe tidy", "renaming updates individual toolbar button label")
+                    toolbar.items.first(where: { $0.itemIdentifier == identifier }),
+                    "fixture: standard toolbar item is installed")
+                check(
+                    button.toolbar === toolbar && button.view == nil,
+                    "named automation is installed as a standard native toolbar item")
+                check(button.label == "My recipe tidy", "renaming updates individual toolbar item label")
                 editor.text = source
                 editor.resetUndoHistory()
                 check(

@@ -275,14 +275,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         app.addItem(.separator())
         app.addItem(title: "Quit TextTank", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let file = menu("File")
-        file.addItem(title: "New", action: #selector(newDocument(_:)), keyEquivalent: "n")
-        file.addItem(title: "Open…", action: #selector(NSDocumentController.openDocument(_:)), keyEquivalent: "o")
+        file.addItem(title: EditorToolbarCommand.new.title, action: EditorToolbarCommand.new.action, keyEquivalent: "n")
+        file.addItem(
+            title: EditorToolbarCommand.open.title, action: EditorToolbarCommand.open.action, keyEquivalent: "o")
         let recentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
         let recentMenu = NSMenu(title: "Open Recent")
         recentMenu.delegate = recentDocumentsMenu
         recentItem.submenu = recentMenu
         file.addItem(recentItem)
-        file.addItem(title: "Save", action: #selector(NSDocument.save(_:)), keyEquivalent: "s")
+        file.addItem(
+            title: EditorToolbarCommand.save.title, action: EditorToolbarCommand.save.action, keyEquivalent: "s")
         file.addItem(title: "Save As…", action: #selector(NSDocument.saveAs(_:)), keyEquivalent: "S")
         file.addItem(title: "Save Copy…", action: #selector(TextDocument.saveCopy(_:)))
         file.addItem(title: "Save All", action: #selector(NSDocumentController.saveAllDocuments(_:)))
@@ -422,7 +424,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // One Find. Command-F opens the find bar in the document window; Find Next, Find Previous
         // and Use Selection for Find share its text with the system find pasteboard. Find and
         // Replace is the window with scopes, regular expressions and results.
-        search.addItem(title: "Find…", action: #selector(EditorWindowController.showFind(_:)), keyEquivalent: "f")
+        search.addItem(
+            title: EditorToolbarCommand.find.title, action: EditorToolbarCommand.find.action, keyEquivalent: "f")
         search.addItem(
             title: "Find and Replace…", action: #selector(SearchController.showSearch(_:)), keyEquivalent: "f",
             modifiers: [.command, .option], target: searchController)
@@ -450,7 +453,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         utilityRoot.submenu = utilities.makeMenu()
         bar.addItem(utilityRoot)
         let view = menu("View")
-        view.addItem(title: "Clone in Split View", action: #selector(EditorWindowController.clone(_:)))
+        view.addItem(title: EditorToolbarCommand.split.title, action: EditorToolbarCommand.split.action)
         view.addItem(title: "Close Split View", action: #selector(EditorWindowController.closeSplit(_:)))
         view.addItem(title: "Wrap Lines", action: #selector(EditorWindowController.toggleWrap(_:)))
         command(view, .zoomIn)
@@ -458,6 +461,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for value: EditorCommand in [.foldAll, .unfoldAll, .showWhitespace, .toggleEOL, .toggleLineNumbers] {
             command(view, value)
         }
+        view.addItem(.separator())
+        view.addItem(
+            title: Strings.text("toolbar.show", "Show Toolbar"), action: #selector(NSWindow.toggleToolbarShown(_:)))
+        view.addItem(
+            title: Strings.text("toolbar.customize", "Customize Toolbar…"),
+            action: #selector(NSWindow.runToolbarCustomizationPalette(_:)))
         let languageRoot = NSMenuItem()
         languageRoot.title = "Language"
         languageRoot.submenu = languages.menu()

@@ -867,8 +867,9 @@ import AppKit
                 tabsController.refreshStatusDetails()
                 let buttons = descendants(winA.contentView!).compactMap { $0 as? NSButton }
                 let closeB = buttons.first { $0.toolTip == "Close \(winB.title)" }!
-                let plus = buttons.first { $0.identifier?.rawValue == "tab.new" }!
-                check(plus.frame.minX < 500, "new-tab button follows compact tabs rather than window edge")
+                check(
+                    !buttons.contains { $0.identifier?.rawValue == "tab.new" },
+                    "DT-R6 compact tabs do not repeat the standard toolbar New command")
                 check(winA.tabbingMode == .disallowed, "native full-width tab strip disabled")
                 let heldFrame = winA.frame
                 tabA.close()

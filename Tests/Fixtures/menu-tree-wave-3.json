@@ -1521,6 +1521,33 @@
     "title": "Show Line Numbers"
   },
   {
+    "action": "",
+    "key": "",
+    "modifiers": "1048576",
+    "object": "",
+    "target": "responder",
+    "title": "",
+    "position": "8.10"
+  },
+  {
+    "action": "toggleToolbarShown:",
+    "key": "",
+    "modifiers": "1048576",
+    "object": "",
+    "target": "responder",
+    "title": "Show Toolbar",
+    "position": "8.11"
+  },
+  {
+    "action": "runToolbarCustomizationPalette:",
+    "key": "",
+    "modifiers": "1048576",
+    "object": "",
+    "target": "responder",
+    "title": "Customize Toolbar…",
+    "position": "8.12"
+  },
+  {
     "action": "submenuAction:",
     "key": "",
     "modifiers": "1048576",

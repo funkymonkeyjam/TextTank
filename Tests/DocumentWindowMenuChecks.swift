@@ -52,6 +52,8 @@ extension DocumentChecks {
             }
         }
 
+        section("standard customizable toolbar", #line) { try ToolbarChecks.run(composition: sessionDelegate) }
+
         // F294
         section("menu validation follows the document and the view", #line) {
             let (first, controller, window) = try tab("p21-validate-1")

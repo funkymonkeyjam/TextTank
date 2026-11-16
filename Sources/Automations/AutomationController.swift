@@ -16,7 +16,9 @@ extension Notification.Name {
     static let textTankAutomationsDidChange = Notification.Name("TextTankAutomationsDidChange")
 }
 
-final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation {
+final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSToolbarItemValidation {
+    /// Independent isolated compositions must not share AppKit toolbar synchronization state.
+    let toolbarFamilyIdentifier = UUID().uuidString
     private let editorProvider: () -> TTEditor?
     /// Called once each time a saved automation starts to run, before any prompt or change.
     var onInvocation: () -> Void = {}
@@ -107,41 +109,63 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     /// Fresh menus all dispatch by stable ID and resolve the currently saved definition at invocation.
     func contextMenu() -> NSMenu { invocationMenu(title: "Run Automation") }
     func makeToolbarItem() -> NSToolbarItem {
-        let item = NSToolbarItem(itemIdentifier: NSToolbarItem.Identifier("TextTank.Automations"))
-        item.label = "Automations"
-        item.paletteLabel = "Automations"
-        let button = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 165, height: 30), pullsDown: true)
-        button.menu = invocationMenu(title: "Automation Launcher", launcher: true)
-        button.setAccessibilityLabel("Automations")
-        button.toolTip = "Run a saved automation or manage automations"
-        item.view = button
+        let item = NSMenuToolbarItem(itemIdentifier: .init("TextTank.Automations"))
+        item.label = Strings.text("toolbar.automations", "Automations")
+        item.paletteLabel = item.label
+        let description = Strings.text("toolbar.automations.help", "Run a saved automation or manage automations.")
+        item.image = NSImage(systemSymbolName: "bolt.circle", accessibilityDescription: description)
+        item.toolTip = description
+        item.menu = invocationMenu(title: "Automations", launcher: true)
         return item
     }
     func toolbarIdentifiers() -> [NSToolbarItem.Identifier] {
         library.workflows.filter { $0.pinToToolbar == true }.map { .init("TextTank.Automation." + $0.id.uuidString) }
     }
-    func makeToolbarItem(identifier: NSToolbarItem.Identifier) -> NSToolbarItem? {
+    private func toolbarWorkflow(_ identifier: NSToolbarItem.Identifier) -> AutomationDefinition? {
         let prefix = "TextTank.Automation."
         guard identifier.rawValue.hasPrefix(prefix),
-            let id = UUID(uuidString: String(identifier.rawValue.dropFirst(prefix.count))),
-            let workflow = library.workflows.first(where: { $0.id == id })
+            let id = UUID(uuidString: String(identifier.rawValue.dropFirst(prefix.count)))
         else { return nil }
+        return library.workflows.first { $0.id == id && $0.pinToToolbar == true }
+    }
+    func makeToolbarItem(identifier: NSToolbarItem.Identifier) -> NSToolbarItem? {
+        guard toolbarWorkflow(identifier) != nil else { return nil }
         let item = NSToolbarItem(itemIdentifier: identifier)
-        item.label = workflow.name
-        item.paletteLabel = workflow.name
-        item.toolTip =
-            workflow.output == .reminders
-            ? "Send the current text to a Reminders list you choose" : "Run \(workflow.name)"
-        let button = NSButton(title: workflow.name, target: self, action: #selector(runToolbarButton(_:)))
-        button.identifier = NSUserInterfaceItemIdentifier(id.uuidString)
-        button.bezelStyle = .rounded
-        button.setAccessibilityLabel(workflow.name)
-        item.view = button
+        updateToolbarItem(item)
         return item
     }
-    @objc private func runToolbarButton(_ sender: NSButton) {
-        guard let value = sender.identifier?.rawValue, let id = UUID(uuidString: value) else { return }
-        do { try runSavedAutomation(id: id) } catch { showError(error) }
+    func updateToolbarItem(_ item: NSToolbarItem) {
+        guard let workflow = toolbarWorkflow(item.itemIdentifier) else { return }
+        let description = String(
+            format: Strings.text("toolbar.automation.run", "Run “%@” with its saved input and output."), workflow.name)
+        guard item.label != workflow.name || item.toolTip != description || item.image == nil else { return }
+        item.label = workflow.name
+        item.paletteLabel = workflow.name
+        item.toolTip = description
+        item.image = NSImage(systemSymbolName: "bolt", accessibilityDescription: description)
+        item.target = self
+        item.action = #selector(runToolbarItem(_:))
+        let overflow = NSMenuItem(title: workflow.name, action: #selector(runAction(_:)), keyEquivalent: "")
+        overflow.target = self
+        overflow.representedObject = workflow.id.uuidString
+        item.menuFormRepresentation = overflow
+    }
+    @objc private func runToolbarItem(_ sender: NSToolbarItem) {
+        guard let workflow = toolbarWorkflow(sender.itemIdentifier) else { return }
+        do { try runSavedAutomation(id: workflow.id) } catch { showError(error) }
+    }
+    private func canInvoke(_ id: UUID) -> Bool {
+        guard !busy, !exportInProgress, let workflow = library.workflows.first(where: { $0.id == id }) else {
+            return false
+        }
+        let editor = editorProvider()
+        if (workflow.input == .document || workflow.input == .selection) && editor == nil { return false }
+        if workflow.output == .editor && (editor == nil || editor?.readOnly == true) { return false }
+        return true
+    }
+    func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
+        guard let workflow = toolbarWorkflow(item.itemIdentifier) else { return false }
+        return canInvoke(workflow.id)
     }
     /// Every menu, shortcut, toolbar and palette resolves the current saved definition by UUID.
     func runSavedAutomation(id: UUID) throws {
@@ -241,6 +265,12 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     @objc private func restoreDefaultsAction() { restoreDefaultAutomations() }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(restoreDefaultsAction) { return !busy && !exportInProgress }
+        if menuItem.action == #selector(runAction(_:)) {
+            guard let value = menuItem.representedObject as? String, let id = UUID(uuidString: value) else {
+                return false
+            }
+            return canInvoke(id)
+        }
         return true
     }
     /// A picker with one item for every automation, in order. Items are built as menu items,

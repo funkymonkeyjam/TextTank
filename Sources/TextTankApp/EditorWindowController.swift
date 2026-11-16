@@ -1,6 +1,8 @@
 import AppKit
 
-final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMenuItemValidation, NSSearchFieldDelegate {
+final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToolbarItemValidation,
+    NSMenuItemValidation, NSSearchFieldDelegate
+{
     let split = NSSplitView()
     let findField = NSSearchField()
     let replaceField = NSTextField()
@@ -64,6 +66,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
     /// first responder is observed as well: a pane chosen in a background window still counts.
     private(set) var focusObservation: NSKeyValueObservation?
     private(set) var automationObserver: NSObjectProtocol?
+    private var knownToolbarFavorites: Set<NSToolbarItem.Identifier> = []
+    private var toolbarAccessibilityObservers: [NSObjectProtocol] = []
+    private var toolbarObservations: [NSKeyValueObservation] = []
+    private var applyingToolbarArrangement = false
+    private var toolbarArrangementSaveScheduled = false
     let primaryEditor: TTEditor
     /// The primary view and, while the window is split, the clone.
     var views: [TTEditor] { [primaryEditor] + (secondary.map { [$0] } ?? []) }
@@ -117,10 +124,24 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         }
         if let app = EditorServices.current {
             app.settings?.apply(to: document.editor)
-            let toolbar = NSToolbar(identifier: "TextTankToolbar")
+            let toolbar = NSToolbar(identifier: EditorToolbarPreferences.identifier(for: app.automations))
             toolbar.delegate = self
-            toolbar.displayMode = .iconOnly
+            toolbar.displayMode = .iconAndLabel
+            toolbar.allowsUserCustomization = true
+            toolbar.autosavesConfiguration = EditorToolbarPreferences.nativeAutosaveAllowed
+            knownToolbarFavorites = Set(app.automations?.toolbarIdentifiers() ?? [])
             window.toolbar = toolbar
+            restoreToolbarArrangement()
+            EditorToolbarAccessibility.apply(to: window)
+            toolbarAccessibilityObservers = [NSWindow.didResizeNotification, NSWindow.didBecomeKeyNotification].map {
+                NotificationCenter.default.addObserver(forName: $0, object: window, queue: .main) { [weak window] _ in
+                    if let window { EditorToolbarAccessibility.apply(to: window) }
+                }
+            }
+            toolbarObservations = [
+                toolbar.observe(\.displayMode) { [weak self] _, _ in self?.scheduleToolbarArrangementSave() },
+                toolbar.observe(\.isVisible) { [weak self] _, _ in self?.scheduleToolbarArrangementSave() }
+            ]
             automationObserver = NotificationCenter.default.addObserver(
                 forName: .textTankAutomationsDidChange, object: app.automations, queue: .main
             ) { [weak self] _ in self?.refreshAutomationToolbar() }
@@ -566,28 +587,90 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSMen
         return goToLine(line, in: editor, macros: nil)
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar)
+        EditorToolbarCommand.allCases.map(\.identifier) + [.flexibleSpace, .init("TextTank.Automations")]
+            + (EditorServices.current?.automations?.toolbarIdentifiers() ?? [])
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        // No Close Tab item: every tab has its own close button, and Command-W closes the current one.
-        [.flexibleSpace, .init("TextTank.Automations")]
+        // The tab strip keeps its close controls; New has one toolbar home.
+        toolbarAllowedItemIdentifiers(toolbar)
     }
     func toolbar(
         _ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar: Bool
     ) -> NSToolbarItem? {
+        if let command = EditorToolbarCommand(rawValue: identifier.rawValue) { return command.makeItem() }
         guard let automations = EditorServices.current?.automations else { return nil }
         return identifier.rawValue == "TextTank.Automations"
             ? automations.makeToolbarItem() : automations.makeToolbarItem(identifier: identifier)
     }
-    func refreshAutomationToolbar() {
-        guard let toolbar = window?.toolbar else { return }
-        while !toolbar.items.isEmpty { toolbar.removeItem(at: 0) }
-        for (index, id) in toolbarDefaultItemIdentifiers(toolbar).enumerated() {
-            toolbar.insertItem(withItemIdentifier: id, at: index)
+    func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
+        let menu = NSMenuItem(title: item.label, action: item.action, keyEquivalent: "")
+        return validateMenuItem(menu)
+    }
+    func toolbarWillAddItem(_ notification: Notification) { scheduleToolbarArrangementSave() }
+    func toolbarDidRemoveItem(_ notification: Notification) { scheduleToolbarArrangementSave() }
+    private func scheduleToolbarArrangementSave() {
+        // willAdd precedes the actual insertion. Capture the finished configuration on the next turn.
+        guard !toolbarArrangementSaveScheduled else { return }
+        toolbarArrangementSaveScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.toolbarArrangementSaveScheduled = false
+            self.saveToolbarArrangement()
+            if let window = self.window { EditorToolbarAccessibility.apply(to: window) }
         }
     }
+    func saveToolbarArrangement() {
+        guard !applyingToolbarArrangement, let toolbar = window?.toolbar else { return }
+        EditorToolbarPreferences.save(toolbar)
+    }
+    private func restoreToolbarArrangement() {
+        guard let toolbar = window?.toolbar, let state = EditorToolbarPreferences.load() else { return }
+        applyingToolbarArrangement = true
+        defer { applyingToolbarArrangement = false }
+        let allowed = Set(toolbarAllowedItemIdentifiers(toolbar))
+        var seen: Set<NSToolbarItem.Identifier> = []
+        let restored = state.identifiers.map { NSToolbarItem.Identifier($0) }.filter {
+            allowed.contains($0) && ($0 == .flexibleSpace || seen.insert($0).inserted)
+        }
+        while !toolbar.items.isEmpty { toolbar.removeItem(at: 0) }
+        for (index, identifier) in restored.enumerated() {
+            toolbar.insertItem(withItemIdentifier: identifier, at: index)
+        }
+        toolbar.displayMode = NSToolbar.DisplayMode(rawValue: state.displayMode) ?? .iconAndLabel
+        toolbar.isVisible = state.visible
+    }
+    func refreshAutomationToolbar() {
+        guard let toolbar = window?.toolbar, let automations = EditorServices.current?.automations else { return }
+        let favorites = automations.toolbarIdentifiers(), current = Set(favorites)
+        let added = current.subtracting(knownToolbarFavorites)
+        // Toolbars sharing an identifier synchronize insertions, so another window may already
+        // have applied an update. Never rebuild the user's arrangement or insert a duplicate.
+        for index in toolbar.items.indices.reversed() {
+            let item = toolbar.items[index]
+            guard item.itemIdentifier.rawValue.hasPrefix("TextTank.Automation.") else { continue }
+            if !current.contains(item.itemIdentifier) {
+                toolbar.removeItem(at: index)
+            } else {
+                automations.updateToolbarItem(item)
+            }
+        }
+        for identifier in favorites
+        where added.contains(identifier)
+            && !toolbar.items.contains(where: { $0.itemIdentifier == identifier })
+        {
+            toolbar.insertItem(withItemIdentifier: identifier, at: toolbar.items.count)
+        }
+        knownToolbarFavorites = current
+        if let window { EditorToolbarAccessibility.apply(to: window) }
+        saveToolbarArrangement()
+    }
     func prepareForClose() {
+        saveToolbarArrangement()
+        toolbarObservations.forEach { $0.invalidate() }
+        toolbarObservations = []
+        toolbarAccessibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        toolbarAccessibilityObservers = []
         cancelInlineSearch()
         statusClosed = true
         updateInlineFindValidation()

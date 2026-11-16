@@ -187,22 +187,8 @@ final class DocumentTabStrip: NSView {
             row.addSubview(close)
             x += width
         }
-        let add = NSButton(
-            image: NSImage(systemSymbolName: "plus", accessibilityDescription: "New tab")!, target: self,
-            action: #selector(newTab(_:)))
-        add.isBordered = false
-        add.contentTintColor = .controlAccentColor
-        add.setAccessibilityLabel("Open a new document tab")
-        if let shortcut = ControlPresentation.shortcut(for: #selector(AppDelegate.newDocument(_:)), in: NSApp.mainMenu)
-        {
-            add.toolTip = String(format: Strings.text("tab.new.shortcut", "New Tab (%@)"), shortcut)
-        } else {
-            add.toolTip = Strings.text("tab.new", "New Tab")
-        }
-        add.identifier = NSUserInterfaceItemIdentifier("tab.new")
-        add.frame = NSRect(x: x + 4, y: 3, width: 32, height: 30)
-        row.addSubview(add)
-        row.frame = NSRect(x: 0, y: 0, width: x + 40, height: 36)
+        // New is a standard toolbar item and remains in File / Command-N when the toolbar is hidden.
+        row.frame = NSRect(x: 0, y: 0, width: x, height: 36)
         row.scrollToVisible(activeRect)
     }
     @objc private func selectTab(_ sender: NSButton) {
@@ -225,5 +211,4 @@ final class DocumentTabStrip: NSView {
         (target as? DocumentTabWindow)?.returnTo = active
         target.performClose(sender)
     }
-    @objc private func newTab(_ sender: Any?) { EditorServices.current?.newDocument(sender) }
 }

@@ -77,10 +77,10 @@ enum Audit26PresentationChecks {
         }
         search.window?.close()
         let automation = AutomationController(editorProvider: { nil }, newDocument: { _ in })
-        let first = automation.makeToolbarItem().view as! NSPopUpButton
-        let second = automation.makeToolbarItem().view as! NSPopUpButton
+        let first = automation.makeToolbarItem() as! NSMenuToolbarItem
+        let second = automation.makeToolbarItem() as! NSMenuToolbarItem
         for launcher in [first, second] {
-            let menu = launcher.menu!
+            let menu = launcher.menu
             menu.title = "Renamed display title"
             automation.menuNeedsUpdate(menu)
             check(
@@ -111,9 +111,9 @@ enum Audit26PresentationChecks {
         check(
             invocationIDs(automation.contextMenu()) == [favorite.id.uuidString, ordinary.id.uuidString],
             "G416 editor context menu puts favorites first")
-        let favoriteLauncher = automation.makeToolbarItem().view as! NSPopUpButton
+        let favoriteLauncher = automation.makeToolbarItem() as! NSMenuToolbarItem
         check(
-            invocationIDs(favoriteLauncher.menu!) == [favorite.id.uuidString, ordinary.id.uuidString],
+            invocationIDs(favoriteLauncher.menu) == [favorite.id.uuidString, ordinary.id.uuidString],
             "G416 toolbar launcher puts favorites first")
         check(
             AutomationDefinition.advancedHelp.contains(AutomationDefinition.favoriteHelp)
