@@ -18,7 +18,15 @@ private final class OffscreenFindRoutingWindow: NSWindow {
     override func makeKeyAndOrderFront(_ sender: Any?) {}
 }
 
+@MainActor private final class WindowQuitObservation { var shown = 0 }
+
 extension DocumentChecks {
+    @MainActor static func item(_ action: Selector, _ object: String? = nil) -> NSMenuItem {
+        let item = NSMenuItem(title: "", action: action, keyEquivalent: "")
+        item.representedObject = object
+        return item
+    }
+
     @MainActor static func windowMenuAndKeyboard(
         root: URL, app: NSApplication, sessionDelegate: AppDelegate, section: SectionRunner
     ) {
@@ -44,11 +52,6 @@ extension DocumentChecks {
         @MainActor func isOpen(_ document: NSDocument) -> Bool {
             NSDocumentController.shared.documents.contains { $0 === document }
         }
-        func item(_ action: Selector, _ object: String? = nil) -> NSMenuItem {
-            let item = NSMenuItem(title: "", action: action, keyEquivalent: "")
-            item.representedObject = object
-            return item
-        }
         func walk(_ menu: NSMenu, _ path: String = "") -> [(path: String, item: NSMenuItem)] {
             menu.items.flatMap { item -> [(path: String, item: NSMenuItem)] in
                 let here = path.isEmpty ? item.title : path + " > " + item.title
@@ -61,8 +64,7 @@ extension DocumentChecks {
             let (document, documentController, documentWindow) = try tab("settings-document-stays-usable")
             defer { document.close() }
             var returned = false, observedModeless = false, inspected = false, usable = false
-            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-                MainActor.assumeIsolated {
+            let timerAction: @MainActor @Sendable () -> Void = {
                     guard
                         let window = NSApp.windows.first(where: {
                             $0.isVisible && ($0.title == "Settings" || $0.title == "Editor Settings")
@@ -77,7 +79,9 @@ extension DocumentChecks {
                     DesignSettingsChecks.checkNativeButtons(window)
                     descendants(content).compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(
                         nil)
-                }
+            }
+            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+                MainActor.assumeIsolated { timerAction() }
             }
             RunLoop.main.add(timer, forMode: .common)
             RunLoop.main.add(timer, forMode: .modalPanel)
@@ -349,8 +353,7 @@ extension DocumentChecks {
             _ = document.editor.setSelectionAnchor(0, caret: 0)
             var answered = false
             let giveUp = Date().addingTimeInterval(10)
-            let answer = Timer(timeInterval: 0.05, repeats: true) { _ in
-                MainActor.assumeIsolated {
+            let answerAction: @MainActor @Sendable () -> Void = {
                     guard !answered, let modal = presentedFormWindow, let content = modal.contentView else { return }
                     let views = descendants(content)
                     if let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
@@ -363,7 +366,9 @@ extension DocumentChecks {
                     } else if Date() > giveUp {
                         NSApp.abortModal()
                     }
-                }
+            }
+            let answer = Timer(timeInterval: 0.05, repeats: true) { _ in
+                MainActor.assumeIsolated { answerAction() }
             }
             RunLoop.main.add(answer, forMode: .modalPanel)
             controller.goToLine(nil)
@@ -484,8 +489,7 @@ extension DocumentChecks {
             let dialog = SettingsController(url: root.appendingPathComponent("audit25-shortcuts-dialog.json"))
             var observed = false, readable = false, current = false
             let deadline = Date().addingTimeInterval(10)
-            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-                MainActor.assumeIsolated {
+            let timerAction: @MainActor @Sendable () -> Void = {
                     guard let content = presentedFormWindow?.contentView else { return }
                     if Date() > deadline {
                         NSApp.abortModal()
@@ -512,7 +516,9 @@ extension DocumentChecks {
                         current = key.stringValue == "d"
                     }
                     views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
-                }
+            }
+            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+                MainActor.assumeIsolated { timerAction() }
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             dialog.showSettings(nil)
@@ -553,8 +559,7 @@ extension DocumentChecks {
             }
             var acted = false, kept = false, cleared = false, defaultRestored = false
             let deadline = Date().addingTimeInterval(10)
-            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-                MainActor.assumeIsolated {
+            let timerAction: @MainActor @Sendable () -> Void = {
                     guard let content = presentedFormWindow?.contentView else { return }
                     if Date() > deadline {
                         NSApp.abortModal()
@@ -597,7 +602,9 @@ extension DocumentChecks {
                     defaultRestored = key.stringValue == "d"
                     acted = true
                     save.performClick(nil)
-                }
+            }
+            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+                MainActor.assumeIsolated { timerAction() }
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             settings.showSettings(nil)
@@ -711,8 +718,7 @@ extension DocumentChecks {
                 "F16 closing modeless Settings never saves defaults or creates its file")
             var stage = 0, keptDraft = false
             let deadline = Date().addingTimeInterval(10)
-            let retry = Timer(timeInterval: 0.02, repeats: true) { _ in
-                MainActor.assumeIsolated {
+            let retryAction: @MainActor @Sendable () -> Void = {
                     guard let content = presentedFormWindow?.contentView else { return }
                     let views = descendants(content)
                     if Date() > deadline {
@@ -740,7 +746,9 @@ extension DocumentChecks {
                         stage = 2
                         save.performClick(nil)
                     }
-                }
+            }
+            let retry = Timer(timeInterval: 0.02, repeats: true) { _ in
+                MainActor.assumeIsolated { retryAction() }
             }
             RunLoop.main.add(retry, forMode: .modalPanel)
             settings.showSettings(nil)
@@ -881,16 +889,20 @@ extension DocumentChecks {
             winH.makeKeyAndOrderFront(nil)
             let controllers = [controlH, controlI]
             let before = controllers.map(\.statusRefreshCount)
-            var shownDuringQuit = 0
+            let quitObservation = WindowQuitObservation()
             let observer = NotificationCenter.default.addObserver(
                 forName: NSWindow.didBecomeKeyNotification, object: nil, queue: nil
             ) { note in
-                if note.object as AnyObject? === winH || note.object as AnyObject? === winI { shownDuringQuit += 1 }
+                precondition(Thread.isMainThread)
+                let isClosingWindow = note.object as AnyObject? === winH || note.object as AnyObject? === winI
+                MainActor.assumeIsolated {
+                    if isClosingWindow { quitObservation.shown += 1 }
+                }
             }
             sessionDelegate.closeAllForTermination()
             NotificationCenter.default.removeObserver(observer)
             check(
-                controllers.map(\.statusRefreshCount) == before && shownDuringQuit == 0 && !winH.isVisible
+                controllers.map(\.statusRefreshCount) == before && quitObservation.shown == 0 && !winH.isVisible
                     && !winI.isVisible && NSDocumentController.shared.documents.isEmpty,
                 "closing every document for quit shows and refreshes no remaining tab")
             withExtendedLifetime((controlA, controlE, h, i)) {}
