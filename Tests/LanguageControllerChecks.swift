@@ -90,7 +90,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 }
             }
             editor.text =
-                "# Heading\n\nPlain **strong** and *emphasis* with `code`.\n\n[Link](https://example.invalid)\n\n- Item\n\n> Quote\n\n```swift\nlet value = 42\n```\n"
+                "# Heading\n\nPlain **strong** and *emphasis* with `code`.\n\n[Link](https://example.invalid)\n\n- Item\n\n> Quote\n\n```swift\nlet value = 42\n```\n\n~~~\nlet tilde = 42\n~~~\n"
             editor.resetUndoHistory()
             editor.setSavePoint()
             let markdownRevision = editor.revision
@@ -102,7 +102,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 let send = unsafeBitCast(native.method(for: selector), to: Message.self)
                 for (token, style) in [
                     ("Heading", 6), ("strong", 2), ("emphasis", 4), ("code", 19),
-                    ("Link", 18), ("- Item", 13), ("> Quote", 15), ("let value", 21)
+                    ("Link", 18), ("- Item", 13), ("> Quote", 15), ("let value", 20), ("let tilde", 21)
                 ] {
                     let offset = (editor.text as NSString).range(of: token).location
                     check(
@@ -133,6 +133,14 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 NSColor(
                     srgbRed: CGFloat(value & 255) / 255, green: CGFloat((value >> 8) & 255) / 255,
                     blue: CGFloat((value >> 16) & 255) / 255, alpha: 1)
+            }
+            for (id, first, second) in [("python", 8, 20), ("cpp", 9, 18)] {
+                check(controller.apply(identifier: id, to: editor), "syntax fixture: overlapping categories in \(id)")
+                let a = engineColor(send(native, selector, 2481, UInt(first), 0)),
+                    b = engineColor(send(native, selector, 2481, UInt(second), 0))
+                check(
+                    distance(a, b) >= 0.18,
+                    "\(mode): \(id) category \(first) and \(second) retain separated colors")
             }
             var unreadable: [String] = []
             editor.text = ""
@@ -1356,7 +1364,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 check(
                     written.count < fullSize / 4 && overrides.changed.map(\.id) == ["normal", "python"]
                         && overrides.changed[1].keywordLists == nil && overrides.removed.isEmpty
-                        && overrides.added.count == loaded.profiles.count - 96
+                        && overrides.added.count == loaded.profiles.count - 97
                         && overrides.basedOnSourceCommit == bundledCatalog.sourceCommit,
                     "saving writes only the changes (\(written.count) bytes, was \(fullSize))")
                 check(
@@ -1378,13 +1386,13 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 let goldenProfiles = try LanguageCatalog.decode(Data(contentsOf: stored)).profiles
                 let golden = plainController()
                 check(
-                    golden.loadError == nil && golden.catalog?.profiles.count == 96 + goldenProfiles.count
+                    golden.loadError == nil && golden.catalog?.profiles.count == 97 + goldenProfiles.count
                         && goldenProfiles.allSatisfy { golden.profile(identifier: $0.id) == $0 },
                     "the golden full-copy catalog loads with its profiles intact over the bundled languages")
                 try golden.persist(try requireValue(golden.catalog, "fixture: golden catalog"))
                 check(
                     goldenProfiles.allSatisfy { plainController().profile(identifier: $0.id) == $0 }
-                        && plainController().catalog?.profiles.count == 96 + goldenProfiles.count,
+                        && plainController().catalog?.profiles.count == 97 + goldenProfiles.count,
                     "the golden catalog's profiles survive being saved as overrides")
             }
             // F241, F305: one decode, an indexed lookup, and a menu rebuilt only when the catalog changed.
@@ -1463,10 +1471,9 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                     "\(id) is coloured by its own profile styles")
             }
             // F299: adaptive colours are resolved for the editor's own appearance.
-            func calibrated(_ r: Double, _ g: Double, _ b: Double) -> [Double] {
-                components(NSColor(calibratedRed: r, green: g, blue: b, alpha: 1))
-            }
-            let darkKeyword = calibrated(0.65, 0.82, 1), lightKeyword = calibrated(0.08, 0.24, 0.55)
+            // DS-D8 deliberately replaces the previous calibrated blue with this sRGB pair.
+            let darkKeyword = [Double(0xB4) / 255, Double(0x9A) / 255, 1],
+                lightKeyword = [Double(0x60) / 255, Double(0x37) / 255, Double(0xC9) / 255]
             let adaptive = hostedEditor()
             adaptive.text = "return value;\n"
             adaptive.appearance = NSAppearance(named: .aqua)

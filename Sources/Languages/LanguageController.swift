@@ -312,12 +312,12 @@ private final class LanguageMenu: NSMenu {
             case .number: return ("AD235F", "F18EC8")
             case .property: return ("075DB4", "77B7FF")
             case .tag: return ("344CC5", "8EA8FF")
-            case .attribute: return ("00676B", "51D4CF")
+            case .attribute: return ("006F00", "A5F34D")
             case .variable: return ("334D7D", "B8D9EF")
             case .operator: return ("48545D", "C4CBC8")
             case .directive: return ("C0001B", "FF727C")
             case .escape: return ("006244", "64D9B3")
-            case .error: return ("B51920", "FF727C")
+            case .error: return ("820000", "FF4E5E")
             }
         }
         static func category(_ style: LanguageProfile.Style) -> Self? {
@@ -329,6 +329,7 @@ private final class LanguageMenu: NSMenu {
             if has("COMMENT", "BLOCKQUOTE") || name == "POD" { return .comment }
             if has("ESCAPE", "REGEX", "ENTITY") { return .escape }
             if has("PREPROC", "DIRECTIVE", "DECORATOR", "PRAGMA", "ANNOTATION", "IFDEF") { return .directive }
+            if has("FRONT MATTER MARKER") { return .operator }
             if has("ATTRIBUTE") { return .attribute }
             if has("PROPERTY", "VALUE NAME", "FRONT MATTER KEY") || name == "KEY" { return .property }
             if has("TAG", "XML START", "XML END", "SGML COMMAND") { return .tag }
