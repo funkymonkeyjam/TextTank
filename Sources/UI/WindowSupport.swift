@@ -137,7 +137,8 @@ final class ActivatingTableView: NSTableView {
         self.defaults = defaults
         super.init()
         for notification in [
-            NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification
+            NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification,
+            NSWindow.didBecomeKeyNotification
         ] {
             NotificationCenter.default.addObserver(self, selector: #selector(save), name: notification, object: window)
         }
@@ -145,6 +146,7 @@ final class ActivatingTableView: NSTableView {
     deinit { NotificationCenter.default.removeObserver(self) }
     @objc private func save() {
         // A hidden document tab keeps whatever frame it had when it was last shown.
+        // Becoming key also saves a tab positioned while hidden, before it was presented.
         guard let window, window.isVisible, !window.inLiveResize else { return }
         defaults.set(WindowFrames.description(of: window), forKey: WindowFrames.defaultsKey(name))
     }
