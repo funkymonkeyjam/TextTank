@@ -19,6 +19,9 @@ private final class OffscreenFindRoutingWindow: NSWindow {
 }
 
 @MainActor private final class WindowQuitObservation { var shown = 0 }
+@MainActor private final class WindowSettingsObservation {
+    var returned = false, observedModeless = false, inspected = false, usable = false
+}
 
 extension DocumentChecks {
     @MainActor static func item(_ action: Selector, _ object: String? = nil) -> NSMenuItem {
@@ -63,19 +66,19 @@ extension DocumentChecks {
             let settings = SettingsController(url: root.appendingPathComponent("modeless-settings-red.json"))
             let (document, documentController, documentWindow) = try tab("settings-document-stays-usable")
             defer { document.close() }
-            var returned = false, observedModeless = false, inspected = false, usable = false
+            let observation = WindowSettingsObservation()
             let timerAction: @MainActor @Sendable () -> Void = {
                     guard
                         let window = NSApp.windows.first(where: {
                             $0.isVisible && ($0.title == "Settings" || $0.title == "Editor Settings")
                         }), let content = window.contentView
                     else { return }
-                    observedModeless = returned && NSApp.modalWindow == nil
-                    usable =
+                    observation.observedModeless = observation.returned && NSApp.modalWindow == nil
+                    observation.usable =
                         documentWindow.canBecomeKey
                         && documentController.validateMenuItem(
                             item(#selector(EditorWindowController.perform(_:)), "upper"))
-                    inspected = true
+                    observation.inspected = true
                     DesignSettingsChecks.checkNativeButtons(window)
                     descendants(content).compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(
                         nil)
@@ -86,11 +89,11 @@ extension DocumentChecks {
             RunLoop.main.add(timer, forMode: .common)
             RunLoop.main.add(timer, forMode: .modalPanel)
             settings.showSettings(nil)
-            returned = true
-            _ = spinUntil("Settings presentation is inspected") { inspected }
+            observation.returned = true
+            _ = spinUntil("Settings presentation is inspected") { observation.inspected }
             timer.invalidate()
-            check(observedModeless, "DG-R1 opening Settings returns without entering an application modal loop")
-            check(usable, "DG-R1 the document stays key-capable and its commands validate while Settings is open")
+            check(observation.observedModeless, "DG-R1 opening Settings returns without entering an application modal loop")
+            check(observation.usable, "DG-R1 the document stays key-capable and its commands validate while Settings is open")
         }
 
         section("DG Settings keyboard, restoration and minimum layout", #line) {
