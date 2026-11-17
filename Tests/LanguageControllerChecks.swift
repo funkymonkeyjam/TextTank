@@ -9,6 +9,149 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
 @MainActor private final class LanguageDialogState { var acted = false, timedOut = false }
 
 @main struct LanguageControllerChecks {
+    /// Read actual Scintilla colors, lexer categories and fonts, rather than palette metadata.
+    @MainActor static func syntaxAppearanceChecks(_ controller: LanguageController) throws {
+        let host = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 500), styleMask: [.titled], backing: .buffered,
+            defer: false)
+        let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 700, height: 500))
+        host.contentView = editor
+        func rgb(_ color: NSColor) -> [Double] {
+            let c = color.usingColorSpace(.sRGB)!
+            return [Double(c.redComponent), Double(c.greenComponent), Double(c.blueComponent)]
+        }
+        func luminance(_ color: NSColor) -> Double {
+            zip(rgb(color), [0.2126, 0.7152, 0.0722]).reduce(0) { sum, pair in
+                let (c, weight) = pair
+                return sum + weight * (c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4))
+            }
+        }
+        func contrast(_ a: NSColor, _ b: NSColor) -> Double {
+            let x = luminance(a), y = luminance(b)
+            return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+        }
+        func distance(_ a: NSColor, _ b: NSColor) -> Double {
+            sqrt(zip(rgb(a), rgb(b)).reduce(0) { $0 + pow($1.0 - $1.1, 2) })
+        }
+        @MainActor func attribute(_ key: NSAttributedString.Key, _ token: String) -> Any {
+            let offset = (editor.text as NSString).range(of: token).location
+            return editor.attributedText(forSelection: false).attribute(key, at: offset, effectiveRange: nil)!
+        }
+        var lightColors: [NSColor] = []
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            editor.appearance = NSAppearance(named: appearance)
+            editor.viewDidChangeEffectiveAppearance()
+            let mode = appearance.rawValue
+            editor.text =
+                "@decorator\nclass Example:\n    def render(self):\n        return len(\"hello\") + 42 # comment\n"
+            editor.resetUndoHistory()
+            editor.setSavePoint()
+            let revision = editor.revision
+            check(controller.apply(identifier: "python", to: editor), "syntax fixture: Python applies in \(mode)")
+            let tokens = ["class", "Example", "render", "\"hello\"", "42", "# comment", "@decorator"]
+            let colors = tokens.map { attribute(.foregroundColor, $0) as! NSColor }
+            for (token, color) in zip(tokens, colors) {
+                let back = attribute(.backgroundColor, token) as! NSColor
+                check(contrast(color, back) >= 4.5, "\(mode): actual Python \(token) text contrast is at least 4.5:1")
+            }
+            for a in colors.indices {
+                for b in colors.indices where a < b {
+                    check(
+                        distance(colors[a], colors[b]) >= 0.18,
+                        "\(mode): Python \(tokens[a]) and \(tokens[b]) have visibly separated RGB colors")
+                }
+            }
+            check(
+                editor.revision == revision && !editor.modified,
+                "\(mode): changing syntax colors preserves document revision and save point")
+            if appearance == .aqua {
+                lightColors = colors
+            } else {
+                check(
+                    zip(lightColors, colors).allSatisfy { distance($0, $1) >= 0.25 },
+                    "syntax colors resolve separately for light and dark editor appearances")
+            }
+            for (id, text, tokens) in [
+                ("html", "<section title=\"hello\">body</section>\n", ["section", "title", "\"hello\""]),
+                ("json", "{\"name\": \"hello\", \"count\": 42, \"active\": true}\n", ["name", "hello", "42", "true"])
+            ] {
+                editor.text = text
+                check(controller.apply(identifier: id, to: editor), "syntax fixture: \(id) applies in \(mode)")
+                let colors = tokens.map { attribute(.foregroundColor, $0) as! NSColor }
+                for a in colors.indices {
+                    for b in colors.indices where a < b {
+                        check(
+                            distance(colors[a], colors[b]) >= 0.18,
+                            "\(mode): \(id) \(tokens[a]) and \(tokens[b]) retain distinct category colors")
+                    }
+                    check(
+                        contrast(colors[a], attribute(.backgroundColor, tokens[a]) as! NSColor) >= 4.5,
+                        "\(mode): actual \(id) \(tokens[a]) text contrast is at least 4.5:1")
+                }
+            }
+            editor.text =
+                "# Heading\n\nPlain **strong** and *emphasis* with `code`.\n\n[Link](https://example.invalid)\n\n- Item\n\n> Quote\n\n```swift\nlet value = 42\n```\n"
+            editor.resetUndoHistory()
+            editor.setSavePoint()
+            let markdownRevision = editor.revision
+            let applied = controller.apply(identifier: "markdown", to: editor)
+            check(applied, "Markdown is a linked selectable language in \(mode)")
+            if applied {
+                typealias Message = @convention(c) (AnyObject, Selector, UInt32, UInt, Int) -> Int
+                let native = editor.subviews.first!, selector = NSSelectorFromString("message:wParam:lParam:")
+                let send = unsafeBitCast(native.method(for: selector), to: Message.self)
+                for (token, style) in [
+                    ("Heading", 6), ("strong", 2), ("emphasis", 4), ("code", 19),
+                    ("Link", 18), ("- Item", 13), ("> Quote", 15), ("let value", 21)
+                ] {
+                    let offset = (editor.text as NSString).range(of: token).location
+                    check(
+                        send(native, selector, 2010, UInt(offset), 0) == style,
+                        "\(mode): actual Markdown \(token) uses its lexer category \(style)")
+                    check(
+                        contrast(
+                            attribute(.foregroundColor, token) as! NSColor,
+                            attribute(.backgroundColor, token) as! NSColor) >= 4.5,
+                        "\(mode): actual Markdown \(token) text contrast is at least 4.5:1")
+                }
+                check(
+                    NSFontManager.shared.traits(of: attribute(.font, "strong") as! NSFont).contains(.boldFontMask),
+                    "\(mode): Markdown strong emphasis is bold")
+                check(
+                    NSFontManager.shared.traits(of: attribute(.font, "emphasis") as! NSFont).contains(.italicFontMask),
+                    "\(mode): Markdown emphasis is italic")
+                check(
+                    editor.revision == markdownRevision && !editor.modified,
+                    "\(mode): Markdown highlighting preserves text revision and save point")
+            }
+            // Check every configured built-in category, including categories not present in the
+            // representative documents. Read the real engine tables after each profile applies.
+            typealias StyleMessage = @convention(c) (AnyObject, Selector, UInt32, UInt, Int) -> Int
+            let native = editor.subviews.first!, selector = NSSelectorFromString("message:wParam:lParam:")
+            let send = unsafeBitCast(native.method(for: selector), to: StyleMessage.self)
+            func engineColor(_ value: Int) -> NSColor {
+                NSColor(
+                    srgbRed: CGFloat(value & 255) / 255, green: CGFloat((value >> 8) & 255) / 255,
+                    blue: CGFloat((value >> 16) & 255) / 255, alpha: 1)
+            }
+            var unreadable: [String] = []
+            editor.text = ""
+            for profile in controller.catalog!.profiles where profile.udl == nil {
+                guard controller.apply(identifier: profile.id, to: editor) else { continue }
+                for style in profile.styles {
+                    let front = engineColor(send(native, selector, 2481, UInt(style.id), 0))
+                    let back = engineColor(send(native, selector, 2482, UInt(style.id), 0))
+                    if contrast(front, back) < 4.5 { unreadable.append("\(profile.id):\(style.name)") }
+                }
+            }
+            check(
+                unreadable.isEmpty,
+                "\(mode): every linked built-in syntax category meets 4.5:1 against its actual background")
+            if !unreadable.isEmpty { print("NOTE low-contrast categories: \(unreadable)") }
+        }
+        let item = controller.languageMenuItems().first { ($0.representedObject as? String) == "markdown" }
+        check(item?.title == "Markdown", "Markdown is discoverable in the real language menu")
+    }
     @MainActor static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     @MainActor static func editingJSON(
         _ controller: LanguageController, _ act: @escaping @MainActor @Sendable (NSWindow, [NSView]) -> Bool
@@ -298,6 +441,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 editorProvider: { editor }, languageProvider: { selected }, setLanguage: { selected = $0 },
                 bundledCatalog: bundledURL)
             let catalog = try requireValue(controller.catalog, "fixture: language catalog loaded")
+            try syntaxAppearanceChecks(controller)
             let text = "# café\nclass Example:\n    def work(self):\n        return 1\n"
             editor.text = text
             editor.resetUndoHistory()
@@ -646,7 +790,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 print("NOTE missing profiles: \(missing)")
             }
             check(
-                supported == catalog.profiles.count - expectedMissing.count && catalog.profiles.count == 96,
+                supported == catalog.profiles.count - expectedMissing.count && catalog.profiles.count == 97,
                 "every other catalog profile applies (\(supported) of \(catalog.profiles.count))")
             @MainActor func message(_ target: TTEditor, _ number: UInt32, _ w: UInt = 0, _ l: Int = 0) -> Int {
                 let view = target.subviews.first!

@@ -3,7 +3,7 @@
   "budgets": {
     "app_modal_calls": 57,
     "literal_font_sizes": 9,
-    "literal_colours": 8,
+    "literal_colours": 0,
     "lazy_plurals": 0,
     "beeps": 7,
     "custom_materials": 0

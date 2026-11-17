@@ -144,6 +144,25 @@ A field added to a version-1 type must therefore be one of two things. Either it
 
 `PersistedFormat` additionally checks optional envelope metadata `minimumReaderVersion` before model decoding. Absent means reader 1; present must be a positive integer no greater than this build's reader version (1). Null, a string, zero and a newer reader requirement are failures, and app-owned stores retain their original bytes behind the load latch. The Run format is still an array: this gate applies to each command object. Other formats gate their envelope, never arbitrary nested user dictionaries. Current unchanged version-1 writers omit the metadata, so their schema and the committed golden fixtures remain unchanged. Existing older builds cannot retroactively honor this gate: a future incompatible meaning or schema must also bump its existing required version and supply an explicit migration; setting this optional key alone cannot make it safe for an older build. No format migration is performed by this audit.
 
+Bundled syntax profiles retain the 96 Notepad++ source definitions, style IDs, category names,
+keyword lists and pinned source hashes. The additional Markdown profile is TextTank-authored
+against the existing pinned Lexilla Markdown lexer; its provenance is separate from the
+Notepad++ import and is stated in the catalog limitations. It detects `.md`, `.markdown`,
+`.mdown`, `.mkd` and `.mkdn` through the same case-insensitive extension path as other languages.
+Headings, bold/italic emphasis, lists, quotes, links, inline/fenced code and front matter use
+the lexer categories. Code fences are colored as code; they do not embed another language lexer
+or render a preview. Explicit saved profile deletions and user-defined extension priority remain.
+
+Built-in presentation maps the source categories to paired colors for comments, strings,
+keywords, types, functions, numbers/constants, properties, tags, attributes, variables, operators,
+directives/decorators, escapes and errors. More specific category names take precedence over
+shared words; uncommon chromatic source styles retain their hue family rather than falling
+back to ordinary text. Neutral ordinary-text categories remain native text colors. Each view
+resolves its own appearance; saved fixed RGB choices and imported UDL behavior are unchanged.
+Native checks read every linked built-in style's actual foreground/background in light and
+dark mode (minimum 4.5:1), exercise category separation on Python/HTML/JSON and check real
+Markdown lexer IDs/fonts without changing text, revision or the save point (DS-D8).
+
 The user's `LanguageProfiles.json` is the one store that is not a whole value: it is a `LanguageOverrides` (`overridesVersion` 1) holding only what differs from the bundled catalog, namely changed fields of bundled profiles, added profiles such as imported UDLs, deleted bundled identifiers, and the order when it was changed. `LanguageCatalog.load(stored:over:)` merges it over the bundled catalog at launch, so a later bundled catalog reaches every field the user left alone. A file written before overrides existed is a full `LanguageCatalog`; it is still read, as the differences it makes to today's bundled catalog, and is rewritten as overrides at the next save. If the stored file cannot be read, the bundled catalog is used, the file is never overwritten, and the Language dialogs offer to rename it aside (`quarantineDamagedStorage`) before anything is saved.
 
 `Tests/Fixtures/persistence/` holds one file per format as written by the build of 15 November 2026. The "persisted format golden fixtures" section of document-checks decodes each one through the production reader and compares every value, so a field added without a decoder for old files fails acceptance. Do not rewrite those files to make a check pass; add a new fixture beside them when a format gains a version.

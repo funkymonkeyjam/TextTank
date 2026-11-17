@@ -49,6 +49,13 @@ Owner follow-up, 16 November 2026:
 - DS-D7. New, Open and Close must not animate the document window. The temporary tab-window
   arrangement positions the incoming window before showing it; the workspace-host decision is unchanged.
 
+Owner follow-up, 17 November 2026:
+
+- DS-D8. Syntax highlighting retains the original Notepad++ lexer style categories. Built-in
+  categories use distinguishable light/dark colors, with at least 4.5:1 text/background contrast.
+  Explicit user colors remain overrides. Markdown is a selectable language and is detected for
+  `.md` and `.markdown` files. Its headings, emphasis, lists, links and code are highlighted.
+
 ## 3. Rules
 
 ### Windows and tabs

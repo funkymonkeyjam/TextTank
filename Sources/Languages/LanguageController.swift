@@ -283,42 +283,85 @@ private final class LanguageMenu: NSMenu {
         }
         return true
     }
+    /// Keep Notepad++'s lexer style IDs and category names; resolve their presentation for
+    /// this editor appearance. Fixed user/UDL RGB values remain explicit overrides.
     private static func color(_ style: LanguageProfile.Style, imported: Bool) -> NSColor {
         if style.useCustomColor == true { return rgb(style.foreground) }
-        // An imported style without a fixed colour is ordinary text, whether the file gave it no
-        // real colour (nil) or the person turned the custom colour off (false). The palette below
-        // goes by style name, and would turn a UDL's black keyword group blue.
         if imported { return .textColor }
-        // Keep native dynamic contrast unless the user selected a fixed RGB color.
+        guard let category = SyntaxColor.category(style) else { return .textColor }
+        let pair = category.colors, light = rgb(pair.light), dark = rgb(pair.dark)
         return NSColor(
             name: nil,
             dynamicProvider: { appearance in
-                let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                let name = style.name.uppercased()
-                if name.contains("COMMENT") {
-                    return dark
-                        ? NSColor(calibratedRed: 0.62, green: 0.72, blue: 0.64, alpha: 1)
-                        : NSColor(calibratedRed: 0.25, green: 0.39, blue: 0.28, alpha: 1)
-                }
-                if name.contains("STRING") || name.contains("CHARACTER") {
-                    return dark
-                        ? NSColor(calibratedRed: 0.88, green: 0.75, blue: 0.52, alpha: 1)
-                        : NSColor(calibratedRed: 0.48, green: 0.28, blue: 0.08, alpha: 1)
-                }
-                if name.contains("WORD") || name.contains("KEYWORD") || name.contains("INSTRUCTION")
-                    || name.contains("TYPE")
-                {
-                    return dark
-                        ? NSColor(calibratedRed: 0.65, green: 0.82, blue: 1, alpha: 1)
-                        : NSColor(calibratedRed: 0.08, green: 0.24, blue: 0.55, alpha: 1)
-                }
-                if name.contains("NUMBER") {
-                    return dark
-                        ? NSColor(calibratedRed: 0.86, green: 0.69, blue: 0.96, alpha: 1)
-                        : NSColor(calibratedRed: 0.44, green: 0.19, blue: 0.55, alpha: 1)
-                }
-                return .textColor
+                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
             })
+    }
+    private enum SyntaxColor {
+        case comment, string, keyword, type, function, number, property, tag, attribute
+        case variable, `operator`, directive, escape, error
+
+        // All pairs exceed 4.5:1 on the editor's paper/carbon backgrounds (DS-60/61).
+        // Category separation is checked against actual Scintilla output in both appearances.
+        var colors: (light: String, dark: String) {
+            switch self {
+            case .comment: return ("426B38", "89B66B")
+            case .string: return ("A33A00", "F2A567")
+            case .keyword: return ("6037C9", "B49AFF")
+            case .type: return ("00676B", "51D4CF")
+            case .function: return ("756400", "F8DD54")
+            case .number: return ("AD235F", "F18EC8")
+            case .property: return ("075DB4", "77B7FF")
+            case .tag: return ("344CC5", "8EA8FF")
+            case .attribute: return ("00676B", "51D4CF")
+            case .variable: return ("334D7D", "B8D9EF")
+            case .operator: return ("48545D", "C4CBC8")
+            case .directive: return ("C0001B", "FF727C")
+            case .escape: return ("006244", "64D9B3")
+            case .error: return ("B51920", "FF727C")
+            }
+        }
+        static func category(_ style: LanguageProfile.Style) -> Self? {
+            let name = style.name.uppercased()
+            func has(_ fragments: String...) -> Bool { fragments.contains { name.contains($0) } }
+            // Specific categories precede overlapping names, e.g. COMMENT DOC KEYWORD,
+            // TYPE WORD, STRING ESCAPE, and FUNCTION COMMENT.
+            if has("ERROR", "ILLEGAL", "BAD STRING", "WRONG") { return .error }
+            if has("COMMENT", "BLOCKQUOTE") || name == "POD" { return .comment }
+            if has("ESCAPE", "REGEX", "ENTITY") { return .escape }
+            if has("PREPROC", "DIRECTIVE", "DECORATOR", "PRAGMA", "ANNOTATION", "IFDEF") { return .directive }
+            if has("ATTRIBUTE") { return .attribute }
+            if has("PROPERTY", "VALUE NAME", "FRONT MATTER KEY") || name == "KEY" { return .property }
+            if has("TAG", "XML START", "XML END", "SGML COMMAND") { return .tag }
+            if has("BUILTIN", "BUILT-IN", "BUILIN", "FUNC", "METHOD", "DEF NAME", "CALLABLE", "CMDLET") {
+                return .function
+            }
+            if has("TYPE", "CLASS NAME", "ENUM", "STRUCT", "INTERFACE") || name == "CLASS" { return .type }
+            if has("VAR", "SCALAR", "PARAMETER", "REGISTER") { return .variable }
+            if has(
+                "STRING", "CHARACTER", "TRIPLE", "HEREDOC", "VERBATIM", "BACKTICK", "TEMPLATE LIT.",
+                "INLINE CODE", "CODE BLOCK", "FRONT MATTER") || name == "CHAR"
+            {
+                return .string
+            }
+            if has("NUMBER", "DIGIT", "CONSTANT", "LITERAL", "BOOL", "MONEY") { return .number }
+            if has("KEYWORD", "INSTRUCTION", "RESERVED", "STATEMENT", "HEADER", "HEADING")
+                || ["WORD", "WORD2", "CONTROL", "RETURN", "H1", "H2", "H3", "H4", "H5", "H6"].contains(name)
+            {
+                return .keyword
+            }
+            if has("OPERATOR", "DELIMITER", "SYMBOL", "BRACE", "HRULE") { return .operator }
+            if has("LINK", "URI", "URL", "ULIST", "OLIST", "LIST ITEM") { return .property }
+            if has("STRONG") { return .type }
+            if has("EMPHASIS") || name.hasPrefix("EM1") || name.hasPrefix("EM2") { return .number }
+            // Less common source categories retain their original hue family instead of
+            // silently losing a chromatic Notepad++ style. Neutral source styles stay text.
+            guard let value = UInt32(style.foreground, radix: 16) else { return nil }
+            let r = Int((value >> 16) & 255), g = Int((value >> 8) & 255), b = Int(value & 255)
+            guard max(r, g, b) - min(r, g, b) >= 32 else { return nil }
+            if r >= g && r >= b { return g >= b ? .string : .number }
+            if g >= r && g >= b { return b >= r ? .type : .comment }
+            return r >= g ? .keyword : .property
+        }
     }
     func profile(identifier: String) -> LanguageProfile? {
         guard let index = profileIndex[identifier], let profiles = catalog?.profiles, profiles.indices.contains(index)
