@@ -47,21 +47,23 @@ extension DocumentChecks {
         /// Runs a command that opens app-modal dialogs and answers them in order. Each answer
         /// receives the dialog's views and returns the button to press. A dialog that is not
         /// expected, or not answered within ten seconds, is aborted. True when every answer was used.
-        @MainActor func answeringDialogs(_ answers: [@MainActor @Sendable ([NSView]) -> NSButton?], _ command: () -> Void) -> Bool {
+        @MainActor func answeringDialogs(
+            _ answers: [@MainActor @Sendable ([NSView]) -> NSButton?], _ command: () -> Void
+        ) -> Bool {
             var pending = answers
             weak var answered: NSWindow?
             let deadline = Date().addingTimeInterval(10)
             let tick: @MainActor @Sendable () -> Void = {
-                    guard let modal = presentedFormWindow, modal !== answered || Date() > deadline else { return }
-                    guard Date() <= deadline, let answer = pending.first, let content = modal.contentView,
-                        let button = answer(descendants(content))
-                    else {
-                        NSApp.abortModal()
-                        return
-                    }
-                    pending.removeFirst()
-                    answered = modal
-                    button.performClick(nil)
+                guard let modal = presentedFormWindow, modal !== answered || Date() > deadline else { return }
+                guard Date() <= deadline, let answer = pending.first, let content = modal.contentView,
+                    let button = answer(descendants(content))
+                else {
+                    NSApp.abortModal()
+                    return
+                }
+                pending.removeFirst()
+                answered = modal
+                button.performClick(nil)
             }
             let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
                 MainActor.assumeIsolated { tick() }

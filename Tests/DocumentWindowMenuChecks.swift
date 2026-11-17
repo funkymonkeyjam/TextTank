@@ -68,20 +68,20 @@ extension DocumentChecks {
             defer { document.close() }
             let observation = WindowSettingsObservation()
             let timerAction: @MainActor @Sendable () -> Void = {
-                    guard
-                        let window = NSApp.windows.first(where: {
-                            $0.isVisible && ($0.title == "Settings" || $0.title == "Editor Settings")
-                        }), let content = window.contentView
-                    else { return }
-                    observation.observedModeless = observation.returned && NSApp.modalWindow == nil
-                    observation.usable =
-                        documentWindow.canBecomeKey
-                        && documentController.validateMenuItem(
-                            item(#selector(EditorWindowController.perform(_:)), "upper"))
-                    observation.inspected = true
-                    DesignSettingsChecks.checkNativeButtons(window)
-                    descendants(content).compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(
-                        nil)
+                guard
+                    let window = NSApp.windows.first(where: {
+                        $0.isVisible && ($0.title == "Settings" || $0.title == "Editor Settings")
+                    }), let content = window.contentView
+                else { return }
+                observation.observedModeless = observation.returned && NSApp.modalWindow == nil
+                observation.usable =
+                    documentWindow.canBecomeKey
+                    && documentController.validateMenuItem(
+                        item(#selector(EditorWindowController.perform(_:)), "upper"))
+                observation.inspected = true
+                DesignSettingsChecks.checkNativeButtons(window)
+                descendants(content).compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(
+                    nil)
             }
             let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                 MainActor.assumeIsolated { timerAction() }
@@ -92,8 +92,12 @@ extension DocumentChecks {
             observation.returned = true
             _ = spinUntil("Settings presentation is inspected") { observation.inspected }
             timer.invalidate()
-            check(observation.observedModeless, "DG-R1 opening Settings returns without entering an application modal loop")
-            check(observation.usable, "DG-R1 the document stays key-capable and its commands validate while Settings is open")
+            check(
+                observation.observedModeless,
+                "DG-R1 opening Settings returns without entering an application modal loop")
+            check(
+                observation.usable,
+                "DG-R1 the document stays key-capable and its commands validate while Settings is open")
         }
 
         section("DG Settings keyboard, restoration and minimum layout", #line) {
@@ -357,18 +361,18 @@ extension DocumentChecks {
             var answered = false
             let giveUp = Date().addingTimeInterval(10)
             let answerAction: @MainActor @Sendable () -> Void = {
-                    guard !answered, let modal = presentedFormWindow, let content = modal.contentView else { return }
-                    let views = descendants(content)
-                    if let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
-                        let go = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Go" })
-                    {
-                        answered = true
-                        modal.makeFirstResponder(nil)
-                        field.stringValue = "2"
-                        go.performClick(nil)
-                    } else if Date() > giveUp {
-                        NSApp.abortModal()
-                    }
+                guard !answered, let modal = presentedFormWindow, let content = modal.contentView else { return }
+                let views = descendants(content)
+                if let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
+                    let go = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Go" })
+                {
+                    answered = true
+                    modal.makeFirstResponder(nil)
+                    field.stringValue = "2"
+                    go.performClick(nil)
+                } else if Date() > giveUp {
+                    NSApp.abortModal()
+                }
             }
             let answer = Timer(timeInterval: 0.05, repeats: true) { _ in
                 MainActor.assumeIsolated { answerAction() }
@@ -493,32 +497,32 @@ extension DocumentChecks {
             var observed = false, readable = false, current = false
             let deadline = Date().addingTimeInterval(10)
             let timerAction: @MainActor @Sendable () -> Void = {
-                    guard let content = presentedFormWindow?.contentView else { return }
-                    if Date() > deadline {
-                        NSApp.abortModal()
-                        return
-                    }
-                    let views = descendants(content)
-                    guard
-                        let popup = views.compactMap({ $0 as? NSPopUpButton }).first(where: {
-                            $0.accessibilityLabel() == "Command shortcut to assign"
-                        }),
-                        let key = views.compactMap({ $0 as? NSTextField }).first(where: {
-                            $0.accessibilityLabel() == "Shortcut key"
-                        })
-                    else { return }
-                    observed = true
-                    readable = popup.itemArray.contains {
-                        $0.title == "Duplicate Line" && $0.representedObject as? String == "duplicateLine"
-                    }
-                    if let entry = popup.itemArray.first(where: {
-                        $0.representedObject as? String == "duplicateLine" || $0.title == "duplicateLine"
-                    }) {
-                        popup.select(entry)
-                        if let action = popup.action { _ = NSApp.sendAction(action, to: popup.target, from: popup) }
-                        current = key.stringValue == "d"
-                    }
-                    views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
+                guard let content = presentedFormWindow?.contentView else { return }
+                if Date() > deadline {
+                    NSApp.abortModal()
+                    return
+                }
+                let views = descendants(content)
+                guard
+                    let popup = views.compactMap({ $0 as? NSPopUpButton }).first(where: {
+                        $0.accessibilityLabel() == "Command shortcut to assign"
+                    }),
+                    let key = views.compactMap({ $0 as? NSTextField }).first(where: {
+                        $0.accessibilityLabel() == "Shortcut key"
+                    })
+                else { return }
+                observed = true
+                readable = popup.itemArray.contains {
+                    $0.title == "Duplicate Line" && $0.representedObject as? String == "duplicateLine"
+                }
+                if let entry = popup.itemArray.first(where: {
+                    $0.representedObject as? String == "duplicateLine" || $0.title == "duplicateLine"
+                }) {
+                    popup.select(entry)
+                    if let action = popup.action { _ = NSApp.sendAction(action, to: popup.target, from: popup) }
+                    current = key.stringValue == "d"
+                }
+                views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
             }
             let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                 MainActor.assumeIsolated { timerAction() }
@@ -563,48 +567,48 @@ extension DocumentChecks {
             var acted = false, kept = false, cleared = false, defaultRestored = false
             let deadline = Date().addingTimeInterval(10)
             let timerAction: @MainActor @Sendable () -> Void = {
-                    guard let content = presentedFormWindow?.contentView else { return }
-                    if Date() > deadline {
-                        NSApp.abortModal()
+                guard let content = presentedFormWindow?.contentView else { return }
+                if Date() > deadline {
+                    NSApp.abortModal()
+                    return
+                }
+                let views = descendants(content)
+                guard !acted,
+                    let popup = views.compactMap({ $0 as? NSPopUpButton }).first(where: {
+                        $0.identifier?.rawValue == "settings.shortcut.command"
+                    }),
+                    let key = views.compactMap({ $0 as? NSTextField }).first(where: {
+                        $0.identifier?.rawValue == "settings.shortcut.key"
+                    }),
+                    let clear = views.compactMap({ $0 as? NSButton }).first(where: {
+                        $0.identifier?.rawValue == "settings.shortcut.clear"
+                    }),
+                    let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save" })
+                else { return }
+                @MainActor func select(_ id: String) {
+                    guard let entry = popup.itemArray.first(where: { $0.representedObject as? String == id }) else {
                         return
                     }
-                    let views = descendants(content)
-                    guard !acted,
-                        let popup = views.compactMap({ $0 as? NSPopUpButton }).first(where: {
-                            $0.identifier?.rawValue == "settings.shortcut.command"
-                        }),
-                        let key = views.compactMap({ $0 as? NSTextField }).first(where: {
-                            $0.identifier?.rawValue == "settings.shortcut.key"
-                        }),
-                        let clear = views.compactMap({ $0 as? NSButton }).first(where: {
-                            $0.identifier?.rawValue == "settings.shortcut.clear"
-                        }),
-                        let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save" })
-                    else { return }
-                    @MainActor func select(_ id: String) {
-                        guard let entry = popup.itemArray.first(where: { $0.representedObject as? String == id }) else {
-                            return
-                        }
-                        popup.select(entry)
-                        if let action = popup.action { _ = NSApp.sendAction(action, to: popup.target, from: popup) }
-                    }
-                    select("upper")
-                    key.stringValue = "u"
-                    select("deleteLine")
-                    key.stringValue = "k"
-                    select("upper")
-                    kept = key.stringValue == "u"
-                    clear.performClick(nil)
-                    cleared = key.stringValue.isEmpty
-                    select("duplicateLine")
-                    key.stringValue = "j"
-                    select("deleteLine")
-                    kept = kept && key.stringValue == "k"
-                    select("duplicateLine")
-                    clear.performClick(nil)
-                    defaultRestored = key.stringValue == "d"
-                    acted = true
-                    save.performClick(nil)
+                    popup.select(entry)
+                    if let action = popup.action { _ = NSApp.sendAction(action, to: popup.target, from: popup) }
+                }
+                select("upper")
+                key.stringValue = "u"
+                select("deleteLine")
+                key.stringValue = "k"
+                select("upper")
+                kept = key.stringValue == "u"
+                clear.performClick(nil)
+                cleared = key.stringValue.isEmpty
+                select("duplicateLine")
+                key.stringValue = "j"
+                select("deleteLine")
+                kept = kept && key.stringValue == "k"
+                select("duplicateLine")
+                clear.performClick(nil)
+                defaultRestored = key.stringValue == "d"
+                acted = true
+                save.performClick(nil)
             }
             let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                 MainActor.assumeIsolated { timerAction() }
@@ -722,33 +726,33 @@ extension DocumentChecks {
             var stage = 0, keptDraft = false
             let deadline = Date().addingTimeInterval(10)
             let retryAction: @MainActor @Sendable () -> Void = {
-                    guard let content = presentedFormWindow?.contentView else { return }
-                    let views = descendants(content)
-                    if Date() > deadline {
-                        NSApp.abortModal()
-                        return
-                    }
-                    guard let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
-                        let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save" })
-                    else {
-                        views.compactMap { $0 as? NSButton }.first?.performClick(nil)
-                        return
-                    }
-                    if stage == 0 {
-                        field.stringValue = "invalid width"
-                        stage = 1
-                        save.performClick(nil)
-                    } else if stage == 1 {
-                        keptDraft =
-                            field.stringValue == "invalid width"
-                            && views.compactMap({ $0 as? NSTextField }).contains(where: {
-                                !$0.isEditable && $0.stringValue.contains("Tab width must")
-                                    && $0.stringValue.contains("32")
-                            })
-                        field.stringValue = "8 "
-                        stage = 2
-                        save.performClick(nil)
-                    }
+                guard let content = presentedFormWindow?.contentView else { return }
+                let views = descendants(content)
+                if Date() > deadline {
+                    NSApp.abortModal()
+                    return
+                }
+                guard let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
+                    let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save" })
+                else {
+                    views.compactMap { $0 as? NSButton }.first?.performClick(nil)
+                    return
+                }
+                if stage == 0 {
+                    field.stringValue = "invalid width"
+                    stage = 1
+                    save.performClick(nil)
+                } else if stage == 1 {
+                    keptDraft =
+                        field.stringValue == "invalid width"
+                        && views.compactMap({ $0 as? NSTextField }).contains(where: {
+                            !$0.isEditable && $0.stringValue.contains("Tab width must")
+                                && $0.stringValue.contains("32")
+                        })
+                    field.stringValue = "8 "
+                    stage = 2
+                    save.performClick(nil)
+                }
             }
             let retry = Timer(timeInterval: 0.02, repeats: true) { _ in
                 MainActor.assumeIsolated { retryAction() }
