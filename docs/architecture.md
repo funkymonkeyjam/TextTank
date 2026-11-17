@@ -376,7 +376,7 @@ lifetimes, multi-document result state and guarded bridge application, with its 
 APIs. Cheap truncated/closed/stale rejection still happens before selection reads or position
 conversion, and the pure planner also validates its input facts. Foundation-only compilation and
 native checks enforce this boundary. TextTankCore is now a separate Foundation Swift module;
-AppKit composition remains in the application target during the Runtime migration.
+AppKit composition belongs to the separate Runtime module.
 
 Document language intent applies a profile once and records its identifier only on success.
 Language-controller notifications use the separate state-only `noteAppliedLanguage` method, so
@@ -392,10 +392,8 @@ retains its compound fallback, clamp and skip behavior rather than promising ato
 
 NativeSearch is now a separate Foundation Objective-C++ framework containing the snapshot
 search engine and its typed public interface. The application depends on and embeds this
-framework; EditorBridge has no dependency on it. Remaining Swift sources still share the
-application target during the staged module migration. Checks now link the actual signed native frameworks after input/artifact validation.
-Swift product sources still use their legacy per-script lists at this stage; full shared
-Core/Runtime artifact acceptance is not yet established.
+framework; EditorBridge has no dependency on it. Checks link the actual signed native
+frameworks after input/artifact validation, with no implementation copies in check compilation.
 
 EditorBridge is now a separate AppKit Objective-C++ framework owning TTEditor and the
 ported user lexer. It links Scintilla and Lexilla; it has no dependency on NativeSearch
@@ -407,8 +405,8 @@ zlib interfaces, with no EditorBridge, AppKit or executable dependency. Package 
 explicit value constructors form the cross-target API; fields retain setter restrictions,
 version decoding requirements and existing defaults. UUID/Date defaults evaluate once per
 construction. Native checks import the actual built Debug Core module and link/load its
-signed application image rather than recompiling those sources. Swift UI source copies and
-TESTING seams remain until the separate Runtime target transition; this is partial F269.
+signed application image rather than recompiling those sources. Core-only checks do not
+import Runtime or UI modules.
 
 TextTankRuntime now owns the AppKit/document/controller/service composition and depends on
 Core, EditorBridge and NativeSearch. TextTankMain is only the executable bootstrap; Runtime
@@ -418,3 +416,20 @@ Tests sources and consume the actual signed Runtime/Core/native images. Product 
 branches are replaced by explicit document timing/write/notice configuration and runtime
 window/Find/announcement effects; production defaults remain unchanged. Isolated support
 without explicit owner capabilities cannot obtain general clipboard or EventKit implicitly.
+
+Runtime UI/controller/composition state is main-actor owned. Worker closures carry immutable
+inputs and main-created Sendable deliveries; weak UI references are loaded only on that
+actor. Pure Core models, Strings, saved configuration, metrics values and disk inspection
+remain nonisolated. Recovery storage and run-control callback state use narrow complete
+locks, with arbitrary callback invocation and displaced capture destruction after unlock.
+Native search cancellation allows only its audited atomic cancel/read methods to mutate or
+observe cancellation; direct ivar KVC is disabled.
+
+Inherited synchronous NSDocument read/data/write entry points retain synchronous main
+bridges and their complete super-call/payload/reentry lifetimes. The fileURL getter is a
+separate contract: an off-main file presenter can immediately read the superclass URL while
+main waits during a save. Only the canonical URL snapshot uses a narrow lock; no superclass
+call or UI callback runs under it. Completion deliveries preserve direct main execution
+and main-queue worker delivery; an absent controller also delivers on main. Automation
+progress continues through the main common-mode CFRunLoop block and wakeup, publishing its
+actor-owned result before stopping the nested modal loop in that same turn.

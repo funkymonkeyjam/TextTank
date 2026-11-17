@@ -12,10 +12,13 @@ from pathlib import Path
 import platform
 import stat
 import subprocess
+import tempfile
 
 from build_config import load_identity
 import bootstrap
 import build_evidence
+import link_evidence
+import runtime_linkage
 
 ROOT = Path(__file__).resolve().parents[1]
 FRAMEWORKS = ['Scintilla', 'NativeSearch', 'EditorBridge', 'TextTankCore', 'TextTankRuntime']
@@ -142,36 +145,104 @@ def code_and_metadata(build_root, app, configuration):
     return images, metadata
 
 
+def atomic_json(destination, value):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=destination.parent, delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(value, output, indent=2)
+            output.write('\n')
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+def matching_before(root, configuration, before_path, source_inputs, settings):
+    before = json.loads(before_path.read_text())
+    if before.get('schema') != 1 or before.get('configuration') != configuration or before.get('inputs') != source_inputs or before.get('toolchain') != toolchain() or before.get('target_settings') != settings:
+        raise ValueError('Source/dependency/configuration/toolchain inputs changed during the canonical build')
+    return before
+
+
+def capture_links(root, app, configuration, destination, before_path):
+    source_inputs = inputs(root)
+    settings = build_evidence.resolved_settings(root, configuration)
+    matching_before(root, configuration, before_path, source_inputs, settings)
+    previous_path = destination.parent / 'manifest.json'
+    previous = json.loads(previous_path.read_text()) if previous_path.exists() else {}
+    if previous.get('schema') != 3:
+        previous = {}
+    lexer = build_evidence.cpp_producer(root, configuration, settings, previous.get('user_lexer_producer'))
+    images, _ = code_and_metadata(root, app, configuration)
+    producers = link_evidence.record(root, configuration, images, app, settings, lexer,
+                                     previous.get('link_producers'), previous.get('linked_outputs'))
+    closure = runtime_linkage.verify(app, load_identity(root)['deploymentTarget'])
+    value = {'schema': 1, 'configuration': configuration, 'inputs': source_inputs,
+             'toolchain': toolchain(), 'target_settings': settings,
+             'user_lexer_producer': lexer, 'link_producers': producers,
+             'unsigned_closure': closure}
+    verify_dependencies(root)
+    matching_before(root, configuration, before_path, inputs(root), build_evidence.resolved_settings(root, configuration))
+    # Bind the final pre-sign bytes to the successful real link records in this turn.
+    for path, producer in producers.items():
+        if str(path) in previous.get('link_producers', {}) and producer == previous['link_producers'][path]:
+            if link_evidence.regular(path) != previous['linked_outputs'][path]:
+                raise ValueError('Reused linked bytes changed during capture')
+        elif link_evidence.regular(path) != {key: item for key, item in producer['output'].items() if key != 'uuid'}:
+            raise ValueError('Actual linked bytes changed during capture')
+    atomic_json(destination, value)
+    return value
+
+
 def record(root, app, configuration, destination, before_path):
     if configuration not in ('Debug', 'Release'):
         raise ValueError('Unsupported artifact configuration')
     source_inputs = inputs(root)
     before_path = before_path if before_path.is_absolute() else root / before_path
     before_path = before_path.resolve()
-    before = json.loads(before_path.read_text())
     settings = build_evidence.resolved_settings(root, configuration)
-    if before.get('schema') != 1 or before.get('configuration') != configuration or before.get('inputs') != source_inputs or before.get('toolchain') != toolchain() or before.get('target_settings') != settings:
-        raise ValueError('Source/dependency/configuration/toolchain inputs changed during the canonical build')
-    previous = json.loads(destination.read_text()) if destination.exists() else {}
-    producer = build_evidence.cpp_producer(root, configuration, settings, previous.get('user_lexer_producer') if previous.get('schema') == 2 else None)
+    matching_before(root, configuration, before_path, source_inputs, settings)
+    capture_path = root / 'build/artifacts' / configuration / 'link-before-sign.json'
+    captured = json.loads(capture_path.read_text())
+    if captured.get('schema') != 1 or captured.get('configuration') != configuration or captured.get('inputs') != source_inputs or captured.get('toolchain') != toolchain() or captured.get('target_settings') != settings:
+        raise ValueError('Actual pre-sign link capture does not match canonical inputs/settings')
+    producer = captured['user_lexer_producer']
+    if producer is not None:
+        build_evidence.validate_cpp(root, producer, settings['EditorBridge'])
     verify_dependencies(root)
     command('codesign', '--verify', '--deep', '--strict', str(app))
     images, metadata = code_and_metadata(root, app, configuration)
-    value = {'schema': 2, 'configuration': configuration, 'build_root': str(root), 'app': str(app),
+    closure = runtime_linkage.verify(app, load_identity(root)['deploymentTarget'])
+    expected = {value['produced'] for value in images.values()} | {str(app / name) for name in closure['images'] if name.startswith('Contents/MacOS/')}
+    links = link_evidence.validate(root, captured['link_producers'], settings, producer, expected)
+    # Signature bytes may change; each signed result must keep its actual linked UUID.
+    unsigned = captured['unsigned_closure']
+    if {key: {field: item for field, item in value.items() if field != 'sha256'} for key, value in unsigned['images'].items()} != {key: {field: item for field, item in value.items() if field != 'sha256'} for key, value in closure['images'].items()} or unsigned['edges'] != closure['edges']:
+        raise ValueError('Signing changed actual code identity/dependency commands')
+    capture_proof = link_evidence.retain(root, configuration, capture_path.read_bytes(), '.capture.json')
+    value = {'schema': 3, 'configuration': configuration, 'build_root': str(root), 'app': str(app),
              'identity': load_identity(root), 'toolchain': toolchain(), 'inputs': source_inputs,
              'app_files': snapshot(app), 'images': images, 'metadata': metadata,
              'user_lexer_producer': producer, 'target_settings': settings,
+             'link_producers': links, 'linked_outputs': {path: link_evidence.regular(path) for path in links},
+             'dependency_closure': closure, 'link_capture': capture_proof,
              'before': {'path': str(before_path), 'sha256': digest(before_path)},
              'source_checkout': tracked_inputs(root) is not None,
              'scope': 'Local native artifact/input identity only; no source-stable, archive-binding or package-provenance claim'}
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(value, indent=2) + '\n')
+    if inputs(root) != source_inputs or build_evidence.resolved_settings(root, configuration) != settings or toolchain() != value['toolchain'] or snapshot(app) != value['app_files']:
+        raise ValueError('Canonical inputs/settings/code changed before artifact publication')
+    verify_dependencies(root)
+    atomic_json(destination, value)
     return value
 
 
 def validate(root, manifest, configuration):
     value = json.loads(manifest.read_text())
-    if value.get('schema') != 2 or value.get('configuration') != configuration:
+    if value.get('schema') != 3 or value.get('configuration') != configuration:
         raise ValueError('Artifact configuration/schema does not match this check invocation')
     if inputs(root, require_checkout=True) != value['inputs']:
         raise ValueError('Stale artifact: source/configuration/header input bytes or modes changed')
@@ -182,6 +253,9 @@ def validate(root, manifest, configuration):
     if inputs(build_root) != value['inputs']:
         raise ValueError('Built archive source/configuration/header inputs changed')
     verify_dependencies(build_root)
+    # Query the selected archive, never the known-blocked synced checkout project.
+    if build_evidence.resolved_settings(build_root, configuration) != value['target_settings']:
+        raise ValueError('Stale artifact: live selected-build target settings changed')
     if snapshot(app) != value['app_files']:
         raise ValueError('Actual signed application artifact changed')
     images, metadata = code_and_metadata(build_root, app, configuration)
@@ -199,13 +273,28 @@ def validate(root, manifest, configuration):
         raise ValueError('Actual user-lexer source requires complete nonnull EditorBridge producer evidence')
     if producer is not None:
         build_evidence.validate_cpp(build_root, value['user_lexer_producer'], value['target_settings']['EditorBridge'])
+    closure = runtime_linkage.verify(app, value['identity']['deploymentTarget'])
+    if closure != value['dependency_closure']:
+        raise ValueError('Actual signed dependency/runpath closure changed')
+    expected = {item['produced'] for item in images.values()} | {str(app / name) for name in closure['images'] if name.startswith('Contents/MacOS/')}
+    link_evidence.validate(build_root, value['link_producers'], value['target_settings'], producer, expected)
+    if value['linked_outputs'] != {path: link_evidence.regular(path) for path in expected}:
+        raise ValueError('Actual signed/produced link output bytes changed')
+    capture_proof = value['link_capture']
+    if link_evidence.anchored(capture_proof['path'], build_root) != capture_proof:
+        raise ValueError('Immutable actual link capture changed')
+    captured = json.loads(Path(capture_proof['path']).read_text())
+    if captured['link_producers'] != value['link_producers'] or captured['user_lexer_producer'] != producer or captured['inputs'] != value['inputs'] or captured['target_settings'] != value['target_settings']:
+        raise ValueError('Immutable actual link capture differs from artifact manifest')
     command('codesign', '--verify', '--deep', '--strict', str(app))
+    if inputs(root, require_checkout=True) != value['inputs'] or inputs(build_root) != value['inputs'] or build_evidence.resolved_settings(build_root, configuration) != value['target_settings'] or snapshot(app) != value['app_files']:
+        raise ValueError('Inputs/settings/artifacts changed during validation')
     return value
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['begin', 'record', 'validate'])
+    parser.add_argument('operation', choices=['begin', 'links', 'record', 'validate'])
     parser.add_argument('--root', type=Path, default=ROOT)
     parser.add_argument('--configuration', choices=['Debug', 'Release'], required=True)
     parser.add_argument('--manifest', type=Path, required=True)
@@ -215,10 +304,11 @@ def main():
     root = arguments.root.resolve()
     if arguments.operation == 'begin':
         begin(root, arguments.configuration, arguments.manifest)
-    elif arguments.operation == 'record':
+    elif arguments.operation in ('links', 'record'):
         if arguments.app is None or arguments.before is None:
             parser.error('record requires --app and --before')
-        record(root, arguments.app.resolve(), arguments.configuration, arguments.manifest, arguments.before)
+        operation = capture_links if arguments.operation == 'links' else record
+        operation(root, arguments.app.resolve(), arguments.configuration, arguments.manifest, arguments.before.resolve())
     else:
         value = validate(root, arguments.manifest, arguments.configuration)
         print(value['app'])

@@ -2,13 +2,13 @@
 
 Only arm64 is currently built and checked. The minimum system version and canonical architecture come from `Dependencies.lock.json`, validated by `scripts/build_config.py` for the shell, generator and engine builder; it does not certify an older macOS runtime. No Developer ID identity, entitlement or notarization flow is configured. Review bundles remain ad-hoc signed, incomplete previews.
 
-Run `scripts/build.sh`, `scripts/test.sh` and `scripts/test-performance.sh` in that order. Debug is the default. To test Release, supply `CONFIGURATION=Release` to each command, including `scripts/package-review.sh` if packaging that configuration. The generator and Info.plist use matching configuration paths and deployment settings. Regenerate with `python3 scripts/generate-project.py` after adding or moving sources; CI rejects project drift.
+Run `scripts/build.sh`, `scripts/test.sh` and `scripts/test-performance.sh` in that order. Debug is the default. Use `CONFIGURATION=Release` for the production build and matching packaging. Native check clients use Debug module metadata with testability; Release keeps optimization and `ENABLE_TESTABILITY=NO`. The generator and Info.plist use matching configuration paths and deployment settings. Regenerate with `python3 scripts/generate-project.py` after adding or moving sources; CI rejects project drift.
 
 Scintilla derived data and outputs are private to each checkout and configuration. Lexilla is copied from the already verified source manifest into `build/vendor/<configuration>/lexilla-work/`, where make writes its objects and archive. The shared Vendor source checkout is never a build-output destination. Copied source bytes are refreshed; unexpected files are rejected; all private Lexilla objects are rebuilt on every build invocation, so changes to flags, compiler or transitive headers cannot reuse stale objects.
 
-Each native suite remains a real script with explicit test sources, defines and layering boundaries. Native bridge, search and user-lexer implementations come from the validated signed application frameworks; checks do not recompile them. Swift product sources still use the legacy per-script lists during migration. Do not compile two suite/probe scripts concurrently in one checkout: their final check-binary and log paths remain shared.
+Each native suite remains a real script with explicit test sources, defines and layering boundaries. Native bridge, search and user-lexer implementations come from the validated signed application frameworks; checks do not recompile them. Swift checks compile Tests sources only and import the actual built Core/Runtime modules; pure Core suites do not import Runtime or AppKit. Do not compile two suite/probe scripts concurrently in one checkout: their final check-binary and log paths remain shared.
 
-The document-check executable drives many owned document-window transitions without running the normal application event loop. A long CLI prefix on this Mac accumulated AppKit animation workers and blocked native save-panel creation; the same prefix from the accepted pre-catalog source reproduced it. The `TESTING` build therefore disables only its owned document-window transition animations. Production builds retain system animations, and the actual native save panels, review sheets, close routes, Cancel actions and deadlines remain unchanged. Functional check results do not certify physical transition animations. Diagnostic controls and source identities are execution evidence, not source-archive package certification.
+The document-check executable drives many owned document-window transitions without running the normal application event loop. A long CLI prefix on this Mac accumulated AppKit animation workers and blocked native save-panel creation; the same prefix from the accepted pre-catalog source reproduced it. The document test supplies an explicit owned dependency that disables only its document-window transition animations; product compilation has no `TESTING` flag. Production builds retain system animations, and the actual native save panels, review sheets, close routes, Cancel actions and deadlines remain unchanged. Functional check results do not certify physical transition animations. Diagnostic controls and source identities are execution evidence, not source-archive package certification.
 
 `scripts/test-documents.sh` compiles one native check executable, then always runs two
 required processes: the existing document checks and configuration input accessibility
@@ -16,7 +16,7 @@ checks (`--configuration-input-accessibility`). Each retains its own watchdog, s
 and normal completion marker; a failure in either fails acceptance. Both processes create
 their owned support directory and document controller before `NSApplication`, check
 singleton identity, and use the same accessory activation policy. The complete test
-runner therefore records 32 suites, including all prior 31 and the new input checks.
+runner records 34 suites: all prior 33, including both document processes, plus the actual compiler diagnostic guard checks.
 A combined CLI prefix failed native review/save-panel creation with saturated AppKit
 animation workers; paired controls passed the full original document checks and all
 input checks in separate processes on identical product bytes. This isolates test
@@ -45,7 +45,7 @@ an absolute /Library/Frameworks dependency fails rather than passing build-only 
 
 EditorBridge builds the editor bridge and user lexer once for the application target,
 linking the existing pinned engines. Its module exports TTEditor.h; it is signed before
-the app alongside NativeSearch and Scintilla. Swift check-source migration is still pending.
+the app alongside NativeSearch and Scintilla. Checks compile no product source copies.
 
 Native check clients now link the actual signed application EditorBridge, NativeSearch and
 Scintilla artifacts. `runtime_artifacts.py` records separate Debug/Release manifests after
@@ -55,8 +55,7 @@ and changed app files before reuse. Each linked native image is resolved and has
 the check process, and required image-proof markers accompany normal suite completion.
 For an exact-source archive build, pass its `build/artifacts/Debug/manifest.json` through
 `TEXTTANK_ARTIFACT_MANIFEST`; current checkout inputs must still match. This establishes local
-input/artifact identity, not archive binding, source stability or package provenance. Swift
-product sources are still compiled by the legacy test configurations during this stage.
+input/artifact identity, not archive binding, source stability or package provenance.
 
 Dependency inspection failures are fatal for native check executables; a missing inspector
 cannot turn required image proofs into an empty list. The user-lexer provenance suite keeps
@@ -65,15 +64,15 @@ actual signed EditorBridge producer, with canonical per-file C++ flags and hashe
 log, response files and object evidence. Existing source/patch/upstream contracts remain.
 
 Before compilation, canonical builds capture actual resolved settings for every application
-project target and source/toolchain inputs; recording refuses before/after differences.
+project target, the pinned Scintilla target and source/toolchain inputs; recording refuses before/after differences.
 User-lexer compiler evidence is immutable and scoped to that object: actual dependency-file
 source/header bytes, effective options after response expansion, C++ target settings, clang/SDK
 identity, response files and object bytes. A normal incremental build may retain this evidence
 when the C++ producer remains valid while recording new whole-product inputs for Swift changes.
 The build does not force routine recompilation to manufacture a fresh compiler log.
 
-Core membership is declared once in scripts/core_sources.py and consumed by the project
-and remaining application-client lists. Debug checks import the build-produced Core module
+Core membership is declared once in scripts/core_sources.py and consumed by the generated
+project. Debug checks import the build-produced Core module
 metadata and link the actual signed embedded Core/NativeSearch images, with package name
 TextTank. Release retains normal optimization and ENABLE_TESTABILITY=NO. Header/module
 metadata remains separately hashed; code-image path/hash evidence is required for Core too.
@@ -85,3 +84,29 @@ there are no product source arguments or product TESTING flags in the suite scri
 required DocumentChecks processes install explicit owned effects before the document-controller
 singleton and NSApplication; owned window animations are disabled through that dependency,
 while production defaults retain native animations and real sheet/save behavior.
+
+Actual Swift producers and all test compilers retain Swift 5 and warnings-as-errors with
+complete concurrency checking. `compile_diagnostics.py` also rejects emitted first-party
+Swift warning/error headers when a Swift 5 compiler returns zero. The guard suite runs an
+actual good/bad AppKit actor-access compiler pair and checks the resolved producer settings;
+intentional negative compiler output is retained separately from normal build diagnostics.
+This does not certify other toolchains or macOS runtimes.
+
+Before signing, canonical builds retain immutable per-image link records: the real Ld event,
+working directory, driver and expanded response arguments, exact file-list bytes/order,
+source-to-object maps, object/library hashes and actual linker dependency selections. The
+LexUser compiler object and canonical Lexilla archive must each enter EditorBridge exactly
+once. Generated Scintilla version code, the Debug executor archive/section inputs and the
+empty preview auxiliary have explicit roles. Xcode's empty preview link may share an
+overwritten dependency-info path with the real Debug application; that file is never
+attributed to the preview's library selections.
+
+The schema-3 manifest separately binds pre-sign linked identity and final signed image
+hashes/UUIDs, all embedded code, and the full per-image load/reexport/weak-load/runpath
+closure. Every non-system dependency must resolve inside the selected app; platform shared
+cache paths remain valid without standalone disk files. Unexpected code, escaping paths,
+wrong install names, forbidden Core/native UI edges, cycles and failed inspection reject.
+Artifact reuse re-queries resolved settings at the selected build root and rechecks inputs,
+metadata, code, retained producers and strict signing. It never queries a different source
+project or searches for a substitute cached build. A valid no-op may reuse the same scoped
+link/C++ producers; a changed input or missing producer cannot invent a successful link.

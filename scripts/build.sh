@@ -30,6 +30,7 @@ logged lexilla-build python3 scripts/build-lexilla.py
 logged app-build xcodebuild -project TextTank.xcodeproj -scheme TextTank -configuration "$CONFIGURATION" -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO build
 python3 scripts/compile_diagnostics.py --log harness/logs/app-build.log
 python3 scripts/check-runtime-linkage.py "$APP_PATH"
+python3 scripts/runtime_artifacts.py links --configuration "$CONFIGURATION" --app "$APP_PATH" --manifest "build/artifacts/$CONFIGURATION/link-before-sign.json" --before "build/artifacts/$CONFIGURATION/before.json"
 # Finder/file-provider metadata is not part of the generated application resources.
 xattr -dr com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
 xattr -dr com.apple.ResourceFork "$APP_PATH" 2>/dev/null || true

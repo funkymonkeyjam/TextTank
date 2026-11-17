@@ -7,6 +7,7 @@ import json
 import os
 import plistlib
 import shutil
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -130,56 +131,66 @@ func rawMode() throws {
 
     def test_runtime_linkage_rejects_real_absolute_framework_install_names(self):
         linkage = module('check_runtime_linkage', 'check-runtime-linkage.py')
-        with tempfile.TemporaryDirectory(prefix='runtime-linkage-', dir=ROOT / 'tmp') as work:
+        with tempfile.TemporaryDirectory(prefix='runtime-linkage-', dir=ROOT / 'build/tests') as work:
             fixture = Path(work)
             app = fixture / 'Fixture.app'
-            image = app / 'Contents/Frameworks/NativeSearch.framework/Versions/A/NativeSearch'
             executable = app / 'Contents/MacOS/TextTank'
-            image.parent.mkdir(parents=True)
             executable.parent.mkdir(parents=True)
-            editor_image = app / 'Contents/Frameworks/EditorBridge.framework/Versions/A/EditorBridge'
-            editor_image.parent.mkdir(parents=True)
-            editor_source = fixture / 'editor.c'
-            editor_source.write_text('int fixture_editor(void) { return 0; }\n')
-            editor_built = subprocess.run(['xcrun', 'clang', '-dynamiclib', str(editor_source), '-install_name',
-                                           '@rpath/EditorBridge.framework/Versions/A/EditorBridge', '-o', str(editor_image)],
-                                          capture_output=True, text=True)
-            self.assertEqual(editor_built.returncode, 0, editor_built.stderr)
-            core_image = app / 'Contents/Frameworks/TextTankCore.framework/Versions/A/TextTankCore'
-            core_image.parent.mkdir(parents=True)
-            core_source = fixture / 'core.c'
-            core_source.write_text('int fixture_core(void) { return 0; }\n')
-            core_built = subprocess.run(['xcrun', 'clang', '-dynamiclib', str(core_source), '-install_name', '@rpath/TextTankCore.framework/Versions/A/TextTankCore', '-o', str(core_image)], capture_output=True, text=True)
-            self.assertEqual(core_built.returncode, 0, core_built.stderr)
-            runtime_image = app / 'Contents/Frameworks/TextTankRuntime.framework/Versions/A/TextTankRuntime'
-            runtime_image.parent.mkdir(parents=True)
-            runtime_source = fixture / 'runtime.c'
-            runtime_source.write_text('int fixture_runtime(void) { return 0; }\n')
-            runtime_built = subprocess.run(['xcrun', 'clang', '-dynamiclib', str(runtime_source), '-install_name', '@rpath/TextTankRuntime.framework/Versions/A/TextTankRuntime', '-o', str(runtime_image)], capture_output=True, text=True)
-            self.assertEqual(runtime_built.returncode, 0, runtime_built.stderr)
-            library_source = fixture / 'search.c'
-            library_source.write_text('int fixture_search(void) { return 0; }\n')
-            main_source = fixture / 'main.c'
-            main_source.write_text('extern int fixture_search(void); extern int fixture_editor(void); extern int fixture_core(void); extern int fixture_runtime(void); int main(void) { return fixture_search() + fixture_editor() + fixture_core() + fixture_runtime(); }\n')
+            (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable': 'TextTank'}))
+            images = {}
+            sources = {}
+            compiler = subprocess.check_output(['xcrun', '--find', 'clang'], text=True).strip()
+            def build(arguments):
+                result = subprocess.run([compiler, '-target', 'arm64-apple-macos14.0', *arguments], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            for name in ['Scintilla', 'NativeSearch', 'EditorBridge', 'TextTankCore', 'TextTankRuntime']:
+                images[name] = app / f'Contents/Frameworks/{name}.framework/Versions/A/{name}'
+                images[name].parent.mkdir(parents=True)
+                sources[name] = fixture / (name+'.c')
+                sources[name].write_text(f'int fixture_{name}(void) {{ return 0; }}\n')
+                build(['-dynamiclib', str(sources[name]), '-install_name', f'@rpath/{name}.framework/Versions/A/{name}', '-o', str(images[name])])
+            main = fixture / 'main.c'
+            main.write_text(''.join(f'extern int fixture_{name}(void);\n' for name in images)
+                + 'int main(void) { return ' + ' + '.join(f'fixture_{name}()' for name in images) + '; }\n')
+            def link(rpaths):
+                build([str(main), *map(str, images.values()), '-Wl,-headerpad_max_install_names', *[argument for path in rpaths for argument in ['-Xlinker', '-rpath', '-Xlinker', path]], '-o', str(executable)])
             for identity, accepted in [('/Library/Frameworks/NativeSearch.framework/Versions/A/NativeSearch', False),
                                        ('@rpath/NativeSearch.framework/Versions/A/NativeSearch', True)]:
-                built = subprocess.run(['xcrun', 'clang', '-dynamiclib', str(library_source),
-                                        '-install_name', identity, '-o', str(image)], capture_output=True, text=True)
-                self.assertEqual(built.returncode, 0, built.stderr)
-                linked = subprocess.run(['xcrun', 'clang', str(main_source), str(image), str(editor_image), str(core_image), str(runtime_image), '-o', str(executable)],
-                                        capture_output=True, text=True)
-                self.assertEqual(linked.returncode, 0, linked.stderr)
+                build(['-dynamiclib', str(sources['NativeSearch']), '-install_name', identity, '-o', str(images['NativeSearch'])])
+                link(['@executable_path/../Frameworks'])
                 if accepted:
-                    self.assertEqual(linkage.verify(app)['NativeSearch'], identity)
+                    self.assertEqual(len(linkage.verify(app)['images']), 6)
                 else:
                     with self.assertRaisesRegex(ValueError, 'install name'):
                         linkage.verify(app)
-
-            editor_source.write_text('extern int fixture_search(void); int fixture_editor(void) { return fixture_search(); }\n')
-            illegal_edge = subprocess.run(['xcrun', 'clang', '-dynamiclib', str(editor_source), str(image),
-                                           '-install_name', '@rpath/EditorBridge.framework/Versions/A/EditorBridge',
-                                           '-o', str(editor_image)], capture_output=True, text=True)
-            self.assertEqual(illegal_edge.returncode, 0, illegal_edge.stderr)
+            link([])
+            with self.assertRaisesRegex(ValueError, 'Unresolved'):
+                linkage.verify(app)
+            link(['/Library/Frameworks', '@executable_path/../Frameworks'])
+            with self.assertRaisesRegex(ValueError, 'Runpath leaves'):
+                linkage.verify(app)
+            link(['@executable_path/../Frameworks'])
+            for escaped in ['/usr/lib/../../Library/Frameworks/Other.framework/Other',
+                            '/System/Library/Frameworks/../../../Library/Other.dylib']:
+                target = images['TextTankRuntime']
+                changed = subprocess.run(['install_name_tool', '-change', '/usr/lib/libSystem.B.dylib',
+                                          escaped, str(target)], capture_output=True, text=True)
+                self.assertEqual(changed.returncode, 0, changed.stderr)
+                try:
+                    with self.assertRaisesRegex(ValueError, 'Unresolved|leaves selected bundle'):
+                        linkage.verify(app)
+                finally:
+                    restored = subprocess.run(['install_name_tool', '-change', escaped,
+                        '/usr/lib/libSystem.B.dylib', str(target)], capture_output=True, text=True)
+                    self.assertEqual(restored.returncode, 0, restored.stderr)
+            extra = app / 'Contents/MacOS/unclassified.dylib'
+            shutil.copyfile(images['NativeSearch'], extra)
+            with self.assertRaisesRegex(ValueError, 'Unclassified'):
+                linkage.verify(app)
+            extra.unlink()
+            sources['EditorBridge'].write_text('extern int fixture_NativeSearch(void); int fixture_EditorBridge(void) { return fixture_NativeSearch(); }\n')
+            build(['-dynamiclib', str(sources['EditorBridge']), str(images['NativeSearch']), '-install_name',
+                   '@rpath/EditorBridge.framework/Versions/A/EditorBridge', '-o', str(images['EditorBridge'])])
             with self.assertRaisesRegex(ValueError, 'snapshot search engine'):
                 linkage.verify(app)
 
@@ -559,11 +570,64 @@ sys.exit(93)
             embedded = app / 'Contents/Frameworks'
             embedded.mkdir()
             before_path = fixture / 'build/artifacts/Debug/before.json'
-            # This cache-fault fixture uses actual clang-built/signed tiny artifacts,
-            # not an Xcode project. Resolved project settings are integration-covered
-            # by each canonical application build; no product CLI bypass exists.
-            with patch.object(artifacts.build_evidence, 'resolved_settings', return_value={}):
-                artifacts.begin(fixture, 'Debug', before_path)
+            # Tiny real C producers exercise the same input/link/sign/closure/cache
+            # protocol. Only Xcode settings are patched: this fixture has no Xcode
+            # project build. Every compile and link below actually runs and succeeds.
+            settings_patch = patch.object(artifacts.build_evidence, 'resolved_settings', return_value={})
+            settings_patch.start()
+            self.addCleanup(settings_patch.stop)
+            compiler = subprocess.check_output(['xcrun', '--find', 'clang'], text=True).strip()
+            sdk = json.loads(Path(os.environ['TEXTTANK_ARTIFACT_MANIFEST']).read_text())['toolchain']['sdk']
+            project, sources = {}, {}
+            for name in [*artifacts.FRAMEWORKS, 'TextTank']:
+                source = fixture / ('Vendor/scintilla/fixture.c' if name == 'Scintilla' else f'Sources/{name}.c')
+                if name == 'TextTank':
+                    source.write_text(''.join(f'extern int fixture_{other}(void);\n' for other in artifacts.FRAMEWORKS)
+                        + 'int main(void) { return ' + ' + '.join(f'fixture_{other}()' for other in artifacts.FRAMEWORKS) + '; }\n')
+                else:
+                    source.write_text(f'int fixture_{name}(void) {{ return 0; }}\n')
+                sources[name] = source
+                project[name] = {'isa': 'PBXNativeTarget', 'name': name, 'buildPhases': [name+'phase']}
+                project[name+'phase'] = {'isa': 'PBXSourcesBuildPhase', 'files': [name+'build']}
+                project[name+'build'] = {'fileRef': name+'file'}
+                project[name+'file'] = {'path': str(source.relative_to(fixture))}
+            dependency_manifest = fixture / 'scripts/scintilla-source-hashes.json'
+            recorded = json.loads(dependency_manifest.read_text())
+            recorded['fixture.c'] = hashlib.sha256(sources['Scintilla'].read_bytes()).hexdigest()
+            dependency_manifest.write_text(json.dumps(recorded))
+            project_path = fixture / 'TextTank.xcodeproj/project.pbxproj'
+            project_path.parent.mkdir()
+            project_path.write_text(json.dumps({'objects': project}))
+            subprocess.run(['git', 'add', '--', 'Sources', 'scripts', 'TextTank.xcodeproj'], cwd=fixture, check=True, capture_output=True)
+            artifacts.begin(fixture, 'Debug', before_path)
+            logs = {'app': [], 'scintilla': []}
+            def execute(arguments):
+                result = subprocess.run(arguments, cwd=fixture, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+            def object_for(name):
+                directory = fixture / 'build/objects' / name / 'Objects-normal/arm64'
+                directory.mkdir(parents=True)
+                obj = directory / (name+'.o')
+                arguments = [compiler, '-target', 'arm64-apple-macos14.0', '-isysroot', sdk,
+                             '-c', str(sources[name]), '-o', str(obj)]
+                execute(arguments)
+                lane = 'scintilla' if name == 'Scintilla' else 'app'
+                logs[lane].extend([f'CompileC {shlex.quote(str(obj))} {shlex.quote(str(sources[name]))} normal arm64 c',
+                                   '    cd '+shlex.quote(str(fixture)), '    '+shlex.join(arguments), ''])
+                return obj
+            def link(name, image, extra):
+                obj = object_for(name)
+                filelist = obj.parent / (name+'.LinkFileList')
+                filelist.write_text(str(obj)+'\n')
+                response = obj.parent / 'link.rsp'
+                response.write_text(shlex.join(['-target', 'arm64-apple-macos14.0', '-isysroot', sdk])+'\n')
+                arguments = [compiler, '@'+str(response),
+                    '-filelist', str(filelist), '-Xlinker', '-dependency_info', '-Xlinker', str(obj.parent/'dependencies.dat'),
+                    *extra, '-o', str(image)]
+                execute(arguments)
+                lane = 'scintilla' if name == 'Scintilla' else 'app'
+                logs[lane].extend([f'Ld {shlex.quote(str(image))} normal', '    cd '+shlex.quote(str(fixture)),
+                                   '    '+shlex.join(arguments), ''])
             built_images = []
             for name in artifacts.FRAMEWORKS:
                 base = (fixture / 'build/vendor/Debug') if name == 'Scintilla' else products
@@ -581,37 +645,59 @@ sys.exit(93)
                     folder, header = ('Search', 'TTSearchEngine.h') if name == 'NativeSearch' else ('EditorBridge', 'TTEditor.h')
                     shutil.copyfile(fixture / f'Sources/{folder}/{header}', version / 'Headers' / header)
                     shutil.copyfile(fixture / f'Sources/{folder}/module.modulemap', version / 'Modules/module.modulemap')
-                source = fixture / f'{name}.c'
-                source.write_text(f'int fixture_{name}(void) {{ return 0; }}\n')
                 image = version / name
-                compiled = subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-macos14.0', '-dynamiclib',
-                    str(source), '-install_name', f'@rpath/{name}.framework/Versions/A/{name}', '-o', str(image)],
-                    capture_output=True, text=True)
-                self.assertEqual(compiled.returncode, 0, compiled.stderr)
+                link(name, image, ['-dynamiclib', '-install_name', f'@rpath/{name}.framework/Versions/A/{name}'])
                 built_images.append(image)
-                copied = embedded / framework.name
-                shutil.copytree(framework, copied, symlinks=True)
+                shutil.copytree(framework, embedded / framework.name, symlinks=True)
+            link('TextTank', app / 'Contents/MacOS/TextTank', [*map(str, built_images), '-Xlinker', '-rpath', '-Xlinker', '@executable_path/../Frameworks'])
+            for lane, lines in logs.items():
+                path = fixture / 'harness/logs' / (lane+'-build.log')
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('\n'.join(lines))
+            artifacts.capture_links(fixture, app, 'Debug', fixture / 'build/artifacts/Debug/link-before-sign.json', before_path)
+            for copied in embedded.glob('*.framework'):
                 for attribute in ['com.apple.FinderInfo', 'com.apple.ResourceFork']:
                     subprocess.run(['xattr', '-dr', attribute, str(app)], capture_output=True)
                 signed = subprocess.run(['codesign', '--force', '--sign', '-', str(copied)], capture_output=True, text=True)
                 self.assertEqual(signed.returncode, 0, signed.stderr)
-            main = fixture / 'main.c'
-            main.write_text(''.join(f'extern int fixture_{name}(void);\n' for name in artifacts.FRAMEWORKS)
-                            + 'int main(void) { return ' + ' + '.join(f'fixture_{name}()' for name in artifacts.FRAMEWORKS) + '; }\n')
-            linked = subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-macos14.0', str(main),
-                                     *map(str, built_images), '-o', str(app / 'Contents/MacOS/TextTank')], capture_output=True, text=True)
-            self.assertEqual(linked.returncode, 0, linked.stderr)
             for attribute in ['com.apple.FinderInfo', 'com.apple.ResourceFork']:
                 subprocess.run(['xattr', '-dr', attribute, str(app)], capture_output=True)
             signed = subprocess.run(['codesign', '--force', '--sign', '-', str(app)], capture_output=True, text=True)
             self.assertEqual(signed.returncode, 0, signed.stderr)
             manifest = fixture / 'build/artifacts/Debug/manifest.json'
-            try:
-                with patch.object(artifacts.build_evidence, 'resolved_settings', return_value={}):
-                    artifacts.record(fixture, app, 'Debug', manifest, before_path.relative_to(fixture))
-            except subprocess.CalledProcessError as error:
-                self.fail(error.output)
+            artifacts.record(fixture, app, 'Debug', manifest, before_path.relative_to(fixture))
             self.assertEqual(artifacts.validate(fixture, manifest, 'Debug')['app'], str(app))
+            original_manifest = manifest.read_bytes()
+            recorded = json.loads(original_manifest)
+            for producers, message in [(None, 'nonnull'), ({}, 'nonnull'),
+                ({key: value for key, value in list(recorded['link_producers'].items())[1:]}, 'Missing/extra')]:
+                manifest.write_text(json.dumps({**recorded, 'link_producers': producers}))
+                with self.assertRaisesRegex(ValueError, message):
+                    artifacts.validate(fixture, manifest, 'Debug')
+            manifest.write_bytes(original_manifest)
+            with patch.object(artifacts.build_evidence, 'resolved_settings', return_value={'changed': {}}):
+                with self.assertRaisesRegex(ValueError, 'live selected-build target settings'):
+                    artifacts.validate(fixture, manifest, 'Debug')
+            bridge = next(value for value in recorded['link_producers'].values() if value['target'] == 'EditorBridge')
+            faults = [bridge['filelists'][0]['path'], bridge['files'][0]['path'],
+                      next(iter(bridge['response_files'])), bridge['dependency_info']['path']]
+            for filename in faults:
+                selected = Path(filename)
+                previous_bytes = selected.read_bytes()
+                selected.write_bytes(previous_bytes+b'changed actual link input')
+                try:
+                    with self.assertRaisesRegex(ValueError, 'Stale actual link'):
+                        artifacts.link_evidence.validate(fixture, recorded['link_producers'], {}, None)
+                finally:
+                    selected.write_bytes(previous_bytes)
+            inspector = fixture / 'bin/otool'
+            inspector.parent.mkdir()
+            inspector.write_text('#!/bin/sh\necho actual-inspector-fault >&2\nexit 47\n')
+            inspector.chmod(0o755)
+            with patch.dict(os.environ, {'PATH': str(inspector.parent)+os.pathsep+os.environ['PATH']}):
+                with self.assertRaises(subprocess.CalledProcessError) as failed:
+                    artifacts.validate(fixture, manifest, 'Debug')
+                self.assertEqual(failed.exception.returncode, 47)
             with self.assertRaisesRegex(ValueError, 'configuration'):
                 artifacts.validate(fixture, manifest, 'Release')
             header = fixture / 'Sources/EditorBridge/TTEditor.h'

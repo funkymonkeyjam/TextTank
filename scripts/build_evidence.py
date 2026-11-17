@@ -14,15 +14,32 @@ def sha(path):
 
 
 def resolved_settings(root, configuration):
-    arguments = ['xcodebuild', '-showBuildSettings', '-json', '-project', 'TextTank.xcodeproj',
-                 '-alltargets', '-configuration', configuration, 'CODE_SIGNING_ALLOWED=NO',
+    from build_config import load_identity
+    identity = load_identity(root)
+    shared = ['-showBuildSettings', '-json', '-configuration', configuration, 'CODE_SIGNING_ALLOWED=NO']
+    # Xcode rejects -scheme together with -alltargets. Query every product target
+    # with the canonical DerivedData products/intermediates paths explicitly.
+    queries = [(['-project', 'TextTank.xcodeproj', '-alltargets',
                  'SYMROOT=' + str(root / 'build/DerivedData/Build/Products'),
-                 'OBJROOT=' + str(root / 'build/DerivedData/Build/Intermediates.noindex')]
-    result = subprocess.run(arguments, cwd=root, capture_output=True, text=True)
-    if result.returncode:
-        raise ValueError('Resolved target settings failed: ' + result.stdout + result.stderr)
-    settings = json.loads(result.stdout)
-    return {entry['target']: entry['buildSettings'] for entry in settings}
+                 'OBJROOT=' + str(root / 'build/DerivedData/Build/Intermediates.noindex')],
+                {'TextTank', 'NativeSearch', 'EditorBridge', 'TextTankCore', 'TextTankRuntime'}),
+               (['-project', 'Vendor/scintilla/cocoa/Scintilla/Scintilla.xcodeproj', '-scheme', 'Scintilla',
+                 '-derivedDataPath', str(root / 'build/ScintillaDerived' / configuration),
+                 'ARCHS=' + identity['architecture'], 'ONLY_ACTIVE_ARCH=YES',
+                 'MACOSX_DEPLOYMENT_TARGET=' + identity['deploymentTarget'],
+                 'CONFIGURATION_BUILD_DIR=' + str(root / 'build/vendor' / configuration),
+                 'CLANG_MODULE_CACHE_PATH=' + str(root / 'build/ModuleCache')], {'Scintilla'})]
+    selected = {}
+    for arguments, expected in queries:
+        result = subprocess.run(['xcodebuild', *shared, *arguments], cwd=root, capture_output=True, text=True)
+        if result.returncode:
+            raise ValueError('Resolved target settings failed: ' + result.stdout + result.stderr)
+        values = json.loads(result.stdout)
+        settings = {entry['target']: entry['buildSettings'] for entry in values}
+        if set(settings) != expected:
+            raise ValueError('Resolved settings have missing/extra canonical targets')
+        selected.update(settings)
+    return selected
 
 
 def cpp_settings(settings):
