@@ -336,7 +336,9 @@ private final class LanguageMenu: NSMenu {
             if has("BUILTIN", "BUILT-IN", "BUILIN", "FUNC", "METHOD", "DEF NAME", "CALLABLE", "CMDLET") {
                 return .function
             }
-            if has("TYPE", "CLASS NAME", "ENUM", "STRUCT", "INTERFACE") || name == "CLASS" { return .type }
+            if has("TYPE", "CLASS NAME", "ENUM", "INTERFACE") || ["CLASS", "STRUCT", "STRUCTURE"].contains(name) {
+                return .type
+            }
             if has("VAR", "SCALAR", "PARAMETER", "REGISTER") { return .variable }
             if has(
                 "STRING", "CHARACTER", "TRIPLE", "HEREDOC", "VERBATIM", "BACKTICK", "TEMPLATE LIT.",
