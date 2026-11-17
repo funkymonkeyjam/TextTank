@@ -90,10 +90,11 @@ import NativeSearch
             toolbar.items.first { $0.itemIdentifier.rawValue == "TextTank.Automations" } is NSMenuToolbarItem,
             "DT-R2 Automations is a native menu toolbar item")
         check(
-            composition.automations.toolbarIdentifiers().allSatisfy { id in
-                toolbar.items.contains { $0.itemIdentifier == id }
-            },
-            "DT-R3 saved favorites appear as individual toolbar items")
+            !toolbar.items.contains { $0.itemIdentifier.rawValue.hasPrefix("TextTank.Automation.") }
+                && !controller.toolbarAllowedItemIdentifiers(toolbar).contains {
+                    $0.rawValue.hasPrefix("TextTank.Automation.")
+                },
+            "the default toolbar and customization palette contain no individual automations")
         check(
             !descendants(window.contentView!).contains { $0.identifier?.rawValue == "tab.new" },
             "DT-R6 the tab strip does not repeat the toolbar New command")
@@ -192,91 +193,86 @@ import NativeSearch
         let firstID = NSToolbarItem.Identifier("TextTank.Automation." + first.id.uuidString)
         for bar in [toolbar, siblingToolbar] {
             check(
-                bar.items.filter { $0.itemIdentifier == firstID }.count == 1,
-                "DT-R3 newly favorited automation appears once per synchronized toolbar")
-            check(
-                bar.items.filter { $0.itemIdentifier != firstID }.map(\.itemIdentifier) == custom,
-                "DT-R3 favorite insertion preserves the customized arrangement")
+                bar.items.map(\.itemIdentifier) == custom,
+                "marking a favorite preserves the customized toolbar without adding buttons")
         }
         check(
             toolbar.displayMode == .iconOnly && !toolbar.isVisible,
-            "DT-R3 library updates preserve toolbar display mode and visibility")
-        let heldFavorite = try requireValue(
-            toolbar.items.first { $0.itemIdentifier == firstID }, "DT fixture: new favorite")
+            "library updates preserve toolbar display mode and visibility")
+        check(
+            controller.toolbar(toolbar, itemForItemIdentifier: firstID, willBeInsertedIntoToolbar: true) == nil,
+            "a saved favorite identifier cannot recreate an individual toolbar button")
+        let launcher = try requireValue(
+            toolbar.items.first { $0.itemIdentifier.rawValue == "TextTank.Automations" } as? NSMenuToolbarItem,
+            "fixture: Automations drop-down")
         library.workflows[0].name = second.name
         try composition.automations.persistLibrary(library)
+        let invocation = try requireValue(
+            launcher.menu?.items.first { $0.representedObject as? String == first.id.uuidString },
+            "fixture: renamed favorite in the drop-down")
         check(
-            toolbar.items.first { $0.itemIdentifier == firstID } === heldFavorite && heldFavorite.label == second.name,
-            "DT-R3 rename updates the existing standard item without changing its UUID binding")
-        let overflow = try requireValue(heldFavorite.menuFormRepresentation, "DT fixture: favorite overflow")
-        check(
-            overflow.title == second.name && overflow.representedObject as? String == first.id.uuidString,
-            "DT-R5 favorite overflow retains its exact UUID even when display names collide")
+            invocation.title == "★ " + second.name
+                && launcher.menu?.items.contains {
+                    $0.representedObject as? String == second.id.uuidString && $0.title == "★ " + second.name
+                } == true,
+            "renamed automations with identical titles retain distinct UUID-bound drop-down actions")
         composition.noteActive(controller)
         let savedFrame = window.frame, minimum = window.contentMinSize
         window.makeKeyAndOrderFront(nil)
         toolbar.isVisible = true
         toolbar.displayMode = .iconAndLabel
-        heldFavorite.visibilityPriority = .low
+        find.visibilityPriority = .low
         window.contentMinSize = NSSize(width: 180, height: minimum.height)
         window.setFrame(
             NSRect(x: savedFrame.minX, y: savedFrame.minY, width: 300, height: savedFrame.height), display: true)
         window.contentView?.superview?.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
-        print(
-            "DT_OVERFLOW", window.frame.width, window.isVisible, toolbar.items.map { $0.itemIdentifier.rawValue },
-            "visible", (toolbar.visibleItems ?? []).map { $0.itemIdentifier.rawValue })
-        spinUntil("DT native toolbar overflow is laid out") {
+        spinUntil("native toolbar overflow is laid out") {
             let visible = toolbar.visibleItems ?? []
-            return !visible.isEmpty && !visible.contains { $0 === heldFavorite }
+            return !visible.isEmpty && !visible.contains { $0 === find }
         }
         check(
-            !(toolbar.visibleItems ?? []).contains { $0 === heldFavorite },
-            "DT-R5 the tested favorite is actually clipped into the native overflow menu")
+            !(toolbar.visibleItems ?? []).contains { $0 === find },
+            "a standard command is clipped into the native overflow menu")
+        let overflow = try requireValue(find.menuFormRepresentation, "fixture: Find overflow action")
+        check(
+            NSApp.sendAction(overflow.action!, to: controller, from: overflow) && controller.findBarVisible,
+            "the native overflow retains the standard Find action")
+        controller.hideFind(nil)
         document.editor.text = "- 2 eggs\n"
         document.editor.resetUndoHistory()
         check(
-            NSApp.sendAction(overflow.action!, to: overflow.target, from: overflow)
+            NSApp.sendAction(invocation.action!, to: invocation.target, from: invocation)
                 && document.editor.text == "2 eggs\n",
-            "DT-R5 favorite overflow executes the selected saved automation, not another identical title")
+            "the drop-down runs the selected UUID rather than another automation with the same title")
         document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
         check(
             document.editor.text == "- 2 eggs\n",
-            "DT-R5 automation invoked from overflow remains one authoritative Undo step")
+            "a drop-down automation remains one authoritative Undo step")
         document.editor.readOnly = true
         check(
-            !composition.automations.validateToolbarItem(heldFavorite)
-                && !composition.automations.validateMenuItem(overflow),
-            "DT-R1/R3 read-only text output is disabled consistently in toolbar and menu")
+            !composition.automations.validateMenuItem(invocation),
+            "read-only text output is disabled in the Automations drop-down")
         document.editor.readOnly = false
         window.contentMinSize = minimum
         window.setFrame(savedFrame, display: true)
         toolbar.isVisible = false
         toolbar.displayMode = .iconOnly
-        let secondID = NSToolbarItem.Identifier("TextTank.Automation." + second.id.uuidString)
-        let removeFavoriteIndex = try requireValue(
-            toolbar.items.firstIndex { $0.itemIdentifier == secondID },
-            "DT fixture: customized-away favorite")
-        toolbar.removeItem(at: removeFavoriteIndex)
-        library.workflows[0].name = "Renamed after customization"
-        try composition.automations.persistLibrary(library)
-        check(
-            !toolbar.items.contains { $0.itemIdentifier == secondID }
-                && !siblingToolbar.items.contains { $0.itemIdentifier == secondID },
-            "DT-R3 an unrelated rename does not reinsert a favorite the person customized away")
-        let unpinID = firstID
         library.workflows[0].pinToToolbar = false
         try composition.automations.persistLibrary(library)
         check(
-            [toolbar, siblingToolbar].allSatisfy { bar in !bar.items.contains { $0.itemIdentifier == unpinID } }
-                && composition.automations.makeToolbarItem(identifier: unpinID) == nil,
-            "DT-R3 unmark removes the favorite everywhere and refuses a stale saved identifier")
-        let deletedID = NSToolbarItem.Identifier("TextTank.Automation." + second.id.uuidString)
+            launcher.menu?.items.first { $0.representedObject is String }?.representedObject as? String
+                == second.id.uuidString,
+            "favorites still sort first in the drop-down without appearing on the toolbar")
         library.workflows.remove(at: 1)
         try composition.automations.persistLibrary(library)
         check(
-            [toolbar, siblingToolbar].allSatisfy { bar in !bar.items.contains { $0.itemIdentifier == deletedID } },
-            "DT-R3 deleting an automation removes its toolbar item without resetting core customization")
+            launcher.menu?.items.contains { $0.representedObject as? String == second.id.uuidString } == false
+                && [toolbar, siblingToolbar].allSatisfy { $0.items.map(\.itemIdentifier) == custom },
+            "deleting an automation refreshes the drop-down and preserves both customized toolbars")
+        library.workflows[0].pinToToolbar = true
+        try composition.automations.persistLibrary(library)
+        let unpinID = firstID
         toolbar.isVisible = true
         window.contentView?.superview?.layoutSubtreeIfNeeded()
         window.displayIfNeeded()

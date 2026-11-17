@@ -54,6 +54,8 @@ final class DocumentTabWindow: NSWindow {
         returnTo = nil
         let others = Self.documents.filter { $0 !== self }
         let sharedFrame = others.first(where: { $0.isVisible })?.frame
+        // Set the shared geometry before AppKit presents this native window.
+        if let sharedFrame { setFrame(sharedFrame, display: false) }
         others.forEach { $0.orderOut(nil) }
         super.makeKeyAndOrderFront(sender)
         contentView?.layoutSubtreeIfNeeded()
@@ -105,6 +107,7 @@ final class DocumentTabWindow: NSWindow {
         returnTo = nil
         super.close()
         if wasVisible {
+            next?.setFrame(closingFrame, display: false)
             next?.makeKeyAndOrderFront(nil)
             // Ordering a hidden window can apply AppKit's screen constraints.
             // Restore the shared frame after that layout transition, as on tab selection.

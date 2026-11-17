@@ -16,7 +16,8 @@ struct DocumentDependencies {
 @MainActor struct RuntimeDependencies {
     var sharedDefaultsProvider: (() -> UserDefaults)?
     var document: @MainActor () -> DocumentDependencies = { DocumentDependencies() }
-    var windowAnimation: NSWindow.AnimationBehavior?
+    // Document tabs swap native windows; animate neither side of that transition.
+    var windowAnimation: NSWindow.AnimationBehavior? = NSWindow.AnimationBehavior.none
     var announce: ((String, Any?) -> Void)?
     var readFindText: () -> String = {
         guard AppStorage.permitsLegacyDefaults else { return "" }

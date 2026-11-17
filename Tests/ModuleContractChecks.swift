@@ -25,8 +25,8 @@ import ObjectiveC
                     && dependencies.recoveryFailureNotice == nil,
                 "actual Runtime production write and notice effects default to nil")
             check(
-                RuntimeDependencies().windowAnimation == nil,
-                "actual Runtime production window animations retain system behavior")
+                RuntimeDependencies().windowAnimation == .some(.none),
+                "actual Runtime production document transitions disable window animation")
             let manifestPath = try requireValue(
                 ProcessInfo.processInfo.environment["TEXTTANK_ARTIFACT_MANIFEST"], "owned artifact manifest")
             let manifest = try requireValue(

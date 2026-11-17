@@ -8,7 +8,7 @@ Scintilla derived data and outputs are private to each checkout and configuratio
 
 Each native suite remains a real script with explicit test sources, defines and layering boundaries. Native bridge, search and user-lexer implementations come from the validated signed application frameworks; checks do not recompile them. Swift checks compile Tests sources only and import the actual built Core/Runtime modules; pure Core suites do not import Runtime or AppKit. Do not compile two suite/probe scripts concurrently in one checkout: their final check-binary and log paths remain shared.
 
-The document-check executable drives many owned document-window transitions without running the normal application event loop. A long CLI prefix on this Mac accumulated AppKit animation workers and blocked native save-panel creation; the same prefix from the accepted pre-catalog source reproduced it. The document test supplies an explicit owned dependency that disables only its document-window transition animations; product compilation has no `TESTING` flag. Production builds retain system animations, and the actual native save panels, review sheets, close routes, Cancel actions and deadlines remain unchanged. Functional check results do not certify physical transition animations. Diagnostic controls and source identities are execution evidence, not source-archive package certification.
+The document-check executable drives many owned document-window transitions without running the normal application event loop. A long CLI prefix on this Mac accumulated AppKit animation workers and blocked native save-panel creation; the same prefix from the accepted pre-catalog source reproduced it. The document test supplies an explicit owned dependency that disables only its document-window transition animations; product compilation has no `TESTING` flag. Document windows now disable open/close transition animation in production as well, per the owner's DS-D7 follow-up; native save panels, review sheets, close routes, Cancel actions and deadlines remain unchanged. Functional check results do not certify physical transition animations. Diagnostic controls and source identities are execution evidence, not source-archive package certification.
 
 `scripts/test-documents.sh` compiles one native check executable, then always runs two
 required processes: the existing document checks and configuration input accessibility
@@ -20,8 +20,7 @@ runner records 34 suites: all prior 33, including both document processes, plus 
 A combined CLI prefix failed native review/save-panel creation with saturated AppKit
 animation workers; paired controls passed the full original document checks and all
 input checks in separate processes on identical product bytes. This isolates test
-process state without omitting assertions, changing deadlines or changing production
-animation, sheet or document behavior. It does not establish a universal framework cause.
+process state without omitting assertions, changing deadlines or changing sheet or document behavior. The later DS-D7 production animation policy is independent of that process-state isolation. It does not establish a universal framework cause.
 
 The isolated toolbar fixture exercises synchronized windows, display modes, visibility and actual overflow actions. AppKit emits `NSToolbarLabelStack` constraint-invalidation runtime warnings during this sequence. Removing the added accessibility assignment/traversal or toolbar KVO observations did not remove them, and a smaller matched AppKit-only control did not reproduce them; their cause is not established. Subsequent viewport, dispatch, UUID and Undo checks pass. These runtime messages are retained separately from compiler diagnostics and do not establish physical layout or running-app accessibility certification.
 
@@ -83,7 +82,7 @@ actual signed embedded Runtime/Core/native code. Check compilation pins the arti
 there are no product source arguments or product TESTING flags in the suite scripts. The two
 required DocumentChecks processes install explicit owned effects before the document-controller
 singleton and NSApplication; owned window animations are disabled through that dependency,
-while production defaults retain native animations and real sheet/save behavior.
+while production defaults disable document-window transition animations and retain real sheet/save behavior.
 
 Actual Swift producers and all test compilers retain Swift 5 and warnings-as-errors with
 complete concurrency checking. `compile_diagnostics.py` also rejects emitted first-party

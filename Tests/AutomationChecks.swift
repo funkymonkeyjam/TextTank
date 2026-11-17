@@ -149,7 +149,7 @@ import Darwin
                 "cleanup targets current editor")
             check(
                 AutomationDefinition.example.previewBeforeApply == false
-                    && AutomationDefinition.example.pinToToolbar == true, "direct cleanup button defaults")
+                    && AutomationDefinition.example.pinToToolbar == true, "direct cleanup favorite defaults")
             check(
                 AutomationDefinition.remindersExample.output == .reminders
                     && AutomationDefinition.remindersExample.id != AutomationDefinition.example.id,
@@ -997,7 +997,9 @@ import Darwin
                 let help = AutomationDefinition.advancedHelp
                 check(
                     help.contains("askForFind") && help.contains("askForReplacement") && help.contains("favorite")
-                        && help.contains(AutomationDefinition.favoriteHelp) && help.contains("adds its toolbar button")
+                        && help.contains(AutomationDefinition.favoriteHelp)
+                        && help.contains("Favorites appear first in the Automations drop-down")
+                        && !help.contains("adds its toolbar button")
                         && help.contains("No automation runs when saved or imported."),
                     "G381 the Advanced JSON help names prompt fields, working favorite buttons and no implicit execution"
                 )

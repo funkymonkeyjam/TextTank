@@ -1017,8 +1017,16 @@ extension DocumentChecks {
                 print("SKIP window frames: no screen in native test process")
                 return
             }
+            let priorEffects = RuntimeEnvironment.dependencies
+            var effects = RuntimeEnvironment.current
+            effects.windowAnimation = nil
+            RuntimeEnvironment.dependencies = effects
+            defer { RuntimeEnvironment.dependencies = priorEffects }
             let key = WindowFrames.defaultsKey("TextTank.Document")
             let (first, _, firstWindow) = try tab("p21-frame-1")
+            check(
+                firstWindow.animationBehavior == .none,
+                "document windows disable transition animation without a test-only override")
             // A restored title bar must fit a connected screen. The former fixed rectangle
             // reached y=770, outside the 768-point CI screen, and was correctly rejected.
             let screen = NSScreen.screens[0].visibleFrame
@@ -1042,6 +1050,9 @@ extension DocumentChecks {
             let shared = secondWindow.frame
             defaults.set(WindowFrames.description(of: firstWindow), forKey: key)
             let (third, _, thirdWindow) = try tab("p21-frame-3")
+            check(
+                secondWindow.animationBehavior == .none && thirdWindow.animationBehavior == .none,
+                "opening and switching document tabs keeps both native windows unanimated")
             check(
                 thirdWindow.isVisible && thirdWindow.frame == shared,
                 "a further tab takes the showing tab's frame, not the saved one")

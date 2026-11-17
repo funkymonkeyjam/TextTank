@@ -90,7 +90,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// first responder is observed as well: a pane chosen in a background window still counts.
     private(set) var focusObservation: NSKeyValueObservation?
     private(set) var automationObserver: NSObjectProtocol?
-    private var knownToolbarFavorites: Set<NSToolbarItem.Identifier> = []
     private var toolbarAccessibilityObservers: [NSObjectProtocol] = []
     private var toolbarObservations: [NSKeyValueObservation] = []
     private var applyingToolbarArrangement = false
@@ -131,7 +130,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
-        if let animation = RuntimeEnvironment.current.windowAnimation { window.animationBehavior = animation }
+        window.animationBehavior = RuntimeEnvironment.current.windowAnimation ?? .none
         lastEditor = document.editor
         wire(document.editor)
         focusObservation = window.observe(\.firstResponder) { [weak self] window, _ in
@@ -153,9 +152,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             toolbar.displayMode = .iconAndLabel
             toolbar.allowsUserCustomization = true
             toolbar.autosavesConfiguration = EditorToolbarPreferences.nativeAutosaveAllowed
-            knownToolbarFavorites = Set(app.automations?.toolbarIdentifiers() ?? [])
             window.toolbar = toolbar
             restoreToolbarArrangement()
+            refreshAutomationToolbar()
             EditorToolbarAccessibility.apply(to: window)
             toolbarAccessibilityObservers = [NSWindow.didResizeNotification, NSWindow.didBecomeKeyNotification].map {
                 NotificationCenter.default.addObserver(forName: $0, object: window, queue: .main) { [weak window] _ in
@@ -671,7 +670,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         EditorToolbarCommand.allCases.map(\.identifier) + [.flexibleSpace, .init("TextTank.Automations")]
-            + (EditorServices.current?.automations?.toolbarIdentifiers() ?? [])
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         // The tab strip keeps its close controls; New has one toolbar home.
@@ -682,9 +680,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         willBeInsertedIntoToolbar: Bool
     ) -> NSToolbarItem? {
         if let command = EditorToolbarCommand(rawValue: identifier.rawValue) { return command.makeItem() }
-        guard let automations = EditorServices.current?.automations else { return nil }
-        return identifier.rawValue == "TextTank.Automations"
-            ? automations.makeToolbarItem() : automations.makeToolbarItem(identifier: identifier)
+        guard identifier.rawValue == "TextTank.Automations" else { return nil }
+        return EditorServices.current?.automations?.makeToolbarItem()
     }
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
         let menu = NSMenuItem(title: item.label, action: item.action, keyEquivalent: "")
@@ -725,26 +722,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     func refreshAutomationToolbar() {
         guard let toolbar = window?.toolbar, let automations = EditorServices.current?.automations else { return }
-        let favorites = automations.toolbarIdentifiers(), current = Set(favorites)
-        let added = current.subtracting(knownToolbarFavorites)
-        // Toolbars sharing an identifier synchronize insertions, so another window may already
-        // have applied an update. Never rebuild the user's arrangement or insert a duplicate.
-        for index in toolbar.items.indices.reversed() {
-            let item = toolbar.items[index]
-            guard item.itemIdentifier.rawValue.hasPrefix("TextTank.Automation.") else { continue }
-            if !current.contains(item.itemIdentifier) {
-                toolbar.removeItem(at: index)
-            } else {
-                automations.updateToolbarItem(item)
-            }
+        // Saved native arrangements may still contain the former individual favorites.
+        // Remove those entries without resetting the person's remaining toolbar choices.
+        for index in toolbar.items.indices.reversed()
+        where toolbar.items[index].itemIdentifier.rawValue.hasPrefix("TextTank.Automation.") {
+            toolbar.removeItem(at: index)
         }
-        for identifier in favorites
-        where added.contains(identifier)
-            && !toolbar.items.contains(where: { $0.itemIdentifier == identifier })
-        {
-            toolbar.insertItem(withItemIdentifier: identifier, at: toolbar.items.count)
+        for case let item as NSMenuToolbarItem in toolbar.items
+        where item.itemIdentifier.rawValue == "TextTank.Automations" {
+            automations.refreshToolbarItem(item)
         }
-        knownToolbarFavorites = current
         if let window { EditorToolbarAccessibility.apply(to: window) }
         saveToolbarArrangement()
     }

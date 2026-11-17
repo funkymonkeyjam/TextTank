@@ -42,6 +42,13 @@ any user-facing string. Cite rules by their id (for example DS-31) in commit mes
 | DS-D4 | **Top-level menu order stays as it is** until the owner decides the menu map. Group inside menus; do not add, remove, merge or reorder top-level menus. | open |
 | DS-D5 | **Distribution** (Developer ID signing and notarisation) is undecided. Do not add signing identities, entitlements or release scripts without the owner asking. | open |
 
+Owner follow-up, 16 November 2026:
+
+- DS-D6. The toolbar has one Automations drop-down, with no individual automation buttons,
+  including in restored configurations. Favorites prioritize the drop-down and editor context menu.
+- DS-D7. New, Open and Close must not animate the document window. The temporary tab-window
+  arrangement positions the incoming window before showing it; the workspace-host decision is unchanged.
+
 ## 3. Rules
 
 ### Windows and tabs
@@ -149,7 +156,7 @@ any user-facing string. Cite rules by their id (for example DS-31) in commit mes
 ### Writing
 
 - DS-80. One noun per object, everywhere: **document**, **tab**, **window**, **automation**, **rule** (a
-  step of an automation), **favorite** (an automation shown in the toolbar), **macro**, **Run command**,
+  step of an automation), **favorite** (an automation listed first in the Automations drop-down and editor context menu), **macro**, **Run command**,
   **workspace**, **session**, **recovery copy**. Do not introduce synonyms (workflow, step, snapshot,
   draft, batch, root).
 - DS-81. Plain, active sentences. An error says what happened, what was not changed, and what to do next.

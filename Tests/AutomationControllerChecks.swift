@@ -9,16 +9,16 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
     let controller: AutomationController
     init(_ controller: AutomationController) { self.controller = controller }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        controller.toolbarIdentifiers()
+        [.init("TextTank.Automations")]
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        controller.toolbarIdentifiers()
+        [.init("TextTank.Automations")]
     }
     func toolbar(
         _ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar: Bool
     ) -> NSToolbarItem? {
-        controller.makeToolbarItem(identifier: identifier)
+        identifier.rawValue == "TextTank.Automations" ? controller.makeToolbarItem() : nil
     }
 }
 
@@ -1120,7 +1120,7 @@ final class Audit24RecoverySpy: NSObject {
                 !FileManager.default.fileExists(atPath: lockedPath.path),
                 "fixture: the first write of the presets failed")
             check(
-                blocked.toolbarIdentifiers().count == 2
+                blocked.contextMenu().items.filter { $0.representedObject is String }.count == 2
                     && blocked.menu().items.contains { $0.title == AutomationDefinition.example.name },
                 "F75 the presets are available in memory after a failed first write")
             // Manage reports the failure once, then opens as usual.
@@ -1168,7 +1168,8 @@ final class Audit24RecoverySpy: NSObject {
                 try refusing.persistLibrary(renamed)
             }
             check(
-                (try Data(contentsOf: unreadablePath)) == damaged && refusing.toolbarIdentifiers().isEmpty,
+                (try Data(contentsOf: unreadablePath)) == damaged
+                    && !refusing.contextMenu().items.contains { $0.representedObject is String },
                 "F75 an existing unreadable library is never overwritten and no presets are substituted")
         }
     }
@@ -1371,15 +1372,16 @@ final class Audit24RecoverySpy: NSObject {
                 editorProvider: { editor }, newDocument: { _ in newDocumentCalls += 1 })
             let path = root.appendingPathComponent("Automations.json")
             var saved = try AutomationLibrary.decode(Data(contentsOf: path))
-            // The toolbar host and the pinned identifier outlive the section that installs them.
+            // The native drop-down host outlives the section that installs it.
             let toolbarHost = AutomationToolbarHost(controller)
-            var pinnedIdentifier: NSToolbarItem.Identifier?
             Checks.section("direct cleanup, toolbar and recipe safety") {
                 check(saved.workflows.count == 2, "new configuration seeds two ordinary saved workflows")
                 check(
                     saved.workflows[0].output == .editor && saved.workflows[1].output == .reminders,
                     "separate cleanup and send definitions")
-                check(controller.toolbarIdentifiers().count == 2, "two individual pinned toolbar buttons available")
+                check(
+                    controller.makeToolbarItem().menu?.items.filter { $0.representedObject is String }.count == 2,
+                    "the Automations drop-down lists both saved definitions")
                 let source = "# Ingredients\n- **2 eggs**\n- ½ cup flour\n"
                 editor.text = source
                 editor.resetUndoHistory()
@@ -1421,24 +1423,24 @@ final class Audit24RecoverySpy: NSObject {
                 saved.workflows[0].shortcut = "k"
                 saved.workflows[0].previewBeforeApply = nil
                 try controller.persistLibrary(saved)
-                let identifier = try requireValue(
-                    controller.toolbarIdentifiers().first, "fixture: a pinned toolbar identifier exists")
-                pinnedIdentifier = identifier
                 let toolbar = NSToolbar(identifier: "TextTank.AutomationControllerChecks")
                 toolbar.delegate = toolbarHost
                 window.toolbar = toolbar
+                let launcher = try requireValue(
+                    toolbar.items.first as? NSMenuToolbarItem, "fixture: native Automations drop-down")
                 let button = try requireValue(
-                    toolbar.items.first(where: { $0.itemIdentifier == identifier }),
-                    "fixture: standard toolbar item is installed")
+                    launcher.menu?.items.first {
+                        $0.representedObject as? String == AutomationDefinition.example.id.uuidString
+                    }, "fixture: saved automation in drop-down")
                 check(
-                    button.toolbar === toolbar && button.view == nil,
-                    "named automation is installed as a standard native toolbar item")
-                check(button.label == "My recipe tidy", "renaming updates individual toolbar item label")
+                    launcher.toolbar === toolbar && launcher.view == nil && toolbar.items.count == 1,
+                    "automations use one standard native drop-down without individual toolbar buttons")
+                check(button.title == "★ My recipe tidy", "renaming updates the drop-down action label")
                 editor.text = source
                 editor.resetUndoHistory()
                 check(
                     NSApp.sendAction(button.action!, to: button.target, from: button),
-                    "toolbar action reaches shared stable-ID dispatcher")
+                    "drop-down action reaches shared stable-ID dispatcher")
                 check(
                     editor.text == "2 eggs\n½ cup flour\n", "absent preview flag applies same saved definition directly"
                 )
@@ -1454,7 +1456,7 @@ final class Audit24RecoverySpy: NSObject {
                 editor.setSavePoint()
                 check(
                     NSApp.sendAction(button.action!, to: button.target, from: button),
-                    "observed browser recipe runs through actual named toolbar button")
+                    "observed browser recipe runs through actual named drop-down action")
                 let cleanedRows = editor.text.components(separatedBy: .newlines).filter { !$0.isEmpty }
                 check(cleanedRows.count == 28, "observed full browser recipe produces all 28 ingredient rows")
                 check(
@@ -1507,10 +1509,10 @@ final class Audit24RecoverySpy: NSObject {
                     try Data(contentsOf: path) == beforeReload,
                     "existing named configuration is not replaced or rewritten by presets")
                 check(
-                    restarted.makeToolbarItem(
-                        identifier: try requireValue(
-                            pinnedIdentifier, "fixture: the pinned toolbar identifier was captured"))?.label
-                        == "My recipe tidy", "toolbar stable identity survives configuration reload")
+                    restarted.makeToolbarItem().menu?.items.contains {
+                        $0.representedObject as? String == AutomationDefinition.example.id.uuidString
+                            && $0.title == "★ My recipe tidy"
+                    } == true, "drop-down stable identity survives configuration reload")
                 let menuItem = try requireValue(
                     restarted.menu().items.first(where: {
                         ($0.representedObject as? String) == AutomationDefinition.example.id.uuidString
@@ -1646,7 +1648,10 @@ final class Audit24RecoverySpy: NSObject {
                 restarted.exportInProgress = false
                 saved.workflows[0].pinToToolbar = false
                 try restarted.persistLibrary(saved)
-                check(restarted.toolbarIdentifiers().count == 1, "toolbar pin setting hides only configured workflow")
+                check(
+                    restarted.contextMenu().items.filter { $0.representedObject is String }.count == 2
+                        && saved.workflows[0].pinToToolbar == false,
+                    "unmarking a favorite keeps both saved automations available")
             }
             Checks.section("user recipe samples") {
                 // Four literal user examples run through a persisted named automation.
