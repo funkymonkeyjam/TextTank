@@ -275,11 +275,92 @@ def link_snapshot(root, configuration, output, target, role, event, settings, me
             'output': {**regular(output), 'uuid': subprocess.check_output(['dwarfdump', '--uuid', str(output)], text=True).strip()}}
 
 
-def validate(root, producers, settings, lexer, expected=None):
+def swift_refresh_event(log, target, source):
+    lines = log.read_text().splitlines()
+    suffix = f"(in target '{target}' from project 'TextTank')"
+    primary = [line for line in lines if line.startswith('SwiftCompile normal arm64 ')
+               and line.endswith(suffix) and shlex.split(line)[3:4] == [str(source)]]
+    if len(primary) != 1:
+        raise ValueError('Changed source lacks one actual absolute SwiftCompile primary event')
+    drivers = []
+    for index, line in enumerate(lines):
+        if not line.startswith(f'SwiftDriver {target} normal arm64 ') or not line.endswith(suffix):
+            continue
+        cwd = None
+        for following in lines[index+1:]:
+            if following and not following.startswith(' '):
+                break
+            words = shlex.split(following)
+            if words[:1] == ['cd'] and len(words) == 2:
+                cwd = words[1]
+            elif words[:2] == ['builtin-SwiftDriver', '--']:
+                drivers.append({'header': line, 'cwd': cwd, 'arguments': words[2:]})
+    if len(drivers) != 1 or drivers[0]['cwd'] is None:
+        raise ValueError('Changed source lacks one actual Swift driver invocation')
+    return primary[0], drivers[0]
+
+
+def make_refresh(root, configuration, target, source, object_input, settings, log):
+    primary, driver = swift_refresh_event(log, target, source)
+    responses = {}
+    expanded = expand(driver['arguments'], Path(driver['cwd']), responses)
+    def option(name):
+        if name not in expanded or expanded.count(name) != 1:
+            raise ValueError('Ambiguous actual Swift refresh option: ' + name)
+        return expanded[expanded.index(name)+1]
+    if str(source) not in expanded or option('-module-name') != target or option('-swift-version') != '5' or '-warnings-as-errors' not in expanded:
+        raise ValueError('Actual Swift refresh is not the canonical target/compiler policy')
+    levels = [argument.split('=',1)[1] for argument in expanded if argument.startswith('-strict-concurrency=')]
+    if '-strict-concurrency' in expanded:
+        levels.append(option('-strict-concurrency'))
+    strict = bool(levels) or any(
+        expanded[index] in ('-enable-experimental-feature', '-enable-upcoming-feature') and expanded[index+1] == 'StrictConcurrency'
+        for index in range(len(expanded)-1))
+    if not strict or any(level != 'complete' for level in levels) or '-suppress-warnings' in expanded or settings.get('SWIFT_STRICT_CONCURRENCY') != 'complete' or settings.get('SWIFT_TREAT_WARNINGS_AS_ERRORS') != 'YES' or option('-target') != 'arm64-apple-macos' + settings['MACOSX_DEPLOYMENT_TARGET'] or option('-sdk') != settings['SDKROOT']:
+        raise ValueError('Actual Swift refresh concurrency/architecture/deployment/SDK differs')
+    mapping = Path(option('-output-file-map'))
+    outputs = json.loads(mapping.read_text())
+    if outputs.get(str(source), {}).get('object') != object_input['path']:
+        raise ValueError('Actual Swift refresh source-to-object map differs from linked object')
+    value = {'target': target, 'source': regular(source), 'object': object_input,
+             'primary_event': primary, 'driver': driver, 'expanded_arguments': expanded,
+             'response_files': responses, 'output_map': regular(mapping),
+             'compiler': regular(Path(driver['arguments'][0]).resolve()),
+             'sdk_settings': regular(Path(settings['SDKROOT'])/'SDKSettings.json'),
+             'target_settings': settings,
+             'build_log': retain(root, configuration, log.read_bytes(), '.swift-refresh.log')}
+    contents = (json.dumps(value, sort_keys=True, indent=2)+'\n').encode()
+    value['proof'] = retain(root, configuration, contents, '.swift-refresh.json')
+    return value
+
+
+def validate_refresh(root, value, target, source, object_input, settings):
+    proof = value['proof']
+    if anchored(proof['path'], root) != proof or json.loads(Path(proof['path']).read_text()) != {key:item for key,item in value.items() if key != 'proof'}:
+        raise ValueError('Immutable actual Swift refresh proof changed')
+    if value['target'] != target or value['target_settings'] != settings or value['source'] != regular(source) or value['object'] != object_input or regular(object_input['path']) != object_input:
+        raise ValueError('Actual Swift refresh source/object/settings identity differs')
+    for item in [value['compiler'],value['sdk_settings'],value['output_map'],value['build_log'],*value['response_files'].values()]:
+        if regular(item['path']) != item:
+            raise ValueError('Actual Swift refresh compiler/SDK/map/response/log identity changed')
+    if anchored(value['build_log']['path'], root) != value['build_log']:
+        raise ValueError('Actual Swift refresh log leaves selected build evidence root')
+    primary, driver = swift_refresh_event(Path(value['build_log']['path']), target, source)
+    responses = {}
+    if primary != value['primary_event'] or driver != value['driver'] or expand(driver['arguments'],Path(driver['cwd']),responses) != value['expanded_arguments'] or responses != value['response_files']:
+        raise ValueError('Actual Swift refresh compiler event/arguments changed')
+    outputs = json.loads(Path(value['output_map']['path']).read_text())
+    if outputs.get(str(source),{}).get('object') != object_input['path']:
+        raise ValueError('Actual Swift refresh map no longer identifies the byte-identical linked object')
+
+
+def validate(root, producers, settings, lexer, expected=None, refreshes=None):
     if not isinstance(producers, dict) or not producers:
         raise ValueError('Actual application requires nonnull link producer evidence')
     if expected is not None and set(producers) != set(expected):
         raise ValueError('Missing/extra actual link producer outputs')
+    refreshes = refreshes if isinstance(refreshes, dict) else {}
+    required_refreshes = set()
     for path, value in producers.items():
         proof = value['proof']
         if anchored(proof['path'], root) != proof:
@@ -296,7 +377,16 @@ def validate(root, producers, settings, lexer, expected=None):
             checks.append({key: item for key, item in value['dependency_info'].items() if key != 'version'})
         if value['source_objects']['map']:
             checks.append(value['source_objects']['map'])
-        checks.extend({key: item for key, item in source.items() if key != 'object'} for source in value['source_objects']['sources'].values())
+        for source in value['source_objects']['sources'].values():
+            historical = {key:item for key,item in source.items() if key != 'object'}
+            if regular(source['path']) == historical:
+                continue
+            key = source['path']
+            object_input = next((item for item in value['files'] if item['path'] == source['object']), None)
+            if key not in refreshes or object_input is None:
+                raise ValueError('Changed linked source requires actual compiler refresh evidence: ' + key)
+            validate_refresh(root,refreshes[key],value['target'],Path(key),object_input,settings[value['target']])
+            required_refreshes.add(key)
         checks.extend({key: item for key, item in filelist.items() if key != 'entries'} for filelist in value['filelists'])
         for item in checks:
             if regular(item['path']) != item:
@@ -315,10 +405,12 @@ def validate(root, producers, settings, lexer, expected=None):
         library = regular(root / 'build/vendor' / next(iter(producers.values()))['configuration'] / 'liblexilla.a')
         if bridge[0]['files'].count(library) != 1 or library not in bridge[0]['resolved_inputs']:
             raise ValueError('Actual canonical Lexilla library must enter EditorBridge exactly once')
+    if set(refreshes) != required_refreshes:
+        raise ValueError('Missing/extra actual compiler refresh observations')
     return producers
 
 
-def record(root, configuration, images, app, settings, lexer, previous=None, previous_outputs=None):
+def record(root, configuration, images, app, settings, lexer, previous=None, previous_outputs=None, previous_refreshes=None):
     previous = previous if isinstance(previous, dict) else {}
     membership = source_membership(root)
     logs = {name: root / 'harness/logs' / f'{name}-build.log' for name in ('app', 'scintilla')}
@@ -336,7 +428,8 @@ def record(root, configuration, images, app, settings, lexer, previous=None, pre
         else:
             raise ValueError('Unclassified application link output')
         outputs.append((path, 'TextTank', role, 'app'))
-    result = {}
+    result, refreshes = {}, {}
+    previous_refreshes = previous_refreshes if isinstance(previous_refreshes, dict) else {}
     for output, target, role, lane in outputs:
         key = str(output)
         if key not in events[lane]:
@@ -353,4 +446,19 @@ def record(root, configuration, images, app, settings, lexer, previous=None, pre
         result[key] = value
     if len(result) != len(outputs):
         raise ValueError('Duplicate actual linker output')
-    return validate(root, result, settings, lexer, [str(output) for output, _, _, _ in outputs])
+    for value in result.values():
+        for source in value['source_objects']['sources'].values():
+            historical = {key:item for key,item in source.items() if key != 'object'}
+            if regular(source['path']) == historical:
+                continue
+            if Path(source['path']).suffix != '.swift':
+                raise ValueError('Changed native source lacks a fresh link producer')
+            key = source['path']
+            object_input = next(item for item in value['files'] if item['path'] == source['object'])
+            old = previous_refreshes.get(key)
+            if old is not None and old['source'] == regular(key) and old['object'] == object_input:
+                refreshes[key] = old
+            else:
+                refreshes[key] = make_refresh(root,configuration,value['target'],Path(key),object_input,settings[value['target']],logs['app'])
+    validate(root,result,settings,lexer,[str(output) for output,_,_,_ in outputs],refreshes)
+    return result, refreshes

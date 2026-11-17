@@ -110,3 +110,10 @@ Artifact reuse re-queries resolved settings at the selected build root and reche
 metadata, code, retained producers and strict signing. It never queries a different source
 project or searches for a substitute cached build. A valid no-op may reuse the same scoped
 link/C++ producers; a changed input or missing producer cannot invent a successful link.
+
+If an actual Swift compile changes source bytes but emits a byte-identical mapped object
+without a new Ld event, the original link record stays immutable. A separate immutable
+compiler refresh must retain the exact target and absolute SwiftCompile primary source,
+actual driver/response/compiler/SDK/settings, source/output-map hashes and the identical
+object. Driver file-list membership alone cannot prove that refresh. Missing primary
+evidence or changed object bytes reject reuse.

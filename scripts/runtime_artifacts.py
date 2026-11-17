@@ -178,12 +178,13 @@ def capture_links(root, app, configuration, destination, before_path):
         previous = {}
     lexer = build_evidence.cpp_producer(root, configuration, settings, previous.get('user_lexer_producer'))
     images, _ = code_and_metadata(root, app, configuration)
-    producers = link_evidence.record(root, configuration, images, app, settings, lexer,
-                                     previous.get('link_producers'), previous.get('linked_outputs'))
+    producers, refreshes = link_evidence.record(root, configuration, images, app, settings, lexer,
+                                     previous.get('link_producers'), previous.get('linked_outputs'), previous.get('compiler_refreshes'))
     closure = runtime_linkage.verify(app, load_identity(root)['deploymentTarget'])
     value = {'schema': 1, 'configuration': configuration, 'inputs': source_inputs,
              'toolchain': toolchain(), 'target_settings': settings,
              'user_lexer_producer': lexer, 'link_producers': producers,
+             'compiler_refreshes': refreshes,
              'unsigned_closure': closure}
     verify_dependencies(root)
     matching_before(root, configuration, before_path, inputs(root), build_evidence.resolved_settings(root, configuration))
@@ -218,7 +219,7 @@ def record(root, app, configuration, destination, before_path):
     images, metadata = code_and_metadata(root, app, configuration)
     closure = runtime_linkage.verify(app, load_identity(root)['deploymentTarget'])
     expected = {value['produced'] for value in images.values()} | {str(app / name) for name in closure['images'] if name.startswith('Contents/MacOS/')}
-    links = link_evidence.validate(root, captured['link_producers'], settings, producer, expected)
+    links = link_evidence.validate(root, captured['link_producers'], settings, producer, expected, captured['compiler_refreshes'])
     # Signature bytes may change; each signed result must keep its actual linked UUID.
     unsigned = captured['unsigned_closure']
     if {key: {field: item for field, item in value.items() if field != 'sha256'} for key, value in unsigned['images'].items()} != {key: {field: item for field, item in value.items() if field != 'sha256'} for key, value in closure['images'].items()} or unsigned['edges'] != closure['edges']:
@@ -229,6 +230,7 @@ def record(root, app, configuration, destination, before_path):
              'app_files': snapshot(app), 'images': images, 'metadata': metadata,
              'user_lexer_producer': producer, 'target_settings': settings,
              'link_producers': links, 'linked_outputs': {path: link_evidence.regular(path) for path in links},
+             'compiler_refreshes': captured['compiler_refreshes'],
              'dependency_closure': closure, 'link_capture': capture_proof,
              'before': {'path': str(before_path), 'sha256': digest(before_path)},
              'source_checkout': tracked_inputs(root) is not None,
@@ -277,14 +279,14 @@ def validate(root, manifest, configuration):
     if closure != value['dependency_closure']:
         raise ValueError('Actual signed dependency/runpath closure changed')
     expected = {item['produced'] for item in images.values()} | {str(app / name) for name in closure['images'] if name.startswith('Contents/MacOS/')}
-    link_evidence.validate(build_root, value['link_producers'], value['target_settings'], producer, expected)
+    link_evidence.validate(build_root, value['link_producers'], value['target_settings'], producer, expected, value['compiler_refreshes'])
     if value['linked_outputs'] != {path: link_evidence.regular(path) for path in expected}:
         raise ValueError('Actual signed/produced link output bytes changed')
     capture_proof = value['link_capture']
     if link_evidence.anchored(capture_proof['path'], build_root) != capture_proof:
         raise ValueError('Immutable actual link capture changed')
     captured = json.loads(Path(capture_proof['path']).read_text())
-    if captured['link_producers'] != value['link_producers'] or captured['user_lexer_producer'] != producer or captured['inputs'] != value['inputs'] or captured['target_settings'] != value['target_settings']:
+    if captured['link_producers'] != value['link_producers'] or captured['compiler_refreshes'] != value['compiler_refreshes'] or captured['user_lexer_producer'] != producer or captured['inputs'] != value['inputs'] or captured['target_settings'] != value['target_settings']:
         raise ValueError('Immutable actual link capture differs from artifact manifest')
     command('codesign', '--verify', '--deep', '--strict', str(app))
     if inputs(root, require_checkout=True) != value['inputs'] or inputs(build_root) != value['inputs'] or build_evidence.resolved_settings(build_root, configuration) != value['target_settings'] or snapshot(app) != value['app_files']:
