@@ -208,11 +208,11 @@ import NativeSearch
         library.workflows[0].name = second.name
         try composition.automations.persistLibrary(library)
         let invocation = try requireValue(
-            launcher.menu?.items.first { $0.representedObject as? String == first.id.uuidString },
+            launcher.menu.items.first { $0.representedObject as? String == first.id.uuidString },
             "fixture: renamed favorite in the drop-down")
         check(
             invocation.title == "★ " + second.name
-                && launcher.menu?.items.contains {
+                && launcher.menu.items.contains {
                     $0.representedObject as? String == second.id.uuidString && $0.title == "★ " + second.name
                 } == true,
             "renamed automations with identical titles retain distinct UUID-bound drop-down actions")
@@ -261,13 +261,13 @@ import NativeSearch
         library.workflows[0].pinToToolbar = false
         try composition.automations.persistLibrary(library)
         check(
-            launcher.menu?.items.first { $0.representedObject is String }?.representedObject as? String
+            launcher.menu.items.first { $0.representedObject is String }?.representedObject as? String
                 == second.id.uuidString,
             "favorites still sort first in the drop-down without appearing on the toolbar")
         library.workflows.remove(at: 1)
         try composition.automations.persistLibrary(library)
         check(
-            launcher.menu?.items.contains { $0.representedObject as? String == second.id.uuidString } == false
+            launcher.menu.items.contains { $0.representedObject as? String == second.id.uuidString } == false
                 && [toolbar, siblingToolbar].allSatisfy { $0.items.map(\.itemIdentifier) == custom },
             "deleting an automation refreshes the drop-down and preserves both customized toolbars")
         library.workflows[0].pinToToolbar = true

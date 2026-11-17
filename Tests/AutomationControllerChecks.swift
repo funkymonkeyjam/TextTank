@@ -1380,7 +1380,7 @@ final class Audit24RecoverySpy: NSObject {
                     saved.workflows[0].output == .editor && saved.workflows[1].output == .reminders,
                     "separate cleanup and send definitions")
                 check(
-                    controller.makeToolbarItem().menu?.items.filter { $0.representedObject is String }.count == 2,
+                    controller.makeToolbarItem().menu.items.filter { $0.representedObject is String }.count == 2,
                     "the Automations drop-down lists both saved definitions")
                 let source = "# Ingredients\n- **2 eggs**\n- ½ cup flour\n"
                 editor.text = source
@@ -1429,7 +1429,7 @@ final class Audit24RecoverySpy: NSObject {
                 let launcher = try requireValue(
                     toolbar.items.first as? NSMenuToolbarItem, "fixture: native Automations drop-down")
                 let button = try requireValue(
-                    launcher.menu?.items.first {
+                    launcher.menu.items.first {
                         $0.representedObject as? String == AutomationDefinition.example.id.uuidString
                     }, "fixture: saved automation in drop-down")
                 check(
@@ -1509,7 +1509,7 @@ final class Audit24RecoverySpy: NSObject {
                     try Data(contentsOf: path) == beforeReload,
                     "existing named configuration is not replaced or rewritten by presets")
                 check(
-                    restarted.makeToolbarItem().menu?.items.contains {
+                    restarted.makeToolbarItem().menu.items.contains {
                         $0.representedObject as? String == AutomationDefinition.example.id.uuidString
                             && $0.title == "★ My recipe tidy"
                     } == true, "drop-down stable identity survives configuration reload")
