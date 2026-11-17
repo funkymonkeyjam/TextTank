@@ -60,6 +60,7 @@ final class DocumentTabWindow: NSWindow {
         super.makeKeyAndOrderFront(sender)
         contentView?.layoutSubtreeIfNeeded()
         if let sharedFrame { setFrame(sharedFrame, display: true) }
+        WindowFrames.didPresent(self)
         (windowController as? EditorWindowController)?.visibilityChanged()
         (windowController as? EditorWindowController)?.refreshStatusDetails()
         if let controller = windowController as? EditorWindowController { makeFirstResponder(controller.activeEditor) }

@@ -126,6 +126,12 @@ final class ActivatingTableView: NSTableView {
             window, &trackerKey, FrameTracker(window: window, name: name, defaults: defaults),
             .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
+    /// A tab can inherit the visible frame before ordering, so no geometry notification
+    /// follows presentation. Save through its existing tracker once it is visible.
+    static func didPresent(_ window: NSWindow) {
+        (objc_getAssociatedObject(window, &trackerKey) as? FrameTracker)?.save()
+    }
+
 }
 
 @MainActor private final class FrameTracker: NSObject {
@@ -137,16 +143,14 @@ final class ActivatingTableView: NSTableView {
         self.defaults = defaults
         super.init()
         for notification in [
-            NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification,
-            NSWindow.didBecomeKeyNotification
+            NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification
         ] {
             NotificationCenter.default.addObserver(self, selector: #selector(save), name: notification, object: window)
         }
     }
     deinit { NotificationCenter.default.removeObserver(self) }
-    @objc private func save() {
+    @objc fileprivate func save() {
         // A hidden document tab keeps whatever frame it had when it was last shown.
-        // Becoming key also saves a tab positioned while hidden, before it was presented.
         guard let window, window.isVisible, !window.inLiveResize else { return }
         defaults.set(WindowFrames.description(of: window), forKey: WindowFrames.defaultsKey(name))
     }
