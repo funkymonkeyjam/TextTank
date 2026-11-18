@@ -12,7 +12,7 @@ The document-check executable drives many owned document-window transitions with
 
 `scripts/test-documents.sh` compiles one native check executable, then always runs three
 required processes: the existing document checks and configuration input accessibility
-checks (`--configuration-input-accessibility`), plus Stage 0 workspace checks (`--tab-workspace`). Each retains its own watchdog, status
+checks (`--configuration-input-accessibility`), plus Stage 0 workspace checks (`--tab-workspace`). The workspace process uses an owned NSApplication event loop for native full-screen activation; the two prior processes retain their original CLI lifecycle. Each retains its own watchdog, status
 and normal completion marker; a failure in either fails acceptance. Both processes create
 their owned support directory and document controller before `NSApplication`, check
 singleton identity, and use the same accessory activation policy. The complete test

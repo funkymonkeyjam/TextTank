@@ -231,11 +231,21 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         if item.action == EditorToolbarCommand.new.action || item.action == EditorToolbarCommand.open.action {
             return true
         }
-        guard let active else { return false }
+        if item.itemIdentifier.rawValue == "TextTank.Automations" { return true }
+        guard let active else {
+            if item.action == #selector(EditorWindowController.clone(_:)) {
+                item.menuFormRepresentation?.state = .off
+                if item.toolTip != EditorToolbarCommand.split.scope {
+                    item.toolTip = EditorToolbarCommand.split.scope
+                    item.image = NSImage(
+                        systemSymbolName: EditorToolbarCommand.split.symbol, accessibilityDescription: item.toolTip)
+                }
+            }
+            return false
+        }
         if item.action == #selector(NSDocument.save(_:)), let doc = active.document as? TextDocument {
             return doc.validateMenuItem(NSMenuItem(title: item.label, action: item.action, keyEquivalent: ""))
         }
-        if item.itemIdentifier.rawValue == "TextTank.Automations" { return true }
         return active.validateToolbarItem(item)
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool { active?.validateMenuItem(item) ?? false }

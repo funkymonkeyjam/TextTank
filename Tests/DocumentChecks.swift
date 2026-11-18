@@ -33,24 +33,7 @@ import NativeSearch
     }
     @MainActor static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
-        if arguments == ["--tab-workspace"] {
-            Checks.run("TabWorkspaceChecks") {
-                let isolated = try IsolatedSupportDirectory("TabWorkspaceProcess")
-                defer { isolated.restore() }
-                LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent(
-                    "LanguageProfiles.json")
-                NativeFixtureEnvironment.install()
-                defer { NativeFixtureEnvironment.restore() }
-                let documentController = TextDocumentController()
-                let app = NSApplication.shared
-                check(
-                    NSDocumentController.shared === documentController,
-                    "tab workspace process owns the document controller")
-                app.setActivationPolicy(.accessory)
-                try TabWorkspaceNativeChecks.run(root: isolated.url)
-                Checks.summary { "PASS TabWorkspaceChecks: \(Checks.count) native assertions" }
-            }
-        }
+        if arguments == ["--tab-workspace"] { TabWorkspaceNativeChecks.runApplicationProcess() }
         if arguments == ["--configuration-input-accessibility"] {
             // Always required by test-documents.sh in a fresh process. A combined CLI
             // prefix saturated AppKit animation workers; no production flags change.

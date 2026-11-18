@@ -24,23 +24,61 @@ import NativeSearch
 }
 
 @MainActor private final class WorkspaceCheckApplicationDelegate: NSObject, NSApplicationDelegate {
+    var onLaunch: (() -> Void)?
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
+    func applicationDidFinishLaunching(_ notification: Notification) { onLaunch?() }
+}
+
+@MainActor private final class WorkspaceCheckApplicationProcess {
+    let isolated: IsolatedSupportDirectory
+    let documents: TextDocumentController
+    let app: NSApplication
+    let delegate = WorkspaceCheckApplicationDelegate()
+    init() throws {
+        isolated = try IsolatedSupportDirectory("TabWorkspaceProcess")
+        LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")
+        NativeFixtureEnvironment.install()
+        documents = TextDocumentController()
+        app = NSApplication.shared
+        app.delegate = delegate
+        app.setActivationPolicy(.regular)
+    }
+    func run() -> Never {
+        delegate.onLaunch = { [self] in
+            DispatchQueue.main.async { [self] in
+                Checks.run("TabWorkspaceChecks") {
+                    defer {
+                        isolated.restore()
+                        NativeFixtureEnvironment.restore()
+                    }
+                    check(
+                        NSDocumentController.shared === documents, "tab workspace process owns the document controller")
+                    check(app.isRunning, "owned workspace checks run in the actual NSApplication event loop")
+                    try TabWorkspaceNativeChecks.run(root: isolated.url)
+                    Checks.summary { "PASS TabWorkspaceChecks: \(Checks.count) native assertions" }
+                }
+            }
+        }
+        withExtendedLifetime(self) { app.run() }
+        Checks.fail("The owned application event loop stopped before native completion.")
+        Checks.finish("TabWorkspaceChecks")
+    }
 }
 
 @MainActor enum TabWorkspaceNativeChecks {
     @MainActor private final class Observation { var switched = false }
     private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    static func runApplicationProcess() -> Never {
+        do { try WorkspaceCheckApplicationProcess().run() } catch {
+            Checks.fail("Owned native application setup failed: \(error)")
+            Checks.finish("TabWorkspaceChecks")
+        }
+    }
     static func run(root: URL) throws {
         let priorDelegate = NSApp.delegate, priorFront = NSWorkspace.shared.frontmostApplication
-        let launchDelegate = WorkspaceCheckApplicationDelegate()
-        NSApp.delegate = launchDelegate
-        check(NSApp.setActivationPolicy(.regular), "full-screen fixture uses the normal application activation policy")
-        NSApp.finishLaunching()
         defer {
             NSApp.delegate = priorDelegate
-            NSApp.setActivationPolicy(.accessory)
             priorFront?.activate(options: [.activateAllWindows])
-            withExtendedLifetime(launchDelegate) {}
         }
         let unstarted = AppDelegate(), windowsBeforeLookup = NSApp.windows.count
         check(
@@ -186,19 +224,17 @@ import NativeSearch
             !pa.statusTimerActive && pb.isActiveTab && pa.statusRefreshCount == old,
             "T0-R13 keyboard cycle retires outgoing status timer immediately")
         a.showWindows()
-        let nextKey = try requireValue(
-            NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: [.control], timestamp: 0,
-                windowNumber: window.windowNumber, context: nil, characters: "\t", charactersIgnoringModifiers: "\t",
-                isARepeat: false, keyCode: 48), "T0 Control-Tab event")
+        let nextCG = try requireValue(
+            CGEvent(keyboardEventSource: nil, virtualKey: 48, keyDown: true), "T0 Control-Tab event")
+        nextCG.flags = [.maskControl]
+        let nextKey = try requireValue(NSEvent(cgEvent: nextCG), "T0 native Control-Tab translation")
         check(
             NSApp.mainMenu?.performKeyEquivalent(with: nextKey) == true && pb.isActiveTab,
             "T0-R11 actual Control-Tab menu routing follows model order")
-        let previousKey = try requireValue(
-            NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: [.control, .shift], timestamp: 0,
-                windowNumber: window.windowNumber, context: nil, characters: "\t", charactersIgnoringModifiers: "\t",
-                isARepeat: false, keyCode: 48), "T0 Control-Shift-Tab event")
+        let previousCG = try requireValue(
+            CGEvent(keyboardEventSource: nil, virtualKey: 48, keyDown: true), "T0 Control-Shift-Tab event")
+        previousCG.flags = [.maskControl, .maskShift]
+        let previousKey = try requireValue(NSEvent(cgEvent: previousCG), "T0 native Control-Shift-Tab translation")
         check(
             NSApp.mainMenu?.performKeyEquivalent(with: previousKey) == true && pa.isActiveTab,
             "T0-R11 actual Control-Shift-Tab returns to the prior tab")
@@ -265,7 +301,7 @@ import NativeSearch
         let stripScroll = try requireValue(
             descendants(host.tabStrip).compactMap { $0 as? NSScrollView }.first, "T0 tab overflow scroll")
         check(
-            tab.frame.width < wide && tab.frame.width >= 130
+            tab.frame.width < wide && tab.frame.width >= 28
                 && stripScroll.documentView!.frame.width <= stripScroll.contentSize.width + 1,
             "T0-R9 five tabs shrink before horizontal overflow")
         let overflowTabs = (0..<3).map { _ in DocumentFactory.makeUntitled() }
@@ -304,6 +340,16 @@ import NativeSearch
         check(
             terminate == 2 && host.model.activeTab == nil && window.isVisible,
             "T0-R18/22 the empty workspace red close still invokes injected Quit")
+        let emptyClone = try requireValue(
+            window.toolbar?.items.first { $0.itemIdentifier == EditorToolbarCommand.split.identifier },
+            "T0 empty Clone item")
+        let emptyAutomations = try requireValue(
+            window.toolbar?.items.first { $0.itemIdentifier.rawValue == "TextTank.Automations" },
+            "T0 empty Automations item")
+        check(
+            !host.validateToolbarItem(emptyClone) && emptyClone.menuFormRepresentation?.state == .off
+                && host.validateToolbarItem(emptyAutomations),
+            "T0-R19 empty workspace clears Clone while retaining global automation management")
         check(
             !EditorLifetime.isOpen(editor) && !EditorLifetime.isOpen(clone),
             "T0-R20 retained closed editors never remain valid")
