@@ -100,8 +100,8 @@ extension DocumentChecks {
                 "fixture: no document window is main while the auxiliary window is in front")
             delegate.noteActive(nil)
             check(
-                delegate.currentEditor == nil && delegate.currentDocument == nil,
-                "with no document window focused there is no current editor")
+                delegate.currentEditor === document.editor && delegate.currentDocument === document,
+                "the active workspace tab remains current while an auxiliary window is main")
             delegate.noteActive(controller)
             check(
                 delegate.currentEditor === document.editor && delegate.currentDocument === document
@@ -349,7 +349,7 @@ extension DocumentChecks {
 
             // F83: the dialogs that save a catalog change re-apply it the same way. Each case first
             // gives the clone and the other C++ document a foreign palette, then saves in the dialog.
-            window.makeKeyAndOrderFront(nil)
+            document.showWindows()
             delegate.noteActive(controller)
             try require(
                 delegate.currentDocument === document && document.languageIdentifier == "cpp",
@@ -563,8 +563,8 @@ extension DocumentChecks {
                 autoreleasepool { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
             }
             check(
-                lateClone == nil && lateWindow == nil && lateDocument == nil,
-                "closing a document releases its window, its views and a clone closed earlier")
+                lateClone == nil && lateWindow === controller.hostWindow && lateDocument == nil,
+                "closing a document releases its document and Clone while retaining the shared workspace window")
             document.close()
         }
     }

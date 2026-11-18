@@ -24,6 +24,7 @@ enum DesignStatusChecks {
         let document = TextDocument()
         NSDocumentController.shared.addDocument(document)
         document.makeWindowControllers()
+        document.showWindows()
         defer { document.close() }
         let controller = document.windowControllers[0] as! EditorWindowController
         controller.statusTimerInterval = nil

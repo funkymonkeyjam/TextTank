@@ -169,17 +169,18 @@ enum Audit26PresentationChecks {
         }
         let doc = TextDocument()
         doc.makeWindowControllers()
+        doc.showWindows()
         defer { doc.close() }
         let controller = doc.windowControllers.first as! EditorWindowController
         controller.refreshStatusDetails()
-        let badges = descendants(controller.window!.contentView!).compactMap { $0 as? NSPopUpButton }
+        let badges = descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSPopUpButton }
             .filter { $0.identifier?.rawValue.hasPrefix("status.") == true }
         check(
             !badges.isEmpty
                 && badges.allSatisfy { !($0.accessibilityLabel() ?? "").isEmpty && $0.accessibilityLabel() != $0.title },
             "G401 every status badge has a descriptive accessibility label")
         let nativeRow = try requireValue(
-            descendants(controller.window!.contentView!).first { $0.accessibilityLabel() == "Document status" },
+            descendants(controller.hostWindow!.contentView!).first { $0.accessibilityLabel() == "Document status" },
             "fixture: native status row")
         checkNativeStatus(nativeRow)
 
@@ -241,14 +242,14 @@ enum Audit26PresentationChecks {
         let original = LanguageProfile.Style(id: 0, name: "DEFAULT", foreground: "000000", fontStyle: 0)
         let localized = try LanguageController.readStyle(
             original, font: font, size: size, color: .black,
-            custom: false, bold: false, italic: false, window: controller.window!)
+            custom: false, bold: false, italic: false, window: controller.hostWindow!)
         check(localized.fontSize == 12.125, "G399 actual style form parses comma locale without quantizing")
         let unchanged = NSTextField(string: NumericInput.editable(12.125))
         NumericInput.configure(unchanged, fractional: true)
         check(
             try LanguageController.readStyle(
                 original, font: font, size: unchanged, color: .black,
-                custom: false, bold: false, italic: false, window: controller.window!
+                custom: false, bold: false, italic: false, window: controller.hostWindow!
             ).fontSize == 12.125,
             "G399 opening and saving a fractional style size retains the exact Double")
         let popup = NSPopUpButton()

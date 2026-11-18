@@ -216,7 +216,7 @@ import NativeSearch
             independentToolbar.identifier != toolbar.identifier,
             "DT-R4 independent isolated compositions cannot share AppKit toolbar synchronization state")
         check(
-            siblingToolbar.identifier == toolbar.identifier,
+            siblingToolbar === toolbar && siblingToolbar.identifier == toolbar.identifier,
             "DT-R4 windows from one composition share the native toolbar family")
         let openIndex = try requireValue(
             toolbar.items.firstIndex { $0.itemIdentifier.rawValue == "TextTank.Open" }, "DT fixture: Open position")
@@ -273,6 +273,9 @@ import NativeSearch
             let visible = toolbar.visibleItems ?? []
             return !visible.isEmpty && !visible.contains { $0 === find }
         }
+        print(
+            "T0 TOOLBAR OVERFLOW", window.frame, window.contentMinSize,
+            toolbar.visibleItems?.map { $0.itemIdentifier.rawValue } ?? [])
         check(
             !(toolbar.visibleItems ?? []).contains { $0 === find },
             "a standard command is clipped into the native overflow menu")

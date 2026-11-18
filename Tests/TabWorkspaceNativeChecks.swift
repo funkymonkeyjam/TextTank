@@ -41,7 +41,7 @@ import NativeSearch
         pa.showFind(nil)
         pa.findField.stringValue = "line"
         pa.replaceField.stringValue = "row"
-        clone.go(toLine: 100)
+        _ = clone.goToLine(100)
         let scrollLine = clone.firstVisibleLine
         let selection = clone.selectionRanges, last = pa.activeEditor
         b.showWindows()
@@ -64,7 +64,8 @@ import NativeSearch
         a.showWindows()
         check(
             a.editor === editor && pa.secondary === clone && clone.selectionRanges == selection
-                && pa.activeEditor === last && pa.findBarVisible && pa.findField.stringValue == "line"
+                && clone.firstVisibleLine == scrollLine && pa.activeEditor === last && pa.findBarVisible
+                && pa.findField.stringValue == "line"
                 && pa.replaceField.stringValue == "row",
             "T0-R14 same editor objects retain Clone, Find, selection and last pane across switches")
         // Real all-open result enumeration must include detached A and select its captured editor.
@@ -221,14 +222,22 @@ import NativeSearch
             check(
                 p.findBarVisible && p.secondary != nil && fullWindow.styleMask.contains(.fullScreen),
                 "T0-R16 full-screen tab switching retains Find/Clone")
+            extra.editor.text = "Owned unsaved full-screen fixture"
             extra.updateChangeCount(.changeDone)
             fullWindow.performClose(nil)
             spinUntil("T0 full-screen unsaved review") { fullWindow.attachedSheet != nil }
-            let review = try requireValue(fullWindow.attachedSheet, "T0 full-screen review sheet")
-            let cancel = try requireValue(
-                review.contentView.map(descendants)?.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" },
-                "T0 full-screen Cancel")
-            cancel.performClick(nil)
+            if let savePanel = fullWindow.attachedSheet as? NSSavePanel {
+                savePanel.cancel(nil)
+            } else {
+                var cancelButton: NSButton?
+                spinUntil("T0 full-screen native Cancel control") {
+                    cancelButton = fullWindow.attachedSheet?.contentView.map(descendants)?.compactMap {
+                        $0 as? NSButton
+                    }.first { $0.title == "Cancel" }
+                    return cancelButton != nil
+                }
+                try requireValue(cancelButton, "T0 full-screen Cancel").performClick(nil)
+            }
             spinUntil("T0 full-screen cancelled review") { fullWindow.attachedSheet == nil }
             check(
                 extra.isOpen && p.isActiveTab && fullWindow.styleMask.contains(.fullScreen),

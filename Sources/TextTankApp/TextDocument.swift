@@ -12,12 +12,37 @@ import AppKit
     var isOpen: Bool { opened && !isClosed }
     var presentation: EditorWindowController? { windowControllers.compactMap { $0 as? EditorWindowController }.first }
     private var tabClosePending = false
-    override var windowForSheet: NSWindow? {
-        guard !isClosed else { return nil }
+    override var windowForSheet: NSWindow? { isClosed ? nil : presentation?.hostWindow }
+    private func revealForNativeAction() {
+        guard !isClosed else { return }
         if presentation == nil { makeWindowControllers() }
-        guard let presentation else { return nil }
-        presentation.host.activate(presentation, explicit: false)
-        return presentation.hostWindow
+        if let presentation { presentation.host.activate(presentation, explicit: false) }
+    }
+    override func canClose(
+        withDelegate delegate: Any, shouldClose shouldCloseSelector: Selector?, contextInfo: UnsafeMutableRawPointer?
+    ) {
+        revealForNativeAction()
+        super.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: contextInfo)
+    }
+    override func save(_ sender: Any?) {
+        revealForNativeAction()
+        super.save(sender)
+    }
+    override func saveAs(_ sender: Any?) {
+        revealForNativeAction()
+        super.saveAs(sender)
+    }
+    override func revertToSaved(_ sender: Any?) {
+        revealForNativeAction()
+        super.revertToSaved(sender)
+    }
+    override func printDocument(_ sender: Any?) {
+        revealForNativeAction()
+        super.printDocument(sender)
+    }
+    override func runPageLayout(_ sender: Any?) {
+        revealForNativeAction()
+        super.runPageLayout(sender)
     }
     func requestTabClose(_ sender: Any?) {
         guard isOpen, !tabClosePending else { return }

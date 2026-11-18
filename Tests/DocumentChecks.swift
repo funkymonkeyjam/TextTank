@@ -744,7 +744,9 @@ import NativeSearch
                     document.editor.text == "locked reload" && document.editor.readOnly,
                     "explicit reload works while retaining read-only flag")
                 document.close()
-                check(!window.isVisible, "closing document hides its native window")
+                check(
+                    window.isVisible && controller.host.active == nil && document.isClosed,
+                    "closing the final document retains the empty workspace window")
                 NotificationCenter.default.post(name: NSWindow.didUpdateNotification, object: window)
                 app.updateWindows()
                 check(
