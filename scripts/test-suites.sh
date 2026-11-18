@@ -39,6 +39,11 @@ suite_run tab-organization-core-layering harness/logs/tab-organization-core-laye
 suite_build "tab-organization-core-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabOrganizationCoreChecks.swift -o build/tests/tab-organization-core-checks
 suite_run tab-organization-core-checks harness/logs/tab-organization-core-checks.log build/tests/tab-organization-core-checks
 
+suite_build "tab-selection-core-layering" swiftc -typecheck "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabSelectionCoreChecks.swift
+suite_run tab-selection-core-layering harness/logs/tab-selection-core-layering.log /bin/echo "PASS TabSelectionCore imports canonical Foundation-only Core"
+suite_build "tab-selection-core-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabSelectionCoreChecks.swift -o build/tests/tab-selection-core-checks
+suite_run tab-selection-core-checks harness/logs/tab-selection-core-checks.log build/tests/tab-selection-core-checks
+
 suite_script scripts/test-documents.sh
 
 # The Foundation-only macro core must keep compiling without AppKit. Its checks

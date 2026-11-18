@@ -43,17 +43,19 @@ package struct TabClosePlan: Sendable {
     private let facts: [DocumentID: TabCloseFact]
     static package func make(
         _ command: TabCommand, target: TabID, workspace: TabWorkspace,
-        facts: [DocumentID: TabCloseFact]
+        facts: [DocumentID: TabCloseFact], keeping: Set<TabID>? = nil
     ) throws -> Self {
         try workspace.validate(openDocuments: Set(facts.keys))
         guard let group = workspace.groups.first(where: { $0.tabs.contains { $0.id == target } }),
             let index = group.tabs.firstIndex(where: { $0.id == target })
         else { throw TabModelError.invalid }
+        if let keeping, !keeping.isSubset(of: Set(group.tabs.map(\.id))) { throw TabModelError.invalid }
+        let keep = (keeping ?? [target]).union([target])
         let selected = group.tabs.enumerated().filter { i, tab in
             if command == .close { return tab.id == target }
             guard !tab.isPinned else { return false }
             switch command {
-            case .closeOthers: return tab.id != target
+            case .closeOthers: return !keep.contains(tab.id)
             case .closeLeft: return i < index
             case .closeRight: return i > index
             case .closeGroup: return true
