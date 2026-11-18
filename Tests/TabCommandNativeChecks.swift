@@ -401,6 +401,34 @@ import NativeSearch
                 && NSDocumentController.shared.documents.count == n && commands.history.records.isEmpty,
             "T1 existing destination focuses without reload or duplicate")
         reset()
+        for i in 0...ClosedTabHistory.capacity {
+            let closed = try saved("consumed-job-\(i)")
+            closed.close()
+            check(commands.pendingFingerprintCount == 1, "T1 close job captured before yielding")
+            let live = try DocumentFactory.openCaptured(
+                WorkspaceStore.captureRegularFile(closed.fileURL!), from: closed.fileURL!)
+            commands.perform(.reopen, target: nil)
+            check(
+                commands.history.records.isEmpty && commands.pendingFingerprintCount == 0 && live.isOpen,
+                "T1 consuming existing-file record cancels and removes fingerprint job")
+            commands.isTerminating = true
+            live.close()
+            commands.isTerminating = false
+        }
+        reset()
+        let mainA = try saved("main-active"), mainB = try saved("main-inactive")
+        mainA.showWindows()
+        let mainWindow = try requireValue(
+            NSApp.mainMenu?.items.first { $0.title == "Window" }?.submenu, "T1 active Window menu")
+        mainWindow.update()
+        copied = ""
+        dispatch(try item(mainWindow, .copyPath))
+        check(copied == mainA.fileURL!.path && mainB.isOpen, "T1 main menu shared command acts on active file")
+        dispatch(try item(mainWindow, .newToRight))
+        check(
+            host.model.groups[0].tabs[1].documentID == app.currentDocument?.runtimeID,
+            "T1 main-menu New Right shares active-target insertion")
+        reset()
         let savedClean = try saved("close-saved"), deleted = try saved("close-saved-deleted"),
             edited = try saved("close-saved-dirty"), untouched = DocumentFactory.makeUntitled()
         edited.editor.text = "dirty"

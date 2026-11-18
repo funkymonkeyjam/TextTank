@@ -350,6 +350,17 @@ import EditorBridge
         let position = bulkPositions[group.tabs[index].id] ?? (group.slot, index)
         record(group.tabs[index], group: position.0, index: position.1, document: doc, url: url)
     }
+    var pendingFingerprintCount: Int { fingerprints.count }
+    /// Consumed records no longer participate in capacity eviction. Retire their
+    /// descriptor/job here so repeated existing-file reopens cannot grow a queue.
+    @discardableResult private func consumeHistory(_ id: UUID) -> ClosedTabRecord? {
+        guard let record = history.consume(id) else { return nil }
+        if let job = fingerprints.removeValue(forKey: id) {
+            job.0.cancel()
+            job.1.cancelQueued()
+        }
+        return record
+    }
     func clearHistory() {
         cancelReopen()
         for job in fingerprints.values {
@@ -378,7 +389,7 @@ import EditorBridge
         if let existing = host.model.groups.first(where: { $0.slot == slot })?.tabs.first(where: {
             document($0.id)?.fileURL?.standardizedFileURL == record.url.standardizedFileURL
         }), let presentation = host.presentation(for: existing.id) {
-            _ = history.consume(record.id)
+            _ = consumeHistory(record.id)
             host.show(presentation, sender: nil)
             host.showTabMessage("The file is already open. Its existing tab was selected.")
             return
@@ -426,7 +437,7 @@ import EditorBridge
                     return
                 }
                 host.placeTab(id, in: slot, index: record.index, pinned: record.pinned)
-                _ = self.history.consume(record.id)
+                _ = self.consumeHistory(record.id)
                 document.showWindows()
                 document.editor.restoreClosedTabView(
                     anchor: record.anchor, caret: record.caret, firstVisibleLine: record.firstVisibleLine)
@@ -447,7 +458,7 @@ import EditorBridge
                 guard self.reopenGeneration == token, self.history.latest?.id == record.id else { return }
                 if error is CancellationError { return }
                 if error.isFileNotFound {
-                    _ = self.history.consume(record.id)
+                    _ = self.consumeHistory(record.id)
                     host.showTabMessage(
                         String(
                             format: "“%@” is no longer at its file path. Nothing was opened.",
