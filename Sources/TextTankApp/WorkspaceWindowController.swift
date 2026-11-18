@@ -233,7 +233,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         guard !tabCommands.isBusy, window?.attachedSheet == nil else { return false }
         tabCommands.cancelReopen()
         var next = model
-        do { try tabSelection.apply(id, gesture: gesture, workspace: &next, openDocuments: openIDs) } catch { return }
+        do { try tabSelection.apply(id, gesture: gesture, workspace: &next, openDocuments: openIDs) } catch {
+            return false
+        }
         if next.activeTab?.id != model.activeTab?.id || gesture == .plain {
             if let chosen = next.activeTab?.id, let p = presentation(for: chosen) {
                 activate(p, preserveSelection: true)

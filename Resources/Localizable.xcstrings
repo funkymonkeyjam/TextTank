@@ -546,7 +546,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Searching: %@ files; %@ matches; %@ read…"
+            "value": "Searching: %@ files; %@ matches; %@ read\u2026"
           }
         }
       }
@@ -557,7 +557,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Searching: %@ files; %@ match; %@ read…"
+            "value": "Searching: %@ files; %@ match; %@ read\u2026"
           }
         }
       }
@@ -568,7 +568,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Searching: %@ file; %@ matches; %@ read…"
+            "value": "Searching: %@ file; %@ matches; %@ read\u2026"
           }
         }
       }
@@ -579,7 +579,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Searching: %@ file; %@ match; %@ read…"
+            "value": "Searching: %@ file; %@ match; %@ read\u2026"
           }
         }
       }
@@ -590,7 +590,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ file replaced · %@ unchanged/skipped/failed. Recovery copies retained."
+            "value": "%@ file replaced \u00b7 %@ unchanged/skipped/failed. Recovery copies retained."
           }
         }
       }
@@ -601,7 +601,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ files replaced · %@ unchanged/skipped/failed. Recovery copies retained."
+            "value": "%@ files replaced \u00b7 %@ unchanged/skipped/failed. Recovery copies retained."
           }
         }
       }
@@ -777,7 +777,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Load %@ rule from ‘%@’. Canceling the builder will still preserve the saved automation."
+            "value": "Load %@ rule from \u2018%@\u2019. Canceling the builder will still preserve the saved automation."
           }
         }
       }
@@ -788,7 +788,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Load %@ rules from ‘%@’. Canceling the builder will still preserve the saved automation."
+            "value": "Load %@ rules from \u2018%@\u2019. Canceling the builder will still preserve the saved automation."
           }
         }
       }
@@ -1452,7 +1452,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Customize Toolbar…"
+            "value": "Customize Toolbar\u2026"
           }
         }
       }
@@ -1462,7 +1462,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Find…"
+            "value": "Find\u2026"
           }
         }
       }
@@ -1502,7 +1502,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Open…"
+            "value": "Open\u2026"
           }
         }
       }
