@@ -4,7 +4,12 @@ import NativeSearch
 import AppKit
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
-    lazy var workspaceWindow = WorkspaceWindowController()
+    private weak var knownWorkspace: WorkspaceWindowController?
+    lazy var workspaceWindow: WorkspaceWindowController = {
+        let host = WorkspaceWindowController()
+        knownWorkspace = host
+        return host
+    }()
     @MainActor override init() { super.init() }
     @MainActor lazy var workspace: WorkspaceController = {
         let controller = WorkspaceController()
@@ -35,7 +40,7 @@ import AppKit
     /// document window, otherwise the document window focused last, because Find and Replace,
     /// a Run result or another auxiliary window may be main. Nil once that document has closed.
     var currentDocumentController: EditorWindowController? {
-        let controller = lastDocumentController?.host.active ?? lastDocumentController
+        let controller = knownWorkspace?.active ?? lastDocumentController
         return (controller?.document as? TextDocument)?.isOpen == true ? controller : nil
     }
     var currentDocument: TextDocument? { currentDocumentController?.document as? TextDocument }
@@ -215,7 +220,10 @@ import AppKit
         services.openSessionFile = { [weak self] in self?.workspace.openSession(at: $0) }
         EditorServices.current = services
     }
-    func noteActive(_ controller: EditorWindowController?) { lastDocumentController = controller }
+    func noteActive(_ controller: EditorWindowController?) {
+        if let controller { knownWorkspace = controller.host }
+        lastDocumentController = controller
+    }
     @objc func newDocument(_ sender: Any?) {
         DocumentFactory.makeUntitled()
     }

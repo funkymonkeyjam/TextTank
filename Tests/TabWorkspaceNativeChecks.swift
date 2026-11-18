@@ -4,6 +4,25 @@ import AppKit
 import EditorBridge
 import NativeSearch
 
+/// Deliver actual queued AppKit events in the CLI fixture, as NSApplication.run normally does.
+@MainActor enum NativeWindowEvents {
+    static func pump() {
+        for _ in 0..<32 {
+            guard let event = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) else {
+                break
+            }
+            NSApp.sendEvent(event)
+        }
+        NSApp.updateWindows()
+    }
+    static func wait(_ label: String, timeout: TimeInterval = 10, _ condition: () -> Bool) {
+        spinUntil(timeout: timeout, label) {
+            pump()
+            return condition()
+        }
+    }
+}
+
 @MainActor private final class WorkspaceCheckApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
 }
@@ -31,10 +50,13 @@ import NativeSearch
         let services = EditorServices.current
         let composition = AppDelegate()
         composition.installEditorServices()
+        NSApp.delegate = composition
+        composition.buildMenus()
         defer { EditorServices.current = services }
         let cold = DocumentFactory.makeUntitled(display: false)
         check(
-            cold.isOpen && cold.editor.window == nil && cold.presentation?.statusTimerActive == false,
+            cold.isOpen && cold.editor.window == nil && cold.presentation?.statusTimerActive == false
+                && cold.presentation?.statusMetricsCaptureCount == 0,
             "T0-R13 an unmounted first tab is open without visible status work")
         cold.close()
         let a = DocumentFactory.makeUntitled(), b = DocumentFactory.makeUntitled(), c = DocumentFactory.makeUntitled()
@@ -164,6 +186,22 @@ import NativeSearch
             !pa.statusTimerActive && pb.isActiveTab && pa.statusRefreshCount == old,
             "T0-R13 keyboard cycle retires outgoing status timer immediately")
         a.showWindows()
+        let nextKey = try requireValue(
+            NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [.control], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "\t", charactersIgnoringModifiers: "\t",
+                isARepeat: false, keyCode: 48), "T0 Control-Tab event")
+        check(
+            NSApp.mainMenu?.performKeyEquivalent(with: nextKey) == true && pb.isActiveTab,
+            "T0-R11 actual Control-Tab menu routing follows model order")
+        let previousKey = try requireValue(
+            NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [.control, .shift], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "\t", charactersIgnoringModifiers: "\t",
+                isARepeat: false, keyCode: 48), "T0 Control-Shift-Tab event")
+        check(
+            NSApp.mainMenu?.performKeyEquivalent(with: previousKey) == true && pa.isActiveTab,
+            "T0-R11 actual Control-Shift-Tab returns to the prior tab")
         let revert = NSMenuItem(
             title: "Revert to Saved", action: #selector(NSDocument.revertToSaved(_:)), keyEquivalent: "")
         check(
@@ -215,12 +253,15 @@ import NativeSearch
             same === tab && window.firstResponder === tab && tab.accessibilityLabel() == "Workspace A renamed, edited",
             "T0-R10 metadata updates preserve native tab identity/focus and edited words")
         a.updateChangeCount(.changeCleared)
+        NativeWindowEvents.pump()
         let wide = tab.frame.width
         window.setContentSize(NSSize(width: 800, height: 600))
         window.contentView?.layoutSubtreeIfNeeded()
         let extras = (0..<2).map { _ in DocumentFactory.makeUntitled() }
         defer { extras.forEach { $0.close() } }
         window.contentView?.layoutSubtreeIfNeeded()
+        NativeWindowEvents.pump()
+        print("T0 SHRINK", wide, tab.frame.width, host.tabStrip.bounds.width)
         let stripScroll = try requireValue(
             descendants(host.tabStrip).compactMap { $0 as? NSScrollView }.first, "T0 tab overflow scroll")
         check(
@@ -295,16 +336,18 @@ import NativeSearch
         NSApp.activate()
         fullWindow.makeKeyAndOrderFront(nil)
         fullWindow.makeMain()
-        spinUntil("owned native full-screen window becomes key") { fullWindow.isKeyWindow }
+        NativeWindowEvents.wait("owned native full-screen window becomes key") { fullWindow.isKeyWindow }
         print("T0 full-screen preflight", NSApp.isActive, fullWindow.isKeyWindow, fullWindow.styleMask.rawValue)
         defer {
             if fullWindow.styleMask.contains(.fullScreen) {
                 fullWindow.toggleFullScreen(nil)
-                spinUntil(timeout: 20, "owned full-screen cleanup") { !fullWindow.styleMask.contains(.fullScreen) }
+                NativeWindowEvents.wait("owned full-screen cleanup", timeout: 20) {
+                    !fullWindow.styleMask.contains(.fullScreen)
+                }
             }
         }
         fullWindow.toggleFullScreen(nil)
-        spinUntil(timeout: 20, "T0 actual native full-screen entry") { entered }
+        NativeWindowEvents.wait("T0 actual native full-screen entry", timeout: 20) { entered }
         check(
             entered && fullWindow.styleMask.contains(.fullScreen),
             "T0-R16 actual native full-screen entry notification and state")
@@ -344,7 +387,7 @@ import NativeSearch
                 reopened.presentation?.isActiveTab == true && fullWindow.styleMask.contains(.fullScreen),
                 "T0-R16 closing a full-screen tab retains workspace")
             fullWindow.toggleFullScreen(nil)
-            spinUntil(timeout: 20, "T0 actual native full-screen exit") { exited }
+            NativeWindowEvents.wait("T0 actual native full-screen exit", timeout: 20) { exited }
             check(
                 exited && !fullWindow.styleMask.contains(.fullScreen),
                 "T0-R16 actual native full-screen exit notification and state")

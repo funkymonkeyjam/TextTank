@@ -339,7 +339,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         let editor = activeEditor, info = editor.statusInfo
         let revision = doc.editor.revision
         let allowsMetricsCapture =
-            source == .explicit || (source == .pollingTick && statusTickRevision == revision)
+            isPresented && (source == .explicit || (source == .pollingTick && statusTickRevision == revision))
         if statusRevision != revision && !statusMetricsPending && allowsMetricsCapture {
             // Capture the authoritative bytes in one copy on main; the scan happens off-main.
             // One in-flight task bounds work for rapid edits.

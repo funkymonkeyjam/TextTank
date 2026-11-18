@@ -270,10 +270,11 @@ import NativeSearch
         window.contentView = NSView()
         window.contentMinSize = NSSize(width: 180, height: minimum.height)
         window.setFrame(
-            NSRect(x: savedFrame.minX, y: savedFrame.minY, width: 300, height: savedFrame.height), display: true)
+            NSRect(x: savedFrame.minX, y: savedFrame.minY, width: 450, height: savedFrame.height), display: true)
         window.contentView?.superview?.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
         spinUntil("native toolbar overflow is laid out") {
+            NativeWindowEvents.pump()
             let visible = toolbar.visibleItems ?? []
             return !visible.isEmpty && !visible.contains { $0 === find }
         }
