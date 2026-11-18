@@ -353,13 +353,13 @@ import EditorBridge
     var pendingFingerprintCount: Int { fingerprints.count }
     /// Consumed records no longer participate in capacity eviction. Retire their
     /// descriptor/job here so repeated existing-file reopens cannot grow a queue.
-    @discardableResult private func consumeHistory(_ id: UUID) -> ClosedTabRecord? {
-        guard let record = history.consume(id) else { return nil }
+    @discardableResult private func consumeHistory(_ id: UUID) -> Bool {
+        guard history.consume(id) else { return false }
         if let job = fingerprints.removeValue(forKey: id) {
             job.0.cancel()
             job.1.cancelQueued()
         }
-        return record
+        return true
     }
     func clearHistory() {
         cancelReopen()
