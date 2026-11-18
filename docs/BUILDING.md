@@ -15,7 +15,7 @@ required processes: the existing document checks and configuration input accessi
 checks (`--configuration-input-accessibility`), plus Stage 0 workspace checks (`--tab-workspace`) and Stage 1 tab-command checks (`--tab-commands`), plus Stage 2 organisation checks (`--tab-organization`). All three tab processes copy the byte-identical compiled check client into an owned app bundle with the selected product document-type metadata, a private bundle identity and no Finder-handler rank. It uses an owned NSApplication event loop for native save/close/full-screen behavior and explicitly foregrounds that owned client before the unchanged key-window/full-screen assertions. Cooperative `NSApp.activate()` can decline foreground activation even on an available desktop; the fixture uses AppKit's explicit foreground call, while production activation stays unchanged. The two prior processes retain their original CLI lifecycle. Each retains its own watchdog, status
 and normal completion marker; a failure in any process fails acceptance. All five processes create
 their owned support directory and document controller before `NSApplication`, check
-singleton identity, and use the same accessory activation policy. The complete test
+singleton identity. The two CLI processes use accessory activation; the three owned tab app processes use regular activation to exercise native window/review behavior. The complete test
 runner records 45 suites: the accepted Stage 1 roster of 40 plus organisation and selection Core behavior/layering checks and the required Stage 2 native process.
 A combined CLI prefix failed native review/save-panel creation with saturated AppKit
 animation workers; paired controls passed the full original document checks and all

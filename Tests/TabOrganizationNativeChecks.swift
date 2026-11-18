@@ -369,6 +369,47 @@ import NativeSearch
                 "T2 selected close exact disk bytes \(decision)")
             reset()
         }
+        for failSave in [false, true] {
+            let first = try saved("selected-atomic-first-\(failSave)"),
+                second = try saved("selected-atomic-second-\(failSave)"),
+                outside = try saved("selected-atomic-outside-\(failSave)")
+            commands.perform(.pin, target: id(first))
+            first.editor.text = "first changed"
+            second.editor.text = "second changed"
+            click(second)
+            click(first, .command)
+            let selection = selectedIDs(), focus = window.firstResponder
+            var decisions = 0, saves = 0
+            commands.decisionHandler = { _, reply in
+                decisions += 1
+                reply(!failSave && decisions == 2 ? .cancel : .save)
+            }
+            commands.saveHandler = { doc, reply in
+                saves += 1
+                if doc === second {
+                    reply(CocoaError(.fileWriteNoPermission))
+                } else {
+                    doc.save(to: doc.fileURL!, ofType: doc.fileType!, for: .saveOperation) { reply($0) }
+                }
+            }
+            try invoke(commands.contextMenu(for: id(first)), .close)
+            waitClose()
+            check(
+                first.isOpen && second.isOpen && outside.isOpen && selectedIDs() == selection
+                    && window.firstResponder === focus && host.active?.document === second,
+                "T2 selected second Cancel or save failure closes none and restores selection focus")
+            check(
+                decisions == 2 && saves == (failSave ? 2 : 0) && commands.history.records.isEmpty,
+                "T2 all decisions precede saves and failed selected close adds no history")
+            check(
+                try Data(contentsOf: first.fileURL!) == Data((failSave ? "first changed" : "disk").utf8)
+                    && Data(contentsOf: second.fileURL!) == Data("disk".utf8),
+                "T2 failed selected close retains earlier saves only")
+            let beforeOutside = selectedIDs()
+            outside.close()
+            check(selectedIDs() == beforeOutside, "T2 unrelated disappearance preserves multi-selection")
+            reset()
+        }
         // Main menu and File Close differ intentionally in scope (DS-D2).
         let mx = try saved("main-close-X"), my = try saved("main-close-Y"), mz = try saved("main-close-Z")
         click(my)
