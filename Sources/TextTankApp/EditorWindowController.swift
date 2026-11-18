@@ -121,6 +121,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     private func wire(_ editor: TTEditor) {
         editor.onFocus = { [weak self, weak editor] in
             guard let self, !self.isRetired, !self.host.isMutatingGroups, let editor else { return }
+            if self.host.active !== self { self.host.tabCommands.cancelReopen() }
             self.host.activate(self, focus: false, explicit: false, preserveSelection: true)
             self.lastEditor = editor
             self.updateInlineFindValidation()
@@ -152,6 +153,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     let pane = self.views.last(where: { responder.isDescendant(of: $0) })
                 else { return }
                 guard !self.isRetired, !self.host.isMutatingGroups else { return }
+                if self.host.active !== self { self.host.tabCommands.cancelReopen() }
                 self.host.activate(self, focus: false, explicit: false, preserveSelection: true)
                 self.lastEditor = pane
                 self.updateInlineFindValidation()
@@ -219,6 +221,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 ? document.currentSaveStateStatus : "Recovered copy — Save As to keep")
         statusDetails.menuProvider = { [weak self] field in
             guard let self else { return nil }
+            if self.host.active !== self { self.host.tabCommands.cancelReopen() }
             self.host.activate(self, focus: false, explicit: false, preserveSelection: true)
             EditorServices.current?.noteActiveController(self)
             self.lastEditor = self.activeEditor

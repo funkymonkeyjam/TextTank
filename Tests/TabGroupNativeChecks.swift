@@ -513,6 +513,7 @@ import Darwin
             search.numberOfRows(in: search.table) == 2, "T3 all-open search yields one result population per document")
         let b = try requireValue(host.openView(a, in: .second), "T3 chained B"),
             c = try requireValue(host.openView(a, in: .third), "T3 chained C")
+        host.activate(host.presentation(for: b)!)
         host.closeTab(a, sender: nil)
         check(
             functions.editor === host.presentation(for: b)?.primaryEditor,
@@ -571,6 +572,8 @@ import Darwin
         let stay = try saved("busy-stay"), stayID = id(stay), closed = try saved("busy-closed")
         _ = host.setEditorLayout(.twoColumns)
         closed.close()
+        let focusView = try requireValue(host.openView(stayID, in: .second), "T3 focus during reopen view")
+        host.activate(host.presentation(for: stayID)!)
         wait("T3 fingerprint settles before disk reopen hold") { commands.pendingFingerprintCount == 0 }
         let (busyHeld, busyRelease) = holdDisk()
         commands.perform(.reopen, target: nil)
@@ -582,6 +585,10 @@ import Darwin
         check(
             host.openView(stayID, in: .second) == nil && host.model == busyModel,
             "T3 direct add-view API refuses during active reopen")
+        window.makeFirstResponder(host.presentation(for: focusView)!.primaryEditor)
+        check(
+            !commands.isReopening && host.model.focusedGroup == .second,
+            "T3 actual native editor focus cancels stale reopen and updates group target")
         commands.cancelReopen()
         busyRelease.signal()
         _ = busyHeld
@@ -614,7 +621,9 @@ import Darwin
         check(
             host.layoutPicker.superview !== strip && host.layoutPicker.accessibilityLabel() == "Editor layout",
             "T3 trailing picker is outside scrolling strip and labelled")
-        let choices = host.layoutPicker.menu!.items.filter { $0.action != nil }
+        let choices = host.layoutPicker.menu!.items.filter {
+            $0.identifier?.rawValue.hasPrefix("groups.layout.") == true
+        }
         check(
             choices.count == 4 && choices.allSatisfy { $0.image?.accessibilityDescription != nil }
                 && choices.filter { $0.state == .on }.count == 1,
