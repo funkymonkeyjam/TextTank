@@ -248,8 +248,9 @@ extension DocumentChecks {
             let cloneItem = NSMenuItem(
                 title: "", action: #selector(EditorWindowController.clone(_:)), keyEquivalent: "")
             check(
-                controller.validateMenuItem(cloneItem) && !controller.validateMenuItem(closeItem),
-                "without a split, Clone in Split View is enabled and Close Split View is not")
+                controller.validateMenuItem(cloneItem) && cloneItem.state == .off
+                    && !controller.validateMenuItem(closeItem),
+                "without a split, Clone is enabled and unchecked and Close Split View is disabled")
             controller.showFind(nil)
             let findResponder = window.firstResponder
             controller.closeSplit(nil)
@@ -262,8 +263,9 @@ extension DocumentChecks {
             controller.clone(nil)
             let clone = try requireValue(controller.secondary, "fixture: clone view")
             check(
-                !controller.validateMenuItem(cloneItem) && controller.validateMenuItem(closeItem),
-                "with a split, Close Split View is enabled and Clone in Split View is not")
+                controller.validateMenuItem(cloneItem) && cloneItem.state == .on
+                    && controller.validateMenuItem(closeItem),
+                "with a split, Clone stays enabled and checked and Close Split View is enabled")
             check(
                 document.editor.statusInfo.tabWidth == 2
                     && document.editor.statusInfo.useTabs == true

@@ -685,7 +685,27 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
         let menu = NSMenuItem(title: item.label, action: item.action, keyEquivalent: "")
-        return validateMenuItem(menu)
+        let enabled = validateMenuItem(menu)
+        if item.action == #selector(clone(_:)) {
+            item.menuFormRepresentation?.state = menu.state
+            let help =
+                secondary == nil
+                ? EditorToolbarCommand.split.scope
+                : Strings.text("toolbar.split.close.help", "Return to a single view of the current document.")
+            if item.toolTip != help {
+                item.toolTip = help
+                item.image = NSImage(
+                    systemSymbolName: secondary == nil ? EditorToolbarCommand.split.symbol : "checkmark.rectangle",
+                    accessibilityDescription: help)
+                if let window { EditorToolbarAccessibility.apply(to: window) }
+            }
+        }
+        return enabled
+    }
+    private func refreshCloneToolbar() {
+        for item in window?.toolbar?.items ?? [] where item.action == #selector(clone(_:)) {
+            item.isEnabled = validateToolbarItem(item)
+        }
     }
     func toolbarWillAddItem(_ notification: Notification) { scheduleToolbarArrangementSave() }
     func toolbarDidRemoveItem(_ notification: Notification) { scheduleToolbarArrangementSave() }
@@ -998,7 +1018,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             })
     }
     @objc func clone(_ sender: Any?) {
-        guard secondary == nil else { return }
+        if secondary != nil {
+            closeSplit(sender)
+            return
+        }
         let source = primaryEditor
         let clone = TTEditor(frame: split.bounds)
         // Everything document-level (text, read-only, tab settings, lexer and keyword lists,
@@ -1014,6 +1037,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         split.layoutSubtreeIfNeeded()
         clone.layoutSubtreeIfNeeded()
         window?.makeFirstResponder(clone)
+        refreshCloneToolbar()
     }
     @objc func closeSplit(_ sender: Any?) {
         guard let clone = secondary else { return }
@@ -1026,10 +1050,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         clone.retire(inFavorOf: primaryEditor)
         clone.removeFromSuperview()
         secondary = nil
+        refreshCloneToolbar()
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
-        case #selector(clone(_:)): return secondary == nil
+        case #selector(clone(_:)):
+            item.state = secondary == nil ? .off : .on
+            return true
         case #selector(closeSplit(_:)): return secondary != nil
         case #selector(command(_:)):
             if (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder is NSTextView { return false }

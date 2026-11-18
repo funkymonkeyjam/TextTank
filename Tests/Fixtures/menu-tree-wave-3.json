@@ -1437,7 +1437,7 @@
     "object": "",
     "position": "8.0",
     "target": "responder",
-    "title": "Clone in Split View"
+    "title": "Clone"
   },
   {
     "action": "closeSplit:",

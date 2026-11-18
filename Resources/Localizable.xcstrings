@@ -1432,7 +1432,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Clone in Split View"
+            "value": "Clone"
           }
         }
       }
@@ -1477,12 +1477,22 @@
         }
       }
     },
+    "toolbar.split.close.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Return to a single view of the current document."
+          }
+        }
+      }
+    },
     "toolbar.split.help": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Show another view of the current document."
+            "value": "Show a second view of the current document, or return to a single view."
           }
         }
       }

@@ -128,16 +128,58 @@ import NativeSearch
         let split = try requireValue(
             toolbar.items.first { $0.itemIdentifier.rawValue == "TextTank.Split" }, "DT fixture: Split")
         let splitMenu = try requireValue(menuItem(split.action!, in: NSApp.mainMenu), "DT fixture: menu Split")
+        let splitOverflow = try requireValue(split.menuFormRepresentation, "DT fixture: Clone overflow")
+        let singleViewHelp = split.toolTip
+        let revisionBeforeClone = document.editor.revision
         check(
-            controller.validateToolbarItem(split) && controller.validateMenuItem(splitMenu),
-            "DT-R1 Split enables on both surfaces")
+            split.label == "Clone" && controller.validateToolbarItem(split) && controller.validateMenuItem(splitMenu)
+                && splitMenu.state == .off && splitOverflow.state == .off,
+            "DS-20/22 Clone is enabled and unchecked on the toolbar, menu and overflow before splitting")
         check(
             NSApp.sendAction(split.action!, to: controller, from: split) && controller.secondary != nil,
             "DT-R1 the standard Split item executes the actual clone action")
         check(
-            !controller.validateToolbarItem(split) && !controller.validateMenuItem(splitMenu),
-            "DT-R1 Split disables on both surfaces after cloning")
+            controller.validateToolbarItem(split) && controller.validateMenuItem(splitMenu)
+                && splitMenu.state == .on && splitOverflow.state == .on
+                && split.toolTip == "Return to a single view of the current document.",
+            "DS-20/22 Clone stays enabled with a checkmark and closing help after splitting")
+        check(
+            nativeTree(window).contains {
+                nativeAttribute($0, "accessibilityLabel") == split.toolTip
+                    && nativeAttribute($0, "accessibilityRole") == "AXButton"
+            }, "DS-70 the actual Clone toolbar button describes returning to a single view")
+        let pane = try requireValue(controller.secondary, "DT fixture: Clone pane")
+        _ = pane.setSelectionAnchor(pane.utf8Data.count, caret: pane.utf8Data.count)
+        pane.replaceSelection(" through clone")
+        let editedRevision = document.editor.revision
+        check(
+            NSApp.sendAction(split.action!, to: controller, from: split)
+                && controller.secondary == nil && controller.split.arrangedSubviews.count == 1
+                && controller.activeEditor === document.editor,
+            "DS-91 clicking Clone again closes the split and returns focus to the primary editor")
+        check(
+            document.editor.text == "Owned save fixture through clone" && document.isDocumentEdited
+                && document.editor.revision == editedRevision && editedRevision > revisionBeforeClone,
+            "closing through Clone preserves shared text, revision and edited state")
+        check(
+            controller.validateToolbarItem(split) && controller.validateMenuItem(splitMenu)
+                && splitMenu.state == .off && splitOverflow.state == .off && split.toolTip == singleViewHelp,
+            "DS-22 closing clears Clone's checked state and restores its opening help")
+        document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        check(
+            document.editor.text == "Owned save fixture",
+            "the shared Undo history survives closing through Clone")
+        document.editor.readOnly = true
+        check(
+            NSApp.sendAction(splitOverflow.action!, to: controller, from: splitOverflow) && controller.secondary != nil
+                && NSApp.sendAction(splitMenu.action!, to: controller, from: splitMenu) && controller.secondary == nil,
+            "DS-20 the overflow and menu toggle the same split even in a read-only document")
+        document.editor.readOnly = false
+        controller.clone(nil)
         controller.closeSplit(nil)
+        check(
+            splitOverflow.state == .off && split.toolTip == singleViewHelp && split.isEnabled,
+            "the separate Close Split View action also resets the Clone toolbar state")
         let find = try requireValue(
             toolbar.items.first { $0.itemIdentifier.rawValue == "TextTank.Find" }, "DT fixture: Find")
         check(
