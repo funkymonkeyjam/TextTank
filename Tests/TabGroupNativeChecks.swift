@@ -808,6 +808,36 @@ import Darwin
             host.model.focusedGroup == .fourth && app.currentDocument === other && pd.activeEditor === last
                 && last.selectionRanges == ranges,
             "R1 V3-02 Match Case interaction focuses its group without changing selection")
+        func responderBelongsTo(_ editor: TTEditor) -> Bool {
+            (window.firstResponder as? NSView)?.isDescendant(of: editor) == true
+        }
+        check(responderBelongsTo(last), "R2 V3-04 Match Case moves native typing focus to its saved Clone")
+        window.makeFirstResponder(pd.findField)
+        let findResponder = window.firstResponder
+        pd.caseBox.performClick(nil)
+        check(
+            window.firstResponder === findResponder && pd.findField.currentEditor() === findResponder,
+            "R2 V3-04 Match Case preserves its own Find field editor")
+        window.makeFirstResponder(pd.replaceField)
+        let replaceResponder = window.firstResponder
+        pd.caseBox.performClick(nil)
+        check(
+            window.firstResponder === replaceResponder && pd.replaceField.currentEditor() === replaceResponder,
+            "R2 V3-04 Match Case preserves its own Replace field editor")
+        let status = try requireValue(
+            pd.presentationRoot.subviews.compactMap { $0 as? StatusBadgeRow }.first,
+            "R2 actual target status row")
+        host.activate(pa)
+        _ = status.menuProvider?(.wrap)
+        check(
+            host.active === pd && responderBelongsTo(last) && last.selectionRanges == ranges,
+            "R2 V3-04 status popup changes global and native typing target without changing Clone selection")
+        window.makeFirstResponder(pd.findField)
+        let statusResponder = window.firstResponder
+        _ = status.menuProvider?(.wrap)
+        check(
+            window.firstResponder === statusResponder && pd.findField.currentEditor() === statusResponder,
+            "R2 V3-04 status popup preserves its own field editor")
         host.activate(pa)
         let observed = RepairPublicationState()
         let token = NotificationCenter.default.addObserver(

@@ -144,8 +144,17 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             hostWindow?.attachedSheet == nil
         else { return false }
         if host.active !== self { host.tabCommands.cancelReopen() }
+        let responder = hostWindow?.firstResponder
+        let ownsResponder =
+            responder.map {
+                ($0 as? NSView)?.isDescendant(of: presentationRoot) == true || ownsFindFieldEditor($0)
+            } ?? false
+        let typingTarget = activeEditor
         host.activate(self, focus: false, explicit: explicit, preserveSelection: true)
-        return host.active === self
+        guard host.active === self else { return false }
+        // Keep an existing local field editor or keyboard control. A click in sibling chrome
+        // otherwise must move both command routing and the native typing target together.
+        return ownsResponder || hostWindow?.makeFirstResponder(typingTarget) == true
     }
     /// Copies the active pane's syntax styles to the other pane after a language or style
     /// change. The lexer itself belongs to the shared document and is never applied twice.
@@ -244,9 +253,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             compactMessage: document.recoveredOrigin == nil
                 ? document.currentSaveStateStatus : "Recovered copy — Save As to keep")
         statusDetails.menuProvider = { [weak self] field in
-            guard let self else { return nil }
-            if self.host.active !== self { self.host.tabCommands.cancelReopen() }
-            self.host.activate(self, focus: false, explicit: false, preserveSelection: true)
+            guard let self, self.focusPresentationChrome(explicit: false) else { return nil }
             EditorServices.current?.noteActiveController(self)
             self.lastEditor = self.activeEditor
             return self.statusOptionsMenu(field)
