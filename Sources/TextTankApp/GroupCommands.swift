@@ -18,13 +18,15 @@ import TextTankCore
             self.action = action
             self.target = target
             self.destination = destination
-            source =
+            let sourceSlot =
                 host.model.groups.first(where: { $0.tabs.contains { $0.id == target } })?.slot
                 ?? host.model.focusedGroup
-            sourceToken = host.groupSurfaces[source]?.generation
+            source = sourceSlot
+            sourceToken = host.groupSurfaces[sourceSlot]?.generation
             let capture = target.flatMap { host.tabCommands.capture($0) }?.members(in: host.model) ?? []
             members =
-                host.model.groups.first { $0.slot == source }?.tabs.filter { capture.contains($0.id) }.map(\.id) ?? []
+                host.model.groups.first { $0.slot == sourceSlot }?.tabs.filter { capture.contains($0.id) }.map(\.id)
+                ?? []
             destinationToken = destination.flatMap { host.groupSurfaces[$0]?.generation }
         }
     }

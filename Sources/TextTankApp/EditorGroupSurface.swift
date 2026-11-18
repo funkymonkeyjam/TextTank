@@ -79,7 +79,10 @@ final class EditorGroupContainer: NSView, NSSplitViewDelegate {
     private var root: NSView?
     private var splitMinimum: [ObjectIdentifier: CGFloat] = [:]
     private(set) var dividers: [NSSplitView] = []
+    private var synchronizing = false
+    private var alignColumns = false
     func configure(_ layout: LayoutKind, surfaces: [EditorGroupSurface]) {
+        alignColumns = false
         surfaces.forEach { $0.removeFromSuperview() }
         root?.removeFromSuperview()
         dividers = []
@@ -115,6 +118,16 @@ final class EditorGroupContainer: NSView, NSSplitViewDelegate {
             $0.adjustSubviews()
             $0.setPosition(($0.isVertical ? $0.bounds.width : $0.bounds.height) / 2, ofDividerAt: 0)
         }
+        alignColumns = layout == .grid2x2
+    }
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        guard alignColumns, !synchronizing, let source = notification.object as? NSSplitView, source.isVertical,
+            let other = dividers.first(where: { $0.isVertical && $0 !== source }), let first = source.subviews.first
+        else { return }
+        guard abs((other.subviews.first?.frame.width ?? 0) - first.frame.width) > 0.5 else { return }
+        synchronizing = true
+        other.setPosition(first.frame.width, ofDividerAt: 0)
+        synchronizing = false
     }
     func splitView(
         _ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int

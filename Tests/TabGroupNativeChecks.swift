@@ -148,6 +148,290 @@ import NativeSearch
         b.hideFind(nil)
         surface.frame = priorFrame
         surface.layoutSubtreeIfNeeded()
-        // This cold process intentionally starts with release; additional cases follow only after it passes.
+        try groupCases(host: host, app: app, root: root)
     }
+    private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    private static func groupCases(host: WorkspaceWindowController, app: AppDelegate, root: URL) throws {
+        let commands = host.tabCommands, window = host.window!
+        func reset() {
+            commands.isTerminating = true
+            NSDocumentController.shared.documents.forEach { $0.close() }
+            commands.isTerminating = false
+            commands.clearHistory()
+            commands.decisionHandler = nil
+            commands.saveHandler = nil
+            _ = host.setEditorLayout(.single)
+        }
+        func saved(_ name: String, _ text: String = "one\ntwo\nthree\n") throws -> TextDocument {
+            let url = root.appendingPathComponent(name + ".txt")
+            try Data(text.utf8).write(to: url)
+            return try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(url), from: url)
+        }
+        func id(_ doc: TextDocument, in slot: GroupSlot? = nil) -> TabID {
+            host.model.groups.filter { slot == nil || $0.slot == slot }.flatMap(\.tabs).first {
+                $0.documentID == doc.runtimeID
+            }!.id
+        }
+        func item(_ menu: NSMenu, _ identifier: String) throws -> NSMenuItem {
+            func all(_ menu: NSMenu) -> [NSMenuItem] { menu.items + menu.items.flatMap { $0.submenu.map(all) ?? [] } }
+            return try requireValue(
+                all(menu).first { $0.identifier?.rawValue == identifier }, "T3 native item " + identifier)
+        }
+        func invoke(_ item: NSMenuItem) {
+            if let action = item.action { _ = NSApp.sendAction(action, to: item.target, from: item) }
+        }
+        func nativeDecision(_ tab: TabID, _ choice: String) throws {
+            host.closeTab(tab, sender: nil)
+            spinUntil("T3 final native review") { window.attachedSheet != nil }
+            var button: NSButton?
+            spinUntil("T3 final native button") {
+                button = window.attachedSheet?.contentView.map(descendants)?.compactMap { $0 as? NSButton }.first {
+                    $0.title == choice || (choice == "Discard" && ["Don’t Save", "Don't Save"].contains($0.title))
+                }
+                return button != nil
+            }
+            try requireValue(button, "T3 native " + choice).performClick(nil)
+            spinUntil("T3 final native completion") { window.attachedSheet == nil }
+        }
+        // The only tab left by the cold fixture has a local Clone: it is still a final tab.
+        let original = try requireValue(host.active?.document as? TextDocument, "T3 cold survivor doc")
+        let originalID = host.model.activeTab!.id
+        try nativeDecision(originalID, "Cancel")
+        check(
+            original.isOpen && host.presentation(for: originalID)?.secondary != nil,
+            "T3 final dirty Cancel preserves surviving primary and Clone")
+        try nativeDecision(originalID, "Discard")
+        spinUntil("T3 final discard closes") { original.isClosed }
+        check(host.presentations.isEmpty, "T3 final dirty Discard closes exactly one shared document")
+        reset()
+        let a = try saved("group-A"), aid = id(a)
+        let ap = try requireValue(host.presentation(for: aid), "T3 moving adapter")
+        ap.clone(nil)
+        ap.activeEditor.restoreClosedTabView(anchor: 1, caret: 3, firstVisibleLine: 0)
+        host.setPinnedTabs([aid], target: aid, pinned: true)
+        let clone = ap.secondary, revision = a.editor.revision
+        check(host.setEditorLayout(.twoColumns), "T3 expand columns")
+        check(host.model.groups[1].tabs.isEmpty, "T3 expanded group starts empty")
+        host.focusGroup(.second)
+        check(
+            app.currentEditor == nil && app.currentDocument == nil && app.currentDocumentController == nil,
+            "T3 known empty focused group has no stale global target")
+        let chooserItem = NSMenuItem(
+            title: "Open Documents…", action: #selector(AppDelegate.showDocumentTabs(_:)), keyEquivalent: "")
+        check(app.validateMenuItem(chooserItem), "T3 chooser remains available from empty group")
+        app.newDocument(nil)
+        let created = try requireValue(app.currentDocument, "T3 New in empty group")
+        check(
+            host.model.groups[1].tabs.contains { $0.documentID == created.runtimeID }
+                && host.model.groups[0].tabs.map(\.id) == [aid], "T3 ordinary New scopes to focused group")
+        created.close()
+        let move = try item(commands.contextMenu(for: aid), "groups.move.2")
+        invoke(move)
+        check(
+            host.presentation(for: aid) === ap && ap.secondary === clone && host.model.focusedGroup == .second
+                && host.model.groups[0].tabs.isEmpty, "T3 native Move retains exact presentation Clone and empty source"
+        )
+        check(
+            host.model.groups[1].tabs.first?.isPinned == true && ap.activeEditor.selectionCaret == 3
+                && a.editor.revision == revision, "T3 Move preserves pin viewport and revision")
+        let a1 = try requireValue(host.openView(aid, in: .first), "T3 additional view")
+        let other = try requireValue(host.presentation(for: a1), "T3 additional primary")
+        other.primaryEditor.restoreClosedTabView(anchor: 0, caret: 1, firstVisibleLine: 0)
+        check(
+            other.primaryEditor !== ap.primaryEditor && other.secondary == nil
+                && host.model.groups[0].tabs.first?.isPinned == false,
+            "T3 additional view starts unpinned without Clone")
+        check(
+            host.openView(aid, in: .first) == a1 && host.presentations.count == 2,
+            "T3 duplicate Open selects existing destination")
+        let rows = app.documentTabChoices(host.presentations)
+        check(
+            Set(rows.map(\.id)).count == 2 && rows.allSatisfy { $0.title.contains("Group") },
+            "T3 chooser lists every exact TabID with group label")
+        host.moveTabs([aid], target: aid, to: .first)
+        check(
+            host.presentation(for: aid) == nil && host.presentation(for: a1) === other
+                && other.primaryEditor.selectionCaret == 1 && a.isOpen,
+            "T3 duplicate Move keeps destination position and retires source")
+        // A menu destination is a live group generation, not a reusable slot.
+        let stale = try item(commands.contextMenu(for: a1), "groups.additional.2")
+        let oldToken = host.groupSurfaces[.second]!.generation
+        check(host.setEditorLayout(.single) && host.setEditorLayout(.twoColumns), "T3 remove then recreate destination")
+        check(host.groupSurfaces[.second]!.generation != oldToken, "T3 recreated slot has new generation")
+        invoke(stale)
+        check(host.model.groups[1].tabs.isEmpty, "T3 stale destination invocation changes nothing")
+        let live = try item(commands.contextMenu(for: a1), "groups.additional.2")
+        let token = host.groupSurfaces[.second]!.generation
+        check(host.setEditorLayout(.twoRows), "T3 orientation transition")
+        invoke(live)
+        check(
+            host.groupSurfaces[.second]!.generation == token && host.model.groups[1].tabs.count == 1,
+            "T3 orientation preserves captured destination continuity")
+        let beforeRefusal = host.model, minBefore = window.contentMinSize, frameBefore = window.frame
+        check(
+            !host.setEditorLayout(.grid2x2, availableContent: TabGroupExtent(width: 400, height: 300)),
+            "T3 native screen-fit refusal")
+        check(
+            host.model == beforeRefusal && window.contentMinSize == minBefore && window.frame == frameBefore
+                && host.lastTabMessage.contains("cannot fit"),
+            "T3 refused layout preserves model frame minimum and explains why")
+        // Group-local selection, pin, reorder, cycle, and captured batch target.
+        reset()
+        let x = try saved("local-X"), xid = id(x)
+        _ = host.setEditorLayout(.twoColumns)
+        host.focusGroup(.second)
+        let y = try saved("local-Y"), yid = id(y), z = try saved("local-Z"), zid = id(z)
+        let firstTabs = host.model.groups[0].tabs
+        _ = host.selectTab(yid, gesture: .plain)
+        _ = host.selectTab(zid, gesture: .toggle)
+        let captured = try item(commands.contextMenu(for: yid), "groups.move.1")
+        check(captured.title.contains("Group 1"), "T3 native destination number and position")
+        _ = host.selectTab(zid, gesture: .plain)
+        invoke(captured)
+        check(
+            host.model.groups[0].tabs.map(\.id) == firstTabs.map(\.id) + [yid, zid]
+                && host.model.groups[1].tabs.isEmpty, "T3 captured batch moves original set despite later selection")
+        check(
+            host.tabSelection.selected(in: host.model, group: .first) == [yid, zid] && host.model.activeTab?.id == yid,
+            "T3 destination selects resolved batch and clicked active")
+        host.cycle(1)
+        check(
+            host.model.activeTab?.id == zid && host.tabSelection.selected(in: host.model, group: .first) == [zid],
+            "T3 Next cycles and collapses only focused selection")
+        // Every Grid position and a global focused winner present in all four groups.
+        reset()
+        let shared = try saved("collapse-shared", String(repeating: "line\n", count: 80)), g1 = id(shared)
+        _ = host.setEditorLayout(.grid2x2)
+        let g2 = try requireValue(host.openView(g1, in: .second), "T3 G2"),
+            g3 = try requireValue(host.openView(g1, in: .third), "T3 G3"),
+            g4 = try requireValue(host.openView(g1, in: .fourth), "T3 G4")
+        host.setPinnedTabs([g3], target: g3, pinned: true)
+        let winner = try requireValue(host.presentation(for: g4), "T3 G4 winner")
+        winner.clone(nil)
+        winner.activeEditor.restoreClosedTabView(anchor: 3, caret: 8, firstVisibleLine: 10)
+        let winnerEditor = winner.activeEditor, winnerClone = winner.secondary,
+            allDocs = NSDocumentController.shared.documents.count, history = commands.history.records.count
+        let frames = GroupSlot.allCases.map {
+            host.groupSurfaces[$0]!.convert(host.groupSurfaces[$0]!.bounds, to: window.contentView)
+        }
+        check(
+            frames[0].midX < frames[1].midX && frames[0].midY > frames[2].midY && frames[2].midX < frames[3].midX,
+            "T3 Grid places 1 top-left 2 top-right 3 bottom-left 4 bottom-right")
+        let vertical = host.groupContainer.dividers.filter(\.isVertical)
+        if let top = vertical.first, let bottom = vertical.last {
+            top.setPosition(350, ofDividerAt: 0)
+            check(
+                abs(top.subviews[0].frame.width - bottom.subviews[0].frame.width) < 1, "T3 Grid columns remain aligned")
+            let position = top.subviews[0].frame.width
+            _ = host.setEditorLayout(.grid2x2)
+            check(top.subviews[0].frame.width == position, "T3 unchanged layout preserves divider position")
+        }
+        check(host.setEditorLayout(.single), "T3 collapse Grid")
+        check(
+            host.model.activeTab?.id == g4 && host.presentation(for: g4) === winner
+                && winner.activeEditor === winnerEditor && winner.secondary === winnerClone
+                && winnerEditor.selectionCaret == 8,
+            "T3 collapse preserves exact focused global winner including Clone and viewport")
+        check(
+            host.presentations.count == 1 && host.presentation(for: g1) == nil && host.presentation(for: g2) == nil
+                && host.presentation(for: g3) == nil && NSDocumentController.shared.documents.count == allDocs
+                && commands.history.records.count == history,
+            "T3 collapse deduplicates every losing view without close or history")
+        // Session capture and polling are per document / visible presentation.
+        let session = try app.workspace.capture(name: "Stage 3")
+        check(
+            session.documents.count == 1 && session.documents[0].selection.caretByte == 8,
+            "T3 session deduplicates and captures focused Clone selection")
+        _ = host.setEditorLayout(.grid2x2)
+        for slot in [GroupSlot.second, .third, .fourth] {
+            _ = host.openView(g4, in: slot)
+            host.active?.clone(nil)
+        }
+        check(
+            host.presentations.count == 4 && host.presentations.allSatisfy { $0.views.count == 2 && $0.isPresented },
+            "T3 Grid mounts four shared presentations and four local Clones")
+        let captures = host.presentations.map(\.statusMetricsCaptureCount)
+        let started = ProcessInfo.processInfo.systemUptime
+        for _ in 0..<20 { host.presentations.forEach { $0.statusTimerTick() } }
+        check(
+            zip(host.presentations, captures).allSatisfy { $0.0.statusMetricsCaptureCount - $0.1 <= 1 },
+            "T3 repeated same-revision Grid ticks start at most one metrics job per presentation")
+        print("T3 GRID_TICKS seconds=\(ProcessInfo.processInfo.systemUptime-started) presentations=4 editors=8")
+        window.orderOut(nil)
+        check(host.presentations.allSatisfy { !$0.statusTimerActive }, "T3 hidden Grid stops every presentation poller")
+        window.makeKeyAndOrderFront(nil)
+        // Grid Close Group retains the pane; two-pane Close Group normalizes its survivor.
+        host.focusGroup(.fourth)
+        host.closeEditorGroup(.fourth)
+        check(
+            host.model.layout == .grid2x2 && host.model.groups[3].tabs.isEmpty && host.model.focusedGroup == .first
+                && host.model.activeTab?.documentID == shared.runtimeID,
+            "T3 focused Grid Close Group empties pane and focuses resolved destination")
+        _ = host.setEditorLayout(.twoColumns)
+        host.closeEditorGroup(.first)
+        check(
+            host.model.layout == .single && shared.isOpen && host.model.groups.count == 1,
+            "T3 two-pane Close Group consolidates without closing document")
+        reset()
+        // A non-final saved close records that exact view. Missing disk cannot affect live reopen.
+        let liveDoc = try saved("history-live", "é\nabcdef\n"), h1 = id(liveDoc)
+        _ = host.setEditorLayout(.twoColumns)
+        let h2 = try requireValue(host.openView(h1, in: .second), "T3 history second view")
+        let hp = try requireValue(host.presentation(for: h2), "T3 history presentation")
+        hp.clone(nil)
+        hp.activeEditor.restoreClosedTabView(anchor: 3, caret: 7, firstVisibleLine: 1)
+        host.setPinnedTabs([h2], target: h2, pinned: true)
+        liveDoc.editor.text = "é\nunsaved live bytes\n"
+        hp.activeEditor.restoreClosedTabView(anchor: 3, caret: 7, firstVisibleLine: 1)
+        host.closeTab(h2, sender: nil)
+        let record = try requireValue(commands.history.latest, "T3 non-final history record")
+        check(
+            record.group == .second && record.pinned && record.anchor == 3 && record.caret == 7,
+            "T3 history captures exact closed Clone offsets and pin")
+        try FileManager.default.removeItem(at: liveDoc.fileURL!)
+        commands.perform(.reopen, target: nil)
+        let reopened = try requireValue(host.active, "T3 live reopened adapter")
+        check(
+            host.model.focusedGroup == .second && host.model.activeTab?.isPinned == true
+                && reopened.primaryEditor.text == "é\nunsaved live bytes\n"
+                && reopened.primaryEditor.selectionCaret == 7 && liveDoc.isDocumentEdited
+                && !commands.hasPendingDiskRead,
+            "T3 missing-file live reopen restores shared dirty bytes pin and viewport without disk read")
+        check(
+            NSDocumentController.shared.documents.count == 1
+                && reopened.primaryEditor.sharesDocument(with: liveDoc.editor),
+            "T3 live reopen creates no NSDocument or second text buffer")
+        // Group-local bulk close of dirty shared views asks for no decisions.
+        var prompts = 0
+        commands.decisionHandler = { _, reply in
+            prompts += 1
+            reply(.cancel)
+        }
+        commands.perform(.closeGroup, target: host.model.activeTab!.id, captured: true)
+        spinUntil("T3 shared bulk close") { !commands.isBusy }
+        check(
+            prompts == 0 && liveDoc.isOpen && host.model.groups[1].tabs.count == 1,
+            "T3 implicit bulk close protects pinned shared tab")
+        host.setPinnedTabs([host.model.activeTab!.id], target: host.model.activeTab!.id, pinned: false)
+        commands.perform(.closeGroup, target: host.model.activeTab!.id, captured: true)
+        spinUntil("T3 non-final unpinned bulk close") { !commands.isBusy }
+        check(
+            prompts == 0 && liveDoc.isOpen && host.model.groups[1].tabs.isEmpty && host.model.groups[0].tabs.count == 1,
+            "T3 group-local dirty shared bulk close retires view without prompt")
+        reset()
+        // Final save through a surviving additional view follows the native lifecycle.
+        let saveDoc = try saved("final-save"), s1 = id(saveDoc)
+        _ = host.setEditorLayout(.twoColumns)
+        let s2 = try requireValue(host.openView(s1, in: .second), "T3 save view")
+        host.closeTab(s1, sender: nil)
+        saveDoc.editor.text = "saved through surviving view"
+        try nativeDecision(s2, "Save")
+        spinUntil("T3 saved final closes") { saveDoc.isClosed }
+        check(
+            (try? String(contentsOf: root.appendingPathComponent("final-save.txt"), encoding: .utf8))
+                == "saved through surviving view", "T3 native Save after original retirement writes exact shared bytes")
+        reset()
+        _ = xid // identities are deliberately retained only as values.
+    }
+
 }

@@ -177,7 +177,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         }
         return "Group \(slot.rawValue)" + (position.isEmpty ? "" : ", " + position)
     }
-    @discardableResult func setEditorLayout(_ layout: LayoutKind) -> Bool {
+    @discardableResult func setEditorLayout(_ layout: LayoutKind, availableContent: TabGroupExtent? = nil) -> Bool {
         guard !tabCommands.isBusy, window?.attachedSheet == nil else { return false }
         if layout == model.layout { return true }
         let minimum = TabGroupGeometry.minimumContent(layout)
@@ -185,7 +185,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             let available = window.contentRect(forFrameRect: screen.visibleFrame).size
             guard
                 TabGroupGeometry.fits(
-                    minimum, available: TabGroupExtent(width: available.width, height: available.height))
+                    minimum,
+                    available: availableContent ?? TabGroupExtent(width: available.width, height: available.height))
             else {
                 showTabMessage("This screen cannot fit the minimum size for that editor layout.")
                 return false
