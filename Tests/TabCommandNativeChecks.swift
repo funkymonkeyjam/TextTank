@@ -9,7 +9,16 @@ import NativeSearch
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
     func applicationDidFinishLaunching(_ notification: Notification) { launched?() }
 }
-@MainActor private final class MenuTrackingContext { var tracked: NSMenu? }
+@MainActor private final class MenuTrackingContext: NSObject {
+    var tracked: NSMenu?
+    @objc func beganTracking(_ note: Notification) {
+        tracked = note.object as? NSMenu
+        let timer = Timer(timeInterval: 0.1, repeats: false) { [self] _ in
+            MainActor.assumeIsolated { tracked?.cancelTrackingWithoutAnimation() }
+        }
+        RunLoop.main.add(timer, forMode: .eventTracking)
+    }
+}
 @MainActor private final class TabCommandContext {
     let isolated: IsolatedSupportDirectory
     init() throws { isolated = try IsolatedSupportDirectory("TabCommandProcess") }
@@ -105,18 +114,10 @@ import NativeSearch
             "T1-R1 standard accessibility Show Menu action exists")
         // Close the actual native menu through its tracking run loop, without dispatching an item.
         let menuContext = MenuTrackingContext()
-        let trackingObserver = NotificationCenter.default.addObserver(
-            forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main
-        ) { note in
-            MainActor.assumeIsolated {
-                menuContext.tracked = note.object as? NSMenu
-                let timer = Timer(timeInterval: 0.1, repeats: false) { _ in
-                    MainActor.assumeIsolated { menuContext.tracked?.cancelTrackingWithoutAnimation() }
-                }
-                RunLoop.main.add(timer, forMode: .eventTracking)
-            }
-        }
-        defer { NotificationCenter.default.removeObserver(trackingObserver) }
+        NotificationCenter.default.addObserver(
+            menuContext, selector: #selector(MenuTrackingContext.beganTracking(_:)),
+            name: NSMenu.didBeginTrackingNotification, object: nil)
+        defer { NotificationCenter.default.removeObserver(menuContext) }
         select.rightMouseDown(with: event)
         check(
             host.model.activeTab?.id == active && window.firstResponder === before,
