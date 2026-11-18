@@ -546,7 +546,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Searching: %@ files; %@ matches; %@ read\u2026"
+            "value": "Searching: %@ files; %@ matches; %@ read…"
           }
         }
       }
@@ -557,7 +557,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Searching: %@ files; %@ match; %@ read\u2026"
+            "value": "Searching: %@ files; %@ match; %@ read…"
           }
         }
       }
@@ -568,7 +568,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Searching: %@ file; %@ matches; %@ read\u2026"
+            "value": "Searching: %@ file; %@ matches; %@ read…"
           }
         }
       }
@@ -579,7 +579,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Searching: %@ file; %@ match; %@ read\u2026"
+            "value": "Searching: %@ file; %@ match; %@ read…"
           }
         }
       }
@@ -590,7 +590,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ file replaced \u00b7 %@ unchanged/skipped/failed. Recovery copies retained."
+            "value": "%@ file replaced · %@ unchanged/skipped/failed. Recovery copies retained."
           }
         }
       }
@@ -601,7 +601,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ files replaced \u00b7 %@ unchanged/skipped/failed. Recovery copies retained."
+            "value": "%@ files replaced · %@ unchanged/skipped/failed. Recovery copies retained."
           }
         }
       }
@@ -646,17 +646,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ match in %@ file searched. Not searched: %@. Excluded: %@. Status: %@."
-          }
-        }
-      }
-    },
-    "form.action.scope": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ in %@"
           }
         }
       }
@@ -777,7 +766,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Load %@ rule from \u2018%@\u2019. Canceling the builder will still preserve the saved automation."
+            "value": "Load %@ rule from ‘%@’. Canceling the builder will still preserve the saved automation."
           }
         }
       }
@@ -788,7 +777,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Load %@ rules from \u2018%@\u2019. Canceling the builder will still preserve the saved automation."
+            "value": "Load %@ rules from ‘%@’. Canceling the builder will still preserve the saved automation."
           }
         }
       }
@@ -1167,17 +1156,6 @@
         }
       }
     },
-    "status.commandUnavailable": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This editor command is unavailable."
-          }
-        }
-      }
-    },
     "status.document": {
       "extractionState": "manual",
       "localizations": {
@@ -1277,17 +1255,6 @@
         }
       }
     },
-    "status.messageDetails": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Message details are available."
-          }
-        }
-      }
-    },
     "status.options": {
       "extractionState": "manual",
       "localizations": {
@@ -1317,28 +1284,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Document access"
-          }
-        }
-      }
-    },
-    "status.remindersAdded": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Items were added in Reminders. Editor Undo does not remove them."
-          }
-        }
-      }
-    },
-    "status.searchFailed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Search could not complete."
           }
         }
       }
@@ -1383,196 +1328,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Line wrapping"
-          }
-        }
-      }
-    },
-    "tabs.close": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Close %@"
-          }
-        }
-      }
-    },
-    "tabs.edited": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@, edited"
-          }
-        }
-      }
-    },
-    "tabs.pinned": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@, pinned"
-          }
-        }
-      }
-    },
-    "tabs.pinnedEdited": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@, pinned, edited"
-          }
-        }
-      }
-    },
-    "toolbar.automations": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Automations"
-          }
-        }
-      }
-    },
-    "toolbar.automations.help": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Run a saved automation or manage automations."
-          }
-        }
-      }
-    },
-    "toolbar.customize": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Customize Toolbar\u2026"
-          }
-        }
-      }
-    },
-    "toolbar.find": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Find\u2026"
-          }
-        }
-      }
-    },
-    "toolbar.find.help": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Find text in the current document."
-          }
-        }
-      }
-    },
-    "toolbar.new": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "New"
-          }
-        }
-      }
-    },
-    "toolbar.new.help": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Create a new document."
-          }
-        }
-      }
-    },
-    "toolbar.open": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open\u2026"
-          }
-        }
-      }
-    },
-    "toolbar.open.help": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose a document to open."
-          }
-        }
-      }
-    },
-    "toolbar.save": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Save"
-          }
-        }
-      }
-    },
-    "toolbar.save.help": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Save the current document."
-          }
-        }
-      }
-    },
-    "toolbar.show": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Show Toolbar"
-          }
-        }
-      }
-    },
-    "toolbar.split": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clone"
-          }
-        }
-      }
-    },
-    "toolbar.split.close.help": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Return to a single view of the current document."
-          }
-        }
-      }
-    },
-    "toolbar.split.help": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Show a second view of the current document, or return to a single view."
           }
         }
       }
@@ -1628,6 +1383,251 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ hidden, symbolic-link or special entries skipped; %@-entry listing limit reached."
+          }
+        }
+      }
+    },
+    "toolbar.new": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New"
+          }
+        }
+      }
+    },
+    "toolbar.open": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open…"
+          }
+        }
+      }
+    },
+    "toolbar.save": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save"
+          }
+        }
+      }
+    },
+    "toolbar.find": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find…"
+          }
+        }
+      }
+    },
+    "toolbar.split": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clone"
+          }
+        }
+      }
+    },
+    "toolbar.new.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create a new document."
+          }
+        }
+      }
+    },
+    "toolbar.open.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a document to open."
+          }
+        }
+      }
+    },
+    "toolbar.save.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save the current document."
+          }
+        }
+      }
+    },
+    "toolbar.find.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find text in the current document."
+          }
+        }
+      }
+    },
+    "toolbar.split.close.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Return to a single view of the current document."
+          }
+        }
+      }
+    },
+    "toolbar.split.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show a second view of the current document, or return to a single view."
+          }
+        }
+      }
+    },
+    "toolbar.automations": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automations"
+          }
+        }
+      }
+    },
+    "toolbar.automations.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run a saved automation or manage automations."
+          }
+        }
+      }
+    },
+    "toolbar.show": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Toolbar"
+          }
+        }
+      }
+    },
+    "toolbar.customize": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Customize Toolbar…"
+          }
+        }
+      }
+    },
+    "form.action.scope": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ in %@"
+          }
+        }
+      }
+    },
+    "status.commandUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This editor command is unavailable."
+          }
+        }
+      }
+    },
+    "status.messageDetails": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message details are available."
+          }
+        }
+      }
+    },
+    "status.remindersAdded": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Items were added in Reminders. Editor Undo does not remove them."
+          }
+        }
+      }
+    },
+    "status.searchFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search could not complete."
+          }
+        }
+      }
+    },
+    "tabs.close": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close %@"
+          }
+        }
+      }
+    },
+    "tabs.edited": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, edited"
+          }
+        }
+      }
+    },
+    "tabs.pinned": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, pinned"
+          }
+        }
+      }
+    },
+    "tabs.pinnedEdited": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, pinned, edited"
           }
         }
       }
