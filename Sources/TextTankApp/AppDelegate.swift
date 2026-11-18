@@ -41,11 +41,15 @@ import AppKit
     /// a Run result or another auxiliary window may be main. Nil once that document has closed.
     var currentDocumentController: EditorWindowController? {
         let controller = knownWorkspace.map { $0.active } ?? lastDocumentController
-        return (controller?.document as? TextDocument)?.isOpen == true ? controller : nil
+        guard let controller, !controller.isRetired, !controller.host.isMutatingGroups,
+            (controller.document as? TextDocument)?.isOpen == true
+        else { return nil }
+        return controller
     }
     var currentDocument: TextDocument? { currentDocumentController?.document as? TextDocument }
     var currentEditor: TTEditor? { currentDocumentController?.activeEditor }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard knownWorkspace?.isMutatingGroups != true else { return false }
         switch item.action {
         case #selector(performTabCommand(_:)):
             guard let raw = item.representedObject as? String, let command = TabCommand(rawValue: raw) else {
@@ -249,6 +253,7 @@ import AppKit
         lastDocumentController = controller
     }
     @objc func newDocument(_ sender: Any?) {
+        guard knownWorkspace?.isMutatingGroups != true else { return }
         DocumentFactory.makeUntitled()
     }
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
@@ -588,6 +593,7 @@ import AppKit
     private func cycleDocumentTab(_ direction: Int) { WorkspaceWindowController.current.cycle(direction) }
     private var documentsPanel: ChoicePanel?
     @MainActor @objc func showDocumentTabs(_ sender: Any?) {
+        guard knownWorkspace?.isMutatingGroups != true else { return }
         if let documentsPanel {
             documentsPanel.refresh()
             documentsPanel.form.window.makeKeyAndOrderFront(nil)

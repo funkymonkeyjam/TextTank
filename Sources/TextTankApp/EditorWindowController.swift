@@ -131,6 +131,22 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
         editor.menu = EditorServices.current?.automations?.contextMenu()
     }
+    /// Reading currentEditor never creates the window's shared field editor.
+    private func ownsFindFieldEditor(_ responder: NSResponder) -> Bool {
+        let fields: [NSTextField] = [findField, replaceField]
+        return fields.contains { field in
+            guard let current = field.currentEditor() else { return false }
+            return current === responder
+        }
+    }
+    @discardableResult private func focusPresentationChrome(explicit: Bool = true) -> Bool {
+        guard !isRetired, !statusClosed, !host.isMutatingGroups, !host.tabCommands.isBusy,
+            hostWindow?.attachedSheet == nil
+        else { return false }
+        if host.active !== self { host.tabCommands.cancelReopen() }
+        host.activate(self, focus: false, explicit: explicit, preserveSelection: true)
+        return host.active === self
+    }
     /// Copies the active pane's syntax styles to the other pane after a language or style
     /// change. The lexer itself belongs to the shared document and is never applied twice.
     func syncPaneStyles(from source: TTEditor) {
@@ -149,13 +165,21 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             precondition(Thread.isMainThread)
             MainActor.assumeIsolated {
 
-                guard let self, let responder = hostWindow.firstResponder as? NSView,
-                    let pane = self.views.last(where: { responder.isDescendant(of: $0) })
+                guard let self, !self.isRetired, !self.host.isMutatingGroups,
+                    let responder = hostWindow.firstResponder
                 else { return }
-                guard !self.isRetired, !self.host.isMutatingGroups else { return }
-                if self.host.active !== self { self.host.tabCommands.cancelReopen() }
-                self.host.activate(self, focus: false, explicit: false, preserveSelection: true)
-                self.lastEditor = pane
+                let view = responder as? NSView
+                let pane = view.flatMap { value in self.views.last(where: { value.isDescendant(of: $0) }) }
+                let belongs =
+                    view?.isDescendant(of: self.presentationRoot) == true || self.ownsFindFieldEditor(responder)
+                guard pane != nil || belongs else { return }
+                if let pane {
+                    if self.host.active !== self { self.host.tabCommands.cancelReopen() }
+                    self.host.activate(self, focus: false, explicit: false, preserveSelection: true)
+                    self.lastEditor = pane
+                } else {
+                    _ = self.focusPresentationChrome(explicit: false)
+                }
                 self.updateInlineFindValidation()
 
             }
@@ -686,13 +710,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     func retireTab(inFavorOf successor: TTEditor) {
         guard !isRetired else { return }
         isRetired = true
+        let retiring = views
+        // Invalidate every pane before forms, macro hooks or retirement notifications
+        // can synchronously query another pane in this retiring tab.
+        retiring.forEach { EditorLifetime.retire($0) }
         prepareForClose()
         // Detach the whole native root before removing its children: AppKit may retain the
         // first removed container, but it must not retain retired editors or this adapter.
         presentationRoot.removeFromSuperview()
-        for view in views {
+        for view in retiring {
             EditorServices.current?.macros?.editorWillRetire(view)
-            EditorLifetime.retire(view)
             view.retire(inFavorOf: successor)
             view.onMacroStep = nil
             view.onChange = nil
@@ -841,12 +868,21 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         guard !findField.stringValue.isEmpty else { return }
         performFind(backwards: NSApp.currentEvent?.modifierFlags.contains(.shift) == true, focusEditor: false)
     }
+    func controlTextDidBeginEditing(_ notification: Notification) {
+        if let field = notification.object as? NSTextField, field === findField || field === replaceField {
+            _ = focusPresentationChrome()
+        }
+    }
     func controlTextDidChange(_ notification: Notification) {
         if let field = notification.object as? NSTextField, field === findField || field === replaceField {
+            _ = focusPresentationChrome()
             cancelInlineSearch()
         }
     }
-    @objc private func inlineFindOptionsChanged(_ sender: Any?) { cancelInlineSearch() }
+    @objc private func inlineFindOptionsChanged(_ sender: Any?) {
+        guard focusPresentationChrome() else { return }
+        cancelInlineSearch()
+    }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         guard control === findField else { return false }
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
@@ -868,6 +904,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     /// Replacing is strict: a caret, several selections or text that is not a match is never inserted into.
     func replaceSelectionFromBar() throws {
+        guard focusPresentationChrome() else { return }
         let editor = activeEditor
         try editor.requireWritable()
         guard editor.selectionCount == 1, editor.selectionStart < editor.selectionEnd else {
@@ -899,6 +936,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     /// Only scheduling and feedback belong to the bar. SearchController owns engine, navigation and replacement.
     private func beginInlineSearch(action: String, focusEditor: Bool) {
+        guard focusPresentationChrome() else { return }
         let editor = activeEditor
         // Menu/button actions commit the field editor and restore typing to the document. Return
         // keeps the field editor, so repeated Return and Shift-Return continue to work (DS-35).

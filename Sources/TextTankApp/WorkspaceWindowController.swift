@@ -26,11 +26,12 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     private var recent: [DocumentID: [TabID]] = [:]
     private(set) var isMutatingGroups = false
     var acceptsDocumentCreation: Bool {
+        guard !isMutatingGroups else { return false }
         if let current = EditorServices.current?.workspaceHost { return current === self }
         return Self.fallback === self
     }
-    var presentations: [EditorWindowController] { model.groups.flatMap(\.tabs).compactMap { entries[$0.id] } }
-    var active: EditorWindowController? { model.activeTab.flatMap { entries[$0.id] } }
+    var presentations: [EditorWindowController] { model.groups.flatMap(\.tabs).compactMap { presentation(for: $0.id) } }
+    var active: EditorWindowController? { model.activeTab.flatMap { presentation(for: $0.id) } }
     private var openIDs: Set<DocumentID> { Set(documents.keys) }
     private(set) var groupSurfaces: [GroupSlot: EditorGroupSurface] = [:]
     let groupContainer = EditorGroupContainer()
@@ -116,7 +117,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     func presentation(for document: DocumentID) -> EditorWindowController? {
         if let active, (active.document as? TextDocument)?.runtimeID == document { return active }
-        if let p = recent[document]?.compactMap({ entries[$0] }).first { return p }
+        if let p = recent[document]?.compactMap({ entries[$0] }).first(where: { !$0.isRetired }) { return p }
         return presentations.first { ($0.document as? TextDocument)?.runtimeID == document }
     }
     func isPresented(_ presentation: EditorWindowController) -> Bool {
@@ -263,29 +264,40 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         else { return }
         let resolved = priorActive.flatMap { plan.resolved[$0] }
         let destination = model.groups.first { $0.tabs.contains { $0.id == resolved } }?.slot ?? model.focusedGroup
-        showTabMessage(
-            "Closed Group \(slot.rawValue). " + (name.map { $0 + " is in " } ?? "All documents remain open. Focused ")
-                + groupLabel(destination) + ".")
+        if let name {
+            showTabMessage(
+                String(format: "Closed Group %ld. %@ is in %@.", slot.rawValue, name, groupLabel(destination)))
+        } else {
+            showTabMessage(
+                String(
+                    format: "Closed Group %ld. All documents remain open. %@ is focused.", slot.rawValue,
+                    groupLabel(model.focusedGroup)))
+        }
     }
     @discardableResult func applyGroupChange(_ plan: TabGroupChange) -> Bool {
         guard !isMutatingGroups, !tabCommands.isBusy, !tabCommands.isReopening, window?.attachedSheet == nil,
             plan.isCurrent(workspace: model)
         else { return false }
         do { try plan.result.validate(openDocuments: openIDs) } catch { return false }
-        isMutatingGroups = true
         let before = model, selection = tabSelection
         let originalActive = active, originalResponder = window?.firstResponder
+        isMutatingGroups = true
         for tab in plan.created {
-            guard let doc = documents[tab.documentID]?.value, let source = presentation(for: tab.documentID) else {
+            guard let doc = documents[tab.documentID]?.value,
+                let sourceID = plan.resolved.first(where: { $0.value == tab.id })?.key,
+                let source = entries[sourceID], !source.isRetired, source.document === doc
+            else {
                 isMutatingGroups = false
                 return false
             }
-            let editor = TTEditor(frame: source.primaryEditor.frame)
-            editor.shareDocument(with: source.activeEditor)
-            editor.adoptViewState(from: source.activeEditor)
+            // The validated plan maps the chosen source TabID to this fresh view. A
+            // document-MRU lookup would copy an unrelated sibling's caret/wrap/zoom.
+            let seed = source.activeEditor
+            let editor = TTEditor(frame: seed.frame)
+            editor.shareDocument(with: seed)
+            editor.adoptViewState(from: seed)
             editor.restoreClosedTabView(
-                anchor: source.activeEditor.selectionAnchor, caret: source.activeEditor.selectionCaret,
-                firstVisibleLine: source.activeEditor.firstVisibleLine)
+                anchor: seed.selectionAnchor, caret: seed.selectionCaret, firstVisibleLine: seed.firstVisibleLine)
             let p = EditorWindowController(document: doc, editor: editor)
             doc.addWindowController(p)
             entries[tab.id] = p
@@ -348,7 +360,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     func unregister(_ presentation: EditorWindowController, document: TextDocument) {
         guard let id = presentation.tabID, entries[id] === presentation else { return }
-        let wasActive = active === presentation, before = model
+        let wasActive = model.activeTab?.id == id, before = model
         _ = try? model.remove(id, reviewed: true, openDocuments: openIDs)
         presentation.presentationRoot.removeFromSuperview()
         entries.removeValue(forKey: id)
@@ -393,7 +405,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     func closeTab(_ id: TabID, sender: Any?) { tabCommands.perform(.close, target: id, captured: true, sender: sender) }
     func performSingleTabClose(_ id: TabID, sender: Any?) {
-        guard window?.attachedSheet == nil, let tab = model.groups.flatMap(\.tabs).first(where: { $0.id == id }),
+        guard !isMutatingGroups, window?.attachedSheet == nil,
+            let tab = model.groups.flatMap(\.tabs).first(where: { $0.id == id }),
             let presentation = entries[id],
             let document = presentation.document as? TextDocument
         else { return }
@@ -416,7 +429,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         returnSelection = nil
     }
     @discardableResult func selectTab(_ id: TabID, gesture: TabSelectionGesture) -> Bool {
-        guard !tabCommands.isBusy, window?.attachedSheet == nil else { return false }
+        guard !isMutatingGroups, !tabCommands.isBusy, window?.attachedSheet == nil else { return false }
         tabCommands.cancelReopen()
         var next = model
         if let group = model.groups.first(where: { $0.tabs.contains { $0.id == id } }) {
@@ -440,8 +453,12 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         tabSelection.reconcile(from: original, to: model)
         metadataChanged()
     }
-    func presentation(for id: TabID) -> EditorWindowController? { entries[id] }
+    func presentation(for id: TabID) -> EditorWindowController? {
+        guard let presentation = entries[id], !presentation.isRetired else { return nil }
+        return presentation
+    }
     func placeTab(_ id: TabID, in slot: GroupSlot, index: Int, pinned: Bool) {
+        guard !isMutatingGroups else { return }
         do { try model.place(id, in: slot, index: index, pinned: pinned, openDocuments: openIDs) } catch {
             showTabMessage("The tab could not be placed because the workspace changed.")
         }
@@ -487,7 +504,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     /// Single-only fixture replacement; group operations require staged runtime plans.
     func replaceTabModel(_ value: TabWorkspace) throws {
-        guard value.layout == .single else { throw TabModelError.invalid }
+        guard !isMutatingGroups, value.layout == .single else { throw TabModelError.invalid }
         try value.validate(openDocuments: openIDs)
         let before = model
         model = value
@@ -496,6 +513,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     private(set) var lastTabMessage = ""
     func showTabMessage(_ message: String) {
+        guard !isMutatingGroups else { return }
         lastTabMessage = message
         if let active {
             active.showTransientStatus(message, seconds: 8, announce: true)
@@ -508,12 +526,14 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         }
     }
     func restoreTabFocus(_ id: TabID?, responder: NSResponder?) {
+        guard !isMutatingGroups else { return }
         if let id, let p = presentation(for: id) {
             activate(p, focus: false, explicit: false)
             if let responder { _ = window?.makeFirstResponder(responder) }
         }
     }
     func commitTabClose(_ plan: TabClosePlan, originalActive: TabID?, originalResponder: NSResponder?) {
+        guard !isMutatingGroups else { return }
         let before = model, selection = tabSelection
         tabCommands.prepareBulkHistory(before)
         removingTabs = true
@@ -553,12 +573,13 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         validateToolbar()
     }
     func cycle(_ direction: Int) {
-        guard window?.attachedSheet == nil else { return }
+        guard !isMutatingGroups, window?.attachedSheet == nil else { return }
         var next = model
         try? next.cycle(direction, openDocuments: openIDs)
         if let tab = next.activeTab, let presentation = entries[tab.id] { activate(presentation) }
     }
     func metadataChanged() {
+        guard !isMutatingGroups else { return }
         if let doc = active?.document as? TextDocument {
             window?.title = doc.displayName
             window?.representedURL = doc.fileURL

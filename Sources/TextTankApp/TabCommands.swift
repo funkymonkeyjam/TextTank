@@ -111,7 +111,7 @@ import EditorBridge
     func state(_ command: TabCommand, target: TabID?, scope: TabTargetCapture? = nil) -> (
         enabled: Bool, reason: String?
     ) {
-        if isBusy || isReopening || host.window?.attachedSheet != nil {
+        if host.isMutatingGroups || isBusy || isReopening || host.window?.attachedSheet != nil {
             return (false, "Wait for the current tab operation to finish.")
         }
         if let scope, scope.members(in: host.model) == nil { return (false, "This tab is no longer open.") }

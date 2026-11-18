@@ -19,6 +19,10 @@ import Darwin
     weak var clone: TTEditor?
     weak var adapter: EditorWindowController?
 }
+@MainActor private final class RepairPublicationState {
+    var called = false, noGlobalTarget = false, noRegistryTarget = false, allBindingsRetired = false,
+        dispatchBlocked = false, creationDisabled = false
+}
 @MainActor enum TabGroupNativeChecks {
     static func runApplicationProcess() -> Never {
         do {
@@ -151,6 +155,7 @@ import Darwin
         surface.layoutSubtreeIfNeeded()
         try groupCases(host: host, app: app, root: root)
         try advancedCases(host: host, app: app, root: root)
+        try repair1Cases(host: host, app: app)
     }
     private static func wait(_ label: String, _ condition: () -> Bool) {
         spinUntil(label) {
@@ -725,6 +730,116 @@ import Darwin
         check(host.presentations.allSatisfy { !$0.statusTimerActive }, "T3 four-document hidden Grid stops all polling")
         reset()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    private static func repair1Cases(host: WorkspaceWindowController, app: AppDelegate) throws {
+        let commands = host.tabCommands, window = host.window!
+        func reset() {
+            commands.isTerminating = true
+            NSDocumentController.shared.documents.forEach { $0.close() }
+            commands.isTerminating = false
+            commands.clearHistory()
+            _ = host.setEditorLayout(.single)
+        }
+        reset()
+        let doc = DocumentFactory.makeUntitled()
+        doc.editor.text = String(repeating: "0123456789abcdefghij\n", count: 10)
+        let aid = host.model.activeTab!.id, pa = host.presentation(for: aid)!
+        _ = host.setEditorLayout(.grid2x2)
+        pa.clone(nil)
+        let source = try requireValue(pa.secondary, "R1 chosen source Clone")
+        source.wrap = false
+        source.restoreClosedTabView(anchor: 5, caret: 9, firstVisibleLine: 1)
+        source.executeCommand(TTEditorCommandIdentifier(rawValue: "zoomIn"))
+        source.executeCommand(TTEditorCommandIdentifier(rawValue: "zoomIn"))
+        pa.primaryEditor.wrap = true
+        pa.primaryEditor.restoreClosedTabView(anchor: 1, caret: 2, firstVisibleLine: 0)
+        let bid = try requireValue(host.openView(aid, in: .second), "R1 focused sibling"),
+            pb = host.presentation(for: bid)!
+        pb.primaryEditor.wrap = true
+        pb.primaryEditor.restoreClosedTabView(anchor: 24, caret: 28, firstVisibleLine: 2)
+        pb.primaryEditor.executeCommand(TTEditorCommandIdentifier(rawValue: "zoomOut"))
+        host.activate(pb)
+        let menu = commands.contextMenu(for: aid)
+        func all(_ menu: NSMenu) -> [NSMenuItem] { menu.items + menu.items.flatMap { $0.submenu.map(all) ?? [] } }
+        let additional = try requireValue(
+            all(menu).first { $0.identifier?.rawValue == "groups.additional.3" },
+            "R1 actual captured additional-view command")
+        _ = NSApp.sendAction(additional.action!, to: additional.target, from: additional)
+        let created = try requireValue(host.active, "R1 created view")
+        check(
+            created.primaryEditor.selectionAnchor == 5 && created.primaryEditor.selectionCaret == 9
+                && !created.primaryEditor.wrap
+                && created.primaryEditor.statusInfo.fontSize == source.statusInfo.fontSize,
+            "R1 V3-01 seeds inactive clicked tab's exact last Clone viewport and view settings")
+        check(
+            created.primaryEditor.sharesDocument(with: source) && created.secondary == nil && source.selectionCaret == 9
+                && pb.primaryEditor.selectionCaret == 28 && pb.primaryEditor.wrap,
+            "R1 V3-01 source sibling positions and one shared document stay unchanged")
+        host.focusGroup(.fourth)
+        let other = DocumentFactory.makeUntitled()
+        other.editor.text = "other document text\n"
+        let pd = host.active!
+        pd.clone(nil)
+        let last = try requireValue(pd.secondary, "R1 Find target last Clone")
+        last.restoreClosedTabView(anchor: 2, caret: 6, firstVisibleLine: 0)
+        pa.showFind(nil)
+        pd.showFind(nil)
+        let ranges = last.selectionRanges
+        host.activate(pa)
+        check(
+            window.makeFirstResponder(pd.findField) && pd.findField.currentEditor() != nil,
+            "R1 V3-02 native Find begins real field editing")
+        check(
+            host.model.focusedGroup == .fourth && app.currentDocument === other && pd.activeEditor === last
+                && last.selectionRanges == ranges,
+            "R1 V3-02 Find focus updates exact group without stealing Clone selection")
+        host.activate(pa)
+        check(
+            window.makeFirstResponder(pd.replaceField) && pd.replaceField.currentEditor() != nil,
+            "R1 V3-02 native Replace begins real field editing")
+        check(
+            host.model.focusedGroup == .fourth && app.currentDocument === other && pd.activeEditor === last
+                && last.selectionRanges == ranges,
+            "R1 V3-02 Replace focus updates exact group without stealing Clone selection")
+        host.activate(pa)
+        pd.caseBox.performClick(nil)
+        check(
+            host.model.focusedGroup == .fourth && app.currentDocument === other && pd.activeEditor === last
+                && last.selectionRanges == ranges,
+            "R1 V3-02 Match Case interaction focuses its group without changing selection")
+        host.activate(pa)
+        let observed = RepairPublicationState()
+        let token = NotificationCenter.default.addObserver(
+            forName: .TTEditorWillRetire, object: pa.primaryEditor, queue: nil
+        ) { _ in
+            MainActor.assumeIsolated {
+                observed.called = true
+                observed.noGlobalTarget =
+                    app.currentDocumentController == nil && app.currentDocument == nil && app.currentEditor == nil
+                observed.noRegistryTarget = host.presentation(for: aid) == nil && host.active == nil
+                observed.allBindingsRetired = pa.views.allSatisfy { !EditorLifetime.isOpen($0) }
+                observed.dispatchBlocked = !commands.state(.close, target: bid).enabled && !host.acceptsDocumentCreation
+                let newItem = NSMenuItem(
+                    title: "New", action: #selector(AppDelegate.newDocument(_:)), keyEquivalent: "n")
+                observed.creationDisabled = !app.validateMenuItem(newItem)
+            }
+        }
+        host.moveTabs([aid], target: aid, to: .second)
+        NotificationCenter.default.removeObserver(token)
+        check(
+            observed.called && observed.noGlobalTarget && observed.noRegistryTarget,
+            "R1 V3-03 synchronous retirement exposes no retired global or registry target")
+        check(observed.allBindingsRetired, "R1 V3-03 every editor in retiring tab is unavailable before first callback")
+        check(
+            observed.dispatchBlocked && observed.creationDisabled,
+            "R1 V3-03 conflicting tab and New dispatch is disabled during publication")
+        check(
+            host.active === pb && doc.isOpen && host.model.groups[1].activeTab == bid,
+            "R1 V3-03 publication resolves destination only after retirement boundary")
+        try host.model.validate(
+            openDocuments: Set(NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.runtimeID }))
+        reset()
     }
 
 }
