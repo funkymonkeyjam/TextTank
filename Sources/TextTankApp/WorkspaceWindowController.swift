@@ -193,6 +193,10 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             if let (selection, original) = returnSelection {
                 tabSelection = selection
                 tabSelection.reconcile(from: original, to: model)
+            } else {
+                // Removal may have picked an intermediate neighbour before returnTab.
+                // Collapse only after the final active identity has been restored.
+                tabSelection.collapse(in: model)
             }
             endBackgroundCloseReturn()
             if let next = active {

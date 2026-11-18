@@ -410,6 +410,21 @@ import NativeSearch
             check(selectedIDs() == beforeOutside, "T2 unrelated disappearance preserves multi-selection")
             reset()
         }
+        let returnA = try saved("selected-return-A"), returnB = try saved("selected-return-B"),
+            returnC = try saved("selected-return-C")
+        click(returnA)
+        click(returnB, .command)
+        let returnAID = id(returnA), returnBID = id(returnB)
+        let selectedClose = try requireValue(
+            descendants(host.tabStrip).compactMap { $0 as? NSButton }.first {
+                $0.toolTip == "Close " + returnB.fileURL!.lastPathComponent
+            }, "T2 selected background close control")
+        selectedClose.performClick(nil)
+        check(
+            returnB.isClosed && returnA.isOpen && returnC.isOpen && host.model.activeTab?.id == returnAID
+                && selectedIDs() == [returnAID] && !ids().contains(returnBID),
+            "T2 selected background X closes only target and collapses to final restored active")
+        reset()
         // Main menu and File Close differ intentionally in scope (DS-D2).
         let mx = try saved("main-close-X"), my = try saved("main-close-Y"), mz = try saved("main-close-Z")
         click(my)
