@@ -72,11 +72,8 @@ import NativeSearch
         check(
             host.model.groups[0].tabs.isEmpty && NSDocumentController.shared.documents.isEmpty,
             "T3 cold host has no prewarmed document or removed Clone")
-        let document = DocumentFactory.makeUntitled()
-        document.editor.text = "one\ntwo\nthree\n"
-        document.presentation?.showWindow(nil)
         let retired = RetiredGroupViews()
-        @MainActor func openSharedAndCloseOriginal() throws -> TabID {
+        @MainActor func openSharedAndCloseOriginal(_ document: TextDocument) throws -> TabID {
             let a = try requireValue(document.presentation, "T3 original adapter")
             let aid = try requireValue(host.model.activeTab?.id, "T3 original TabID")
             a.clone(nil)
@@ -101,7 +98,13 @@ import NativeSearch
             check(document.editor === b.primaryEditor, "T3 surviving primary receives document service ownership")
             return bid
         }
-        let bid = try openSharedAndCloseOriginal()
+        let (document, bid) = try autoreleasepool {
+            let document = DocumentFactory.makeUntitled()
+            document.editor.text = "one\ntwo\nthree\n"
+            document.presentation?.showWindow(nil)
+            return (document, try openSharedAndCloseOriginal(document))
+        }
+        // Drain setup’s native temporary collections, without prewarming any removal.
         spinUntil("T3 cold original primary Clone and adapter release") {
             retired.primary == nil && retired.clone == nil && retired.adapter == nil
         }
@@ -122,6 +125,25 @@ import NativeSearch
             b.primaryEditor.text == old && b.secondary!.text == old, "T3 Undo from surviving primary reverts Clone edit"
         )
         check(NSDocumentController.shared.documents.count == 1, "T3 additional views retain exactly one NSDocument")
+        let surface = try requireValue(host.groupSurfaces[.second], "T3 second native surface")
+        let priorFrame = surface.frame
+        surface.frame = NSRect(x: 0, y: 0, width: 320, height: 200)
+        surface.layoutSubtreeIfNeeded()
+        b.showFind(nil)
+        surface.layoutSubtreeIfNeeded()
+        b.presentationRoot.layoutSubtreeIfNeeded()
+        for control in [b.findField, b.replaceField, b.caseBox, b.findNextButton, b.replaceMatchButton] as [NSView] {
+            let rect = b.presentationRoot.convert(control.bounds, from: control)
+            check(
+                b.presentationRoot.bounds.insetBy(dx: -1, dy: -1).contains(rect) && !control.isHidden,
+                "T3 all essential Find controls fit 320x200 group: \(type(of:control))")
+        }
+        check(
+            b.split.frame.height >= 30 && b.primaryEditor.frame.width >= 100,
+            "T3 minimum pane retains visible editor with Find")
+        b.hideFind(nil)
+        surface.frame = priorFrame
+        surface.layoutSubtreeIfNeeded()
         // This cold process intentionally starts with release; additional cases follow only after it passes.
     }
 }

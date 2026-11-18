@@ -149,7 +149,8 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
             leadingLabel?.removeFromSuperview()
             leadingLabel = label
             label.translatesAutoresizingMaskIntoConstraints = false
-            label.setContentCompressionResistancePriority(.required, for: .horizontal)
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            label.lineBreakMode = .byTruncatingTail
             stack.insertArrangedSubview(label, at: 0)
         }
         fullLeadingText = fullText

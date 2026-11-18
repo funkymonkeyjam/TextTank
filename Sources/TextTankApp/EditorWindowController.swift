@@ -174,10 +174,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         let doneButton = NSButton(title: "Done", target: self, action: #selector(hideFind(_:)))
         doneButton.setAccessibilityLabel("Close Find in document")
         caseBox.setAccessibilityLabel("Match case in document search")
-        let search = NSStackView(views: [
+        let search = EditorFindBar(controls: [
             findField, replaceField, caseBox, findNextButton, replaceMatchButton, doneButton
         ])
-        search.spacing = 8
         // Return in the field finds the next match, Shift-Return the previous one, Escape closes.
         findField.delegate = self
         replaceField.delegate = self
@@ -196,20 +195,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             root.addSubview($0)
         }
         NSLayoutConstraint.activate([
-            split.heightAnchor.constraint(greaterThanOrEqualToConstant: 200),
-            search.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
-            search.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
-            search.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
-            findField.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
-            replaceField.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
+            split.heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
+            search.topAnchor.constraint(equalTo: root.topAnchor, constant: 4),
+            search.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 8),
+            search.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -8),
             split.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             split.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            split.bottomAnchor.constraint(equalTo: statusDetails.topAnchor, constant: -5),
+            split.bottomAnchor.constraint(equalTo: statusDetails.topAnchor, constant: -2),
             statusDetails.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             statusDetails.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
-            statusDetails.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6)
+            statusDetails.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -2)
         ])
-        splitBelowFindBar = split.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 10)
+        splitBelowFindBar = split.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 4)
         splitBelowTabs = split.topAnchor.constraint(equalTo: root.topAnchor)
         splitBelowTabs?.isActive = true
         statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
