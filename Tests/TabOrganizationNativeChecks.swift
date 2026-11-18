@@ -235,11 +235,15 @@ import NativeSearch
         activeDoc.showWindows()
         window.contentView?.layoutSubtreeIfNeeded()
         window.makeFirstResponder(activeDoc.editor)
+        let crowdedResponder = window.firstResponder
+        check(
+            (crowdedResponder as? NSView)?.isDescendant(of: activeDoc.editor) == true,
+            "T2 crowded fixture has actual editor focus before reorder")
         host.reorderTab(id(moved), to: 0)
         check(
             host.tabStrip.isTabHorizontallyVisible(id(activeDoc)) && host.active?.document === activeDoc
-                && window.firstResponder === activeDoc.editor,
-            "T2 owner decision keeps active tab visible when both cannot fit")
+                && window.firstResponder === crowdedResponder,
+            "T2 owner decision keeps active tab visible and preserves editor responder when both cannot fit")
         check(
             NativeFixtureEnvironment.announcements.last?.contains("tab 1 of 14") == true,
             "T2 offscreen move still announces position")
