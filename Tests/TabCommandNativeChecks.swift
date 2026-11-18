@@ -9,10 +9,15 @@ import NativeSearch
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
     func applicationDidFinishLaunching(_ notification: Notification) { launched?() }
 }
+@MainActor private final class MenuTrackingContext { var tracked: NSMenu? }
+@MainActor private final class TabCommandContext {
+    let isolated: IsolatedSupportDirectory
+    init() throws { isolated = try IsolatedSupportDirectory("TabCommandProcess") }
+}
 @MainActor enum TabCommandNativeChecks {
     static func runApplicationProcess() -> Never {
         do {
-            let isolated = try IsolatedSupportDirectory("TabCommandProcess")
+            let context = try TabCommandContext()
             LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")
             NativeFixtureEnvironment.install()
             let documents = TextDocumentController(), app = NSApplication.shared, delegate = TabCommandCheckDelegate()
@@ -23,13 +28,13 @@ import NativeSearch
                     MainActor.assumeIsolated {
                         Checks.run("TabCommandNativeChecks") {
                             defer {
-                                isolated.restore()
+                                context.isolated.restore()
                                 NativeFixtureEnvironment.restore()
                             }
                             check(
                                 NSDocumentController.shared === documents && app.isRunning,
                                 "T1 owned controller and actual AppKit loop")
-                            try run(root: isolated.url)
+                            try run(root: context.isolated.url)
                             Checks.summary { "PASS TabCommandNativeChecks: \(Checks.count) native assertions" }
                         }
                     }
@@ -99,14 +104,17 @@ import NativeSearch
             select.responds(to: NSSelectorFromString("accessibilityPerformShowMenu")),
             "T1-R1 standard accessibility Show Menu action exists")
         // Close the actual native menu through its tracking run loop, without dispatching an item.
+        let menuContext = MenuTrackingContext()
         let trackingObserver = NotificationCenter.default.addObserver(
             forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main
         ) { note in
-            guard let tracked = note.object as? NSMenu else { return }
-            let timer = Timer(timeInterval: 0.1, repeats: false) { _ in
-                MainActor.assumeIsolated { tracked.cancelTrackingWithoutAnimation() }
+            MainActor.assumeIsolated {
+                menuContext.tracked = note.object as? NSMenu
+                let timer = Timer(timeInterval: 0.1, repeats: false) { _ in
+                    MainActor.assumeIsolated { menuContext.tracked?.cancelTrackingWithoutAnimation() }
+                }
+                RunLoop.main.add(timer, forMode: .eventTracking)
             }
-            RunLoop.main.add(timer, forMode: .eventTracking)
         }
         defer { NotificationCenter.default.removeObserver(trackingObserver) }
         select.rightMouseDown(with: event)
@@ -201,7 +209,7 @@ import NativeSearch
         leftDirty.editor.text = "discard left"
         leftDirty.flushRecovery()
         check(
-            try TextDocument.recovery.loadAll().contains { $0.id == leftDirty.runtimeID.rawValue },
+            try TextDocument.recovery.loadAll().contains { $0.id == leftDirty.recoveryID },
             "T1 owned dirty snapshot exists before bulk close")
         commands.decisionHandler = { _, reply in reply(.discard) }
         commands.perform(.closeLeft, target: id(right))
@@ -210,7 +218,7 @@ import NativeSearch
             pin.isOpen && leftDirty.isClosed && right.isOpen && host.active?.document === right,
             "T1 scenarioB directional close keeps pinned tab and honours dirty Discard")
         check(
-            try !TextDocument.recovery.loadAll().contains { $0.id == leftDirty.runtimeID.rawValue },
+            try !TextDocument.recovery.loadAll().contains { $0.id == leftDirty.recoveryID },
             "T1 successful bulk close removes existing recovery snapshot")
         reset()
         let draft = DocumentFactory.makeUntitled()
