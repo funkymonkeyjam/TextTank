@@ -109,6 +109,10 @@ private final class DocumentTabButton: NSButton {
         downPoint = nil
         moving = false
     }
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        guard strip?.allowsSelection == true else { return [] }
+        return super.accessibilityCustomActions()
+    }
     func updateSelectionActions(selected: Bool, canToggle: Bool) {
         var actions: [NSAccessibilityCustomAction] = []
         if canToggle {
@@ -180,6 +184,10 @@ final class DocumentTabStrip: NSView {
     var dropIndicatorVisible: Bool { !dropIndicator.isHidden }
 
     weak var host: WorkspaceWindowController?
+    var allowsSelection: Bool {
+        guard let host else { return false }
+        return !host.tabCommands.isBusy && host.window?.attachedSheet == nil
+    }
     override init(frame: NSRect) {
         super.init(frame: frame)
         scroll.drawsBackground = false

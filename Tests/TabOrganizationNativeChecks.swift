@@ -287,6 +287,24 @@ import NativeSearch
         check(
             retiredAction?.handler?() == false && selectedIDs() == priorRetiredAttempt,
             "T2 native AX action refuses retired target without retargeting selection")
+        let selectionSheet = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 240, height: 100),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        let beforeSheet = selectedIDs()
+        let heldSelectionAction = unselectedButton.accessibilityCustomActions()?.first { $0.name == "Add to Selection" }
+        window.beginSheet(selectionSheet)
+        check(
+            unselectedButton.accessibilityCustomActions()?.isEmpty == true,
+            "T2 unavailable selection actions disappear while native sheet is attached")
+        check(
+            heldSelectionAction?.handler?() == false && selectedIDs() == beforeSheet,
+            "T2 held selection callback refuses native sheet race")
+        window.endSheet(selectionSheet)
+        NativeWindowEvents.wait("T2 selection fixture sheet ends") { window.attachedSheet == nil }
+        selectionSheet.orderOut(nil)
+        check(
+            unselectedButton.accessibilityCustomActions()?.isEmpty == false,
+            "T2 selection actions return after native sheet without stale refresh")
         let selectedBackground = descendants(host.tabStrip).first {
             $0 !== selectedButton && $0.frame.minX == selectedButton.frame.minX - 8
                 && $0.frame.width == selectedButton.frame.width + 48
@@ -414,8 +432,16 @@ import NativeSearch
             click(first, .command)
             let selection = selectedIDs(), focus = window.firstResponder
             var decisions = 0, saves = 0
+            let heldBusyAction = try button(outside).accessibilityCustomActions()?.first {
+                $0.name == "Add to Selection"
+            }
+            let busyButton = try button(outside)
             commands.decisionHandler = { _, reply in
                 decisions += 1
+                check(
+                    busyButton.accessibilityCustomActions()?.isEmpty == true
+                        && heldBusyAction?.handler?() == false && selectedIDs() == selection,
+                    "T2 busy selection actions are unavailable and retained callback is guarded")
                 reply(!failSave && decisions == 2 ? .cancel : .save)
             }
             commands.saveHandler = { doc, reply in
