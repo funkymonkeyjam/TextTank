@@ -418,7 +418,7 @@ EditorBridge is now a separate AppKit Objective-C++ framework owning TTEditor an
 ported user lexer. It links Scintilla and Lexilla; it has no dependency on NativeSearch
 or the remaining Swift application target. The application embeds both native frameworks.
 
-TextTankCore owns the25 Foundation model/codec/storage/search-planning sources listed once
+TextTankCore owns the26 Foundation model/codec/storage/search-planning sources listed once
 in scripts/core_sources.py. It depends on NativeSearch and system Foundation/Darwin/CryptoKit/
 zlib interfaces, with no EditorBridge, AppKit or executable dependency. Package access and
 explicit value constructors form the cross-target API; fields retain setter restrictions,
@@ -453,4 +453,4 @@ and main-queue worker delivery; an absent controller also delivers on main. Auto
 progress continues through the main common-mode CFRunLoop block and wakeup, publishing its
 actor-owned result before stopping the nested modal loop in that same turn.
 
-Document-window transitions use `.none` animation behavior (DS-D7). Before presenting a new or selected tab, its native window receives the visible tab's frame. Closing a visible tab likewise positions the survivor before presentation. Final frame correction and existing Save/Discard/Cancel, close and quit lifecycles remain unchanged; this is a focused fix to the stand-in arrangement, not the wave4 workspace host.
+The workspace uses `.none` document transition animation (DS-D7). New, Open, switching and Close mount retained presentations inside the same window, with no sibling ordering or frame copying. One host frame is tracked. Full screen uses native transitions; physical keyboard, VoiceOver and full-screen interaction require separate observations. Explicit document lifecycle notifications keep the workspace browser independent of native-window creation and closing.

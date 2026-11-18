@@ -5,6 +5,7 @@ import EditorBridge
 import NativeSearch
 
 @MainActor enum TabWorkspaceNativeChecks {
+    @MainActor private final class Observation { var switched = false }
     private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     static func run(root: URL) throws {
         let services = EditorServices.current
@@ -40,6 +41,8 @@ import NativeSearch
         pa.showFind(nil)
         pa.findField.stringValue = "line"
         pa.replaceField.stringValue = "row"
+        clone.go(toLine: 100)
+        let scrollLine = clone.firstVisibleLine
         let selection = clone.selectionRanges, last = pa.activeEditor
         b.showWindows()
         check(
@@ -64,6 +67,82 @@ import NativeSearch
                 && pa.activeEditor === last && pa.findBarVisible && pa.findField.stringValue == "line"
                 && pa.replaceField.stringValue == "row",
             "T0-R14 same editor objects retain Clone, Find, selection and last pane across switches")
+        // Real all-open result enumeration must include detached A and select its captured editor.
+        b.editor.text = "line B"
+        b.showWindows()
+        let search = composition.searchController
+        search.queryField.stringValue = "line"
+        search.scope.selectItem(at: 2)
+        search.findAll(nil)
+        spinUntil("T0 all-open native results") { !search.isSearching }
+        check(
+            search.numberOfRows(in: search.table) == 151 && search.activateResult(at: 0) && pa.isActiveTab
+                && pa.activeEditor.selectedText == "line",
+            "T0-R20 all-open search includes detached A and activates its actual held result")
+        search.window?.close()
+        let captured = DocumentFactory.makeUntitled()
+        captured.editor.text = "captured"
+        captured.editor.resetUndoHistory()
+        let runner = RunController()
+        runner.editor = { captured.activeEditor }
+        try runner.start(ConfiguredRun.uppercaseSample)
+        b.showWindows()
+        var apply: NSButton?
+        spinUntil("T0 actual Run completion after switching tabs") {
+            apply = NSApp.windows.flatMap { $0.contentView.map(descendants) ?? [] }.compactMap { $0 as? NSButton }.last
+            { $0.identifier?.rawValue == "run.apply" }
+            return apply != nil
+        }
+        try runner.applyResult(try requireValue(apply, "T0 Run Apply"))
+        check(
+            captured.editor.text == "CAPTURED" && b.editor.text == "line B" && pb.isActiveTab,
+            "T0-R12/20 actual Run completion applies to captured inactive A without retargeting B")
+        captured.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        check(captured.editor.text == "captured", "captured Run remains one authoritative Undo step")
+        NSApp.windows.filter { $0.title == ConfiguredRun.uppercaseSample.name }.forEach { $0.close() }
+        captured.editor.text = "- 2 eggs\n"
+        captured.editor.resetUndoHistory()
+        captured.showWindows()
+        var workflow = AutomationDefinition.example
+        workflow.id = UUID()
+        workflow.name = "Stage 0 captured automation"
+        workflow.input = .document
+        workflow.output = .editor
+        workflow.previewBeforeApply = true
+        try composition.automations.persistLibrary(AutomationLibrary(workflows: [workflow]))
+        let observation = Observation()
+        let previewAction: @MainActor @Sendable () -> Void = {
+            guard let modal = NSApp.modalWindow, let content = modal.contentView,
+                let apply = descendants(content).compactMap({ $0 as? NSButton }).first(where: { $0.title == "Apply" })
+            else { return }
+            b.showWindows()
+            observation.switched = pb.isActiveTab
+            apply.performClick(nil)
+        }
+        let previewTimer = Timer(timeInterval: 0.02, repeats: true) { _ in MainActor.assumeIsolated { previewAction() }
+        }
+        RunLoop.main.add(previewTimer, forMode: .modalPanel)
+        RunLoop.main.add(previewTimer, forMode: .common)
+        try composition.automations.runSavedAutomation(id: workflow.id)
+        previewTimer.invalidate()
+        check(
+            observation.switched && captured.editor.text == "2 eggs\n" && b.editor.text == "line B" && pb.isActiveTab,
+            "T0-R12/20 native automation preview applies only to its captured inactive document")
+        captured.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        check(captured.editor.text == "- 2 eggs\n", "captured automation remains one Undo step")
+        captured.close()
+        a.showWindows()
+        let old = pa.statusRefreshCount
+        host.cycle(1)
+        check(
+            !pa.statusTimerActive && pb.isActiveTab && pa.statusRefreshCount == old,
+            "T0-R13 keyboard cycle retires outgoing status timer immediately")
+        a.showWindows()
+        let revert = NSMenuItem(
+            title: "Revert to Saved", action: #selector(NSDocument.revertToSaved(_:)), keyEquivalent: "")
+        check(
+            !pa.validateMenuItem(revert) && !a.validateMenuItem(revert),
+            "T0-R7 active adapter preserves native untitled Revert validation")
         let buttons = descendants(host.tabStrip).compactMap { $0 as? NSButton }
         let tab = try requireValue(buttons.first { $0.toolTip == a.displayName }, "T0 stable tab")
         let close = try requireValue(buttons.first { $0.toolTip == "Close Workspace A" }, "T0 close target")
@@ -142,6 +221,19 @@ import NativeSearch
             check(
                 p.findBarVisible && p.secondary != nil && fullWindow.styleMask.contains(.fullScreen),
                 "T0-R16 full-screen tab switching retains Find/Clone")
+            extra.updateChangeCount(.changeDone)
+            fullWindow.performClose(nil)
+            spinUntil("T0 full-screen unsaved review") { fullWindow.attachedSheet != nil }
+            let review = try requireValue(fullWindow.attachedSheet, "T0 full-screen review sheet")
+            let cancel = try requireValue(
+                review.contentView.map(descendants)?.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" },
+                "T0 full-screen Cancel")
+            cancel.performClick(nil)
+            spinUntil("T0 full-screen cancelled review") { fullWindow.attachedSheet == nil }
+            check(
+                extra.isOpen && p.isActiveTab && fullWindow.styleMask.contains(.fullScreen),
+                "T0-R16 native dirty-close Cancel keeps its tab and full-screen workspace")
+            extra.updateChangeCount(.changeCleared)
             extra.close()
             check(
                 reopened.presentation?.isActiveTab == true && fullWindow.styleMask.contains(.fullScreen),

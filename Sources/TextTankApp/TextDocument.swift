@@ -8,9 +8,8 @@ import AppKit
 @objc(TextDocument) final class TextDocument: NSDocument {
     let runtimeID = DocumentID()
     private(set) var isClosed = false
-    var isOpen: Bool {
-        !isClosed && (presentation != nil || NSDocumentController.shared.documents.contains { $0 === self })
-    }
+    private var opened = false
+    var isOpen: Bool { opened && !isClosed }
     var presentation: EditorWindowController? { windowControllers.compactMap { $0 as? EditorWindowController }.first }
     private var tabClosePending = false
     override var windowForSheet: NSWindow? {
@@ -446,11 +445,18 @@ import AppKit
         }
         if let presentation { presentation.host.unregister(presentation, document: self) }
         super.close()
+        for controller in windowControllers { removeWindowController(controller) }
+        NSDocumentController.shared.removeDocument(self)
+        NotificationCenter.default.post(name: .textTankDocumentsDidChange, object: self)
     }
     override class var autosavesInPlace: Bool { false }
     override func makeWindowControllers() {
         guard !isClosed, presentation == nil else { return }
-        addWindowController(EditorWindowController(document: self))
+        opened = true
+        let adapter = EditorWindowController(document: self)
+        addWindowController(adapter)
+        adapter.host.register(adapter, document: self)
+        NotificationCenter.default.post(name: .textTankDocumentsDidChange, object: self)
     }
     override func read(from url: URL, ofType typeName: String) throws {
         precondition(Thread.isMainThread)

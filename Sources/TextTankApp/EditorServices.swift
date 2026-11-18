@@ -31,3 +31,7 @@ import AppKit
     var automations: AutomationController? { automationsProvider() }
     var searchController: SearchController? { searchProvider() }
 }
+
+extension Notification.Name {
+    static let textTankDocumentsDidChange = Notification.Name("TextTankDocumentsDidChange")
+}

@@ -191,8 +191,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     func endBackgroundCloseReturn() { returnTab = nil }
     func cycle(_ direction: Int) {
         guard window?.attachedSheet == nil else { return }
-        try? model.cycle(direction, openDocuments: openIDs)
-        if let active { activate(active) }
+        var next = model
+        try? next.cycle(direction, openDocuments: openIDs)
+        if let tab = next.activeTab, let presentation = entries[tab.documentID]?.presentation { activate(presentation) }
     }
     func metadataChanged() {
         if let doc = active?.document as? TextDocument {

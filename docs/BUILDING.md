@@ -10,13 +10,13 @@ Each native suite remains a real script with explicit test sources, defines and 
 
 The document-check executable drives many owned document-window transitions without running the normal application event loop. A long CLI prefix on this Mac accumulated AppKit animation workers and blocked native save-panel creation; the same prefix from the accepted pre-catalog source reproduced it. The document test supplies an explicit owned dependency that disables only its document-window transition animations; product compilation has no `TESTING` flag. Document windows now disable open/close transition animation in production as well, per the owner's DS-D7 follow-up; native save panels, review sheets, close routes, Cancel actions and deadlines remain unchanged. Functional check results do not certify physical transition animations. Diagnostic controls and source identities are execution evidence, not source-archive package certification.
 
-`scripts/test-documents.sh` compiles one native check executable, then always runs two
+`scripts/test-documents.sh` compiles one native check executable, then always runs three
 required processes: the existing document checks and configuration input accessibility
-checks (`--configuration-input-accessibility`). Each retains its own watchdog, status
+checks (`--configuration-input-accessibility`), plus Stage 0 workspace checks (`--tab-workspace`). Each retains its own watchdog, status
 and normal completion marker; a failure in either fails acceptance. Both processes create
 their owned support directory and document controller before `NSApplication`, check
 singleton identity, and use the same accessory activation policy. The complete test
-runner records 34 suites: all prior 33, including both document processes, plus the actual compiler diagnostic guard checks.
+runner records 37 suites: all prior 34, the tab Core behavior/layering checks and the required workspace native process.
 A combined CLI prefix failed native review/save-panel creation with saturated AppKit
 animation workers; paired controls passed the full original document checks and all
 input checks in separate processes on identical product bytes. This isolates test
@@ -79,7 +79,7 @@ metadata remains separately hashed; code-image path/hash evidence is required fo
 The Runtime target builds all UI/document/service code once, and the executable is a thin
 bootstrap. Native check clients import the matching build-produced Debug modules and link
 actual signed embedded Runtime/Core/native code. Check compilation pins the artifact's SDK;
-there are no product source arguments or product TESTING flags in the suite scripts. The two
+there are no product source arguments or product TESTING flags in the suite scripts. The three
 required DocumentChecks processes install explicit owned effects before the document-controller
 singleton and NSApplication; owned window animations are disabled through that dependency,
 while production defaults disable document-window transition animations and retain real sheet/save behavior.

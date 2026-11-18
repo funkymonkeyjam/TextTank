@@ -43,8 +43,9 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         store = WorkspaceBrowserStore(url: storeURL ?? AppStorage.url(.workspace))
         super.init()
         monitor.onStatus = { [weak self] value in self?.monitorStatus.stringValue = value.message }
-        // AppKit has no notification for a document joining or leaving the document list.
-        // Its window closing or becoming main is the signal.
+        // Explicit document registration/retirement is independent of the shared host window.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowDidBecomeMain(_:)), name: .textTankDocumentsDidChange, object: nil)
         NotificationCenter.default.addObserver(
             self, selector: #selector(windowWillClose(_:)), name: NSWindow.willCloseNotification, object: nil)
         NotificationCenter.default.addObserver(

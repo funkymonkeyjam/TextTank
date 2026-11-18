@@ -829,7 +829,7 @@ extension DocumentChecks {
                     && (a.presentation?.isActiveTab != true),
                 "closing a clean background tab from its close button returns to the tab that was active")
             let (e, controlE, winE) = try tab("p21-E")
-            let (f, _, winF) = try tab("p21-F")
+            let (f, _, _) = try tab("p21-F")
             try require((f.presentation?.isActiveTab == true), "fixture: the new last tab is showing")
             f.close()
             check(

@@ -1591,6 +1591,26 @@
           }
         }
       }
+    },
+    "tabs.close": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close %@"
+          }
+        }
+      }
+    },
+    "tabs.edited": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, edited"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

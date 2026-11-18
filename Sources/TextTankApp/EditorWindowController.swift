@@ -50,7 +50,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     let presentationRoot: NSView
     var hostWindow: NSWindow? { host.window }
     var isActiveTab: Bool { host.active === self }
-    var isPresented: Bool { isActiveTab && hostWindow?.isVisible == true && hostWindow?.isMiniaturized != true }
+    var isPresented: Bool {
+        isActiveTab && presentationRoot.window === hostWindow && hostWindow?.isVisible == true
+            && hostWindow?.isMiniaturized != true
+    }
     private var statusTimer: Timer?
     /// Nil when the caller supplies timer ticks itself. The normal hostWindow polls every 0.2 s;
     /// checks can drive the exact same tick path without depending on run-loop scheduling speed.
@@ -133,7 +136,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         host = WorkspaceWindowController.current
         presentationRoot = NSView()
         super.init(window: nil)
-        self.document = document
         let hostWindow = host.window!
         lastEditor = document.editor
         wire(document.editor)
@@ -252,7 +254,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         // The first document hostWindow opens where the last one was left. A later tab takes the
         // frame of the visible tab when it is shown, which replaces whatever is applied here.
         // This comes last: the title bar and toolbar set up above change the hostWindow's height.
-        host.register(self, document: document)
     }
     private func removeVisibilityObservers() {
         visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
@@ -597,7 +598,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     throw GoToLineFailure(last: editor.statusInfo.lines)
                 }
                 form.close()
-                self.hostWindow?.makeFirstResponder(editor)
+                EditorLifetime.activate(editor)
                 self.refreshStatusDetails()
             } catch { form.showValidation(error, field: input) }
         }.keyEquivalent = "\r"
@@ -996,7 +997,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             // Wrapping belongs to the view, as the status bar's Wrap field shows it.
             item.state = activeEditor.wrap ? .on : .off
             return true
-        default: return true
+        default:
+            if let doc = document as? TextDocument, let action = item.action, doc.responds(to: action) {
+                return doc.validateMenuItem(item)
+            }
+            return true
         }
     }
     @objc func toggleWrap(_ sender: Any?) { activeEditor.wrap.toggle() }
