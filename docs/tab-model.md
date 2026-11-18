@@ -40,3 +40,41 @@ WorkspaceLayoutState requires version 1, layout, focused slot and ordered group 
 ## Evidence boundary
 
 Acceptance must import actual canonical signed Core/Runtime modules, retain all existing suites and add isolated tab/layering checks. Native controls and owned full-screen transitions are checked separately from physical keyboard, VoiceOver and physical full-screen observation. The latter remain unverified unless observed. Exact candidate manifests, failures and requirement results are retained outside the product checkout. This note specifies behavior; it is not an acceptance claim.
+
+## Stage 1 commands, close review and session-only reopen
+
+DS-12, DS-20 through DS-26, DS-40 through DS-43, DS-52/53, DS-62/70/72/73,
+DS-91/92/97/100 apply. Context commands capture TabID without selecting a tab;
+Window-menu equivalents use the active tab. Every route, including File Close
+and tab close controls, reaches the same command owner and revalidates identity.
+New Tab to Right respects the pinned prefix; ordinary New still appends. Pin UI,
+reordering, multi-selection, group UI and saved layouts are later stages.
+
+Core close plans contain one immutable model snapshot, ordered eligible tabs,
+deduplicated final-view documents and their modified subset. Pinned tabs are
+excluded from bulk plans; Close Saved keeps untitled, modified and missing files.
+Runtime captures document identity/revision/format/file state. It collects all
+Save/Discard/Cancel decisions before any save, stops without saves/removals on
+Cancel, then performs requested saves. No views are removed unless every save
+succeeds and the model/document captures still validate. Completed saves are not
+rolled back. Abort restores the original active presentation and responder.
+Successful removal updates the shared host once and preserves the nearest
+surviving tab and the existing background single-close rules.
+
+Closed-tab history holds at most 20 value records in memory, with file URL,
+original group/index/pin and UTF-8 view offsets, plus a disk fingerprint. It holds
+no editor, document or text and is never connected to session/recovery storage.
+Actual close captures view state before retirement; untitled discard/clean close
+records nothing. Descriptor-anchored, cancellable disk work stays off the editor
+thread, with bounded history jobs and record/model revalidation. Reopen consumes
+only the expected record, reads current disk bytes through the existing captured
+file factory, never revives discarded text, preserves an already open document,
+and restores clamped position/UTF-8 view state. Missing paths are consumed and
+reported; changed disk contents are reported quietly and announced.
+
+The conditional Locate in Workspace item is deferred: the browser has no
+select-by-URL contract and needs bounded ancestor loading/selection behavior.
+Reveal in Finder and Copy File Path remain explicit captured-file actions.
+Native menus retain real disabled items with reasons and standard accessibility
+Show Menu; new tab commands have no new key equivalents. Physical keyboard and
+VoiceOver observation remain separate from owned automated native checks.
