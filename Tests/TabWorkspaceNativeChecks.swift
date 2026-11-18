@@ -96,6 +96,25 @@ import NativeSearch
         NSApp.delegate = composition
         composition.buildMenus()
         defer { EditorServices.current = services }
+        let tabMenuActions = [
+            #selector(AppDelegate.findNextShared(_:)), #selector(AppDelegate.findPreviousShared(_:)),
+            #selector(AppDelegate.nextDocumentTab(_:)), #selector(AppDelegate.previousDocumentTab(_:)),
+            #selector(AppDelegate.showDocumentTabs(_:))
+        ]
+        func menuItem(_ action: Selector) throws -> NSMenuItem {
+            func entries(_ menu: NSMenu) -> [NSMenuItem] {
+                menu.items.flatMap { [$0] + ($0.submenu.map(entries) ?? []) }
+            }
+            return try requireValue(
+                NSApp.mainMenu.map(entries)?.first { $0.action == action },
+                "T0 real menu action " + NSStringFromSelector(action))
+        }
+        func updateMenus() { NSApp.mainMenu?.items.compactMap(\.submenu).forEach { $0.update() } }
+        let windowsBeforeValidation = NSApp.windows.count
+        check(
+            !unstarted.validateMenuItem(try menuItem(#selector(AppDelegate.findNextShared(_:))))
+                && NSApp.windows.count == windowsBeforeValidation,
+            "T0-R7 menu validation is a pure lookup without constructing a workspace")
         let cold = DocumentFactory.makeUntitled(display: false)
         check(
             cold.isOpen && cold.editor.window == nil && cold.presentation?.statusTimerActive == false
@@ -120,6 +139,14 @@ import NativeSearch
         check(
             NSApp.windows.filter { ($0.windowController as? WorkspaceWindowController) === host }.count == 1,
             "T0-R5 no hidden document windows")
+        updateMenus()
+        check(
+            try tabMenuActions.allSatisfy { try menuItem($0).isEnabled },
+            "T0-R7/22 actual menus enable document and tab actions with an active document")
+        let closeMenuItem = try menuItem(#selector(NSWindow.performClose(_:)))
+        check(
+            window.validateMenuItem(closeMenuItem) && window.validateUserInterfaceItem(closeMenuItem),
+            "T0-R18 active window Close validation retains its single-tab route")
         let frame = window.frame, editor = a.editor
         a.showWindows()
         pa.clone(nil)
@@ -403,6 +430,23 @@ import NativeSearch
         check(
             host.model.activeTab == nil && window.isVisible && host.document == nil && window.title == "TextTank",
             "T0-R22 final close retains usable empty workspace without a new document")
+        updateMenus()
+        check(
+            try tabMenuActions.allSatisfy { try !menuItem($0).isEnabled },
+            "T0-R22 actual empty menus disable Find Next/Previous, cycling and Open Documents")
+        check(
+            try menuItem(EditorToolbarCommand.new.action).isEnabled
+                && menuItem(EditorToolbarCommand.open.action).isEnabled,
+            "T0-R22 actual empty File menu retains New/Open using native document metadata")
+        check(
+            !window.validateMenuItem(closeMenuItem) && !window.validateUserInterfaceItem(closeMenuItem),
+            "T0-R18/22 empty window disables Close through both native validation protocols")
+        check(
+            try [
+                EditorToolbarCommand.find.action, #selector(NSDocument.saveDocument(_:)),
+                #selector(NSDocument.printDocument(_:))
+            ].allSatisfy { try !menuItem($0).isEnabled },
+            "T0-R22 empty menus disable Find, Save and Print")
         check(
             host.validateToolbarItem(EditorToolbarCommand.new.makeItem())
                 && host.validateToolbarItem(EditorToolbarCommand.open.makeItem())

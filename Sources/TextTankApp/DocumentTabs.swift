@@ -21,6 +21,15 @@ final class DocumentTabWindow: NSWindow {
     var closeButtonQuits: Bool { routed }
     @objc private func closeButtonPressed(_ sender: Any?) { RuntimeEnvironment.current.terminate(sender) }
     override func performClose(_ sender: Any?) { host?.closeActive(sender) }
+    private var hasCloseTarget: Bool { (host?.active?.document as? TextDocument)?.isOpen == true }
+    override func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(performClose(_:)) { return hasCloseTarget }
+        return super.validateMenuItem(item)
+    }
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(performClose(_:)) { return hasCloseTarget }
+        return super.validateUserInterfaceItem(item)
+    }
     override func sendEvent(_ event: NSEvent) {
         if attachedSheet == nil, [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
             host?.endBackgroundCloseReturn()

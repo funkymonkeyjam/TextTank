@@ -3,7 +3,7 @@ import EditorBridge
 import NativeSearch
 import AppKit
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private weak var knownWorkspace: WorkspaceWindowController?
     lazy var workspaceWindow: WorkspaceWindowController = {
         let host = WorkspaceWindowController()
@@ -45,6 +45,15 @@ import AppKit
     }
     var currentDocument: TextDocument? { currentDocumentController?.document as? TextDocument }
     var currentEditor: TTEditor? { currentDocumentController?.activeEditor }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(findNextShared(_:)), #selector(findPreviousShared(_:)),
+            #selector(nextDocumentTab(_:)), #selector(previousDocumentTab(_:)), #selector(showDocumentTabs(_:)):
+            return currentDocumentController != nil
+        default:
+            return true
+        }
+    }
     @MainActor lazy var languages: LanguageController = {
         let controller = LanguageController(
             editorProvider: { [weak self] in self?.currentEditor },
