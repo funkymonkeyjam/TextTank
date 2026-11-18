@@ -191,7 +191,7 @@ import EditorBridge
         case .reopen: break
         }
     }
-    private struct Stamp: Equatable {
+    @MainActor private struct Stamp: Equatable {
         let revision: UInt, format: FileFormat, url: URL?, edited: Bool
         init(_ doc: TextDocument) {
             revision = doc.editor.revision

@@ -418,7 +418,7 @@ EditorBridge is now a separate AppKit Objective-C++ framework owning TTEditor an
 ported user lexer. It links Scintilla and Lexilla; it has no dependency on NativeSearch
 or the remaining Swift application target. The application embeds both native frameworks.
 
-TextTankCore owns the26 Foundation model/codec/storage/search-planning sources listed once
+TextTankCore owns the27 Foundation model/codec/storage/search-planning sources listed once
 in scripts/core_sources.py. It depends on NativeSearch and system Foundation/Darwin/CryptoKit/
 zlib interfaces, with no EditorBridge, AppKit or executable dependency. Package access and
 explicit value constructors form the cross-target API; fields retain setter restrictions,
@@ -454,3 +454,12 @@ progress continues through the main common-mode CFRunLoop block and wakeup, publ
 actor-owned result before stopping the nested modal loop in that same turn.
 
 The workspace uses `.none` document transition animation (DS-D7). New, Open, switching and Close mount retained presentations inside the same window, with no sibling ordering or frame copying. One host frame is tracked. Full screen uses native transitions; physical keyboard, VoiceOver and full-screen interaction require separate observations. Explicit document lifecycle notifications keep the workspace browser independent of native-window creation and closing.
+
+
+### Stage 1 tab commands
+
+`TabCommandCore.swift` computes ordered close plans and final-view document decisions from a value snapshot. A bulk transaction collects every decision before saving, then completes every requested save before removing any view. Structure, dirty state, revision, format and URL are revalidated across asynchronous boundaries. Cancellation or save failure removes no tabs; earlier successful saves remain saved. Final close uses the existing document lifecycle and recovery cleanup.
+
+`TabCommandController` captures TabID for context menus and shares dispatch and validation with Window, File Close and tab controls. Disabled items retain a reason; stale targets and reopen outcomes are visible and announced (DS-20–26, DS-62, DS-72–73). Review sheets name the document and tab count, default to Save, and mark Discard destructive (DS-40–43). No new shortcuts or toolbar controls are introduced.
+
+The in-memory `ClosedTabHistory.capacity` is 20 and stores only URL, placement, view offsets and a disk fingerprint. `TabDiskIO` hashes captured regular-file descriptors off the main actor in cancellable chunks; record identity prevents late publication. Reopen reads current disk bytes through the standard captured document factory, revalidates identity, clamps UTF-8 offsets and placement, and consumes missing records with feedback. It neither persists history nor retains discarded draft text. Locate in Workspace is deferred: adding bounded navigation and ancestor expansion to the lazy browser exceeds a small select-by-URL change. No Stage 2 UI is present.

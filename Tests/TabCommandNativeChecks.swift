@@ -98,6 +98,33 @@ import NativeSearch
         check(
             select.responds(to: NSSelectorFromString("accessibilityPerformShowMenu")),
             "T1-R1 standard accessibility Show Menu action exists")
+        // Close the actual native menu through its tracking run loop, without dispatching an item.
+        let trackingObserver = NotificationCenter.default.addObserver(
+            forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main
+        ) { note in
+            guard let tracked = note.object as? NSMenu else { return }
+            let timer = Timer(timeInterval: 0.1, repeats: false) { _ in
+                MainActor.assumeIsolated { tracked.cancelTrackingWithoutAnimation() }
+            }
+            RunLoop.main.add(timer, forMode: .eventTracking)
+        }
+        defer { NotificationCenter.default.removeObserver(trackingObserver) }
+        select.rightMouseDown(with: event)
+        check(
+            host.model.activeTab?.id == active && window.firstResponder === before,
+            "T1 actual right-click tracking preserves inactive target and responder")
+        let controlEvent = NSEvent.mouseEvent(
+            with: .leftMouseDown, location: select.convert(.zero, to: nil),
+            modifierFlags: [.control], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 2, clickCount: 1, pressure: 1)!
+        select.mouseDown(with: controlEvent)
+        check(
+            host.model.activeTab?.id == active && window.firstResponder === before,
+            "T1 actual Control-click tracking preserves inactive target and responder")
+        check(select.accessibilityPerformShowMenu(), "T1 native AX Show Menu action opens a menu")
+        check(
+            host.model.activeTab?.id == active && window.firstResponder === before,
+            "T1 AX menu tracking preserves editing focus")
         let titles = menu.items.filter { !$0.isSeparatorItem }.map(\.title)
         check(
             titles == TabCommand.allCases.map(\.title),
@@ -165,6 +192,42 @@ import NativeSearch
         }
         check(
             !titles.contains("Locate in Workspace"), "T1-R13 conditional Locate omitted without select-by-URL contract")
+        reset()
+        let pin = try saved("scenario-B-pin"), leftDirty = try saved("scenario-B-dirty"),
+            right = try saved("scenario-B-target")
+        var bModel = host.model
+        bModel.groups[0].tabs[0].isPinned = true
+        try host.replaceTabModel(bModel)
+        leftDirty.editor.text = "discard left"
+        leftDirty.flushRecovery()
+        check(
+            try TextDocument.recovery.loadAll().contains { $0.id == leftDirty.runtimeID.rawValue },
+            "T1 owned dirty snapshot exists before bulk close")
+        commands.decisionHandler = { _, reply in reply(.discard) }
+        commands.perform(.closeLeft, target: id(right))
+        waitClose()
+        check(
+            pin.isOpen && leftDirty.isClosed && right.isOpen && host.active?.document === right,
+            "T1 scenarioB directional close keeps pinned tab and honours dirty Discard")
+        check(
+            try !TextDocument.recovery.loadAll().contains { $0.id == leftDirty.runtimeID.rawValue },
+            "T1 successful bulk close removes existing recovery snapshot")
+        reset()
+        let draft = DocumentFactory.makeUntitled()
+        draft.editor.text = "saved draft"
+        commands.decisionHandler = { _, reply in reply(.save) }
+        let draftURL = root.appendingPathComponent("saved-untitled.txt")
+        commands.saveHandler = { doc, reply in
+            doc.save(to: draftURL, ofType: "public.plain-text", for: .saveAsOperation) { reply($0) }
+        }
+        commands.perform(.closeGroup, target: id(draft))
+        waitClose()
+        check(
+            draft.isClosed && commands.history.latest?.url == draftURL,
+            "T1 saved untitled becomes file-backed and receives normal history")
+        commands.perform(.reopen, target: nil)
+        waitOpen()
+        check(app.currentDocument?.editor.text == "saved draft", "T1 saved untitled reopens actual disk bytes")
         reset()
         let d = try saved("cancel-first"), e = try saved("cancel-second"), f = try saved("cancel-focus")
         d.editor.text = "dirty D"
@@ -286,7 +349,7 @@ import NativeSearch
             app.currentDocument?.editor.text == "saved reopen", "T1 single native Save route records actual saved bytes"
         )
         reset()
-        let old = try saved("history-old", "old"), missing = try saved("history-missing", "gone")
+        let old = try saved("history-old", "a🙂éZ"), missing = try saved("history-missing", "gone")
         old.close()
         missing.close()
         try FileManager.default.removeItem(at: missing.fileURL!)
@@ -299,7 +362,7 @@ import NativeSearch
         commands.perform(.reopen, target: nil)
         waitOpen()
         check(
-            app.currentDocument?.fileURL == old.fileURL && app.currentDocument?.editor.text == "old",
+            app.currentDocument?.fileURL == old.fileURL && app.currentDocument?.editor.text == "a🙂éZ",
             "T1 next reopen reaches next history record")
         let changed = try requireValue(app.currentDocument, "T1 changed file")
         changed.editor.restoreClosedTabView(anchor: 2, caret: 7, firstVisibleLine: 0)
