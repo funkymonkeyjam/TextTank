@@ -7,6 +7,8 @@ import TextTankCore
     private weak var viewMenu: NSMenu?
     private enum Action { case layout(LayoutKind), move, additional, close, focus }
     @MainActor private final class Invocation: NSObject {
+        nonisolated let commandID: String
+        nonisolated override var description: String { commandID }
         let action: Action
         let target: TabID?
         let source: GroupSlot
@@ -15,6 +17,13 @@ import TextTankCore
         let destination: GroupSlot?
         let destinationToken: UUID?
         init(_ action: Action, host: WorkspaceWindowController, target: TabID?, destination: GroupSlot? = nil) {
+            switch action {
+            case .layout(let layout): commandID = "group.layout." + layout.rawValue
+            case .move: commandID = "group.move"
+            case .additional: commandID = "group.additional"
+            case .close: commandID = "group.close"
+            case .focus: commandID = "group.focus"
+            }
             self.action = action
             self.target = target
             self.destination = destination

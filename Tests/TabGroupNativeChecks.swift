@@ -105,7 +105,7 @@ import NativeSearch
             return (document, try openSharedAndCloseOriginal(document))
         }
         // Drain setup’s native temporary collections, without prewarming any removal.
-        spinUntil("T3 cold original primary Clone and adapter release") {
+        wait("T3 cold original primary Clone and adapter release") {
             retired.primary == nil && retired.clone == nil && retired.adapter == nil
         }
         check(
@@ -150,6 +150,18 @@ import NativeSearch
         surface.layoutSubtreeIfNeeded()
         try groupCases(host: host, app: app, root: root)
     }
+    private static func wait(_ label: String, _ condition: () -> Bool) {
+        spinUntil(label) {
+            for _ in 0..<32 {
+                guard let event = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) else {
+                    break
+                }
+                NSApp.sendEvent(event)
+            }
+            NSApp.updateWindows()
+            return condition()
+        }
+    }
     private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     private static func groupCases(host: WorkspaceWindowController, app: AppDelegate, root: URL) throws {
         let commands = host.tabCommands, window = host.window!
@@ -182,16 +194,21 @@ import NativeSearch
         }
         func nativeDecision(_ tab: TabID, _ choice: String) throws {
             host.closeTab(tab, sender: nil)
-            spinUntil("T3 final native review") { window.attachedSheet != nil }
+            wait("T3 final native review") { window.attachedSheet != nil }
+            if choice == "Cancel", let panel = window.attachedSheet as? NSSavePanel {
+                panel.cancel(nil)
+                wait("T3 untitled native save Cancel") { window.attachedSheet == nil }
+                return
+            }
             var button: NSButton?
-            spinUntil("T3 final native button") {
+            wait("T3 final native button") {
                 button = window.attachedSheet?.contentView.map(descendants)?.compactMap { $0 as? NSButton }.first {
                     $0.title == choice || (choice == "Discard" && ["Don’t Save", "Don't Save"].contains($0.title))
                 }
                 return button != nil
             }
             try requireValue(button, "T3 native " + choice).performClick(nil)
-            spinUntil("T3 final native completion") { window.attachedSheet == nil }
+            wait("T3 final native completion") { window.attachedSheet == nil }
         }
         // The only tab left by the cold fixture has a local Clone: it is still a final tab.
         let original = try requireValue(host.active?.document as? TextDocument, "T3 cold survivor doc")
@@ -200,9 +217,8 @@ import NativeSearch
         check(
             original.isOpen && host.presentation(for: originalID)?.secondary != nil,
             "T3 final dirty Cancel preserves surviving primary and Clone")
-        try nativeDecision(originalID, "Discard")
-        spinUntil("T3 final discard closes") { original.isClosed }
-        check(host.presentations.isEmpty, "T3 final dirty Discard closes exactly one shared document")
+        original.close()
+        check(host.presentations.isEmpty, "T3 owned cold document cleanup removes final view")
         reset()
         let a = try saved("group-A"), aid = id(a)
         let ap = try requireValue(host.presentation(for: aid), "T3 moving adapter")
@@ -408,13 +424,13 @@ import NativeSearch
             reply(.cancel)
         }
         commands.perform(.closeGroup, target: host.model.activeTab!.id, captured: true)
-        spinUntil("T3 shared bulk close") { !commands.isBusy }
+        wait("T3 shared bulk close") { !commands.isBusy }
         check(
             prompts == 0 && liveDoc.isOpen && host.model.groups[1].tabs.count == 1,
             "T3 implicit bulk close protects pinned shared tab")
         host.setPinnedTabs([host.model.activeTab!.id], target: host.model.activeTab!.id, pinned: false)
         commands.perform(.closeGroup, target: host.model.activeTab!.id, captured: true)
-        spinUntil("T3 non-final unpinned bulk close") { !commands.isBusy }
+        wait("T3 non-final unpinned bulk close") { !commands.isBusy }
         check(
             prompts == 0 && liveDoc.isOpen && host.model.groups[1].tabs.isEmpty && host.model.groups[0].tabs.count == 1,
             "T3 group-local dirty shared bulk close retires view without prompt")
@@ -425,11 +441,24 @@ import NativeSearch
         let s2 = try requireValue(host.openView(s1, in: .second), "T3 save view")
         host.closeTab(s1, sender: nil)
         saveDoc.editor.text = "saved through surviving view"
+        try nativeDecision(s2, "Cancel")
+        check(saveDoc.isOpen && saveDoc.isDocumentEdited, "T3 saved final native Cancel keeps shared dirty document")
         try nativeDecision(s2, "Save")
-        spinUntil("T3 saved final closes") { saveDoc.isClosed }
+        wait("T3 saved final closes") { saveDoc.isClosed }
         check(
             (try? String(contentsOf: root.appendingPathComponent("final-save.txt"), encoding: .utf8))
                 == "saved through surviving view", "T3 native Save after original retirement writes exact shared bytes")
+        reset()
+        let discardDoc = try saved("final-discard"), d1 = id(discardDoc)
+        _ = host.setEditorLayout(.twoColumns)
+        let d2 = try requireValue(host.openView(d1, in: .second), "T3 discard additional view")
+        host.closeTab(d1, sender: nil)
+        discardDoc.editor.text = "discard these owned bytes"
+        try nativeDecision(d2, "Discard")
+        wait("T3 final native discard") { discardDoc.isClosed }
+        check(
+            (try? String(contentsOf: root.appendingPathComponent("final-discard.txt"), encoding: .utf8))
+                == "one\ntwo\nthree\n", "T3 final native Discard keeps original disk bytes after first-view retirement")
         reset()
         _ = xid // identities are deliberately retained only as values.
     }

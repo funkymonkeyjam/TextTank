@@ -219,6 +219,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 ? document.currentSaveStateStatus : "Recovered copy — Save As to keep")
         statusDetails.menuProvider = { [weak self] field in
             guard let self else { return nil }
+            self.host.activate(self, focus: false, preserveSelection: true)
             EditorServices.current?.noteActiveController(self)
             self.lastEditor = self.activeEditor
             return self.statusOptionsMenu(field)

@@ -418,7 +418,7 @@ EditorBridge is now a separate AppKit Objective-C++ framework owning TTEditor an
 ported user lexer. It links Scintilla and Lexilla; it has no dependency on NativeSearch
 or the remaining Swift application target. The application embeds both native frameworks.
 
-TextTankCore owns the29 Foundation model/codec/storage/search-planning sources listed once
+TextTankCore owns the30 Foundation model/codec/storage/search-planning sources listed once
 in scripts/core_sources.py. It depends on NativeSearch and system Foundation/Darwin/CryptoKit/
 zlib interfaces, with no EditorBridge, AppKit or executable dependency. Package access and
 explicit value constructors form the cross-target API; fields retain setter restrictions,
@@ -484,3 +484,30 @@ all captured selected tabs plus its clicked target, excluding pinned tabs from i
 selected Close includes pins and reuses Stage 1 review/save/revalidate/commit. Abort restores selection
 and focus; disappearance collapses selection. No group UI, cross-group drag, search or persistence is added.
 See [tab-model](tab-model.md) for the settled interaction and DS rule mapping.
+
+
+### Stage 3 editor groups
+
+`TabGroupCore` plans all four layouts, remaps, moves, duplicate retirement and Close Group atomically.
+The workspace registers strong presentations by TabID and weak documents by DocumentID. Each native
+group surface has a transient generation: captured source membership and destination continuity are
+revalidated before a whole move. Orientation changes preserve groups; removed/recreated slots do not.
+The focused group supplies commands, including nil for an empty group; each group's active tab remains
+visible independently. Native split dividers enforce total 320 by 200 pane bounds. Grid columns align.
+Find uses the same native controls in a compact three-row arrangement at narrow widths.
+
+Each tab has its own primary and optional Clone, sharing one Scintilla document and Undo with other
+views. TextDocument's representative transfers to a surviving primary before retirement; its one
+change/recovery observer moves without resetting bytes, revision or savepoint. Retiring a non-final
+tab removes both editor views, forms, callbacks and adapter ownership, without a document close or
+save review. The cold process drains an explicit setup autorelease pool before asserting weak release;
+it performs no prior view removal. Final tabs retain the native document lifecycle.
+
+The shared group command owner supplies View, context and trailing picker definitions (DS-20-24,62,70-74).
+Menus capture the complete move set; a vanished member invalidates the entire move. Organization
+deduplication does not create history. Explicit tab closes capture exact view offsets and group slot;
+Reopen resolves a live document identity before fingerprint waits or disk reads, then restores a shared
+view or focuses the existing destination. Chooser rows use TabID/group identity. Session and recovery
+remain once per document with focused or per-document MRU selection. No layout persistence or automatic
+restore is connected; that is Stage 4. Group shortcuts are unassigned pending a complete system conflict
+check; the reference combinations are not assumed safe on an arbitrary Mac.
