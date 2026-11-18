@@ -388,6 +388,109 @@ import NativeSearch
             mx.isClosed && mz.isClosed && host.model.groups[0].tabs.isEmpty,
             "T2 main selected Close uses same bulk path")
         reset()
+        for decision in ["Save", "Don't Save", "Cancel"] {
+            let closing = try saved("own-pin-" + decision), peer = try saved("own-pin-peer-" + decision)
+            commands.perform(.pin, target: id(closing))
+            closing.editor.text = "owned pin edits"
+            click(peer)
+            let control = try requireValue(
+                descendants(host.tabStrip).compactMap { $0 as? NSButton }.first {
+                    $0.toolTip == "Close " + closing.fileURL!.lastPathComponent
+                }, "T2 pinned own close control")
+            control.performClick(nil)
+            NativeWindowEvents.wait("T2 pinned native dirty review") { window.attachedSheet != nil }
+            var choiceButton: NSButton?
+            NativeWindowEvents.wait("T2 pinned decision button") {
+                choiceButton = window.attachedSheet?.contentView.map(descendants)?.compactMap { $0 as? NSButton }.first
+                {
+                    $0.title == decision || (decision == "Don't Save" && ["Discard", "Don’t Save"].contains($0.title))
+                }
+                return choiceButton != nil
+            }
+            try requireValue(choiceButton, "T2 pinned close decision").performClick(nil)
+            NativeWindowEvents.wait("T2 pinned decision completes") { window.attachedSheet == nil }
+            if decision == "Cancel" {
+                check(
+                    closing.isOpen && closing.isDocumentEdited && host.model.activeTab?.isPinned == true,
+                    "T2 pinned own close Cancel preserves edited pin and reviewed active")
+            } else {
+                NativeWindowEvents.wait("T2 pinned own close retires") { closing.isClosed }
+                check(
+                    closing.isClosed && peer.isOpen && host.active?.document === peer,
+                    "T2 pinned own close returns to prior active " + decision)
+            }
+            check(
+                try Data(contentsOf: closing.fileURL!) == Data((decision == "Save" ? "owned pin edits" : "disk").utf8),
+                "T2 pinned own close exact native lifecycle bytes " + decision)
+            reset()
+        }
+        let stableA = try saved("stable-A"), stableB = try saved("stable-B"), stableC = try saved("stable-C")
+        commands.perform(.pin, target: id(stableA))
+        host.reorderTab(id(stableC), to: 1)
+        let stableOrder = ids()
+        stableB.editor.text = "saved metadata"
+        host.metadataChanged()
+        stableB.showWindows()
+        let renamed = root.appendingPathComponent("stable-renamed.txt")
+        var saveDone = false, saveError: Error?
+        stableB.save(to: renamed, ofType: "public.plain-text", for: .saveAsOperation) {
+            saveError = $0
+            saveDone = true
+        }
+        spinUntil("T2 stable Save As completion") { saveDone }
+        try require(saveError == nil, "T2 owned Save As succeeds")
+        try Data("external current bytes".utf8).write(to: renamed)
+        try stableB.revert(toContentsOf: renamed, ofType: "public.plain-text")
+        host.metadataChanged()
+        check(
+            ids() == stableOrder && stableB.editor.text == "external current bytes"
+                && host.model.groups[0].tabs.first?.isPinned == true,
+            "T2 dirty title Save As activation reload refresh never reorder or unpin")
+        let selectStable = try button(stableC), stableActive = host.model.activeTab?.id,
+            stableFocus = window.firstResponder
+        let point = selectStable.convert(NSPoint(x: 10, y: 10), to: nil)
+        let down = NSEvent.mouseEvent(
+            with: .leftMouseDown, location: point, modifierFlags: .command,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 10, clickCount: 1, pressure: 1)!
+        let up = NSEvent.mouseEvent(
+            with: .leftMouseUp, location: point, modifierFlags: .command,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 11, clickCount: 1, pressure: 0)!
+        selectStable.mouseDown(with: down)
+        check(
+            host.model.activeTab?.id == stableActive && window.firstResponder === stableFocus,
+            "T2 actual mouse down defers selection until click or drag resolved")
+        selectStable.mouseUp(with: up)
+        check(
+            selectedIDs() == [id(stableB), id(stableC)] && host.model.activeTab?.id == stableActive
+                && window.firstResponder === stableFocus, "T2 actual Command mouse click toggles without focus change")
+        commands.perform(.newToRight, target: id(stableC))
+        let inserted = try requireValue(app.currentDocument, "T2 post-reorder inserted doc")
+        check(
+            ids()[2] == id(inserted) && !host.model.groups[0].tabs[2].isPinned,
+            "T2 New Right uses reordered visible index")
+        commands.perform(.closeRight, target: id(stableC))
+        waitClose()
+        check(
+            inserted.isClosed && stableB.isClosed && stableA.isOpen && stableC.isOpen,
+            "T2 directional close uses reordered index and excludes pin")
+        reset()
+        let readOnly = try saved("organisation-readonly"), untitled = DocumentFactory.makeUntitled()
+        readOnly.editor.readOnly = true
+        click(readOnly)
+        click(untitled, .command)
+        let readonlyRevision = readOnly.editor.revision
+        try invoke(commands.contextMenu(for: id(readOnly)), .pin)
+        host.reorderTab(id(untitled), to: 0)
+        check(
+            host.model.groups[0].tabs.allSatisfy(\.isPinned) && readOnly.editor.revision == readonlyRevision
+                && readOnly.editor.readOnly && !readOnly.isDocumentEdited && !untitled.isDocumentEdited,
+            "T2 read-only and untitled pin reorder selection are view-only")
+        let untitledID = id(untitled)
+        untitled.close()
+        check(
+            !ids().contains(untitledID) && commands.history.records.isEmpty,
+            "T2 closed clean untitled pin creates no history record")
+        reset()
         var crowded: [TextDocument] = []
         for _ in 0..<14 { crowded.append(DocumentFactory.makeUntitled()) }
         let activeDoc = crowded.last!, moved = crowded[crowded.count - 2]

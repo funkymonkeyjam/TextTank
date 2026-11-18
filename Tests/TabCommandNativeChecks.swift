@@ -146,7 +146,7 @@ extension TabDiskIO {
         let titles = menu.items.filter { !$0.isSeparatorItem }.map(\.title)
         check(
             titles == TabCommand.allCases.map(\.title),
-            "T1 menu exact create-close-location order and no Stage2 commands")
+            "T1 shared menu exact create-close-organisation-location order")
         check(menu.items.allSatisfy { $0.keyEquivalent.isEmpty }, "T1 no new context key equivalents")
         dispatch(try item(menu, .closeOthers))
         waitClose()
