@@ -517,6 +517,29 @@ extension TabDiskIO {
                 "V1-01 post-read existing-file check preserves dirty Save As tab without duplicate")
         }
         reset()
+        do {
+            let preceding = try saved("before-missing-alias", "earlier record")
+            preceding.close()
+            let target = root.appendingPathComponent("broken-alias-target.txt"),
+                alias = root.appendingPathComponent("broken-alias-link.txt")
+            try Data("removed target".utf8).write(to: target)
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+            let closed = try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(target), from: alias)
+            closed.close()
+            try FileManager.default.removeItem(at: target)
+            commands.perform(.reopen, target: nil)
+            waitOpen()
+            check(
+                NSDocumentController.shared.documents.isEmpty && commands.history.records.count == 1
+                    && host.lastTabMessage.contains("no longer"),
+                "V1-01 missing alias target consumes missing record without following bytes or creating a document")
+            commands.perform(.reopen, target: nil)
+            waitOpen()
+            check(
+                app.currentDocument?.editor.text == "earlier record" && commands.history.records.isEmpty,
+                "V1-01 broken alias does not block the next reopen record")
+        }
+        reset()
         for i in 0...ClosedTabHistory.capacity {
             let closed = try saved("consumed-job-\(i)")
             closed.close()

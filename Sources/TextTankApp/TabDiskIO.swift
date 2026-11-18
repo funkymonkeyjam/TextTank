@@ -45,7 +45,21 @@ actor TabDiskIO {
         try? scan(capture, collecting: false).digest
     }
     func read(_ url: URL) throws -> TabDiskRead {
-        let capture = try TabDiskCapture(url)
+        let capture: TabDiskCapture
+        do { capture = try TabDiskCapture(url) } catch let failure as POSIXError {
+            if failure.code == .ENOTDIR { throw POSIXError(.ENOENT) }
+            // A broken display alias cannot be resolved to a regular-file path.
+            // Follow metadata only to distinguish a missing target from a refused
+            // link. Bytes are still read exclusively through O_NOFOLLOW captures.
+            if failure.code == .ELOOP {
+                var current = stat()
+                if fstatat(AT_FDCWD, url.path, &current, 0) != 0 {
+                    let reason = errno
+                    if reason == ENOENT || reason == ENOTDIR { throw POSIXError(.ENOENT) }
+                }
+            }
+            throw failure
+        }
         let result = try scan(capture, collecting: true)
         let s = capture.signature
         return TabDiskRead(
