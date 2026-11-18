@@ -45,19 +45,24 @@ import NativeSearch
     }
     func run() -> Never {
         delegate.onLaunch = { [self] in
-            DispatchQueue.main.async { [self] in
-                Checks.run("TabWorkspaceChecks") {
-                    defer {
-                        isolated.restore()
-                        NativeFixtureEnvironment.restore()
+            // A real AppKit timer callback allows main-queue deliveries in nested RunLoop waits.
+            let timer = Timer(timeInterval: 0.01, repeats: false) { [self] _ in
+                MainActor.assumeIsolated {
+                    Checks.run("TabWorkspaceChecks") {
+                        defer {
+                            isolated.restore()
+                            NativeFixtureEnvironment.restore()
+                        }
+                        check(
+                            NSDocumentController.shared === documents,
+                            "tab workspace process owns the document controller")
+                        check(app.isRunning, "owned workspace checks run in the actual NSApplication event loop")
+                        try TabWorkspaceNativeChecks.run(root: isolated.url)
+                        Checks.summary { "PASS TabWorkspaceChecks: \(Checks.count) native assertions" }
                     }
-                    check(
-                        NSDocumentController.shared === documents, "tab workspace process owns the document controller")
-                    check(app.isRunning, "owned workspace checks run in the actual NSApplication event loop")
-                    try TabWorkspaceNativeChecks.run(root: isolated.url)
-                    Checks.summary { "PASS TabWorkspaceChecks: \(Checks.count) native assertions" }
                 }
             }
+            RunLoop.main.add(timer, forMode: .default)
         }
         withExtendedLifetime(self) { app.run() }
         Checks.fail("The owned application event loop stopped before native completion.", file: #filePath, line: #line)
@@ -243,6 +248,52 @@ import NativeSearch
         check(
             !pa.validateMenuItem(revert) && !a.validateMenuItem(revert),
             "T0-R7 active adapter preserves native untitled Revert validation")
+        // Actual native close choices on captured inactive saved documents.
+        for decision in ["Save", "Don't Save", "Cancel"] {
+            let closeURL = root.appendingPathComponent(
+                "close-" + decision.replacingOccurrences(of: " ", with: "-") + ".txt")
+            try Data("original".utf8).write(to: closeURL)
+            let closing = try DocumentFactory.openCaptured(
+                WorkspaceStore.captureRegularFile(closeURL), from: closeURL, display: false)
+            closing.editor.text = "owned changed bytes"
+            b.showWindows()
+            let closeControl = try requireValue(
+                descendants(host.tabStrip).compactMap { $0 as? NSButton }.first {
+                    $0.toolTip == "Close " + closeURL.lastPathComponent
+                }, "T0 native close control")
+            closeControl.performClick(nil)
+            NativeWindowEvents.wait("T0 native unsaved close review") { window.attachedSheet != nil }
+            var decisionButton: NSButton?
+            NativeWindowEvents.wait("T0 native close decision " + decision) {
+                decisionButton = window.attachedSheet?.contentView.map(descendants)?.compactMap { $0 as? NSButton }
+                    .first {
+                        $0.title == decision
+                            || (decision == "Don't Save" && ["Discard", "Don’t Save"].contains($0.title))
+                    }
+                return decisionButton != nil
+            }
+            print(
+                "T0 native close review", decision, String(describing: window.attachedSheet),
+                window.attachedSheet?.contentView.map(descendants)?.compactMap { ($0 as? NSButton)?.title } ?? [])
+            try requireValue(decisionButton, "T0 native close " + decision).performClick(nil)
+            NativeWindowEvents.wait("T0 native close decision completion") { window.attachedSheet == nil }
+            if decision == "Cancel" {
+                check(
+                    closing.isOpen && closing.presentation?.isActiveTab == true
+                        && closing.editor.text == "owned changed bytes" && b.editor.text == "line B"
+                        && (try? Data(contentsOf: closeURL)) == Data("original".utf8),
+                    "T0-R4/6 native background Cancel preserves the reviewed document and disk bytes")
+                closing.close()
+            } else {
+                NativeWindowEvents.wait("T0 reviewed document closes") { closing.isClosed }
+                let expected = decision == "Save" ? "owned changed bytes" : "original"
+                check(
+                    closing.isClosed && pb.isActiveTab && b.editor.text == "line B"
+                        && (try? Data(contentsOf: closeURL)) == Data(expected.utf8),
+                    "T0-R4/6 native background " + decision + " returns to B with the correct disk bytes")
+            }
+        }
+        a.showWindows()
         let backgroundSplit = DocumentFactory.makeUntitled(), foregroundSplit = DocumentFactory.makeUntitled()
         let backgroundPresentation = try requireValue(backgroundSplit.presentation, "T0 background split presentation")
         let foregroundPresentation = try requireValue(foregroundSplit.presentation, "T0 foreground split presentation")
