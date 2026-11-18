@@ -22,11 +22,17 @@ import AppKit
         return document
     }
     @discardableResult static func openCaptured(
-        _ read: CapturedFileRead, from url: URL, as encoding: FileEncoding? = nil,
+        _ read: CapturedFileRead, from url: URL, expectedDiskURL: URL? = nil, as encoding: FileEncoding? = nil,
         ofType typeName: String = TextDocument.plainTextType, display: Bool = true
     ) throws -> TextDocument {
         let document = TextDocument()
         document.fileURL = url
+        // The display alias may change after a caller's preflight. The setter
+        // pins diskURL once; reject a mismatched construction before loading,
+        // registration or window publication. Never close it through history.
+        if let expectedDiskURL, document.diskURL != expectedDiskURL {
+            throw WorkspaceError.invalid("The file changed while reopening. Try again.")
+        }
         document.fileType = typeName
         try document.read(captured: read.data, sample: read.sample, from: url, ofType: typeName, as: encoding)
         document.fileModificationDate = read.modificationDate

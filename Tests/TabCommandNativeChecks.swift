@@ -466,6 +466,18 @@ extension TabDiskIO {
             spinUntil("V1-01 captured real disk read queued") { commands.hasPendingDiskRead }
             try FileManager.default.removeItem(at: alias)
             try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: replacement)
+            let registeredBefore = NSDocumentController.shared.documents.count
+            let historyBefore = commands.history.records
+            var constructionRefused = false
+            do {
+                _ = try DocumentFactory.openCaptured(
+                    WorkspaceStore.captureRegularFile(original), from: alias,
+                    expectedDiskURL: TextDocument.canonicalDiskURL(original))
+            } catch { constructionRefused = true }
+            check(
+                constructionRefused && NSDocumentController.shared.documents.count == registeredBefore
+                    && commands.history.records == historyBefore,
+                "V1-01 factory rejects alias rebound after preflight before loading, registration or history")
             release.signal()
             waitOpen()
             check(

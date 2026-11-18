@@ -435,7 +435,8 @@ import EditorBridge
                 let document = try DocumentFactory.openCaptured(
                     CapturedFileRead(
                         data: read.data, sample: FileSample(digest: read.digest, signature: nil),
-                        modificationDate: read.modificationDate), from: record.url, display: false)
+                        modificationDate: read.modificationDate), from: record.url, expectedDiskURL: url, display: false
+                )
                 document.editor.readOnly = !read.writable
                 guard
                     let id = host.model.groups.flatMap(\.tabs).first(where: { $0.documentID == document.runtimeID }
