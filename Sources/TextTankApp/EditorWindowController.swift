@@ -96,11 +96,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// Scintilla reports focus only while the hostWindow is key and the application active, so the
     /// first responder is observed as well: a pane chosen in a background hostWindow still counts.
     private(set) var focusObservation: NSKeyValueObservation?
-    private(set) var automationObserver: NSObjectProtocol?
-    private var toolbarAccessibilityObservers: [NSObjectProtocol] = []
-    private var toolbarObservations: [NSKeyValueObservation] = []
-    private var applyingToolbarArrangement = false
-    private var toolbarArrangementSaveScheduled = false
     let primaryEditor: TTEditor
     /// The primary view and, while the hostWindow is split, the clone.
     var views: [TTEditor] { [primaryEditor] + (secondary.map { [$0] } ?? []) }
@@ -647,11 +642,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
         return enabled
     }
-    private func refreshCloneToolbar() {
-        for item in hostWindow?.toolbar?.items ?? [] where item.action == #selector(clone(_:)) {
-            item.isEnabled = validateToolbarItem(item)
-        }
-    }
+    private func refreshCloneToolbar() { host.validateToolbar() }
     func toolbarWillAddItem(_ notification: Notification) { host.toolbarWillAddItem(notification) }
     func toolbarDidRemoveItem(_ notification: Notification) { host.toolbarDidRemoveItem(notification) }
     func saveToolbarArrangement() { host.saveToolbarArrangement() }
@@ -681,10 +672,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     func prepareForClose() {
         linePanel?.close()
         saveToolbarArrangement()
-        toolbarObservations.forEach { $0.invalidate() }
-        toolbarObservations = []
-        toolbarAccessibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
-        toolbarAccessibilityObservers = []
         cancelInlineSearch()
         statusClosed = true
         updateInlineFindValidation()
@@ -695,10 +682,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             self.stateObserver = nil
         }
         removeVisibilityObservers()
-        if let automationObserver {
-            NotificationCenter.default.removeObserver(automationObserver)
-            self.automationObserver = nil
-        }
         focusObservation?.invalidate()
         focusObservation = nil
         // TextDocument.close has already made the shared document read-only for both panes.
@@ -758,7 +741,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             focusObservation?.invalidate()
             if let stateObserver { NotificationCenter.default.removeObserver(stateObserver) }
             visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
-            if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
 
         }
     }

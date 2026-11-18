@@ -60,7 +60,7 @@ import NativeSearch
             }
         }
         withExtendedLifetime(self) { app.run() }
-        Checks.fail("The owned application event loop stopped before native completion.")
+        Checks.fail("The owned application event loop stopped before native completion.", file: #filePath, line: #line)
         Checks.finish("TabWorkspaceChecks")
     }
 }
@@ -70,7 +70,7 @@ import NativeSearch
     private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     static func runApplicationProcess() -> Never {
         do { try WorkspaceCheckApplicationProcess().run() } catch {
-            Checks.fail("Owned native application setup failed: \(error)")
+            Checks.fail("Owned native application setup failed: \(error)", file: #filePath, line: #line)
             Checks.finish("TabWorkspaceChecks")
         }
     }
@@ -243,6 +243,22 @@ import NativeSearch
         check(
             !pa.validateMenuItem(revert) && !a.validateMenuItem(revert),
             "T0-R7 active adapter preserves native untitled Revert validation")
+        let backgroundSplit = DocumentFactory.makeUntitled(), foregroundSplit = DocumentFactory.makeUntitled()
+        let backgroundPresentation = try requireValue(backgroundSplit.presentation, "T0 background split presentation")
+        let foregroundPresentation = try requireValue(foregroundSplit.presentation, "T0 foreground split presentation")
+        backgroundPresentation.clone(nil)
+        foregroundPresentation.clone(nil)
+        backgroundPresentation.closeSplit(nil)
+        let foregroundCloneItem = try requireValue(
+            window.toolbar?.items.first { $0.itemIdentifier == EditorToolbarCommand.split.identifier },
+            "T0 active Clone toolbar")
+        check(
+            foregroundPresentation.isActiveTab && foregroundPresentation.secondary != nil
+                && foregroundCloneItem.menuFormRepresentation?.state == .on,
+            "T0-R14/19 retiring an inactive Clone never overwrites the active tab toolbar state")
+        backgroundSplit.close()
+        foregroundSplit.close()
+        a.showWindows()
         pa.goToLine(nil)
         let lineForm = try requireValue(
             FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.GoToLine" }, "T0 captured Go to Line")

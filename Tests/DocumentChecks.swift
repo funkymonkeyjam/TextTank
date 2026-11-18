@@ -733,8 +733,8 @@ import NativeSearch
                 NotificationCenter.default.post(name: NSWindow.didUpdateNotification, object: window)
                 app.updateWindows()
                 check(
-                    controller.focusObservation == nil && controller.automationObserver == nil
-                        && document.editor.onFocus == nil,
+                    controller.focusObservation == nil && !controller.statusTimerActive
+                        && controller.views.allSatisfy { $0.onFocus == nil },
                     "close removes callbacks before document detaches")
                 check(
                     controller.activeEditor === document.editor,
