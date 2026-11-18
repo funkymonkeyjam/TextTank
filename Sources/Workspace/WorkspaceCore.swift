@@ -394,7 +394,12 @@ package enum WorkspaceStore {
                     ? signature : nil
             }
             let date = stable.map {
-                Date(timeIntervalSince1970: Double($0.modifiedSeconds) + Double($0.modifiedNanoseconds) / 1_000_000_000)
+                // Add fractional seconds in Foundation's reference epoch. Adding them in the
+                // larger Unix epoch first can round again during Date's epoch conversion and
+                // trigger a false NSDocument external-change review for unchanged file bytes.
+                Date(
+                    timeIntervalSinceReferenceDate: Double($0.modifiedSeconds)
+                        - Date.timeIntervalBetween1970AndReferenceDate + Double($0.modifiedNanoseconds) / 1_000_000_000)
             }
             return CapturedFileRead(
                 data: read.data,

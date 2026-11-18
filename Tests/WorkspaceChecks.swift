@@ -390,6 +390,22 @@ import Darwin
             rejects("read resource limit enforced", where: tooLarge) {
                 _ = try WorkspaceStore.readRegularFile(destination, maximumBytes: 2)
             }
+            // Descriptor dates must equal Foundation's native file date, including subsecond
+            // values that previously lost one Date tick through a double epoch conversion.
+            let dateURL = root.appendingPathComponent("descriptor-date.txt")
+            try Data("owned date fixture".utf8).write(to: dateURL)
+            for nanos in [30_343_616, 36_954_288] {
+                var times = [
+                    timespec(tv_sec: 1_794_979_696, tv_nsec: nanos),
+                    timespec(tv_sec: 1_794_979_696, tv_nsec: nanos)
+                ]
+                try require(utimensat(AT_FDCWD, dateURL.path, &times, 0) == 0, "owned nanosecond date fixture")
+                let captured = try WorkspaceStore.captureRegularFile(dateURL)
+                let native = try FileManager.default.attributesOfItem(atPath: dateURL.path)[.modificationDate] as? Date
+                check(
+                    captured.modificationDate == native && native != nil,
+                    "descriptor date equals native Foundation date without epoch rounding: \(nanos)")
+            }
             // F138: the streamed fingerprint is the fingerprint of the bytes, through the same open.
             for count in [0, 100, 64 * 1024, 128 * 1024, 200_000] {
                 let sized = root.appendingPathComponent("sized-\(count)")

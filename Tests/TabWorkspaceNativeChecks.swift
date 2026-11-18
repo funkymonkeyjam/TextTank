@@ -453,6 +453,8 @@ import NativeSearch
             center.removeObserver(enter)
             center.removeObserver(exit)
         }
+        print("T0 OWNED ACTIVATION", Bundle.main.bundleURL.path, fullWindow.windowNumber)
+        fflush(stdout)
         NSApp.activate()
         fullWindow.makeKeyAndOrderFront(nil)
         fullWindow.makeMain()
