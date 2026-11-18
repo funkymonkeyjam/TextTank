@@ -780,6 +780,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         updateInlineFindValidation()
     }
     @objc func showFind(_ sender: Any?) {
+        guard (document as? TextDocument)?.isOpen == true else { return }
+        host.activate(self, focus: false)
         cancelInlineSearch()
         // Remember the pane the find bar acts on before focus leaves it.
         lastEditor = activeEditor
@@ -941,6 +943,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             })
     }
     @objc func clone(_ sender: Any?) {
+        guard !statusClosed, (document as? TextDocument)?.isOpen == true else { return }
+        host.activate(self, focus: false)
         if secondary != nil {
             closeSplit(sender)
             return

@@ -36,10 +36,6 @@ import AppKit
         revealForNativeAction()
         super.revertToSaved(sender)
     }
-    override func printDocument(_ sender: Any?) {
-        revealForNativeAction()
-        super.printDocument(sender)
-    }
     override func runPageLayout(_ sender: Any?) {
         revealForNativeAction()
         super.runPageLayout(sender)
@@ -703,6 +699,7 @@ import AppKit
         return confirmLargePrint(warning.message, warning.detail)
     }
     override func printDocument(_ sender: Any?) {
+        revealForNativeAction()
         guard shouldBeginPrinting() else { return }
         super.printDocument(sender)
     }

@@ -230,6 +230,7 @@ extension DocumentChecks {
                 second.editor.readOnly && second.validateMenuItem(convert) && second.validateMenuItem(reload),
                 "Convert and Reload As keep their enabling: neither is disabled by this package")
 
+            first.showWindows()
             let wrap = item(#selector(EditorWindowController.toggleWrap(_:)))
             first.editor.wrap = false
             check(

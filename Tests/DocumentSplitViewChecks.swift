@@ -544,6 +544,7 @@ extension DocumentChecks {
             // The whole graph goes when the document closes, including a split closed earlier.
             weak var lateClone: TTEditor?
             weak var lateWindow: NSWindow?
+            weak var latePresentation: EditorWindowController?
             weak var lateDocument: TextDocument?
             autoreleasepool {
                 let other = TextDocument()
@@ -555,6 +556,7 @@ extension DocumentChecks {
                     lateClone = otherController.secondary
                     otherController.closeSplit(nil)
                     lateWindow = otherController.hostWindow
+                    latePresentation = otherController
                 }
                 lateDocument = other
                 other.close()
@@ -563,7 +565,8 @@ extension DocumentChecks {
                 autoreleasepool { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
             }
             check(
-                lateClone == nil && lateWindow === controller.hostWindow && lateDocument == nil,
+                lateClone == nil && latePresentation == nil && lateWindow === controller.hostWindow
+                    && lateDocument == nil,
                 "closing a document releases its document and Clone while retaining the shared workspace window")
             document.close()
         }
