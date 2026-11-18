@@ -90,6 +90,10 @@ enum EncodingChoice {
 /// the stock controller cannot do there. Create it before anything touches
 /// `NSDocumentController.shared`.
 final class TextDocumentController: NSDocumentController {
+    override func addDocument(_ document: NSDocument) {
+        super.addDocument(document)
+        (document as? TextDocument)?.makeWindowControllers()
+    }
     var chooseEncoding: @MainActor (URL, Error) -> FileEncoding? = EncodingChoice.present
     /// A session snapshot is restored through its own review prompt, never opened as editable JSON.
     var openSessionFile: (URL) -> Void = { url in EditorServices.current?.openSessionFile(url) }

@@ -1,0 +1,287 @@
+import AppKit
+import TextTankCore
+import EditorBridge
+import NativeSearch
+
+/// The sole native-window owner. Its NSWindowController.document is always nil.
+final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NSToolbarItemValidation,
+    NSMenuItemValidation
+{
+    private static var fallback: WorkspaceWindowController?
+    static var current: WorkspaceWindowController {
+        if let host = EditorServices.current?.workspaceHost { return host }
+        if let fallback { return fallback }
+        let host = WorkspaceWindowController()
+        fallback = host
+        return host
+    }
+    private(set) var model = TabWorkspace()
+    @MainActor private final class Entry {
+        weak var presentation: EditorWindowController?
+        init(_ value: EditorWindowController) { presentation = value }
+    }
+    private var entries: [DocumentID: Entry] = [:]
+    var presentations: [EditorWindowController] {
+        model.groups.flatMap(\.tabs).compactMap { entries[$0.documentID]?.presentation }
+    }
+    var active: EditorWindowController? { model.activeTab.flatMap { entries[$0.documentID]?.presentation } }
+    private var openIDs: Set<DocumentID> { Set(entries.keys) }
+    let tabStrip = DocumentTabStrip()
+    private let content = NSView()
+    private let empty = NSStackView()
+    private var mounted: NSView?
+    private var observations: [NSKeyValueObservation] = []
+    private var automationObserver: NSObjectProtocol?
+    private var savingArrangement = false
+    private var saveScheduled = false
+    private var returnTab: TabID?
+    init() {
+        let window = DocumentTabWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        super.init(window: window)
+        window.animationBehavior = RuntimeEnvironment.current.windowAnimation ?? .none
+        window.title = "TextTank"
+        window.center()
+        window.tabbingMode = .disallowed
+        window.collectionBehavior.insert(.fullScreenPrimary)
+        window.contentMinSize = NSSize(width: 800, height: 500)
+        window.routeCloseButtonToQuit()
+        let root = NSView()
+        window.contentView = root
+        tabStrip.host = self
+        for view in [tabStrip, content] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            tabStrip.topAnchor.constraint(equalTo: root.topAnchor),
+            tabStrip.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            tabStrip.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            tabStrip.heightAnchor.constraint(equalToConstant: 36),
+            content.topAnchor.constraint(equalTo: tabStrip.bottomAnchor),
+            content.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            content.bottomAnchor.constraint(equalTo: root.bottomAnchor)
+        ])
+        let label = NSTextField(labelWithString: "Open a document or create a new one.")
+        let new = NSButton(title: EditorToolbarCommand.new.title, target: nil, action: EditorToolbarCommand.new.action)
+        new.setAccessibilityLabel("Create a new document")
+        let open = NSButton(
+            title: EditorToolbarCommand.open.title, target: nil, action: EditorToolbarCommand.open.action)
+        open.setAccessibilityLabel("Open a document")
+        empty.orientation = .vertical
+        empty.spacing = 12
+        [label, new, open].forEach { empty.addArrangedSubview($0) }
+        empty.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(empty)
+        NSLayoutConstraint.activate([
+            empty.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            empty.centerYAnchor.constraint(equalTo: content.centerYAnchor)
+        ])
+        let toolbar = NSToolbar(
+            identifier: EditorToolbarPreferences.identifier(for: EditorServices.current?.automations))
+        toolbar.delegate = self
+        toolbar.displayMode = .iconAndLabel
+        toolbar.allowsUserCustomization = true
+        toolbar.autosavesConfiguration = EditorToolbarPreferences.nativeAutosaveAllowed
+        window.toolbar = toolbar
+        restoreToolbarArrangement()
+        refreshAutomationToolbar()
+        observations = [
+            toolbar.observe(\.displayMode) { [weak self] _, _ in MainActor.assumeIsolated { self?.scheduleSave() } },
+            toolbar.observe(\.isVisible) { [weak self] _, _ in MainActor.assumeIsolated { self?.scheduleSave() } }
+        ]
+        automationObserver = NotificationCenter.default.addObserver(
+            forName: .textTankAutomationsDidChange, object: EditorServices.current?.automations, queue: .main
+        ) { [weak self] _ in MainActor.assumeIsolated { self?.refreshAutomationToolbar() } }
+        WindowFrames.track(window, as: "TextTank.Document")
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+    func register(_ presentation: EditorWindowController, document: TextDocument) {
+        let previous = model.activeTab?.id
+        entries[document.runtimeID] = Entry(presentation)
+        do { _ = try model.open(document.runtimeID, openDocuments: openIDs) } catch {
+            preconditionFailure("Invalid workspace registration: \(error)")
+        }
+        if let previous { try? model.activate(previous, openDocuments: openIDs) }
+        // Registering creates a tab, but mounting occurs only through explicit presentation.
+        metadataChanged()
+    }
+    func activate(_ presentation: EditorWindowController, focus: Bool = true, explicit: Bool = true) {
+        guard let document = presentation.document as? TextDocument, document.isOpen,
+            entries[document.runtimeID]?.presentation === presentation,
+            let tab = model.groups.flatMap(\.tabs).first(where: { $0.documentID == document.runtimeID }),
+            window?.attachedSheet == nil || active === presentation
+        else { return }
+        if explicit { returnTab = nil }
+        let previous = active
+        do { try model.activate(tab.id, openDocuments: openIDs) } catch { return }
+        if previous !== presentation { previous?.stopStatusTimer() }
+        if mounted !== presentation.presentationRoot {
+            window?.makeFirstResponder(nil)
+            mounted?.removeFromSuperview()
+            mounted = presentation.presentationRoot
+            let root = presentation.presentationRoot
+            root.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(root)
+            NSLayoutConstraint.activate([
+                root.topAnchor.constraint(equalTo: content.topAnchor),
+                root.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                root.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                root.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+            ])
+        }
+        empty.isHidden = true
+        // Explicit chain preserves NSDocument's native Save/Print validation and actions.
+        window?.nextResponder = presentation
+        presentation.nextResponder = NSApp
+        EditorServices.current?.noteActiveController(presentation)
+        metadataChanged()
+        presentation.visibilityChanged()
+        if presentation.isPresented { presentation.refreshStatusDetails() }
+        validateToolbar()
+        if focus { window?.makeFirstResponder(presentation.activeEditor) }
+    }
+    func show(_ presentation: EditorWindowController, sender: Any?) {
+        activate(presentation)
+        window?.makeKeyAndOrderFront(sender)
+        window?.contentView?.layoutSubtreeIfNeeded()
+        if let window { WindowFrames.didPresent(window) }
+        active?.visibilityChanged()
+    }
+    func unregister(_ presentation: EditorWindowController, document: TextDocument) {
+        guard entries[document.runtimeID]?.presentation === presentation,
+            let tab = model.groups.flatMap(\.tabs).first(where: { $0.documentID == document.runtimeID })
+        else { return }
+        let wasActive = active === presentation
+        do { _ = try model.remove(tab.id, reviewed: true, openDocuments: openIDs) } catch {
+            preconditionFailure("Invalid workspace removal")
+        }
+        entries.removeValue(forKey: document.runtimeID)
+        if wasActive {
+            mounted?.removeFromSuperview()
+            mounted = nil
+            if let back = returnTab, model.groups.flatMap(\.tabs).contains(where: { $0.id == back }) {
+                try? model.activate(back, openDocuments: openIDs)
+            }
+            returnTab = nil
+            if let next = active {
+                activate(next, explicit: false)
+            } else {
+                empty.isHidden = false
+                window?.nextResponder = NSApp
+                window?.makeFirstResponder(nil)
+            }
+        }
+        metadataChanged()
+        validateToolbar()
+    }
+    func closeTab(_ id: TabID, sender: Any?) {
+        guard window?.attachedSheet == nil, let tab = model.groups.flatMap(\.tabs).first(where: { $0.id == id }),
+            let presentation = entries[tab.documentID]?.presentation,
+            let document = presentation.document as? TextDocument
+        else { return }
+        let back = model.activeTab?.id
+        activate(presentation, explicit: false)
+        returnTab = back == id ? nil : back
+        document.requestTabClose(sender)
+    }
+    func closeActive(_ sender: Any?) { if let id = model.activeTab?.id { closeTab(id, sender: sender) } }
+    func endBackgroundCloseReturn() { returnTab = nil }
+    func cycle(_ direction: Int) {
+        guard window?.attachedSheet == nil else { return }
+        try? model.cycle(direction, openDocuments: openIDs)
+        if let active { activate(active) }
+    }
+    func metadataChanged() {
+        if let doc = active?.document as? TextDocument {
+            window?.title = doc.displayName
+            window?.representedURL = doc.fileURL
+            window?.isDocumentEdited = doc.isDocumentEdited
+        } else {
+            window?.title = "TextTank"
+            window?.representedURL = nil
+            window?.isDocumentEdited = false
+        }
+        tabStrip.refresh()
+    }
+    func visibilityChanged() { presentations.forEach { $0.visibilityChanged() } }
+    func validateToolbar() {
+        for item in window?.toolbar?.items ?? [] { item.isEnabled = validateToolbarItem(item) }
+        if let window { EditorToolbarAccessibility.apply(to: window) }
+    }
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        EditorToolbarCommand.allCases.map { NSToolbarItem.Identifier($0.rawValue) } + [
+            NSToolbarItem.Identifier("TextTank.Automations")
+        ]
+    }
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarAllowedItemIdentifiers(toolbar)
+    }
+    func toolbar(
+        _ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar: Bool
+    ) -> NSToolbarItem? {
+        if let command = EditorToolbarCommand(rawValue: id.rawValue) { return command.makeItem() }
+        return id.rawValue == "TextTank.Automations" ? EditorServices.current?.automations?.makeToolbarItem() : nil
+    }
+    func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
+        if item.action == EditorToolbarCommand.new.action || item.action == EditorToolbarCommand.open.action {
+            return true
+        }
+        guard let active else { return false }
+        if item.action == #selector(NSDocument.save(_:)), let doc = active.document as? TextDocument {
+            return doc.validateMenuItem(NSMenuItem(title: item.label, action: item.action, keyEquivalent: ""))
+        }
+        if item.itemIdentifier.rawValue == "TextTank.Automations" { return true }
+        return active.validateToolbarItem(item)
+    }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool { active?.validateMenuItem(item) ?? false }
+    func toolbarWillAddItem(_ notification: Notification) { scheduleSave() }
+    func toolbarDidRemoveItem(_ notification: Notification) { scheduleSave() }
+    private func scheduleSave() {
+        guard !saveScheduled else { return }
+        saveScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.saveScheduled = false
+            self.saveToolbarArrangement()
+            self.validateToolbar()
+        }
+    }
+    func saveToolbarArrangement() {
+        guard !savingArrangement, let toolbar = window?.toolbar else { return }
+        EditorToolbarPreferences.save(toolbar)
+    }
+    private func restoreToolbarArrangement() {
+        guard let toolbar = window?.toolbar, let state = EditorToolbarPreferences.load() else { return }
+        savingArrangement = true
+        defer { savingArrangement = false }
+        let allowed = Set(toolbarAllowedItemIdentifiers(toolbar))
+        var seen = Set<NSToolbarItem.Identifier>()
+        let ids = state.identifiers.map { NSToolbarItem.Identifier($0) }.filter {
+            allowed.contains($0) && ($0 == .flexibleSpace || seen.insert($0).inserted)
+        }
+        while !toolbar.items.isEmpty { toolbar.removeItem(at: 0) }
+        for (index, id) in ids.enumerated() { toolbar.insertItem(withItemIdentifier: id, at: index) }
+        toolbar.displayMode = NSToolbar.DisplayMode(rawValue: state.displayMode) ?? .iconAndLabel
+        toolbar.isVisible = state.visible
+    }
+    func refreshAutomationToolbar() {
+        guard let toolbar = window?.toolbar, let automations = EditorServices.current?.automations else { return }
+        for index in toolbar.items.indices.reversed()
+        where toolbar.items[index].itemIdentifier.rawValue.hasPrefix("TextTank.Automation.") {
+            toolbar.removeItem(at: index)
+        }
+        for case let item as NSMenuToolbarItem in toolbar.items
+        where item.itemIdentifier.rawValue == "TextTank.Automations" { automations.refreshToolbarItem(item) }
+        saveToolbarArrangement()
+        validateToolbar()
+    }
+    deinit {
+        precondition(Thread.isMainThread)
+        MainActor.assumeIsolated {
+            if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
+        }
+    }
+}

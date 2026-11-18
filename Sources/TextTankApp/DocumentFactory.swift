@@ -18,7 +18,7 @@ import AppKit
         document.makeWindowControllers()
         populate(document)
         if display { document.showWindows() }
-        if display && focus { document.windowControllers.first?.window?.makeFirstResponder(document.editor) }
+        if display && focus { document.presentation?.hostWindow?.makeFirstResponder(document.editor) }
         return document
     }
     @discardableResult static func openCaptured(
@@ -31,10 +31,8 @@ import AppKit
         try document.read(captured: read.data, sample: read.sample, from: url, ofType: typeName, as: encoding)
         document.fileModificationDate = read.modificationDate
         NSDocumentController.shared.addDocument(document)
-        if display {
-            document.makeWindowControllers()
-            document.showWindows()
-        }
+        document.makeWindowControllers()
+        if display { document.showWindows() }
         return document
     }
 }

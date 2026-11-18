@@ -325,7 +325,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         finish()
         let editors = selectedScope == .allOpenDocuments ? openEditors() : currentEditor().map { [$0] } ?? []
         var cleared = Set<ObjectIdentifier>()
-        for editor in editors where editor.window != nil {
+        for editor in editors where EditorLifetime.isOpen(editor) {
             if cleared.insert(ObjectIdentifier(editor)).inserted { editor.clearSearchHighlights() }
         }
         status.stringValue = Strings.cleared(cleared.count)
@@ -573,7 +573,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             // since changed, or for an editor that is no longer current, moves nothing and a
             // recording that already holds the later edits is discarded.
             if currentDocumentScope, let b = buffers.first,
-                !(b.editor?.window != nil && b.editor?.revision == b.revision && currentEditor() === b.editor)
+                !(b.editor.map { EditorLifetime.isOpen($0) } == true && b.editor?.revision == b.revision
+                    && currentEditor() === b.editor)
             {
                 fail("Result is stale; search again. Selection unchanged.", .staleResult, audible: true)
                 onUnrecordableCommand?(
@@ -681,7 +682,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 return nil
             }
             for (index, b) in buffers.enumerated() {
-                guard let editor = b.editor, editor.window != nil, editor.revision == b.revision,
+                guard let editor = b.editor, EditorLifetime.isOpen(editor), editor.revision == b.revision,
                     !selectionScope || (editor.selectionAnchor == b.anchor && editor.selectionCaret == b.caret)
                 else {
                     stale += 1
@@ -791,6 +792,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     ) {
         let text = editor.text, revision = editor.revision, selections = editor.selectionRanges
         let anchor = editor.selectionAnchor, caret = editor.selectionCaret
+        let targetDocumentID = EditorLifetime.document(for: editor)?.runtimeID
         let window = editor.window
         Task { @MainActor [weak self, weak editor, weak window] in
             do {
@@ -803,7 +805,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     completion(.cancelled)
                     return
                 }
-                guard let self, let editor, let window, editor.window === window,
+                guard let self, let editor, EditorLifetime.isOpen(editor),
+                    (targetDocumentID != nil
+                        ? EditorLifetime.document(for: editor)?.runtimeID == targetDocumentID
+                        : editor.window === window),
                     editor.revision == revision, editor.selectionRanges == selections,
                     editor.selectionAnchor == anchor, editor.selectionCaret == caret, isCurrent()
                 else {
@@ -818,7 +823,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     completion(.cancelled)
                     return
                 }
-                guard self != nil, let editor, let window, editor.window === window,
+                guard self != nil, let editor, EditorLifetime.isOpen(editor),
+                    (targetDocumentID != nil
+                        ? EditorLifetime.document(for: editor)?.runtimeID == targetDocumentID
+                        : editor.window === window),
                     editor.revision == revision, editor.selectionRanges == selections,
                     editor.selectionAnchor == anchor, editor.selectionCaret == caret, isCurrent()
                 else {
@@ -863,14 +871,14 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         // Preserve the pre-extraction cheap rejection boundary: closed/stale/truncated
         // results must not read selections or scan positions in a captured document.
         guard !report.truncated else { throw SearchFailure.macroResultLimit }
-        guard editor.window != nil, editor.revision == revision else {
+        guard EditorLifetime.isOpen(editor), editor.revision == revision else {
             throw Self.recordedSearchStopped("the document changed or selection is not on a character boundary")
         }
         let selection = SearchCore.utf16Range(
             NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart), in: text)
         let snapshot = SearchSession.Snapshot(
             text: text, revision: revision, currentRevision: editor.revision,
-            selection: selection, isOpen: editor.window != nil)
+            selection: selection, isOpen: EditorLifetime.isOpen(editor))
         switch try SearchSession.plan(
             report, snapshot: snapshot, options: options, action: action, continuing: continuing)
         {
@@ -899,7 +907,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     @discardableResult static func highlight(_ hits: [SearchHit], text: String, revision: UInt, in editor: TTEditor)
         -> Bool
     {
-        guard editor.window != nil, editor.revision == revision,
+        guard EditorLifetime.isOpen(editor), editor.revision == revision,
             let ranges = SearchCore.byteRanges(hits.map(\.range), in: text)
         else { return false }
         return editor.setSearchHighlights(
@@ -914,7 +922,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     /// action, or changes nothing and says why. The selection the command began with is kept around
     /// the text it covered.
     static func replace(_ hits: [SearchHit], text: String, revision: UInt, in editor: TTEditor) -> ReplaceOutcome {
-        guard editor.window != nil else { return .closed }
+        guard EditorLifetime.isOpen(editor) else { return .closed }
         guard !editor.readOnly else { return .readOnly }
         guard editor.revision == revision else { return .stale }
         guard editor.selectionCount == 1 else { return .multipleSelections }
@@ -946,7 +954,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         if let last = lastNavigation, let editor = last.editor, editor.revision == last.revision,
             current == nil || current === editor
                 || ((current === last.from || !buffers.contains(where: { $0.editor === current }))
-                    && !(current?.window?.isVisible == true && editor.window?.isVisible != true)),
+                    && !(EditorLifetime.isVisible(current) && !EditorLifetime.isVisible(editor))),
             let index = buffers.firstIndex(where: { $0.editor === editor && $0.revision == last.revision }),
             SearchCore.utf16Range(
                 NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart),
@@ -1040,7 +1048,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     /// not showing at all.
     @discardableResult private func select(_ row: Row, focusEditor: Bool, audible: Bool) -> Bool {
         guard resultBuffers.indices.contains(row.buffer), let editor = resultBuffers[row.buffer].editor,
-            editor.window != nil, editor.revision == resultBuffers[row.buffer].revision,
+            EditorLifetime.isOpen(editor), editor.revision == resultBuffers[row.buffer].revision,
             let range = SearchCore.byteRange(row.hit.range, in: resultBuffers[row.buffer].text),
             editor.setSelectionAnchor(range.location, caret: NSMaxRange(range))
         else {
@@ -1049,10 +1057,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         }
         lastNavigation = Navigation(
             editor: editor, revision: editor.revision, range: row.hit.range, from: currentEditor())
-        if focusEditor || editor.window?.isVisible == false {
-            editor.window?.makeKeyAndOrderFront(nil)
-            editor.window?.makeFirstResponder(editor)
-        }
+        if focusEditor || !EditorLifetime.isVisible(editor) { EditorLifetime.activate(editor) }
         return true
     }
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -1061,7 +1066,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         let r = rows[row], buffer = resultBuffers[r.buffer]
         let match = (buffer.text as NSString).substring(with: r.hit.range)
         return
-            "\(buffer.editor?.window?.title ?? "Document") · \(r.hit.displayPosition.map { "\($0.line):\($0.column)" } ?? "—") · \(String(match.prefix(160)).replacingOccurrences(of:"\n",with:" ↵ "))"
+            "\(EditorLifetime.title(buffer.editor)) · \(r.hit.displayPosition.map { "\($0.line):\($0.column)" } ?? "—") · \(String(match.prefix(160)).replacingOccurrences(of:"\n",with:" ↵ "))"
     }
     /// A double-click. `clickedRow` is -1 for the header and the empty area below the rows,
     /// which therefore do nothing even while a row is selected.

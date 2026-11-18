@@ -618,7 +618,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                 let report = try? await Task.detached(priority: .userInitiated) {
                     try SearchCore.search(snapshot, options: options)
                 }.value
-                guard self.generation == token, editor.window != nil,
+                guard self.generation == token, EditorLifetime.isOpen(editor),
                     Self.selectResult(match, in: editor, snapshot: snapshot, revision: revision, hits: report?.hits)
                 else {
                     self.status.stringValue =
@@ -628,7 +628,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                 }
                 self.onUnrecordableCommand?("Opening a folder search result is not recorded in macros yet.")
                 document.showWindows()
-                document.windowControllers.first?.window?.makeFirstResponder(editor)
+                EditorLifetime.activate(editor)
             }
         }
     }

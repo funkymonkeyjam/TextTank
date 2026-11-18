@@ -28,7 +28,7 @@ enum DesignStatusChecks {
         let controller = document.windowControllers[0] as! EditorWindowController
         controller.statusTimerInterval = nil
         controller.visibilityChanged()
-        let window = controller.window!
+        let window = controller.hostWindow!
         window.setContentSize(NSSize(width: 800, height: 500))
         let root = window.contentView!
         root.layoutSubtreeIfNeeded()

@@ -36,7 +36,7 @@ any user-facing string. Cite rules by their id (for example DS-31) in commit mes
 
 | Id | Decision | Date |
 |---|---|---|
-| DS-D1 | **Tab model: one workspace window that hosts the compact tab strip** (and, later, editor groups). Native `NSWindow` tabbing is rejected: pinned tabs, multi-select, groups and two views of one document cannot be built on it. The present one-hidden-window-per-document arrangement is a stand-in to be replaced by that host; do not build new features on it. | 15 Nov 2026 |
+| DS-D1 | **Tab model: one workspace window that hosts the compact tab strip** (and, later, editor groups). Native `NSWindow` tabbing is rejected: pinned tabs, multi-select, groups and two views of one document cannot be built on it. Stage 0 replaces the hidden document windows with a shared native host; later stages extend its model. | 15 Nov 2026 |
 | DS-D2 | **The window's red close button quits TextTank**, after the usual review of unsaved documents. One tab closes from its own close button, File > Close or Command-W. | 15 Nov 2026 |
 | DS-D3 | **No Close Tab button in the toolbar.** Each tab has its own. | 15 Nov 2026 |
 | DS-D4 | **Top-level menu order stays as it is** until the owner decides the menu map. Group inside menus; do not add, remove, merge or reorder top-level menus. | open |
@@ -66,8 +66,7 @@ Owner follow-up, 17 November 2026:
   `NSVisualEffectView`, no transparent title bar, no hand-drawn buttons that imitate system ones.
 - DS-12. Closing one tab, closing the window and quitting are three separately specified behaviours
   (DS-D2). Each keeps the Save / Discard / Cancel review, and Cancel leaves everything as it was.
-- DS-13. Full screen must work once the workspace-window host exists. It is off today only because of the
-  stand-in tab arrangement.
+- DS-13. Full screen must work in the workspace window. Native transitions remain system behavior.
 - DS-14. A tab is a tab to assistive technology: tab role, a label of the form "name, edited", an
   in-place update rather than a rebuild, and a close target of at least 28 by 28 points that does not
   abut the tab's own target. Tabs shrink before the strip scrolls.

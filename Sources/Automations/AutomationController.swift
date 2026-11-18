@@ -225,7 +225,7 @@ extension Notification.Name {
         }
         panel.canChoose = { [weak self, weak panel, weak capturedEditor] in
             guard let self, let text = panel?.selectedID, let id = UUID(uuidString: text) else { return false }
-            if let capturedEditor, capturedEditor.window == nil { return false }
+            if let capturedEditor, !EditorLifetime.isOpen(capturedEditor) { return false }
             return self.canInvoke(id, editor: capturedEditor)
         }
         panel.choose = { [weak self, weak capturedEditor] id in
@@ -709,7 +709,7 @@ extension Notification.Name {
                 outputs.append(output)
             }
             try editor.requireWritable() // Read Only may have been switched on while a preview was open.
-            guard editor.window != nil, editor.selectionRanges == selections,
+            guard EditorLifetime.isOpen(editor), editor.selectionRanges == selections,
                 editor.replaceSelections(outputs, expectedRevision: revision)
             else {
                 throw AutomationError.invalid("The document or selections changed or closed. Nothing was replaced.")
@@ -774,7 +774,7 @@ extension Notification.Name {
         switch workflow.output {
         case .editor:
             try editor?.requireWritable() // Read Only may have been switched on while a dialog was open.
-            guard let editor, editor.window != nil, editor.revision == revision else {
+            guard let editor, EditorLifetime.isOpen(editor), editor.revision == revision else {
                 throw AutomationError.invalid(
                     "The original document changed or closed. Run the automation again with the current text.")
             }

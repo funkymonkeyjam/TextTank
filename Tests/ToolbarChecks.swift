@@ -70,7 +70,7 @@ import NativeSearch
         let controller = try requireValue(
             document.windowControllers.first as? EditorWindowController, "DT fixture: document controller")
         composition.noteActive(controller)
-        let window = try requireValue(controller.window, "DT fixture: document window")
+        let window = try requireValue(controller.hostWindow, "DT fixture: document window")
         let toolbar = try requireValue(window.toolbar, "DT fixture: native toolbar")
         let core = ["TextTank.New", "TextTank.Open", "TextTank.Save", "TextTank.Find", "TextTank.Split"]
         let native = nativeTree(window)
@@ -201,14 +201,14 @@ import NativeSearch
         owned.append(sibling)
         let siblingController = try requireValue(
             sibling.windowControllers.first as? EditorWindowController, "DT fixture: sibling controller")
-        let siblingToolbar = try requireValue(siblingController.window?.toolbar, "DT fixture: sibling toolbar")
+        let siblingToolbar = try requireValue(siblingController.hostWindow?.toolbar, "DT fixture: sibling toolbar")
         let services = EditorServices.current
         let independentComposition = AppDelegate()
         independentComposition.installEditorServices()
         let independentDocument = DocumentFactory.makeUntitled()
         owned.append(independentDocument)
         let independentToolbar = try requireValue(
-            independentDocument.windowControllers.first?.window?.toolbar,
+            independentDocument.presentation?.hostWindow?.toolbar,
             "DT fixture: independent composition toolbar")
         let independentItems = independentToolbar.items.map(\.itemIdentifier)
         EditorServices.current = services
@@ -260,7 +260,7 @@ import NativeSearch
             "renamed automations with identical titles retain distinct UUID-bound drop-down actions")
         composition.noteActive(controller)
         let savedFrame = window.frame, minimum = window.contentMinSize
-        window.makeKeyAndOrderFront(nil)
+        document.showWindows()
         toolbar.isVisible = true
         toolbar.displayMode = .iconAndLabel
         find.visibilityPriority = .low
@@ -332,11 +332,14 @@ import NativeSearch
         owned.forEach { $0.close() }
         owned = []
         preferences.set(try JSONEncoder().encode(state), forKey: EditorToolbarPreferences.key)
+        let restoredComposition = AppDelegate()
+        restoredComposition.installEditorServices()
+        defer { EditorServices.current = services }
         let restored = DocumentFactory.makeUntitled()
         owned.append(restored)
         let restoredController = try requireValue(
             restored.windowControllers.first as? EditorWindowController, "DT fixture: restored controller")
-        let restoredToolbar = try requireValue(restoredController.window?.toolbar, "DT fixture: restored toolbar")
+        let restoredToolbar = try requireValue(restoredController.hostWindow?.toolbar, "DT fixture: restored toolbar")
         check(
             restoredToolbar.items.map { $0.itemIdentifier.rawValue } == ["TextTank.Find", "TextTank.Save"]
                 && restoredToolbar.displayMode == .iconOnly && !restoredToolbar.isVisible,

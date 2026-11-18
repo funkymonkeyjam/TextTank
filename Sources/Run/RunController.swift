@@ -459,9 +459,7 @@ import AppKit
             // The editor is held weakly, and one that is gone belonged to a closed document. A
             // closed document is also marked read-only and may still sit in its closed window,
             // so closure is recognised first and reported as what it is.
-            guard let editor = result.editor, editor.window != nil else { throw RunFailure.documentClosed }
-            let controller = editor.window?.windowController
-            guard controller == nil || controller?.document != nil else { throw RunFailure.documentClosed }
+            guard let editor = result.editor, EditorLifetime.isOpen(editor) else { throw RunFailure.documentClosed }
             try editor.requireWritable()
             guard editor.revision == result.revision, editor.selectionCount == 1,
                 !result.selection

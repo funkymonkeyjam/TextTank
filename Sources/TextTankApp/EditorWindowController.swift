@@ -46,12 +46,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
     }
     private let statusDetails = StatusBadgeRow()
-    private let documentTabs = DocumentTabStrip()
+    let host: WorkspaceWindowController
+    let presentationRoot: NSView
+    var hostWindow: NSWindow? { host.window }
+    var isActiveTab: Bool { host.active === self }
+    var isPresented: Bool { isActiveTab && hostWindow?.isVisible == true && hostWindow?.isMiniaturized != true }
     private var statusTimer: Timer?
-    /// Nil when the caller supplies timer ticks itself. The normal window polls every 0.2 s;
+    /// Nil when the caller supplies timer ticks itself. The normal hostWindow polls every 0.2 s;
     /// checks can drive the exact same tick path without depending on run-loop scheduling speed.
     var statusTimerInterval: TimeInterval? = 0.2
-    /// True while the recurring refresh is scheduled, which is only while the window is on screen.
+    /// True while the recurring refresh is scheduled, which is only while the hostWindow is on screen.
     var statusTimerActive: Bool { statusTimer != nil }
     /// Stop the recurring refresh without changing visibility.
     func stopStatusTimer() {
@@ -83,11 +87,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     private var cachedEndings = "LF"
     private var statusSummaryItems: [StatusItem] = []
     private(set) var secondary: TTEditor?
-    /// The pane focused last. Written when the window's first responder moves into a pane, by
+    /// The pane focused last. Written when the hostWindow's first responder moves into a pane, by
     /// each view's onFocus (see `wire`) and by closeSplit.
     private(set) weak var lastEditor: TTEditor?
-    /// Scintilla reports focus only while the window is key and the application active, so the
-    /// first responder is observed as well: a pane chosen in a background window still counts.
+    /// Scintilla reports focus only while the hostWindow is key and the application active, so the
+    /// first responder is observed as well: a pane chosen in a background hostWindow still counts.
     private(set) var focusObservation: NSKeyValueObservation?
     private(set) var automationObserver: NSObjectProtocol?
     private var toolbarAccessibilityObservers: [NSObjectProtocol] = []
@@ -95,12 +99,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     private var applyingToolbarArrangement = false
     private var toolbarArrangementSaveScheduled = false
     let primaryEditor: TTEditor
-    /// The primary view and, while the window is split, the clone.
+    /// The primary view and, while the hostWindow is split, the clone.
     var views: [TTEditor] { [primaryEditor] + (secondary.map { [$0] } ?? []) }
     /// The pane that holds the first responder, otherwise the pane focused last (focus may be
-    /// in the find field or another window). A pure read.
+    /// in the find field or another hostWindow). A pure read.
     var activeEditor: TTEditor {
-        if let responder = window?.firstResponder as? NSView,
+        if let responder = hostWindow?.firstResponder as? NSView,
             let focused = views.last(where: { responder.isDescendant(of: $0) })
         {
             return focused
@@ -126,18 +130,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     init(document: TextDocument) {
         primaryEditor = document.editor
-        let window = DocumentTabWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        super.init(window: window)
-        window.animationBehavior = RuntimeEnvironment.current.windowAnimation ?? .none
+        host = WorkspaceWindowController.current
+        presentationRoot = NSView()
+        super.init(window: nil)
+        self.document = document
+        let hostWindow = host.window!
         lastEditor = document.editor
         wire(document.editor)
-        focusObservation = window.observe(\.firstResponder) { [weak self] window, _ in
+        focusObservation = hostWindow.observe(\.firstResponder) { [weak self] hostWindow, _ in
             precondition(Thread.isMainThread)
             MainActor.assumeIsolated {
 
-                guard let self, let responder = window.firstResponder as? NSView,
+                guard let self, let responder = hostWindow.firstResponder as? NSView,
                     let pane = self.views.last(where: { responder.isDescendant(of: $0) })
                 else { return }
                 self.lastEditor = pane
@@ -145,59 +149,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
 
             }
         }
-        if let app = EditorServices.current {
-            app.settings?.apply(to: document.editor)
-            let toolbar = NSToolbar(identifier: EditorToolbarPreferences.identifier(for: app.automations))
-            toolbar.delegate = self
-            toolbar.displayMode = .iconAndLabel
-            toolbar.allowsUserCustomization = true
-            toolbar.autosavesConfiguration = EditorToolbarPreferences.nativeAutosaveAllowed
-            window.toolbar = toolbar
-            restoreToolbarArrangement()
-            refreshAutomationToolbar()
-            EditorToolbarAccessibility.apply(to: window)
-            toolbarAccessibilityObservers = [NSWindow.didResizeNotification, NSWindow.didBecomeKeyNotification].map {
-                NotificationCenter.default.addObserver(forName: $0, object: window, queue: .main) { [weak window] _ in
-                    precondition(Thread.isMainThread)
-                    MainActor.assumeIsolated {
-
-                        if let window { EditorToolbarAccessibility.apply(to: window) }
-
-                    }
-                }
-            }
-            toolbarObservations = [
-                toolbar.observe(\.displayMode) { [weak self] _, _ in
-                    precondition(Thread.isMainThread)
-                    MainActor.assumeIsolated { self?.scheduleToolbarArrangementSave() }
-                },
-                toolbar.observe(\.isVisible) { [weak self] _, _ in
-                    precondition(Thread.isMainThread)
-                    MainActor.assumeIsolated { self?.scheduleToolbarArrangementSave() }
-                }
-            ]
-            automationObserver = NotificationCenter.default.addObserver(
-                forName: .textTankAutomationsDidChange, object: app.automations, queue: .main
-            ) { [weak self] _ in
-                precondition(Thread.isMainThread)
-                MainActor.assumeIsolated { self?.refreshAutomationToolbar() }
-            }
-        }
-        window.title = "TextTank"
-        window.center()
-        window.tabbingMode = .disallowed
-        // Tabs are separate windows of which one is shown. A full-screen window cannot be
-        // swapped for another that way, so the tab windows do not enter full screen.
-        window.collectionBehavior.insert(.fullScreenNone)
-        window.titleVisibility = .visible
-        window.titlebarAppearsTransparent = false
-        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            window.standardWindowButton(button)?.isHidden = false
-        }
-        window.routeCloseButtonToQuit()
-        window.contentMinSize = NSSize(width: 800, height: 500)
-        let root = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
-        window.contentView = root
+        EditorServices.current?.settings?.apply(to: document.editor)
+        let root = presentationRoot
         split.isVertical = true
         split.dividerStyle = .thin
         split.addArrangedSubview(document.editor)
@@ -226,21 +179,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         findField.sendsWholeSearchString = true
         findField.setAccessibilityLabel("Find in document")
         replaceField.setAccessibilityLabel("Replace selection with")
-        // The bar is out of the way until Find is chosen, so the text is the window's main surface.
+        // The bar is out of the way until Find is chosen, so the text is the hostWindow's main surface.
         search.isHidden = true
         findBar = search
-        documentTabs.owner = window
-        [documentTabs, search, split, statusDetails].forEach {
+        [search, split, statusDetails].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview($0)
         }
         NSLayoutConstraint.activate([
             split.heightAnchor.constraint(greaterThanOrEqualToConstant: 200),
-            documentTabs.topAnchor.constraint(equalTo: root.topAnchor),
-            documentTabs.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            documentTabs.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            documentTabs.heightAnchor.constraint(equalToConstant: 36),
-            search.topAnchor.constraint(equalTo: documentTabs.bottomAnchor, constant: 10),
+            search.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
             search.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             search.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             findField.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
@@ -253,7 +201,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             statusDetails.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6)
         ])
         splitBelowFindBar = split.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 10)
-        splitBelowTabs = split.topAnchor.constraint(equalTo: documentTabs.bottomAnchor)
+        splitBelowTabs = split.topAnchor.constraint(equalTo: root.topAnchor)
         splitBelowTabs?.isActive = true
         statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         statusLabel.textColor = .secondaryLabelColor
@@ -279,20 +227,17 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 guard let self, !self.statusClosed, let editor = changed else { return }
                 if editor === self.primaryEditor || editor === self.secondary {
                     self.updateInlineFindValidation()
-                    if self.window?.isVisible == true { self.refreshStatusDetails(source: .editorEvent) }
-                } else if self.window?.isVisible == true {
-                    // Another document changed: only its title in this window's tab strip can differ.
-                    self.documentTabs.refresh()
+                    if self.isPresented { self.refreshStatusDetails(source: .editorEvent) }
                 }
 
             }
         }
-        // Minimising and restoring a window changes isVisible without any order call.
+        // Minimising and restoring a hostWindow changes isVisible without any order call.
         visibilityObservers = [
             NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification,
             NSWindow.didBecomeKeyNotification, NSWindow.didChangeOcclusionStateNotification
         ].map {
-            NotificationCenter.default.addObserver(forName: $0, object: window, queue: nil) { [weak self] _ in
+            NotificationCenter.default.addObserver(forName: $0, object: hostWindow, queue: nil) { [weak self] _ in
                 precondition(Thread.isMainThread)
                 MainActor.assumeIsolated {
 
@@ -304,19 +249,19 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         visibilityChanged()
         refreshStatusDetails(for: document)
         updateInlineFindValidation()
-        // The first document window opens where the last one was left. A later tab takes the
+        // The first document hostWindow opens where the last one was left. A later tab takes the
         // frame of the visible tab when it is shown, which replaces whatever is applied here.
-        // This comes last: the title bar and toolbar set up above change the window's height.
-        WindowFrames.track(window, as: "TextTank.Document")
+        // This comes last: the title bar and toolbar set up above change the hostWindow's height.
+        host.register(self, document: document)
     }
     private func removeVisibilityObservers() {
         visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
         visibilityObservers = []
     }
-    /// Starts the recurring status refresh when the window comes on screen and stops it when the
-    /// window leaves, so a hidden tab has no timer at all.
+    /// Starts the recurring status refresh when the hostWindow comes on screen and stops it when the
+    /// hostWindow leaves, so a hidden tab has no timer at all.
     func visibilityChanged() {
-        let visible = window?.isVisible == true && !statusClosed && statusTimerInterval != nil
+        let visible = isPresented && !statusClosed && statusTimerInterval != nil
         if !visible {
             statusTimer?.invalidate()
             statusTimer = nil
@@ -338,7 +283,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// One polling tick. Kept separate from Timer so checks can insert an edit before every tick
     /// and an idle tick after the last edit, even on a busy runner.
     func statusTimerTick() {
-        guard window?.isVisible == true else {
+        guard isPresented else {
             visibilityChanged()
             return
         }
@@ -355,7 +300,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         _ message: String, compactMessage: String? = nil, seconds: TimeInterval = 4, announce: Bool = true
     ) {
         guard transientStatus != message else { return }
-        if announce { Announce.say(message, from: window) }
+        if announce { Announce.say(message, from: hostWindow) }
         guard let doc = document as? TextDocument, doc.lastRecoveryError == nil, !recoveryStatusFailed else { return }
         transientStatus = message
         applyStatusMessage(message, compactMessage: compactMessage)
@@ -370,7 +315,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     func showRecoveryStatus(_ message: String, failed: Bool) {
         transientStatus = nil
         recoveryStatusFailed = failed
-        if failed, fullStatusText != message { Announce.say(message, from: window) }
+        if failed, fullStatusText != message { Announce.say(message, from: hostWindow) }
         let compact = (document as? TextDocument)?.recoveredOrigin == nil ? message : "Recovered copy — Save As to keep"
         applyStatusMessage(message, compactMessage: compact)
         // The failure is carried by the words and the symbol; full-strength label colour keeps it
@@ -388,9 +333,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     func refreshStatusDetails(for suppliedDocument: TextDocument? = nil, source: StatusRefreshSource = .explicit) {
         guard let doc = suppliedDocument ?? document as? TextDocument else { return }
         statusRefreshCount += 1
-        // Any refresh in a window on screen restarts a missing timer, the editor-event path included.
+        // Any refresh in a hostWindow on screen restarts a missing timer, the editor-event path included.
         if statusTimer == nil { visibilityChanged() }
-        documentTabs.refresh()
         let editor = activeEditor, info = editor.statusInfo
         let revision = doc.editor.revision
         let allowsMetricsCapture =
@@ -408,7 +352,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 self.cachedCharacterCount = count
                 self.cachedEndings = eol
                 self.statusRevision = revision
-                if self.window?.isVisible == true { self.refreshStatusDetails() }
+                if self.isPresented { self.refreshStatusDetails() }
             }
             DispatchQueue.global(qos: .utility).async {
                 let (count, eol) = StatusMetrics.scan(bytes)
@@ -644,7 +588,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         form.button("Go", identifier: "goToLine.go") { [weak self, weak editor] in
             guard let self, form.commitEditing() else { return }
             do {
-                guard !self.statusClosed, let editor, editor.window != nil, editor.revision == revision else {
+                guard !self.statusClosed, let editor, EditorLifetime.isOpen(editor), editor.revision == revision else {
                     throw FormFailure.documentChanged
                 }
                 guard let line = NumericInput.integer(input, signed: true),
@@ -653,7 +597,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     throw GoToLineFailure(last: editor.statusInfo.lines)
                 }
                 form.close()
-                self.window?.makeFirstResponder(editor)
+                self.hostWindow?.makeFirstResponder(editor)
                 self.refreshStatusDetails()
             } catch { form.showValidation(error, field: input) }
         }.keyEquivalent = "\r"
@@ -663,9 +607,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     /// Puts the caret at the start of a line, counted from 1, on the engine's own line model.
     /// False, with nothing changed, for a line the document does not have or a view that has
-    /// left its window. Does not touch a macro recording; the dialog passes the recorder.
+    /// left its hostWindow. Does not touch a macro recording; the dialog passes the recorder.
     static func goToLine(_ line: Int, in editor: TTEditor) -> Bool {
-        guard editor.window != nil else { return false }
+        guard EditorLifetime.isOpen(editor) else { return false }
         return goToLine(line, in: editor, macros: nil)
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -697,64 +641,42 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 item.image = NSImage(
                     systemSymbolName: secondary == nil ? EditorToolbarCommand.split.symbol : "checkmark.rectangle",
                     accessibilityDescription: help)
-                if let window { EditorToolbarAccessibility.apply(to: window) }
+                if let hostWindow { EditorToolbarAccessibility.apply(to: hostWindow) }
             }
         }
         return enabled
     }
     private func refreshCloneToolbar() {
-        for item in window?.toolbar?.items ?? [] where item.action == #selector(clone(_:)) {
+        for item in hostWindow?.toolbar?.items ?? [] where item.action == #selector(clone(_:)) {
             item.isEnabled = validateToolbarItem(item)
         }
     }
-    func toolbarWillAddItem(_ notification: Notification) { scheduleToolbarArrangementSave() }
-    func toolbarDidRemoveItem(_ notification: Notification) { scheduleToolbarArrangementSave() }
-    private func scheduleToolbarArrangementSave() {
-        // willAdd precedes the actual insertion. Capture the finished configuration on the next turn.
-        guard !toolbarArrangementSaveScheduled else { return }
-        toolbarArrangementSaveScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.toolbarArrangementSaveScheduled = false
-            self.saveToolbarArrangement()
-            if let window = self.window { EditorToolbarAccessibility.apply(to: window) }
+    func toolbarWillAddItem(_ notification: Notification) { host.toolbarWillAddItem(notification) }
+    func toolbarDidRemoveItem(_ notification: Notification) { host.toolbarDidRemoveItem(notification) }
+    func saveToolbarArrangement() { host.saveToolbarArrangement() }
+    func refreshAutomationToolbar() { host.refreshAutomationToolbar() }
+    nonisolated override func responds(to selector: Selector!) -> Bool {
+        let inherited = super.responds(to: selector)
+        guard !inherited, Thread.isMainThread else { return inherited }
+        return MainActor.assumeIsolated {
+            guard let doc = document as? TextDocument, doc.isOpen else { return false }
+            return doc.responds(to: selector)
         }
     }
-    func saveToolbarArrangement() {
-        guard !applyingToolbarArrangement, let toolbar = window?.toolbar else { return }
-        EditorToolbarPreferences.save(toolbar)
+    nonisolated override func forwardingTarget(for selector: Selector!) -> Any? {
+        if Thread.isMainThread {
+            let target: TextDocument? = MainActor.assumeIsolated {
+                guard let doc = document as? TextDocument, doc.isOpen, doc.responds(to: selector) else { return nil }
+                return doc
+            }
+            if let target { return target }
+        }
+        return super.forwardingTarget(for: selector)
     }
-    private func restoreToolbarArrangement() {
-        guard let toolbar = window?.toolbar, let state = EditorToolbarPreferences.load() else { return }
-        applyingToolbarArrangement = true
-        defer { applyingToolbarArrangement = false }
-        let allowed = Set(toolbarAllowedItemIdentifiers(toolbar))
-        var seen: Set<NSToolbarItem.Identifier> = []
-        let restored = state.identifiers.map { NSToolbarItem.Identifier($0) }.filter {
-            allowed.contains($0) && ($0 == .flexibleSpace || seen.insert($0).inserted)
-        }
-        while !toolbar.items.isEmpty { toolbar.removeItem(at: 0) }
-        for (index, identifier) in restored.enumerated() {
-            toolbar.insertItem(withItemIdentifier: identifier, at: index)
-        }
-        toolbar.displayMode = NSToolbar.DisplayMode(rawValue: state.displayMode) ?? .iconAndLabel
-        toolbar.isVisible = state.visible
-    }
-    func refreshAutomationToolbar() {
-        guard let toolbar = window?.toolbar, let automations = EditorServices.current?.automations else { return }
-        // Saved native arrangements may still contain the former individual favorites.
-        // Remove those entries without resetting the person's remaining toolbar choices.
-        for index in toolbar.items.indices.reversed()
-        where toolbar.items[index].itemIdentifier.rawValue.hasPrefix("TextTank.Automation.") {
-            toolbar.removeItem(at: index)
-        }
-        for case let item as NSMenuToolbarItem in toolbar.items
-        where item.itemIdentifier.rawValue == "TextTank.Automations" {
-            automations.refreshToolbarItem(item)
-        }
-        if let window { EditorToolbarAccessibility.apply(to: window) }
-        saveToolbarArrangement()
-    }
+    override func showWindow(_ sender: Any?) { host.show(self, sender: sender) }
+    override func close() { presentationRoot.removeFromSuperview() }
+    override func synchronizeWindowTitleWithDocumentName() { host.metadataChanged() }
+    override func setDocumentEdited(_ dirtyFlag: Bool) { host.metadataChanged() }
     func prepareForClose() {
         linePanel?.close()
         saveToolbarArrangement()
@@ -845,12 +767,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         findBar.isHidden = !visible
         splitBelowFindBar?.isActive = visible
     }
-    /// The text other apps and the Find and Replace window last searched for.
+    /// The text other apps and the Find and Replace hostWindow last searched for.
     static var findPasteboardText: String {
         get { RuntimeEnvironment.current.readFindText() }
         set { RuntimeEnvironment.current.writeFindText(newValue) }
     }
-    /// The advanced window and inline bar share the query without scheduling another search.
+    /// The advanced hostWindow and inline bar share the query without scheduling another search.
     func acceptSharedFindText(_ text: String) {
         cancelInlineSearch()
         findField.stringValue = text
@@ -862,7 +784,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         lastEditor = activeEditor
         setFindBar(visible: true)
         if findField.stringValue.isEmpty { findField.stringValue = Self.findPasteboardText }
-        window?.makeFirstResponder(findField)
+        hostWindow?.makeFirstResponder(findField)
         findField.selectText(nil)
         updateInlineFindValidation()
     }
@@ -870,7 +792,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         cancelInlineSearch()
         let editor = activeEditor
         setFindBar(visible: false)
-        window?.makeFirstResponder(editor)
+        hostWindow?.makeFirstResponder(editor)
     }
     /// Command-E: the selected text becomes the text to find, here and in other apps.
     @objc func useSelectionForFind(_ sender: Any?) {
@@ -961,7 +883,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         let editor = activeEditor
         // Menu/button actions commit the field editor and restore typing to the document. Return
         // keeps the field editor, so repeated Return and Shift-Return continue to work (DS-35).
-        if focusEditor { window?.makeFirstResponder(editor) }
+        if focusEditor { hostWindow?.makeFirstResponder(editor) }
         var captured = SearchOptions()
         captured.query = findField.stringValue
         captured.replacement = action == "replaceOne" ? replaceField.stringValue : ""
@@ -969,7 +891,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         let options = captured
         cancelInlineSearch()
         guard !options.query.isEmpty, let delegate = EditorServices.current,
-            let search = delegate.searchController, let capturedWindow = window
+            let search = delegate.searchController, let capturedWindow = hostWindow
         else {
             return
         }
@@ -983,7 +905,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             options: options, action: action, on: editor, cancellation: flag,
             isCurrent: { [weak self, weak editor, weak capturedWindow] in
                 guard let self, let editor, let capturedWindow else { return false }
-                return !self.statusClosed && self.inlineSearchGeneration == token && self.window === capturedWindow
+                return !self.statusClosed && self.inlineSearchGeneration == token && self.hostWindow === capturedWindow
                     && self.activeEditor === editor && self.findField.stringValue.utf8.elementsEqual(options.query.utf8)
                     && (self.caseBox.state == .on) == options.matchCase
                     && (action != "replaceOne"
@@ -1029,6 +951,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         // copies only what a view owns, from the pane it was cloned from.
         clone.shareDocument(with: source)
         clone.adoptViewState(from: source)
+        if let doc = document as? TextDocument { EditorLifetime.bind(clone, to: doc) }
         wire(clone)
         clone.onReadOnlyAttempt = { [weak self] in (self?.document as? TextDocument)?.noteReadOnlyAttempt() }
         secondary = clone
@@ -1036,23 +959,25 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         split.adjustSubviews()
         split.layoutSubtreeIfNeeded()
         clone.layoutSubtreeIfNeeded()
-        window?.makeFirstResponder(clone)
+        hostWindow?.makeFirstResponder(clone)
         refreshCloneToolbar()
     }
     @objc func closeSplit(_ sender: Any?) {
         guard let clone = secondary else { return }
         clone.onFocus = nil
         lastEditor = primaryEditor
-        window?.makeFirstResponder(primaryEditor)
+        hostWindow?.makeFirstResponder(primaryEditor)
         // Recording across views is not supported; say so even if no focus event was sent.
         EditorServices.current?.macros?.editorDidFocus(primaryEditor)
         // Deferred results that do not depend on the clone's selection move to the primary view.
+        EditorLifetime.retire(clone)
         clone.retire(inFavorOf: primaryEditor)
         clone.removeFromSuperview()
         secondary = nil
         refreshCloneToolbar()
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard !statusClosed else { return false }
         switch item.action {
         case #selector(clone(_:)):
             item.state = secondary == nil ? .off : .on
@@ -1156,7 +1081,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     static func applyColumn(_ values: [String], to editor: TTEditor, revision: UInt, selections: [TTSelectionRange])
         -> Bool
     {
-        guard editor.window != nil, editor.selectionRanges == selections else { return false }
+        guard EditorLifetime.isOpen(editor), editor.selectionRanges == selections else { return false }
         return editor.replaceSelections(values, expectedRevision: revision)
     }
     @objc func convertEOL(_ sender: NSMenuItem) {

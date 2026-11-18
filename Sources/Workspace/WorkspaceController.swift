@@ -7,7 +7,7 @@ import AppKit
 @MainActor final class WorkspaceController: NSObject {
     /// The document a saved session marks as active. The application supplies its one
     /// definition of the current document; a controller made on its own asks the main window.
-    var activeDocument: () -> TextDocument? = { NSApp.mainWindow?.windowController?.document as? TextDocument }
+    var activeDocument: () -> TextDocument? = { WorkspaceWindowController.current.active?.document as? TextDocument }
     func capture(name: String) throws -> WorkspaceSession {
         let documents = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
         let snapshots = documents.map { document -> SessionDocument in

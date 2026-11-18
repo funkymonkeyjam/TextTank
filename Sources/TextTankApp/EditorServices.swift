@@ -14,6 +14,8 @@ import AppKit
         }
         set { installed = newValue }
     }
+    var workspaceHostProvider: () -> WorkspaceWindowController? = { nil }
+    var workspaceHost: WorkspaceWindowController? { workspaceHostProvider() }
     var isAvailable: () -> Bool = { true }
     var settingsProvider: () -> SettingsController? = { nil }
     var languagesProvider: () -> LanguageController? = { nil }

@@ -30,7 +30,7 @@ extension DocumentChecks {
             document.showWindows()
             let controller = try requireValue(
                 document.windowControllers.first as? EditorWindowController, "fixture: editor window controller")
-            return (document, controller, try requireValue(controller.window, "fixture: window"))
+            return (document, controller, try requireValue(controller.hostWindow, "fixture: window"))
         }
         @MainActor func recordOneStep(_ delegate: AppDelegate, in editor: TTEditor) throws {
             delegate.macros.startRecording()
@@ -554,7 +554,7 @@ extension DocumentChecks {
                     otherController.clone(nil)
                     lateClone = otherController.secondary
                     otherController.closeSplit(nil)
-                    lateWindow = otherController.window
+                    lateWindow = otherController.hostWindow
                 }
                 lateDocument = other
                 other.close()

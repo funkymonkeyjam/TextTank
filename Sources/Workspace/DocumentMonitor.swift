@@ -43,7 +43,7 @@ enum DocumentMonitorStatus: Equatable, Sendable {
     }
     func start(_ document: TextDocument) throws {
         precondition(Thread.isMainThread)
-        guard document.fileURL != nil, document.editor.window != nil else {
+        guard document.fileURL != nil, document.isOpen else {
             throw WorkspaceError.invalid("Monitoring requires an open, saved document.")
         }
         stop()
@@ -111,7 +111,7 @@ enum DocumentMonitorStatus: Equatable, Sendable {
         }
         // The location resolved when the document's URL was set, never resolved again here:
         // a link swapped in afterwards is reported, not followed.
-        guard let url = document.diskURL, document.editor.window != nil else {
+        guard let url = document.diskURL, document.isOpen else {
             stop()
             return
         }
@@ -126,7 +126,7 @@ enum DocumentMonitorStatus: Equatable, Sendable {
             self.known = result.sample.map { (url, $0) }
             if result.readFile { self.fileReads += 1 } else if result.sample != nil { self.metadataOnlyPolls += 1 }
             guard let document, let current = self.document, current === document,
-                current.editor.window != nil
+                current.isOpen
             else {
                 self.stop()
                 return
@@ -146,7 +146,7 @@ enum DocumentMonitorStatus: Equatable, Sendable {
 
     func reload(expectedRevision: UInt) throws {
         precondition(Thread.isMainThread)
-        guard let document, document.editor.window != nil, document.editor.revision == expectedRevision,
+        guard let document, document.isOpen, document.editor.revision == expectedRevision,
             !document.isDocumentEdited
         else {
             throw WorkspaceError.invalid("The monitored document changed or has unsaved edits. Its text was preserved.")

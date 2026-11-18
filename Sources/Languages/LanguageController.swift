@@ -678,13 +678,12 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
         }
     }
     static func navigate(_ symbol: LanguageSymbol, text: String, revision: UInt, editor: TTEditor) -> Bool {
-        guard editor.window != nil, editor.revision == revision, editor.text == text,
+        guard EditorLifetime.isOpen(editor), editor.revision == revision, editor.text == text,
             let range = Range(symbol.range, in: text)
         else { return false }
         let start = text[..<range.lowerBound].utf8.count, end = text[..<range.upperBound].utf8.count
         guard editor.setSelectionAnchor(start, caret: end) else { return false }
-        editor.window?.makeKeyAndOrderFront(nil)
-        editor.window?.makeFirstResponder(editor)
+        EditorLifetime.activate(editor)
         return true
     }
 }

@@ -6,6 +6,33 @@ import AppKit
 /// The Objective-C name is fixed, so `NSDocumentClass` in Info.plist does not depend on the
 /// name of the Swift module.
 @objc(TextDocument) final class TextDocument: NSDocument {
+    let runtimeID = DocumentID()
+    private(set) var isClosed = false
+    var isOpen: Bool {
+        !isClosed && (presentation != nil || NSDocumentController.shared.documents.contains { $0 === self })
+    }
+    var presentation: EditorWindowController? { windowControllers.compactMap { $0 as? EditorWindowController }.first }
+    private var tabClosePending = false
+    override var windowForSheet: NSWindow? {
+        guard !isClosed else { return nil }
+        if presentation == nil { makeWindowControllers() }
+        guard let presentation else { return nil }
+        presentation.host.activate(presentation, explicit: false)
+        return presentation.hostWindow
+    }
+    func requestTabClose(_ sender: Any?) {
+        guard isOpen, !tabClosePending else { return }
+        tabClosePending = true
+        canClose(
+            withDelegate: self, shouldClose: #selector(tabCloseReviewed(_:shouldClose:contextInfo:)), contextInfo: nil)
+    }
+    @objc private func tabCloseReviewed(
+        _ document: NSDocument, shouldClose: Bool, contextInfo: UnsafeMutableRawPointer?
+    ) {
+        tabClosePending = false
+        if shouldClose, document === self, isOpen { close() }
+    }
+    override var displayName: String! { didSet { presentation?.host.metadataChanged() } }
     /// The type name used where a document has none of its own. Reading ignores the type.
     nonisolated static let plainTextType = "public.plain-text"
     /// No File Format pop-up in the Save panel. Every content type in Info.plist is a writable
@@ -254,6 +281,7 @@ import AppKit
     init(dependencies: DocumentDependencies) {
         self.dependencies = dependencies
         super.init()
+        EditorLifetime.bind(editor, to: self)
         hasUndoManager = false
         // Typing or a key command that Scintilla refuses in a read-only document; the status bar
         // shows Read Only. Menu commands state the reason in words before they reach the engine.
@@ -357,7 +385,7 @@ import AppKit
     /// interrupt typing. Returns false when there was nowhere to show it, so a later failure retries.
     private func presentRecoveryFailureNotice(_ error: Error) -> Bool {
         if let notice = dependencies.recoveryFailureNotice { return notice(self, error) }
-        guard let window = windowControllers.compactMap({ $0.window }).first(where: { $0.isVisible }) else {
+        guard let presentation, presentation.isPresented, let window = presentation.hostWindow else {
             return false
         }
         let alert = TTAlert()
@@ -397,6 +425,8 @@ import AppKit
         } catch { reportRecovery(error) }
     }
     override func close() {
+        guard !isClosed else { return }
+        isClosed = true
         EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was closed.")
         cancelRecoveryTimers()
         recoveryGeneration += 1
@@ -414,10 +444,14 @@ import AppKit
                 "TextTank: recovery snapshot %@ could not be removed at close: %@", id.uuidString,
                 error.localizedDescription)
         }
+        if let presentation { presentation.host.unregister(presentation, document: self) }
         super.close()
     }
     override class var autosavesInPlace: Bool { false }
-    override func makeWindowControllers() { addWindowController(EditorWindowController(document: self)) }
+    override func makeWindowControllers() {
+        guard !isClosed, presentation == nil else { return }
+        addWindowController(EditorWindowController(document: self))
+    }
     override func read(from url: URL, ofType typeName: String) throws {
         precondition(Thread.isMainThread)
         try MainActor.assumeIsolated { try readURLOnMain(from: url, ofType: typeName) }

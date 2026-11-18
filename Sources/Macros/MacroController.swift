@@ -511,7 +511,8 @@ import Darwin
     ) throws {
         try macro.validate()
         try editor.requireWritable()
-        guard editor.window != nil, editor.selectionCount == 1, repeats > 0, repeats <= MacroLimits.repeatCount,
+        guard EditorLifetime.isOpen(editor), editor.selectionCount == 1, repeats > 0,
+            repeats <= MacroLimits.repeatCount,
             macro.steps.count <= MacroLimits.playbackActions / repeats
         else { throw MacroError.invalid("Macro playback is unavailable for this editor or repeat count.") }
         self.macro = macro
@@ -527,7 +528,7 @@ import Darwin
         for offset in 0..<budget {
             if offset > 0 && ProcessInfo.processInfo.systemUptime - started >= 0.02 { return false }
             if shouldCancel() { throw MacroError.invalid("Macro stopped. Prior edits remain in one Undo group.") }
-            guard editor.window != nil, !editor.readOnly, editor.selectionCount == 1 else {
+            guard EditorLifetime.isOpen(editor), !editor.readOnly, editor.selectionCount == 1 else {
                 throw MacroError.invalid(
                     "The macro editor closed, became read-only or changed selection mode. Prior edits remain undoable.")
             }

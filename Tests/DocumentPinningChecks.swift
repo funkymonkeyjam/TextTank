@@ -447,7 +447,7 @@ extension DocumentChecks {
             let
                 controller = try requireValue(
                     document.windowControllers.first as? EditorWindowController, "fixture: editor window controller"),
-                window = try requireValue(controller.window, "fixture: window")
+                window = try requireValue(controller.hostWindow, "fixture: window")
             let primaryStatus = document.editor.statusInfo
             check(
                 primaryStatus.tabWidth == 8 && primaryStatus.useTabs == false,
@@ -964,7 +964,7 @@ extension DocumentChecks {
             let
                 controller = try requireValue(
                     document.windowControllers.first as? EditorWindowController, "fixture: editor window controller"),
-                window = try requireValue(controller.window, "fixture: window")
+                window = try requireValue(controller.hostWindow, "fixture: window")
             sessionDelegate.buildMenus()
             let bar = try requireValue(NSApp.mainMenu, "fixture: buildMenus installs a main menu")
             func walk(_ menu: NSMenu, _ path: String) -> [(String, NSMenuItem)] {

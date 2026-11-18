@@ -513,9 +513,10 @@ import NativeSearch
                     controller = try requireValue(
                         document.windowControllers.first as? EditorWindowController,
                         "fixture: the document has its editor window controller"),
-                    window = try requireValue(controller.window, "fixture: the controller has a window")
+                    window = try requireValue(controller.hostWindow, "fixture: the controller has a window")
                 check(
-                    controller.document === document && window.windowController === controller,
+                    controller.document === document && controller.window == nil
+                        && window.windowController === controller.host && controller.host.document == nil,
                     "native controller document/window ownership")
                 let columnRevision = document.editor.revision, columnSelections = document.editor.selectionRanges
                 _ = document.editor.setSelectionAnchor(0, caret: 1)
@@ -889,11 +890,15 @@ import NativeSearch
                     doc.makeWindowControllers()
                     doc.showWindows()
                 }
-                let winA = tabA.windowControllers[0].window!, winB = tabB.windowControllers[0].window!
-                check(!winA.isVisible && winB.isVisible, "only selected compact tab is visible")
+                let winA = tabA.presentation!.hostWindow!, winB = tabB.presentation!.hostWindow!
+                check(
+                    !tabA.presentation!.isActiveTab && tabB.presentation!.isActiveTab && winA === winB,
+                    "one shared window hosts only the selected compact tab")
                 winB.setFrame(NSRect(x: 150, y: 150, width: 900, height: 650), display: true)
-                winA.makeKeyAndOrderFront(nil)
-                check(winA.isVisible && !winB.isVisible, "switching tabs changes visible document")
+                tabA.showWindows()
+                check(
+                    tabA.presentation!.isActiveTab && !tabB.presentation!.isActiveTab,
+                    "switching tabs changes mounted document")
                 if !NSScreen.screens.isEmpty {
                     print("TAB_GEOMETRY", winA.frame, winB.frame)
                     fflush(stdout)
@@ -904,7 +909,7 @@ import NativeSearch
                 let tabsController = tabA.windowControllers[0] as! EditorWindowController
                 tabsController.refreshStatusDetails()
                 let buttons = descendants(winA.contentView!).compactMap { $0 as? NSButton }
-                let closeB = buttons.first { $0.toolTip == "Close \(winB.title)" }!
+                let closeB = buttons.first { $0.toolTip == "Close \(tabB.displayName ?? "Untitled")" }!
                 check(
                     !buttons.contains { $0.identifier?.rawValue == "tab.new" },
                     "DT-R6 compact tabs do not repeat the standard toolbar New command")
@@ -1304,31 +1309,38 @@ import NativeSearch
                     firstController.statusRefreshCount == hiddenRefreshes,
                     "hidden tabs perform no recurring status refresh")
                 secondController.refreshStatusDetails()
-                let eolBefore = descendants(secondController.window!.contentView!).compactMap { $0 as? NSPopUpButton }
-                    .first { $0.identifier?.rawValue == "status.eol.0" }!
+                let eolBefore = descendants(secondController.hostWindow!.contentView!).compactMap {
+                    $0 as? NSPopUpButton
+                }
+                .first { $0.identifier?.rawValue == "status.eol.0" }!
                 second.editor.text = "new text"
                 secondController.refreshStatusDetails()
-                let eolAfter = descendants(secondController.window!.contentView!).compactMap { $0 as? NSPopUpButton }
-                    .first {
-                        $0.identifier?.rawValue == "status.eol.0"
-                    }!
+                let eolAfter = descendants(secondController.hostWindow!.contentView!).compactMap {
+                    $0 as? NSPopUpButton
+                }
+                .first {
+                    $0.identifier?.rawValue == "status.eol.0"
+                }!
                 check(eolBefore === eolAfter, "unrelated status changes retain existing control identity")
                 check(eolAfter.title == "LF", "the line-ending badge found by identifier shows the document's ending")
                 let navigation = AppDelegate()
                 navigation.previousDocumentTab(nil)
                 check(
-                    firstController.window!.isVisible && !secondController.window!.isVisible,
+                    firstController.isActiveTab && !secondController.isActiveTab,
                     "previous-tab command selects hidden document")
-                let sameA = NSWindow(), sameB = NSWindow()
-                sameA.title = "same.txt"
-                sameB.title = "same.txt"
-                let choices = navigation.documentTabChoices([sameA, sameB])
+                let sameA = DocumentFactory.makeUntitled(display: false),
+                    sameB = DocumentFactory.makeUntitled(display: false)
+                sameA.displayName = "same.txt"
+                sameB.displayName = "same.txt"
+                let choices = navigation.documentTabChoices([sameA.presentation!, sameB.presentation!])
                 check(
                     choices.count == 2 && Set(choices.map(\.id)).count == 2,
                     "document chooser preserves same-title document identities")
+                sameA.close()
+                sameB.close()
                 navigation.nextDocumentTab(nil)
                 check(
-                    secondController.window!.isVisible && !firstController.window!.isVisible,
+                    secondController.isActiveTab && !firstController.isActiveTab,
                     "next-tab command restores document visibility")
                 first.close()
                 second.close()
@@ -1384,7 +1396,7 @@ import NativeSearch
                 }
                 let controller = visible.windowControllers[0] as! EditorWindowController
                 let hiddenController = hidden.windowControllers[0] as! EditorWindowController
-                let buttons = { descendants(controller.window!.contentView!).compactMap { $0 as? NSPopUpButton } }
+                let buttons = { descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSPopUpButton } }
                 let badges = {
                     // DB-R3: totals, wrap and access state moved to the position menu. These
                     // retain the original asynchronous metrics/state assertions at that surface.
@@ -1395,7 +1407,7 @@ import NativeSearch
                 }
                 let badge = { (identifier: String) in buttons().first { $0.identifier?.rawValue == identifier }?.title }
                 try require(
-                    controller.window!.isVisible && !hiddenController.window!.isVisible,
+                    controller.isPresented && !hiddenController.isActiveTab,
                     "fixture: one tab on screen, one hidden")
                 check(
                     controller.statusTimerActive && !hiddenController.statusTimerActive,
@@ -1464,8 +1476,8 @@ import NativeSearch
                 visible.editor.readOnly = false
                 controller.toggleWrap(nil)
                 let hiddenTabTitle = {
-                    descendants(controller.window!.contentView!).compactMap { $0 as? NSButton }
-                        .first { $0.toolTip == hidden.windowControllers[0].window!.title }?.title
+                    descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSButton }
+                        .first { $0.toolTip == hidden.displayName }?.title
                 }
                 try require(hiddenTabTitle()?.hasSuffix("•") == false, "fixture: the hidden tab starts unedited")
                 _ = hidden.editor.replaceSelection("edited while hidden")
@@ -1544,12 +1556,12 @@ import NativeSearch
                 controller.visibilityChanged()
                 // Minimising takes the window off screen without any order call, and restoring it
                 // brings it back the same way.
-                controller.window!.miniaturize(nil)
-                spinUntil("the minimised window to leave the screen") { !controller.window!.isVisible }
+                controller.hostWindow!.miniaturize(nil)
+                spinUntil("the minimised window to leave the screen") { !controller.hostWindow!.isVisible }
                 spinUntil("the minimised tab's timer to stop") { !controller.statusTimerActive }
                 check(!controller.statusTimerActive, "a minimised window has no recurring status timer")
-                controller.window!.deminiaturize(nil)
-                spinUntil("the restored window to be on screen") { controller.window!.isVisible }
+                controller.hostWindow!.deminiaturize(nil)
+                spinUntil("the restored window to be on screen") { controller.hostWindow!.isVisible }
                 spinUntil(timeout: 3, "the restored tab's timer") { controller.statusTimerActive }
                 check(controller.statusTimerActive, "restoring a minimised window restarts its recurring status timer")
                 let restoredRefreshes = controller.statusRefreshCount
@@ -1570,7 +1582,7 @@ import NativeSearch
                 check(
                     controller.statusTimerActive,
                     "an editor event in a window on screen restarts a missing status timer")
-                hiddenController.window!.makeKeyAndOrderFront(nil)
+                hidden.showWindows()
                 check(
                     hiddenController.statusTimerActive && !controller.statusTimerActive,
                     "switching tabs moves the recurring timer to the tab now on screen")
@@ -1675,6 +1687,7 @@ import NativeSearch
             windowMenuAndKeyboard(root: root, app: app, sessionDelegate: sessionDelegate) { name, line, body in
                 section(name, line: line, body)
             }
+            section("Stage 0 workspace native acceptance") { try TabWorkspaceNativeChecks.run(root: root) }
             section("clean quit") {
                 let termination = AppDelegate().applicationShouldTerminate(app)
                 check(termination == .terminateNow, "clean application quit does not wait for async reply")

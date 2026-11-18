@@ -1,0 +1,158 @@
+import AppKit
+@testable import TextTankCore
+@testable import TextTankRuntime
+import EditorBridge
+import NativeSearch
+
+@MainActor enum TabWorkspaceNativeChecks {
+    private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    static func run(root: URL) throws {
+        let services = EditorServices.current
+        let composition = AppDelegate()
+        composition.installEditorServices()
+        defer { EditorServices.current = services }
+        let a = DocumentFactory.makeUntitled(), b = DocumentFactory.makeUntitled(), c = DocumentFactory.makeUntitled()
+        defer {
+            [a, b, c].forEach { $0.close() }
+            composition.workspaceWindow.window?.orderOut(nil)
+        }
+        a.displayName = "Workspace A"
+        b.displayName = "Workspace B"
+        c.displayName = "Workspace C"
+        let pa = try requireValue(a.presentation, "T0 A presentation"),
+            pb = try requireValue(b.presentation, "T0 B presentation")
+        let host = pa.host, window = try requireValue(host.window, "T0 workspace window")
+        check(
+            host === pb.host && c.presentation?.host === host && a.windowControllers[0].window == nil
+                && b.windowControllers[0].window == nil && window.windowController === host && host.document == nil,
+            "T0-R5 one native owner and windowless document adapters")
+        check(
+            NSApp.windows.filter { ($0.windowController as? WorkspaceWindowController) === host }.count == 1,
+            "T0-R5 no hidden document windows")
+        let frame = window.frame, editor = a.editor
+        a.showWindows()
+        pa.clone(nil)
+        let clone = try requireValue(pa.secondary, "T0 Clone")
+        clone.text = Array(repeating: "line\n", count: 150).joined()
+        clone.resetUndoHistory()
+        _ = clone.setSelectionAnchor(10, caret: 15)
+        window.makeFirstResponder(clone)
+        pa.showFind(nil)
+        pa.findField.stringValue = "line"
+        pa.replaceField.stringValue = "row"
+        let selection = clone.selectionRanges, last = pa.activeEditor
+        b.showWindows()
+        check(
+            a.editor.window == nil && EditorLifetime.isOpen(a.editor) && !pa.isActiveTab && !pa.statusTimerActive,
+            "T0-R13/20 detached inactive document remains open with no status timer")
+        let revision = a.editor.revision
+        let hits = try SearchCore.search(a.editor.text, options: SearchOptions(query: "line", replacement: "row"))
+        check(
+            SearchController.highlight(hits.hits, text: a.editor.text, revision: revision, in: a.editor),
+            "T0-R20 Find All can mark an inactive registered document")
+        let symbol = LanguageSymbol(name: "owned", range: NSRange(location: 0, length: 4), line: 1)
+        check(
+            LanguageFunctionController.navigate(symbol, text: a.editor.text, revision: revision, editor: a.editor),
+            "T0-R20 Function List activates the captured inactive document")
+        check(pa.isActiveTab && window.frame == frame, "T0-R21 result activation preserves the same host frame")
+        window.makeFirstResponder(clone)
+        pa.showFind(nil)
+        b.showWindows()
+        a.showWindows()
+        check(
+            a.editor === editor && pa.secondary === clone && clone.selectionRanges == selection
+                && pa.activeEditor === last && pa.findBarVisible && pa.findField.stringValue == "line"
+                && pa.replaceField.stringValue == "row",
+            "T0-R14 same editor objects retain Clone, Find, selection and last pane across switches")
+        let buttons = descendants(host.tabStrip).compactMap { $0 as? NSButton }
+        let tab = try requireValue(buttons.first { $0.toolTip == a.displayName }, "T0 stable tab")
+        let close = try requireValue(buttons.first { $0.toolTip == "Close Workspace A" }, "T0 close target")
+        check(
+            tab.accessibilityRole() == .radioButton && tab.accessibilitySubrole()?.rawValue == "AXTabButton"
+                && (tab.accessibilityValue() as? NSNumber)?.boolValue == true,
+            "T0-R9 native tab role and selected value")
+        check(
+            host.tabStrip.accessibilityRole() == .tabGroup && host.tabStrip.accessibilityLabel() == "Documents"
+                && close.frame.width >= 28 && close.frame.height >= 28 && close.frame.minX - tab.frame.maxX >= 4,
+            "T0-R9 tab group and separated 28-point close target")
+        window.makeFirstResponder(tab)
+        a.displayName = "Workspace A renamed"
+        a.updateChangeCount(.changeDone)
+        let same = descendants(host.tabStrip).compactMap { $0 as? NSButton }.first { $0.identifier == tab.identifier }
+        check(
+            same === tab && window.firstResponder === tab && tab.accessibilityLabel() == "Workspace A renamed, edited",
+            "T0-R10 metadata updates preserve native tab identity/focus and edited words")
+        a.updateChangeCount(.changeCleared)
+        let wide = tab.frame.width
+        window.setContentSize(NSSize(width: 800, height: 600))
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(tab.frame.width <= wide && tab.frame.width > 0, "T0-R9 tabs shrink within the available row")
+        var terminate = 0
+        let prior = RuntimeEnvironment.dependencies
+        var effects = RuntimeEnvironment.current
+        effects.terminate = { _ in terminate += 1 }
+        RuntimeEnvironment.dependencies = effects
+        window.standardWindowButton(.closeButton)?.performClick(nil)
+        RuntimeEnvironment.dependencies = prior
+        check(
+            terminate == 1 && [a, b, c].allSatisfy(\.isOpen),
+            "T0-R18 red close invokes injected Quit without closing a tab")
+        b.close()
+        c.close()
+        a.close()
+        check(
+            host.model.activeTab == nil && window.isVisible && host.document == nil && window.title == "TextTank",
+            "T0-R22 final close retains usable empty workspace without a new document")
+        check(
+            host.validateToolbarItem(EditorToolbarCommand.new.makeItem())
+                && host.validateToolbarItem(EditorToolbarCommand.open.makeItem())
+                && !host.validateToolbarItem(EditorToolbarCommand.find.makeItem()),
+            "T0-R22 empty host enables New/Open and disables document commands")
+        check(
+            !EditorLifetime.isOpen(editor) && !EditorLifetime.isOpen(clone),
+            "T0-R20 retained closed editors never remain valid")
+        let reopened = DocumentFactory.makeUntitled()
+        defer { reopened.close() }
+        check(reopened.runtimeID != a.runtimeID, "T0-R20 reopened document has a fresh runtime identity")
+        // Observe actual system transition notifications, separate from physical input certification.
+        let fullWindow = try requireValue(reopened.presentation?.hostWindow, "T0 full-screen host")
+        var entered = false, exited = false
+        let center = NotificationCenter.default
+        let enter = center.addObserver(forName: NSWindow.didEnterFullScreenNotification, object: fullWindow, queue: nil)
+        { _ in MainActor.assumeIsolated { entered = true } }
+        let exit = center.addObserver(forName: NSWindow.didExitFullScreenNotification, object: fullWindow, queue: nil) {
+            _ in MainActor.assumeIsolated { exited = true }
+        }
+        defer {
+            center.removeObserver(enter)
+            center.removeObserver(exit)
+        }
+        fullWindow.toggleFullScreen(nil)
+        spinUntil(timeout: 20, "T0 actual native full-screen entry") { entered }
+        check(
+            entered && fullWindow.styleMask.contains(.fullScreen),
+            "T0-R16 actual native full-screen entry notification and state")
+        if entered {
+            let extra = DocumentFactory.makeUntitled()
+            let p = try requireValue(extra.presentation, "T0 full-screen tab")
+            p.clone(nil)
+            p.showFind(nil)
+            reopened.showWindows()
+            extra.showWindows()
+            check(
+                p.findBarVisible && p.secondary != nil && fullWindow.styleMask.contains(.fullScreen),
+                "T0-R16 full-screen tab switching retains Find/Clone")
+            extra.close()
+            check(
+                reopened.presentation?.isActiveTab == true && fullWindow.styleMask.contains(.fullScreen),
+                "T0-R16 closing a full-screen tab retains workspace")
+            fullWindow.toggleFullScreen(nil)
+            spinUntil(timeout: 20, "T0 actual native full-screen exit") { exited }
+            check(
+                exited && !fullWindow.styleMask.contains(.fullScreen),
+                "T0-R16 actual native full-screen exit notification and state")
+        }
+        print(
+            "T0 physical keyboard/VoiceOver/full-screen interaction: unverified; native API transitions recorded above")
+    }
+}

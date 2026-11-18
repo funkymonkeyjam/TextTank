@@ -18,6 +18,7 @@ struct DocumentDependencies {
     var document: @MainActor () -> DocumentDependencies = { DocumentDependencies() }
     // Document tabs swap native windows; animate neither side of that transition.
     var windowAnimation: NSWindow.AnimationBehavior? = NSWindow.AnimationBehavior.none
+    var terminate: (Any?) -> Void = { NSApp.terminate($0) }
     var announce: ((String, Any?) -> Void)?
     var readFindText: () -> String = {
         guard AppStorage.permitsLegacyDefaults else { return "" }

@@ -4,6 +4,7 @@ import NativeSearch
 import AppKit
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
+    lazy var workspaceWindow = WorkspaceWindowController()
     @MainActor override init() { super.init() }
     @MainActor lazy var workspace: WorkspaceController = {
         let controller = WorkspaceController()
@@ -18,7 +19,7 @@ import AppKit
     @MainActor let settings = SettingsController(
         onApply: EditorSettingsApplication.apply,
         onStatus: { message in
-            (NSApp.mainWindow?.windowController as? EditorWindowController)?.showTransientStatus(message)
+            WorkspaceWindowController.current.active?.showTransientStatus(message)
         })
     let recentDocumentsMenu = RecentDocumentsMenu()
     @MainActor lazy var folderSearch: FolderSearchController = {
@@ -34,8 +35,8 @@ import AppKit
     /// document window, otherwise the document window focused last, because Find and Replace,
     /// a Run result or another auxiliary window may be main. Nil once that document has closed.
     var currentDocumentController: EditorWindowController? {
-        let controller = (NSApp.mainWindow?.windowController as? EditorWindowController) ?? lastDocumentController
-        return controller?.document == nil ? nil : controller
+        let controller = WorkspaceWindowController.current.active ?? lastDocumentController
+        return (controller?.document as? TextDocument)?.isOpen == true ? controller : nil
     }
     var currentDocument: TextDocument? { currentDocumentController?.document as? TextDocument }
     var currentEditor: TTEditor? { currentDocumentController?.activeEditor }
@@ -100,7 +101,7 @@ import AppKit
         let controller = AutomationController(
             editorProvider: { [weak self] in self?.currentEditor }, newDocument: AppDelegate.openAutomationOutput)
         controller.onQuietExportResult = { [weak self] message in
-            let window = (NSApp.mainWindow?.windowController as? EditorWindowController) ?? self?.lastDocumentController
+            let window = self?.currentDocumentController
             window?.showTransientStatus(
                 message,
                 compactMessage: Strings.text(
@@ -201,6 +202,7 @@ import AppKit
     /// Weak providers preserve the lazy feature graph without retaining a discarded composition root.
     @MainActor func installEditorServices() {
         var services = EditorServices()
+        services.workspaceHostProvider = { [weak self] in self?.workspaceWindow }
         services.isAvailable = { [weak self] in self != nil }
         services.settingsProvider = { [weak self] in self?.settings }
         services.languagesProvider = { [weak self] in self?.languages }
@@ -224,7 +226,12 @@ import AppKit
     /// tab that takes its place, and at quit that would show and lay out each remaining document.
     func closeAllForTermination() {
         let documents = NSDocumentController.shared.documents
-        DocumentTabWindow.documents.forEach { $0.orderOut(nil) }
+        var hidden = Set<ObjectIdentifier>()
+        for case let document as TextDocument in documents {
+            if let host = document.presentation?.host, hidden.insert(ObjectIdentifier(host)).inserted {
+                host.window?.orderOut(nil)
+            }
+        }
         for document in documents { document.close() }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -522,56 +529,45 @@ import AppKit
             if backwards { searchController.previous(nil) } else { searchController.next(nil) }
         } else {
             let controller =
-                (NSApp.mainWindow?.windowController as? EditorWindowController) ?? lastDocumentController
+                currentDocumentController
             controller?.findFromMenu(backwards: backwards)
         }
     }
     @objc func nextDocumentTab(_ sender: Any?) { cycleDocumentTab(1) }
     @objc func previousDocumentTab(_ sender: Any?) { cycleDocumentTab(-1) }
-    private func cycleDocumentTab(_ direction: Int) {
-        let windows = DocumentTabWindow.documents
-        guard !windows.isEmpty else { return }
-        let index = windows.firstIndex(where: { $0.isVisible }) ?? 0
-        windows[(index + direction + windows.count) % windows.count].makeKeyAndOrderFront(nil)
-    }
+    private func cycleDocumentTab(_ direction: Int) { WorkspaceWindowController.current.cycle(direction) }
     private var documentsPanel: ChoicePanel?
     @MainActor @objc func showDocumentTabs(_ sender: Any?) {
         if let documentsPanel {
             documentsPanel.form.window.makeKeyAndOrderFront(nil)
             return
         }
-        guard !DocumentTabWindow.documents.isEmpty else { return }
-        let identities = NSMapTable<NSWindow, NSString>(keyOptions: .weakMemory, valueOptions: .strongMemory)
-        func identity(_ window: NSWindow) -> String {
-            if let existing = identities.object(forKey: window) { return existing as String }
-            let token = UUID().uuidString
-            identities.setObject(token as NSString, forKey: window)
-            return token
-        }
+        let host = WorkspaceWindowController.current
+        guard !host.presentations.isEmpty else { return }
         let panel = ChoicePanel(
             title: "Open Documents", identifier: "TextTank.OpenDocuments", action: "Switch",
             filterLabel: "Filter open documents by name or path")
         documentsPanel = panel
         panel.retainController(self)
         panel.onClose = { [weak self] in self?.documentsPanel = nil }
-        panel.rows = { [weak self] in self?.documentTabChoices(DocumentTabWindow.documents, identity: identity) ?? [] }
-        panel.choose = { id in
-            guard
-                let window = DocumentTabWindow.documents.first(where: { identities.object(forKey: $0) as String? == id }
-                )
+        panel.rows = { [weak self, weak host] in self?.documentTabChoices(host?.presentations ?? []) ?? [] }
+        panel.choose = { [weak host] id in
+            guard let host,
+                let presentation = host.presentations.first(where: {
+                    ($0.document as? TextDocument)?.runtimeID.rawValue.uuidString == id
+                })
             else { throw FormFailure.documentChanged }
-            window.makeKeyAndOrderFront(nil)
+            host.show(presentation, sender: nil)
             return true
         }
         panel.show()
     }
-    @MainActor func documentTabChoices(
-        _ windows: [NSWindow], identity: (NSWindow) -> String = { String(describing: ObjectIdentifier($0)) }
-    ) -> [ChoicePanel.Row] {
-        windows.map { window in
-            let path = (window.windowController?.document as? NSDocument)?.fileURL?.deletingLastPathComponent().path
-            let title = window.title + (window.isDocumentEdited ? " •" : "") + (path.map { " — \($0)" } ?? "")
-            return ChoicePanel.Row(id: identity(window), title: title)
+    @MainActor func documentTabChoices(_ presentations: [EditorWindowController]) -> [ChoicePanel.Row] {
+        presentations.compactMap { presentation in
+            guard let document = presentation.document as? TextDocument, document.isOpen else { return nil }
+            let path = document.fileURL?.deletingLastPathComponent().path
+            let title = document.displayName + (document.isDocumentEdited ? " •" : "") + (path.map { " — \($0)" } ?? "")
+            return ChoicePanel.Row(id: document.runtimeID.rawValue.uuidString, title: title)
         }
     }
     /// Full paths, because the Recovery folder is inside the hidden Library folder.

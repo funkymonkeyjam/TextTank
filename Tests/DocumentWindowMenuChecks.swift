@@ -42,15 +42,17 @@ extension DocumentChecks {
             document.showWindows()
             let controller = try requireValue(
                 document.windowControllers.first as? EditorWindowController, "fixture: editor window controller")
-            return (document, controller, try requireValue(controller.window, "fixture: window"))
+            return (document, controller, try requireValue(controller.hostWindow, "fixture: window"))
         }
         /// The close button for `target` in the tab strip of the window that is showing.
-        @MainActor func closeButton(for target: NSWindow, in shown: EditorWindowController) throws -> NSButton {
+        @MainActor func closeButton(for target: TextDocument, in shown: EditorWindowController) throws -> NSButton {
             shown.refreshStatusDetails()
-            let content = try requireValue(shown.window?.contentView, "fixture: content view")
+            let content = try requireValue(shown.hostWindow?.contentView, "fixture: content view")
             return try requireValue(
-                descendants(content).compactMap { $0 as? NSButton }.first { $0.toolTip == "Close \(target.title)" },
-                "fixture: the close button for \(target.title)")
+                descendants(content).compactMap { $0 as? NSButton }.first {
+                    $0.toolTip == "Close \(target.displayName ?? "Untitled")"
+                },
+                "fixture: the close button for \(target.displayName ?? "Untitled")")
         }
         @MainActor func isOpen(_ document: NSDocument) -> Bool {
             NSDocumentController.shared.documents.contains { $0 === document }
@@ -152,8 +154,8 @@ extension DocumentChecks {
         section("DG Open Documents Cancel never switches documents", #line) {
             let (first, _, firstWindow) = try tab("docs-cancel-first")
             let (second, _, secondWindow) = try tab("docs-cancel-second")
-            firstWindow.makeKeyAndOrderFront(nil)
-            let shown = (firstWindow.isVisible, secondWindow.isVisible)
+            first.showWindows()
+            let shown = first.presentation!.host.model.activeTab?.id
             sessionDelegate.showDocumentTabs(nil)
             let form = try requireValue(FormPanel.visible.last, "fixture: actual Open Documents panel")
             let filter = try DesignSettingsChecks.field("TextTank.OpenDocuments.filter", form.window)
@@ -161,7 +163,7 @@ extension DocumentChecks {
             DesignSettingsChecks.type("docs-cancel-second", in: form.window)
             try DesignSettingsChecks.button("TextTank.OpenDocuments.cancel", form.window).performClick(nil)
             check(
-                firstWindow.isVisible == shown.0 && secondWindow.isVisible == shown.1,
+                first.presentation!.host.model.activeTab?.id == shown && firstWindow === secondWindow,
                 "DG filtering and cancelling Open Documents never switches the captured tab")
             sessionDelegate.showDocumentTabs(nil)
             let switching = try requireValue(FormPanel.visible.last, "fixture: reopened Open Documents panel")
@@ -170,7 +172,7 @@ extension DocumentChecks {
             DesignSettingsChecks.type("docs-cancel-second", in: switching.window)
             try DesignSettingsChecks.button("TextTank.OpenDocuments.choose", switching.window).performClick(nil)
             check(
-                secondWindow.isVisible && !firstWindow.isVisible,
+                second.presentation!.isActiveTab && !first.presentation!.isActiveTab,
                 "DG explicit Switch opens the filtered document by its live identity")
             first.close()
             second.close()
@@ -659,7 +661,7 @@ extension DocumentChecks {
             check(
                 doc.editor.text == "safe" && doc.editor.revision == before
                     && doc.editor.selectionGeneration == generation, "F281 refused dispatch never changes editor state")
-            controller.window?.makeFirstResponder(doc.editor)
+            controller.hostWindow?.makeFirstResponder(doc.editor)
             controller.command(item(#selector(EditorWindowController.command(_:)), "noSuchCommand"))
             check(
                 controller.status.stringValue == EditorCommandFailure.unsupported.localizedDescription
@@ -690,12 +692,12 @@ extension DocumentChecks {
             try controller.perform(command: "toggleEOL")
             controller.clone(nil)
             let clone = try requireValue(controller.secondary, "fixture: catalog toggle clone")
-            _ = controller.window?.makeFirstResponder(clone)
+            _ = controller.hostWindow?.makeFirstResponder(clone)
             clone.executeCommand(TTEditorCommandIdentifier(rawValue: "toggleEOL"))
             check(
                 controller.validateMenuItem(endings) && endings.state == .on,
                 "DS22 catalog toggle checkmarks follow the focused clone's own view state")
-            _ = controller.window?.makeFirstResponder(doc.editor)
+            _ = controller.hostWindow?.makeFirstResponder(doc.editor)
             check(
                 controller.validateMenuItem(endings) && endings.state == .off,
                 "DS22 returning to the source pane restores that view's toggle checkmark")
@@ -803,38 +805,43 @@ extension DocumentChecks {
             let (c, _, winC) = try tab("p21-C")
             let (d, controlD, winD) = try tab("p21-D")
             check(
-                [winA, winB, winC, winD].allSatisfy { $0.collectionBehavior.contains(.fullScreenNone) },
-                "document tab windows do not enter full screen")
+                [winA, winB, winC, winD].allSatisfy { !$0.collectionBehavior.contains(.fullScreenNone) },
+                "the shared workspace supports native full screen")
             check(
-                winD.isVisible && ![winA, winB, winC].contains { $0.isVisible },
+                d.presentation!.isActiveTab && [a, b, c].allSatisfy { !$0.presentation!.isActiveTab } && winA === winD,
                 "fixture: the last of four tabs is showing")
             winD.setFrame(NSRect(x: 160, y: 140, width: 900, height: 640), display: true)
             let frame = winD.frame
             // B first, while C is still open between it and D: only the return-to target, not
             // adjacency, brings D back (B's neighbour is C).
-            try closeButton(for: winB, in: controlD).performClick(nil)
+            try closeButton(for: b, in: controlD).performClick(nil)
             check(
-                winD.isVisible && !isOpen(b) && isOpen(c) && isOpen(d) && !winC.isVisible && !winA.isVisible,
+                (d.presentation?.isActiveTab == true) && !isOpen(b) && isOpen(c) && isOpen(d)
+                    && (c.presentation?.isActiveTab != true) && (a.presentation?.isActiveTab != true),
                 "closing a background tab that is not next to the active one returns to the active tab, not its neighbour"
             )
             if !NSScreen.screens.isEmpty {
                 check(winD.frame == frame, "closing a background tab leaves the window's frame as it was")
             }
-            try closeButton(for: winC, in: controlD).performClick(nil)
+            try closeButton(for: c, in: controlD).performClick(nil)
             check(
-                winD.isVisible && !isOpen(c) && isOpen(d) && !winA.isVisible,
+                (d.presentation?.isActiveTab == true) && !isOpen(c) && isOpen(d)
+                    && (a.presentation?.isActiveTab != true),
                 "closing a clean background tab from its close button returns to the tab that was active")
             let (e, controlE, winE) = try tab("p21-E")
             let (f, _, winF) = try tab("p21-F")
-            try require(winF.isVisible, "fixture: the new last tab is showing")
+            try require((f.presentation?.isActiveTab == true), "fixture: the new last tab is showing")
             f.close()
             check(
-                winE.isVisible && !winA.isVisible && !winD.isVisible,
+                (e.presentation?.isActiveTab == true) && (a.presentation?.isActiveTab != true)
+                    && (d.presentation?.isActiveTab != true),
                 "closing the active last tab shows the previous tab, not the first")
-            winD.makeKeyAndOrderFront(nil)
+            d.showWindows()
             let middleFrame = winD.frame
             d.close()
-            check(winE.isVisible && !winA.isVisible, "closing an active middle tab shows the next tab")
+            check(
+                (e.presentation?.isActiveTab == true) && (a.presentation?.isActiveTab != true),
+                "closing an active middle tab shows the next tab")
             if !NSScreen.screens.isEmpty {
                 check(winE.frame == middleFrame, "the tab shown after a close takes the closed tab's frame")
             }
@@ -850,9 +857,10 @@ extension DocumentChecks {
                 keyDuringReview: Bool = false
             ) throws {
                 document.updateChangeCount(.changeDone)
-                try closeButton(for: window, in: control).performClick(nil)
+                try closeButton(for: document, in: control).performClick(nil)
                 check(
-                    window.isVisible && control.window?.isVisible == false && isOpen(document),
+                    window.isVisible && document.presentation?.isActiveTab == true && !control.isActiveTab
+                        && isOpen(document),
                     "closing a background tab with unsaved changes shows that tab and keeps its document open")
                 spinUntil("the unsaved-changes review to attach to the tab now showing") { window.attachedSheet != nil }
                 let sheet = window.attachedSheet
@@ -870,11 +878,11 @@ extension DocumentChecks {
             // The cancelled close must not decide where a later close goes: after a tab switch.
             let (g, controlG, winG) = try tab("p21-G")
             try cancelledClose(a, winA, from: controlG)
-            winE.makeKeyAndOrderFront(nil)
-            winA.makeKeyAndOrderFront(nil)
+            e.showWindows()
+            a.showWindows()
             a.close()
             check(
-                winE.isVisible && !winG.isVisible,
+                (e.presentation?.isActiveTab == true) && (g.presentation?.isActiveTab != true),
                 "after a cancelled close and a tab switch, closing the tab shows its neighbour again")
             // And after the person has gone on working in the tab without switching.
             let (h, controlH, winH) = try tab("p21-H")
@@ -882,7 +890,7 @@ extension DocumentChecks {
             winE.sendEvent(leftArrow)
             e.close()
             check(
-                winG.isVisible && !winH.isVisible,
+                (g.presentation?.isActiveTab == true) && (h.presentation?.isActiveTab != true),
                 "after a cancelled close and a key typed in the tab, closing the tab shows its neighbour again")
             // Closed straight after the cancel, it still returns to the tab that was active; a key
             // pressed while the review was up is not work in the tab.
@@ -890,10 +898,10 @@ extension DocumentChecks {
             try cancelledClose(g, winG, from: controlI, keyDuringReview: true)
             g.close()
             check(
-                winI.isVisible && !winH.isVisible,
+                (i.presentation?.isActiveTab == true) && (h.presentation?.isActiveTab != true),
                 "closed straight after a cancelled review, the tab returns to the tab that was active")
             // Quit: nothing is shown or laid out while the documents close.
-            winH.makeKeyAndOrderFront(nil)
+            h.showWindows()
             let controllers = [controlH, controlI]
             let before = controllers.map(\.statusRefreshCount)
             let quitObservation = WindowQuitObservation()
@@ -909,8 +917,9 @@ extension DocumentChecks {
             sessionDelegate.closeAllForTermination()
             NotificationCenter.default.removeObserver(observer)
             check(
-                controllers.map(\.statusRefreshCount) == before && quitObservation.shown == 0 && !winH.isVisible
-                    && !winI.isVisible && NSDocumentController.shared.documents.isEmpty,
+                controllers.map(\.statusRefreshCount) == before && quitObservation.shown == 0
+                    && (h.presentation?.isActiveTab != true)
+                    && (i.presentation?.isActiveTab != true) && NSDocumentController.shared.documents.isEmpty,
                 "closing every document for quit shows and refreshes no remaining tab")
             withExtendedLifetime((controlA, controlE, h, i)) {}
         }
@@ -923,7 +932,8 @@ extension DocumentChecks {
             quitting.replyToTerminate = { replies.append($0) }
             quitting.reviewed(NSDocumentController.shared, didReviewAll: false, contextInfo: nil)
             check(
-                replies == [false] && otherWindow.isVisible && !window.isVisible
+                replies == [false] && other.presentation!.isActiveTab && !document.presentation!.isActiveTab
+                    && window === otherWindow
                     && NSDocumentController.shared.documents.count == 2,
                 "a cancelled quit review closes nothing and leaves the showing tab on screen")
             document.updateChangeCount(.changeCleared)
@@ -1022,6 +1032,10 @@ extension DocumentChecks {
             effects.windowAnimation = nil
             RuntimeEnvironment.dependencies = effects
             defer { RuntimeEnvironment.dependencies = priorEffects }
+            let priorServices = EditorServices.current
+            let frameComposition = AppDelegate()
+            frameComposition.installEditorServices()
+            defer { EditorServices.current = priorServices }
             let key = WindowFrames.defaultsKey("TextTank.Document")
             let (first, _, firstWindow) = try tab("p21-frame-1")
             check(
@@ -1193,9 +1207,9 @@ extension DocumentChecks {
                 plain.close()
             }
             // The red close button quits the app; closing one tab stays with performClose.
-            let red = controller.window?.standardWindowButton(.closeButton)
+            let red = controller.hostWindow?.standardWindowButton(.closeButton)
             check(
-                red?.target === controller.window
+                red?.target === controller.hostWindow
                     && red?.action.map { NSStringFromSelector($0) } == "closeButtonPressed:"
                     && red?.toolTip?.hasPrefix("Quit TextTank") == true,
                 "the window's red close button is routed to Quit, not to closing one tab")
@@ -1315,7 +1329,7 @@ extension DocumentChecks {
             controller.findFromMenu(backwards: false)
             spinUntil("inline Find to finish") { !controller.inlineSearchPending }
             check(
-                (controller.window?.firstResponder as? NSView)?.isDescendant(of: document.editor) == true,
+                (controller.hostWindow?.firstResponder as? NSView)?.isDescendant(of: document.editor) == true,
                 "DS35 menu Find Next leaves keyboard focus in the document")
             let firstMatch = document.editor.selectionStart
             check(document.editor.selectedText == "alpha", "Find Next selects a match of the find bar's text")
@@ -1329,21 +1343,21 @@ extension DocumentChecks {
                 "the text searched for is shared through the find pasteboard")
             controller.showFind(nil)
             let field = controller.findField
-            let fieldEditor = controller.window?.firstResponder
+            let fieldEditor = controller.hostWindow?.firstResponder
             check(
                 controller.control(
                     field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:))),
                 "Return in the find field is handled as Find Next")
             spinUntil("Return Find to finish") { !controller.inlineSearchPending }
             check(
-                controller.window?.firstResponder === fieldEditor && field.currentEditor() === fieldEditor,
+                controller.hostWindow?.firstResponder === fieldEditor && field.currentEditor() === fieldEditor,
                 "DS35 Return retains the Find field editor for repeated navigation")
             let afterReturn = document.editor.selectionStart
             controller.performFind(backwards: true, focusEditor: false)
             spinUntil("backwards field Find to finish") { !controller.inlineSearchPending }
             check(
                 document.editor.selectedText == "alpha" && document.editor.selectionStart != afterReturn
-                    && controller.window?.firstResponder === fieldEditor,
+                    && controller.hostWindow?.firstResponder === fieldEditor,
                 "DS35 backwards field navigation retains the field editor")
             // A real bar action records shared search only after the asynchronous result applies.
             sessionDelegate.noteActive(controller)

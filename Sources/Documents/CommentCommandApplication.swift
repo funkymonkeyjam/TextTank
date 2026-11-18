@@ -5,7 +5,7 @@ import AppKit
 
 extension CommentCommand {
     @MainActor func apply(to editor: TTEditor, profile: LanguageProfile) throws {
-        guard editor.window != nil else {
+        guard EditorLifetime.isOpen(editor) else {
             throw LanguageError.invalid("The comment command requires an open document.")
         }
         try editor.requireWritable()

@@ -49,7 +49,7 @@ import AppKit
     /// that names the cause the person can least see first: no document, read-only (the shared
     /// requireWritable error), several selections, then an empty selection.
     func editableEditor(requireNonEmpty: Bool) throws -> TTEditor {
-        guard let editor = editorProvider(), editor.window != nil else { throw UtilityFailure.noDocument }
+        guard let editor = editorProvider(), EditorLifetime.isOpen(editor) else { throw UtilityFailure.noDocument }
         try editor.requireWritable()
         guard editor.selectionCount == 1 else { throw UtilityFailure.multipleSelections }
         guard !requireNonEmpty || editor.selectionStart != editor.selectionEnd else {
@@ -62,7 +62,7 @@ import AppKit
     static func recheck(
         _ editor: TTEditor?, captured: TTEditor?, revision: UInt?, selection: [TTSelectionRange]?
     ) throws -> TTEditor {
-        guard let editor, editor.window != nil else { throw UtilityFailure.noDocument }
+        guard let editor, EditorLifetime.isOpen(editor) else { throw UtilityFailure.noDocument }
         try editor.requireWritable()
         guard editor === captured, editor.revision == revision, editor.selectionRanges == selection else {
             throw UtilityFailure.documentChanged
@@ -186,7 +186,7 @@ import AppKit
     /// selection is exported; no selection exports the complete document.
     func exportData(format: String) throws -> (Data, String) {
         precondition(Thread.isMainThread)
-        guard let editor = editorProvider(), editor.window != nil else { throw UtilityFailure.noDocument }
+        guard let editor = editorProvider(), EditorLifetime.isOpen(editor) else { throw UtilityFailure.noDocument }
         guard editor.selectionCount == 1 else { throw UtilityFailure.multipleSelections }
         let selected = editor.selectionStart != editor.selectionEnd
         let bytes = selected ? editor.selectionEnd - editor.selectionStart : editor.byteLength
