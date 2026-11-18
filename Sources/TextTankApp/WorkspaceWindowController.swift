@@ -105,8 +105,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             preconditionFailure("Invalid workspace registration: \(error)")
         }
         if let previous { try? model.activate(previous, openDocuments: openIDs) }
-        // Registering creates a tab, but mounting occurs only through explicit presentation.
+        // A visible empty host mounts its first registered tab without ordering another window.
         metadataChanged()
+        if mounted == nil, window?.isVisible == true, let active { activate(active, focus: false, explicit: false) }
     }
     func activate(_ presentation: EditorWindowController, focus: Bool = true, explicit: Bool = true) {
         guard let document = presentation.document as? TextDocument, document.isOpen,

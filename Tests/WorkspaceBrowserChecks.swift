@@ -362,10 +362,6 @@ import Darwin
             // load, finish first, so a few attempts are allowed.
             let polled = folder.appendingPathComponent("polled.bin")
             try Data(repeating: 0x61, count: 30 * 1024 * 1024).write(to: polled)
-            let host = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled], backing: .buffered,
-                defer: true)
-            host.isReleasedWhenClosed = false
             var releasedDuringPoll = false, stoppedAfterRelease = true
             for _ in 0..<5 where !releasedDuringPoll {
                 weak var polledDocument: TextDocument?
@@ -373,7 +369,7 @@ import Darwin
                 try autoreleasepool {
                     let document = TextDocument()
                     document.fileURL = polled
-                    host.contentView = document.editor
+                    document.makeWindowControllers()
                     polledDocument = document
                     try dropped.start(document)
                     try require(dropped.status == .checking && dropped.document === document, "the monitor is polling")
@@ -387,7 +383,6 @@ import Darwin
                 releasedDuringPoll = polledDocument == nil && dropped.status == .checking
                 spinUntil("the monitor of a released document to stop") { dropped.status == .stopped }
                 stoppedAfterRelease = stoppedAfterRelease && dropped.status == .stopped && dropped.document == nil
-                host.contentView = nil
             }
             check(releasedDuringPoll, "F117 a poll in flight does not keep its document alive")
             check(stoppedAfterRelease, "F117 a monitor whose document was released stops at the next result")
@@ -395,7 +390,7 @@ import Darwin
             // main-owned; deinit invalidates the timer synchronously on this same thread.
             let disposableDocument = TextDocument()
             disposableDocument.fileURL = polled
-            host.contentView = disposableDocument.editor
+            disposableDocument.makeWindowControllers()
             weak var releasedMonitor: DocumentMonitor?
             try autoreleasepool {
                 let disposableMonitor = DocumentMonitor()
@@ -405,8 +400,6 @@ import Darwin
             }
             check(releasedMonitor == nil, "F316 an in-flight inspection does not retain its main-owned monitor")
             disposableDocument.close()
-            host.contentView = nil
-            host.close()
             let app = AppDelegate()
             let previousServices = EditorServices.current
             app.installEditorServices()

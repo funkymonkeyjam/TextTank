@@ -19,7 +19,7 @@ import AppKit
     @MainActor let settings = SettingsController(
         onApply: EditorSettingsApplication.apply,
         onStatus: { message in
-            WorkspaceWindowController.current.active?.showTransientStatus(message)
+            EditorServices.current?.activePresentation?.showTransientStatus(message)
         })
     let recentDocumentsMenu = RecentDocumentsMenu()
     @MainActor lazy var folderSearch: FolderSearchController = {
@@ -35,7 +35,7 @@ import AppKit
     /// document window, otherwise the document window focused last, because Find and Replace,
     /// a Run result or another auxiliary window may be main. Nil once that document has closed.
     var currentDocumentController: EditorWindowController? {
-        let controller = WorkspaceWindowController.current.active ?? lastDocumentController
+        let controller = lastDocumentController?.host.active ?? lastDocumentController
         return (controller?.document as? TextDocument)?.isOpen == true ? controller : nil
     }
     var currentDocument: TextDocument? { currentDocumentController?.document as? TextDocument }
@@ -202,6 +202,7 @@ import AppKit
     /// Weak providers preserve the lazy feature graph without retaining a discarded composition root.
     @MainActor func installEditorServices() {
         var services = EditorServices()
+        services.activePresentationProvider = { [weak self] in self?.currentDocumentController }
         services.workspaceHostProvider = { [weak self] in self?.workspaceWindow }
         services.isAvailable = { [weak self] in self != nil }
         services.settingsProvider = { [weak self] in self?.settings }

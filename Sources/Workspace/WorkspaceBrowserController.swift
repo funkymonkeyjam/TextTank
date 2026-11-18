@@ -15,7 +15,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     let store: WorkspaceBrowserStore
     let monitor = DocumentMonitor()
     var chooseEncoding: @MainActor (URL, Error) -> FileEncoding? = EncodingChoice.present
-    var currentDocument: () -> TextDocument? = { WorkspaceWindowController.current.active?.document as? TextDocument }
+    var currentDocument: () -> TextDocument? = { EditorServices.current?.activePresentation?.document as? TextDocument }
     private(set) var window: NSPanel?
     let outline = NSOutlineView()
     private enum Mode: Int { case openDocuments, folders, recentFiles }

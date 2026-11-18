@@ -4,10 +4,30 @@ import AppKit
 import EditorBridge
 import NativeSearch
 
+@MainActor private final class WorkspaceCheckApplicationDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
+}
+
 @MainActor enum TabWorkspaceNativeChecks {
     @MainActor private final class Observation { var switched = false }
     private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     static func run(root: URL) throws {
+        let priorDelegate = NSApp.delegate, priorFront = NSWorkspace.shared.frontmostApplication
+        let launchDelegate = WorkspaceCheckApplicationDelegate()
+        NSApp.delegate = launchDelegate
+        check(NSApp.setActivationPolicy(.regular), "full-screen fixture uses the normal application activation policy")
+        NSApp.finishLaunching()
+        defer {
+            NSApp.delegate = priorDelegate
+            NSApp.setActivationPolicy(.accessory)
+            priorFront?.activate(options: [.activateAllWindows])
+            withExtendedLifetime(launchDelegate) {}
+        }
+        let unstarted = AppDelegate(), windowsBeforeLookup = NSApp.windows.count
+        check(
+            unstarted.currentEditor == nil && unstarted.currentDocument == nil
+                && NSApp.windows.count == windowsBeforeLookup,
+            "T0-R7 current-target getters never create a workspace window")
         let services = EditorServices.current
         let composition = AppDelegate()
         composition.installEditorServices()
@@ -206,6 +226,17 @@ import NativeSearch
         defer {
             center.removeObserver(enter)
             center.removeObserver(exit)
+        }
+        NSApp.activate()
+        fullWindow.makeKeyAndOrderFront(nil)
+        fullWindow.makeMain()
+        spinUntil("owned native full-screen window becomes key") { fullWindow.isKeyWindow }
+        print("T0 full-screen preflight", NSApp.isActive, fullWindow.isKeyWindow, fullWindow.styleMask.rawValue)
+        defer {
+            if fullWindow.styleMask.contains(.fullScreen) {
+                fullWindow.toggleFullScreen(nil)
+                spinUntil(timeout: 20, "owned full-screen cleanup") { !fullWindow.styleMask.contains(.fullScreen) }
+            }
         }
         fullWindow.toggleFullScreen(nil)
         spinUntil(timeout: 20, "T0 actual native full-screen entry") { entered }

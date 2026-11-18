@@ -264,6 +264,10 @@ import NativeSearch
         toolbar.isVisible = true
         toolbar.displayMode = .iconAndLabel
         find.visibilityPriority = .low
+        // Isolate the actual native toolbar's narrow overflow test from the document's
+        // Find-row minimum width. Restore the same retained view tree before dispatch.
+        let retainedContent = try requireValue(window.contentView, "fixture: retained workspace content")
+        window.contentView = NSView()
         window.contentMinSize = NSSize(width: 180, height: minimum.height)
         window.setFrame(
             NSRect(x: savedFrame.minX, y: savedFrame.minY, width: 300, height: savedFrame.height), display: true)
@@ -280,6 +284,11 @@ import NativeSearch
             !(toolbar.visibleItems ?? []).contains { $0 === find },
             "a standard command is clipped into the native overflow menu")
         let overflow = try requireValue(find.menuFormRepresentation, "fixture: Find overflow action")
+        window.contentView = retainedContent
+        window.setFrame(savedFrame, display: true)
+        document.showWindows()
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(document.editor.window === window, "the retained native document is mounted before overflow dispatch")
         check(
             NSApp.sendAction(overflow.action!, to: controller, from: overflow) && controller.findBarVisible,
             "the native overflow retains the standard Find action")

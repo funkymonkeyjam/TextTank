@@ -14,6 +14,8 @@ import AppKit
         }
         set { installed = newValue }
     }
+    var activePresentationProvider: () -> EditorWindowController? = { nil }
+    var activePresentation: EditorWindowController? { activePresentationProvider() }
     var workspaceHostProvider: () -> WorkspaceWindowController? = { nil }
     var workspaceHost: WorkspaceWindowController? { workspaceHostProvider() }
     var isAvailable: () -> Bool = { true }
