@@ -589,6 +589,7 @@ import AppKit
     private var documentsPanel: ChoicePanel?
     @MainActor @objc func showDocumentTabs(_ sender: Any?) {
         if let documentsPanel {
+            documentsPanel.refresh()
             documentsPanel.form.window.makeKeyAndOrderFront(nil)
             return
         }

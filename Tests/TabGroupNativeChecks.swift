@@ -489,6 +489,47 @@ import Darwin
             return (task, release)
         }
         reset()
+        let chooserDoc = try saved("chooser-live"), chooserFirst = id(chooserDoc)
+        _ = host.setEditorLayout(.twoColumns)
+        app.showDocumentTabs(nil)
+        let form = try requireValue(FormPanel.visible.last, "T3 native Open Documents form")
+        let content = try requireValue(form.window.contentView, "T3 native chooser content")
+        let chooserTable = try requireValue(
+            descendants(content).compactMap { $0 as? NSTableView }.first {
+                $0.identifier?.rawValue == "TextTank.OpenDocuments.list"
+            }, "T3 actual chooser table")
+        check(chooserTable.numberOfRows == 1, "T3 actual chooser starts with one live view")
+        let chooserSecond = try requireValue(
+            host.openView(chooserFirst, in: .second), "T3 view added while chooser remains open")
+        app.showDocumentTabs(nil)
+        check(
+            FormPanel.visible.last === form && chooserTable.numberOfRows == 2,
+            "T3 invoking existing chooser refreshes every live view without replacing its panel")
+        let filter = try requireValue(
+            descendants(content).compactMap { $0 as? NSTextField }.first {
+                $0.identifier?.rawValue == "TextTank.OpenDocuments.filter"
+            }, "T3 native chooser filter")
+        filter.stringValue = "Group 2"
+        filter.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: filter))
+        let row = chooserTable.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSTextField
+        check(
+            chooserTable.numberOfRows == 1 && row?.identifier?.rawValue == chooserSecond.rawValue.uuidString,
+            "T3 actual group filter exposes distinct view identity")
+        let choose = try requireValue(
+            descendants(content).compactMap { $0 as? NSButton }.first {
+                $0.identifier?.rawValue == "TextTank.OpenDocuments.choose"
+            }, "T3 native Switch")
+        choose.performClick(nil)
+        check(host.model.activeTab?.id == chooserSecond, "T3 actual native Switch reveals exact additional view")
+        app.showDocumentTabs(nil)
+        let cancelForm = try requireValue(FormPanel.visible.last, "T3 chooser Cancel form")
+        let cancel = try requireValue(
+            cancelForm.window.contentView.map(descendants)?.compactMap { $0 as? NSButton }.first {
+                $0.identifier?.rawValue == "TextTank.OpenDocuments.cancel"
+            }, "T3 actual chooser Cancel")
+        cancel.performClick(nil)
+        check(host.model.activeTab?.id == chooserSecond, "T3 actual native chooser Cancel preserves group and view")
+        reset()
         // A -> B -> C retirement must follow the current target, never only the initial one.
         let doc = DocumentFactory.makeUntitled(), a = id(doc)
         doc.editor.text = "def one():\n    pass\n\ndef two():\n    pass\n"
