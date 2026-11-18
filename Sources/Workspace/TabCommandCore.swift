@@ -1,7 +1,8 @@
 import Foundation
 
 package enum TabCommand: String, CaseIterable, Sendable {
-    case newToRight, reopen, close, closeOthers, closeLeft, closeRight, closeGroup, closeSaved, reveal, copyPath
+    case newToRight, reopen, close, closeOthers, closeLeft, closeRight, closeGroup, closeSaved, pin, moveLeft,
+        moveRight, reveal, copyPath
     package var title: String {
         switch self {
         case .newToRight: return "New Tab to Right"
@@ -12,6 +13,9 @@ package enum TabCommand: String, CaseIterable, Sendable {
         case .closeRight: return "Close Tabs to the Right"
         case .closeGroup: return "Close All in Group"
         case .closeSaved: return "Close Saved Tabs"
+        case .pin: return "Pin Tab"
+        case .moveLeft: return "Move Tab Left"
+        case .moveRight: return "Move Tab Right"
         case .reveal: return "Reveal in Finder"
         case .copyPath: return "Copy File Path"
         }

@@ -101,6 +101,10 @@ import EditorBridge
         if command == .reveal || command == .copyPath {
             return doc.fileURL == nil ? (false, "Save this document to give it a file path.") : (true, nil)
         }
+        if command == .moveLeft || command == .moveRight {
+            return host.model.canMoveTab(target, direction: command == .moveLeft ? -1 : 1)
+                ? (true, nil) : (false, "This tab is at the edge of its pinned or ordinary region.")
+        }
         if command.isBulkClose {
             guard let plan = try? TabClosePlan.make(command, target: target, workspace: host.model, facts: facts()),
                 !plan.tabs.isEmpty
@@ -118,7 +122,7 @@ import EditorBridge
     static var sections: [[TabCommand]] {
         [
             [.newToRight, .reopen], [.close, .closeOthers, .closeLeft, .closeRight, .closeGroup, .closeSaved],
-            [.reveal, .copyPath]
+            [.pin, .moveLeft, .moveRight], [.reveal, .copyPath]
         ]
     }
     func contextMenu(for target: TabID) -> NSMenu {
@@ -145,8 +149,23 @@ import EditorBridge
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         let s = stateFor(item)
+        if let call = item.representedObject as? TabMenuInvocation {
+            item.title = title(call.command, target: call.targetID)
+            item.state = call.command == .pin && tab(call.targetID)?.isPinned == true ? .on : .off
+        }
         item.toolTip = s.reason
         return s.enabled
+    }
+    func title(_ command: TabCommand, target: TabID?) -> String {
+        if command == .pin, let target, tab(target)?.isPinned == true { return "Unpin Tab" }
+        return command.title
+    }
+    func configure(_ item: NSMenuItem, command: TabCommand, target: TabID?) -> Bool {
+        let available = state(command, target: target)
+        item.title = title(command, target: target)
+        item.state = command == .pin && target.flatMap(tab)?.isPinned == true ? .on : .off
+        item.toolTip = available.reason
+        return available.enabled
     }
     @objc private func invoke(_ item: NSMenuItem) {
         guard let call = item.representedObject as? TabMenuInvocation else { return }
@@ -181,6 +200,9 @@ import EditorBridge
             created.showWindows()
         case .close: host.performSingleTabClose(target, sender: sender)
         case .closeOthers, .closeLeft, .closeRight, .closeGroup, .closeSaved: beginBulk(command, target: target)
+        case .pin: host.setPinnedTabs([target], target: target, pinned: tab(target)?.isPinned != true)
+        case .moveLeft: host.moveTab(target, direction: -1)
+        case .moveRight: host.moveTab(target, direction: 1)
         case .reveal: if let url = doc.fileURL { revealFiles([url]) }
         case .copyPath:
             if let url = doc.fileURL {

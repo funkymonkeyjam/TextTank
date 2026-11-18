@@ -217,7 +217,44 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         }
         metadataChanged()
     }
-    /// Internal validated model replacement; Stage 1 still renders Single only.
+    func setPinnedTabs(_ ids: Set<TabID>, target: TabID, pinned: Bool) {
+        guard tabCommands.state(.pin, target: target).enabled,
+            let group = model.groups.first(where: { $0.tabs.contains { $0.id == target } })
+        else { return }
+        do {
+            let changed = try model.setPinned(ids, in: group.slot, pinned: pinned, openDocuments: openIDs)
+            metadataChanged()
+            tabStrip.revealOrganizationChange(target)
+            if changed.count == 1, let name = (presentation(for: changed[0])?.document as? TextDocument)?.displayName {
+                showTabMessage(String(format: pinned ? "%@ is pinned." : "%@ is unpinned.", name))
+            } else if !changed.isEmpty {
+                showTabMessage(String(format: pinned ? "Pinned %ld tabs." : "Unpinned %ld tabs.", changed.count))
+            }
+        } catch { showTabMessage("The tabs changed. No tabs were pinned or unpinned. Try again.") }
+    }
+    func moveTab(_ id: TabID, direction: Int) {
+        guard model.canMoveTab(id, direction: direction),
+            let group = model.groups.first(where: { $0.tabs.contains { $0.id == id } }),
+            let index = group.tabs.firstIndex(where: { $0.id == id })
+        else { return }
+        reorderTab(id, to: index + direction)
+    }
+    func reorderTab(_ id: TabID, to index: Int) {
+        guard tabCommands.state(.pin, target: id).enabled else { return }
+        do { try model.reorderTab(id, to: index, openDocuments: openIDs) } catch {
+            showTabMessage("The tabs changed. No tab was moved. Try again.")
+            return
+        }
+        metadataChanged()
+        tabStrip.revealOrganizationChange(id)
+        if let group = model.groups.first(where: { $0.tabs.contains { $0.id == id } }),
+            let position = group.tabs.firstIndex(where: { $0.id == id }),
+            let name = (presentation(for: id)?.document as? TextDocument)?.displayName
+        {
+            showTabMessage(String(format: "%@, tab %ld of %ld.", name, position + 1, group.tabs.count))
+        }
+    }
+    /// Internal validated model replacement; only Single is rendered until Stage 3.
     func replaceTabModel(_ value: TabWorkspace) throws {
         guard value.layout == .single else { throw TabModelError.invalid }
         try value.validate(openDocuments: openIDs)

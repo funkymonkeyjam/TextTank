@@ -51,6 +51,9 @@ import AppKit
             guard let raw = item.representedObject as? String, let command = TabCommand(rawValue: raw) else {
                 return false
             }
+            if let host = knownWorkspace {
+                return host.tabCommands.configure(item, command: command, target: host.model.activeTab?.id)
+            }
             let state =
                 knownWorkspace?.tabCommands.state(command, target: knownWorkspace?.model.activeTab?.id)
                 ?? (
