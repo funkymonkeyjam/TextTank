@@ -339,7 +339,10 @@ import NativeSearch
             NSApp.sendAction(find.action!, to: controller, from: find) && controller.findBarVisible,
             "DT-R5 after synchronized configuration changes the actual Find action still dispatches")
         controller.hideFind(nil)
-        let restoredIDs = ["TextTank.Find", "TextTank.Unavailable", unpinID.rawValue, "TextTank.Save", "TextTank.Find"]
+        let restoredIDs = [
+            "TextTank.Find", NSToolbarItem.Identifier.flexibleSpace.rawValue, "TextTank.Unavailable", unpinID.rawValue,
+            "TextTank.Save", "TextTank.Find"
+        ]
         let state = EditorToolbarPreferences.Arrangement(
             identifiers: restoredIDs, displayMode: NSToolbar.DisplayMode.iconOnly.rawValue, visible: false)
         owned.forEach { $0.close() }
@@ -354,7 +357,9 @@ import NativeSearch
             restored.windowControllers.first as? EditorWindowController, "DT fixture: restored controller")
         let restoredToolbar = try requireValue(restoredController.hostWindow?.toolbar, "DT fixture: restored toolbar")
         check(
-            restoredToolbar.items.map { $0.itemIdentifier.rawValue } == ["TextTank.Find", "TextTank.Save"]
+            restoredToolbar.items.map { $0.itemIdentifier.rawValue } == [
+                "TextTank.Find", NSToolbarItem.Identifier.flexibleSpace.rawValue, "TextTank.Save"
+            ]
                 && restoredToolbar.displayMode == .iconOnly && !restoredToolbar.isVisible,
             "DT-R4 owned configuration restores order, mode and visibility while ignoring stale and duplicate identifiers"
         )
@@ -377,7 +382,9 @@ import NativeSearch
             "DT-R4 isolation disables native autosave and never obtains the app shared-default provider")
         restoredController.saveToolbarArrangement()
         check(
-            EditorToolbarPreferences.load()?.identifiers == ["TextTank.Find", "TextTank.Save"],
+            EditorToolbarPreferences.load()?.identifiers == [
+                "TextTank.Find", NSToolbarItem.Identifier.flexibleSpace.rawValue, "TextTank.Save"
+            ],
             "DT-R4 the shared persistence boundary writes the actual owned native configuration")
     }
 }

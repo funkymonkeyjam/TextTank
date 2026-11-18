@@ -215,7 +215,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         EditorToolbarCommand.allCases.map { NSToolbarItem.Identifier($0.rawValue) } + [
-            NSToolbarItem.Identifier("TextTank.Automations")
+            .flexibleSpace, NSToolbarItem.Identifier("TextTank.Automations")
         ]
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
