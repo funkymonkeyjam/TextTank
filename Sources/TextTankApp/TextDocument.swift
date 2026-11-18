@@ -10,7 +10,13 @@ import AppKit
     private(set) var isClosed = false
     private var opened = false
     var isOpen: Bool { opened && !isClosed }
-    var presentation: EditorWindowController? { windowControllers.compactMap { $0 as? EditorWindowController }.first }
+    var presentations: [EditorWindowController] {
+        windowControllers.compactMap { $0 as? EditorWindowController }.filter { !$0.isRetired }
+    }
+    var presentation: EditorWindowController? {
+        guard let first = presentations.first else { return nil }
+        return first.host.presentation(for: runtimeID) ?? first
+    }
     private var tabClosePending = false
     override var windowForSheet: NSWindow? { isClosed ? nil : presentation?.hostWindow }
     private func revealForNativeAction() {
@@ -78,7 +84,7 @@ import AppKit
     var dependencies: DocumentDependencies
     private var automaticRecoveryDelay: TimeInterval { dependencies.automaticRecoveryDelay }
     private var maximumRecoveryDelay: TimeInterval { dependencies.maximumRecoveryDelay }
-    let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
+    private(set) var editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
     /// Encoding/BOM checkpoint paired with the save point from the latest completed read or save.
     private(set) var savedFormat = FileFormat(encoding: .utf8, bom: false)
     var format = FileFormat(encoding: .utf8, bom: false) {
@@ -306,6 +312,9 @@ import AppKit
         // Typing or a key command that Scintilla refuses in a read-only document; the status bar
         // shows Read Only. Menu commands state the reason in words before they reach the engine.
         editor.onReadOnlyAttempt = { [weak self] in self?.noteReadOnlyAttempt() }
+        installChangeObserver()
+    }
+    private func installChangeObserver() {
         editor.onChange = { [weak self] in
             guard let self, !self.loading else { return }
             self.updateChangeCount(self.hasUnsavedState ? .changeDone : .changeCleared)
@@ -317,6 +326,13 @@ import AppKit
                 self.recoveryDeadlineTimer = self.scheduleRecoveryTimer(after: self.maximumRecoveryDelay)
             }
         }
+    }
+    func promoteEditor(from retired: EditorWindowController, to survivor: EditorWindowController) {
+        guard editor === retired.primaryEditor else { return }
+        precondition(editor.sharesDocument(with: survivor.primaryEditor))
+        editor.onChange = nil
+        editor = survivor.primaryEditor
+        installChangeObserver()
     }
     /// Common modes include modal panels and event tracking, so the idle and deadline
     /// snapshots still happen while an alert, a menu or interactive macro playback is up.
@@ -465,7 +481,7 @@ import AppKit
                 "TextTank: recovery snapshot %@ could not be removed at close: %@", id.uuidString,
                 error.localizedDescription)
         }
-        if let presentation { presentation.host.unregister(presentation, document: self) }
+        for p in presentations { p.host.unregister(p, document: self) }
         super.close()
         for controller in windowControllers { removeWindowController(controller) }
         NSDocumentController.shared.removeDocument(self)

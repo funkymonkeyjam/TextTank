@@ -51,7 +51,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     var hostWindow: NSWindow? { host.window }
     var isActiveTab: Bool { host.active === self }
     var isPresented: Bool {
-        isActiveTab && presentationRoot.window === hostWindow && hostWindow?.isVisible == true
+        !isRetired && host.isPresented(self) && presentationRoot.window === hostWindow && hostWindow?.isVisible == true
             && hostWindow?.isMiniaturized != true
     }
     private var statusTimer: Timer?
@@ -96,6 +96,14 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// Scintilla reports focus only while the hostWindow is key and the application active, so the
     /// first responder is observed as well: a pane chosen in a background hostWindow still counts.
     private(set) var focusObservation: NSKeyValueObservation?
+    private(set) var isRetired = false
+    private(set) var tabID: TabID?
+    func bindTab(_ id: TabID) {
+        tabID = id
+        if let doc = document as? TextDocument {
+            views.forEach { EditorLifetime.bind($0, to: doc, presentation: self) }
+        }
+    }
     let primaryEditor: TTEditor
     /// The primary view and, while the hostWindow is split, the clone.
     var views: [TTEditor] { [primaryEditor] + (secondary.map { [$0] } ?? []) }
@@ -112,7 +120,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// Per-view wiring shared by the primary view and a clone.
     private func wire(_ editor: TTEditor) {
         editor.onFocus = { [weak self, weak editor] in
-            guard let self, let editor else { return }
+            guard let self, !self.isRetired, !self.host.isMutatingGroups, let editor else { return }
+            self.host.activate(self, focus: false, preserveSelection: true)
             self.lastEditor = editor
             self.updateInlineFindValidation()
             let app = EditorServices.current
@@ -126,14 +135,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     func syncPaneStyles(from source: TTEditor) {
         for view in views where view !== source { view.adoptSyntaxStyles(from: source) }
     }
-    init(document: TextDocument) {
-        primaryEditor = document.editor
+    init(document: TextDocument, editor: TTEditor? = nil) {
+        primaryEditor = editor ?? document.editor
         host = WorkspaceWindowController.current
         presentationRoot = NSView()
         super.init(window: nil)
         let hostWindow = host.window!
-        lastEditor = document.editor
-        wire(document.editor)
+        lastEditor = primaryEditor
+        wire(primaryEditor)
+        primaryEditor.onReadOnlyAttempt = { [weak document] in document?.noteReadOnlyAttempt() }
         focusObservation = hostWindow.observe(\.firstResponder) { [weak self] hostWindow, _ in
             precondition(Thread.isMainThread)
             MainActor.assumeIsolated {
@@ -141,16 +151,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 guard let self, let responder = hostWindow.firstResponder as? NSView,
                     let pane = self.views.last(where: { responder.isDescendant(of: $0) })
                 else { return }
+                guard !self.isRetired, !self.host.isMutatingGroups else { return }
+                self.host.activate(self, focus: false, preserveSelection: true)
                 self.lastEditor = pane
                 self.updateInlineFindValidation()
 
             }
         }
-        EditorServices.current?.settings?.apply(to: document.editor)
+        if editor == nil { EditorServices.current?.settings?.apply(to: primaryEditor) }
         let root = presentationRoot
         split.isVertical = true
         split.dividerStyle = .thin
-        split.addArrangedSubview(document.editor)
+        split.addArrangedSubview(primaryEditor)
         findField.placeholderString = "Find literal text"
         replaceField.placeholderString = "Replace with"
         findNextButton.target = self
@@ -669,6 +681,26 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     override func close() { presentationRoot.removeFromSuperview() }
     override func synchronizeWindowTitleWithDocumentName() { host.metadataChanged() }
     override func setDocumentEdited(_ dirtyFlag: Bool) { host.metadataChanged() }
+    func retireTab(inFavorOf successor: TTEditor) {
+        guard !isRetired else { return }
+        isRetired = true
+        prepareForClose()
+        // Detach the whole native root before removing its children: AppKit may retain the
+        // first removed container, but it must not retain retired editors or this adapter.
+        presentationRoot.removeFromSuperview()
+        for view in views {
+            EditorServices.current?.macros?.editorWillRetire(view)
+            EditorLifetime.retire(view)
+            view.retire(inFavorOf: successor)
+            view.onMacroStep = nil
+            view.onChange = nil
+            view.menu = nil
+            view.removeFromSuperview()
+        }
+        secondary = nil
+        lastEditor = nil
+        presentationRoot.subviews.forEach { $0.removeFromSuperview() }
+    }
     func prepareForClose() {
         linePanel?.close()
         saveToolbarArrangement()
@@ -938,7 +970,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         // copies only what a view owns, from the pane it was cloned from.
         clone.shareDocument(with: source)
         clone.adoptViewState(from: source)
-        if let doc = document as? TextDocument { EditorLifetime.bind(clone, to: doc) }
+        if let doc = document as? TextDocument { EditorLifetime.bind(clone, to: doc, presentation: self) }
         wire(clone)
         clone.onReadOnlyAttempt = { [weak self] in (self?.document as? TextDocument)?.noteReadOnlyAttempt() }
         secondary = clone

@@ -7,13 +7,17 @@ import EditorBridge
 @MainActor enum EditorLifetime {
     private final class Binding {
         weak var document: TextDocument?
+        weak var presentation: EditorWindowController?
         var retired = false
-        init(_ document: TextDocument) { self.document = document }
+        init(_ document: TextDocument, _ presentation: EditorWindowController?) {
+            self.document = document
+            self.presentation = presentation
+        }
     }
     private static var key: UInt8 = 0
     private static func binding(_ editor: TTEditor) -> Binding? { objc_getAssociatedObject(editor, &key) as? Binding }
-    static func bind(_ editor: TTEditor, to document: TextDocument) {
-        objc_setAssociatedObject(editor, &key, Binding(document), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    static func bind(_ editor: TTEditor, to document: TextDocument, presentation: EditorWindowController? = nil) {
+        objc_setAssociatedObject(editor, &key, Binding(document, presentation), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
     static func retire(_ editor: TTEditor) { binding(editor)?.retired = true }
     static func document(for editor: TTEditor) -> TextDocument? {
@@ -27,12 +31,14 @@ import EditorBridge
     }
     static func isVisible(_ editor: TTEditor?) -> Bool {
         guard let editor else { return false }
-        if binding(editor) != nil { return document(for: editor)?.presentation?.isPresented == true }
+        if binding(editor) != nil {
+            return document(for: editor) != nil && binding(editor)?.presentation?.isPresented == true
+        }
         return editor.window?.isVisible == true
     }
     static func activate(_ editor: TTEditor, focus: Bool = true) {
         guard isOpen(editor) else { return }
-        if let presentation = document(for: editor)?.presentation {
+        if let presentation = binding(editor)?.presentation, document(for: editor) != nil {
             presentation.host.activate(presentation, focus: focus)
             presentation.hostWindow?.makeKeyAndOrderFront(nil)
             if focus { presentation.hostWindow?.makeFirstResponder(editor) }

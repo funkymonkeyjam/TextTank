@@ -152,6 +152,9 @@ import Darwin
     /// `editor` is any view of the document being reloaded or closed. The recording may have been
     /// started in another view of that document, so this compares documents, unlike the focus
     /// rule in editorDidFocus, which is deliberately per view.
+    func editorWillRetire(_ editor: TTEditor) {
+        if recordingEditor === editor { invalidateRecording(reason: "The recording view was closed.") }
+    }
     func editorWillReset(_ editor: TTEditor, reason: String) {
         if let recordingEditor, recordingEditor.sharesDocument(with: editor) { invalidateRecording(reason: reason) }
     }

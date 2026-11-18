@@ -8,7 +8,7 @@ final class DocumentTabWindow: NSWindow {
     var host: WorkspaceWindowController? { windowController as? WorkspaceWindowController }
     override func resignKey() {
         super.resignKey()
-        host?.tabStrip.cancelReorder()
+        host?.tabStrips.forEach { $0.cancelReorder() }
     }
     override func becomeMain() {
         super.becomeMain()
@@ -37,8 +37,8 @@ final class DocumentTabWindow: NSWindow {
         return super.validateUserInterfaceItem(item)
     }
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .keyDown, event.keyCode == 53, host?.tabStrip.isReordering == true {
-            host?.tabStrip.cancelReorder()
+        if event.type == .keyDown, event.keyCode == 53, host?.tabStrips.contains(where: { $0.isReordering }) == true {
+            host?.tabStrips.forEach { $0.cancelReorder() }
             return
         }
         if attachedSheet == nil, [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
@@ -184,6 +184,8 @@ final class DocumentTabStrip: NSView {
     var dropIndicatorVisible: Bool { !dropIndicator.isHidden }
 
     weak var host: WorkspaceWindowController?
+    var groupSlot: GroupSlot = .first
+    private var group: EditorGroup? { host?.model.groups.first { $0.slot == groupSlot } }
     var allowsSelection: Bool {
         guard let host else { return false }
         return !host.tabCommands.isBusy && host.window?.attachedSheet == nil
@@ -210,7 +212,7 @@ final class DocumentTabStrip: NSView {
     }
     func refresh() {
         guard let host else { return }
-        let tabs = host.model.groups.flatMap(\.tabs), ids = Set(tabs.map(\.id))
+        let tabs = (group?.tabs ?? []), ids = Set(tabs.map(\.id))
         if let reorder, reorder.tabs != tabs { cancelReorder() }
         for id in Array(controls.keys) where !ids.contains(id) {
             if let c = controls.removeValue(forKey: id) {
@@ -218,8 +220,9 @@ final class DocumentTabStrip: NSView {
             }
         }
         order = tabs.map(\.id)
-        for (tab, presentation) in zip(tabs, host.presentations) {
-            guard let doc = presentation.document as? TextDocument else { continue }
+        for tab in tabs {
+            guard let presentation = host.presentation(for: tab.id), let doc = presentation.document as? TextDocument
+            else { continue }
             let c: Controls
             if let existing = controls[tab.id] {
                 c = existing
@@ -250,8 +253,8 @@ final class DocumentTabStrip: NSView {
                 c.close.strip = self
                 ([c.background, c.select, c.close] as [NSView]).forEach { row.addSubview($0) }
             }
-            let active = host.model.activeTab?.id == tab.id, name = doc.displayName ?? "Untitled"
-            let selection = host.tabSelection.selected(in: host.model, group: host.model.focusedGroup)
+            let active = group?.activeTab == tab.id, name = doc.displayName ?? "Untitled"
+            let selection = host.tabSelection.selected(in: host.model, group: groupSlot)
             let selected = selection.contains(tab.id)
             c.select.updateSelectionActions(selected: selected, canToggle: !active || selection.count > 1)
             c.background.active = active
@@ -303,14 +306,14 @@ final class DocumentTabStrip: NSView {
             // Four points separate the selection and close hit targets (DS-14/70/74).
             c.select.frame = NSRect(x: x + 8, y: 0, width: width - 48, height: 36)
             c.close.frame = NSRect(x: x + width - 36, y: 4, width: 28, height: 28)
-            if host?.model.activeTab?.id == id { active = c.background.frame }
+            if group?.activeTab == id { active = c.background.frame }
             x += width
         }
         row.frame = NSRect(x: 0, y: 0, width: max(x, bounds.width), height: 36)
         row.scrollToVisible(active)
     }
     func revealOrganizationChange(_ id: TabID) {
-        guard let moved = controls[id]?.background.frame, let activeID = host?.model.activeTab?.id,
+        guard let moved = controls[id]?.background.frame, let activeID = group?.activeTab,
             let active = controls[activeID]?.background.frame
         else { return }
         let combined = moved.union(active)
@@ -323,9 +326,9 @@ final class DocumentTabStrip: NSView {
     }
     @discardableResult func beginReorder(_ id: TabID) -> Bool {
         guard let host, host.tabCommands.state(.pin, target: id).enabled,
-            host.model.groups.flatMap(\.tabs).contains(where: { $0.id == id })
+            (group?.tabs ?? []).contains(where: { $0.id == id })
         else { return false }
-        reorder = ReorderCapture(id: id, tabs: host.model.groups.flatMap(\.tabs))
+        reorder = ReorderCapture(id: id, tabs: (group?.tabs ?? []))
         proposedIndex = nil
         return true
     }
@@ -334,7 +337,7 @@ final class DocumentTabStrip: NSView {
             cancelReorder()
             return
         }
-        guard let capture = reorder, capture.tabs == host?.model.groups.flatMap(\.tabs), bounds.contains(point),
+        guard let capture = reorder, capture.tabs == group?.tabs, bounds.contains(point),
             let old = capture.tabs.firstIndex(where: { $0.id == capture.id })
         else {
             proposedIndex = nil
@@ -362,7 +365,7 @@ final class DocumentTabStrip: NSView {
         updateReorder(at: point)
         let capture = reorder, destination = proposedIndex
         cancelReorder()
-        guard let capture, let destination, capture.tabs == host?.model.groups.flatMap(\.tabs) else { return }
+        guard let capture, let destination, capture.tabs == group?.tabs else { return }
         host?.reorderTab(capture.id, to: destination)
     }
     func cancelReorder() {
@@ -380,10 +383,10 @@ final class DocumentTabStrip: NSView {
         _ id: TabID, gesture: TabSelectionGesture, expectedSelected: Bool? = nil
     ) -> Bool {
         guard let host, host.presentation(for: id) != nil else { return false }
-        let chosen = host.tabSelection.selected(in: host.model, group: host.model.focusedGroup)
+        let chosen = host.tabSelection.selected(in: host.model, group: groupSlot)
         if let expectedSelected {
             guard chosen.contains(id) == expectedSelected,
-                !(expectedSelected && chosen.count == 1 && host.model.activeTab?.id == id)
+                !(expectedSelected && chosen.count == 1 && group?.activeTab == id)
             else { return false }
         }
         return host.selectTab(id, gesture: gesture)

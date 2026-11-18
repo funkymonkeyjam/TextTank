@@ -40,7 +40,7 @@ import AppKit
     /// document window, otherwise the document window focused last, because Find and Replace,
     /// a Run result or another auxiliary window may be main. Nil once that document has closed.
     var currentDocumentController: EditorWindowController? {
-        let controller = knownWorkspace?.active ?? lastDocumentController
+        let controller = knownWorkspace.map { $0.active } ?? lastDocumentController
         return (controller?.document as? TextDocument)?.isOpen == true ? controller : nil
     }
     var currentDocument: TextDocument? { currentDocumentController?.document as? TextDocument }

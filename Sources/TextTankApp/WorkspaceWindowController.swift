@@ -17,31 +17,32 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     private(set) var model = TabWorkspace()
     private(set) var tabSelection = TabSelectionState()
-    @MainActor private final class Entry {
-        weak var presentation: EditorWindowController?
-        init(_ value: EditorWindowController) { presentation = value }
+    private var entries: [TabID: EditorWindowController] = [:]
+    private var documents: [DocumentID: WeakDocument] = [:]
+    @MainActor private final class WeakDocument {
+        weak var value: TextDocument?
+        init(_ document: TextDocument) { value = document }
     }
-    private var entries: [DocumentID: Entry] = [:]
+    private var recent: [DocumentID: TabID] = [:]
+    private(set) var isMutatingGroups = false
     var acceptsDocumentCreation: Bool {
         if let current = EditorServices.current?.workspaceHost { return current === self }
         return Self.fallback === self
     }
-    var presentations: [EditorWindowController] {
-        model.groups.flatMap(\.tabs).compactMap { entries[$0.documentID]?.presentation }
-    }
-    var active: EditorWindowController? { model.activeTab.flatMap { entries[$0.documentID]?.presentation } }
-    private var openIDs: Set<DocumentID> { Set(entries.keys) }
-    let tabStrip = DocumentTabStrip()
+    var presentations: [EditorWindowController] { model.groups.flatMap(\.tabs).compactMap { entries[$0.id] } }
+    var active: EditorWindowController? { model.activeTab.flatMap { entries[$0.id] } }
+    private var openIDs: Set<DocumentID> { Set(documents.keys) }
+    private(set) var groupSurfaces: [GroupSlot: EditorGroupSurface] = [:]
+    let groupContainer = EditorGroupContainer()
+    var tabStrip: DocumentTabStrip { groupSurfaces[.first]!.strip }
+    var tabStrips: [DocumentTabStrip] { model.groups.compactMap { groupSurfaces[$0.slot]?.strip } }
     private let content = NSView()
-    private let empty = NSStackView()
-    private var mounted: NSView?
     private var observations: [NSKeyValueObservation] = []
     private var automationObserver: NSObjectProtocol?
     private var savingArrangement = false
     private var saveScheduled = false
     lazy var tabCommands = TabCommandController(host: self)
     private var removingTabs = false
-    private let emptyStatus = AnnouncingLabel(labelWithString: "")
     private var returnTab: TabID?
     private var returnSelection: (TabSelectionState, TabWorkspace)?
     init() {
@@ -58,36 +59,15 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         window.routeCloseButtonToQuit()
         let root = NSView()
         window.contentView = root
-        tabStrip.host = self
-        for view in [tabStrip, content] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            root.addSubview(view)
-        }
-        NSLayoutConstraint.activate([
-            tabStrip.topAnchor.constraint(equalTo: root.topAnchor),
-            tabStrip.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            tabStrip.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            tabStrip.heightAnchor.constraint(equalToConstant: 36),
-            content.topAnchor.constraint(equalTo: tabStrip.bottomAnchor),
-            content.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            content.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            content.bottomAnchor.constraint(equalTo: root.bottomAnchor)
-        ])
-        let label = NSTextField(labelWithString: "Open a document or create a new one.")
-        let new = NSButton(title: EditorToolbarCommand.new.title, target: nil, action: EditorToolbarCommand.new.action)
-        new.setAccessibilityLabel("Create a new document")
-        let open = NSButton(
-            title: EditorToolbarCommand.open.title, target: nil, action: EditorToolbarCommand.open.action)
-        open.setAccessibilityLabel("Open a document")
-        empty.orientation = .vertical
-        empty.spacing = 12
-        [label, new, open, emptyStatus].forEach { empty.addArrangedSubview($0) }
-        empty.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(empty)
-        NSLayoutConstraint.activate([
-            empty.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-            empty.centerYAnchor.constraint(equalTo: content.centerYAnchor)
-        ])
+        content.frame = root.bounds
+        content.autoresizingMask = [.width, .height]
+        root.addSubview(content)
+        groupContainer.frame = content.bounds
+        groupContainer.autoresizingMask = [.width, .height]
+        content.addSubview(groupContainer)
+        let first = EditorGroupSurface(slot: .first, host: self)
+        groupSurfaces[.first] = first
+        groupContainer.configure(.single, surfaces: [first])
         let toolbar = NSToolbar(
             identifier: EditorToolbarPreferences.identifier(for: EditorServices.current?.automations))
         toolbar.delegate = self
@@ -109,54 +89,184 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
     func register(_ presentation: EditorWindowController, document: TextDocument) {
         let previous = model.activeTab?.id
-        entries[document.runtimeID] = Entry(presentation)
-        do { _ = try model.open(document.runtimeID, openDocuments: openIDs) } catch {
-            preconditionFailure("Invalid workspace registration: \(error)")
-        }
+        documents[document.runtimeID] = WeakDocument(document)
+        do {
+            let id = try model.open(document.runtimeID, openDocuments: openIDs)
+            entries[id] = presentation
+            presentation.bindTab(id)
+        } catch { preconditionFailure("Invalid workspace registration: \(error)") }
         if let previous { try? model.activate(previous, openDocuments: openIDs) }
-        // A visible empty host mounts its first registered tab without ordering another window.
         metadataChanged()
-        if mounted == nil, window?.isVisible == true, let active { activate(active, focus: false, explicit: false) }
+        syncGroups()
+    }
+    func presentation(for document: DocumentID) -> EditorWindowController? {
+        if let active, (active.document as? TextDocument)?.runtimeID == document { return active }
+        if let id = recent[document], let p = entries[id] { return p }
+        return presentations.first { ($0.document as? TextDocument)?.runtimeID == document }
+    }
+    func isPresented(_ presentation: EditorWindowController) -> Bool {
+        model.groups.contains { group in group.activeTab.flatMap { entries[$0] } === presentation }
     }
     func activate(
         _ presentation: EditorWindowController, focus: Bool = true, explicit: Bool = true,
         preserveSelection: Bool = false
     ) {
-        if explicit { tabCommands.cancelReopen() }
-        guard let document = presentation.document as? TextDocument, document.isOpen,
-            entries[document.runtimeID]?.presentation === presentation,
-            let tab = model.groups.flatMap(\.tabs).first(where: { $0.documentID == document.runtimeID }),
+        guard !isMutatingGroups, let document = presentation.document as? TextDocument, document.isOpen,
+            let id = presentation.tabID, entries[id] === presentation,
             window?.attachedSheet == nil || active === presentation
         else { return }
-        if explicit { endBackgroundCloseReturn() }
-        let previous = active
-        do { try model.activate(tab.id, openDocuments: openIDs) } catch { return }
-        if explicit && !preserveSelection { tabSelection.collapse(in: model) }
-        if previous !== presentation { previous?.stopStatusTimer() }
-        if mounted !== presentation.presentationRoot {
-            window?.makeFirstResponder(nil)
-            mounted?.removeFromSuperview()
-            mounted = presentation.presentationRoot
-            let root = presentation.presentationRoot
-            root.translatesAutoresizingMaskIntoConstraints = false
-            content.addSubview(root)
-            NSLayoutConstraint.activate([
-                root.topAnchor.constraint(equalTo: content.topAnchor),
-                root.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-                root.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-                root.bottomAnchor.constraint(equalTo: content.bottomAnchor)
-            ])
+        if explicit {
+            tabCommands.cancelReopen()
+            endBackgroundCloseReturn()
         }
-        empty.isHidden = true
-        // Explicit chain preserves NSDocument's native Save/Print validation and actions.
+        do { try model.activate(id, openDocuments: openIDs) } catch { return }
+        if explicit && !preserveSelection { tabSelection.collapse(in: model) }
+        recent[document.runtimeID] = id
+        syncGroups()
         window?.nextResponder = presentation
         presentation.nextResponder = NSApp
         EditorServices.current?.noteActiveController(presentation)
         metadataChanged()
-        presentation.visibilityChanged()
-        if presentation.isPresented { presentation.refreshStatusDetails() }
         validateToolbar()
         if focus { window?.makeFirstResponder(presentation.activeEditor) }
+    }
+    func focusGroup(_ slot: GroupSlot) {
+        guard !isMutatingGroups, !tabCommands.isBusy, window?.attachedSheet == nil else { return }
+        tabCommands.cancelReopen()
+        endBackgroundCloseReturn()
+        do { try model.focusGroup(slot, openDocuments: openIDs) } catch { return }
+        if let active {
+            activate(active, preserveSelection: true)
+        } else {
+            window?.nextResponder = NSApp
+            window?.makeFirstResponder(nil)
+            metadataChanged()
+            validateToolbar()
+        }
+    }
+    private func syncGroups() {
+        for group in model.groups {
+            groupSurfaces[group.slot]?.mount(group.activeTab.flatMap { entries[$0]?.presentationRoot })
+            groupSurfaces[group.slot]?.refresh()
+        }
+        presentations.forEach { $0.visibilityChanged() }
+        window?.contentView?.layoutSubtreeIfNeeded()
+    }
+    func groupLabel(_ slot: GroupSlot) -> String {
+        let position: String
+        switch model.layout {
+        case .single: position = ""
+        case .twoColumns: position = slot == .first ? "Left" : "Right"
+        case .twoRows: position = slot == .first ? "Top" : "Bottom"
+        case .grid2x2: position = ["Top Left", "Top Right", "Bottom Left", "Bottom Right"][slot.rawValue - 1]
+        }
+        return "Group \(slot.rawValue)" + (position.isEmpty ? "" : ", " + position)
+    }
+    @discardableResult func setEditorLayout(_ layout: LayoutKind) -> Bool {
+        guard !tabCommands.isBusy, window?.attachedSheet == nil else { return false }
+        if layout == model.layout { return true }
+        let minimum = TabGroupGeometry.minimumContent(layout)
+        if let window, let screen = window.screen ?? NSScreen.main {
+            let available = window.contentRect(forFrameRect: screen.visibleFrame).size
+            guard
+                TabGroupGeometry.fits(
+                    minimum, available: TabGroupExtent(width: available.width, height: available.height))
+            else {
+                showTabMessage("This screen cannot fit the minimum size for that editor layout.")
+                return false
+            }
+        }
+        guard let plan = try? model.planLayout(layout, openDocuments: openIDs) else { return false }
+        guard applyGroupChange(plan) else { return false }
+        window?.contentMinSize = NSSize(width: minimum.width, height: minimum.height)
+        if let window {
+            let size = window.contentView?.bounds.size ?? .zero
+            window.setContentSize(
+                NSSize(width: max(size.width, minimum.width), height: max(size.height, minimum.height)))
+            if let screen = window.screen {
+                window.setFrameOrigin(
+                    NSPoint(
+                        x: max(
+                            screen.visibleFrame.minX,
+                            min(window.frame.minX, screen.visibleFrame.maxX - window.frame.width)),
+                        y: max(
+                            screen.visibleFrame.minY,
+                            min(window.frame.minY, screen.visibleFrame.maxY - window.frame.height))))
+            }
+        }
+        showTabMessage("Editor layout changed. \(groupLabel(model.focusedGroup)) is focused.")
+        return true
+    }
+    @discardableResult func openView(_ source: TabID, in slot: GroupSlot) -> TabID? {
+        guard !tabCommands.isBusy, window?.attachedSheet == nil,
+            let plan = try? model.planAdditionalView(source, to: slot, openDocuments: openIDs),
+            let id = plan.resolved[source], applyGroupChange(plan)
+        else { return nil }
+        showTabMessage("Opened another view in \(groupLabel(slot)).")
+        return id
+    }
+    @discardableResult func applyGroupChange(_ plan: TabGroupChange) -> Bool {
+        guard !isMutatingGroups, plan.isCurrent(workspace: model) else { return false }
+        do { try plan.result.validate(openDocuments: openIDs) } catch { return false }
+        isMutatingGroups = true
+        let before = model, selection = tabSelection
+        for tab in plan.created {
+            guard let doc = documents[tab.documentID]?.value, let source = presentation(for: tab.documentID) else {
+                isMutatingGroups = false
+                return false
+            }
+            let editor = TTEditor(frame: source.primaryEditor.frame)
+            editor.shareDocument(with: source.activeEditor)
+            editor.adoptViewState(from: source.activeEditor)
+            editor.restoreClosedTabView(
+                anchor: source.activeEditor.selectionAnchor, caret: source.activeEditor.selectionCaret,
+                firstVisibleLine: source.activeEditor.firstVisibleLine)
+            let p = EditorWindowController(document: doc, editor: editor)
+            doc.addWindowController(p)
+            entries[tab.id] = p
+            p.bindTab(tab.id)
+        }
+        // Stage native views before publishing identities. Retirement never closes a document.
+        for id in plan.retired {
+            guard let p = entries[id], let doc = p.document as? TextDocument,
+                let survivor = plan.result.groups.flatMap(\.tabs).first(where: { $0.documentID == doc.runtimeID }),
+                let successor = entries[survivor.id]
+            else { continue }
+            doc.promoteEditor(from: p, to: successor)
+            p.retireTab(inFavorOf: successor.primaryEditor)
+            doc.removeWindowController(p)
+            entries.removeValue(forKey: id)
+        }
+        let changedLayout = before.layout != plan.result.layout
+        if changedLayout {
+            let old = groupSurfaces
+            groupSurfaces = [:]
+            for group in plan.result.groups {
+                let surface =
+                    plan.groupOrigins[group.slot].flatMap { old[$0] }
+                    ?? EditorGroupSurface(slot: group.slot, host: self)
+                surface.slot = group.slot
+                groupSurfaces[group.slot] = surface
+            }
+        }
+        model = plan.result
+        tabSelection = selection
+        tabSelection.reconcile(from: before, to: model)
+        if changedLayout {
+            groupContainer.configure(model.layout, surfaces: model.groups.compactMap { groupSurfaces[$0.slot] })
+        }
+        isMutatingGroups = false
+        if let active {
+            activate(active, explicit: false, preserveSelection: true)
+        } else {
+            syncGroups()
+            metadataChanged()
+            window?.nextResponder = NSApp
+            window?.makeFirstResponder(nil)
+        }
+        tabStrips.forEach { $0.refresh() }
+        validateToolbar()
+        return true
     }
     func show(_ presentation: EditorWindowController, sender: Any?) {
         activate(presentation)
@@ -166,56 +276,58 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         active?.visibilityChanged()
     }
     func unregister(_ presentation: EditorWindowController, document: TextDocument) {
-        guard entries[document.runtimeID]?.presentation === presentation,
-            let tab = model.groups.flatMap(\.tabs).first(where: { $0.documentID == document.runtimeID })
-        else { return }
-        let wasActive = active === presentation
-        let before = model
-        do { _ = try model.remove(tab.id, reviewed: true, openDocuments: openIDs) } catch {
-            preconditionFailure("Invalid workspace removal")
+        guard let id = presentation.tabID, entries[id] === presentation else { return }
+        let wasActive = active === presentation, before = model
+        _ = try? model.remove(id, reviewed: true, openDocuments: openIDs)
+        presentation.presentationRoot.removeFromSuperview()
+        entries.removeValue(forKey: id)
+        if !model.groups.flatMap(\.tabs).contains(where: { $0.documentID == document.runtimeID }) {
+            documents.removeValue(forKey: document.runtimeID)
+            recent.removeValue(forKey: document.runtimeID)
         }
-        entries.removeValue(forKey: document.runtimeID)
         if !removingTabs { tabSelection.reconcile(from: before, to: model) }
-        if removingTabs {
-            if mounted === presentation.presentationRoot {
-                window?.makeFirstResponder(nil)
-                mounted?.removeFromSuperview()
-                mounted = nil
-            }
-            return
-        }
-        if wasActive {
-            mounted?.removeFromSuperview()
-            mounted = nil
-            if let back = returnTab, model.groups.flatMap(\.tabs).contains(where: { $0.id == back }) {
-                try? model.activate(back, openDocuments: openIDs)
-            }
+        if wasActive && !removingTabs {
+            if let back = returnTab { try? model.activate(back, openDocuments: openIDs) }
             if let (selection, original) = returnSelection {
                 tabSelection = selection
                 tabSelection.reconcile(from: original, to: model)
             } else {
-                // Removal may have picked an intermediate neighbour before returnTab.
-                // Collapse only after the final active identity has been restored.
                 tabSelection.collapse(in: model)
             }
             endBackgroundCloseReturn()
+        }
+        if !removingTabs {
             if let next = active {
-                activate(next, explicit: false)
+                activate(next, explicit: false, preserveSelection: true)
             } else {
-                empty.isHidden = false
                 window?.nextResponder = NSApp
                 window?.makeFirstResponder(nil)
+                syncGroups()
+                metadataChanged()
             }
+            validateToolbar()
         }
-        metadataChanged()
-        validateToolbar()
+    }
+    private func removeNonfinalTab(_ id: TabID) {
+        guard let p = entries[id], let doc = p.document as? TextDocument,
+            let successor = presentations.first(where: { $0 !== p && $0.document === doc })
+        else { return }
+        doc.promoteEditor(from: p, to: successor)
+        p.retireTab(inFavorOf: successor.primaryEditor)
+        unregister(p, document: doc)
+        doc.removeWindowController(p)
     }
     func closeTab(_ id: TabID, sender: Any?) { tabCommands.perform(.close, target: id, captured: true, sender: sender) }
     func performSingleTabClose(_ id: TabID, sender: Any?) {
         guard window?.attachedSheet == nil, let tab = model.groups.flatMap(\.tabs).first(where: { $0.id == id }),
-            let presentation = entries[tab.documentID]?.presentation,
+            let presentation = entries[id],
             let document = presentation.document as? TextDocument
         else { return }
+        if model.groups.flatMap(\.tabs).filter({ $0.documentID == tab.documentID }).count > 1 {
+            tabCommands.recordNonfinalTab(id)
+            removeNonfinalTab(id)
+            return
+        }
         let back = model.activeTab?.id
         let original = (tabSelection, model)
         let wasSelected = tabSelection.selected(in: model, group: model.focusedGroup).contains(id)
@@ -251,10 +363,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         tabSelection.reconcile(from: original, to: model)
         metadataChanged()
     }
-    func presentation(for id: TabID) -> EditorWindowController? {
-        guard let tab = model.groups.flatMap(\.tabs).first(where: { $0.id == id }) else { return nil }
-        return entries[tab.documentID]?.presentation
-    }
+    func presentation(for id: TabID) -> EditorWindowController? { entries[id] }
     func placeTab(_ id: TabID, in slot: GroupSlot, index: Int, pinned: Bool) {
         do { try model.place(id, in: slot, index: index, pinned: pinned, openDocuments: openIDs) } catch {
             showTabMessage("The tab could not be placed because the workspace changed.")
@@ -313,7 +422,6 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         if let active {
             active.showTransientStatus(message, seconds: 8, announce: true)
         } else {
-            emptyStatus.stringValue = message
             Announce.say(message, from: window)
         }
     }
@@ -338,7 +446,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
                 doc.close()
             } else {
                 tabCommands.recordNonfinalTab(id)
-                _ = try? model.remove(id, reviewed: false, openDocuments: openIDs)
+                removeNonfinalTab(id)
             }
         }
         removingTabs = false
@@ -355,9 +463,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
                 _ = window?.makeFirstResponder(p.activeEditor)
             }
         } else {
-            mounted?.removeFromSuperview()
-            mounted = nil
-            empty.isHidden = false
+            syncGroups()
             window?.nextResponder = NSApp
             window?.makeFirstResponder(nil)
         }
@@ -368,7 +474,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         guard window?.attachedSheet == nil else { return }
         var next = model
         try? next.cycle(direction, openDocuments: openIDs)
-        if let tab = next.activeTab, let presentation = entries[tab.documentID]?.presentation { activate(presentation) }
+        if let tab = next.activeTab, let presentation = entries[tab.id] { activate(presentation) }
     }
     func metadataChanged() {
         if let doc = active?.document as? TextDocument {
@@ -380,7 +486,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             window?.representedURL = nil
             window?.isDocumentEdited = false
         }
-        tabStrip.refresh()
+        tabStrips.forEach { $0.refresh() }
+        groupSurfaces.values.forEach { $0.refresh() }
     }
     func visibilityChanged() { presentations.forEach { $0.visibilityChanged() } }
     func validateToolbar() {
