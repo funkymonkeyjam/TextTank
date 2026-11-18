@@ -443,7 +443,7 @@ import NativeSearch
             "T0-R18/22 empty window disables Close through both native validation protocols")
         check(
             try [
-                EditorToolbarCommand.find.action, #selector(NSDocument.saveDocument(_:)),
+                EditorToolbarCommand.find.action, #selector(NSDocument.save(_:)),
                 #selector(NSDocument.printDocument(_:))
             ].allSatisfy { try !menuItem($0).isEnabled },
             "T0-R22 empty menus disable Find, Save and Print")
