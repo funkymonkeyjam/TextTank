@@ -229,8 +229,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         returnTab = nil
         returnSelection = nil
     }
-    func selectTab(_ id: TabID, gesture: TabSelectionGesture) {
-        guard !tabCommands.isBusy, window?.attachedSheet == nil else { return }
+    @discardableResult func selectTab(_ id: TabID, gesture: TabSelectionGesture) -> Bool {
+        guard !tabCommands.isBusy, window?.attachedSheet == nil else { return false }
         tabCommands.cancelReopen()
         var next = model
         do { try tabSelection.apply(id, gesture: gesture, workspace: &next, openDocuments: openIDs) } catch { return }
@@ -242,6 +242,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             endBackgroundCloseReturn()
             metadataChanged()
         }
+        return true
     }
     func restoreTabSelection(_ selection: TabSelectionState, from original: TabWorkspace) {
         tabSelection = selection

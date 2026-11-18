@@ -109,6 +109,23 @@ private final class DocumentTabButton: NSButton {
         downPoint = nil
         moving = false
     }
+    func updateSelectionActions(selected: Bool, canToggle: Bool) {
+        var actions: [NSAccessibilityCustomAction] = []
+        if canToggle {
+            actions.append(
+                NSAccessibilityCustomAction(name: selected ? "Remove from Selection" : "Add to Selection") {
+                    [weak self] in
+                    guard let self, let id = self.tabID else { return false }
+                    return self.strip?.accessibilitySelect(id, gesture: .toggle, expectedSelected: selected) ?? false
+                })
+        }
+        actions.append(
+            NSAccessibilityCustomAction(name: "Select Range from Active Tab") { [weak self] in
+                guard let self, let id = self.tabID else { return false }
+                return self.strip?.accessibilitySelect(id, gesture: .range) ?? false
+            })
+        setAccessibilityCustomActions(actions)
+    }
     override func rightMouseDown(with event: NSEvent) {
         if let menu = menu(for: event) { NSMenu.popUpContextMenu(menu, with: event, for: self) }
     }
@@ -226,7 +243,9 @@ final class DocumentTabStrip: NSView {
                 ([c.background, c.select, c.close] as [NSView]).forEach { row.addSubview($0) }
             }
             let active = host.model.activeTab?.id == tab.id, name = doc.displayName ?? "Untitled"
-            let selected = host.tabSelection.selected(in: host.model, group: host.model.focusedGroup).contains(tab.id)
+            let selection = host.tabSelection.selected(in: host.model, group: host.model.focusedGroup)
+            let selected = selection.contains(tab.id)
+            c.select.updateSelectionActions(selected: selected, canToggle: !active || selection.count > 1)
             c.background.active = active
             c.background.isHidden = !selected
             c.background.needsDisplay = true
@@ -247,7 +266,7 @@ final class DocumentTabStrip: NSView {
                         : String(format: Strings.text("tabs.pinned", "%@, pinned"), name))
             }
             c.select.setAccessibilityHelp(
-                "Command-click to change selection. Shift-click to select a range. Use the tab menu to close, pin or move tabs."
+                "Command-click to change selection. Shift-click to select a range. Selection actions are also in the accessibility Actions menu."
             )
             c.select.identifier = NSUserInterfaceItemIdentifier("tab." + tab.id.rawValue.uuidString)
             c.close.toolTip = String(format: Strings.text("tabs.close", "Close %@"), name)
@@ -348,6 +367,18 @@ final class DocumentTabStrip: NSView {
         let gesture: TabSelectionGesture =
             modifiers.contains(.shift) ? .range : modifiers.contains(.command) ? .toggle : .plain
         host?.selectTab(id, gesture: gesture)
+    }
+    func accessibilitySelect(
+        _ id: TabID, gesture: TabSelectionGesture, expectedSelected: Bool? = nil
+    ) -> Bool {
+        guard let host, host.presentation(for: id) != nil else { return false }
+        let chosen = host.tabSelection.selected(in: host.model, group: host.model.focusedGroup)
+        if let expectedSelected {
+            guard chosen.contains(id) == expectedSelected,
+                !(expectedSelected && chosen.count == 1 && host.model.activeTab?.id == id)
+            else { return false }
+        }
+        return host.selectTab(id, gesture: gesture)
     }
     @objc private func selectTab(_ sender: DocumentTabButton) {
         if let id = sender.tabID { clickTab(id) }

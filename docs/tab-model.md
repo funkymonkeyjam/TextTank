@@ -109,5 +109,5 @@ without changing editor focus. Both are revealed when space permits, and every m
 announces the tab's position. This resolves the Stage 2 brief's competing visibility
 sentences. Pin is a visible symbol; selected-inactive tabs have an outline distinct
 from the active tab's weight/underline. Semantic colors, labels, disabled reasons and
-announcements meet DS-14/20-23/40-43/60-63/65/70-74/80-85. No new shortcuts,
+announcements meet DS-14/20-23/40-43/60-63/65/70-74/80-85. Native accessibility Actions offer Add/Remove from Selection and Select Range from Active Tab through the same guarded Core gestures, without default shortcuts. Ordinary Press remains plain selection; stale Add/Remove intents and retired targets are refused. No new shortcuts,
 toolbar controls, budgets, saved schema, group UI or Stage 3 commands are introduced.

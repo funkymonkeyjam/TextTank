@@ -253,6 +253,40 @@ import NativeSearch
             (selectedButton.accessibilityValue() as? NSNumber)?.boolValue == true
                 && selectedButton.isAccessibilitySelected() && !unselectedButton.isAccessibilitySelected(),
             "T2 actual AX selected value distinguishes inactive selection")
+        let addAction = unselectedButton.accessibilityCustomActions()?.first { $0.name == "Add to Selection" }
+        check(
+            addAction?.handler?() == true && selectedIDs() == [id(sa), id(sb), id(sc), id(se)]
+                && window.firstResponder === selectionResponder,
+            "T2 native AX Add action creates keyboard-accessible selection without focus change")
+        check(addAction?.handler?() == false, "T2 stale AX Add intent cannot toggle a now-selected tab off")
+        let removeAction = unselectedButton.accessibilityCustomActions()?.first { $0.name == "Remove from Selection" }
+        check(
+            removeAction?.handler?() == true && selectedIDs() == [id(sa), id(sc), id(se)],
+            "T2 native AX Remove action uses same selection core")
+        let rangeAction = unselectedButton.accessibilityCustomActions()?.first {
+            $0.name == "Select Range from Active Tab"
+        }
+        check(
+            rangeAction?.handler?() == true && selectedIDs() == [id(sb), id(sc)]
+                && host.active?.document === sc && window.firstResponder === selectionResponder,
+            "T2 native AX Range action preserves active anchor and focus")
+        click(sc)
+        check(
+            try button(sc).accessibilityCustomActions()?.map(\.name) == ["Select Range from Active Tab"],
+            "T2 sole active tab exposes no impossible Remove action")
+        click(sa, .command)
+        click(se, .command)
+        let retired = try saved("AX-retired-target")
+        click(sc)
+        click(sa, .command)
+        click(se, .command)
+        let retiredButton = try button(retired)
+        let retiredAction = retiredButton.accessibilityCustomActions()?.first { $0.name == "Add to Selection" }
+        retired.close()
+        let priorRetiredAttempt = selectedIDs()
+        check(
+            retiredAction?.handler?() == false && selectedIDs() == priorRetiredAttempt,
+            "T2 native AX action refuses retired target without retargeting selection")
         let selectedBackground = descendants(host.tabStrip).first {
             $0 !== selectedButton && $0.frame.minX == selectedButton.frame.minX - 8
                 && $0.frame.width == selectedButton.frame.width + 48
