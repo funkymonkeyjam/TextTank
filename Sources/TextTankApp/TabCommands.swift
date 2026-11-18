@@ -487,7 +487,8 @@ import EditorBridge
         }), let p = host.presentation(for: existing.id) {
             guard consumeHistory(record.id) else { return false }
             host.show(p, sender: nil)
-            host.showTabMessage("The live document’s existing view was selected in \(host.groupLabel(slot)).")
+            host.showTabMessage(
+                String(format: "Selected the existing view of %@ in %@.", doc.displayName, host.groupLabel(slot)))
             return true
         }
         guard let source = host.model.groups.flatMap(\.tabs).first(where: { $0.documentID == doc.runtimeID }),
@@ -498,7 +499,7 @@ import EditorBridge
         p.primaryEditor.restoreClosedTabView(
             anchor: record.anchor, caret: record.caret, firstVisibleLine: record.firstVisibleLine)
         _ = consumeHistory(record.id)
-        host.showTabMessage("Reopened the live document in \(host.groupLabel(slot)).")
+        host.showTabMessage(String(format: "Reopened a view of %@ in %@.", doc.displayName, host.groupLabel(slot)))
         return true
     }
     private func reopen() {

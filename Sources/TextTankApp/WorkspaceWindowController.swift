@@ -193,7 +193,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
                     minimum,
                     available: availableContent ?? TabGroupExtent(width: available.width, height: available.height))
             else {
-                showTabMessage("This screen cannot fit the minimum size for that editor layout.")
+                showTabMessage(
+                    "This screen cannot fit that editor layout. The current layout is unchanged. Use a larger display.")
                 return false
             }
         }
@@ -215,10 +216,16 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
                             min(window.frame.minY, screen.visibleFrame.maxY - window.frame.height))))
             }
         }
-        let name = (active?.document as? TextDocument)?.displayName
-        showTabMessage(
-            GroupCommandController.title(layout) + ". " + (name.map { $0 + " in " } ?? "Focused ")
-                + groupLabel(model.focusedGroup) + ".")
+        if let name = (active?.document as? TextDocument)?.displayName {
+            showTabMessage(
+                String(
+                    format: "%@. %@ is in %@.", GroupCommandController.title(layout), name,
+                    groupLabel(model.focusedGroup)))
+        } else {
+            showTabMessage(
+                String(
+                    format: "%@. %@ is focused.", GroupCommandController.title(layout), groupLabel(model.focusedGroup)))
+        }
         return true
     }
     @discardableResult func openView(_ source: TabID, in slot: GroupSlot) -> TabID? {
@@ -228,7 +235,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         else { return nil }
         let name = (presentation(for: id)?.document as? TextDocument)?.displayName ?? "Document"
         showTabMessage(
-            (plan.created.isEmpty ? "Selected " : "Opened another view of ") + name + " in " + groupLabel(slot) + ".")
+            plan.created.isEmpty
+                ? String(format: "Selected %@ in %@.", name, groupLabel(slot))
+                : String(format: "Opened another view of %@ in %@.", name, groupLabel(slot)))
         return id
     }
     func moveTabs(_ ids: [TabID], target: TabID, to slot: GroupSlot) {
@@ -491,7 +500,10 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         if let active {
             active.showTransientStatus(message, seconds: 8, announce: true)
         } else {
-            groupSurfaces[model.focusedGroup]?.emptyStatus.stringValue = message
+            if let status = groupSurfaces[model.focusedGroup]?.emptyStatus {
+                status.stringValue = message
+                ControlPresentation.label(message, control: status)
+            }
             Announce.say(message, from: window)
         }
     }
