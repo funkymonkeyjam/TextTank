@@ -122,7 +122,17 @@ private final class DocumentTabBackground: NSView {
     var tabID: TabID?
     weak var strip: DocumentTabStrip?
     override func menu(for event: NSEvent) -> NSMenu? { tabID.flatMap { strip?.contextMenu(for: $0) } }
+    var active = false
     override func draw(_ dirtyRect: NSRect) {
+        if !active {
+            NSColor.selectedControlColor.setFill()
+            bounds.fill()
+            NSColor.labelColor.setStroke()
+            let outline = NSBezierPath(rect: bounds.insetBy(dx: 2, dy: 3))
+            outline.lineWidth = 1
+            outline.stroke()
+            return
+        }
         NSColor.controlAccentColor.withAlphaComponent(0.15).setFill()
         bounds.fill()
         NSColor.controlAccentColor.setFill()
@@ -216,11 +226,15 @@ final class DocumentTabStrip: NSView {
                 ([c.background, c.select, c.close] as [NSView]).forEach { row.addSubview($0) }
             }
             let active = host.model.activeTab?.id == tab.id, name = doc.displayName ?? "Untitled"
-            c.background.isHidden = !active
+            let selected = host.tabSelection.selected(in: host.model, group: host.model.focusedGroup).contains(tab.id)
+            c.background.active = active
+            c.background.isHidden = !selected
+            c.background.needsDisplay = true
             c.select.title = name + (doc.isDocumentEdited ? "  •" : "")
             c.select.font = .systemFont(ofSize: NSFont.systemFontSize, weight: active ? .semibold : .regular)
             c.select.toolTip = name
-            c.select.setAccessibilityValue(NSNumber(value: active))
+            c.select.setAccessibilityValue(NSNumber(value: selected))
+            c.select.setAccessibilitySelected(selected)
             c.select.setAccessibilityLabel(
                 doc.isDocumentEdited ? String(format: Strings.text("tabs.edited", "%@, edited"), name) : name)
             c.select.image = NSImage(
@@ -233,7 +247,8 @@ final class DocumentTabStrip: NSView {
                         : String(format: Strings.text("tabs.pinned", "%@, pinned"), name))
             }
             c.select.setAccessibilityHelp(
-                "Use the tab menu to pin or move this tab. Drag within its pinned or ordinary region to reorder.")
+                "Command-click to change selection. Shift-click to select a range. Use the tab menu to close, pin or move tabs."
+            )
             c.select.identifier = NSUserInterfaceItemIdentifier("tab." + tab.id.rawValue.uuidString)
             c.close.toolTip = String(format: Strings.text("tabs.close", "Close %@"), name)
             c.close.setAccessibilityLabel(c.close.toolTip)
@@ -330,8 +345,9 @@ final class DocumentTabStrip: NSView {
     }
     func contextMenu(for id: TabID) -> NSMenu? { host?.tabCommands.contextMenu(for: id) }
     func clickTab(_ id: TabID, modifiers: NSEvent.ModifierFlags = []) {
-        guard let host, let presentation = host.presentation(for: id) else { return }
-        host.activate(presentation)
+        let gesture: TabSelectionGesture =
+            modifiers.contains(.shift) ? .range : modifiers.contains(.command) ? .toggle : .plain
+        host?.selectTab(id, gesture: gesture)
     }
     @objc private func selectTab(_ sender: DocumentTabButton) {
         if let id = sender.tabID { clickTab(id) }

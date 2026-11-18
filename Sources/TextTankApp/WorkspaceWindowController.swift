@@ -16,6 +16,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         return host
     }
     private(set) var model = TabWorkspace()
+    private(set) var tabSelection = TabSelectionState()
     @MainActor private final class Entry {
         weak var presentation: EditorWindowController?
         init(_ value: EditorWindowController) { presentation = value }
@@ -42,6 +43,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     private var removingTabs = false
     private let emptyStatus = AnnouncingLabel(labelWithString: "")
     private var returnTab: TabID?
+    private var returnSelection: (TabSelectionState, TabWorkspace)?
     init() {
         let window = DocumentTabWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
@@ -116,16 +118,20 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         metadataChanged()
         if mounted == nil, window?.isVisible == true, let active { activate(active, focus: false, explicit: false) }
     }
-    func activate(_ presentation: EditorWindowController, focus: Bool = true, explicit: Bool = true) {
+    func activate(
+        _ presentation: EditorWindowController, focus: Bool = true, explicit: Bool = true,
+        preserveSelection: Bool = false
+    ) {
         if explicit { tabCommands.cancelReopen() }
         guard let document = presentation.document as? TextDocument, document.isOpen,
             entries[document.runtimeID]?.presentation === presentation,
             let tab = model.groups.flatMap(\.tabs).first(where: { $0.documentID == document.runtimeID }),
             window?.attachedSheet == nil || active === presentation
         else { return }
-        if explicit { returnTab = nil }
+        if explicit { endBackgroundCloseReturn() }
         let previous = active
         do { try model.activate(tab.id, openDocuments: openIDs) } catch { return }
+        if explicit && !preserveSelection { tabSelection.collapse(in: model) }
         if previous !== presentation { previous?.stopStatusTimer() }
         if mounted !== presentation.presentationRoot {
             window?.makeFirstResponder(nil)
@@ -164,10 +170,12 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             let tab = model.groups.flatMap(\.tabs).first(where: { $0.documentID == document.runtimeID })
         else { return }
         let wasActive = active === presentation
+        let before = model
         do { _ = try model.remove(tab.id, reviewed: true, openDocuments: openIDs) } catch {
             preconditionFailure("Invalid workspace removal")
         }
         entries.removeValue(forKey: document.runtimeID)
+        if !removingTabs { tabSelection.reconcile(from: before, to: model) }
         if removingTabs {
             if mounted === presentation.presentationRoot {
                 window?.makeFirstResponder(nil)
@@ -182,7 +190,11 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             if let back = returnTab, model.groups.flatMap(\.tabs).contains(where: { $0.id == back }) {
                 try? model.activate(back, openDocuments: openIDs)
             }
-            returnTab = nil
+            if let (selection, original) = returnSelection {
+                tabSelection = selection
+                tabSelection.reconcile(from: original, to: model)
+            }
+            endBackgroundCloseReturn()
             if let next = active {
                 activate(next, explicit: false)
             } else {
@@ -201,12 +213,37 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             let document = presentation.document as? TextDocument
         else { return }
         let back = model.activeTab?.id
+        let original = (tabSelection, model)
+        let wasSelected = tabSelection.selected(in: model, group: model.focusedGroup).contains(id)
         activate(presentation, explicit: false)
+        returnSelection = wasSelected ? nil : original
         returnTab = back == id ? nil : back
         document.requestTabClose(sender)
     }
     func closeActive(_ sender: Any?) { if let id = model.activeTab?.id { closeTab(id, sender: sender) } }
-    func endBackgroundCloseReturn() { returnTab = nil }
+    func endBackgroundCloseReturn() {
+        returnTab = nil
+        returnSelection = nil
+    }
+    func selectTab(_ id: TabID, gesture: TabSelectionGesture) {
+        guard !tabCommands.isBusy, window?.attachedSheet == nil else { return }
+        tabCommands.cancelReopen()
+        var next = model
+        do { try tabSelection.apply(id, gesture: gesture, workspace: &next, openDocuments: openIDs) } catch { return }
+        if next.activeTab?.id != model.activeTab?.id || gesture == .plain {
+            if let chosen = next.activeTab?.id, let p = presentation(for: chosen) {
+                activate(p, preserveSelection: true)
+            }
+        } else {
+            endBackgroundCloseReturn()
+            metadataChanged()
+        }
+    }
+    func restoreTabSelection(_ selection: TabSelectionState, from original: TabWorkspace) {
+        tabSelection = selection
+        tabSelection.reconcile(from: original, to: model)
+        metadataChanged()
+    }
     func presentation(for id: TabID) -> EditorWindowController? {
         guard let tab = model.groups.flatMap(\.tabs).first(where: { $0.id == id }) else { return nil }
         return entries[tab.documentID]?.presentation
@@ -258,7 +295,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     func replaceTabModel(_ value: TabWorkspace) throws {
         guard value.layout == .single else { throw TabModelError.invalid }
         try value.validate(openDocuments: openIDs)
+        let before = model
         model = value
+        tabSelection.reconcile(from: before, to: model)
         metadataChanged()
     }
     private(set) var lastTabMessage = ""
@@ -278,10 +317,10 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         }
     }
     func commitTabClose(_ plan: TabClosePlan, originalActive: TabID?, originalResponder: NSResponder?) {
-        let before = model
+        let before = model, selection = tabSelection
         tabCommands.prepareBulkHistory(before)
         removingTabs = true
-        returnTab = nil
+        endBackgroundCloseReturn()
         active?.stopStatusTimer()
         for id in plan.tabs {
             guard let tab = model.groups.flatMap(\.tabs).first(where: { $0.id == id }), let p = presentation(for: id),
@@ -315,7 +354,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             window?.nextResponder = NSApp
             window?.makeFirstResponder(nil)
         }
-        metadataChanged()
+        restoreTabSelection(selection, from: before)
         validateToolbar()
     }
     func cycle(_ direction: Int) {

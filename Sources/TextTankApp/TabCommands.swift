@@ -11,9 +11,11 @@ import EditorBridge
 @MainActor private final class TabMenuInvocation: NSObject {
     let command: TabCommand
     let targetID: TabID
-    init(_ command: TabCommand, _ targetID: TabID) {
+    let scope: TabTargetCapture?
+    init(_ command: TabCommand, _ targetID: TabID, scope: TabTargetCapture?) {
         self.command = command
         self.targetID = targetID
+        self.scope = scope
     }
 }
 @MainActor private final class TabSaveReply: NSObject {
@@ -88,10 +90,30 @@ import EditorBridge
         }
         return result
     }
-    func state(_ command: TabCommand, target: TabID?) -> (enabled: Bool, reason: String?) {
+    func capture(_ target: TabID?) -> TabTargetCapture? {
+        target.flatMap { try? TabTargetCapture(target: $0, workspace: host.model, selection: host.tabSelection) }
+    }
+    private func members(_ target: TabID, scope: TabTargetCapture?) -> Set<TabID> {
+        scope?.members(in: host.model) ?? [target]
+    }
+    private func closePlan(_ command: TabCommand, target: TabID, scope: TabTargetCapture?) -> TabClosePlan? {
+        if command == .close, members(target, scope: scope).count > 1 {
+            let chosen = members(target, scope: scope)
+            return try? TabClosePlan.selected(
+                host.model.groups.flatMap(\.tabs).filter { chosen.contains($0.id) }.map(\.id),
+                target: target, workspace: host.model, facts: facts())
+        }
+        return try? TabClosePlan.make(
+            command, target: target, workspace: host.model, facts: facts(),
+            keeping: command == .closeOthers ? scope?.keeping(in: host.model) : nil)
+    }
+    func state(_ command: TabCommand, target: TabID?, scope: TabTargetCapture? = nil) -> (
+        enabled: Bool, reason: String?
+    ) {
         if isBusy || isReopening || host.window?.attachedSheet != nil {
             return (false, "Wait for the current tab operation to finish.")
         }
+        if let scope, scope.members(in: host.model) == nil { return (false, "This tab is no longer open.") }
         if command == .reopen {
             return history.latest == nil ? (false, "There are no closed file tabs to reopen.") : (true, nil)
         }
@@ -105,8 +127,8 @@ import EditorBridge
             return host.model.canMoveTab(target, direction: command == .moveLeft ? -1 : 1)
                 ? (true, nil) : (false, "This tab is at the edge of its pinned or ordinary region.")
         }
-        if command.isBulkClose {
-            guard let plan = try? TabClosePlan.make(command, target: target, workspace: host.model, facts: facts()),
+        if command.isBulkClose || (command == .close && members(target, scope: scope).count > 1) {
+            guard let plan = closePlan(command, target: target, scope: scope),
                 !plan.tabs.isEmpty
             else {
                 return (
@@ -126,13 +148,13 @@ import EditorBridge
         ]
     }
     func contextMenu(for target: TabID) -> NSMenu {
-        let menu = NSMenu(title: "Tab")
+        let menu = NSMenu(title: "Tab"), scope = capture(target)
         for (index, section) in Self.sections.enumerated() {
             if index > 0 { menu.addItem(.separator()) }
             for command in section {
                 let item = menu.addItem(
                     title: command.title, action: #selector(invoke(_:)), target: self,
-                    representedObject: TabMenuInvocation(command, target))
+                    representedObject: TabMenuInvocation(command, target, scope: scope))
                 item.identifier = NSUserInterfaceItemIdentifier("tabs.command." + command.rawValue)
                 _ = validateMenuItem(item)
                 item.isEnabled = stateFor(item).enabled
@@ -145,39 +167,61 @@ import EditorBridge
             return (false, "This tab command is unavailable.")
         }
         guard tab(call.targetID) != nil else { return (false, "This tab is no longer open.") }
-        return state(call.command, target: call.targetID)
+        return state(call.command, target: call.targetID, scope: call.scope)
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         let s = stateFor(item)
         if let call = item.representedObject as? TabMenuInvocation {
-            item.title = title(call.command, target: call.targetID)
-            item.state = call.command == .pin && tab(call.targetID)?.isPinned == true ? .on : .off
+            item.title = title(call.command, target: call.targetID, scope: call.scope)
+            item.state = pinState(call.command, target: call.targetID, scope: call.scope)
         }
         item.toolTip = s.reason
         return s.enabled
     }
-    func title(_ command: TabCommand, target: TabID?) -> String {
-        if command == .pin, let target, tab(target)?.isPinned == true { return "Unpin Tab" }
+    private func pinState(_ command: TabCommand, target: TabID?, scope: TabTargetCapture?) -> NSControl.StateValue {
+        guard command == .pin, let target else { return .off }
+        let tabs = members(target, scope: scope).compactMap(tab)
+        let pinned = tabs.filter(\.isPinned).count
+        return pinned == 0 ? .off : pinned == tabs.count ? .on : .mixed
+    }
+    func title(_ command: TabCommand, target: TabID?, scope: TabTargetCapture? = nil) -> String {
+        guard let target else { return command.title }
+        let chosen = members(target, scope: scope).compactMap(tab)
+        if command == .close && chosen.count > 1 { return String(format: "Close %ld Tabs", chosen.count) }
+        if command == .pin {
+            let unpinned = chosen.filter { !$0.isPinned }.count
+            let count = unpinned == 0 ? chosen.count : unpinned
+            if count > 1 { return String(format: unpinned == 0 ? "Unpin %ld Tabs" : "Pin %ld Tabs", count) }
+            return unpinned == 0 && !chosen.isEmpty ? "Unpin Tab" : "Pin Tab"
+        }
         return command.title
     }
     func configure(_ item: NSMenuItem, command: TabCommand, target: TabID?) -> Bool {
-        let available = state(command, target: target)
-        item.title = title(command, target: target)
-        item.state = command == .pin && target.flatMap(tab)?.isPinned == true ? .on : .off
+        let scope = capture(target)
+        let available = state(command, target: target, scope: scope)
+        item.title = title(command, target: target, scope: scope)
+        item.state = pinState(command, target: target, scope: scope)
         item.toolTip = available.reason
         return available.enabled
     }
+    func performSelection(_ command: TabCommand, sender: Any? = nil) {
+        let target = host.model.activeTab?.id
+        perform(command, target: target, sender: sender, scope: capture(target))
+    }
     @objc private func invoke(_ item: NSMenuItem) {
         guard let call = item.representedObject as? TabMenuInvocation else { return }
-        perform(call.command, target: call.targetID, captured: true)
+        perform(call.command, target: call.targetID, captured: true, scope: call.scope)
     }
-    func perform(_ command: TabCommand, target: TabID?, captured: Bool = false, sender: Any? = nil) {
+    func perform(
+        _ command: TabCommand, target: TabID?, captured: Bool = false, sender: Any? = nil,
+        scope: TabTargetCapture? = nil
+    ) {
         if isReopening { cancelReopen() }
         if captured && (target == nil || tab(target!) == nil) {
             host.showTabMessage("This tab is no longer open. No document was changed.")
             return
         }
-        let available = state(command, target: target)
+        let available = state(command, target: target, scope: scope)
         guard available.enabled else {
             host.showTabMessage(available.reason ?? "This tab command is unavailable.")
             return
@@ -198,9 +242,17 @@ import EditorBridge
                 host.placeTab(id, in: group.slot, index: insertion, pinned: false)
             }
             created.showWindows()
-        case .close: host.performSingleTabClose(target, sender: sender)
-        case .closeOthers, .closeLeft, .closeRight, .closeGroup, .closeSaved: beginBulk(command, target: target)
-        case .pin: host.setPinnedTabs([target], target: target, pinned: tab(target)?.isPinned != true)
+        case .close:
+            if members(target, scope: scope).count > 1 {
+                if let plan = closePlan(command, target: target, scope: scope) { beginBulk(plan) }
+            } else {
+                host.performSingleTabClose(target, sender: sender)
+            }
+        case .closeOthers, .closeLeft, .closeRight, .closeGroup, .closeSaved:
+            if let plan = closePlan(command, target: target, scope: scope) { beginBulk(plan) }
+        case .pin:
+            let chosen = members(target, scope: scope)
+            host.setPinnedTabs(chosen, target: target, pinned: chosen.contains { tab($0)?.isPinned == false })
         case .moveLeft: host.moveTab(target, direction: -1)
         case .moveRight: host.moveTab(target, direction: 1)
         case .reveal: if let url = doc.fileURL { revealFiles([url]) }
@@ -222,10 +274,8 @@ import EditorBridge
             edited = doc.isDocumentEdited || doc.editor.modified
         }
     }
-    private func beginBulk(_ command: TabCommand, target: TabID) {
-        guard let plan = try? TabClosePlan.make(command, target: target, workspace: host.model, facts: facts()) else {
-            return
-        }
+    private func beginBulk(_ plan: TabClosePlan) {
+        let originalSelection = host.tabSelection, originalWorkspace = host.model
         let originalActive = host.model.activeTab?.id, originalResponder = host.window?.firstResponder
         var docs: [DocumentID: TextDocument] = [:]
         for id in plan.tabs { if let doc = document(id) { docs[doc.runtimeID] = doc } }
@@ -238,7 +288,10 @@ import EditorBridge
             defer {
                 self.isBusy = false
                 host.metadataChanged()
-                if !committed { host.restoreTabFocus(originalActive, responder: originalResponder) }
+                if !committed {
+                    host.restoreTabFocus(originalActive, responder: originalResponder)
+                    host.restoreTabSelection(originalSelection, from: originalWorkspace)
+                }
             }
             @MainActor func valid() -> Bool {
                 plan.isCurrent(workspace: host.model, facts: self.facts())

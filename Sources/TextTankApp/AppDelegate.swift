@@ -581,7 +581,7 @@ import AppKit
     }
     @objc func performTabCommand(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let command = TabCommand(rawValue: raw) else { return }
-        knownWorkspace?.tabCommands.perform(command, target: knownWorkspace?.model.activeTab?.id)
+        knownWorkspace?.tabCommands.performSelection(command, sender: sender)
     }
     @objc func nextDocumentTab(_ sender: Any?) { cycleDocumentTab(1) }
     @objc func previousDocumentTab(_ sender: Any?) { cycleDocumentTab(-1) }
