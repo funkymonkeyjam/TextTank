@@ -9,8 +9,8 @@ import AppKit
         NSApp.appearance =
             value.appearance == "system" ? nil : NSAppearance(named: value.appearance == "dark" ? .darkAqua : .aqua)
         for doc in NSDocumentController.shared.documents.compactMap({ $0 as? TextDocument }) {
-            let clones = doc.windowControllers.compactMap { ($0 as? EditorWindowController)?.secondary }
-            for editor in [doc.editor] + clones {
+            let views = doc.presentations.flatMap(\.views)
+            for editor in views.isEmpty ? [doc.editor] : views {
                 if let previous {
                     let info = editor.statusInfo
                     if previous.tabWidth != value.tabWidth || previous.useTabs != value.useTabs,

@@ -4,7 +4,7 @@ import NativeSearch
 import AppKit
 
 final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToolbarItemValidation,
-    NSMenuItemValidation, NSSearchFieldDelegate
+    NSMenuItemValidation, NSSearchFieldDelegate, NSSplitViewDelegate
 {
     let split = NSSplitView()
     let findField = NSSearchField()
@@ -160,6 +160,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
         if editor == nil { EditorServices.current?.settings?.apply(to: primaryEditor) }
         let root = presentationRoot
+        split.delegate = self
         split.isVertical = true
         split.dividerStyle = .thin
         split.addArrangedSubview(primaryEditor)
@@ -973,10 +974,33 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         secondary = clone
         split.addArrangedSubview(clone)
         split.adjustSubviews()
+        split.setPosition(split.bounds.width / 2, ofDividerAt: 0)
         split.layoutSubtreeIfNeeded()
         clone.layoutSubtreeIfNeeded()
         hostWindow?.makeFirstResponder(clone)
         refreshCloneToolbar()
+    }
+    func splitView(
+        _ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int
+    ) -> CGFloat { max(100, proposedMinimumPosition) }
+    func splitView(
+        _ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int
+    ) -> CGFloat { min(proposedMaximumPosition, splitView.bounds.width - 101) }
+    func splitView(_ splitView: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) {
+        guard splitView.subviews.count == 2 else {
+            splitView.subviews.first?.frame = splitView.bounds
+            return
+        }
+        let available = max(0, splitView.bounds.width - splitView.dividerThickness)
+        let left =
+            available >= 200
+            ? max(
+                100,
+                min(available - 100, splitView.subviews[0].frame.width + (splitView.bounds.width - oldSize.width) / 2))
+            : available / 2
+        splitView.subviews[0].frame = NSRect(x: 0, y: 0, width: left, height: splitView.bounds.height)
+        splitView.subviews[1].frame = NSRect(
+            x: left + splitView.dividerThickness, y: 0, width: available - left, height: splitView.bounds.height)
     }
     @objc func closeSplit(_ sender: Any?) {
         guard let clone = secondary else { return }

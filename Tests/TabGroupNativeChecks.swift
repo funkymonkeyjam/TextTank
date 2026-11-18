@@ -138,6 +138,10 @@ import NativeSearch
                 b.presentationRoot.bounds.insetBy(dx: -1, dy: -1).contains(rect) && !control.isHidden,
                 "T3 all essential Find controls fit 320x200 group: \(type(of:control))")
         }
+        print(
+            "T3 narrow geometry surface=\(surface.frame) root=\(b.presentationRoot.frame) split=\(b.split.frame) primary=\(b.primaryEditor.frame) clone=\(String(describing:b.secondary?.frame))"
+        )
+        fflush(stdout)
         check(
             b.split.frame.height >= 30 && b.primaryEditor.frame.width >= 100,
             "T3 minimum pane retains visible editor with Find")

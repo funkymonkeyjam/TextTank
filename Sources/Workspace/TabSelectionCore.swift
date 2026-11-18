@@ -12,6 +12,9 @@ package struct TabSelectionState: Equatable, Sendable {
         if let active = group.activeTab { result.insert(active) }
         return result
     }
+    package mutating func set(_ ids: Set<TabID>, in workspace: TabWorkspace, group: GroupSlot) {
+        groups[group] = ids.intersection(workspace.groups.first { $0.slot == group }?.tabs.map(\.id) ?? [])
+    }
     package mutating func collapse(in workspace: TabWorkspace, group: GroupSlot? = nil) {
         let slot = group ?? workspace.focusedGroup
         groups[slot] = Set(workspace.groups.first(where: { $0.slot == slot })?.activeTab.map { [$0] } ?? [])

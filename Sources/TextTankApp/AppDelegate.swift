@@ -64,8 +64,9 @@ import AppKit
             item.toolTip = state.reason
             return state.enabled
         case #selector(findNextShared(_:)), #selector(findPreviousShared(_:)),
-            #selector(nextDocumentTab(_:)), #selector(previousDocumentTab(_:)), #selector(showDocumentTabs(_:)):
+            #selector(nextDocumentTab(_:)), #selector(previousDocumentTab(_:)):
             return currentDocumentController != nil
+        case #selector(showDocumentTabs(_:)): return knownWorkspace?.presentations.isEmpty == false
         default:
             return true
         }
@@ -78,11 +79,9 @@ import AppKit
             },
             setLanguage: { [weak self] id in self?.currentDocument?.noteAppliedLanguage(id) })
         controller.siblingViews = { editor in
-            for document in NSDocumentController.shared.documents {
-                for case let window as EditorWindowController in document.windowControllers
-                where window.views.contains(where: { $0 === editor }) {
-                    return window.views.filter { $0 !== editor }
-                }
+            for case let document as TextDocument in NSDocumentController.shared.documents {
+                let views = document.presentations.flatMap(\.views)
+                if views.contains(where: { $0 === editor }) { return views.filter { $0 !== editor } }
             }
             return []
         }
@@ -519,6 +518,7 @@ import AppKit
         view.addItem(
             title: Strings.text("toolbar.customize", "Customize Toolbar…"),
             action: #selector(NSWindow.runToolbarCustomizationPalette(_:)))
+        workspaceWindow.groupCommands.install(in: view)
         let languageRoot = NSMenuItem()
         languageRoot.title = "Language"
         languageRoot.submenu = languages.menu()
@@ -604,7 +604,7 @@ import AppKit
         panel.choose = { [weak host] id in
             guard let host,
                 let presentation = host.presentations.first(where: {
-                    ($0.document as? TextDocument)?.runtimeID.rawValue.uuidString == id
+                    $0.tabID?.rawValue.uuidString == id
                 })
             else { throw FormFailure.documentChanged }
             host.show(presentation, sender: nil)
@@ -617,7 +617,11 @@ import AppKit
             guard let document = presentation.document as? TextDocument, document.isOpen else { return nil }
             let path = document.fileURL?.deletingLastPathComponent().path
             let title = document.displayName + (document.isDocumentEdited ? " •" : "") + (path.map { " — \($0)" } ?? "")
-            return ChoicePanel.Row(id: document.runtimeID.rawValue.uuidString, title: title)
+            guard let id = presentation.tabID,
+                let group = presentation.host.model.groups.first(where: { $0.tabs.contains { $0.id == id } })
+            else { return nil }
+            return ChoicePanel.Row(
+                id: id.rawValue.uuidString, title: title + " — " + presentation.host.groupLabel(group.slot))
         }
     }
     /// Full paths, because the Recovery folder is inside the hidden Library folder.

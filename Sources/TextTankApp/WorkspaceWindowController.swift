@@ -42,6 +42,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     private var savingArrangement = false
     private var saveScheduled = false
     lazy var tabCommands = TabCommandController(host: self)
+    lazy var groupCommands = GroupCommandController(host: self)
+    let layoutPicker = NSPopUpButton(frame: .zero, pullsDown: true)
     private var removingTabs = false
     private var returnTab: TabID?
     private var returnSelection: (TabSelectionState, TabWorkspace)?
@@ -62,9 +64,22 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         content.frame = root.bounds
         content.autoresizingMask = [.width, .height]
         root.addSubview(content)
-        groupContainer.frame = content.bounds
-        groupContainer.autoresizingMask = [.width, .height]
+        groupContainer.translatesAutoresizingMaskIntoConstraints = false
+        layoutPicker.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(groupContainer)
+        content.addSubview(layoutPicker)
+        layoutPicker.setAccessibilityLabel("Editor layout")
+        layoutPicker.menu = groupCommands.layoutMenu(picker: true)
+        NSLayoutConstraint.activate([
+            layoutPicker.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
+            layoutPicker.topAnchor.constraint(equalTo: content.topAnchor, constant: 3),
+            layoutPicker.heightAnchor.constraint(equalToConstant: 30),
+            layoutPicker.widthAnchor.constraint(equalToConstant: 160),
+            groupContainer.topAnchor.constraint(equalTo: content.topAnchor, constant: 36),
+            groupContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            groupContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            groupContainer.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+        ])
         let first = EditorGroupSurface(slot: .first, host: self)
         groupSurfaces[.first] = first
         groupContainer.configure(.single, surfaces: [first])
@@ -204,6 +219,28 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         else { return nil }
         showTabMessage("Opened another view in \(groupLabel(slot)).")
         return id
+    }
+    func moveTabs(_ ids: [TabID], target: TabID, to slot: GroupSlot) {
+        guard !tabCommands.isBusy, !tabCommands.isReopening, window?.attachedSheet == nil,
+            let plan = try? model.planMove(ids, target: target, to: slot, openDocuments: openIDs),
+            applyGroupChange(plan)
+        else { return }
+        tabSelection.set(Set(ids.compactMap { plan.resolved[$0] }), in: model, group: slot)
+        metadataChanged()
+        groupSurfaces[slot]?.strip.revealOrganizationChange(plan.resolved[target] ?? target)
+        let name =
+            (presentation(for: plan.resolved[target] ?? target)?.document as? TextDocument)?.displayName ?? "Document"
+        showTabMessage(
+            ids.count == 1
+                ? "Moved \(name) to \(groupLabel(slot))."
+                : String(format: "Moved %ld tabs to %@.", ids.count, groupLabel(slot)))
+    }
+    func closeEditorGroup(_ slot: GroupSlot) {
+        guard !tabCommands.isBusy, !tabCommands.isReopening, window?.attachedSheet == nil,
+            let plan = try? model.planCloseGroup(slot, openDocuments: openIDs), applyGroupChange(plan)
+        else { return }
+        showTabMessage(
+            "Closed Group \(slot.rawValue). All documents remain open. \(groupLabel(model.focusedGroup)) is focused.")
     }
     @discardableResult func applyGroupChange(_ plan: TabGroupChange) -> Bool {
         guard !isMutatingGroups, plan.isCurrent(workspace: model) else { return false }
@@ -345,6 +382,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         guard !tabCommands.isBusy, window?.attachedSheet == nil else { return false }
         tabCommands.cancelReopen()
         var next = model
+        if let group = model.groups.first(where: { $0.tabs.contains { $0.id == id } }) {
+            try? next.focusGroup(group.slot, openDocuments: openIDs)
+        }
         do { try tabSelection.apply(id, gesture: gesture, workspace: &next, openDocuments: openIDs) } catch {
             return false
         }
@@ -377,7 +417,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         do {
             let changed = try model.setPinned(ids, in: group.slot, pinned: pinned, openDocuments: openIDs)
             metadataChanged()
-            tabStrip.revealOrganizationChange(target)
+            groupSurfaces[group.slot]?.strip.revealOrganizationChange(target)
             if changed.count == 1, let name = (presentation(for: changed[0])?.document as? TextDocument)?.displayName {
                 showTabMessage(String(format: pinned ? "%@ is pinned." : "%@ is unpinned.", name))
             } else if !changed.isEmpty {
@@ -399,7 +439,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             return
         }
         metadataChanged()
-        tabStrip.revealOrganizationChange(id)
+        groupSurfaces[model.groups.first(where: { $0.tabs.contains { $0.id == id } })!.slot]?.strip
+            .revealOrganizationChange(id)
         if let group = model.groups.first(where: { $0.tabs.contains { $0.id == id } }),
             let position = group.tabs.firstIndex(where: { $0.id == id }),
             let name = (presentation(for: id)?.document as? TextDocument)?.displayName
@@ -486,6 +527,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             window?.representedURL = nil
             window?.isDocumentEdited = false
         }
+        layoutPicker.menu = groupCommands.layoutMenu(picker: true)
         tabStrips.forEach { $0.refresh() }
         groupSurfaces.values.forEach { $0.refresh() }
     }

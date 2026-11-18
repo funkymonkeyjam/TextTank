@@ -47,6 +47,7 @@ import EditorBridge
         board.clearContents()
         return board.setString(path, forType: .string)
     }
+    private var liveHistoryIDs: [UUID: DocumentID] = [:]
     private var fingerprints: [UUID: (Task<String?, Never>, TabDiskCapture)] = [:]
     private var reopenTask: Task<Void, Never>?
     private var readTask: Task<TabDiskRead, Error>?
@@ -81,7 +82,7 @@ import EditorBridge
     func facts() -> [DocumentID: TabCloseFact] {
         var result: [DocumentID: TabCloseFact] = [:]
         for presentation in host.presentations {
-            guard let doc = presentation.document as? TextDocument else { continue }
+            guard let doc = presentation.document as? TextDocument, result[doc.runtimeID] == nil else { continue }
             let unavailable =
                 doc.diskURL.map { (try? WorkspaceStore.signature(ofRegularFileAt: $0, maximumBytes: Int.max)) == nil }
                 ?? false
@@ -160,6 +161,9 @@ import EditorBridge
                 item.isEnabled = stateFor(item).enabled
             }
         }
+        let groups = NSMenuItem(title: "Editor Groups", action: nil, keyEquivalent: "")
+        groups.submenu = host.groupCommands.contextMenu(for: target)
+        menu.addItem(groups)
         return menu
     }
     private func stateFor(_ item: NSMenuItem) -> (enabled: Bool, reason: String?) {
@@ -398,14 +402,18 @@ import EditorBridge
         record(group.tabs[index], group: position.0, index: position.1, document: doc, url: url)
     }
     private func record(_ tab: DocumentTab, group: GroupSlot, index: Int, document: TextDocument, url: URL) {
-        let editor = document.activeEditor
+        let editor = host.presentation(for: tab.id)?.activeEditor ?? document.activeEditor
         let record = ClosedTabRecord(
             url: url, group: group, index: index, pinned: tab.isPinned, anchor: editor.selectionAnchor,
             caret: editor.selectionCaret, firstVisibleLine: editor.firstVisibleLine, fingerprint: nil)
         let capture = document.diskURL.flatMap { try? TabDiskCapture($0) }
-        if let old = history.push(record), let job = fingerprints.removeValue(forKey: old.id) {
-            job.0.cancel()
-            job.1.cancelQueued()
+        liveHistoryIDs[record.id] = document.runtimeID
+        if let old = history.push(record) {
+            liveHistoryIDs.removeValue(forKey: old.id)
+            if let job = fingerprints.removeValue(forKey: old.id) {
+                job.0.cancel()
+                job.1.cancelQueued()
+            }
         }
         guard let capture else { return }
         let task = Task.detached(priority: .utility) { await TabDiskIO.shared.fingerprint(capture) }
@@ -430,6 +438,7 @@ import EditorBridge
     /// descriptor/job here so repeated existing-file reopens cannot grow a queue.
     @discardableResult private func consumeHistory(_ id: UUID) -> Bool {
         guard history.consume(id) else { return false }
+        liveHistoryIDs.removeValue(forKey: id)
         if let job = fingerprints.removeValue(forKey: id) {
             job.0.cancel()
             job.1.cancelQueued()
@@ -443,6 +452,7 @@ import EditorBridge
             job.1.cancelQueued()
         }
         fingerprints.removeAll()
+        liveHistoryIDs = [:]
         history = ClosedTabHistory()
     }
     func cancelReopen() {
@@ -470,10 +480,46 @@ import EditorBridge
         host.showTabMessage("The file is already open. Its existing tab was selected.")
         return true
     }
+    private func reopenLive(_ record: ClosedTabRecord, in slot: GroupSlot, document doc: TextDocument) -> Bool {
+        guard doc.isOpen else { return false }
+        if let existing = host.model.groups.first(where: { $0.slot == slot })?.tabs.first(where: {
+            $0.documentID == doc.runtimeID
+        }), let p = host.presentation(for: existing.id) {
+            guard consumeHistory(record.id) else { return false }
+            host.show(p, sender: nil)
+            host.showTabMessage("The live document’s existing view was selected in \(host.groupLabel(slot)).")
+            return true
+        }
+        guard let source = host.model.groups.flatMap(\.tabs).first(where: { $0.documentID == doc.runtimeID }),
+            let id = host.openView(source.id, in: slot), let p = host.presentation(for: id)
+        else { return false }
+        host.placeTab(id, in: slot, index: record.index, pinned: record.pinned)
+        host.show(p, sender: nil)
+        p.primaryEditor.restoreClosedTabView(
+            anchor: record.anchor, caret: record.caret, firstVisibleLine: record.firstVisibleLine)
+        _ = consumeHistory(record.id)
+        host.showTabMessage("Reopened the live document in \(host.groupLabel(slot)).")
+        return true
+    }
     private func reopen() {
         guard let record = history.latest else { return }
         let slot = host.model.groups.contains { $0.slot == record.group } ? record.group : host.model.focusedGroup
+        // Identity lookup precedes path resolution, fingerprint waits and disk reads.
+        if let runtimeID = liveHistoryIDs[record.id],
+            let doc = host.presentations.compactMap({ $0.document as? TextDocument }).first(where: {
+                $0.runtimeID == runtimeID && $0.isOpen
+            })
+        {
+            _ = reopenLive(record, in: slot, document: doc)
+            return
+        }
         let diskURL = TextDocument.canonicalDiskURL(record.url)
+        if let doc = host.presentations.compactMap({ $0.document as? TextDocument }).first(where: {
+            $0.diskURL == diskURL && $0.isOpen
+        }) {
+            _ = reopenLive(record, in: slot, document: doc)
+            return
+        }
         if focusExisting(record, in: slot, diskURL: diskURL) { return }
         isReopening = true
         reopenGeneration += 1

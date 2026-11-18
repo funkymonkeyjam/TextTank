@@ -622,11 +622,15 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
         super.init(window: window)
         // The list is about the document; when its split pane closes it follows the remaining view.
         retirementObserver = NotificationCenter.default.addObserver(
-            forName: .TTEditorWillRetire, object: editor, queue: nil
+            forName: .TTEditorWillRetire, object: nil, queue: nil
         ) { [weak self] note in
             precondition(Thread.isMainThread)
             let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor
-            MainActor.assumeIsolated { self?.editor = successor }
+            let retiring = note.object as? TTEditor
+            MainActor.assumeIsolated {
+                guard let self, self.editor === retiring else { return }
+                self.editor = successor
+            }
         }
         window.title = "Function List"
         window.listedInWindowMenu = true
