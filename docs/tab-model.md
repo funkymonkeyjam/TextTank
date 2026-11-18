@@ -78,3 +78,36 @@ Reveal in Finder and Copy File Path remain explicit captured-file actions.
 Native menus retain real disabled items with reasons and standard accessibility
 Show Menu; new tab commands have no new key equivalents. Physical keyboard and
 VoiceOver observation remain separate from owned automated native checks.
+
+## Stage 2 organisation and transient selection
+
+Pinning and reorder are delivered before multiple selection. Pin/unpin and in-group
+reorder mutate only tab values, keep the pinned prefix, and preserve active/focused
+identities and the editor responder. Batch pin/unpin retains visible relative order.
+New tabs remain unpinned; close and reopen retain the Stage 1 transaction and history.
+
+Selection is a transient Foundation value per group, separate from the version-1
+layout codec. Live active membership is mandatory. Plain navigation collapses it;
+modifier clicks toggle or form the range from active. Temporary document review and
+registration do not silently erase it; a cancelled bulk operation restores its capture.
+Context menus capture clicked identity and selected identities once. Missing members
+are dropped, a missing clicked identity is a no-op, and newly selected tabs never join.
+Close/Pin use the captured set only when the clicked tab belongs to it. Close Other
+keeps the captured selection plus clicked tab, so an outside click cannot close chosen
+work. Directional, location, New Right and Move commands retain clicked-only scope.
+File Close, Command-W and each tab's X remain single-tab actions (DS-D2).
+
+Pointer reorder uses a local mouse gesture with a drop indicator, no system dragging
+session or pasteboard. Nothing changes until a valid in-strip drop; Escape, outside
+drop, stale membership/order or disappearance cancels. Keyboard Move uses the same
+core path. Native checks use synthetic strip positions; physical dragging is unverified.
+Stable controls are retained while visual and accessibility child order agree.
+
+Owner clarification, 18 November 2026: "Show the active tab; announce the moved tab’s
+position." When active and moved tabs cannot both fit, active visibility takes priority
+without changing editor focus. Both are revealed when space permits, and every move
+announces the tab's position. This resolves the Stage 2 brief's competing visibility
+sentences. Pin is a visible symbol; selected-inactive tabs have an outline distinct
+from the active tab's weight/underline. Semantic colors, labels, disabled reasons and
+announcements meet DS-14/20-23/40-43/60-63/65/70-74/80-85. No new shortcuts,
+toolbar controls, budgets, saved schema, group UI or Stage 3 commands are introduced.
