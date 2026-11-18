@@ -33,7 +33,7 @@ Only the mounted active tab in a visible, non-minimized host runs recurring stat
 
 ## Empty state and persistence boundary
 
-Closing the final tab keeps the host open and TextTank running, without creating an untitled document. The empty host offers New/Open in the toolbar and menu; document commands are disabled. Its red close button still invokes Quit. Stage 1 adds the context commands, bulk close and reopen history described below. Pin/reorder/multiselection UI, additional visible groups and a layout picker remain excluded.
+Closing the final tab keeps the host open and TextTank running, without creating an untitled document. The empty host offers New/Open in the toolbar and menu; document commands are disabled. Its red close button still invokes Quit. Stage 1 adds the context commands, bulk close and reopen history described below. Stage 2 adds pin/reorder/multiselection UI below; additional visible groups and a layout picker remain excluded.
 
 WorkspaceLayoutState requires version 1, layout, focused slot and ordered group states. Each group has its slot, active-tab index and ordered tab records containing DocumentID, pinned flag, UTF-8 anchor/caret and first visible line. Validation rejects unknown or missing version, wrong counts/order/slots, duplicate documents per group, broken pin prefix, invalid active/focused references and negative offsets. No text or bytes are stored. All four layout shapes round-trip in codec tests. Nothing writes this value to disk, and existing session/recovery schema and golden fixture bytes stay unchanged.
 
@@ -48,7 +48,7 @@ DS-91/92/97/100 apply. Context commands capture TabID without selecting a tab;
 Window-menu equivalents use the active tab. Every route, including File Close
 and tab close controls, reaches the same command owner and revalidates identity.
 New Tab to Right respects the pinned prefix; ordinary New still appends. Pin UI,
-reordering, multi-selection, group UI and saved layouts are later stages.
+reordering and multi-selection are added in Stage 2 below; group UI and saved layouts remain later stages.
 
 Core close plans contain one immutable model snapshot, ordered eligible tabs,
 deduplicated final-view documents and their modified subset. Pinned tabs are

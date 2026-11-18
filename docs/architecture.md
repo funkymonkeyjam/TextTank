@@ -418,7 +418,7 @@ EditorBridge is now a separate AppKit Objective-C++ framework owning TTEditor an
 ported user lexer. It links Scintilla and Lexilla; it has no dependency on NativeSearch
 or the remaining Swift application target. The application embeds both native frameworks.
 
-TextTankCore owns the27 Foundation model/codec/storage/search-planning sources listed once
+TextTankCore owns the29 Foundation model/codec/storage/search-planning sources listed once
 in scripts/core_sources.py. It depends on NativeSearch and system Foundation/Darwin/CryptoKit/
 zlib interfaces, with no EditorBridge, AppKit or executable dependency. Package access and
 explicit value constructors form the cross-target API; fields retain setter restrictions,
@@ -462,6 +462,25 @@ The workspace uses `.none` document transition animation (DS-D7). New, Open, swi
 
 `TabCommandController` captures TabID for context menus and shares dispatch and validation with Window, File Close and tab controls. Disabled items retain a reason; stale targets and reopen outcomes are visible and announced (DS-20–26, DS-62, DS-72–73). Review sheets name the document and tab count, default to Save, and mark Discard destructive (DS-40–43). No new shortcuts or toolbar controls are introduced.
 
-The in-memory `ClosedTabHistory.capacity` is 20 and stores only URL, placement, view offsets and a disk fingerprint. `TabDiskIO` hashes captured regular-file descriptors off the main actor in cancellable chunks; record identity prevents late publication. Reopen reads current disk bytes through the standard captured document factory, revalidates identity, clamps UTF-8 offsets and placement, and consumes missing records with feedback. It neither persists history nor retains discarded draft text. Locate in Workspace is deferred: adding bounded navigation and ancestor expansion to the lazy browser exceeds a small select-by-URL change. No Stage 2 UI is present.
+The in-memory `ClosedTabHistory.capacity` is 20 and stores only URL, placement, view offsets and a disk fingerprint. `TabDiskIO` hashes captured regular-file descriptors off the main actor in cancellable chunks; record identity prevents late publication. Reopen reads current disk bytes through the standard captured document factory, revalidates identity, clamps UTF-8 offsets and placement, and consumes missing records with feedback. It neither persists history nor retains discarded draft text. Locate in Workspace is deferred: adding bounded navigation and ancestor expansion to the lazy browser exceeds a small select-by-URL change.
 
 Reopen compares the captured canonical disk URL, including display aliases, with existing documents' pinned disk locations. Before publishing asynchronous bytes it revalidates the display path's canonical binding and the captured file signature, then repeats the existing-file lookup. The normal captured factory also checks its constructed document's pinned diskURL against the expected captured target before loading bytes, registration or window publication, closing the final alias-lookup race. An alias retarget or a Save As in another existing tab cannot produce a duplicate document or bind captured bytes to a different file. Tests hold the actual disk actor from the test client to make these races deterministic; production I/O and cancellation guards remain unchanged.
+
+
+### Stage 2 tab organisation and selection
+
+`TabOrganizationCore` changes pin/order values atomically while preserving active/focused identities and
+the contiguous pinned prefix. The strip previews a local drag without changing model, text or pasteboard;
+keyboard Move uses the same reorder mutation. Overflow reveals active plus moved tabs when both fit;
+otherwise active visibility takes priority and the moved position is announced, per owner clarification.
+
+`TabSelectionState` is transient per-group state, outside the saved layout/session/recovery codecs.
+The active view is always selected; plain navigation collapses selection, Command toggles, Shift ranges
+from active. Selected-inactive tabs have a semantic-color outline and actual AX selected state.
+`TabTargetCapture` snapshots menu identities; vanished members are pruned and a vanished clicked target
+invalidates the set. Selection changes cannot broaden an already-open menu. Context and Window Close/Pin
+use that set, while File Close/Command-W/tab X remain single-tab actions (DS-D2). Close Other preserves
+all captured selected tabs plus its clicked target, excluding pinned tabs from implicit close. Explicit
+selected Close includes pins and reuses Stage 1 review/save/revalidate/commit. Abort restores selection
+and focus; disappearance collapses selection. No group UI, cross-group drag, search or persistence is added.
+See [tab-model](tab-model.md) for the settled interaction and DS rule mapping.
