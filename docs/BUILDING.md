@@ -12,7 +12,7 @@ The document-check executable drives many owned document-window transitions with
 
 `scripts/test-documents.sh` compiles one native check executable, then always runs three
 required processes: the existing document checks and configuration input accessibility
-checks (`--configuration-input-accessibility`), plus Stage 0 workspace checks (`--tab-workspace`). The workspace process copies the byte-identical compiled check client into an owned app bundle with the selected product document-type metadata, a private bundle identity and no Finder-handler rank. It uses an owned NSApplication event loop for native save/close/full-screen behavior; the two prior processes retain their original CLI lifecycle. Each retains its own watchdog, status
+checks (`--configuration-input-accessibility`), plus Stage 0 workspace checks (`--tab-workspace`). The workspace process copies the byte-identical compiled check client into an owned app bundle with the selected product document-type metadata, a private bundle identity and no Finder-handler rank. It uses an owned NSApplication event loop for native save/close/full-screen behavior and explicitly foregrounds that owned client before the unchanged key-window/full-screen assertions. Cooperative `NSApp.activate()` can decline foreground activation even on an available desktop; the fixture uses AppKit's explicit foreground call, while production activation stays unchanged. The two prior processes retain their original CLI lifecycle. Each retains its own watchdog, status
 and normal completion marker; a failure in either fails acceptance. Both processes create
 their owned support directory and document controller before `NSApplication`, check
 singleton identity, and use the same accessory activation policy. The complete test

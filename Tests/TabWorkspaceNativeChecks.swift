@@ -499,7 +499,10 @@ import NativeSearch
         }
         print("T0 OWNED ACTIVATION", Bundle.main.bundleURL.path, fullWindow.windowNumber)
         fflush(stdout)
-        NSApp.activate()
+        // This owned CLI client needs explicit foreground setup. Cooperative activate()
+        // may leave it inactive even on an available desktop; the native key-window and
+        // full-screen assertions below still require their original real states/deadlines.
+        NSApp.activate(ignoringOtherApps: true)
         fullWindow.makeKeyAndOrderFront(nil)
         fullWindow.makeMain()
         NativeWindowEvents.wait("owned native full-screen window becomes key") { fullWindow.isKeyWindow }
