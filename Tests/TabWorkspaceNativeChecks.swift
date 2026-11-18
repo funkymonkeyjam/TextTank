@@ -255,6 +255,7 @@ import NativeSearch
             try Data("original".utf8).write(to: closeURL)
             let closing = try DocumentFactory.openCaptured(
                 WorkspaceStore.captureRegularFile(closeURL), from: closeURL, display: false)
+            defer { closing.close() }
             closing.editor.text = "owned changed bytes"
             b.showWindows()
             let closeControl = try requireValue(
@@ -286,6 +287,12 @@ import NativeSearch
                 closing.close()
             } else {
                 NativeWindowEvents.wait("T0 reviewed document closes") { closing.isClosed }
+                print(
+                    "T0 native close completion", decision, closing.isOpen, closing.isClosed,
+                    String(describing: window.attachedSheet),
+                    window.attachedSheet?.contentView.map(descendants)?.compactMap { ($0 as? NSTextField)?.stringValue }
+                        ?? [])
+                try require(closing.isClosed, "T0 native reviewed close must finish before the next scenario")
                 let expected = decision == "Save" ? "owned changed bytes" : "original"
                 check(
                     closing.isClosed && pb.isActiveTab && b.editor.text == "line B"

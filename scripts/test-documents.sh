@@ -9,5 +9,17 @@ suite_run document-checks harness/logs/document-checks.log build/tests/document-
 # Both native processes are required, even if the first fails. Share compilation,
 # not AppKit state; neither result can replace the other's completion marker.
 suite_run design-settings-input-checks harness/logs/design-settings-input-checks.log build/tests/document-checks --configuration-input-accessibility
-suite_run tab-workspace-checks harness/logs/tab-workspace-checks.log build/tests/document-checks --tab-workspace
+workspace_client=build/tests/document-checks
+if [[ "$SUITE_BROKEN" != *" tab-workspace-checks "* ]]; then
+  if workspace_client=$(python3 scripts/prepare-native-check-app.py --executable build/tests/document-checks --application "$APP_PATH"); then
+    :
+  else
+    preparation_status=$?
+    suite_record "BUILD-FAILED" "tab-workspace-checks" "native app context preparation exit $preparation_status"
+    SUITE_BROKEN="$SUITE_BROKEN tab-workspace-checks "
+  fi
+fi
+# The copied client is byte-identical and remains under build/tests: normal process exit,
+# watchdog, completion summary and all five actual signed-image proofs remain mandatory.
+suite_run tab-workspace-checks harness/logs/tab-workspace-checks.log "$workspace_client" --tab-workspace
 suite_finish
