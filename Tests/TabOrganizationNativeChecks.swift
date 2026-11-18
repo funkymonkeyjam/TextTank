@@ -229,6 +229,165 @@ import NativeSearch
                 "T2 scenarioB exact disk bytes " + String(describing: choice))
             reset()
         }
+        // Native selection and immutable menu capture, using the actual tab controls.
+        let sa = try saved("selected-A"), sb = try saved("selected-B"), sc = try saved("selected-C"),
+            sd = try saved("selected-D"), se = try saved("selected-E")
+        sc.showWindows()
+        let selectionResponder = window.firstResponder
+        let revision = sc.editor.revision
+        func selectedIDs() -> Set<TabID> { host.tabSelection.selected(in: host.model, group: .first) }
+        func click(_ doc: TextDocument, _ modifiers: NSEvent.ModifierFlags = []) {
+            host.tabStrip.clickTab(id(doc), modifiers: modifiers)
+        }
+        click(sa, .command)
+        click(se, .command)
+        check(selectedIDs() == [id(sa), id(sc), id(se)], "T2 native Command noncontiguous selection")
+        check(
+            host.active?.document === sc && window.firstResponder === selectionResponder,
+            "T2 selecting inactive tabs preserves actual editing responder")
+        check(
+            sc.editor.revision == revision && !sc.isDocumentEdited && sc.editor.text == "disk",
+            "T2 selection leaves revision text and dirty unchanged")
+        let selectedButton = try button(sa), unselectedButton = try button(sb)
+        check(
+            (selectedButton.accessibilityValue() as? NSNumber)?.boolValue == true
+                && selectedButton.isAccessibilitySelected() && !unselectedButton.isAccessibilitySelected(),
+            "T2 actual AX selected value distinguishes inactive selection")
+        let selectedBackground = descendants(host.tabStrip).first {
+            $0 !== selectedButton && $0.frame.minX == selectedButton.frame.minX - 8
+                && $0.frame.width == selectedButton.frame.width + 48
+        }
+        check(selectedBackground?.isHidden == false, "T2 selected inactive background is exposed for noncolour outline")
+        let capturedMenu = commands.contextMenu(for: id(sa))
+        check(
+            try item(capturedMenu, .close).title == "Close 3 Tabs" && item(capturedMenu, .pin).title == "Pin 3 Tabs",
+            "T2 selection context counts")
+        main.update()
+        check(
+            try item(main, .close).title == "Close 3 Tabs" && item(main, .pin).title == "Pin 3 Tabs",
+            "T2 main selection counts match context")
+        let outsideMenu = commands.contextMenu(for: id(sb))
+        check(
+            try item(outsideMenu, .close).title == "Close Tab" && item(outsideMenu, .pin).title == "Pin Tab"
+                && selectedIDs() == [id(sa), id(sc), id(se)],
+            "T2 outside context is single and does not change selection")
+        commands.perform(.pin, target: id(sa))
+        let mixedMenu = commands.contextMenu(for: id(sc))
+        check(
+            try item(mixedMenu, .pin).title == "Pin 2 Tabs" && item(mixedMenu, .pin).state == .mixed,
+            "T2 mixed pin counts only views that change")
+        try invoke(mixedMenu, .pin)
+        let allPinned = commands.contextMenu(for: id(sc))
+        check(
+            try item(allPinned, .pin).title == "Unpin 3 Tabs" && item(allPinned, .pin).state == .on,
+            "T2 all pinned selection checks and counts")
+        check(
+            host.model.groups[0].tabs.prefix(3).map(\.id) == [id(sa), id(sc), id(se)]
+                && selectedIDs() == [id(sa), id(sc), id(se)] && window.firstResponder === selectionResponder,
+            "T2 multi pin keeps visible order selection and editor focus")
+        try invoke(allPinned, .pin)
+        click(sc)
+        click(se, .shift)
+        check(
+            selectedIDs() == [id(sc), id(se)] && host.active?.document === sc,
+            "T2 Shift range follows current order and preserves active anchor")
+        click(sc, .command)
+        check(
+            selectedIDs() == [id(se)] && host.active?.document === se,
+            "T2 Command active chooses other selected actual document")
+        click(sa, .command)
+        click(sc, .command)
+        host.cycle(-1)
+        check(selectedIDs() == [host.model.activeTab!.id], "T2 Next Previous clears selection")
+        click(sc)
+        click(sa, .command)
+        click(se, .command)
+        // Changing the selection after a menu is built cannot broaden its target set.
+        click(sb)
+        try invoke(capturedMenu, .pin)
+        check(
+            host.model.groups[0].tabs.filter(\.isPinned).map(\.id) == [id(sa), id(sc), id(se)]
+                && selectedIDs() == [id(sb)], "T2 old menu pins captured identities rather than later selection")
+        let outsideBefore = commands.contextMenu(for: id(sd))
+        click(sc)
+        click(sa, .command)
+        let keepMenu = commands.contextMenu(for: id(sd))
+        try invoke(keepMenu, .closeOthers)
+        waitClose()
+        check(
+            sa.isOpen && sc.isOpen && se.isOpen && sd.isOpen && sb.isClosed,
+            "T2 outside Close Other keeps captured selection clicked target and excluded pin")
+        check(selectedIDs() == [id(sa), id(sc)], "T2 Close Other preserves selected survivors")
+        // A removed member is pruned; the clicked target disappearing disables the whole set.
+        let staleMembers = commands.contextMenu(for: id(sa))
+        sc.close()
+        check(selectedIDs() == [host.model.activeTab!.id], "T2 selected disappearance collapses selection")
+        _ = commands.validateMenuItem(try item(staleMembers, .close))
+        check(try item(staleMembers, .close).title == "Close Tab", "T2 captured selection prunes gone member count")
+        sa.close()
+        check(
+            !commands.validateMenuItem(try item(staleMembers, .close)), "T2 gone clicked target disables captured set")
+        _ = outsideBefore
+        reset()
+        // Pinned selected close is explicit and transactional across dirty documents.
+        for decision in [TabCloseDecision.save, .discard, .cancel] {
+            let x = try saved("multi-pin-\(decision)"), y = try saved("multi-dirty-\(decision)"),
+                keep = try saved("multi-keep-\(decision)")
+            commands.perform(.pin, target: id(x))
+            x.editor.text = "pin changed"
+            y.editor.text = "other changed"
+            click(y)
+            click(x, .command)
+            let selection = selectedIDs(), originalActive = host.model.activeTab?.id, focus = window.firstResponder
+            var reviews: [DocumentID] = []
+            commands.decisionHandler = { prompt, reply in
+                reviews.append(prompt.documentID)
+                reply(decision)
+            }
+            commands.saveHandler = { doc, reply in
+                doc.save(to: doc.fileURL!, ofType: doc.fileType!, for: .saveOperation) { reply($0) }
+            }
+            let menu = commands.contextMenu(for: id(x))
+            check(try item(menu, .close).title == "Close 2 Tabs", "T2 selected explicit close counts pin")
+            try invoke(menu, .close)
+            waitClose()
+            if decision == .cancel {
+                check(
+                    x.isOpen && y.isOpen && keep.isOpen && selectedIDs() == selection
+                        && host.model.activeTab?.id == originalActive && window.firstResponder === focus,
+                    "T2 selected close Cancel retains every tab selection active and responder")
+                check(reviews == [x.runtimeID], "T2 Cancel stops review without saves")
+            } else {
+                check(
+                    x.isClosed && y.isClosed && keep.isOpen && reviews == [x.runtimeID, y.runtimeID],
+                    "T2 selected close reviews and closes pinned plus ordinary only")
+                check(selectedIDs() == [id(keep)], "T2 successful selected close collapses to surviving active")
+            }
+            check(
+                try Data(contentsOf: x.fileURL!) == Data((decision == .save ? "pin changed" : "disk").utf8)
+                    && Data(contentsOf: y.fileURL!) == Data((decision == .save ? "other changed" : "disk").utf8),
+                "T2 selected close exact disk bytes \(decision)")
+            reset()
+        }
+        // Main menu and File Close differ intentionally in scope (DS-D2).
+        let mx = try saved("main-close-X"), my = try saved("main-close-Y"), mz = try saved("main-close-Z")
+        click(my)
+        click(mx, .command)
+        let mxID = id(mx), myID = id(my)
+        host.closeActive(nil)
+        check(
+            my.isClosed && mx.isOpen && mz.isOpen && !ids().contains(myID) && ids().contains(mxID),
+            "T2 File Close remains single even with selection")
+        click(mx)
+        click(mz, .command)
+        main.update()
+        check(try item(main, .close).title == "Close 2 Tabs", "T2 main close carries current selected count")
+        try invoke(main, .close)
+        waitClose()
+        check(
+            mx.isClosed && mz.isClosed && host.model.groups[0].tabs.isEmpty,
+            "T2 main selected Close uses same bulk path")
+        reset()
         var crowded: [TextDocument] = []
         for _ in 0..<14 { crowded.append(DocumentFactory.makeUntitled()) }
         let activeDoc = crowded.last!, moved = crowded[crowded.count - 2]
