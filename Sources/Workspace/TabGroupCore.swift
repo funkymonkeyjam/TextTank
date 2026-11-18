@@ -28,19 +28,30 @@ package struct TabGroupChange: Sendable {
     package func isCurrent(workspace: TabWorkspace) -> Bool { workspace == snapshot }
 }
 
+package struct TabGroupExtent: Equatable, Sendable {
+    package let width: Double
+    package let height: Double
+    package init(width: Double, height: Double) {
+        self.width = width
+        self.height = height
+    }
+    package static let zero = TabGroupExtent(width: 0, height: 0)
+}
+
 package enum TabGroupGeometry {
-    package static let minimumPane = CGSize(width: 320, height: 200)
+    package static let minimumPane = TabGroupExtent(width: 320, height: 200)
     package static func minimumContent(
-        _ layout: LayoutKind, normal: CGSize = CGSize(width: 800, height: 500), pickerHeight: CGFloat = 36,
-        divider: CGFloat = 1
-    ) -> CGSize {
-        let columns: CGFloat = layout == .twoColumns || layout == .grid2x2 ? 2 : 1
-        let rows: CGFloat = layout == .twoRows || layout == .grid2x2 ? 2 : 1
-        return CGSize(
+        _ layout: LayoutKind, normal: TabGroupExtent = TabGroupExtent(width: 800, height: 500),
+        pickerHeight: Double = 36,
+        divider: Double = 1
+    ) -> TabGroupExtent {
+        let columns: Double = layout == .twoColumns || layout == .grid2x2 ? 2 : 1
+        let rows: Double = layout == .twoRows || layout == .grid2x2 ? 2 : 1
+        return TabGroupExtent(
             width: max(normal.width, columns * minimumPane.width + (columns - 1) * divider),
             height: max(normal.height, rows * minimumPane.height + (rows - 1) * divider + pickerHeight))
     }
-    package static func fits(_ required: CGSize, available: CGSize) -> Bool {
+    package static func fits(_ required: TabGroupExtent, available: TabGroupExtent) -> Bool {
         [required.width, required.height, available.width, available.height].allSatisfy { $0.isFinite && $0 >= 0 }
             && required.width <= available.width && required.height <= available.height
     }

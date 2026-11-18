@@ -161,16 +161,17 @@ import Foundation
                 "T3 empty focused group is valid nil target")
             check(
                 TabGroupGeometry.minimumContent(.grid2x2, normal: .zero, pickerHeight: 36, divider: 1)
-                    == CGSize(width: 641, height: 437), "T3 pure Grid minimum includes chrome exactly once")
+                    == TabGroupExtent(width: 641, height: 437), "T3 pure Grid minimum includes chrome exactly once")
             check(
-                TabGroupGeometry.minimumContent(.single) == CGSize(width: 800, height: 500),
+                TabGroupGeometry.minimumContent(.single) == TabGroupExtent(width: 800, height: 500),
                 "T3 normal Single minimum preserved")
             check(
-                !TabGroupGeometry.fits(CGSize(width: 800, height: 500), available: CGSize(width: 799, height: 500)),
+                !TabGroupGeometry.fits(
+                    TabGroupExtent(width: 800, height: 500), available: TabGroupExtent(width: 799, height: 500)),
                 "T3 screen refusal compares exact required content")
             check(
                 !TabGroupGeometry.fits(
-                    CGSize(width: 800, height: 500), available: CGSize(width: Double.nan, height: 500)),
+                    TabGroupExtent(width: 800, height: 500), available: TabGroupExtent(width: Double.nan, height: 500)),
                 "T3 nonfinite screen input refuses")
         }
     }
