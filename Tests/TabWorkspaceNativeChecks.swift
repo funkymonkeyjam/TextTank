@@ -32,6 +32,11 @@ import NativeSearch
         let composition = AppDelegate()
         composition.installEditorServices()
         defer { EditorServices.current = services }
+        let cold = DocumentFactory.makeUntitled(display: false)
+        check(
+            cold.isOpen && cold.editor.window == nil && cold.presentation?.statusTimerActive == false,
+            "T0-R13 an unmounted first tab is open without visible status work")
+        cold.close()
         let a = DocumentFactory.makeUntitled(), b = DocumentFactory.makeUntitled(), c = DocumentFactory.makeUntitled()
         defer {
             [a, b, c].forEach { $0.close() }
@@ -164,6 +169,33 @@ import NativeSearch
         check(
             !pa.validateMenuItem(revert) && !a.validateMenuItem(revert),
             "T0-R7 active adapter preserves native untitled Revert validation")
+        pa.goToLine(nil)
+        let lineForm = try requireValue(
+            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.GoToLine" }, "T0 captured Go to Line")
+        lineForm.window.makeFirstResponder(nil)
+        try DesignSettingsChecks.field("goToLine.line", lineForm.window).stringValue = "4"
+        b.showWindows()
+        try DesignSettingsChecks.button("goToLine.go", lineForm.window).performClick(nil)
+        check(
+            pa.isActiveTab && clone.statusInfo.line == 4
+                && (window.firstResponder as? NSView)?.isDescendant(of: clone) == true,
+            "T0-R12 captured Go to Line reveals and focuses A after switching to B")
+        let saveTarget = DocumentFactory.makeUntitled()
+        saveTarget.editor.text = "Owned unsaved Save As fixture"
+        b.showWindows()
+        saveTarget.saveAs(nil)
+        spinUntil("T0 captured inactive Save As sheet") { window.attachedSheet is NSSavePanel }
+        let savePanel = try requireValue(window.attachedSheet as? NSSavePanel, "T0 captured Save As")
+        check(
+            savePanel.sheetParent === window && saveTarget.presentation?.isActiveTab == true,
+            "T0-R6 native Save As attaches to the shared host and reveals its captured inactive document")
+        savePanel.cancel(nil)
+        spinUntil("T0 captured Save As cancellation") { window.attachedSheet == nil }
+        check(
+            saveTarget.isOpen && saveTarget.fileURL == nil && saveTarget.editor.text == "Owned unsaved Save As fixture",
+            "T0-R6 native Save As Cancel preserves unsaved bytes and document lifetime")
+        saveTarget.close()
+        a.showWindows()
         let buttons = descendants(host.tabStrip).compactMap { $0 as? NSButton }
         let tab = try requireValue(buttons.first { $0.toolTip == a.displayName }, "T0 stable tab")
         let close = try requireValue(buttons.first { $0.toolTip == "Close Workspace A" }, "T0 close target")
@@ -186,7 +218,24 @@ import NativeSearch
         let wide = tab.frame.width
         window.setContentSize(NSSize(width: 800, height: 600))
         window.contentView?.layoutSubtreeIfNeeded()
-        check(tab.frame.width <= wide && tab.frame.width > 0, "T0-R9 tabs shrink within the available row")
+        let extras = (0..<2).map { _ in DocumentFactory.makeUntitled() }
+        defer { extras.forEach { $0.close() } }
+        window.contentView?.layoutSubtreeIfNeeded()
+        let stripScroll = try requireValue(
+            descendants(host.tabStrip).compactMap { $0 as? NSScrollView }.first, "T0 tab overflow scroll")
+        check(
+            tab.frame.width < wide && tab.frame.width >= 130
+                && stripScroll.documentView!.frame.width <= stripScroll.contentSize.width + 1,
+            "T0-R9 five tabs shrink before horizontal overflow")
+        let overflowTabs = (0..<3).map { _ in DocumentFactory.makeUntitled() }
+        defer { overflowTabs.forEach { $0.close() } }
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            stripScroll.documentView!.frame.width > stripScroll.contentSize.width
+                && descendants(host.tabStrip).contains { $0 === tab },
+            "T0-R9/10 minimum-width tabs overflow while surviving native controls retain identity")
+        (extras + overflowTabs).forEach { $0.close() }
+        a.showWindows()
         var terminate = 0
         let prior = RuntimeEnvironment.dependencies
         var effects = RuntimeEnvironment.current
@@ -208,12 +257,28 @@ import NativeSearch
                 && host.validateToolbarItem(EditorToolbarCommand.open.makeItem())
                 && !host.validateToolbarItem(EditorToolbarCommand.find.makeItem()),
             "T0-R22 empty host enables New/Open and disables document commands")
+        RuntimeEnvironment.dependencies = effects
+        window.standardWindowButton(.closeButton)?.performClick(nil)
+        RuntimeEnvironment.dependencies = prior
+        check(
+            terminate == 2 && host.model.activeTab == nil && window.isVisible,
+            "T0-R18/22 the empty workspace red close still invokes injected Quit")
         check(
             !EditorLifetime.isOpen(editor) && !EditorLifetime.isOpen(clone),
             "T0-R20 retained closed editors never remain valid")
-        let reopened = DocumentFactory.makeUntitled()
+        let identityURL = root.appendingPathComponent("same-path-runtime-identity.txt")
+        try Data("owned identity fixture".utf8).write(to: identityURL)
+        let original = try DocumentFactory.openCaptured(
+            WorkspaceStore.captureRegularFile(identityURL), from: identityURL, display: false)
+        let originalID = original.runtimeID, originalEditor = original.editor
+        original.close()
+        let reopened = try DocumentFactory.openCaptured(
+            WorkspaceStore.captureRegularFile(identityURL), from: identityURL)
         defer { reopened.close() }
-        check(reopened.runtimeID != a.runtimeID, "T0-R20 reopened document has a fresh runtime identity")
+        check(
+            reopened.runtimeID != originalID && !EditorLifetime.isOpen(originalEditor)
+                && reopened.fileURL == identityURL,
+            "T0-R20 reopening the same path has fresh runtime identity and never revives a retained old editor")
         // Observe actual system transition notifications, separate from physical input certification.
         let fullWindow = try requireValue(reopened.presentation?.hostWindow, "T0 full-screen host")
         var entered = false, exited = false
