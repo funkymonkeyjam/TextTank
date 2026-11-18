@@ -14,13 +14,18 @@ final class TabDiskCapture: @unchecked Sendable {
         guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         var info = stat()
         guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else {
-            Darwin.close(fd); throw WorkspaceError.unsafeLocation
+            Darwin.close(fd)
+            throw WorkspaceError.unsafeLocation
         }
-        signature = FileSignature(info); queued = fd
+        signature = FileSignature(info)
+        queued = fd
     }
     func take() -> Int32? {
-        lock.lock(); defer { lock.unlock() }
-        let result = queued; queued = nil; return result
+        lock.lock()
+        defer { lock.unlock() }
+        let result = queued
+        queued = nil
+        return result
     }
     func cancelQueued() { if let fd = take() { Darwin.close(fd) } }
     deinit { cancelQueued() }
@@ -43,8 +48,11 @@ actor TabDiskIO {
         let capture = try TabDiskCapture(url)
         let result = try scan(capture, collecting: true)
         let s = capture.signature
-        return TabDiskRead(data: result.data, digest: result.digest, signature: s,
-            modificationDate: Date(timeIntervalSinceReferenceDate: Double(s.modifiedSeconds) - Date.timeIntervalBetween1970AndReferenceDate + Double(s.modifiedNanoseconds) / 1_000_000_000),
+        return TabDiskRead(
+            data: result.data, digest: result.digest, signature: s,
+            modificationDate: Date(
+                timeIntervalSinceReferenceDate: Double(s.modifiedSeconds) - Date.timeIntervalBetween1970AndReferenceDate
+                    + Double(s.modifiedNanoseconds) / 1_000_000_000),
             writable: FileManager.default.isWritableFile(atPath: url.path))
     }
     private func scan(_ capture: TabDiskCapture, collecting: Bool) throws -> (digest: String, data: Data) {
@@ -52,16 +60,23 @@ actor TabDiskIO {
         defer { Darwin.close(fd) }
         try Task.checkCancellation()
         var before = stat()
-        guard fstat(fd, &before) == 0, FileSignature(before) == capture.signature else { throw WorkspaceError.invalid("The file changed while it was being read. Try again.") }
+        guard fstat(fd, &before) == 0, FileSignature(before) == capture.signature else {
+            throw WorkspaceError.invalid("The file changed while it was being read. Try again.")
+        }
         var hash = SHA256(), data = Data(), total: Int64 = 0
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
             try Task.checkCancellation()
             let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
-            if count < 0 { if errno == EINTR { continue }; throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
             if count == 0 { break }
             total += Int64(count)
-            guard total <= capture.signature.size else { throw WorkspaceError.invalid("The file changed while it was being read. Try again.") }
+            guard total <= capture.signature.size else {
+                throw WorkspaceError.invalid("The file changed while it was being read. Try again.")
+            }
             buffer.withUnsafeBytes { bytes in
                 let chunk = UnsafeRawBufferPointer(rebasing: bytes[0..<count])
                 hash.update(bufferPointer: chunk)
