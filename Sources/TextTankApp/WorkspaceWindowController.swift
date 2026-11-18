@@ -21,6 +21,10 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         init(_ value: EditorWindowController) { presentation = value }
     }
     private var entries: [DocumentID: Entry] = [:]
+    var acceptsDocumentCreation: Bool {
+        if let current = EditorServices.current?.workspaceHost { return current === self }
+        return Self.fallback === self
+    }
     var presentations: [EditorWindowController] {
         model.groups.flatMap(\.tabs).compactMap { entries[$0.documentID]?.presentation }
     }

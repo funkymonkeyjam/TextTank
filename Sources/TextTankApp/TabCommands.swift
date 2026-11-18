@@ -210,16 +210,16 @@ import EditorBridge
         var stamps = docs.mapValues(Stamp.init)
         isBusy = true
         host.metadataChanged()
-        Task { @MainActor [weak self] in
+        Task { @MainActor [weak self, host = self.host] in
             guard let self else { return }
             var committed = false
             defer {
                 self.isBusy = false
-                self.host.metadataChanged()
-                if !committed { self.host.restoreTabFocus(originalActive, responder: originalResponder) }
+                host.metadataChanged()
+                if !committed { host.restoreTabFocus(originalActive, responder: originalResponder) }
             }
             func valid() -> Bool {
-                plan.isCurrent(workspace: self.host.model, facts: self.facts())
+                plan.isCurrent(workspace: host.model, facts: self.facts())
                     && docs.allSatisfy { id, doc in doc.isOpen && Stamp(doc) == stamps[id] }
             }
             var decisions: [DocumentID: TabCloseDecision] = [:]
@@ -237,7 +237,7 @@ import EditorBridge
                     }
                 }
                 if decision == .cancel {
-                    self.host.showTabMessage("Closing tabs was cancelled. No tabs were saved or closed.")
+                    host.showTabMessage("Closing tabs was cancelled. No tabs were saved or closed.")
                     return
                 }
                 decisions[id] = decision
@@ -262,7 +262,7 @@ import EditorBridge
                 guard error == nil, doc.isOpen, !self.modified(doc), doc.editor.revision == before.revision,
                     doc.format == before.format
                 else {
-                    self.host.showTabMessage(
+                    host.showTabMessage(
                         String(
                             format:
                                 "The document “%@” could not be saved or its save was cancelled. No tabs were closed. Earlier completed saves remain saved.",
@@ -275,9 +275,9 @@ import EditorBridge
                 self.changedPlan()
                 return
             }
-            self.host.commitTabClose(plan, originalActive: originalActive, originalResponder: originalResponder)
+            host.commitTabClose(plan, originalActive: originalActive, originalResponder: originalResponder)
             committed = true
-            self.host.showTabMessage(
+            host.showTabMessage(
                 plan.tabs.count == 1 ? "Closed 1 tab." : String(format: "Closed %ld tabs.", plan.tabs.count))
         }
     }
@@ -379,7 +379,7 @@ import EditorBridge
         let token = reopenGeneration, snapshot = host.model
         let pending = fingerprints[record.id]?.0
         host.showTabMessage(String(format: "Reopening “%@”…", record.url.lastPathComponent))
-        reopenTask = Task { @MainActor [weak self] in
+        reopenTask = Task { @MainActor [weak self, host = self.host] in
             guard let self else { return }
             defer {
                 if self.reopenGeneration == token {
@@ -397,10 +397,11 @@ import EditorBridge
                 let read = try await task.value
                 try Task.checkCancellation()
                 guard self.reopenGeneration == token, self.history.latest?.id == record.id,
-                    self.sameStructure(self.host.model, snapshot)
+                    self.sameStructure(host.model, snapshot)
                 else { return }
                 guard (try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max)) == read.signature
                 else { throw WorkspaceError.invalid("The file changed while reopening. Try again.") }
+                guard host.acceptsDocumentCreation else { return }
                 self.publishingReopen = true
                 defer { self.publishingReopen = false }
                 let document = try DocumentFactory.openCaptured(
@@ -409,13 +410,13 @@ import EditorBridge
                         modificationDate: read.modificationDate), from: record.url, display: false)
                 document.editor.readOnly = !read.writable
                 guard
-                    let id = self.host.model.groups.flatMap(\.tabs).first(where: { $0.documentID == document.runtimeID }
+                    let id = host.model.groups.flatMap(\.tabs).first(where: { $0.documentID == document.runtimeID }
                     )?.id
                 else {
                     document.close()
                     return
                 }
-                self.host.placeTab(id, in: slot, index: record.index, pinned: record.pinned)
+                host.placeTab(id, in: slot, index: record.index, pinned: record.pinned)
                 document.editor.restoreClosedTabView(
                     anchor: record.anchor, caret: record.caret, firstVisibleLine: record.firstVisibleLine)
                 _ = self.history.consume(record.id)
@@ -432,18 +433,18 @@ import EditorBridge
                 } else {
                     message = String(format: "Reopened “%@”.", record.url.lastPathComponent)
                 }
-                self.host.showTabMessage(message)
+                host.showTabMessage(message)
             } catch {
                 guard self.reopenGeneration == token, self.history.latest?.id == record.id else { return }
                 if error is CancellationError { return }
                 if error.isFileNotFound {
                     _ = self.history.consume(record.id)
-                    self.host.showTabMessage(
+                    host.showTabMessage(
                         String(
                             format: "“%@” is no longer at its file path. Nothing was opened.",
                             record.url.lastPathComponent))
                 } else {
-                    self.host.showTabMessage(
+                    host.showTabMessage(
                         String(
                             format: "“%@” could not be reopened. No document was changed. %@",
                             record.url.lastPathComponent, error.localizedDescription))
