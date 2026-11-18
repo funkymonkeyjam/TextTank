@@ -383,17 +383,23 @@ import EditorBridge
         a.layout == b.layout && a.groups.count == b.groups.count
             && zip(a.groups, b.groups).allSatisfy { $0.slot == $1.slot && $0.tabs == $1.tabs }
     }
+    var hasPendingDiskRead: Bool { readTask != nil }
+    private func focusExisting(_ record: ClosedTabRecord, in slot: GroupSlot, diskURL: URL) -> Bool {
+        guard
+            let existing = host.model.groups.first(where: { $0.slot == slot })?.tabs.first(where: {
+                document($0.id)?.diskURL == diskURL
+            }), let presentation = host.presentation(for: existing.id)
+        else { return false }
+        _ = consumeHistory(record.id)
+        host.show(presentation, sender: nil)
+        host.showTabMessage("The file is already open. Its existing tab was selected.")
+        return true
+    }
     private func reopen() {
         guard let record = history.latest else { return }
         let slot = host.model.groups.contains { $0.slot == record.group } ? record.group : host.model.focusedGroup
-        if let existing = host.model.groups.first(where: { $0.slot == slot })?.tabs.first(where: {
-            document($0.id)?.fileURL?.standardizedFileURL == record.url.standardizedFileURL
-        }), let presentation = host.presentation(for: existing.id) {
-            _ = consumeHistory(record.id)
-            host.show(presentation, sender: nil)
-            host.showTabMessage("The file is already open. Its existing tab was selected.")
-            return
-        }
+        let diskURL = TextDocument.canonicalDiskURL(record.url)
+        if focusExisting(record, in: slot, diskURL: diskURL) { return }
         isReopening = true
         reopenGeneration += 1
         let token = reopenGeneration, snapshot = host.model
@@ -411,7 +417,7 @@ import EditorBridge
             let oldFingerprint = await pending?.value ?? record.fingerprint
             do {
                 try Task.checkCancellation()
-                let url = record.url.resolvingSymlinksInPath()
+                let url = diskURL
                 let task = Task.detached(priority: .userInitiated) { try await TabDiskIO.shared.read(url) }
                 self.readTask = task
                 let read = try await task.value
@@ -419,11 +425,13 @@ import EditorBridge
                 guard self.reopenGeneration == token, self.history.latest?.id == record.id,
                     self.sameStructure(host.model, snapshot)
                 else { return }
-                guard (try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max)) == read.signature
+                guard TextDocument.canonicalDiskURL(record.url) == url,
+                    (try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max)) == read.signature
                 else { throw WorkspaceError.invalid("The file changed while reopening. Try again.") }
                 guard host.acceptsDocumentCreation else { return }
                 self.publishingReopen = true
                 defer { self.publishingReopen = false }
+                if self.focusExisting(record, in: slot, diskURL: url) { return }
                 let document = try DocumentFactory.openCaptured(
                     CapturedFileRead(
                         data: read.data, sample: FileSample(digest: read.digest, signature: nil),

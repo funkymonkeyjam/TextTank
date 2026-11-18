@@ -4,6 +4,15 @@ import AppKit
 import EditorBridge
 import NativeSearch
 
+// A test-client-only actor extension holds real disk reads off main. No product
+// I/O is replaced: queued reads use the actual signed producer after release.
+extension TabDiskIO {
+    fileprivate func holdForTabCommandCheck(entered: DispatchSemaphore, release: DispatchSemaphore) {
+        entered.signal()
+        release.wait()
+    }
+}
+
 @MainActor private final class TabCommandCheckDelegate: NSObject, NSApplicationDelegate {
     var launched: (() -> Void)?
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
@@ -400,6 +409,113 @@ import NativeSearch
             app.currentDocument === openAgain && openAgain.editor.text == "keep existing dirty"
                 && NSDocumentController.shared.documents.count == n && commands.history.records.isEmpty,
             "T1 existing destination focuses without reload or duplicate")
+        reset()
+        for direction in 0..<2 {
+            let canonical = root.appendingPathComponent("alias-canonical-\(direction).txt")
+            let alias = root.appendingPathComponent("alias-link-\(direction).txt")
+            try Data("one disk file".utf8).write(to: canonical)
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: canonical)
+            let closedURL = direction == 0 ? alias : canonical
+            let existingURL = direction == 0 ? canonical : alias
+            let closed = try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(canonical), from: closedURL)
+            check(
+                closed.diskURL == TextDocument.canonicalDiskURL(canonical) && closed.fileURL == closedURL,
+                "V1-01 alias fixture preserves display URL and captured canonical disk identity")
+            closed.close()
+            let existing = try DocumentFactory.openCaptured(
+                WorkspaceStore.captureRegularFile(canonical), from: existingURL)
+            existing.editor.text = "existing dirty alias target"
+            let count = NSDocumentController.shared.documents.count
+            commands.perform(.reopen, target: nil)
+            waitOpen()
+            check(
+                app.currentDocument === existing && existing.editor.text == "existing dirty alias target"
+                    && NSDocumentController.shared.documents.count == count,
+                "V1-01 alias and canonical reopen focuses existing dirty file without duplicate in either direction")
+            check(
+                commands.history.records.isEmpty && commands.pendingFingerprintCount == 0
+                    && existing.fileURL == existingURL,
+                "V1-01 existing alias consumes history/jobs and preserves display path")
+            reset()
+        }
+        @MainActor func holdDiskWorker() -> (Task<Void, Never>, DispatchSemaphore) {
+            let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+            let task = Task.detached {
+                await TabDiskIO.shared.holdForTabCommandCheck(entered: entered, release: release)
+            }
+            spinUntil("V1-01 owned disk actor held off main") { entered.wait(timeout: .now()) == .success }
+            return (task, release)
+        }
+        do {
+            let original = root.appendingPathComponent("rebind-original.txt"),
+                replacement = root.appendingPathComponent("rebind-replacement.txt"),
+                alias = root.appendingPathComponent("rebind-alias.txt")
+            try Data("old target".utf8).write(to: original)
+            try Data("new target".utf8).write(to: replacement)
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: original)
+            let closed = try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(original), from: alias)
+            closed.close()
+            spinUntil("V1-01 alias close fingerprint ready") { commands.history.latest?.fingerprint != nil }
+            let recordID = commands.history.latest?.id
+            let (held, release) = holdDiskWorker()
+            defer {
+                release.signal()
+                held.cancel()
+            }
+            commands.perform(.reopen, target: nil)
+            spinUntil("V1-01 captured real disk read queued") { commands.hasPendingDiskRead }
+            try FileManager.default.removeItem(at: alias)
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: replacement)
+            release.signal()
+            waitOpen()
+            check(
+                NSDocumentController.shared.documents.isEmpty && commands.history.latest?.id == recordID
+                    && host.lastTabMessage.contains("changed while reopening"),
+                "V1-01 retargeted alias rejects captured old bytes before creating or consuming")
+            check(
+                try Data(contentsOf: original) == Data("old target".utf8)
+                    && Data(contentsOf: replacement) == Data("new target".utf8),
+                "V1-01 alias rejection preserves both actual disk files")
+            commands.perform(.reopen, target: nil)
+            waitOpen()
+            check(
+                app.currentDocument?.editor.text == "new target"
+                    && app.currentDocument?.diskURL == TextDocument.canonicalDiskURL(replacement)
+                    && app.currentDocument?.fileURL == alias && commands.history.records.isEmpty,
+                "V1-01 retry binds current bytes to the current alias target")
+        }
+        reset()
+        do {
+            let closed = try saved("late-existing-file", "old disk")
+            closed.close()
+            spinUntil("V1-01 late-file close fingerprint ready") { commands.history.latest?.fingerprint != nil }
+            let live = DocumentFactory.makeUntitled()
+            live.editor.text = "saved late"
+            let count = NSDocumentController.shared.documents.count
+            let (held, release) = holdDiskWorker()
+            defer {
+                release.signal()
+                held.cancel()
+            }
+            commands.perform(.reopen, target: nil)
+            spinUntil("V1-01 read queued before another tab Save As") { commands.hasPendingDiskRead }
+            var done = false, saveError: Error?
+            live.save(to: closed.fileURL!, ofType: TextDocument.plainTextType, for: .saveAsOperation) {
+                saveError = $0
+                done = true
+            }
+            spinUntil("V1-01 other tab Save As completed") { done }
+            check(
+                saveError == nil && live.diskURL == TextDocument.canonicalDiskURL(closed.fileURL!),
+                "V1-01 existing tab acquires captured path without model structure change")
+            live.editor.text = "keep late unsaved text"
+            release.signal()
+            waitOpen()
+            check(
+                app.currentDocument === live && live.editor.text == "keep late unsaved text"
+                    && NSDocumentController.shared.documents.count == count && commands.history.records.isEmpty,
+                "V1-01 post-read existing-file check preserves dirty Save As tab without duplicate")
+        }
         reset()
         for i in 0...ClosedTabHistory.capacity {
             let closed = try saved("consumed-job-\(i)")
