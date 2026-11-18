@@ -24,6 +24,11 @@ suite_run bridge-checks harness/logs/bridge-checks.log build/tests/bridge-checks
 suite_build "module-contract-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/ModuleContractChecks.swift -o build/tests/module-contract-checks
 suite_run module-contract-checks harness/logs/module-contract-checks.log build/tests/module-contract-checks
 
+suite_build "tab-core-layering" swiftc -typecheck "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabCoreChecks.swift
+suite_run tab-core-layering harness/logs/tab-core-layering.log /bin/echo "PASS TabCore imports canonical Foundation-only Core"
+suite_build "tab-core-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabCoreChecks.swift -o build/tests/tab-core-checks
+suite_run tab-core-checks harness/logs/tab-core-checks.log build/tests/tab-core-checks
+
 suite_script scripts/test-documents.sh
 
 # The Foundation-only macro core must keep compiling without AppKit. Its checks
