@@ -120,7 +120,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// Per-view wiring shared by the primary view and a clone.
     private func wire(_ editor: TTEditor) {
         editor.onFocus = { [weak self, weak editor] in
-            guard let self, !self.isRetired, !self.host.isMutatingGroups, let editor else { return }
+            // App activation can deliver late focus notifications from hidden or sibling
+            // views. Only the mounted editor owning the actual native responder may route.
+            guard let self, !self.isRetired, !self.host.isMutatingGroups, self.isPresented,
+                let editor, editor.window === self.hostWindow,
+                let responder = self.hostWindow?.firstResponder as? NSView,
+                responder.isDescendant(of: editor)
+            else { return }
             if self.host.active !== self { self.host.tabCommands.cancelReopen() }
             self.host.activate(self, focus: false, explicit: false, preserveSelection: true)
             self.lastEditor = editor
@@ -174,7 +180,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             precondition(Thread.isMainThread)
             MainActor.assumeIsolated {
 
-                guard let self, !self.isRetired, !self.host.isMutatingGroups,
+                guard let self, !self.isRetired, !self.host.isMutatingGroups, self.isPresented,
                     let responder = hostWindow.firstResponder
                 else { return }
                 let view = responder as? NSView

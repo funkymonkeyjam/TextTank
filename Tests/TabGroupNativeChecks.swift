@@ -156,6 +156,7 @@ import Darwin
         try groupCases(host: host, app: app, root: root)
         try advancedCases(host: host, app: app, root: root)
         try repair1Cases(host: host, app: app)
+        try repair3FocusCases(host: host, app: app)
     }
     private static func wait(_ label: String, _ condition: () -> Bool) {
         spinUntil(label) {
@@ -870,6 +871,107 @@ import Darwin
         try host.model.validate(
             openDocuments: Set(NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.runtimeID }))
         reset()
+    }
+
+    /// Native activation regressions remain in Stage 1/2. These replay the observed late
+    /// callback boundary across all four mounted groups and verify genuine native focus too.
+    private static func repair3FocusCases(host: WorkspaceWindowController, app: AppDelegate) throws {
+        let window = host.window!, commands = host.tabCommands
+        func reset() {
+            commands.isTerminating = true
+            NSDocumentController.shared.documents.forEach { $0.close() }
+            commands.isTerminating = false
+            commands.clearHistory()
+            _ = host.setEditorLayout(.single)
+        }
+        reset()
+        defer { reset() }
+        check(host.setEditorLayout(.grid2x2), "R3 four-group focus layout")
+        let slots: [GroupSlot] = [.first, .second, .third, .fourth]
+        var visible: [EditorWindowController] = [], hidden: [EditorWindowController] = []
+        var documents: [TextDocument] = []
+        for slot in slots {
+            host.focusGroup(slot)
+            let document = DocumentFactory.makeUntitled()
+            document.editor.text = "visible group \(slot.rawValue) bytes"
+            let presentation = try requireValue(host.active, "R3 visible presentation")
+            presentation.clone(nil)
+            visible.append(presentation)
+            documents.append(document)
+            let background = DocumentFactory.makeUntitled()
+            background.editor.text = "hidden group \(slot.rawValue) bytes"
+            hidden.append(try requireValue(host.active, "R3 hidden presentation"))
+            documents.append(background)
+            host.activate(presentation)
+        }
+        let target = visible[0], targetClone = try requireValue(target.secondary, "R3 target Clone")
+        host.activate(target)
+        window.makeFirstResponder(targetClone)
+        check(
+            visible.allSatisfy(\.isPresented) && hidden.allSatisfy { !$0.isPresented },
+            "R3 four visible groups retain four hidden tabs")
+        let textBefore = documents.map { $0.editor.text }
+        for presentation in visible + hidden {
+            for editor in presentation.views where editor !== targetClone {
+                host.activate(target)
+                window.makeFirstResponder(targetClone)
+                let responder = window.firstResponder, active = host.model.activeTab?.id
+                // Invoke the original callback unchanged, as the independently traced late
+                // Scintilla focus deliveries do after a native activation boundary.
+                editor.onFocus?()
+                check(
+                    host.active === target && host.model.activeTab?.id == active
+                        && window.firstResponder === responder && app.currentDocumentController === target
+                        && target.lastEditor === targetClone,
+                    "R3 stale callback cannot retarget from \(presentation.isPresented ? "visible" : "hidden") group")
+            }
+        }
+        check(documents.map { $0.editor.text } == textBefore, "R3 stale callbacks change no document bytes")
+        for (index, presentation) in visible.enumerated() {
+            let other = visible[(index + 1) % visible.count]
+            host.activate(presentation)
+            for editor in presentation.views {
+                host.activate(other)
+                check(
+                    window.makeFirstResponder(editor)
+                        && (window.firstResponder as? NSView)?.isDescendant(of: editor) == true
+                        && host.active === presentation && host.model.focusedGroup == slots[index],
+                    "R3 genuine native primary/Clone focus routes visible group \(slots[index].rawValue)")
+            }
+            presentation.showFind(nil)
+            host.activate(other)
+            check(
+                window.makeFirstResponder(presentation.findField)
+                    && presentation.findField.currentEditor() === window.firstResponder
+                    && host.active === presentation,
+                "R3 actual Find field focus routes visible group \(slots[index].rawValue)")
+            host.activate(other)
+            check(
+                window.makeFirstResponder(presentation.replaceField)
+                    && presentation.replaceField.currentEditor() === window.firstResponder
+                    && host.active === presentation,
+                "R3 actual Replace field focus routes visible group \(slots[index].rawValue)")
+            let status = try requireValue(
+                presentation.presentationRoot.subviews.compactMap { $0 as? StatusBadgeRow }.first,
+                "R3 actual status row")
+            let savedEditor = presentation.activeEditor
+            host.activate(other)
+            _ = status.menuProvider?(.wrap)
+            check(
+                host.active === presentation
+                    && (window.firstResponder as? NSView)?.isDescendant(of: savedEditor) == true,
+                "R3 actual status focus routes saved editor in group \(slots[index].rawValue)")
+        }
+        host.activate(target)
+        window.makeFirstResponder(targetClone)
+        let input = try requireValue(window.firstResponder as? NSTextInputClient, "R3 native typing responder")
+        input.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        check(
+            documents[0].editor.text != textBefore[0]
+                && Array(documents.dropFirst()).map { $0.editor.text } == Array(textBefore.dropFirst()),
+            "R3 actual native typing reaches only the intended document")
+        targetClone.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        check(documents.map { $0.editor.text } == textBefore, "R3 native typing Undo preserves every document")
     }
 
 }
