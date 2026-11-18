@@ -224,7 +224,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         model = value
         metadataChanged()
     }
+    private(set) var lastTabMessage = ""
     func showTabMessage(_ message: String) {
+        lastTabMessage = message
         if let active {
             active.showTransientStatus(message, seconds: 8, announce: true)
         } else {

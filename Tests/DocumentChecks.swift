@@ -33,6 +33,7 @@ import NativeSearch
     }
     @MainActor static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments == ["--tab-commands"] { TabCommandNativeChecks.runApplicationProcess() }
         if arguments == ["--tab-workspace"] { TabWorkspaceNativeChecks.runApplicationProcess() }
         if arguments == ["--configuration-input-accessibility"] {
             // Always required by test-documents.sh in a fresh process. A combined CLI

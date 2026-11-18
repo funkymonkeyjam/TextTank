@@ -1010,6 +1010,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     const NSInteger last=MAX(0,[_engine message:SCI_GETLINECOUNT]-1);
     const NSInteger visible=MAX(0,[_engine message:SCI_VISIBLEFROMDOCLINE wParam:(uptr_t)last]);
     [_engine message:SCI_SETFIRSTVISIBLELINE wParam:(uptr_t)MAX(0,MIN(line,visible))];
+    [self noteStateChange];
 }
 - (BOOL)replaceRanges:(NSArray<TTByteRange *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision {
     [self assertThread];

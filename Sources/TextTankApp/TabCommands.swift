@@ -218,7 +218,7 @@ import EditorBridge
                 host.metadataChanged()
                 if !committed { host.restoreTabFocus(originalActive, responder: originalResponder) }
             }
-            func valid() -> Bool {
+            @MainActor func valid() -> Bool {
                 plan.isCurrent(workspace: host.model, facts: self.facts())
                     && docs.allSatisfy { id, doc in doc.isOpen && Stamp(doc) == stamps[id] }
             }
@@ -350,6 +350,15 @@ import EditorBridge
         let position = bulkPositions[group.tabs[index].id] ?? (group.slot, index)
         record(group.tabs[index], group: position.0, index: position.1, document: doc, url: url)
     }
+    func clearHistory() {
+        cancelReopen()
+        for job in fingerprints.values {
+            job.0.cancel()
+            job.1.cancelQueued()
+        }
+        fingerprints.removeAll()
+        history = ClosedTabHistory()
+    }
     func cancelReopen() {
         guard isReopening, !publishingReopen else { return }
         reopenGeneration += 1
@@ -417,10 +426,10 @@ import EditorBridge
                     return
                 }
                 host.placeTab(id, in: slot, index: record.index, pinned: record.pinned)
-                document.editor.restoreClosedTabView(
-                    anchor: record.anchor, caret: record.caret, firstVisibleLine: record.firstVisibleLine)
                 _ = self.history.consume(record.id)
                 document.showWindows()
+                document.editor.restoreClosedTabView(
+                    anchor: record.anchor, caret: record.caret, firstVisibleLine: record.firstVisibleLine)
                 let message: String
                 if let oldFingerprint, oldFingerprint != read.digest {
                     message = String(
