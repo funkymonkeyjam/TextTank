@@ -10,6 +10,7 @@ final class EditorGroupSurface: NSView {
     let content = NSView()
     private let heading = NSButton()
     private let placeholder = NSStackView()
+    let emptyStatus = AnnouncingLabel(labelWithString: "")
     private(set) weak var mounted: NSView?
     init(slot: GroupSlot, host: WorkspaceWindowController) {
         self.slot = slot
@@ -23,11 +24,15 @@ final class EditorGroupSurface: NSView {
         heading.action = #selector(focusGroup(_:))
         heading.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         let label = NSTextField(wrappingLabelWithString: "Open a document or create a new one.")
-        let new = NSButton(title: "New", target: self, action: #selector(newDocument(_:)))
-        let open = NSButton(title: "Open…", target: self, action: #selector(openDocument(_:)))
+        let new = NSButton(title: "New", target: self, action: #selector(createGroupDocument(_:)))
+        let open = NSButton(title: "Open…", target: self, action: #selector(openGroupDocument(_:)))
         placeholder.orientation = .vertical
         placeholder.spacing = 8
-        [label, new, open].forEach { placeholder.addArrangedSubview($0) }
+        let actions = NSStackView(views: [new, open])
+        actions.spacing = 8
+        emptyStatus.lineBreakMode = .byWordWrapping
+        emptyStatus.maximumNumberOfLines = 2
+        [label, actions, emptyStatus].forEach { placeholder.addArrangedSubview($0) }
         [heading, strip, content].forEach { addSubview($0) }
         content.addSubview(placeholder)
         setAccessibilityElement(true)
@@ -35,11 +40,11 @@ final class EditorGroupSurface: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
     @objc private func focusGroup(_ sender: Any?) { host?.focusGroup(slot) }
-    @objc private func newDocument(_ sender: Any?) {
+    @objc private func createGroupDocument(_ sender: Any?) {
         host?.focusGroup(slot)
-        NSDocumentController.shared.newDocument(sender)
+        EditorServices.current?.newDocument(sender)
     }
-    @objc private func openDocument(_ sender: Any?) {
+    @objc private func openGroupDocument(_ sender: Any?) {
         host?.focusGroup(slot)
         NSDocumentController.shared.openDocument(sender)
     }
@@ -49,6 +54,7 @@ final class EditorGroupSurface: NSView {
         strip.refresh()
         let name = host?.groupLabel(slot) ?? "Group \(slot.rawValue)"
         let focused = host?.model.focusedGroup == slot
+        heading.identifier = .init("groups.heading.\(slot.rawValue)")
         heading.title = (focused ? "▶ " : "   ") + name
         heading.setAccessibilityLabel(name + (focused ? ", focused" : ""))
         setAccessibilityLabel("Editor " + name.lowercased())

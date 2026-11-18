@@ -23,7 +23,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         weak var value: TextDocument?
         init(_ document: TextDocument) { value = document }
     }
-    private var recent: [DocumentID: TabID] = [:]
+    private var recent: [DocumentID: [TabID]] = [:]
     private(set) var isMutatingGroups = false
     var acceptsDocumentCreation: Bool {
         if let current = EditorServices.current?.workspaceHost { return current === self }
@@ -69,7 +69,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         content.addSubview(groupContainer)
         content.addSubview(layoutPicker)
         layoutPicker.setAccessibilityLabel("Editor layout")
-        layoutPicker.menu = groupCommands.layoutMenu(picker: true)
+        refreshLayoutPicker()
         NSLayoutConstraint.activate([
             layoutPicker.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
             layoutPicker.topAnchor.constraint(equalTo: content.topAnchor, constant: 3),
@@ -112,11 +112,11 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         } catch { preconditionFailure("Invalid workspace registration: \(error)") }
         if let previous { try? model.activate(previous, openDocuments: openIDs) }
         metadataChanged()
-        syncGroups()
+        if window?.isVisible == true { syncGroups() }
     }
     func presentation(for document: DocumentID) -> EditorWindowController? {
         if let active, (active.document as? TextDocument)?.runtimeID == document { return active }
-        if let id = recent[document], let p = entries[id] { return p }
+        if let p = recent[document]?.compactMap({ entries[$0] }).first { return p }
         return presentations.first { ($0.document as? TextDocument)?.runtimeID == document }
     }
     func isPresented(_ presentation: EditorWindowController) -> Bool {
@@ -136,7 +136,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         }
         do { try model.activate(id, openDocuments: openIDs) } catch { return }
         if explicit && !preserveSelection { tabSelection.collapse(in: model) }
-        recent[document.runtimeID] = id
+        recent[document.runtimeID] = [id] + (recent[document.runtimeID] ?? []).filter { $0 != id }
         syncGroups()
         window?.nextResponder = presentation
         presentation.nextResponder = NSApp
@@ -167,6 +167,11 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         presentations.forEach { $0.visibilityChanged() }
         window?.contentView?.layoutSubtreeIfNeeded()
     }
+    private func refreshLayoutPicker() {
+        let menu = groupCommands.layoutMenu(picker: true)
+        layoutPicker.menu = menu
+        groupCommands.menuNeedsUpdate(menu)
+    }
     func groupLabel(_ slot: GroupSlot) -> String {
         let position: String
         switch model.layout {
@@ -178,7 +183,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         return "Group \(slot.rawValue)" + (position.isEmpty ? "" : ", " + position)
     }
     @discardableResult func setEditorLayout(_ layout: LayoutKind, availableContent: TabGroupExtent? = nil) -> Bool {
-        guard !tabCommands.isBusy, window?.attachedSheet == nil else { return false }
+        guard !tabCommands.isBusy, !tabCommands.isReopening, window?.attachedSheet == nil else { return false }
         if layout == model.layout { return true }
         let minimum = TabGroupGeometry.minimumContent(layout)
         if let window, let screen = window.screen ?? NSScreen.main {
@@ -210,15 +215,20 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
                             min(window.frame.minY, screen.visibleFrame.maxY - window.frame.height))))
             }
         }
-        showTabMessage("Editor layout changed. \(groupLabel(model.focusedGroup)) is focused.")
+        let name = (active?.document as? TextDocument)?.displayName
+        showTabMessage(
+            GroupCommandController.title(layout) + ". " + (name.map { $0 + " in " } ?? "Focused ")
+                + groupLabel(model.focusedGroup) + ".")
         return true
     }
     @discardableResult func openView(_ source: TabID, in slot: GroupSlot) -> TabID? {
-        guard !tabCommands.isBusy, window?.attachedSheet == nil,
+        guard !tabCommands.isBusy, !tabCommands.isReopening, window?.attachedSheet == nil,
             let plan = try? model.planAdditionalView(source, to: slot, openDocuments: openIDs),
             let id = plan.resolved[source], applyGroupChange(plan)
         else { return nil }
-        showTabMessage("Opened another view in \(groupLabel(slot)).")
+        let name = (presentation(for: id)?.document as? TextDocument)?.displayName ?? "Document"
+        showTabMessage(
+            (plan.created.isEmpty ? "Selected " : "Opened another view of ") + name + " in " + groupLabel(slot) + ".")
         return id
     }
     func moveTabs(_ ids: [TabID], target: TabID, to slot: GroupSlot) {
@@ -234,20 +244,28 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         showTabMessage(
             ids.count == 1
                 ? "Moved \(name) to \(groupLabel(slot))."
-                : String(format: "Moved %ld tabs to %@.", ids.count, groupLabel(slot)))
+                : String(format: "Moved %ld tabs, including %@, to %@.", ids.count, name, groupLabel(slot)))
     }
     func closeEditorGroup(_ slot: GroupSlot) {
+        let priorActive = model.groups.first { $0.slot == slot }?.activeTab
+        let name = priorActive.flatMap { presentation(for: $0)?.document as? TextDocument }?.displayName
         guard !tabCommands.isBusy, !tabCommands.isReopening, window?.attachedSheet == nil,
             let plan = try? model.planCloseGroup(slot, openDocuments: openIDs), applyGroupChange(plan)
         else { return }
+        let resolved = priorActive.flatMap { plan.resolved[$0] }
+        let destination = model.groups.first { $0.tabs.contains { $0.id == resolved } }?.slot ?? model.focusedGroup
         showTabMessage(
-            "Closed Group \(slot.rawValue). All documents remain open. \(groupLabel(model.focusedGroup)) is focused.")
+            "Closed Group \(slot.rawValue). " + (name.map { $0 + " is in " } ?? "All documents remain open. Focused ")
+                + groupLabel(destination) + ".")
     }
     @discardableResult func applyGroupChange(_ plan: TabGroupChange) -> Bool {
-        guard !isMutatingGroups, plan.isCurrent(workspace: model) else { return false }
+        guard !isMutatingGroups, !tabCommands.isBusy, !tabCommands.isReopening, window?.attachedSheet == nil,
+            plan.isCurrent(workspace: model)
+        else { return false }
         do { try plan.result.validate(openDocuments: openIDs) } catch { return false }
         isMutatingGroups = true
         let before = model, selection = tabSelection
+        let originalActive = active, originalResponder = window?.firstResponder
         for tab in plan.created {
             guard let doc = documents[tab.documentID]?.value, let source = presentation(for: tab.documentID) else {
                 isMutatingGroups = false
@@ -274,6 +292,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             p.retireTab(inFavorOf: successor.primaryEditor)
             doc.removeWindowController(p)
             entries.removeValue(forKey: id)
+            recent[doc.runtimeID]?.removeAll { $0 == id }
         }
         let changedLayout = before.layout != plan.result.layout
         if changedLayout {
@@ -295,7 +314,12 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         }
         isMutatingGroups = false
         if let active {
-            activate(active, explicit: false, preserveSelection: true)
+            activate(active, focus: false, explicit: false, preserveSelection: true)
+            if active === originalActive, let responder = originalResponder {
+                window?.makeFirstResponder(responder)
+            } else {
+                window?.makeFirstResponder(active.activeEditor)
+            }
         } else {
             syncGroups()
             metadataChanged()
@@ -319,6 +343,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         _ = try? model.remove(id, reviewed: true, openDocuments: openIDs)
         presentation.presentationRoot.removeFromSuperview()
         entries.removeValue(forKey: id)
+        recent[document.runtimeID]?.removeAll { $0 == id }
         if !model.groups.flatMap(\.tabs).contains(where: { $0.documentID == document.runtimeID }) {
             documents.removeValue(forKey: document.runtimeID)
             recent.removeValue(forKey: document.runtimeID)
@@ -348,7 +373,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     private func removeNonfinalTab(_ id: TabID) {
         guard let p = entries[id], let doc = p.document as? TextDocument,
-            let successor = presentations.first(where: { $0 !== p && $0.document === doc })
+            let successor =
+                ([active].compactMap { $0 } + (recent[doc.runtimeID] ?? []).compactMap { entries[$0] } + presentations)
+                .first(where: { $0 !== p && $0.document === doc })
         else { return }
         doc.promoteEditor(from: p, to: successor)
         p.retireTab(inFavorOf: successor.primaryEditor)
@@ -449,7 +476,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             showTabMessage(String(format: "%@, tab %ld of %ld.", name, position + 1, group.tabs.count))
         }
     }
-    /// Internal validated model replacement; only Single is rendered until Stage 3.
+    /// Single-only fixture replacement; group operations require staged runtime plans.
     func replaceTabModel(_ value: TabWorkspace) throws {
         guard value.layout == .single else { throw TabModelError.invalid }
         try value.validate(openDocuments: openIDs)
@@ -464,6 +491,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         if let active {
             active.showTransientStatus(message, seconds: 8, announce: true)
         } else {
+            groupSurfaces[model.focusedGroup]?.emptyStatus.stringValue = message
             Announce.say(message, from: window)
         }
     }
@@ -528,8 +556,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             window?.representedURL = nil
             window?.isDocumentEdited = false
         }
-        layoutPicker.menu = groupCommands.layoutMenu(picker: true)
-        tabStrips.forEach { $0.refresh() }
+        refreshLayoutPicker()
         groupSurfaces.values.forEach { $0.refresh() }
     }
     func visibilityChanged() { presentations.forEach { $0.visibilityChanged() } }

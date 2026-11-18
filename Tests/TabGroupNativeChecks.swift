@@ -3,6 +3,7 @@ import AppKit
 @testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
+import Darwin
 
 @MainActor private final class GroupCheckContext {
     let isolated: IsolatedSupportDirectory
@@ -149,6 +150,7 @@ import NativeSearch
         surface.frame = priorFrame
         surface.layoutSubtreeIfNeeded()
         try groupCases(host: host, app: app, root: root)
+        try advancedCases(host: host, app: app, root: root)
     }
     private static func wait(_ label: String, _ condition: () -> Bool) {
         spinUntil(label) {
@@ -463,4 +465,223 @@ import NativeSearch
         _ = xid // identities are deliberately retained only as values.
     }
 
+    private static func advancedCases(host: WorkspaceWindowController, app: AppDelegate, root: URL) throws {
+        let commands = host.tabCommands, window = host.window!
+        func reset() {
+            commands.isTerminating = true
+            NSDocumentController.shared.documents.forEach { $0.close() }
+            commands.isTerminating = false
+            commands.clearHistory()
+            _ = host.setEditorLayout(.single)
+        }
+        func saved(_ name: String) throws -> TextDocument {
+            let url = root.appendingPathComponent(name + ".txt")
+            try Data("owned bytes".utf8).write(to: url)
+            return try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(url), from: url)
+        }
+        func id(_ doc: TextDocument) -> TabID {
+            host.model.groups.flatMap(\.tabs).first { $0.documentID == doc.runtimeID }!.id
+        }
+        func holdDisk() -> (Task<Void, Never>, DispatchSemaphore) {
+            let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+            let task = Task.detached { await TabDiskIO.shared.holdForTabGroupCheck(entered: entered, release: release) }
+            wait("T3 owned real disk actor held") { entered.wait(timeout: .now()) == .success }
+            return (task, release)
+        }
+        reset()
+        // A -> B -> C retirement must follow the current target, never only the initial one.
+        let doc = DocumentFactory.makeUntitled(), a = id(doc)
+        doc.editor.text = "def one():\n    pass\n\ndef two():\n    pass\n"
+        _ = host.setEditorLayout(.grid2x2)
+        let pa = host.presentation(for: a)!
+        pa.clone(nil)
+        let origin = pa.secondary!, text = origin.text, revision = origin.revision
+        let profile = try requireValue(app.languages.profile(identifier: "python"), "T3 Python profile")
+        let symbols = try LanguageFunctions.symbols(text: text, profile: profile)
+        let functions = LanguageFunctionController(editor: origin, text: text, revision: revision, symbols: symbols)
+        let output = RunResult(
+            stdout: Data("def changed():\n    pass\n".utf8), stderr: Data(), status: 0, reason: .finished)
+        app.runner.show(
+            .success(output), command: .uppercaseSample, target: origin, revision: revision, selection: false,
+            anchor: 0, caret: 0)
+        let search = app.searchController
+        search.queryField.stringValue = "def"
+        search.scope.selectItem(at: 2)
+        search.findAll(nil)
+        wait("T3 document-dedup search") { !search.isSearching }
+        check(
+            search.numberOfRows(in: search.table) == 2, "T3 all-open search yields one result population per document")
+        let b = try requireValue(host.openView(a, in: .second), "T3 chained B"),
+            c = try requireValue(host.openView(a, in: .third), "T3 chained C")
+        host.closeTab(a, sender: nil)
+        check(
+            functions.editor === host.presentation(for: b)?.primaryEditor,
+            "T3 Function List retargets original Clone to surviving B primary")
+        host.closeTab(b, sender: nil)
+        let pc = host.presentation(for: c)!
+        check(functions.editor === pc.primaryEditor, "T3 Function List follows B to C retirement chain")
+        check(
+            !EditorLifetime.isOpen(origin) && EditorLifetime.document(for: origin) == nil,
+            "T3 retained retired Clone stays unavailable")
+        let beforeFocus = host.model.focusedGroup
+        EditorLifetime.activate(origin)
+        check(host.model.focusedGroup == beforeFocus, "T3 stale editor cannot resurrect routing")
+        check(
+            search.activateResult(at: 1) && host.active === pc && pc.activeEditor.selectedText == "def",
+            "T3 held Search results navigate exact surviving C after A-B-C")
+        let apply = try requireValue(
+            NSApp.windows.flatMap { $0.contentView.map(descendants) ?? [] }.compactMap { $0 as? NSButton }.last {
+                $0.identifier?.rawValue == "run.apply"
+            }, "T3 chained Run Apply")
+        check(apply.isEnabled, "T3 whole-document Run result remains valid through chain")
+        app.runner.apply(apply)
+        check(
+            doc.editor.text == "def changed():\n    pass\n", "T3 chained Run applies through final live shared primary")
+        pc.primaryEditor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        apply.window?.close()
+        search.window?.close()
+        functions.window?.close()
+        // MRU must fall back to the most recently focused surviving view, not group order.
+        _ = host.openView(c, in: .first)
+        let d = try requireValue(host.openView(c, in: .fourth), "T3 MRU D")
+        host.activate(pc)
+        pc.primaryEditor.restoreClosedTabView(anchor: 0, caret: 4, firstVisibleLine: 0)
+        host.activate(host.presentation(for: d)!)
+        host.closeTab(d, sender: nil)
+        check(
+            doc.activeEditor === pc.primaryEditor,
+            "T3 closed document MRU falls back to most recently focused surviving view")
+        reset()
+        // Pending real disk work cannot block a live-document reopen.
+        let live = try saved("held-live"), l1 = id(live)
+        _ = host.setEditorLayout(.twoColumns)
+        let l2 = try requireValue(host.openView(l1, in: .second), "T3 held history view")
+        let (held, release) = holdDisk()
+        host.closeTab(l2, sender: nil)
+        check(
+            commands.pendingFingerprintCount > 0, "T3 closed non-final fingerprint is queued behind actual actor hold")
+        commands.perform(.reopen, target: nil)
+        check(
+            !commands.isReopening && !commands.hasPendingDiskRead && host.model.groups[1].tabs.count == 1
+                && host.active?.document === live,
+            "T3 live reopen completes synchronously while actual disk actor remains blocked")
+        release.signal()
+        _ = held
+        reset()
+        let stay = try saved("busy-stay"), stayID = id(stay), closed = try saved("busy-closed")
+        _ = host.setEditorLayout(.twoColumns)
+        closed.close()
+        wait("T3 fingerprint settles before disk reopen hold") { commands.pendingFingerprintCount == 0 }
+        let (busyHeld, busyRelease) = holdDisk()
+        commands.perform(.reopen, target: nil)
+        wait("T3 queued real closed-document read") { commands.hasPendingDiskRead }
+        let busyModel = host.model
+        check(
+            !host.setEditorLayout(.grid2x2) && host.model == busyModel,
+            "T3 direct layout API refuses during active reopen")
+        check(
+            host.openView(stayID, in: .second) == nil && host.model == busyModel,
+            "T3 direct add-view API refuses during active reopen")
+        commands.cancelReopen()
+        busyRelease.signal()
+        _ = busyHeld
+        reset()
+        // Accessibility and narrow inactive-group organization use the real native controls.
+        let local = try saved("scope-1"), first = id(local)
+        _ = host.setEditorLayout(.twoColumns)
+        host.focusGroup(.second)
+        let secondDoc = try saved("scope-2"), second = id(secondDoc), thirdDoc = try saved("scope-3"),
+            third = id(thirdDoc)
+        let firstGroup = host.model.groups[0]
+        host.setPinnedTabs([second], target: second, pinned: true)
+        host.reorderTab(third, to: 0)
+        check(
+            host.model.groups[0] == firstGroup && host.model.groups[1].tabs.map(\.id) == [second, third],
+            "T3 second-group pin and reorder keep first group untouched and enforce boundary")
+        let strip = host.groupSurfaces[.second]!.strip
+        check(strip.beginReorder(third), "T3 second-group native drag capture")
+        strip.updateReorder(at: NSPoint(x: -10, y: -10))
+        check(
+            !strip.isReordering && !strip.dropIndicatorVisible, "T3 cross-strip/outside drag cancels without transfer")
+        let secondButton = try requireValue(
+            descendants(strip).compactMap { $0 as? NSButton }.first {
+                $0.identifier?.rawValue == "tab." + second.rawValue.uuidString
+            }, "T3 actual G2 AX button")
+        let action = secondButton.accessibilityCustomActions()?.first { $0.name == "Add to Selection" }
+        check(
+            action?.handler?() == true && host.tabSelection.selected(in: host.model, group: .second) == [second, third]
+                && host.model.groups[0] == firstGroup, "T3 native AX selection stays group-local")
+        check(
+            host.layoutPicker.superview !== strip && host.layoutPicker.accessibilityLabel() == "Editor layout",
+            "T3 trailing picker is outside scrolling strip and labelled")
+        let choices = host.layoutPicker.menu!.items.filter { $0.action != nil }
+        check(
+            choices.count == 4 && choices.allSatisfy { $0.image?.accessibilityDescription != nil }
+                && choices.filter { $0.state == .on }.count == 1,
+            "T3 four layout diagrams expose descriptions and one selected mark")
+        _ = first
+        reset()
+        // A four-document Grid has eight views, four bounded presentation workers and four recoveries.
+        let started = ProcessInfo.processInfo.systemUptime
+        _ = host.setEditorLayout(.grid2x2)
+        var docs: [TextDocument] = []
+        for slot in GroupSlot.allCases {
+            host.focusGroup(slot)
+            let doc = DocumentFactory.makeUntitled()
+            doc.editor.text = String(repeating: "sample line\n", count: 10000)
+            host.active?.clone(nil)
+            docs.append(doc)
+        }
+        let captures = host.presentations.map(\.statusMetricsCaptureCount)
+        for _ in 0..<20 { host.presentations.forEach { $0.statusTimerTick() } }
+        check(
+            host.presentations.count == 4 && host.presentations.allSatisfy { $0.views.count == 2 }
+                && zip(host.presentations, captures).allSatisfy { $0.0.statusMetricsCaptureCount - $0.1 <= 1 },
+            "T3 four-document Grid has no per-Clone or duplicate same-revision metrics job")
+        let session = try app.workspace.capture(name: "Grid")
+        check(
+            session.documents.count == 4 && Set(docs.map(\.recoveryID)).count == 4,
+            "T3 Grid capture and recovery identities remain once per document")
+        let previousSettings = app.settings.value
+        var changedSettings = previousSettings
+        changedSettings.wrap = true
+        changedSettings.tabWidth = 10
+        changedSettings.useTabs = false
+        EditorSettingsApplication.apply(changedSettings, replacing: previousSettings)
+        check(
+            host.presentations.flatMap(\.views).allSatisfy {
+                $0.wrap && $0.statusInfo.tabWidth == 10 && !$0.statusInfo.useTabs
+            }, "T3 settings fan out across every group primary and Clone")
+        for doc in docs { doc.editor.readOnly = true }
+        check(
+            host.presentations.flatMap(\.views).allSatisfy(\.readOnly),
+            "T3 document Read Only is shared by all group and Clone views")
+        for doc in docs {
+            doc.editor.readOnly = false
+            doc.flushRecovery()
+        }
+        let liveRecoveryIDs = Set(docs.map(\.recoveryID))
+        let recovered = try TextDocument.recovery.scan().snapshots.filter { liveRecoveryIDs.contains($0.id) }
+        check(
+            recovered.count == 4 && Set(recovered.map(\.id)) == liveRecoveryIDs,
+            "T3 four-document eight-view Grid writes exactly four recovery snapshots")
+        EditorSettingsApplication.apply(previousSettings, replacing: changedSettings)
+        var usage = rusage()
+        getrusage(RUSAGE_SELF, &usage)
+        print(
+            "T3 GRID_FOUR_DOCUMENTS seconds=\(ProcessInfo.processInfo.systemUptime-started) peak_resident_bytes=\(usage.ru_maxrss) presentations=4 editors=8 text_bytes=480000"
+        )
+        window.orderOut(nil)
+        check(host.presentations.allSatisfy { !$0.statusTimerActive }, "T3 four-document hidden Grid stops all polling")
+        reset()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+}
+
+extension TabDiskIO {
+    fileprivate func holdForTabGroupCheck(entered: DispatchSemaphore, release: DispatchSemaphore) {
+        entered.signal()
+        release.wait()
+    }
 }
