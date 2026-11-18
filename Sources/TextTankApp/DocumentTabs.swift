@@ -6,6 +6,10 @@ import AppKit
 /// Native workspace chrome. This window never represents a document's lifetime.
 final class DocumentTabWindow: NSWindow {
     var host: WorkspaceWindowController? { windowController as? WorkspaceWindowController }
+    override func resignKey() {
+        super.resignKey()
+        host?.tabStrip.cancelReorder()
+    }
     override func becomeMain() {
         super.becomeMain()
         if let active = host?.active { EditorServices.current?.noteActiveController(active) }
@@ -197,6 +201,8 @@ final class DocumentTabStrip: NSView {
                 c.select.tabID = tab.id
                 c.select.strip = self
                 c.select.allowsReorder = true
+                c.select.setAccessibilityParent(self)
+                c.close.setAccessibilityParent(self)
                 c.background.tabID = tab.id
                 c.background.strip = self
                 c.select.setAccessibilityRole(.radioButton)
@@ -282,6 +288,10 @@ final class DocumentTabStrip: NSView {
         return true
     }
     func updateReorder(at point: NSPoint) {
+        guard bounds.contains(point) else {
+            cancelReorder()
+            return
+        }
         guard let capture = reorder, capture.tabs == host?.model.groups.flatMap(\.tabs), bounds.contains(point),
             let old = capture.tabs.firstIndex(where: { $0.id == capture.id })
         else {

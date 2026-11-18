@@ -33,6 +33,7 @@ import NativeSearch
     }
     @MainActor static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments == ["--tab-organization"] { TabOrganizationNativeChecks.runApplicationProcess() }
         if arguments == ["--tab-commands"] { TabCommandNativeChecks.runApplicationProcess() }
         if arguments == ["--tab-workspace"] { TabWorkspaceNativeChecks.runApplicationProcess() }
         if arguments == ["--configuration-input-accessibility"] {

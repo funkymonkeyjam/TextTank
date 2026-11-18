@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 source scripts/suite-lib.sh
 suite_begin
 suite_require_build
-suite_build "document-checks design-settings-input-checks tab-workspace-checks tab-command-native-checks" swiftc -swift-version 5 "${SWIFT_BASE[@]}" -F "$VENDOR_BUILD" -framework Scintilla -framework Cocoa -framework EventKit -lc++ -Xlinker -rpath -Xlinker "$VENDOR_BUILD" "$SUITE_SUPPORT" Tests/Support/ModelessForms.swift Tests/Support/UnicodeFixtures.swift Tests/DocumentChecks.swift Tests/TabWorkspaceNativeChecks.swift Tests/TabCommandNativeChecks.swift Tests/DocumentPinningChecks.swift Tests/DocumentOpenSaveChecks.swift Tests/DocumentSplitViewChecks.swift Tests/DocumentWindowMenuChecks.swift Tests/SettingsShortcutValidationChecks.swift Tests/Audit26PresentationChecks.swift Tests/Audit29ServiceChecks.swift Tests/Audit29FactoryChecks.swift Tests/DocumentCoreChecks.swift Tests/Audit29IntentChecks.swift Tests/ToolbarChecks.swift Tests/DesignSettingsChecks.swift Tests/DesignStatusChecks.swift -Xlinker "$NATIVE_BRIDGE_LIBRARY" -Xlinker "$NATIVE_SEARCH_LIBRARY" -o build/tests/document-checks
+suite_build "document-checks design-settings-input-checks tab-workspace-checks tab-command-native-checks tab-organization-native-checks" swiftc -swift-version 5 "${SWIFT_BASE[@]}" -F "$VENDOR_BUILD" -framework Scintilla -framework Cocoa -framework EventKit -lc++ -Xlinker -rpath -Xlinker "$VENDOR_BUILD" "$SUITE_SUPPORT" Tests/Support/ModelessForms.swift Tests/Support/UnicodeFixtures.swift Tests/DocumentChecks.swift Tests/TabWorkspaceNativeChecks.swift Tests/TabCommandNativeChecks.swift Tests/TabOrganizationNativeChecks.swift Tests/DocumentPinningChecks.swift Tests/DocumentOpenSaveChecks.swift Tests/DocumentSplitViewChecks.swift Tests/DocumentWindowMenuChecks.swift Tests/SettingsShortcutValidationChecks.swift Tests/Audit26PresentationChecks.swift Tests/Audit29ServiceChecks.swift Tests/Audit29FactoryChecks.swift Tests/DocumentCoreChecks.swift Tests/Audit29IntentChecks.swift Tests/ToolbarChecks.swift Tests/DesignSettingsChecks.swift Tests/DesignStatusChecks.swift -Xlinker "$NATIVE_BRIDGE_LIBRARY" -Xlinker "$NATIVE_SEARCH_LIBRARY" -o build/tests/document-checks
 suite_run document-checks harness/logs/document-checks.log build/tests/document-checks
 # Both native processes are required, even if the first fails. Share compilation,
 # not AppKit state; neither result can replace the other's completion marker.
@@ -30,4 +30,12 @@ if [[ "$SUITE_BROKEN" != *" tab-command-native-checks "* ]]; then
   fi
 fi
 suite_run tab-command-native-checks harness/logs/tab-command-native-checks.log "$command_client" --tab-commands
+organization_client=build/tests/document-checks
+if [[ "$SUITE_BROKEN" != *" tab-organization-native-checks "* ]]; then
+  if organization_client=$(python3 scripts/prepare-native-check-app.py --executable build/tests/document-checks --application "$APP_PATH"); then :; else
+    suite_record "BUILD-FAILED" "tab-organization-native-checks" "owned native bundle preparation failed"
+    SUITE_BROKEN="$SUITE_BROKEN tab-organization-native-checks "
+  fi
+fi
+suite_run tab-organization-native-checks harness/logs/tab-organization-native-checks.log "$organization_client" --tab-organization
 suite_finish
