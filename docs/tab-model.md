@@ -111,3 +111,70 @@ sentences. Pin is a visible symbol; selected-inactive tabs have an outline disti
 from the active tab's weight/underline. Semantic colors, labels, disabled reasons and
 announcements meet DS-14/20-23/40-43/60-63/65/70-74/80-85. Native accessibility Actions offer Add/Remove from Selection and Select Range from Active Tab through the same guarded Core gestures, without default shortcuts. Ordinary Press remains plain selection; stale Add/Remove intents and retired targets are refused. No new shortcuts,
 toolbar controls, budgets, saved schema, group UI or Stage 3 commands are introduced.
+
+## Stage 3 groups and shared-view contract
+
+DS-D1/D2/D3/D4/D6/D7/D8 and DS-10-15/20-26/30-31/35/40-43/50/52-53/60-63/65/67/70-74/80-85/90-92/97/100 apply.
+The one native host renders Single, Two Columns, Two Rows or Grid (ascending slots,
+left-to-right then top-to-bottom). Each group has its own stable strip, active tab,
+selection and focusable empty placeholder. Several group-active presentations may be
+visible; exactly one focused group supplies global commands. A known empty focused
+group returns nil, never the last occupied group's document. New/Open stay available.
+Native Focus Group menus/AX actions provide a keyboard route without unverified keys.
+
+Runtime document registration is by DocumentID, presentation ownership by TabID.
+Every tab owns a distinct primary TTEditor, optional in-tab Clone, Find/status tree
+and independent view state. Scintilla document references share authoritative bytes,
+Undo, dirty/read-only/language; no text is copied into another buffer. A replaceable
+live primary is the document service representative. Before it retires, transfer the
+single document change/recovery observer to a surviving primary without resetting
+revision, savepoint or Undo. Non-final close retires primary plus Clone, callbacks,
+observers, timers, forms and NSDocument adapter ownership; no document close, shared
+read-only change or recovery cleanup occurs. Cold weak release is required; no hidden
+first editor or warmed-up release exception. Final-tab close retains native review;
+Clones are not extra tabs. Whole-document results follow same-document successors,
+selection-bound results cancel, and retirement chains/stale bindings remain guarded.
+
+Group operations validate a copy and publish model, registry and native tree together
+under a main-thread reentrancy guard. Move retains exact view/pin/state; an existing
+destination view wins and the source retires. Open in Another Group creates an unpinned
+ordinary view without a Clone, copying only initial pane view state; a destination
+view already present is focused unchanged. Selected Move captures source identities
+in order (clicked outside selection is single), validates all before one commit, and
+focuses the resolved clicked/prior-active target. Source selection reconciles after
+final active resolution; destination selects the resolved moved set. No cross-group drag.
+
+Layouts add empty groups without moving tabs. Reduction preserves Group 1, appends
+removed groups' pins then ordinary tabs in source slot/tab order, and deduplicates
+without closing a document. Single collapse designates the focused active TabID as a
+global winner: every other view of that document is skipped/retired before it can win
+an earlier merge. The exact winner joins at its own source group's turn with its pin,
+caret/scroll/Find/Clone state. Other documents retain destination/first encountered
+views. If a removed group had focus in a non-Single reduction, focus Group 1 and the
+resolved old active document there; empty removed focus retains a valid destination
+active or nil. Surviving focus is unchanged. Orientation-only changes preserve groups.
+
+Owner-confirmed Grid Close Group transfers to the lowest-numbered other group and
+leaves its pane empty; empty Grid/Single disable it. In two panes, the other group
+survives and normalizes to slot 1. A focused closed group resolves its old active
+document in the destination; a background close preserves focused group/active.
+Organization dedup retires views without adding explicit-close history or prompts.
+
+Menu captures carry a transient live group token, not only reusable GroupSlot.
+Remove/recreate invalidates old menus, while orientation-only continuity retains
+tokens. History intentionally stores only a slot. Explicit file-view closes record
+that TabID's offsets/pin/index even when another view survives. Live-document Reopen
+creates/focuses a shared view without disk I/O: new views restore recorded pin,
+region-clamped index and UTF-8-clamped viewport; an existing destination stays unchanged.
+Session/recovery/all-document search stay one per document; capture selection from
+focused or per-document MRU live editor. Chooser rows use TabID plus group identity.
+
+The trailing layout picker stays outside scrolling strips. Native dividers enforce
+320 x 200 total group bounds with responsive Find/status, shared chrome counted once,
+and screen-aware content/frame fit. Unfittable layout refuses atomically with status
+and announcement. Single retains its normal minimum; no gratuitous shrink. Same layout
+preserves divider ratios; layout changes reset equal shares, with aligned Grid columns.
+Visible group-active status work is bounded (no per-Clone job); hidden/retired work stops,
+while recovery/monitoring remain per document. Reference shortcuts remain unassigned
+until conflict verification. Stage 4 persistence, extra windows, tear-off, comparison/AI,
+named collections and automatic layout restore remain outside this contract.
