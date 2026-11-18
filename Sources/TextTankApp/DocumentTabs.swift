@@ -21,7 +21,9 @@ final class DocumentTabWindow: NSWindow {
     var closeButtonQuits: Bool { routed }
     @objc private func closeButtonPressed(_ sender: Any?) { RuntimeEnvironment.current.terminate(sender) }
     override func performClose(_ sender: Any?) { host?.closeActive(sender) }
-    private var hasCloseTarget: Bool { (host?.active?.document as? TextDocument)?.isOpen == true }
+    private var hasCloseTarget: Bool {
+        host?.tabCommands.state(.close, target: host?.model.activeTab?.id).enabled == true
+    }
     override func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(performClose(_:)) { return hasCloseTarget }
         return super.validateMenuItem(item)
@@ -58,8 +60,30 @@ final class DocumentTabWindow: NSWindow {
     }
 }
 
-private final class DocumentTabButton: NSButton { var tabID: TabID? }
+private final class DocumentTabButton: NSButton {
+    var tabID: TabID?
+    weak var strip: DocumentTabStrip?
+    override func menu(for event: NSEvent) -> NSMenu? { tabID.flatMap { strip?.contextMenu(for: $0) } }
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control) {
+            rightMouseDown(with: event)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+    override func rightMouseDown(with event: NSEvent) {
+        if let menu = menu(for: event) { NSMenu.popUpContextMenu(menu, with: event, for: self) }
+    }
+    override func accessibilityPerformShowMenu() -> Bool {
+        guard let tabID, let menu = strip?.contextMenu(for: tabID) else { return false }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: bounds.maxY), in: self)
+        return true
+    }
+}
 private final class DocumentTabBackground: NSView {
+    var tabID: TabID?
+    weak var strip: DocumentTabStrip?
+    override func menu(for event: NSEvent) -> NSMenu? { tabID.flatMap { strip?.contextMenu(for: $0) } }
     override func draw(_ dirtyRect: NSRect) {
         NSColor.controlAccentColor.withAlphaComponent(0.15).setFill()
         bounds.fill()
@@ -117,6 +141,9 @@ final class DocumentTabStrip: NSView {
                 c.select.target = self
                 c.select.action = #selector(selectTab(_:))
                 c.select.tabID = tab.id
+                c.select.strip = self
+                c.background.tabID = tab.id
+                c.background.strip = self
                 c.select.setAccessibilityRole(.radioButton)
                 c.select.setAccessibilitySubrole(NSAccessibility.Subrole(rawValue: "AXTabButton"))
                 c.close.isBordered = false
@@ -124,6 +151,7 @@ final class DocumentTabStrip: NSView {
                 c.close.target = self
                 c.close.action = #selector(closeTab(_:))
                 c.close.tabID = tab.id
+                c.close.strip = self
                 ([c.background, c.select, c.close] as [NSView]).forEach { row.addSubview($0) }
             }
             let active = host.model.activeTab?.id == tab.id, name = doc.displayName ?? "Untitled"
@@ -137,6 +165,7 @@ final class DocumentTabStrip: NSView {
             c.select.identifier = NSUserInterfaceItemIdentifier("tab." + tab.id.rawValue.uuidString)
             c.close.toolTip = String(format: Strings.text("tabs.close", "Close %@"), name)
             c.close.setAccessibilityLabel(c.close.toolTip)
+            c.close.isEnabled = host.tabCommands.state(.close, target: tab.id).enabled
         }
         layoutTabs()
     }
@@ -160,6 +189,7 @@ final class DocumentTabStrip: NSView {
         row.frame = NSRect(x: 0, y: 0, width: max(x, bounds.width), height: 36)
         row.scrollToVisible(active)
     }
+    func contextMenu(for id: TabID) -> NSMenu? { host?.tabCommands.contextMenu(for: id) }
     @objc private func selectTab(_ sender: DocumentTabButton) {
         guard let host, let id = sender.tabID,
             let tab = host.model.groups.flatMap(\.tabs).first(where: { $0.id == id }),

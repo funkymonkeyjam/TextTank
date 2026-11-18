@@ -34,6 +34,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     private var automationObserver: NSObjectProtocol?
     private var savingArrangement = false
     private var saveScheduled = false
+    lazy var tabCommands = TabCommandController(host: self)
+    private var removingTabs = false
+    private let emptyStatus = AnnouncingLabel(labelWithString: "")
     private var returnTab: TabID?
     init() {
         let window = DocumentTabWindow(
@@ -72,7 +75,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         open.setAccessibilityLabel("Open a document")
         empty.orientation = .vertical
         empty.spacing = 12
-        [label, new, open].forEach { empty.addArrangedSubview($0) }
+        [label, new, open, emptyStatus].forEach { empty.addArrangedSubview($0) }
         empty.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(empty)
         NSLayoutConstraint.activate([
@@ -110,6 +113,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         if mounted == nil, window?.isVisible == true, let active { activate(active, focus: false, explicit: false) }
     }
     func activate(_ presentation: EditorWindowController, focus: Bool = true, explicit: Bool = true) {
+        if explicit { tabCommands.cancelReopen() }
         guard let document = presentation.document as? TextDocument, document.isOpen,
             entries[document.runtimeID]?.presentation === presentation,
             let tab = model.groups.flatMap(\.tabs).first(where: { $0.documentID == document.runtimeID }),
@@ -160,6 +164,14 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             preconditionFailure("Invalid workspace removal")
         }
         entries.removeValue(forKey: document.runtimeID)
+        if removingTabs {
+            if mounted === presentation.presentationRoot {
+                window?.makeFirstResponder(nil)
+                mounted?.removeFromSuperview()
+                mounted = nil
+            }
+            return
+        }
         if wasActive {
             mounted?.removeFromSuperview()
             mounted = nil
@@ -178,7 +190,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         metadataChanged()
         validateToolbar()
     }
-    func closeTab(_ id: TabID, sender: Any?) {
+    func closeTab(_ id: TabID, sender: Any?) { tabCommands.perform(.close, target: id, captured: true, sender: sender) }
+    func performSingleTabClose(_ id: TabID, sender: Any?) {
         guard window?.attachedSheet == nil, let tab = model.groups.flatMap(\.tabs).first(where: { $0.id == id }),
             let presentation = entries[tab.documentID]?.presentation,
             let document = presentation.document as? TextDocument
@@ -190,6 +203,78 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     func closeActive(_ sender: Any?) { if let id = model.activeTab?.id { closeTab(id, sender: sender) } }
     func endBackgroundCloseReturn() { returnTab = nil }
+    func presentation(for id: TabID) -> EditorWindowController? {
+        guard let tab = model.groups.flatMap(\.tabs).first(where: { $0.id == id }) else { return nil }
+        return entries[tab.documentID]?.presentation
+    }
+    func placeTab(_ id: TabID, in slot: GroupSlot, index: Int, pinned: Bool) {
+        do { try model.place(id, in: slot, index: index, pinned: pinned, openDocuments: openIDs) } catch {
+            showTabMessage("The tab could not be placed because the workspace changed.")
+        }
+        metadataChanged()
+    }
+    /// Internal validated model replacement; Stage 1 still renders Single only.
+    func replaceTabModel(_ value: TabWorkspace) throws {
+        guard value.layout == .single else { throw TabModelError.invalid }
+        try value.validate(openDocuments: openIDs)
+        model = value
+        metadataChanged()
+    }
+    func showTabMessage(_ message: String) {
+        if let active {
+            active.showTransientStatus(message, seconds: 8, announce: true)
+        } else {
+            emptyStatus.stringValue = message
+            Announce.say(message, from: window)
+        }
+    }
+    func restoreTabFocus(_ id: TabID?, responder: NSResponder?) {
+        if let id, let p = presentation(for: id) {
+            activate(p, focus: false, explicit: false)
+            if let responder { _ = window?.makeFirstResponder(responder) }
+        }
+    }
+    func commitTabClose(_ plan: TabClosePlan, originalActive: TabID?, originalResponder: NSResponder?) {
+        let before = model
+        tabCommands.prepareBulkHistory(before)
+        removingTabs = true
+        returnTab = nil
+        active?.stopStatusTimer()
+        for id in plan.tabs {
+            guard let tab = model.groups.flatMap(\.tabs).first(where: { $0.id == id }), let p = presentation(for: id),
+                let doc = p.document as? TextDocument
+            else { continue }
+            let final = model.groups.flatMap(\.tabs).filter { $0.documentID == tab.documentID }.count == 1
+            if final {
+                doc.close()
+            } else {
+                tabCommands.recordNonfinalTab(id)
+                _ = try? model.remove(id, reviewed: false, openDocuments: openIDs)
+            }
+        }
+        removingTabs = false
+        tabCommands.finishBulkHistory()
+        let survivors = Set(model.groups.flatMap(\.tabs).map(\.id))
+        let chosen =
+            originalActive.flatMap { survivors.contains($0) ? $0 : nil }
+            ?? (survivors.contains(plan.target) ? plan.target : model.groups.first { $0.slot == plan.group }?.activeTab)
+        if let chosen, let p = presentation(for: chosen) {
+            activate(p, focus: false, explicit: false)
+            if chosen == originalActive, let originalResponder {
+                _ = window?.makeFirstResponder(originalResponder)
+            } else {
+                _ = window?.makeFirstResponder(p.activeEditor)
+            }
+        } else {
+            mounted?.removeFromSuperview()
+            mounted = nil
+            empty.isHidden = false
+            window?.nextResponder = NSApp
+            window?.makeFirstResponder(nil)
+        }
+        metadataChanged()
+        validateToolbar()
+    }
     func cycle(_ direction: Int) {
         guard window?.attachedSheet == nil else { return }
         var next = model

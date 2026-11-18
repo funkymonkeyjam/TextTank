@@ -446,6 +446,7 @@ import AppKit
     }
     override func close() {
         guard !isClosed else { return }
+        presentation?.host.tabCommands.willClose(self)
         isClosed = true
         EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was closed.")
         cancelRecoveryTimers()

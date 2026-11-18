@@ -47,6 +47,19 @@ import AppKit
     var currentEditor: TTEditor? { currentDocumentController?.activeEditor }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(performTabCommand(_:)):
+            guard let raw = item.representedObject as? String, let command = TabCommand(rawValue: raw) else {
+                return false
+            }
+            let state =
+                knownWorkspace?.tabCommands.state(command, target: knownWorkspace?.model.activeTab?.id)
+                ?? (
+                    enabled: false,
+                    reason: command == .reopen
+                        ? "There are no closed file tabs to reopen." : "There is no open tab to act on."
+                )
+            item.toolTip = state.reason
+            return state.enabled
         case #selector(findNextShared(_:)), #selector(findPreviousShared(_:)),
             #selector(nextDocumentTab(_:)), #selector(previousDocumentTab(_:)), #selector(showDocumentTabs(_:)):
             return currentDocumentController != nil
@@ -250,6 +263,9 @@ import AppKit
                 host.window?.orderOut(nil)
             }
         }
+        let hosts = documents.compactMap { ($0 as? TextDocument)?.presentation?.host }
+        hosts.forEach { $0.tabCommands.isTerminating = true }
+        defer { hosts.forEach { $0.tabCommands.isTerminating = false } }
         for document in documents { document.close() }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -522,6 +538,15 @@ import AppKit
             title: "Previous Tab", action: #selector(previousDocumentTab(_:)), keyEquivalent: "\t",
             modifiers: [.control, .shift], target: self)
         window.addItem(title: "Open Documents…", action: #selector(showDocumentTabs(_:)))
+        for section in TabCommandController.sections {
+            window.addItem(.separator())
+            for command in section {
+                let item = window.addItem(
+                    title: command.title, action: #selector(performTabCommand(_:)), target: self,
+                    representedObject: command.rawValue)
+                item.identifier = NSUserInterfaceItemIdentifier("tabs.command." + command.rawValue)
+            }
+        }
         window.addItem(.separator())
         window.addItem(title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         window.addItem(title: "Zoom", action: #selector(NSWindow.performZoom(_:)))
@@ -550,6 +575,10 @@ import AppKit
                 currentDocumentController
             controller?.findFromMenu(backwards: backwards)
         }
+    }
+    @objc func performTabCommand(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let command = TabCommand(rawValue: raw) else { return }
+        knownWorkspace?.tabCommands.perform(command, target: knownWorkspace?.model.activeTab?.id)
     }
     @objc func nextDocumentTab(_ sender: Any?) { cycleDocumentTab(1) }
     @objc func previousDocumentTab(_ sender: Any?) { cycleDocumentTab(-1) }

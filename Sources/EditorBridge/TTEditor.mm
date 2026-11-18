@@ -998,6 +998,19 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (void)scrollCaretIntoView { [self assertThread]; [_engine message:SCI_SCROLLCARET]; }
 - (NSInteger)firstVisibleLine { [self assertThread]; return [_engine message:SCI_GETFIRSTVISIBLELINE]; }
+- (void)restoreClosedTabViewWithAnchor:(NSInteger)anchor caret:(NSInteger)caret firstVisibleLine:(NSInteger)line {
+    [self assertThread];
+    const NSInteger length=[_engine message:SCI_GETLENGTH];
+    auto boundary=[&](NSInteger value) {
+        value=MAX(0,MIN(length,value));
+        while(value>0 && value<length && ([_engine message:SCI_GETCHARAT w:(uptr_t)value] & 0xc0)==0x80) --value;
+        return value;
+    };
+    [_engine message:SCI_SETSEL w:(uptr_t)boundary(anchor) l:(sptr_t)boundary(caret)];
+    const NSInteger last=MAX(0,[_engine message:SCI_GETLINECOUNT]-1);
+    const NSInteger visible=MAX(0,[_engine message:SCI_VISIBLEFROMDOCLINE w:(uptr_t)last]);
+    [_engine message:SCI_SETFIRSTVISIBLELINE w:(uptr_t)MAX(0,MIN(line,visible))];
+}
 - (BOOL)replaceRanges:(NSArray<TTByteRange *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision {
     [self assertThread];
     if (revision!=self.revision || self.readOnly || ![ranges isKindOfClass:NSArray.class] || ![texts isKindOfClass:NSArray.class] || ranges.count==0 || texts.count!=ranges.count) return NO;

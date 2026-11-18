@@ -164,6 +164,8 @@ __attribute__((objc_subclassing_restricted))
 - (void)scrollCaretIntoView;
 /// Zero-based display line at the top of this view.
 @property(nonatomic, readonly) NSInteger firstVisibleLine;
+/// Restores view metadata only, clamping offsets to UTF-8 boundaries and visible lines.
+- (void)restoreClosedTabViewWithAnchor:(NSInteger)anchor caret:(NSInteger)caret firstVisibleLine:(NSInteger)firstVisibleLine NS_SWIFT_NAME(restoreClosedTabView(anchor:caret:firstVisibleLine:));
 @property(nonatomic, readonly) NSArray<NSNumber *> *bookmarkLines;
 /// bookmarkLines.count without building the array.
 @property(nonatomic, readonly) NSInteger bookmarkCount;
