@@ -33,7 +33,7 @@ import Foundation
                     for reverse in [false,true] {
                         let a = try snapshot(reverse ? pair.after : pair.before)
                         let b = try snapshot(reverse ? pair.before : pair.after)
-                        let changes = await FirstPartyReviewDiff(strategy:strategy).compare(original:a,modified:b,
+                        let changes = await FirstPartyReviewDiff(strategy:strategy).compare(a,b,
                             policy:.correctness,token:ReviewCancellation(),hooks:.init())
                         let projection = try await CompareProjection.build(original:a,modified:b,changes:changes)
                         for side in [CompareSide.original,.modified] {
@@ -58,9 +58,9 @@ import Foundation
             check(n.move(next:false) == 2,"D1 initial Previous goes last")
             check(!CompareNavigation(count:0).hasNext && !CompareNavigation(count:0).hasPrevious,"D1 empty disables both")
             let a = try snapshot((0..<20).map { "\($0)\n" }.joined()), b = try snapshot((0..<20).map { $0 == 10 ? "changed\n" : "\($0)\n" }.joined())
-            let changes = await FirstPartyReviewDiff().compare(original:a,modified:b,policy:.default,token:ReviewCancellation(),hooks:.init())
+            let changes = await FirstPartyReviewDiff().compare(a,b,policy:.default,token:ReviewCancellation(),hooks:.init())
             let p = try await CompareProjection.build(original:a,modified:b,changes:changes)
-            check(p.folds.map(\.rows) == [0..<7,14..<20],"D1 three context lines at prefix/suffix")
+            check(p.folds.map(\.rows) == [1..<7,14..<20],"D1 three context lines at prefix/suffix")
             for limit in [0,1] {
                 var policy = ComparePolicy.default; policy.maximumWork = limit
                 do { _ = try await CompareProjection.build(original:a,modified:b,changes:changes,policy:policy); check(false,"D1 work refused") }

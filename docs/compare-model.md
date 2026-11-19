@@ -18,7 +18,7 @@ CompareCore is Foundation-only in TextTankCore; Runtime owns UI, source binding 
 
 F0 default policies/engines/apply semantics stay unchanged. A bounded line-index overload may reuse F0's scanner with explicit caller policy/token/hooks; never silently select the correctness30s profile for UI. D1 projection starts at32m work/2s/128MiB explicit workspace/64MiB output/500000rows. Charge indexing, equality/range checks, grapheme boundaries, construction, collapse and navigation; cancellation polls within1024 charged operations plus documented bounded opaque calls. No huge unmetered line token arrays or quadratic work. Default large inputs may stop explicitly; incomplete never means identical. Inline exhaustion retains complete line results with a separate warning.
 
-Three context lines are shown around changes. Fold only unchanged runs outside their union; accessible summaries expand individually/all. Next/Previous do not wrap (initial Next first/Previous last). Mode switching preserves change ordinal, expansion/whitespace and independent positions without recomputation or I/O.
+Three context lines are shown around changes. The first logical row remains visible, matching Scintilla's unhideable source line zero; fold counts exclude that retained row. Fold only unchanged runs outside their union; accessible summaries expand individually/all. Next/Previous do not wrap (initial Next first/Previous last). Mode switching preserves change ordinal, expansion/whitespace and independent positions without recomputation or I/O.
 
 ## Native presentation and commands
 

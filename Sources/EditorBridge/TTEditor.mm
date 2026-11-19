@@ -492,8 +492,12 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (void)deliverDeferredChange;
 - (BOOL)undoGroupOpen;
 @property(nonatomic) BOOL cppDefaults;
+@property(nonatomic) BOOL comparisonScrollScheduled;
+- (void)applyComparisonStyle;
+- (void)comparisonViewportChanged;
 @end
 @implementation TTEditor
+@synthesize comparisonPresentation = _comparisonPresentation;
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
         NSAssert(NSThread.isMainThread, @"Editor must be created on the main thread");
@@ -599,6 +603,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [_engine message:SCI_SETFOLDMARGINCOLOUR wParam:1 lParam:background];[_engine message:SCI_SETFOLDMARGINHICOLOUR wParam:1 lParam:background];
     for(int marker=SC_MARKNUM_FOLDEREND;marker<=SC_MARKNUM_FOLDEROPEN;++marker){[_engine message:SCI_MARKERSETFORE wParam:marker lParam:background];[_engine message:SCI_MARKERSETBACK wParam:marker lParam:foreground];}
     [self applySearchIndicatorStyle];
+    if (_comparisonPresentation) [self applyComparisonStyle];
     // The bookmark dot: brand green on the light margin, citrus on the dark one, each at least 3:1.
     _bookmarkColour = dark ? 0x5BF4C7 : (highContrast ? 0x002E1C : 0x005B3A);
     [_engine message:SCI_MARKERSETBACK wParam:TTBookmarkMarker lParam:_bookmarkColour];
@@ -1507,6 +1512,129 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     if (index == STYLE_LINENUMBER) _emptyLineNumbers.needsDisplay = YES;
     return YES;
 }
+// Comparison helpers are deliberately grouped. They never share or replace a source document.
+- (BOOL)selectionIsRectangular {
+    [self assertThread]; const sptr_t mode=[_engine message:SCI_GETSELECTIONMODE];
+    return mode==SC_SEL_RECTANGLE || mode==SC_SEL_THIN;
+}
+- (void)applyComparisonStyle {
+    const BOOL dark=[self usesDarkPalette];
+    const sptr_t cue=dark ? 0x5BF4C7 : 0x005B3A;
+    for (int indicator : {21,22}) {
+        [_engine message:SCI_INDICSETSTYLE wParam:indicator lParam:indicator==21 ? INDIC_FULLBOX : INDIC_ROUNDBOX];
+        [_engine message:SCI_INDICSETFORE wParam:indicator lParam:cue];
+        [_engine message:SCI_INDICSETALPHA wParam:indicator lParam:indicator==21 ? 18 : 52];
+        [_engine message:SCI_INDICSETOUTLINEALPHA wParam:indicator lParam:255];
+    }
+    const int symbols[]={'+','-','~'};
+    for(int i=0;i<3;++i) {
+        [_engine message:SCI_MARKERDEFINE wParam:2+i lParam:SC_MARK_CHARACTER+symbols[i]];
+        [_engine message:SCI_MARKERSETFORE wParam:2+i lParam:cue];
+        [_engine message:SCI_MARKERSETBACK wParam:2+i lParam:dark ? 0x222A25 : 0xE3E9E5];
+    }
+    [_engine message:SCI_SETMARGINMASKN wParam:1 lParam:TTBookmarkMask|(1<<2)|(1<<3)|(1<<4)];
+    [_engine message:SCI_SETMARGINWIDTHN wParam:1 lParam:20];
+    [_engine message:SCI_ANNOTATIONSETVISIBLE wParam:ANNOTATION_STANDARD];
+}
+- (void)setComparisonPresentation:(BOOL)value {
+    [self assertThread]; _comparisonPresentation=value;
+    [_engine message:SCI_SETVSCROLLBAR wParam:!value];
+    [_engine message:SCI_SETENDATLASTLINE wParam:!value];
+    if(value) [self applyComparisonStyle];
+}
+- (BOOL)comparisonPresentation { return _comparisonPresentation; }
+- (NSInteger)comparisonTopDisplayLine { [self assertThread]; return [_engine message:SCI_GETFIRSTVISIBLELINE]; }
+- (void)setComparisonTopDisplayLine:(NSInteger)line {
+    [self assertThread]; if(!_comparisonPresentation || line<0)return;
+    [_engine message:SCI_SETFIRSTVISIBLELINE wParam:MIN(line,MAX(0,self.comparisonDisplayRows-1))];
+}
+- (NSInteger)comparisonHorizontalOffset { [self assertThread]; return [_engine message:SCI_GETXOFFSET]; }
+- (void)setComparisonHorizontalOffset:(NSInteger)offset {
+    [self assertThread]; if(_comparisonPresentation && offset>=0) [_engine message:SCI_SETXOFFSET wParam:offset];
+}
+- (NSInteger)comparisonDisplayRows {
+    [self assertThread]; const sptr_t last=MAX(0,[_engine message:SCI_GETLINECOUNT]-1);
+    return MAX(1,[_engine message:SCI_VISIBLEFROMDOCLINE wParam:last]+[_engine message:SCI_WRAPCOUNT wParam:last]+[_engine message:SCI_ANNOTATIONGETLINES wParam:last]);
+}
+- (NSInteger)comparisonLineHeight { [self assertThread]; return MAX(1,[_engine message:SCI_TEXTHEIGHT wParam:0]); }
+- (NSInteger)comparisonDocumentLineForDisplayLine:(NSInteger)line {
+    [self assertThread]; if(line<0 || line>=self.comparisonDisplayRows)return -1;
+    return [_engine message:SCI_DOCLINEFROMVISIBLE wParam:line];
+}
+- (NSInteger)comparisonDisplayLineForDocumentLine:(NSInteger)line {
+    [self assertThread]; if(line<0 || line>=[_engine message:SCI_GETLINECOUNT])return -1;
+    return [_engine message:SCI_VISIBLEFROMDOCLINE wParam:line];
+}
+- (NSInteger)comparisonWrapCountForLine:(NSInteger)line {
+    [self assertThread]; if(line<0 || line>=[_engine message:SCI_GETLINECOUNT])return 0;
+    return [_engine message:SCI_WRAPCOUNT wParam:line];
+}
+- (NSInteger)comparisonYForByte:(NSInteger)position {
+    [self assertThread]; if(position<0 || position>self.byteLength)return NSIntegerMin;
+    return [_engine message:SCI_POINTYFROMPOSITION wParam:0 lParam:position];
+}
+- (void)clearComparisonPresentation {
+    [self assertThread];
+    for (int indicator : {21,22}) {
+        [_engine message:SCI_SETINDICATORCURRENT wParam:indicator];
+        [_engine message:SCI_INDICATORCLEARRANGE wParam:0 lParam:self.byteLength];
+    }
+    for(int marker : {2,3,4})[_engine message:SCI_MARKERDELETEALL wParam:marker];
+    [_engine message:SCI_ANNOTATIONCLEARALL];
+    [_engine message:SCI_SHOWLINES wParam:0 lParam:MAX(0,[_engine message:SCI_GETLINECOUNT]-1)];
+}
+- (BOOL)addComparisonHighlights:(NSArray<TTByteRange *> *)lines inlineRanges:(NSArray<TTByteRange *> *)spans kind:(NSInteger)kind {
+    [self assertThread]; if(!_comparisonPresentation || kind<0 || kind>2 || ![lines isKindOfClass:NSArray.class] || ![spans isKindOfClass:NSArray.class] || lines.count>512 || spans.count>512)return NO;
+    const NSUInteger length=self.byteLength;
+    for(NSArray *batch in @[lines,spans])for(id value in batch) {
+        NSRange range; if(!TTValidatedByteRange(value,length,&range))return NO;
+        for(NSUInteger p : {range.location,NSMaxRange(range)})
+            if(p<length && ([_engine message:SCI_GETCHARAT wParam:p]&0xc0)==0x80)return NO;
+    }
+    for(TTByteRange *range in lines) {
+        [_engine message:SCI_SETINDICATORCURRENT wParam:21];
+        [_engine message:SCI_INDICATORFILLRANGE wParam:range.location lParam:range.length];
+        const sptr_t line=[_engine message:SCI_LINEFROMPOSITION wParam:range.location];
+        [_engine message:SCI_MARKERADD wParam:line lParam:kind+2];
+    }
+    for(TTByteRange *range in spans) {
+        [_engine message:SCI_SETINDICATORCURRENT wParam:22];
+        [_engine message:SCI_INDICATORFILLRANGE wParam:range.location lParam:range.length];
+    }
+    return YES;
+}
+- (BOOL)setComparisonGapAfterLine:(NSInteger)line rows:(NSInteger)rows {
+    [self assertThread]; if(!_comparisonPresentation || line<0 || line>=[_engine message:SCI_GETLINECOUNT] || rows<0 || rows>32760)return NO;
+    if(rows==0) { [_engine message:SCI_ANNOTATIONSETTEXT wParam:line lParam:0]; return YES; }
+    const std::string text((size_t)rows-1,'\n');
+    [_engine message:SCI_ANNOTATIONSETTEXT wParam:line lParam:(sptr_t)text.c_str()];
+    return YES;
+}
+- (BOOL)setComparisonHiddenLines:(NSIndexSet *)lines {
+    [self assertThread]; if(!_comparisonPresentation || ![lines isKindOfClass:NSIndexSet.class])return NO;
+    const NSUInteger count=[_engine message:SCI_GETLINECOUNT];
+    if(lines.count && (lines.firstIndex==0 || lines.lastIndex>=count))return NO;
+    [_engine message:SCI_SHOWLINES wParam:0 lParam:count-1];
+    [lines enumerateRangesUsingBlock:^(NSRange range,BOOL *stop){
+        [self.engine message:SCI_HIDELINES wParam:range.location lParam:NSMaxRange(range)-1];
+    }];
+    return YES;
+}
+- (void)setComparisonWhitespaceVisible:(BOOL)visible {
+    [self assertThread]; if(!_comparisonPresentation)return;
+    [_engine message:SCI_SETVIEWWS wParam:visible ? SCWS_VISIBLEALWAYS : SCWS_INVISIBLE];
+    [_engine message:SCI_SETVIEWEOL wParam:visible];
+}
+- (void)comparisonViewportChanged {
+    if(!_comparisonPresentation || !_onComparisonViewportChange || _comparisonScrollScheduled)return;
+    _comparisonScrollScheduled=YES; __weak TTEditor *weakSelf=self;
+    dispatch_async(dispatch_get_main_queue(),^{
+        TTEditor *editor=weakSelf; if(!editor)return;
+        editor.comparisonScrollScheduled=NO;
+        if(editor.comparisonPresentation && editor.onComparisonViewportChange)editor.onComparisonViewportChange();
+    });
+}
+
 - (void)clearSearchHighlights {
     [self assertThread];[_engine message:SCI_SETINDICATORCURRENT wParam:TTSearchIndicator];[_engine message:SCI_INDICATORCLEARRANGE wParam:0 lParam:[_engine message:SCI_GETLENGTH]];
 }
@@ -1614,6 +1742,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     // The filler numbers are drawn at the zoomed size, which the compared values need not show.
     if (code == SCN_ZOOM) { [self updateLineNumberMargin:NO]; _emptyLineNumbers.needsDisplay = YES; [self scheduleStateNotification]; }
     else if (code == SCN_MODIFIED && notification->linesAdded != 0 && [self lineNumberDigits] != _marginDigits) [self updateLineNumberMargin:NO];
+    if (code == SCN_ZOOM || (code == SCN_UPDATEUI && (notification->updated & (SC_UPDATE_V_SCROLL | SC_UPDATE_H_SCROLL)))) [self comparisonViewportChanged];
     if (code == SCN_UPDATEUI) {
         if (notification->updated & SC_UPDATE_SELECTION) _selectionGeneration++;
         if (notification->updated & (SC_UPDATE_SELECTION | SC_UPDATE_CONTENT)) [self scheduleStateNotification];

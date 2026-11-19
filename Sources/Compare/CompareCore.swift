@@ -172,7 +172,7 @@ package struct CompareProjection: Sendable {
                     if size > 65_536 || refinements.count > 32_000 { spans.append([]); limited = true; continue }
                     func boundaries(_ s: TextSnapshot, _ r: ReviewByteRange) throws -> Set<Int> {
                         let bytes = s.bytes.subdata(in:r.lower..<r.upper)
-                        try meter.spend(bytes.count)
+                        for start in stride(from: 0, to: bytes.count, by: 1024) { try meter.spend(min(1024,bytes.count-start)) }
                         guard let text = ReviewUTF8.text(bytes) else { throw CompareFailure.invalid }
                         var set: Set<Int> = [r.lower], p = r.lower
                         for character in text {
@@ -204,7 +204,7 @@ package struct CompareProjection: Sendable {
                 if rows[start].change != nil { start += 1; continue }
                 var end = start
                 while end < rows.count && rows[end].change == nil { try meter.spend(); end += 1 }
-                let lo = start == 0 ? start : min(end,start+3)
+                let lo = start == 0 ? min(end,1) : min(end,start+3)
                 let hi = end == rows.count ? end : max(lo,end-3)
                 if hi > lo { folds.append(.init(rows:lo..<hi)) }
                 start = end

@@ -240,6 +240,29 @@ __attribute__((objc_subclassing_restricted))
 - (BOOL)showCallTip:(NSString *)text;
 /// NO for invalid bounds, an unavailable font or an invalid name; existing state is kept.
 - (BOOL)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size;
+/// Comparison-only presentation primitives; callers use independent snapshot renderers.
+/// No method below edits text, Undo, savepoint or selections. Indicator21/22 and marker2/3/4
+/// are distinct from search20/bookmark1. Main-thread only; all batches prevalidate.
+@property(nonatomic) BOOL comparisonPresentation;
+@property(nonatomic, readonly) BOOL selectionIsRectangular;
+@property(nonatomic, copy, nullable) void (^onComparisonViewportChange)(void);
+@property(nonatomic) NSInteger comparisonTopDisplayLine;
+@property(nonatomic) NSInteger comparisonHorizontalOffset;
+@property(nonatomic, readonly) NSInteger comparisonDisplayRows;
+@property(nonatomic, readonly) NSInteger comparisonLineHeight;
+- (NSInteger)comparisonDocumentLineForDisplayLine:(NSInteger)line;
+- (NSInteger)comparisonDisplayLineForDocumentLine:(NSInteger)line;
+- (NSInteger)comparisonWrapCountForLine:(NSInteger)line;
+- (NSInteger)comparisonYForByte:(NSInteger)position;
+/// kind0 inserted(+),1 deleted(-),2 modified(~). Each batch <=512ranges per layer.
+- (BOOL)addComparisonHighlights:(NSArray<TTByteRange *> *)lines inlineRanges:(NSArray<TTByteRange *> *)spans kind:(NSInteger)kind;
+- (void)clearComparisonPresentation;
+/// Annotation rows are virtual space only. Zero clears, maximum32760 (native signed-short count).
+- (BOOL)setComparisonGapAfterLine:(NSInteger)line rows:(NSInteger)rows;
+/// Source line zero stays visible (native engine rule). Empty clears all hiding.
+- (BOOL)setComparisonHiddenLines:(NSIndexSet *)lines;
+- (void)setComparisonWhitespaceVisible:(BOOL)visible;
+
 - (BOOL)setSearchHighlights:(NSArray<TTByteRange *> *)ranges;
 - (void)clearSearchHighlights;
 
