@@ -1072,7 +1072,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         refreshCloneToolbar()
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        guard !statusClosed else { return false }
+        guard !statusClosed, !CompareCommandScope.blocksWorkspace else { return false }
         switch item.action {
         case #selector(clone(_:)):
             item.state = secondary == nil ? .off : .on

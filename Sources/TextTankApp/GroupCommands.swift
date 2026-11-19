@@ -167,6 +167,7 @@ import TextTankCore
         return items
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard !CompareCommandScope.blocksWorkspace else { return false }
         guard let call = item.representedObject as? Invocation else { return item.action == nil }
         guard !host.isMutatingGroups, !host.tabCommands.isBusy, !host.tabCommands.isReopening,
             host.window?.attachedSheet == nil

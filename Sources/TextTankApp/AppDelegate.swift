@@ -41,7 +41,7 @@ import AppKit
     /// a Run result or another auxiliary window may be main. Nil once that document has closed.
     var currentDocumentController: EditorWindowController? {
         let controller = knownWorkspace.map { $0.active } ?? lastDocumentController
-        guard let controller, !controller.isRetired, !controller.host.isMutatingGroups,
+        guard !CompareCommandScope.blocksWorkspace, let controller, !controller.isRetired, !controller.host.isMutatingGroups,
             (controller.document as? TextDocument)?.isOpen == true
         else { return nil }
         return controller
@@ -128,6 +128,9 @@ import AppKit
             NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.activeEditor }
         }
         return controller
+    }()
+    @MainActor lazy var compare: CompareService = {
+        let value=CompareService();value.currentEditor={ [weak self] in self?.currentEditor };return value
     }()
     @MainActor lazy var macros = MacroController(editorProvider: { [weak self] in self?.currentEditor })
     @MainActor lazy var automations: AutomationController = {
@@ -242,6 +245,7 @@ import AppKit
         services.languagesProvider = { [weak self] in self?.languages }
         services.macrosProvider = { [weak self] in self?.macros }
         services.automationsProvider = { [weak self] in self?.automations }
+        services.compareProvider = { [weak self] in self?.compare }
         services.searchProvider = { [weak self] in self?.searchController }
         services.newDocument = { [weak self] in self?.newDocument($0) }
         services.noteActiveController = { [weak self] in self?.noteActive($0) }
@@ -477,6 +481,15 @@ import AppKit
                 .uniqueLines, .removeEmptyLines, .trimLeading, .trimBoth, .titleCase, .invertCase
             ]), "an EditorTransform has no Edit menu item")
         let search = menu("Search")
+        let comparisons=NSMenuItem(title:"Compare",action:nil,keyEquivalent:"")
+        let compareMenu=NSMenu(title:"Compare")
+        compare.addMainItems(to:compareMenu)
+        compareMenu.addItem(.separator())
+        for command in CompareCommand.allCases {
+            compareMenu.addItem(title:command.title,action:#selector(CompareController.performCompareCommand(_:)),target:nil,representedObject:command.rawValue)
+        }
+        comparisons.submenu=compareMenu;search.addItem(comparisons);search.addItem(.separator())
+
         // One Find. Command-F opens the find bar in the document window; Find Next, Find Previous
         // and Use Selection for Find share its text with the system find pasteboard. Find and
         // Replace is the window with scopes, regular expressions and results.

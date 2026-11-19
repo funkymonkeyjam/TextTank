@@ -276,6 +276,10 @@ final class DocumentTabStrip: NSView {
                         ? String(format: Strings.text("tabs.pinnedEdited", "%@, pinned, edited"), name)
                         : String(format: Strings.text("tabs.pinned", "%@, pinned"), name))
             }
+            if EditorServices.current?.compare?.isMarked(doc.runtimeID) == true {
+                c.select.title += " ↔"
+                c.select.setAccessibilityLabel((c.select.accessibilityLabel() ?? name)+", selected for comparison")
+            }
             c.select.setAccessibilityHelp(
                 "Command-click to change selection. Shift-click to select a range. Selection actions are also in the accessibility Actions menu."
             )

@@ -32,14 +32,17 @@ import AppKit
         super.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: contextInfo)
     }
     override func save(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         revealForNativeAction()
         super.save(sender)
     }
     override func saveAs(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         revealForNativeAction()
         super.saveAs(sender)
     }
     override func revertToSaved(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         revealForNativeAction()
         super.revertToSaved(sender)
     }
@@ -256,6 +259,7 @@ import AppKit
     }
     /// Everything NSDocument validates itself (Save, Revert to Saved and the rest) is left to it.
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard !CompareCommandScope.blocksWorkspace else { return false }
         if item.action == #selector(checkExternalChanges(_:)) { return fileURL != nil }
         if item.action == #selector(toggleReadOnly(_:)) {
             (item as? NSMenuItem)?.state = editor.readOnly ? .on : .off

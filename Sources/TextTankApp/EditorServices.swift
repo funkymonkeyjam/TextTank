@@ -23,6 +23,8 @@ import AppKit
     var languagesProvider: () -> LanguageController? = { nil }
     var macrosProvider: () -> MacroController? = { nil }
     var automationsProvider: () -> AutomationController? = { nil }
+    var compareProvider: () -> CompareService? = { nil }
+    var compare: CompareService? { compareProvider() }
     var searchProvider: () -> SearchController? = { nil }
     var newDocument: (Any?) -> Void = { _ in }
     var noteActiveController: (EditorWindowController) -> Void = { _ in }

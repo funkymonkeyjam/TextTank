@@ -236,3 +236,31 @@ package struct CompareNavigation: Sendable {
         return current
     }
 }
+
+package enum CompareSelection {
+    /// Validate complete-string grapheme boundaries off MainActor. No selection is changed.
+    package static func slice(_ snapshot: TextSnapshot, range: Range<Int>, token: ReviewCancellation) async throws -> TextSnapshot {
+        try await Task.detached {
+            guard range.lowerBound >= 0, range.upperBound <= snapshot.bytes.count, !range.isEmpty,
+                let text = ReviewUTF8.text(snapshot.bytes) else { throw CompareFailure.invalid }
+            var policy = ReviewDiffPolicy.default; policy.maximumWork = 32_000_000
+            let meter = ReviewMeter(policy,token:token,hooks:.init())
+            var offset = 0, low = range.lowerBound == 0, high = false
+            do {
+                for c in text {
+                    let n = c.utf8.count
+                    for i in stride(from:0,to:n,by:1024) { try meter.spend(min(1024,n-i)) }
+                    offset += n
+                    if offset == range.lowerBound { low = true }
+                    if offset == range.upperBound { high = true; break }
+                    if offset > range.upperBound { break }
+                }
+                try meter.poll()
+                guard low && high else { throw CompareFailure.invalid }
+                return try TextSnapshot(bytes:snapshot.bytes.subdata(in:range),source:.freeText(UUID()),
+                    label:snapshot.label+" selection",format:snapshot.format)
+            } catch ReviewHalt.cancelled { throw CompareFailure.cancelled }
+            catch ReviewHalt.budget(let r) { throw CompareFailure.budget(r) }
+        }.value
+    }
+}
