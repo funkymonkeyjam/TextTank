@@ -418,7 +418,7 @@ EditorBridge is now a separate AppKit Objective-C++ framework owning TTEditor an
 ported user lexer. It links Scintilla and Lexilla; it has no dependency on NativeSearch
 or the remaining Swift application target. The application embeds both native frameworks.
 
-TextTankCore owns the30 Foundation model/codec/storage/search-planning sources listed once
+TextTankCore owns the36 Foundation model/codec/storage/search-planning sources listed once
 in scripts/core_sources.py. It depends on NativeSearch and system Foundation/Darwin/CryptoKit/
 zlib interfaces, with no EditorBridge, AppKit or executable dependency. Package access and
 explicit value constructors form the cross-target API; fields retain setter restrictions,
@@ -536,3 +536,7 @@ layout retains its previous focused-group restore behavior. Recovery stays one s
 and never consumes session layouts. Closed-tab history remains transient. No automatic last-session
 restore, extra window, collection, comparison engine or AI provider is introduced. See
 [tab-model](tab-model.md#stage-4-document-targets-and-explicit-session-layouts) for the contract and DS rules.
+
+## Wave 5 Foundation
+
+[review-model](review-model.md) defines the shared immutable snapshot/change/preflight contract. The five Sources/Review Core files are explicitly registered in core_sources.py; SnapshotCapture and ProposalApplier remain Runtime. No new UI or consumer migration is included. ReviewDiffEngine always detaches worker computation. Both linear-space Myers and exact-anchor/LIS strategies share bounded accounting, with independently bounded grapheme refinement and complete/cancelled/budgetStopped results. A weak exact document capture composes existing DocumentTarget and reload epochs; one internally issued shared apply ticket revalidates all exact bytes before the existing atomic bridge transaction, without staging selections or nesting Undo. Empty/rejected attempts consume the ticket without native state changes. Actual behavior and two-strategy measurements belong to exact-candidate validation evidence.

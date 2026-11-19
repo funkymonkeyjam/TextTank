@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-package struct SnapshotID: Hashable, Sendable { package let rawValue: UUID; package init() { rawValue = UUID() } }
+package struct SnapshotID: Hashable, Sendable {
+    package let rawValue: UUID
+    package init() { rawValue = UUID() }
+}
 package enum ReviewSourceID: Equatable, Sendable {
     case document(DocumentID), file(UUID), clipboard(UUID), checkpoint(UUID), freeText(UUID)
 }
@@ -16,19 +19,27 @@ package enum ReviewUTF8 {
             var i = 0
             while i < b.count {
                 let c = b[i]
-                if c < 0x80 { i += 1; continue }
+                if c < 0x80 {
+                    i += 1
+                    continue
+                }
                 let n: Int
-                if c >= 0xc2 && c <= 0xdf { n = 2 }
-                else if c >= 0xe0 && c <= 0xef { n = 3 }
-                else if c >= 0xf0 && c <= 0xf4 { n = 4 }
-                else { return false }
-                guard n <= b.count-i else { return false }
-                let second = b[i+1]
+                if c >= 0xc2 && c <= 0xdf {
+                    n = 2
+                } else if c >= 0xe0 && c <= 0xef {
+                    n = 3
+                } else if c >= 0xf0 && c <= 0xf4 {
+                    n = 4
+                } else {
+                    return false
+                }
+                guard n <= b.count - i else { return false }
+                let second = b[i + 1]
                 guard second >= 0x80 && second <= 0xbf,
                     !(c == 0xe0 && second < 0xa0), !(c == 0xed && second > 0x9f),
                     !(c == 0xf0 && second < 0x90), !(c == 0xf4 && second > 0x8f)
                 else { return false }
-                for j in 2..<n { if b[i+j] < 0x80 || b[i+j] > 0xbf { return false } }
+                for j in 2..<n { if b[i + j] < 0x80 || b[i + j] > 0xbf { return false } }
                 i += n
             }
             return true
@@ -54,8 +65,10 @@ package struct TextSnapshot: Sendable {
     package let document: DocumentTarget?
     package let label: String
     package let format: FileFormat?
-    package init(bytes: Data, source: ReviewSourceID, label: String, document: DocumentTarget? = nil,
-        format: FileFormat? = nil) throws {
+    package init(
+        bytes: Data, source: ReviewSourceID, label: String, document: DocumentTarget? = nil,
+        format: FileFormat? = nil
+    ) throws {
         guard bytes.count <= ReviewDiffPolicy.default.maximumInputBytes else { throw ReviewRejection.budgetExceeded }
         guard ReviewUTF8.valid(bytes) else { throw ReviewRejection.invalidText }
         if case .document(let identity) = source {
@@ -63,10 +76,15 @@ package struct TextSnapshot: Sendable {
                 throw ReviewRejection.invalidRange
             }
             try document.validate()
-        } else if document != nil { throw ReviewRejection.invalidRange }
+        } else if document != nil {
+            throw ReviewRejection.invalidRange
+        }
         id = SnapshotID()
         self.bytes = bytes.withUnsafeBytes { Data($0) }
-        self.source = source; self.document = document; self.label = label; self.format = format
+        self.source = source
+        self.document = document
+        self.label = label
+        self.format = format
     }
 }
 package struct ReviewByteRange: Equatable, Sendable {
@@ -74,7 +92,9 @@ package struct ReviewByteRange: Equatable, Sendable {
     package let lower: Int
     package let upper: Int
     package init(snapshot: SnapshotID, lower: Int, upper: Int) {
-        self.snapshot = snapshot; self.lower = lower; self.upper = upper
+        self.snapshot = snapshot
+        self.lower = lower
+        self.upper = upper
     }
 }
 package struct ReviewLineTable: Sendable {
