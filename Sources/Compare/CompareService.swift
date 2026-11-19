@@ -22,25 +22,29 @@ import EditorBridge
     init(_ editor: TTEditor, selection: Bool = false) throws {
         capture = try ReviewSnapshotCapture.document(editor)
         origin = editor
-        let (doc,_) = try capture.resolve()
+        let (doc, _) = try capture.resolve()
         wasEdited = doc.isDocumentEdited || editor.modified || doc.format != doc.savedFormat
         if selection {
             guard !editor.selectionIsRectangular, let values = capture.snapshot.document?.selections,
                 values.count == 1, let first = values.first, first.anchorByte != first.caretByte
             else { throw CompareOpenFailure.selection }
-            self.selection = min(first.anchorByte,first.caretByte)..<max(first.anchorByte,first.caretByte)
-        } else { self.selection = nil }
+            self.selection = min(first.anchorByte, first.caretByte)..<max(first.anchorByte, first.caretByte)
+        } else {
+            self.selection = nil
+        }
     }
     var canRefresh: Bool {
-        guard let (doc,_) = try? capture.resolve() else { return false }
-        if selection != nil { return origin.map { EditorLifetime.document(for:$0) === doc } == true }
+        guard let (doc, _) = try? capture.resolve() else { return false }
+        if selection != nil { return origin.map { EditorLifetime.document(for: $0) === doc } == true }
         return true
     }
     func refreshInput() throws -> CompareInput {
-        let (doc,editor) = try capture.resolve()
+        let (doc, editor) = try capture.resolve()
         if selection != nil {
-            guard let origin, EditorLifetime.document(for:origin) === doc else { throw CompareOpenFailure.originClosed }
-            return .document(try CompareDocumentInput(origin,selection:true))
+            guard let origin, EditorLifetime.document(for: origin) === doc else {
+                throw CompareOpenFailure.originClosed
+            }
+            return .document(try CompareDocumentInput(origin, selection: true))
         }
         return .document(try CompareDocumentInput(editor))
     }
@@ -60,57 +64,81 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     let snapshot: TextSnapshot
     let input: CompareInput
     let clipboardChange: Int?
-    init(snapshot:TextSnapshot,input:CompareInput,clipboardChange:Int? = nil) {
-        self.snapshot=snapshot;self.input=input;self.clipboardChange=clipboardChange
+    init(snapshot: TextSnapshot, input: CompareInput, clipboardChange: Int? = nil) {
+        self.snapshot = snapshot
+        self.input = input
+        self.clipboardChange = clipboardChange
     }
     func validate() throws {
         if case .document(let source) = input { try source.capture.validateCurrent() }
     }
     var isStale: Bool {
         guard case .document(let source) = input else { return false }
-        guard (try? source.capture.validateCurrent()) != nil, let (doc,_) = try? source.capture.resolve() else { return true }
+        guard (try? source.capture.validateCurrent()) != nil, let (doc, _) = try? source.capture.resolve() else {
+            return true
+        }
         return doc.format != source.capture.snapshot.format
     }
     var canRefresh: Bool {
-        switch input { case .snapshot:return false;case .document(let d):return d.canRefresh;case .file,.clipboard:return true }
+        switch input {
+        case .snapshot: return false
+        case .document(let d): return d.canRefresh
+        case .file, .clipboard: return true
+        }
     }
     func refreshInput() throws -> CompareInput {
         if case .document(let source) = input { return try source.refreshInput() }
-        guard canRefresh else { throw CompareOpenFailure.originClosed }; return input
+        guard canRefresh else { throw CompareOpenFailure.originClosed }
+        return input
     }
     var label: String {
         var title = snapshot.label
         if case .document(let source) = input {
-            if let (doc,editor) = try? source.capture.resolve() {
+            if let (doc, editor) = try? source.capture.resolve() {
                 title = doc.displayName + (source.selection == nil ? "" : " selection")
                 if doc.isDocumentEdited || editor.modified || doc.format != doc.savedFormat { title += " · Edited" }
-            } else if source.wasEdited { title += " · Edited when captured" }
-            if let stamp=source.capture.snapshot.document { title += " · revision \(stamp.revision)" }
-        } else { title += " · captured text" }
-        if let f=snapshot.format {
-            title += " · "+f.encoding.displayName+(f.bom ? " · byte-order mark" : " · no byte-order mark")
+            } else if source.wasEdited {
+                title += " · Edited when captured"
+            }
+            if let stamp = source.capture.snapshot.document { title += " · revision \(stamp.revision)" }
+        } else {
+            title += " · captured text"
+        }
+        if let f = snapshot.format {
+            title += " · " + f.encoding.displayName + (f.bom ? " · byte-order mark" : " · no byte-order mark")
         }
         return title
     }
 }
-@MainActor private final class CompareTabInvocation:NSObject {
-    let mark:Bool
-    let editor:()->TTEditor?
-    init(mark:Bool,editor:@escaping ()->TTEditor?) { self.mark=mark;self.editor=editor }
-}
-@MainActor enum CompareSourceCommand:CaseIterable {
-    case choose,mark,compare
-    var title:String {
-        switch self { case .choose:return "Compare Text…";case .mark:return "Select for Compare";case .compare:return "Compare with Selected" }
+@MainActor private final class CompareTabInvocation: NSObject {
+    let mark: Bool
+    let editor: () -> TTEditor?
+    init(mark: Bool, editor: @escaping () -> TTEditor?) {
+        self.mark = mark
+        self.editor = editor
     }
-    var action:Selector {
-        switch self { case .choose:return #selector(CompareService.showPicker(_:));case .mark:return #selector(CompareService.markCurrent(_:));case .compare:return #selector(CompareService.compareCurrent(_:)) }
+}
+@MainActor enum CompareSourceCommand: CaseIterable {
+    case choose, mark, compare
+    var title: String {
+        switch self {
+        case .choose: return "Compare Text…"
+        case .mark: return "Select for Compare"
+        case .compare: return "Compare with Selected"
+        }
+    }
+    var action: Selector {
+        switch self {
+        case .choose: return #selector(CompareService.showPicker(_:))
+        case .mark: return #selector(CompareService.markCurrent(_:))
+        case .compare: return #selector(CompareService.compareCurrent(_:))
+        }
     }
 }
 @MainActor final class CompareService: NSObject, NSMenuItemValidation {
     let engine: any ReviewDiffing
     private(set) var windows: [CompareController] = []
-    private var admissions=0
+    private var admissions = 0
     private var active: UUID?
     private var waiting: [CompareController] = []
     private(set) var marked: CompareDocumentInput?
@@ -119,155 +147,244 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     var allEditors: () -> [TTEditor] = {
         NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.activeEditor }
     }
-    var readClipboard: () throws -> (Data,Int) = {
-        guard let board=RuntimeEnvironment.current.generalPasteboard(),let text=board.string(forType:.string) else {
+    var readClipboard: () throws -> (Data, Int) = {
+        guard let board = RuntimeEnvironment.current.generalPasteboard(), let text = board.string(forType: .string)
+        else {
             throw CompareOpenFailure.clipboard
         }
-        let bytes=Data(text.utf8)
-        guard bytes.count<=8*1024*1024 else { throw ReviewRejection.budgetExceeded }
-        return (bytes,board.changeCount)
+        let bytes = Data(text.utf8)
+        guard bytes.count <= 8 * 1024 * 1024 else { throw ReviewRejection.budgetExceeded }
+        return (bytes, board.changeCount)
     }
-    var showWindows=true
-    init(engine:any ReviewDiffing = FirstPartyReviewDiff()) { self.engine=engine;super.init() }
+    var showWindows = true
+    init(engine: any ReviewDiffing = FirstPartyReviewDiff()) {
+        self.engine = engine
+        super.init()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(documentsChanged(_:)), name: .textTankDocumentsDidChange, object: nil)
+    }
+    deinit { NotificationCenter.default.removeObserver(self) }
+    @objc private func documentsChanged(_ note: Notification) {
+        if let marked, (try? marked.capture.resolve()) == nil { self.marked = nil }
+    }
     static func message(_ error: Error) -> String {
         switch error {
-        case CompareOpenFailure.sameDocument:return "Choose two different documents. Two views of one document share the same text."
-        case CompareOpenFailure.limit:return "Two comparisons are already open. Close one before starting another."
-        case CompareOpenFailure.selection:return "Choose one nonempty text selection. Rectangular and multiple selections cannot be compared."
-        case CompareOpenFailure.originClosed:return "The selection's original view has closed. Choose its source again to refresh."
-        case CompareOpenFailure.clipboard:return "The clipboard has no available text. Copy text, then choose Compare again."
-        case CompareFailure.cancelled, ReviewRejection.cancelled:return "Comparison cancelled. No document was changed."
-        case CompareFailure.invalid:return "The selected range does not follow text boundaries. Choose a complete text selection and try again."
-        case CompareFailure.budget, ReviewRejection.budgetExceeded:return "The comparison exceeded its size or display limit. Try smaller inputs. No document was changed."
-        case ReviewRejection.closed, ReviewRejection.revisionChanged, ReviewRejection.reloaded:return "The source changed or closed. Choose it again or refresh explicitly."
-        default:return "The comparison could not read this source. \(error.localizedDescription) No document was changed."
+        case is CancellationError: return "Comparison cancelled. No document was changed."
+        case CompareOpenFailure.sameDocument:
+            return "Choose two different documents. Two views of one document share the same text."
+        case CompareOpenFailure.limit: return "Two comparisons are already open. Close one before starting another."
+        case CompareOpenFailure.selection:
+            return "Choose one nonempty text selection. Rectangular and multiple selections cannot be compared."
+        case CompareOpenFailure.originClosed:
+            return "The selection's original view has closed. Choose its source again to refresh."
+        case CompareOpenFailure.clipboard:
+            return "The clipboard has no available text. Copy text, then choose Compare again."
+        case CompareFailure.cancelled, ReviewRejection.cancelled:
+            return "Comparison cancelled. No document was changed."
+        case CompareFailure.invalid:
+            return "The selected range does not follow text boundaries. Choose a complete text selection and try again."
+        case CompareFailure.budget, ReviewRejection.budgetExceeded:
+            return "The comparison exceeded its size or display limit. Try smaller inputs. No document was changed."
+        case ReviewRejection.closed, ReviewRejection.revisionChanged, ReviewRejection.reloaded:
+            return "The source changed or closed. Choose it again or refresh explicitly."
+        default:
+            return "The comparison could not read this source. \(error.localizedDescription) No document was changed."
         }
     }
-    func capture(_ input:CompareInput,token:ReviewCancellation) async throws -> CompareSource {
+    func capture(_ input: CompareInput, token: ReviewCancellation) async throws -> CompareSource {
         try Task.checkCancellation()
         let snapshot: TextSnapshot, change: Int?
         switch input {
         case .snapshot(let value):
-            snapshot=try TextSnapshot(bytes:value.bytes,source:value.source,label:value.label,document:value.document,format:value.format);change=nil
+            snapshot = try TextSnapshot(
+                bytes: value.bytes, source: value.source, label: value.label, document: value.document,
+                format: value.format)
+            change = nil
         case .document(let doc):
             try doc.capture.validateCurrent()
-            let original=doc.capture.snapshot
-            if let range=doc.selection { snapshot=try await CompareSelection.slice(original,range:range,token:token) }
-            else { snapshot=try TextSnapshot(bytes:original.bytes,source:original.source,label:original.label,document:original.document,format:original.format) }
-            try doc.capture.validateCurrent();change=nil
-        case .file(let url):snapshot=try await ReviewSnapshotCapture.file(url);change=nil
+            let original = doc.capture.snapshot
+            if let range = doc.selection {
+                snapshot = try await CompareSelection.slice(original, range: range, token: token)
+            } else {
+                snapshot = try TextSnapshot(
+                    bytes: original.bytes, source: original.source, label: original.label, document: original.document,
+                    format: original.format)
+            }
+            try doc.capture.validateCurrent()
+            change = nil
+        case .file(let url):
+            snapshot = try await ReviewSnapshotCapture.file(url)
+            change = nil
         case .clipboard:
-            let (bytes,count)=try readClipboard()
-            snapshot=try ReviewSnapshotCapture.clipboard { bytes };change=count
+            let (bytes, count) = try readClipboard()
+            snapshot = try ReviewSnapshotCapture.clipboard { bytes }
+            change = count
         }
         try Task.checkCancellation()
         guard !token.isCancelled else { throw CompareFailure.cancelled }
-        return CompareSource(snapshot:snapshot,input:input,clipboardChange:change)
+        return CompareSource(snapshot: snapshot, input: input, clipboardChange: change)
     }
-    func capturePair(_ original:CompareInput,_ modified:CompareInput,token:ReviewCancellation) async throws -> (CompareSource,CompareSource) {
-        if let a=original.boundDocument,a==modified.boundDocument { throw CompareOpenFailure.sameDocument }
-        let a=try await capture(original,token:token),b=try await capture(modified,token:token)
-        try a.validate();try b.validate();return (a,b)
+    func capturePair(_ original: CompareInput, _ modified: CompareInput, token: ReviewCancellation) async throws -> (
+        CompareSource, CompareSource
+    ) {
+        if let a = original.boundDocument, a == modified.boundDocument { throw CompareOpenFailure.sameDocument }
+        let a = try await capture(original, token: token), b = try await capture(modified, token: token)
+        try a.validate()
+        try b.validate()
+        return (a, b)
     }
     /// The sole comparison-opening entry. Caller document inputs are already captured before awaits.
-    func open(original:CompareInput,modified:CompareInput) async throws -> CompareController {
-        guard windows.count+admissions<2 else { throw CompareOpenFailure.limit }
-        admissions+=1
-        defer { admissions-=1 }
-        let cancellation=ReviewCancellation()
-        let pair=try await withTaskCancellationHandler {
-            try await capturePair(original,modified,token:cancellation)
-        } onCancel: { cancellation.cancel() }
-        let controller=CompareController(service:self,original:pair.0,modified:pair.1)
+    func open(original: CompareInput, modified: CompareInput) async throws -> CompareController {
+        guard windows.count + admissions < 2 else { throw CompareOpenFailure.limit }
+        admissions += 1
+        defer { admissions -= 1 }
+        let cancellation = ReviewCancellation()
+        let pair = try await withTaskCancellationHandler {
+            try await capturePair(original, modified, token: cancellation)
+        } onCancel: {
+            cancellation.cancel()
+        }
+        let controller = CompareController(service: self, original: pair.0, modified: pair.1)
         windows.append(controller)
-        if showWindows { controller.showWindow(nil);controller.window?.makeKeyAndOrderFront(nil) }
+        if showWindows {
+            controller.showWindow(nil)
+            controller.window?.makeKeyAndOrderFront(nil)
+        }
         enqueue(controller)
         return controller
     }
-    func enqueue(_ controller:CompareController) {
+    func enqueue(_ controller: CompareController) {
         waiting.removeAll { $0 === controller }
-        waiting.append(controller);controller.showQueued();pump()
+        waiting.append(controller)
+        controller.showQueued()
+        pump()
     }
     private func pump() {
-        guard active==nil else { return }
+        guard active == nil else { return }
         waiting.removeAll { $0.isClosed }
         guard !waiting.isEmpty else { return }
-        let controller=waiting.removeFirst(), job=UUID();active=job
-        controller.run(job:job,engine:engine) { [weak self] in
-            guard let self,self.active==job else { return };self.active=nil;self.pump()
+        let controller = waiting.removeFirst(), job = UUID()
+        active = job
+        controller.run(job: job, engine: engine) { [weak self] in
+            guard let self, self.active == job else { return }
+            self.active = nil
+            self.pump()
         }
     }
-    func closed(_ controller:CompareController) {
-        waiting.removeAll { $0 === controller };windows.removeAll { $0 === controller }
+    func cancelQueued(_ controller: CompareController) { waiting.removeAll { $0 === controller } }
+    func closed(_ controller: CompareController) {
+        waiting.removeAll { $0 === controller }
+        windows.removeAll { $0 === controller }
     }
-    func mark(_ editor:TTEditor) throws {
-        marked=try CompareDocumentInput(editor)
+    func mark(_ editor: TTEditor) throws {
+        marked = try CompareDocumentInput(editor)
         EditorServices.current?.workspaceHost?.tabStrips.forEach { $0.refresh() }
         Announce.say("\(marked!.capture.snapshot.label) selected for comparison.")
     }
-    func isMarked(_ document:DocumentID) -> Bool {
+    func isMarked(_ document: DocumentID) -> Bool {
         guard let marked else { return false }
-        if (try? marked.capture.resolve()) == nil { self.marked=nil;return false }
-        return marked.capture.snapshot.document?.documentID==document
+        if (try? marked.capture.resolve()) == nil {
+            self.marked = nil
+            return false
+        }
+        return marked.capture.snapshot.document?.documentID == document
     }
-    func canCompare(_ editor:TTEditor?) -> (Bool,String?) {
-        guard let marked else { return (false,"Select another tab for comparison first.") }
-        guard (try? marked.capture.validateCurrent()) != nil else { return (false,"The selected source changed or closed. Select it again for comparison.") }
-        guard let editor,let doc=EditorLifetime.document(for:editor),doc.isOpen else { return (false,"There is no open document to compare.") }
-        guard marked.capture.snapshot.document?.documentID != doc.runtimeID else { return (false,"Choose a different document; clone views share the same text.") }
-        return (windows.count+admissions<2,windows.count+admissions>=2 ? "Close a comparison before starting another." : nil)
+    func canCompare(_ editor: TTEditor?) -> (Bool, String?) {
+        guard let marked else { return (false, "Select another tab for comparison first.") }
+        guard (try? marked.capture.validateCurrent()) != nil else {
+            return (false, "The selected source changed or closed. Select it again for comparison.")
+        }
+        guard let editor, let doc = EditorLifetime.document(for: editor), doc.isOpen else {
+            return (false, "There is no open document to compare.")
+        }
+        guard editor.byteLength <= 8 * 1024 * 1024 else {
+            return (false, "This text exceeds the 8 MiB comparison limit.")
+        }
+        guard marked.capture.snapshot.document?.documentID != doc.runtimeID else {
+            return (false, "Choose a different document; clone views share the same text.")
+        }
+        return (
+            windows.count + admissions < 2,
+            windows.count + admissions >= 2 ? "Close a comparison before starting another." : nil
+        )
     }
-    @objc func showPicker(_ sender:Any?) {
-        if let picker { picker.showWindow(nil);picker.window?.makeKeyAndOrderFront(nil);return }
-        let value=CompareSourcePicker(service:self,preferred:currentEditor())
-        picker=value;value.onClose={ [weak self] in self?.picker=nil }
-        value.showWindow(nil);value.window?.makeKeyAndOrderFront(nil)
+    @objc func showPicker(_ sender: Any?) {
+        if let picker {
+            picker.showWindow(nil)
+            picker.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+        let value = CompareSourcePicker(service: self, preferred: currentEditor())
+        picker = value
+        value.onClose = { [weak self] in self?.picker = nil }
+        value.showWindow(nil)
+        value.window?.makeKeyAndOrderFront(nil)
     }
-    @objc func markCurrent(_ sender:Any?) {
-        guard let editor=currentEditor() else { return }
+    @objc func markCurrent(_ sender: Any?) {
+        guard let editor = currentEditor() else { return }
         do { try mark(editor) } catch { Announce.say(Self.message(error)) }
     }
-    @objc func compareCurrent(_ sender:Any?) {
-        guard let editor=currentEditor() else { return };compare(editor)
+    @objc func compareCurrent(_ sender: Any?) {
+        guard let editor = currentEditor() else { return }
+        compare(editor)
     }
-    func compare(_ editor:TTEditor) {
-        guard canCompare(editor).0,let marked else { return }
+    func compare(_ editor: TTEditor) {
+        guard canCompare(editor).0, let marked else { return }
         do {
-            let target=try CompareDocumentInput(editor)
+            let target = try CompareDocumentInput(editor)
             Task { [weak self] in
                 guard let self else { return }
-                do { _=try await self.open(original:.document(marked),modified:.document(target)) }
-                catch { Announce.say(Self.message(error)) }
+                do { _ = try await self.open(original: .document(marked), modified: .document(target)) } catch {
+                    Announce.say(Self.message(error))
+                }
             }
         } catch { Announce.say(Self.message(error)) }
     }
-    func addMainItems(to menu:NSMenu) {
-        for command in CompareSourceCommand.allCases { menu.addItem(title:command.title,action:command.action,target:self) }
-    }
-    func addTabItems(to menu:NSMenu,editor:@escaping ()->TTEditor?) {
-        menu.addItem(.separator())
-        for marking in [true,false] {
-            let item=menu.addItem(title:marking ? CompareSourceCommand.mark.title : CompareSourceCommand.compare.title,
-                action:#selector(invokeTab(_:)),target:self,representedObject:CompareTabInvocation(mark:marking,editor:editor))
-            item.isEnabled=validateMenuItem(item)
+    func addMainItems(to menu: NSMenu) {
+        for command in CompareSourceCommand.allCases {
+            menu.addItem(title: command.title, action: command.action, target: self)
         }
     }
-    @objc private func invokeTab(_ item:NSMenuItem) {
-        guard validateMenuItem(item),let call=item.representedObject as? CompareTabInvocation,let editor=call.editor() else { return }
+    func addTabItems(to menu: NSMenu, editor: @escaping () -> TTEditor?) {
+        menu.addItem(.separator())
+        for marking in [true, false] {
+            let item = menu.addItem(
+                title: marking ? CompareSourceCommand.mark.title : CompareSourceCommand.compare.title,
+                action: #selector(invokeTab(_:)), target: self,
+                representedObject: CompareTabInvocation(mark: marking, editor: editor))
+            item.isEnabled = validateMenuItem(item)
+        }
+    }
+    @objc private func invokeTab(_ item: NSMenuItem) {
+        guard validateMenuItem(item), let call = item.representedObject as? CompareTabInvocation,
+            let editor = call.editor()
+        else { return }
         if call.mark { do { try mark(editor) } catch { Announce.say(Self.message(error)) } } else { compare(editor) }
     }
-    func validateMenuItem(_ item:NSMenuItem) -> Bool {
-        if let call=item.representedObject as? CompareTabInvocation {
-            if call.mark { return call.editor().map { EditorLifetime.document(for:$0)?.isOpen==true && $0.byteLength<=8*1024*1024 } ?? false }
-            let state=canCompare(call.editor());item.toolTip=state.1;return state.0
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if let call = item.representedObject as? CompareTabInvocation {
+            if call.mark {
+                return call.editor().map {
+                    EditorLifetime.document(for: $0)?.isOpen == true && $0.byteLength <= 8 * 1024 * 1024
+                } ?? false
+            }
+            let state = canCompare(call.editor())
+            item.toolTip = state.1
+            return state.0
         }
 
         switch item.action {
-        case #selector(showPicker(_:)):return windows.count+admissions<2
-        case #selector(markCurrent(_:)):return currentEditor() != nil
+        case #selector(showPicker(_:)): return windows.count + admissions < 2
+        case #selector(markCurrent(_:)):
+            let editor = currentEditor()
+            item.toolTip =
+                editor?.byteLength ?? 0 > 8 * 1024 * 1024 ? "This text exceeds the 8 MiB comparison limit." : nil
+            return editor != nil && editor!.byteLength <= 8 * 1024 * 1024
         case #selector(compareCurrent(_:)):
-            let state=canCompare(currentEditor());item.toolTip=state.1;return state.0
-        default:return CompareController.key?.validateMenuItem(item) ?? false
+            let state = canCompare(currentEditor())
+            item.toolTip = state.1
+            return state.0
+        default: return CompareController.key?.validateMenuItem(item) ?? false
         }
     }
 }
