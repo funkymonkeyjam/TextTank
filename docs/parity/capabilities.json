@@ -851,7 +851,7 @@
     "source_commit": "05d22261fe7364cce5b15361b715a160a8df676f",
     "source_tree": "a66ce17d68738f4e8346a98461ca6a7d30c75f43",
     "refreshed_on": "2026-11-16",
-    "scope": "All eight dated source ownership and focused-check-presence mappings refreshed after the app/core split. Actual run results belong to exact-candidate validation. No Windows differential, GUI, full-language, full-command or full-parity certification."
+    "scope": "Original source ownership and focused-check-presence baseline after the app/core split; a later per-assessment source_snapshot overrides this baseline for a changed mapping. Actual run results belong to exact-candidate validation. No Windows differential, GUI, full-language, full-command or full-parity certification."
   },
   "assessments": {
     "files.save.external-conflict": {
@@ -974,6 +974,12 @@
       "remaining": "Full reference differential and all interaction combinations remain unverified."
     },
     "automation.editor.undo": {
+      "source_snapshot": {
+        "source_commit": "7a3f514359c04114d48862ad0827024a212a7122",
+        "source_tree": "0b110854fd35bc18ac818c36ca91dfc0f44d2ceb",
+        "refreshed_on": "2026-11-18",
+        "scope": "Stage 4 target-helper ownership and focused-check presence: origin.replaceSelections preserves the captured source's grouped Undo. Actual behavior evidence belongs to exact-candidate validation; no full-parity certification."
+      },
       "implementation_state": "partial",
       "verification_state": "focused checks present; consult exact-candidate validation",
       "implementation_paths": [
