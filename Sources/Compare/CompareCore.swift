@@ -359,6 +359,10 @@ package struct CompareNavigation: Sendable {
         self.count = max(0, count)
         current = nil
     }
+    package mutating func select(_ index: Int) {
+        guard index >= 0, index < count else { return }
+        current = index
+    }
     package var hasNext: Bool { count > 0 && (current == nil || current! < count - 1) }
     package var hasPrevious: Bool { count > 0 && (current == nil || current! > 0) }
     @discardableResult package mutating func move(next: Bool) -> Int? {

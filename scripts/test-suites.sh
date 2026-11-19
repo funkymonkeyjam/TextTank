@@ -55,6 +55,7 @@ suite_build "tab-integration-core-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPP
 suite_run tab-integration-core-checks harness/logs/tab-integration-core-checks.log build/tests/tab-integration-core-checks
 
 suite_script scripts/test-review.sh
+suite_script scripts/test-compare.sh
 
 suite_script scripts/test-documents.sh
 

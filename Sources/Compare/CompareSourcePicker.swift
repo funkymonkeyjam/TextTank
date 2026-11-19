@@ -17,6 +17,8 @@ import EditorBridge
     weak var service: CompareService?
     var onClose: (() -> Void)?
     let kind = NSPopUpButton(), original = NSPopUpButton(), modified = NSPopUpButton()
+    let originalEncoding = NSPopUpButton(), modifiedEncoding = NSPopUpButton()
+    private let savedEncodingCaption = NSTextField(labelWithString: "Saved file encoding")
     private let fileA = NSButton(title: "Choose Original File…", target: nil, action: nil)
     private let fileB = NSButton(title: "Choose Modified File…", target: nil, action: nil)
     private let fileLabels = [
@@ -37,12 +39,12 @@ import EditorBridge
     init(service: CompareService, preferred: TTEditor?) {
         self.service = service
         let panel = ToolPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 520), styleMask: [.titled, .closable, .resizable])
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 620), styleMask: [.titled, .closable, .resizable])
         super.init(window: panel)
         panel.title = "Choose Comparison Sources"
         panel.delegate = self
         panel.listedInWindowMenu = true
-        panel.contentMinSize = NSSize(width: 560, height: 480)
+        panel.contentMinSize = NSSize(width: 560, height: 560)
         panel.animationBehavior = .none
         kind.addItems(withTitles: [
             "Two Tabs", "Tab and Saved File", "Tab and Clipboard", "Selection and Clipboard", "Two Files"
@@ -72,6 +74,20 @@ import EditorBridge
             }
         }
         if modified.numberOfItems > 1 { modified.selectItem(at: 1) }
+        for (popup, name) in [
+            (originalEncoding, "Original file encoding"), (modifiedEncoding, "Modified or saved file encoding")
+        ] {
+            popup.addItem(withTitle: "Automatic")
+            for encoding in FileEncoding.allCases {
+                popup.addItem(withTitle: encoding.displayName)
+                popup.lastItem?.representedObject = encoding.rawValue
+            }
+            popup.setAccessibilityLabel(name)
+            popup.toolTip =
+                "A saved tab uses its last saved encoding. Other files use a Unicode byte-order mark, or strict UTF-8. Choose another encoding explicitly when needed."
+            popup.target = self
+            popup.action = #selector(changed(_:))
+        }
         fileA.target = self
         fileA.action = #selector(chooseFile(_:))
         fileA.tag = 0
@@ -94,7 +110,8 @@ import EditorBridge
         buttons.orientation = .horizontal
         let stack = NSStackView(views: [
             NSTextField(labelWithString: "Compare captured text without changing either source."), kind, original,
-            modified, fileA, fileLabels[0], fileB, fileLabels[1], status, buttons
+            modified, fileA, fileLabels[0], originalEncoding, fileB, fileLabels[1], savedEncodingCaption,
+            modifiedEncoding, status, buttons
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -110,6 +127,8 @@ import EditorBridge
             kind.widthAnchor.constraint(equalTo: stack.widthAnchor),
             original.widthAnchor.constraint(equalTo: stack.widthAnchor),
             modified.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            originalEncoding.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            modifiedEncoding.widthAnchor.constraint(equalTo: stack.widthAnchor),
             start.heightAnchor.constraint(greaterThanOrEqualToConstant: 28),
             cancel.heightAnchor.constraint(greaterThanOrEqualToConstant: 28)
         ])
@@ -146,6 +165,11 @@ import EditorBridge
         let type = kind.indexOfSelectedItem
         original.isHidden = type == 4
         modified.isHidden = type != 0
+        savedEncodingCaption.isHidden = type != 1
+        originalEncoding.isHidden = type != 4
+        modifiedEncoding.isHidden = type != 4 && type != 1
+        originalEncoding.isEnabled = !busy
+        modifiedEncoding.isEnabled = !busy
         fileA.isHidden = type != 4
         fileB.isHidden = type != 4
         fileLabels.forEach { $0.isHidden = type != 4 }
@@ -227,6 +251,9 @@ import EditorBridge
         fileLabels[side].toolTip = url.path
         update()
     }
+    private func selectedEncoding(_ popup: NSPopUpButton) -> FileEncoding? {
+        (popup.selectedItem?.representedObject as? String).flatMap(FileEncoding.init(rawValue:))
+    }
     @objc private func begin(_ sender: Any?) {
         update()
         guard !busy, let service, start.isEnabled else { return }
@@ -238,10 +265,8 @@ import EditorBridge
                 b = try selected(modified)
             case 1:
                 a = try selected(original)
-                guard case .document(let input) = a, let url = try input.capture.resolve().0.fileURL else {
-                    throw ReviewRejection.closed
-                }
-                b = .file(url)
+                guard case .document(let input) = a else { throw ReviewRejection.closed }
+                b = .savedFile(try CompareSavedFileInput(input, encoding: selectedEncoding(modifiedEncoding)))
             case 2:
                 a = try selected(original)
                 b = .clipboard
@@ -250,8 +275,8 @@ import EditorBridge
                 b = .clipboard
             default:
                 guard let x = urls[0], let y = urls[1] else { return }
-                a = .file(x)
-                b = .file(y)
+                a = .file(x, encoding: selectedEncoding(originalEncoding))
+                b = .file(y, encoding: selectedEncoding(modifiedEncoding))
             }
             busy = true
             update()

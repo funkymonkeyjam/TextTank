@@ -16,7 +16,7 @@ checks (`--configuration-input-accessibility`), plus Stage 0 workspace checks (`
 and normal completion marker; a failure in any process fails acceptance. All seven processes create
 their owned support directory and document controller before `NSApplication`, check
 singleton identity. The two CLI processes use accessory activation; the five owned tab app processes use regular activation to exercise native window/review behavior. The complete test
-runner records 54 suites: all 51 accepted Wave 4 suites plus Foundation Core layering, Core behavior and native applier checks. `scripts/test-review.sh` uses actual signed canonical Core/Runtime modules; diff work runs detached from MainActor, while native capture/application use owned isolated documents.
+runner records 57 suites: all 54 accepted Wave 4/Foundation suites plus D1 Core layering, projection behavior and native controller checks. `scripts/test-review.sh` uses actual signed canonical Core/Runtime modules; diff work runs detached from MainActor, while native capture/application use owned isolated documents.
 A combined CLI prefix failed native review/save-panel creation with saturated AppKit
 animation workers; paired controls passed the full original document checks and all
 input checks in separate processes on identical product bytes. This isolates test
@@ -116,3 +116,5 @@ compiler refresh must retain the exact target and absolute SwiftCompile primary 
 actual driver/response/compiler/SDK/settings, source/output-map hashes and the identical
 object. Driver file-list membership alone cannot prove that refresh. Missing primary
 evidence or changed object bytes reject reuse.
+
+D1 adds `scripts/test-compare.sh` using signed canonical Core/Runtime/EditorBridge images. Controller checks create owned documents/files and inject a named private pasteboard only under `TEXTTANK_TEST_PASTEBOARD=1`; they never inspect the general clipboard. Pure projection checks reconstruct both sources from side/unified/segmented mappings. Physical keyboard, wrapped reading and VoiceOver speech remain separate observations. `docs/compare-model.md` is included in the explicit packaged review documents.

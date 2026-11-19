@@ -49,10 +49,43 @@ import EditorBridge
         return .document(try CompareDocumentInput(editor))
     }
 }
+/// The disk side of Tab and Saved File remains bound to that exact document's pinned
+/// saved location. A Save As or save-state change invalidates it without reading disk.
+@MainActor final class CompareSavedFileInput {
+    let parent: CompareDocumentInput
+    let url: URL, encoding: FileEncoding
+    let overrideEncoding: FileEncoding?
+    private let edited: Bool
+    private let savedFormat: FileFormat
+    init(_ parent: CompareDocumentInput, encoding: FileEncoding? = nil) throws {
+        let (doc, editor) = try parent.capture.resolve()
+        guard let url = doc.diskURL ?? doc.fileURL else { throw ReviewRejection.closed }
+        self.parent = parent
+        self.url = url
+        self.overrideEncoding = encoding
+        self.encoding = encoding ?? doc.savedFormat.encoding
+        self.savedFormat = doc.savedFormat
+        edited = doc.isDocumentEdited || editor.modified || doc.format != doc.savedFormat
+    }
+    func validate() throws {
+        try parent.capture.validateCurrent()
+        let (doc, editor) = try parent.capture.resolve()
+        guard (doc.diskURL ?? doc.fileURL) == url, doc.savedFormat == savedFormat,
+            (doc.isDocumentEdited || editor.modified || doc.format != doc.savedFormat) == edited
+        else {
+            throw ReviewRejection.bytesChanged
+        }
+    }
+    func refreshInput() throws -> CompareInput {
+        let (_, editor) = try parent.capture.resolve()
+        return .savedFile(try CompareSavedFileInput(CompareDocumentInput(editor), encoding: overrideEncoding))
+    }
+}
 @MainActor enum CompareInput {
     case snapshot(TextSnapshot)
     case document(CompareDocumentInput)
-    case file(URL)
+    case file(URL, encoding: FileEncoding? = nil)
+    case savedFile(CompareSavedFileInput)
     case clipboard
     var boundDocument: DocumentID? {
         if case .document(let input) = self { return input.capture.snapshot.document?.documentID }
@@ -71,8 +104,10 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     }
     func validate() throws {
         if case .document(let source) = input { try source.capture.validateCurrent() }
+        if case .savedFile(let source) = input { try source.validate() }
     }
     var isStale: Bool {
+        if case .savedFile(let source) = input { return (try? source.validate()) == nil }
         guard case .document(let source) = input else { return false }
         guard (try? source.capture.validateCurrent()) != nil, let (doc, _) = try? source.capture.resolve() else {
             return true
@@ -84,6 +119,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         case .snapshot: return false
         case .document(let d): return d.canRefresh
         case .file, .clipboard: return true
+        case .savedFile(let source): return (try? source.parent.capture.resolve()) != nil
         }
     }
     var canRetainForRefresh: Bool {
@@ -102,8 +138,15 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     }
     func refreshInput() throws -> CompareInput {
         if case .document(let source) = input { return try source.refreshInput() }
+        if case .savedFile(let source) = input { return try source.refreshInput() }
         // Fixed value inputs remain fixed when the other live source is explicitly refreshed.
         return input
+    }
+    var displayName: String {
+        if case .document(let source) = input, let (doc, _) = try? source.capture.resolve() {
+            return doc.displayName + (source.selection == nil ? "" : " selection")
+        }
+        return snapshot.label
     }
     var label: String {
         var title = snapshot.label
@@ -182,6 +225,9 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         guard bytes.count <= 8 * 1024 * 1024 else { throw ReviewRejection.budgetExceeded }
         return (bytes, board.changeCount)
     }
+    var fileSnapshot: @Sendable (URL, FileEncoding?) async throws -> TextSnapshot = { url, encoding in
+        try await ReviewSnapshotCapture.file(url, as: encoding)
+    }
     var showWindows = true
     init(engine: any ReviewDiffing = FirstPartyReviewDiff()) {
         self.engine = engine
@@ -192,6 +238,24 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     deinit { NotificationCenter.default.removeObserver(self) }
     @objc private func documentsChanged(_ note: Notification) {
         if let marked, (try? marked.capture.resolve()) == nil { self.marked = nil }
+    }
+    static func budgetMessage(_ reason: ReviewBudgetReason) -> String {
+        switch reason {
+        case .input: return "One source exceeds the text size limit."
+        case .lines: return "One source has too many lines."
+        case .work: return "The comparison work limit was reached."
+        case .time: return "The comparison time limit was reached."
+        case .workspace: return "The comparison exceeded its memory allowance."
+        case .output: return "The comparison has too many changes or display rows."
+        case .span, .tokens: return "A changed span is too large to display safely."
+        case .invalidInput: return "The source could not be compared safely."
+        case .mainThread: return "The comparison could not start in the background. Try again."
+        case .notAttempted: return "Some comparison detail was not computed."
+        }
+    }
+    private func report(_ error: Error) {
+        let text = Self.message(error)
+        if let host = EditorServices.current?.workspaceHost { host.showTabMessage(text) } else { Announce.say(text) }
     }
     static func message(_ error: Error) -> String {
         switch error {
@@ -209,9 +273,10 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
             return "Comparison cancelled. No document was changed."
         case CompareFailure.invalid:
             return "The selected range does not follow text boundaries. Choose a complete text selection and try again."
-        case CompareFailure.budget, ReviewRejection.budgetExceeded:
-            return "The comparison exceeded its size or display limit. Try smaller inputs. No document was changed."
-        case ReviewRejection.closed, ReviewRejection.revisionChanged, ReviewRejection.reloaded:
+        case CompareFailure.budget(let reason): return budgetMessage(reason) + " No document was changed."
+        case ReviewRejection.budgetExceeded: return "One source exceeds the 8 MiB text limit. No document was changed."
+        case ReviewRejection.closed, ReviewRejection.revisionChanged, ReviewRejection.reloaded,
+            ReviewRejection.bytesChanged:
             return "The source changed or closed. Choose it again or refresh explicitly."
         default:
             return "The comparison could not read this source. \(error.localizedDescription) No document was changed."
@@ -239,8 +304,13 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
             }
             try doc.capture.validateCurrent()
             change = nil
-        case .file(let url):
-            snapshot = try await ReviewSnapshotCapture.file(url)
+        case .file(let url, let encoding):
+            snapshot = try await fileSnapshot(url, encoding)
+            change = nil
+        case .savedFile(let file):
+            try file.validate()
+            snapshot = try await fileSnapshot(file.url, file.encoding)
+            try file.validate()
             change = nil
         case .clipboard:
             let (bytes, count) = try readClipboard()
@@ -349,7 +419,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     }
     @objc func markCurrent(_ sender: Any?) {
         guard let editor = currentEditor() else { return }
-        do { try mark(editor) } catch { Announce.say(Self.message(error)) }
+        do { try mark(editor) } catch { report(error) }
     }
     @objc func compareCurrent(_ sender: Any?) {
         guard let editor = currentEditor() else { return }
@@ -362,10 +432,10 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
             Task { [weak self] in
                 guard let self else { return }
                 do { _ = try await self.open(original: .document(marked), modified: .document(target)) } catch {
-                    Announce.say(Self.message(error))
+                    report(error)
                 }
             }
-        } catch { Announce.say(Self.message(error)) }
+        } catch { report(error) }
     }
     func addMainItems(to menu: NSMenu) {
         for command in CompareSourceCommand.allCases {
@@ -386,7 +456,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         guard validateMenuItem(item), let call = item.representedObject as? CompareTabInvocation,
             let editor = call.editor()
         else { return }
-        if call.mark { do { try mark(editor) } catch { Announce.say(Self.message(error)) } } else { compare(editor) }
+        if call.mark { do { try mark(editor) } catch { report(error) } } else { compare(editor) }
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if let call = item.representedObject as? CompareTabInvocation {

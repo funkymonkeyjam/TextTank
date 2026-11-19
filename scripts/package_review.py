@@ -17,7 +17,7 @@ from bootstrap import obtain_archive
 # prompts, one-off research generators and dated worker notes are not deliveries.
 REVIEW_DOCUMENTS = (
     'docs/REVIEW-ME.md', 'docs/BUILDING.md', 'docs/product-spec.md',
-    'docs/architecture.md', 'docs/tab-model.md', 'docs/review-model.md', 'docs/DESIGN-STANDARDS.md', 'docs/design-budget.json',
+    'docs/architecture.md', 'docs/tab-model.md', 'docs/review-model.md', 'docs/compare-model.md', 'docs/DESIGN-STANDARDS.md', 'docs/design-budget.json',
     'docs/AUTOMATION-RULES.md', 'docs/EXTENSIONS-AND-RUN.md',
     'docs/parity/README.md', 'docs/parity/capabilities.json',
     'docs/parity/user-validation-2026-11-14.json',

@@ -236,6 +236,8 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             if sourceLabels[i].stringValue != value {
                 sourceLabels[i].stringValue = value
                 sourceLabels[i].setAccessibilityLabel(value)
+                (i == 0 ? left : right).editor.accessibilityDocumentName =
+                    (i == 0 ? "Original" : "Modified") + " comparison for " + (source?.displayName ?? "closed source")
             }
         }
     }
@@ -340,11 +342,15 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         switch completeness {
         case .complete: return "Complete."
         case .cancelled: return "Computation was cancelled."
-        case .budgetStopped: return "The size, time or work limit was reached."
+        case .budgetStopped(let reason): return CompareService.budgetMessage(reason)
         }
     }
     private func showResultStatus() {
         guard let p = projection else { return }
+        guard presentationComplete && !hasPendingGeometry else {
+            showStatus("Arranging captured comparison…")
+            return
+        }
         let base =
             p.changes.identical
             ? "Byte-identical text. The decoded text matches byte for byte. File encodings or byte-order marks may differ."
@@ -488,6 +494,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 progress.stopAnimation(nil)
                 cancelButton.isHidden = true
                 window?.toolbar?.validateVisibleItems()
+                if presentationComplete { showResultStatus() }
             }
         }
         let stamp = generation, oldLeft = left.top, oldRight = right.top
@@ -745,8 +752,19 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             if let change = value.change {
                 // A segment contains complete clusters. Byte->UTF16 conversion is bounded to
                 // this at-most64KiB cell; original coordinates are never rewritten.
-                for span in p.inlineSpans[change] {
-                    let r = value.side == .original ? span.original : span.modified
+                let spans = p.inlineSpans[change]
+                func range(_ i: Int) -> ReviewByteRange {
+                    value.side == .original ? spans[i].original : spans[i].modified
+                }
+                var low = 0, high = spans.count
+                while low < high {
+                    let mid = (low + high) / 2
+                    if range(mid).upper <= segment.range.lower { low = mid + 1 } else { high = mid }
+                }
+                var i = low
+                while i < spans.count && range(i).lower < end {
+                    let r = range(i)
+                    i += 1
                     let lo = max(segment.range.lower, r.lower), hi = min(end, r.upper)
                     if hi > lo {
                         let preceding = ReviewUTF8.text(snapshot.bytes.subdata(in: segment.range.lower..<lo)) ?? ""
@@ -780,8 +798,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         }
         guard case .segment(let index) = unifiedRows[row], let change = p.unified[p.segments[index].unifiedRow].change
         else { return }
-        navigation = CompareNavigation(count: p.changes.blocks.count)
-        for _ in 0...change { navigation.move(next: true) }
+        navigation.select(change)
         announcePosition()
     }
     private func announcePosition() {

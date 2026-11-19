@@ -25,13 +25,84 @@ private final class CompareCountingEngine: ReviewDiffing, @unchecked Sendable {
         lock.unlock()
     }
 }
+private final class ComparePausedEngine: ReviewDiffing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var paused = true, entries = 0, inFlight = 0, maximum = 0
+    var calls: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries
+    }
+    var peak: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return maximum
+    }
+    func release() {
+        lock.lock()
+        paused = false
+        lock.unlock()
+    }
+    private func enter() {
+        lock.lock()
+        entries += 1
+        inFlight += 1
+        maximum = max(maximum, inFlight)
+        lock.unlock()
+    }
+    private func leave() {
+        lock.lock()
+        inFlight -= 1
+        lock.unlock()
+    }
+    private func waiting() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return paused
+    }
+    func compare(
+        _ a: TextSnapshot, _ b: TextSnapshot, policy: ReviewDiffPolicy, token: ReviewCancellation,
+        hooks: ReviewDiffHooks
+    ) async -> ReviewChangeSet {
+        enter()
+        defer { leave() }
+        while waiting() && !token.isCancelled { try? await Task.sleep(nanoseconds: 1_000_000) }
+        return await FirstPartyReviewDiff().compare(a, b, policy: policy, token: token, hooks: hooks)
+    }
+}
+private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var fail = false
+    func stopNext() {
+        lock.lock()
+        fail = true
+        lock.unlock()
+    }
+    private func take() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let value = fail
+        fail = false
+        return value
+    }
+    func compare(
+        _ a: TextSnapshot, _ b: TextSnapshot, policy: ReviewDiffPolicy, token: ReviewCancellation,
+        hooks: ReviewDiffHooks
+    ) async -> ReviewChangeSet {
+        if take() {
+            return ReviewChangeSet(
+                original: a.id, modified: b.id, blocks: [], completeness: .budgetStopped(.work), metrics: .init())
+        }
+        return await FirstPartyReviewDiff().compare(a, b, policy: policy, token: token, hooks: hooks)
+    }
+}
 @main struct CompareControllerChecks {
     @MainActor static func main() async {
         await Checks.run("CompareControllerChecks") {
             let isolated = try IsolatedSupportDirectory("D1Controllers")
             let documents = TextDocumentController()
             let app = NSApplication.shared
-            app.setActivationPolicy(.accessory)
+            app.setActivationPolicy(.regular)
             NativeFixtureEnvironment.install()
             let previous = EditorServices.current, delegate = AppDelegate()
             delegate.installEditorServices()
@@ -253,6 +324,164 @@ private final class CompareCountingEngine: ReviewDiffing, @unchecked Sendable {
             q2.cancel(nil)
             q2.window?.close()
             q1.window?.close()
+
+            let paused = ComparePausedEngine(), serial = service(paused)
+            let first = try await serial.open(original: values("old"), modified: values("new"))
+            let entered = ProcessInfo.processInfo.systemUptime + 2
+            while paused.calls == 0 && ProcessInfo.processInfo.systemUptime < entered {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            check(paused.calls == 1, "D1 first queued pipeline entered actual injected engine")
+            let second = try await serial.open(original: values("second"), modified: values("result"))
+            try await Task.sleep(nanoseconds: 20_000_000)
+            check(paused.calls == 1 && second.isBusy, "D1 one active comparison pipeline")
+            second.perform(.cancel)
+            second.window?.close()
+            paused.release()
+            try await settled(first)
+            check(
+                paused.calls == 1 && paused.peak == 1,
+                "D1 cancelled queued result never starts and workers do not overlap")
+            first.window?.close()
+
+            let stopped = ComparePausedEngine(), stale = service(stopped), changing = fresh("captured\n")
+            let running = try await stale.open(original: input(changing), modified: values("candidate\n"))
+            changing.editor.replaceSelection("edit")
+            running.pollSources()
+            stopped.release()
+            try await Task.sleep(nanoseconds: 30_000_000)
+            check(running.projection == nil && running.outOfDate, "D1 source change during work drops late result")
+            check(
+                !running.statusText.contains("Byte-identical"),
+                "D1 cancelled/stale in-flight result cannot imply equality")
+            running.window?.close()
+
+            let failing = CompareFailingEngine(), refreshService = service(failing), ra = fresh("same\n"),
+                rb = fresh("same\n")
+            let retained = try await refreshService.open(original: input(ra), modified: input(rb))
+            try await settled(retained)
+            let beforeRefresh = retained.projection?.original.id, oldRight = retained.modified?.snapshot.bytes
+            rb.editor.replaceSelection("user change")
+            retained.pollSources()
+            failing.stopNext()
+            retained.perform(.refresh)
+            try await settled(retained)
+            check(
+                retained.projection?.original.id == beforeRefresh && retained.modified?.snapshot.bytes == oldRight,
+                "D1 failed refresh keeps complete old pair")
+            check(
+                retained.outOfDate && retained.statusText.contains("work limit")
+                    && !retained.statusText.contains("Byte-identical"),
+                "D1 failed refresh has truthful reason and previous-result attribution")
+            retained.window?.close()
+
+            let ga = fresh("anchor\nend\n"), gb = fresh("anchor\nother\nend\n"), geometryService = service()
+            let previousGeometry = try await geometryService.open(original: input(ga), modified: input(gb))
+            try await settled(previousGeometry)
+            let previousGeometryID = previousGeometry.projection?.modified.id,
+                previousBytes = previousGeometry.modified?.snapshot.bytes
+            gb.editor.text = "anchor\n" + String(repeating: "new\n", count: 32761) + "end\n"
+            previousGeometry.pollSources()
+            previousGeometry.perform(.refresh)
+            try await settled(previousGeometry)
+            check(
+                previousGeometry.projection?.modified.id == previousGeometryID
+                    && previousGeometry.modified?.snapshot.bytes == previousBytes,
+                "D1 native geometry refusal restores previous captured pair")
+            check(
+                previousGeometry.outOfDate && previousGeometry.statusText.contains("display limit"),
+                "D1 native geometry refusal is explicit, not a partial successful refresh")
+            previousGeometry.window?.close()
+
+            let origins = fresh("first selection\nsecond\n")
+            origins.presentation?.clone(nil)
+            let origin = try requireValue(origins.presentation?.secondary, "D1 selection origin clone")
+            _ = origin.setSelectionAnchor(0, caret: 5)
+            _ = origins.presentation?.primaryEditor.setSelectionAnchor(16, caret: 22)
+            let selectedInput = CompareInput.document(try CompareDocumentInput(origin, selection: true))
+            let selectionService = service(),
+                bound = try await selectionService.open(original: selectedInput, modified: values("other"))
+            try await settled(bound)
+            origins.presentation?.closeSplit(nil)
+            check(
+                bound.original?.canRefresh == false && bound.original?.snapshot.bytes == Data("first".utf8),
+                "D1 retired selection origin keeps slice and cannot borrow primary selection")
+            let disabled = NSMenuItem(
+                title: "Refresh", action: #selector(CompareController.performCompareCommand(_:)), keyEquivalent: "")
+            disabled.representedObject = CompareCommand.refresh.rawValue
+            check(
+                !bound.validateMenuItem(disabled) && disabled.toolTip?.contains("original view") == true,
+                "D1 retired-origin Refresh is disabled with a reason")
+            bound.window?.close()
+
+            let legacy = folder.appendingPathComponent("legacy.txt")
+            try FileCodec.encode("price €\r\n", format: .init(encoding: .windows1252)).write(to: legacy)
+            let encodings = service(),
+                legacyResult = try await encodings.open(
+                    original: .file(legacy, encoding: .windows1252), modified: values("price €\r\n"))
+            try await settled(legacyResult)
+            check(
+                legacyResult.projection?.changes.identical == true
+                    && legacyResult.original?.snapshot.format?.encoding == .windows1252,
+                "D1 explicit strict legacy encoding uses existing FileCodec")
+            legacyResult.window?.close()
+
+            let saved = fresh("disk original\n")
+            let disk = folder.appendingPathComponent("saved.txt")
+            try Data("disk original\n".utf8).write(to: disk)
+            saved.fileURL = disk
+            let savedService = service(), parent = try CompareDocumentInput(saved.editor)
+            let savedComparison = try await savedService.open(
+                original: .document(parent), modified: .savedFile(CompareSavedFileInput(parent)))
+            try await settled(savedComparison)
+            check(
+                savedComparison.projection?.changes.identical == true,
+                "D1 Tab and Saved File reads actual owned disk bytes")
+            let oldDisk = savedComparison.modified?.snapshot.id
+            saved.fileURL = folder.appendingPathComponent("saved-as.txt")
+            try Data("new disk content\n".utf8).write(to: saved.fileURL!)
+            savedComparison.pollSources()
+            check(savedComparison.outOfDate, "D1 saved-file location change invalidates the captured pair")
+            savedComparison.perform(.refresh)
+            try await settled(savedComparison)
+            check(
+                savedComparison.modified?.snapshot.id != oldDisk
+                    && savedComparison.modified?.snapshot.bytes == Data("new disk content\n".utf8),
+                "D1 explicit saved-file Refresh resolves the current pinned saved location")
+            savedComparison.window?.close()
+
+            let routing = service(), route = fresh("route source\n"),
+                routed = try await routing.open(original: input(route), modified: values("route result\n"))
+            try await settled(routed)
+            delegate.buildMenus()
+            host.window?.makeKeyAndOrderFront(nil)
+            app.activate(ignoringOtherApps: true)
+            _ = NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
+            routed.window?.makeKeyAndOrderFront(nil)
+            _ = routed.window?.makeFirstResponder(routed.left.editor)
+            try await Task.sleep(nanoseconds: 30_000_000)
+            check(
+                routed.window?.isKeyWindow == true && CompareCommandScope.blocksWorkspace,
+                "D1 owned comparison is key and blocks workspace scope")
+            check(delegate.currentEditor == nil, "D1 current-editor providers cannot leak a background target")
+            let routeState = State(route),
+                command = NSMenuItem(
+                    title: "Duplicate", action: #selector(EditorWindowController.command(_:)), keyEquivalent: "")
+            command.representedObject = "duplicateLine"
+            let presentation = try requireValue(route.presentation, "D1 route presentation")
+            check(!presentation.validateMenuItem(command), "D1 workspace custom command validates disabled")
+            presentation.command(command)
+            let readonly = NSMenuItem(
+                title: "Read Only", action: #selector(TextDocument.toggleReadOnly(_:)), keyEquivalent: "")
+            route.toggleReadOnly(readonly)
+            check(
+                State(route) == routeState && !route.editor.readOnly,
+                "D1 actual stale UI dispatch cannot mutate source text/read-only/selection")
+            check(
+                routed.window?.canBecomeMain == false && routed.window?.windowController?.document == nil,
+                "D1 comparison has no document or main-window lifecycle")
+            _ = NSApp.sendAction(#selector(NSWindow.performClose(_:)), to: nil, from: nil)
+            check(routed.isClosed && route.isOpen, "D1 Command-W path closes comparison, preserving source document")
         }
     }
 }

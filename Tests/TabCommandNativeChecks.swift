@@ -145,7 +145,7 @@ extension TabDiskIO {
             "T1 AX menu tracking preserves editing focus")
         let titles = menu.items.filter { !$0.isSeparatorItem }.map(\.title)
         check(
-            titles == TabCommand.allCases.map(\.title) + ["Editor Groups"],
+            titles == TabCommand.allCases.map(\.title) + ["Select for Compare", "Compare with Selected", "Editor Groups"],
             "T1 shared menu preserves create-close-organisation-location order and adds Stage 3 Groups submenu")
         check(menu.items.allSatisfy { $0.keyEquivalent.isEmpty }, "T1 no new context key equivalents")
         dispatch(try item(menu, .closeOthers))
