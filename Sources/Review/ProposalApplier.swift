@@ -85,6 +85,7 @@ enum ReviewApplyResult: Equatable, Sendable { case applied, noChange, rejected(R
             let target = DocumentTarget(
                 documentID: document.runtimeID, revision: editor.revision,
                 loadEpoch: document.loadEpoch, byteLength: editor.byteLength, selections: proposal.target.selections)
+            try ReviewPreflight.admit(proposal, currentByteLength: editor.byteLength)
             let bytes = editor.utf8Data
             let edits = try ReviewPreflight.validate(proposal, current: bytes, target: target).get()
             if edits.isEmpty { return .noChange }

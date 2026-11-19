@@ -9,6 +9,7 @@ private final class ReviewOwnedGate: @unchecked Sendable {
     let reached = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private var paused = false
+    var isReached: Bool { reached.wait(timeout: .now()) == .success }
     func once() {
         lock.lock()
         let shouldPause = !paused
@@ -19,6 +20,11 @@ private final class ReviewOwnedGate: @unchecked Sendable {
             _ = release.wait(timeout: .now() + 10)
         }
     }
+}
+
+@MainActor private final class ReviewWeakEditor {
+    weak var value: TTEditor?
+    init(_ value: TTEditor?) { self.value = value }
 }
 
 @main struct ReviewApplierChecks {
@@ -42,13 +48,15 @@ private final class ReviewOwnedGate: @unchecked Sendable {
                 NativeFixtureEnvironment.restore()
                 isolated.restore()
             }
-            func fresh(_ text: String = "alpha beta\n") -> TextDocument {
+            @MainActor func fresh(_ text: String = "alpha beta\n") -> TextDocument {
                 DocumentFactory.makeUntitled(display: false, populate: { $0.editor.text = text })
             }
-            func capture(_ doc: TextDocument) throws -> ReviewDocumentCapture {
+            @MainActor func capture(_ doc: TextDocument) throws -> ReviewDocumentCapture {
                 try ReviewSnapshotCapture.document(doc.editor)
             }
-            func edit(_ capture: ReviewDocumentCapture, _ lo: Int = 0, _ hi: Int = 5, _ text: String = "OMEGA")
+            @MainActor func edit(
+                _ capture: ReviewDocumentCapture, _ lo: Int = 0, _ hi: Int = 5, _ text: String = "OMEGA"
+            )
                 -> ReviewEdit
             {
                 .init(
@@ -189,11 +197,11 @@ private final class ReviewOwnedGate: @unchecked Sendable {
             let tab = host.model.groups.flatMap(\.tabs).first { $0.documentID == survivorDoc.runtimeID }!.id
             _ = host.setEditorLayout(.twoColumns)
             let second = try requireValue(host.openView(tab, in: .second), "F0 second presentation")
-            weak var retired = host.presentation(for: tab)?.primaryEditor
+            let retired = ReviewWeakEditor(host.presentation(for: tab)?.primaryEditor)
             let survive = try requireValue(ReviewRequest(capture: cap).issue(edits: [edit(cap)]), "F0 surviving handle")
             host.closeTab(tab, sender: nil)
             origin = nil
-            check(host.presentation(for: second) != nil && retired == nil, "F0 cold nonfinal original release")
+            check(host.presentation(for: second) != nil && retired.value == nil, "F0 cold nonfinal original release")
             check(
                 survive.apply() == .applied && survivorDoc.editor.text == "OMEGA beta\n",
                 "F0 surviving representative apply")
@@ -253,7 +261,7 @@ private final class ReviewOwnedGate: @unchecked Sendable {
             let deadline = ProcessInfo.processInfo.systemUptime + 5
             var paused = false
             while ProcessInfo.processInfo.systemUptime < deadline {
-                if gate.reached.wait(timeout: .now()) == .success {
+                if gate.isReached {
                     paused = true
                     break
                 }
@@ -283,7 +291,7 @@ private final class ReviewOwnedGate: @unchecked Sendable {
                 let deadline = ProcessInfo.processInfo.systemUptime + 5
                 var paused = false
                 while ProcessInfo.processInfo.systemUptime < deadline {
-                    if gate.reached.wait(timeout: .now()) == .success {
+                    if gate.isReached {
                         paused = true
                         break
                     }

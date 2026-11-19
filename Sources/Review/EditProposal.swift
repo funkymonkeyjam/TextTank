@@ -39,15 +39,13 @@ package enum ReviewPreflight {
             error as ReviewRejection
         { return .failure(error) } catch { return .failure(.invalidRange) }
     }
-    private static func validated(
-        _ proposal: EditProposal, current: Data, target: DocumentTarget,
-        policy: ReviewApplyPolicy
-    ) throws -> [ReviewEdit] {
-        guard proposal.target.documentID == target.documentID else { throw ReviewRejection.closed }
-        guard proposal.target.loadEpoch == target.loadEpoch else { throw ReviewRejection.reloaded }
-        guard proposal.target.revision == target.revision else { throw ReviewRejection.revisionChanged }
+    /// Metadata-only admission, safe before taking even the bounded live-byte copy.
+    package static func admit(_ proposal: EditProposal, currentByteLength: Int, policy: ReviewApplyPolicy = .default)
+        throws
+    {
+        guard currentByteLength >= 0 else { throw ReviewRejection.invalidRange }
         guard policy.maximumEdits >= 0, proposal.edits.count <= min(10_000, policy.maximumEdits),
-            current.count <= 8 * 1024 * 1024, policy.maximumWork >= 0
+            currentByteLength <= 8 * 1024 * 1024, policy.maximumWork >= 0
         else { throw ReviewRejection.budgetExceeded }
         var expected = 0, replacements = 0, removed = 0, work = 0
         func add(_ value: Int, to total: inout Int, limit: Int) throws {
@@ -62,19 +60,28 @@ package enum ReviewPreflight {
             try add(
                 edit.replacement.count, to: &replacements, limit: min(8 * 1024 * 1024, policy.maximumReplacementBytes))
             guard edit.range.lower >= 0, edit.range.upper >= edit.range.lower,
-                edit.range.upper <= current.count
+                edit.range.upper <= currentByteLength
             else { throw ReviewRejection.invalidRange }
-            try add(edit.range.upper - edit.range.lower, to: &removed, limit: current.count)
+            try add(edit.range.upper - edit.range.lower, to: &removed, limit: currentByteLength)
         }
-        let projected = (current.count - removed).addingReportingOverflow(replacements)
+        let projected = (currentByteLength - removed).addingReportingOverflow(replacements)
         guard !projected.overflow, projected.partialValue <= min(8 * 1024 * 1024, policy.maximumResultBytes) else {
             throw ReviewRejection.budgetExceeded
         }
-        try add(current.count, to: &work, limit: policy.maximumWork)
+        try add(currentByteLength, to: &work, limit: policy.maximumWork)
         // Two replacement passes: strict validation and the later exact conversion/round-trip.
         try add(replacements, to: &work, limit: policy.maximumWork)
         try add(replacements, to: &work, limit: policy.maximumWork)
         try add(expected, to: &work, limit: policy.maximumWork)
+    }
+    private static func validated(
+        _ proposal: EditProposal, current: Data, target: DocumentTarget,
+        policy: ReviewApplyPolicy
+    ) throws -> [ReviewEdit] {
+        guard proposal.target.documentID == target.documentID else { throw ReviewRejection.closed }
+        guard proposal.target.loadEpoch == target.loadEpoch else { throw ReviewRejection.reloaded }
+        guard proposal.target.revision == target.revision else { throw ReviewRejection.revisionChanged }
+        try admit(proposal, currentByteLength: current.count, policy: policy)
         guard ReviewUTF8.valid(current) else { throw ReviewRejection.invalidText }
         guard current.count == proposal.target.byteLength && current.count == target.byteLength else {
             throw ReviewRejection.bytesChanged
