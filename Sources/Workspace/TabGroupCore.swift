@@ -5,6 +5,7 @@ package struct TabGroupChange: Sendable {
     package let result: TabWorkspace
     package let retired: [TabID]
     package let created: [DocumentTab]
+    package let createdSources: [TabID: TabID]
     package let resolved: [TabID: TabID]
     /// New slot -> surviving old slot. Absent entries require a new live group token.
     package let groupOrigins: [GroupSlot: GroupSlot]
@@ -19,6 +20,13 @@ package struct TabGroupChange: Sendable {
         let oldIDs = Set(old.map(\.id)), newIDs = Set(current.map(\.id))
         retired = old.filter { !newIDs.contains($0.id) }.map(\.id)
         created = current.filter { !oldIDs.contains($0.id) }
+        createdSources = Dictionary(
+            uniqueKeysWithValues: created.compactMap { tab in
+                let source =
+                    mapping.first(where: { $0.value == tab.id })?.key
+                    ?? old.first(where: { $0.documentID == tab.documentID })?.id
+                return source.map { (tab.id, $0) }
+            })
         var resolved = mapping
         for tab in old where resolved[tab.id] == nil {
             resolved[tab.id] = newIDs.contains(tab.id) ? tab.id : current.first { $0.documentID == tab.documentID }?.id
@@ -186,5 +194,41 @@ extension TabWorkspace {
         }
         try next.validate(openDocuments: openDocuments)
         return TabGroupChange(self, next, origins: origins)
+    }
+}
+
+extension TabWorkspace {
+    /// Saved document identifiers are mapped to fresh runtime documents before publication.
+    /// Several new views can share one existing source; no lossy one-to-one view map is used.
+    package func planSessionLayout(
+        _ state: WorkspaceLayoutState,
+        documentIDs: [DocumentID: DocumentID],
+        openDocuments: Set<DocumentID>
+    ) throws -> TabGroupChange {
+        try validate(openDocuments: openDocuments)
+        try state.validate()
+        let savedIDs = Set(state.groups.flatMap(\.tabs).map(\.documentID))
+        guard savedIDs == Set(documentIDs.keys), Set(documentIDs.values) == openDocuments,
+            documentIDs.count == openDocuments.count
+        else { throw TabModelError.invalid }
+        let previous = groups.flatMap(\.tabs)
+        var reused = Set<DocumentID>()
+        let restored = try state.groups.map { group -> EditorGroup in
+            let tabs = try group.tabs.map { saved -> DocumentTab in
+                guard let runtimeID = documentIDs[saved.documentID],
+                    let source = previous.first(where: { $0.documentID == runtimeID })
+                else { throw TabModelError.invalid }
+                let id = reused.insert(runtimeID).inserted ? source.id : TabID()
+                return DocumentTab(id: id, documentID: runtimeID, isPinned: saved.isPinned)
+            }
+            return EditorGroup(slot: group.slot, tabs: tabs, activeTab: group.activeTabIndex.map { tabs[$0].id })
+        }
+        let result = TabWorkspace(layout: state.layout, groups: restored, focusedGroup: state.focusedGroup)
+        try result.validate(openDocuments: openDocuments)
+        let origins = Dictionary(
+            uniqueKeysWithValues: result.groups.compactMap { group in
+                groups.contains(where: { $0.slot == group.slot }) ? (group.slot, group.slot) : nil
+            })
+        return TabGroupChange(self, result, origins: origins)
     }
 }

@@ -82,7 +82,7 @@ package struct SessionDocument: Codable, Equatable, Identifiable, Sendable {
 package struct WorkspaceSession: Codable, Equatable, Identifiable, Sendable {
     package init(
         schemaVersion: Int = 1, id: UUID, name: String, documents: [SessionDocument], activeDocumentID: UUID? = nil,
-        savedAt: Date = Date()
+        savedAt: Date = Date(), layoutState: WorkspaceLayoutState? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -90,6 +90,7 @@ package struct WorkspaceSession: Codable, Equatable, Identifiable, Sendable {
         self.documents = documents
         self.activeDocumentID = activeDocumentID
         self.savedAt = savedAt
+        self.layoutState = layoutState
     }
 
     package var schemaVersion: Int
@@ -98,6 +99,22 @@ package struct WorkspaceSession: Codable, Equatable, Identifiable, Sendable {
     package var documents: [SessionDocument]
     package var activeDocumentID: UUID?
     package var savedAt: Date
+    package var layoutState: WorkspaceLayoutState?
+    private var layoutDecodingFailed = false
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, id, name, documents, activeDocumentID, savedAt, layoutState
+    }
+    package enum LayoutStatus: Equatable, Sendable { case absent, valid(WorkspaceLayoutState), invalid }
+    package var layoutStatus: LayoutStatus {
+        guard !layoutDecodingFailed else { return .invalid }
+        guard let layoutState else { return .absent }
+        do {
+            try layoutState.validate()
+            let referenced = Set(layoutState.groups.flatMap(\.tabs).map(\.documentID))
+            guard referenced == Set(documents.map { DocumentID($0.id) }) else { return .invalid }
+            return .valid(layoutState)
+        } catch { return .invalid }
+    }
 
     package func validate() throws {
         guard schemaVersion == 1 else {
@@ -118,6 +135,7 @@ package struct WorkspaceSession: Codable, Equatable, Identifiable, Sendable {
     }
     package func encoded() throws -> Data {
         try validate()
+        guard layoutStatus != .invalid else { throw WorkspaceError.invalid("The saved session layout is invalid.") }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(self)
@@ -191,6 +209,22 @@ package struct WorkspaceSession: Codable, Equatable, Identifiable, Sendable {
                     ? " The original files have not been read; Check Originals compares them with this session." : "")
                 + "\n\n" + lines.joined(separator: "\n")
         )
+    }
+}
+
+extension WorkspaceSession {
+    package init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        documents = try c.decode([SessionDocument].self, forKey: .documents)
+        activeDocumentID = try c.decodeIfPresent(UUID.self, forKey: .activeDocumentID)
+        savedAt = try c.decode(Date.self, forKey: .savedAt)
+        do { layoutState = try c.decodeIfPresent(WorkspaceLayoutState.self, forKey: .layoutState) } catch {
+            layoutState = nil
+            layoutDecodingFailed = true
+        }
     }
 }
 

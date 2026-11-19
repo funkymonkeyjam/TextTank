@@ -140,24 +140,42 @@ package struct TabWorkspace: Equatable, Sendable {
     }
 }
 
-/// Codec only: no session or recovery storage reads or writes are connected to this value.
+/// Explicit session layout value. Recovery and automatic launch restore never use it.
 package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
     package struct Tab: Codable, Equatable, Sendable {
-        var documentID: DocumentID
-        var isPinned: Bool
-        var anchorByte: Int
-        var caretByte: Int
-        var firstVisibleLine: Int
+        package var documentID: DocumentID
+        package var isPinned: Bool
+        package var anchorByte: Int
+        package var caretByte: Int
+        package var firstVisibleLine: Int
+        package init(documentID: DocumentID, isPinned: Bool, anchorByte: Int, caretByte: Int, firstVisibleLine: Int) {
+            self.documentID = documentID
+            self.isPinned = isPinned
+            self.anchorByte = anchorByte
+            self.caretByte = caretByte
+            self.firstVisibleLine = firstVisibleLine
+        }
     }
     package struct Group: Codable, Equatable, Sendable {
-        var slot: GroupSlot
-        var activeTabIndex: Int?
-        var tabs: [Tab]
+        package var slot: GroupSlot
+        package var activeTabIndex: Int?
+        package var tabs: [Tab]
+        package init(slot: GroupSlot, activeTabIndex: Int?, tabs: [Tab]) {
+            self.slot = slot
+            self.activeTabIndex = activeTabIndex
+            self.tabs = tabs
+        }
     }
     package let version: Int
     package var layout: LayoutKind
     package var focusedGroup: GroupSlot
     package var groups: [Group]
+    package init(version: Int = 1, layout: LayoutKind, focusedGroup: GroupSlot, groups: [Group]) {
+        self.version = version
+        self.layout = layout
+        self.focusedGroup = focusedGroup
+        self.groups = groups
+    }
     package func validate() throws {
         guard version == 1, groups.count == layout.groupCount,
             groups.map(\.slot) == Array(GroupSlot.allCases.prefix(layout.groupCount)),
