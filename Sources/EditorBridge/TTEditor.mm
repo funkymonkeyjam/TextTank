@@ -215,13 +215,24 @@ static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
 - (NSArray<NSURL *> *)droppedFileURLs:(id<NSDraggingInfo>)sender {
     return [sender.draggingPasteboard readObjectsForClasses:@[NSURL.class] options:@{NSPasteboardURLReadingFileURLsOnlyKey:@YES}] ?: @[];
 }
+// Snapshot comparison renderers refuse all incoming drops before reading their pasteboard.
+// Ordinary editors retain their existing file-open and Scintilla text-drop behavior.
+- (BOOL)isComparisonDestination {
+    for (NSView *view=self.superview;view;view=view.superview) {
+        if ([view isKindOfClass:TTEditor.class]) return ((TTEditor *)view).comparisonPresentation;
+    }
+    return NO;
+}
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    if ([self isComparisonDestination]) return NSDragOperationNone;
     return [self droppedFileURLs:sender].count ? NSDragOperationCopy : [super draggingEntered:sender];
 }
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    if ([self isComparisonDestination]) return NSDragOperationNone;
     return [self droppedFileURLs:sender].count ? NSDragOperationCopy : [super draggingUpdated:sender];
 }
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    if ([self isComparisonDestination]) return NO;
     NSArray<NSURL *> *files = [self droppedFileURLs:sender];
     if (files.count) {
         // After the drag session ends, so an encoding question or an error is not shown mid-drag.
@@ -1538,6 +1549,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (void)setComparisonPresentation:(BOOL)value {
     [self assertThread]; _comparisonPresentation=value;
+    _emptyLineNumbers.hidden=value;
     [_engine message:SCI_SETVSCROLLBAR wParam:!value];
     [_engine message:SCI_SETENDATLASTLINE wParam:!value];
     if(value) [self applyComparisonStyle];

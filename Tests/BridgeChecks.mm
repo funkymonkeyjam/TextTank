@@ -72,6 +72,34 @@ int main(int argc, char **argv) {
         }
         cancellationContract();
         [NSApplication sharedApplication];
+        ttchecks::section("D1 comparison drop and gutter isolation", [&] {
+            TTEditor *renderer=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,240)];
+            renderer.text=@"exact snapshot\n";[renderer resetUndoHistory];[renderer setSavePoint];
+            const NSUInteger revision=renderer.revision;
+            ScintillaView *engine=(ScintillaView *)renderer.subviews.firstObject;
+            NSView *filler=nil;
+            for (NSView *view in engine.scrollView.verticalRulerView.subviews) {
+                if ([NSStringFromClass(view.class) isEqualToString:@"TTEmptyLineNumbersView"]) filler=view;
+            }
+            check(filler && !filler.hidden,"D1 ordinary editor retains its existing gutter filler");
+            renderer.comparisonPresentation=YES;renderer.readOnly=YES;
+            check(filler.hidden,"D1 comparison gutter suppresses invented source line numbers");
+            TTFakeDrop *drop=[TTFakeDrop new];drop.draggingPasteboard=[NSPasteboard pasteboardWithUniqueName];
+            NSURL *file=[NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[@"TextTank-D1-drop-" stringByAppendingString:NSUUID.UUID.UUIDString]]];
+            [@"owned file" writeToURL:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            [drop.draggingPasteboard writeObjects:@[file]];drop.draggingSourceOperationMask=NSDragOperationCopy;
+            id<NSDraggingDestination> destination=(id<NSDraggingDestination>)engine.content;
+            id<NSDraggingInfo> info=(id<NSDraggingInfo>)drop;
+            const NSUInteger documents=NSDocumentController.sharedDocumentController.documents.count;
+            check([destination draggingEntered:info]==NSDragOperationNone && [destination draggingUpdated:info]==NSDragOperationNone && ![destination performDragOperation:info],"D1 actual file drop is refused before workspace-open dispatch");
+            [drop.draggingPasteboard clearContents];[drop.draggingPasteboard setString:@"DROP" forType:NSPasteboardTypeString];
+            check([destination draggingEntered:info]==NSDragOperationNone && [destination draggingUpdated:info]==NSDragOperationNone && ![destination performDragOperation:info],"D1 actual text drop is refused by snapshot destination");
+            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.03]];
+            check(NSDocumentController.sharedDocumentController.documents.count==documents && renderer.revision==revision && !renderer.modified && [renderer.text isEqualToString:@"exact snapshot\n"],"D1 drop refusal preserves document count, exact text, revision and savepoint");
+            renderer.comparisonPresentation=NO;
+            check(!filler.hidden,"D1 leaving comparison presentation restores ordinary editor gutter filler");
+            [drop.draggingPasteboard releaseGlobally];[NSFileManager.defaultManager removeItemAtURL:file error:nil];
+        });
         ttchecks::section("audit25 unknown command refusal", [&] {
             TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 300, 200)];
             editor.text = @"safe"; [editor setSelectionAnchor:1 caret:1];
