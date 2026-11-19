@@ -518,7 +518,10 @@ check; the reference combinations are not assumed safe on an arbitrary Mac.
 Foundation `DocumentTarget` records runtime document identity, modification revision, reload epoch and
 oriented UTF-8 selections. `AutomationDocumentTarget` captures immutable input on the main actor and
 holds weak document/origin references. All automation entry points choose at invocation (palette Run).
-Results resolve the same open document and check epoch/revision/read-only before the atomic bridge edit;
+Results revalidate their source identity/revision/epoch before any output (and after a file Save panel).
+Whole-document external output ignores caret-only changes and permits read-only sources; selection input
+checks live-origin drift. Independent clipboard/file inputs remain independent. Editor writes check
+read-only state before the atomic bridge edit;
 a surviving sibling can receive captured ranges after origin retirement. Live-origin selection drift
 still rejects. Whole-document output keeps the minimal-span bookmark/caret behavior and one Undo.
 

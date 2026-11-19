@@ -198,6 +198,11 @@ before parameter prompts, progress or preview. Selection drift of a still-live o
 view remains a rejection. If that view retires while the document survives, apply to the
 same document's representative using captured byte ranges, without substituting a
 survivor's selection or moving it to fake a match. One result remains one grouped Undo.
+Every source-bound output revalidates identity, revision and reload epoch after preview;
+file output revalidates again after its Save panel. Closed or stale sources cannot create a
+result document, export or update the clipboard. Selection input also checks live-origin
+selection drift; whole-document external output ignores caret-only changes and may export
+from a read-only source. Independent clipboard/file inputs do not bind unrelated documents.
 Direct deterministic automations gain no required preview or confirmation. UUIDs route
 workflows; names remain editable data. Existing standalone native editor clients retain
 their explicit view/window-lifetime behavior, separate from real document targets.

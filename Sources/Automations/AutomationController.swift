@@ -752,6 +752,14 @@ extension Notification.Name {
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             output = preview.editor.string
         }
+        func revalidateSource() throws {
+            guard workflow.input == .document || workflow.input == .selection else { return }
+            guard let target else {
+                throw AutomationError.invalid("The original source closed. The result was discarded.")
+            }
+            try target.validateSource(checkSelection: workflow.input == .selection)
+        }
+        try revalidateSource()
         switch workflow.output {
         case .editor:
             guard let target else {
@@ -773,6 +781,7 @@ extension Notification.Name {
             let panel = NSSavePanel()
             panel.nameFieldStringValue = "Automation-output.txt"
             guard panel.runModal() == .OK, let url = panel.url else { return }
+            try revalidateSource()
             try Data(output.utf8).write(to: url, options: .atomic)
         }
     }

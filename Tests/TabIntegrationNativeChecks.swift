@@ -209,6 +209,92 @@ import Darwin
             try automation.runSavedAutomation(id: workflow.id)
         }
         directEditor.readOnly = false
+        // Source-bound external results must not outlive or apply stale source bytes.
+        // Read-only whole-document sources may export, and caret-only changes are irrelevant.
+        for operation in [
+            "documentClose", "selectionClose", "edit", "undo", "reload", "selectionDrift", "caret", "readOnly",
+            "clipboard"
+        ] {
+            reset()
+            let source = try saved("external-" + operation), sourceID = id(source)
+            let bystander = try saved("external-other-" + operation, "unrelated\n")
+            let unrelatedRevision = bystander.editor.revision, sourceRevision = source.editor.revision
+            host.activate(host.presentation(for: sourceID)!)
+            _ = source.editor.setSelectionAnchor(5, caret: 0)
+            if operation == "readOnly" { source.editor.readOnly = true }
+            var export = workflow
+            export.input = operation == "selectionClose" || operation == "selectionDrift" ? .selection : .document
+            export.output = .newDocument
+            export.previewBeforeApply = true
+            if operation == "clipboard" {
+                export.input = .clipboard
+                let board = NSPasteboard.withUniqueName()
+                board.setString("alpha from private board", forType: .string)
+                automation.pasteboard = board
+            }
+            try automation.persistLibrary(AutomationLibrary(workflows: [export]))
+            var acted = false, timedOut = false
+            let started = ProcessInfo.processInfo.systemUptime
+            let timer = Timer(timeInterval: 0.01, repeats: true) { _ in
+                MainActor.assumeIsolated {
+                    guard let modal = NSApp.modalWindow, !acted else { return }
+                    if ProcessInfo.processInfo.systemUptime - started > 8 {
+                        timedOut = true
+                        NSApp.abortModal()
+                        return
+                    }
+                    guard let content = modal.contentView,
+                        let apply = DocumentChecks.descendants(content).compactMap({ $0 as? NSButton }).first(where: {
+                            $0.title == "Apply"
+                        })
+                    else { return }
+                    acted = true
+                    switch operation {
+                    case "documentClose", "selectionClose", "clipboard": source.close()
+                    case "edit": source.editor.text = "later source edit"
+                    case "undo":
+                        source.editor.text = "temporary"
+                        source.editor.executeCommand(.init(rawValue: "undo"))
+                    case "reload": try? source.revert(toContentsOf: source.fileURL!, ofType: TextDocument.plainTextType)
+                    case "selectionDrift", "caret": _ = source.editor.setSelectionAnchor(3, caret: 3)
+                    default: break
+                    }
+                    apply.performClick(nil)
+                }
+            }
+            RunLoop.main.add(timer, forMode: .modalPanel)
+            var error: Error?
+            do { try automation.runSavedAutomation(id: export.id) } catch let failure { error = failure }
+            timer.invalidate()
+            automation.pasteboard = nil
+            let stale = !["caret", "readOnly", "clipboard"].contains(operation)
+            check(acted && !timedOut && (error != nil) == stale, "T4 external source validation \(operation)")
+            let after = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
+            let originals: Set<DocumentID> =
+                source.isOpen ? [source.runtimeID, bystander.runtimeID] : [bystander.runtimeID]
+            let results = after.filter { !originals.contains($0.runtimeID) }
+            check(
+                bystander.editor.text == "unrelated\n" && bystander.editor.revision == unrelatedRevision,
+                "T4 external output never mutates unrelated document \(operation)")
+            if stale {
+                check(
+                    results.isEmpty && Set(after.map(\.runtimeID)) == originals,
+                    "T4 stale external output creates no result or revived document \(operation)")
+                check(
+                    error?.localizedDescription.contains(source.displayName) == true,
+                    "T4 stale external rejection names source \(operation)")
+            } else {
+                let expected = operation == "clipboard" ? "OMEGA from private board" : "OMEGA beta\n"
+                check(
+                    results.count == 1 && results[0].editor.text == expected,
+                    "T4 current external snapshot exports correctly \(operation)")
+                check(
+                    !source.isOpen
+                        || (source.editor.text == "alpha beta\n" && source.editor.revision == sourceRevision),
+                    "T4 allowed external output preserves source bytes/revision \(operation)")
+            }
+        }
+        try automation.persistLibrary(AutomationLibrary(workflows: [workflow]))
         // A modeless palette captures at Run, after a genuine focused-group change.
         reset()
         let paletteA = try saved("palette-A"), paletteAID = id(paletteA)

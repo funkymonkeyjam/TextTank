@@ -79,7 +79,7 @@ import EditorBridge
             value = nil
         }
     }
-    func resolve() throws -> TTEditor {
+    func resolve(checkSelection: Bool = true) throws -> TTEditor {
         let editor: TTEditor
         if let value {
             guard let document, document.isOpen,
@@ -92,12 +92,15 @@ import EditorBridge
             guard let origin, EditorLifetime.isOpen(origin), origin.revision == revision else { throw changed() }
             editor = origin
         }
-        if let origin, EditorLifetime.isOpen(origin) {
+        if checkSelection, let origin, EditorLifetime.isOpen(origin) {
             let current = origin.selectionRanges.map { SessionSelection(anchorByte: $0.anchor, caretByte: $0.caret) }
             guard current == selections else { throw changed() }
         }
         return editor
     }
+    /// External output still belongs to the captured source revision. A document export
+    /// does not depend on its caret and may read a read-only source.
+    func validateSource(checkSelection: Bool) throws { _ = try resolve(checkSelection: checkSelection) }
     func requireWritable() throws {
         let editor = try resolve()
         if value == nil {
@@ -145,7 +148,7 @@ import EditorBridge
     }
     private func changed() -> AutomationError {
         .invalid(
-            "“\(name)” changed, its selection changed, or it closed. Nothing was replaced. Run the automation again with the current text."
+            "“\(name)” changed, its selection changed, or it closed. The result was discarded. Run the automation again with the current text."
         )
     }
 }
