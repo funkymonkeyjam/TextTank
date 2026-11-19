@@ -30,6 +30,7 @@ import EditorBridge
     private var urls: [URL?] = [nil, nil]
     private var task: Task<Void, Never>?
     private var isClosed = false, busy = false
+    private var failure: String?
     private var filePanel: NSOpenPanel?
     var makeFilePanel: () -> NSOpenPanel = { NSOpenPanel() }
     private var sourceTimer: Timer?
@@ -132,6 +133,7 @@ import EditorBridge
         return .document(try CompareDocumentInput(doc.editor))
     }
     @objc private func changed(_ sender: Any?) {
+        failure = nil
         if let popup = sender as? NSPopUpButton, popup === original || popup === modified,
             let choice = popup.selectedItem?.representedObject as? CompareChoice, let doc = choice.document, doc.isOpen
         {
@@ -193,7 +195,10 @@ import EditorBridge
         modified.isEnabled = !busy
         fileA.isEnabled = !busy
         fileB.isEnabled = !busy
-        if !busy { status.stringValue = available ? "Both sources will be captured when you choose Compare." : reason }
+        if !busy {
+            status.stringValue =
+                available ? (failure ?? "Both sources will be captured when you choose Compare.") : reason
+        }
     }
     @objc private func chooseFile(_ sender: NSButton) {
         guard !busy, filePanel == nil, let window else { return }
@@ -216,6 +221,7 @@ import EditorBridge
     }
     func chooseFile(_ url: URL, side: Int) {
         guard side == 0 || side == 1, !busy else { return }
+        failure = nil
         urls[side] = url
         fileLabels[side].stringValue = url.lastPathComponent
         fileLabels[side].toolTip = url.path
@@ -262,10 +268,14 @@ import EditorBridge
                     self.busy = false
                     self.spinner.stopAnimation(nil)
                     self.update()
-                    self.status.stringValue = CompareService.message(error)
+                    self.failure = CompareService.message(error)
+                    self.status.stringValue = self.failure!
                 }
             }
-        } catch { status.stringValue = CompareService.message(error) }
+        } catch {
+            failure = CompareService.message(error)
+            status.stringValue = failure!
+        }
     }
     @objc private func cancel(_ sender: Any?) {
         task?.cancel()

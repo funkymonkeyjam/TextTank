@@ -694,7 +694,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         try valid()
         unifiedRows = result
         changeTableRows = tableChanges
-        let font = NSFont.monospacedSystemFont(ofSize: commonFont.pointSize, weight: .regular)
+        let font = commonFont
         table.tableColumns.first?.width = max(
             1000, CGFloat(maxBytes + 120) * ("M" as NSString).size(withAttributes: [.font: font]).width)
         table.reloadData()
@@ -739,8 +739,9 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 (tableView.makeView(withIdentifier: .init("source-row"), owner: self) as? NSTextField)
                 ?? NSTextField(labelWithString: "")
             cell.identifier = .init("source-row")
-            cell.font = .monospacedSystemFont(ofSize: commonFont.pointSize, weight: .regular)
-            let styled = NSMutableAttributedString(string: prefix + shown + suffix)
+            cell.font = commonFont
+            let styled = NSMutableAttributedString(
+                string: prefix + shown + suffix, attributes: [.font: commonFont, .foregroundColor: NSColor.labelColor])
             if let change = value.change {
                 // A segment contains complete clusters. Byte->UTF16 conversion is bounded to
                 // this at-most64KiB cell; original coordinates are never rewritten.

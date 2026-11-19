@@ -1103,7 +1103,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
     }
     @objc func toggleWrap(_ sender: Any?) {
-        guard !CompareCommandScope.blocksWorkspace else { return } activeEditor.wrap.toggle() }
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        activeEditor.wrap.toggle()
+    }
     @objc func comment(_ sender: NSMenuItem) {
         guard !CompareCommandScope.blocksWorkspace else { return }
         guard let raw = sender.representedObject as? String, let command = CommentCommand(rawValue: raw),
