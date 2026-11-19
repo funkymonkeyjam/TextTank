@@ -123,6 +123,8 @@ __attribute__((objc_subclassing_restricted))
 /// changes nothing, including revision. NO when read-only or unencodable. setText: remains the
 /// unconditional replace for fresh loads.
 - (BOOL)replaceDocumentText:(NSString *)text;
+/// Reject stale results before even a no-op replacement. Main-thread atomic guard.
+- (BOOL)replaceDocumentText:(NSString *)text expectedRevision:(NSUInteger)revision;
 /// replaceDocumentText: for open, reload and restore: nothing is recorded for Undo, the undo
 /// history is emptied and the result is the save point. NO, changing nothing, when read-only
 /// or unencodable.

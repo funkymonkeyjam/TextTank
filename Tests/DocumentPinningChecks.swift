@@ -731,6 +731,11 @@ extension DocumentChecks {
                 id: idA, text: sessionText, format: FileFormat(encoding: .windows1252, bom: false),
                 originalURL: "file:///Users/Shared/TextTank%20Fixture/project/list.txt", revision: 42)
             snapshot.savedAt = stamp
+            let layoutBytes = try Data(contentsOf: folder.appendingPathComponent("SessionLayout.texttanksession"))
+            let layoutSession = try WorkspaceStore.load(from: copy(layoutBytes, "SessionLayout.texttanksession"))
+            check(
+                layoutSession.documents.count == 2 && layoutSession.layoutState?.groups.count == 4,
+                "golden multi-group shared pinned session decodes through production file reader")
             let snapshotBytes = try golden("RecoverySnapshot.json") {
                 let store = RecoveryStore(
                     directory: scratch.appendingPathComponent("write-recovery", isDirectory: true))

@@ -156,7 +156,7 @@ extension Notification.Name {
         }
         busy = true
         defer { busy = false }
-        try run(workflow, capturedEditor: editorProvider())
+        try run(workflow, target: AutomationDocumentTarget(editorProvider()))
     }
     private func invocationMenu(title: String, launcher: Bool = false) -> NSMenu {
         let result = NSMenu(title: title)
@@ -195,7 +195,6 @@ extension Notification.Name {
             manage()
             return
         }
-        let capturedEditor = editorProvider()
         let panel = ChoicePanel(
             title: "Run Automation", identifier: "automation.palette", action: "Run",
             filterLabel: "Filter automations by name")
@@ -210,32 +209,27 @@ extension Notification.Name {
         for name in [Notification.Name.TTEditorStateDidChange, .TTEditorWillRetire] {
             watches.append(
                 NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) {
-                    [weak panel, weak capturedEditor] note in
+                    [weak panel] _ in
                     precondition(Thread.isMainThread)
-                    let changed = note.object as? TTEditor
                     MainActor.assumeIsolated {
-                        guard let editor = capturedEditor, let changed,
-                            changed === editor || changed.sharesDocument(with: editor)
-                        else { return }
                         MainRunLoop.perform { [weak panel] in panel?.refresh() }
                     }
                 })
         }
         panel.rows = { [weak self] in self?.library.workflows.map { .init(id: $0.id.uuidString, title: $0.name) } ?? []
         }
-        panel.canChoose = { [weak self, weak panel, weak capturedEditor] in
+        panel.canChoose = { [weak self, weak panel] in
             guard let self, let text = panel?.selectedID, let id = UUID(uuidString: text) else { return false }
-            if let capturedEditor, !EditorLifetime.isOpen(capturedEditor) { return false }
-            return self.canInvoke(id, editor: capturedEditor)
+            return self.canInvoke(id, editor: self.editorProvider())
         }
-        panel.choose = { [weak self, weak capturedEditor] id in
+        panel.choose = { [weak self] id in
             guard let self, !self.busy, !self.exportInProgress else { throw FormFailure.busy }
             guard let workflow = self.library.workflows.first(where: { $0.id.uuidString == id }) else {
                 throw FormFailure.changed
             }
             self.busy = true
             defer { self.busy = false }
-            try self.run(workflow, capturedEditor: capturedEditor)
+            try self.run(workflow, target: AutomationDocumentTarget(self.editorProvider()))
             return true
         }
         panel.show()
@@ -648,23 +642,18 @@ extension Notification.Name {
         }
         do { try runSavedAutomation(id: id) } catch { showError(error) }
     }
-    private func run(_ workflow: AutomationDefinition, capturedEditor editor: TTEditor?) throws {
-        // Invocation, not lookup: opening and cancelling the palette never reaches this.
+    private func run(_ workflow: AutomationDefinition, target: AutomationDocumentTarget?) throws {
         onInvocation()
-        // The editor was captured before preview. Never re-query the frontmost editor on Apply.
-        let revision = editor?.revision
-        let start = editor?.selectionStart
-        let end = editor?.selectionEnd
-        let selections = editor?.selectionRanges
-        if workflow.input == .selection || workflow.output == .editor {
-            guard let editor else { throw AutomationError.invalid("This automation requires an open editor document.") }
-            // Before any parameter prompt or preview: a read-only document can never take the result.
-            if workflow.output == .editor { try editor.requireWritable() }
-            guard editor.selectionCount == 1 || (workflow.input == .selection && workflow.output == .editor) else {
+        if workflow.input == .selection || workflow.input == .document || workflow.output == .editor {
+            guard let target else { throw AutomationError.invalid("This automation requires an open editor document.") }
+            if workflow.output == .editor { try target.requireWritable() }
+            guard target.selections.count == 1 || (workflow.input == .selection && workflow.output == .editor) else {
                 throw AutomationError.invalid(
                     "Multiple selections require selection input and editor output. Other outputs are not changed.")
             }
         }
+        // Freeze all source bytes before parameter prompts, progress and preview.
+        let selectionInputs = workflow.input == .selection ? try target?.selectionTexts() : nil
         guard
             let resolved = try workflow.resolvingParameters({ index, label, initial in
                 let alert = TTAlert()
@@ -680,21 +669,15 @@ extension Notification.Name {
                 return field.stringValue
             })
         else { return }
-        if workflow.input == .selection, workflow.output == .editor, let editor, editor.selectionCount > 1,
-            let revision, let selections
+        if workflow.input == .selection, workflow.output == .editor, let target,
+            let selectionInputs, selectionInputs.count > 1
         {
-            let bytes = Data(editor.text.utf8)
             var outputs: [String] = []
-            for (index, range) in selections.enumerated() {
-                let anchor = range.anchor, caret = range.caret
-                guard anchor != caret,
-                    min(anchor, caret) >= 0, max(anchor, caret) <= bytes.count,
-                    let text = String(data: bytes.subdata(in: min(anchor, caret)..<max(anchor, caret)), encoding: .utf8)
-                else { throw AutomationError.invalid("Select text in every selection before running this automation.") }
+            for (index, text) in selectionInputs.enumerated() {
                 var output = try transformWithProgress(resolved, input: text)
                 if workflow.previewBeforeApply == true {
                     let alert = TTAlert()
-                    alert.messageText = "\(workflow.name) — Selection \(index + 1) of \(selections.count)"
+                    alert.messageText = "\(workflow.name) — Selection \(index + 1) of \(selectionInputs.count)"
                     alert.informativeText =
                         "All selections apply together after every preview is accepted. Cancel preserves the entire editor."
                     alert.addButton(withTitle: "Accept")
@@ -708,24 +691,19 @@ extension Notification.Name {
                 }
                 outputs.append(output)
             }
-            try editor.requireWritable() // Read Only may have been switched on while a preview was open.
-            guard EditorLifetime.isOpen(editor), editor.selectionRanges == selections,
-                editor.replaceSelections(outputs, expectedRevision: revision)
-            else {
-                throw AutomationError.invalid("The document or selections changed or closed. Nothing was replaced.")
-            }
+            try target.apply(outputs, wholeDocument: false)
             return
         }
         let input: String
         switch workflow.input {
         case .selection:
-            guard let editor, start != end else {
+            guard let selection = selectionInputs?.first else {
                 throw AutomationError.invalid("Select text before running this automation.")
             }
-            input = editor.selectedText
+            input = selection
         case .document:
-            guard let editor else { throw AutomationError.invalid("This automation requires an open editor document.") }
-            input = editor.text
+            guard let target else { throw AutomationError.invalid("This automation requires an open editor document.") }
+            input = target.text
         case .file:
             let panel = NSOpenPanel()
             panel.canChooseDirectories = false
@@ -773,17 +751,10 @@ extension Notification.Name {
         }
         switch workflow.output {
         case .editor:
-            try editor?.requireWritable() // Read Only may have been switched on while a dialog was open.
-            guard let editor, EditorLifetime.isOpen(editor), editor.revision == revision else {
-                throw AutomationError.invalid(
-                    "The original document changed or closed. Run the automation again with the current text.")
+            guard let target else {
+                throw AutomationError.invalid("The original document closed. Nothing was replaced.")
             }
-            guard editor.selectionCount == 1, editor.selectionStart == start, editor.selectionEnd == end else {
-                throw AutomationError.invalid("The editor selection changed. No text was replaced.")
-            }
-            // Document input replaces only the span that differs, keeping bookmarks and the caret line.
-            guard workflow.input == .document ? editor.replaceDocumentText(output) : editor.replaceSelection(output)
-            else { throw AutomationError.invalid("The automation result could not be written to the editor.") }
+            try target.apply([output], wholeDocument: workflow.input == .document)
         case .clipboard:
             guard let board = activePasteboard else {
                 throw AutomationError.invalid("Clipboard access is unavailable for this isolated support directory.")

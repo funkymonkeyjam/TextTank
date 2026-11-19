@@ -33,6 +33,7 @@ import NativeSearch
     }
     @MainActor static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments == ["--tab-integrations"] { TabIntegrationNativeChecks.runApplicationProcess() }
         if arguments == ["--tab-groups"] { TabGroupNativeChecks.runApplicationProcess() }
         if arguments == ["--tab-organization"] { TabOrganizationNativeChecks.runApplicationProcess() }
         if arguments == ["--tab-commands"] { TabCommandNativeChecks.runApplicationProcess() }

@@ -892,6 +892,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     return YES;
 }
 - (BOOL)replaceDocumentText:(NSString *)text {
+    return [self replaceDocumentText:text expectedRevision:self.revision];
+}
+- (BOOL)replaceDocumentText:(NSString *)text expectedRevision:(NSUInteger)revision {
+    [self assertThread];
+    if (self.revision != revision) return NO;
     [self assertThread];
     NSData *data = TTUTF8(text); if (!data || self.readOnly) return NO;
     const sptr_t oldLength = [_engine message:SCI_GETLENGTH], newLength = (sptr_t)data.length;

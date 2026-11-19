@@ -183,6 +183,58 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         }
         return "Group \(slot.rawValue)" + (position.isEmpty ? "" : ", " + position)
     }
+    func canFitSessionLayout(_ layout: LayoutKind, availableContent: TabGroupExtent? = nil) -> Bool {
+        if let availableContent {
+            return TabGroupGeometry.fits(TabGroupGeometry.minimumContent(layout), available: availableContent)
+        }
+        guard let window, let screen = window.screen ?? NSScreen.main else { return layout == .single }
+        let available = window.contentRect(forFrameRect: screen.visibleFrame).size
+        return TabGroupGeometry.fits(
+            TabGroupGeometry.minimumContent(layout),
+            available: TabGroupExtent(width: available.width, height: available.height))
+    }
+    func captureSessionLayout() -> WorkspaceLayoutState {
+        WorkspaceLayoutState(
+            layout: model.layout, focusedGroup: model.focusedGroup,
+            groups: model.groups.map { group in
+                WorkspaceLayoutState.Group(
+                    slot: group.slot, activeTabIndex: group.tabs.firstIndex { $0.id == group.activeTab },
+                    tabs: group.tabs.compactMap { tab in
+                        guard let p = entries[tab.id], let doc = p.document as? TextDocument else { return nil }
+                        let editor = p.activeEditor
+                        return WorkspaceLayoutState.Tab(
+                            documentID: DocumentID(doc.recoveryID), isPinned: tab.isPinned,
+                            anchorByte: editor.selectionAnchor, caretByte: editor.selectionCaret,
+                            firstVisibleLine: editor.firstVisibleLine)
+                    })
+            })
+    }
+    @discardableResult func restoreSessionLayout(
+        _ state: WorkspaceLayoutState, documents mapping: [DocumentID: TextDocument]
+    ) -> Bool {
+        guard Set(mapping.values.map(\.runtimeID)) == openIDs,
+            let plan = try? model.planSessionLayout(
+                state, documentIDs: mapping.mapValues(\.runtimeID), openDocuments: openIDs),
+            applyGroupChange(plan)
+        else { return false }
+        let minimum = TabGroupGeometry.minimumContent(state.layout)
+        window?.contentMinSize = NSSize(width: minimum.width, height: minimum.height)
+        if let window {
+            let size = window.contentView?.bounds.size ?? .zero
+            window.setContentSize(
+                NSSize(width: max(size.width, minimum.width), height: max(size.height, minimum.height)))
+        }
+        for (saved, actual) in zip(state.groups, model.groups) {
+            for (view, tab) in zip(saved.tabs, actual.tabs) {
+                entries[tab.id]?.primaryEditor.restoreClosedTabView(
+                    anchor: view.anchorByte, caret: view.caretByte,
+                    firstVisibleLine: view.firstVisibleLine)
+            }
+        }
+        syncGroups()
+        if let active { activate(active, focus: true, explicit: false) } else { window?.makeFirstResponder(nil) }
+        return true
+    }
     @discardableResult func setEditorLayout(_ layout: LayoutKind, availableContent: TabGroupExtent? = nil) -> Bool {
         guard !tabCommands.isBusy, !tabCommands.isReopening, window?.attachedSheet == nil else { return false }
         if layout == model.layout { return true }
@@ -284,7 +336,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         isMutatingGroups = true
         for tab in plan.created {
             guard let doc = documents[tab.documentID]?.value,
-                let sourceID = plan.resolved.first(where: { $0.value == tab.id })?.key,
+                let sourceID = plan.createdSources[tab.id],
                 let source = entries[sourceID], !source.isRetired, source.document === doc
             else {
                 isMutatingGroups = false

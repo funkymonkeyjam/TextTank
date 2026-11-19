@@ -7,6 +7,7 @@ import AppKit
 /// name of the Swift module.
 @objc(TextDocument) final class TextDocument: NSDocument {
     let runtimeID = DocumentID()
+    private(set) var loadEpoch: UInt = 0
     private(set) var isClosed = false
     private var opened = false
     var isOpen: Bool { opened && !isClosed }
@@ -587,6 +588,7 @@ import AppKit
     /// boundary (as for open and revert), and the document stays edited until a real save:
     /// the engine's save point is this text, which is not a disk state.
     func loadUnsavedSnapshot(text: String, format snapshotFormat: FileFormat) {
+        loadEpoch &+= 1
         loading = true
         format = snapshotFormat
         // A new document: writable and empty, so the load cannot be refused.
@@ -618,6 +620,7 @@ import AppKit
         return doc
     }
     private func loadDecoded(_ decoded: DecodedFile, sample: FileSample) {
+        loadEpoch &+= 1
         EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was reloaded.")
         loading = true
         let locked = editor.readOnly
