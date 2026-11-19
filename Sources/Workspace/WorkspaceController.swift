@@ -208,13 +208,17 @@ import AppKit
                                 firstVisibleLine: 0)
                         })
                 ])
-            _ = host.restoreSessionLayout(state, documents: mapping)
+            guard host.restoreSessionLayout(state, documents: mapping) else {
+                host.showTabMessage("The workspace changed. Snapshots were added; the saved layout was not applied.")
+                return restored
+            }
             host.window?.makeKeyAndOrderFront(nil)
             host.showTabMessage(policy.explanation)
         case .merge, .legacy:
             active?.showWindows()
             if active == nil { restored.last?.showWindows() }
-            if policy == .merge { host.showTabMessage(policy.explanation) }
+            host.showTabMessage(
+                policy == .merge ? policy.explanation : "Restored session snapshots in the focused group.")
         }
         return restored
     }

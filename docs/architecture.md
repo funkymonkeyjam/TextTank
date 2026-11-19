@@ -508,6 +508,28 @@ Menus capture the complete move set; a vanished member invalidates the entire mo
 deduplication does not create history. Explicit tab closes capture exact view offsets and group slot;
 Reopen resolves a live document identity before fingerprint waits or disk reads, then restores a shared
 view or focuses the existing destination. Chooser rows use TabID/group identity. Session and recovery
-remain once per document with focused or per-document MRU selection. No layout persistence or automatic
-restore is connected; that is Stage 4. Group shortcuts are unassigned pending a complete system conflict
+remain once per document with focused or per-document MRU selection. Explicit session snapshots now carry
+optional layout state as described below; automatic launch recovery remains separate. Group shortcuts are unassigned pending a complete system conflict
 check; the reference combinations are not assumed safe on an arbitrary Mac.
+
+
+### Stage 4 document targets and explicit session layout
+
+Foundation `DocumentTarget` records runtime document identity, modification revision, reload epoch and
+oriented UTF-8 selections. `AutomationDocumentTarget` captures immutable input on the main actor and
+holds weak document/origin references. All automation entry points choose at invocation (palette Run).
+Results resolve the same open document and check epoch/revision/read-only before the atomic bridge edit;
+a surviving sibling can receive captured ranges after origin retirement. Live-origin selection drift
+still rejects. Whole-document output keeps the minimal-span bookmark/caret behavior and one Undo.
+
+`WorkspaceSession` schemaVersion 1 adds Optional `layoutState` with saved SessionDocument IDs, never
+runtime IDs. Text occurs once/document. A malformed/unknown optional layout is classified separately
+from strict document/envelope corruption. Explicit restore validates policy before opening anything,
+creates fresh unsaved documents and recovery identities, then reconstructs shared Scintilla views,
+ordered tabs, pins, group actives/focus and clamped UTF-8 view positions. Empty workspaces apply a fitting
+valid layout or fall back to Single. Nonempty workspaces keep their layout and merge into the captured
+focused group. Confirmations revalidate after modal work; visible summaries are announced. Legacy absent
+layout retains its previous focused-group restore behavior. Recovery stays one snapshot/document/view
+and never consumes session layouts. Closed-tab history remains transient. No automatic last-session
+restore, extra window, collection, comparison engine or AI provider is introduced. See
+[tab-model](tab-model.md#stage-4-document-targets-and-explicit-session-layouts) for the contract and DS rules.

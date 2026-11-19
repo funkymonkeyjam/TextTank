@@ -43,16 +43,22 @@ import Foundation
                 session.documents.count == 2 && layout.groups.flatMap(\.tabs).count == 3,
                 "T4 shared view stores document content once")
             check(try session.encoded() == bytes, "T4 new golden round trip uses production encoder")
-            var raw = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
+            // JSONSerialization's NSString bridge strips a leading FEFF. Keep the exact BOM
+            // golden oracle above, and use separate ASCII content for envelope mutations.
+            var mutationSession = session
+            mutationSession.documents[0].text = "plain snapshot"
+            mutationSession.documents[0].selection = SessionSelection(anchorByte: 5, caretByte: 0)
+            let mutationBytes = try mutationSession.encoded()
+            var raw = try JSONSerialization.jsonObject(with: mutationBytes) as! [String: Any]
             for malformed in ["wrong shape", ["version": 99], NSNull()] as [Any] {
                 raw["layoutState"] = malformed
                 let result = try WorkspaceSession.decode(JSONSerialization.data(withJSONObject: raw))
-                check(result.documents == session.documents, "T4 bad optional layout never loses content")
+                check(result.documents == mutationSession.documents, "T4 bad optional layout never loses content")
                 check(
                     malformed is NSNull ? result.layoutStatus == .absent : result.layoutStatus == .invalid,
                     "T4 malformed optional layout classified")
             }
-            raw = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
+            raw = try JSONSerialization.jsonObject(with: mutationBytes) as! [String: Any]
             var invalidLayout = raw["layoutState"] as! [String: Any]
             invalidLayout["layout"] = "futureLayout"
             raw["layoutState"] = invalidLayout
@@ -97,7 +103,7 @@ import Foundation
             bad = session
             bad.layoutState!.groups.swapAt(0, 1)
             check(bad.layoutStatus == .invalid, "T4 unordered slots invalid")
-            let envelope = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
+            let envelope = try JSONSerialization.jsonObject(with: mutationBytes) as! [String: Any]
             for key in ["schemaVersion", "id", "name", "documents", "savedAt"] {
                 var missing = envelope
                 missing.removeValue(forKey: key)

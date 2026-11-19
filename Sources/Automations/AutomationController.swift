@@ -1228,6 +1228,7 @@ extension Notification.Name {
             }
             return
         }
+        Announce.say(error.localizedDescription)
         TTAlert.present(error)
     }
 }

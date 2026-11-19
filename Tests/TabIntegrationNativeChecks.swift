@@ -209,6 +209,27 @@ import Darwin
             try automation.runSavedAutomation(id: workflow.id)
         }
         directEditor.readOnly = false
+        // A modeless palette captures at Run, after a genuine focused-group change.
+        reset()
+        let paletteA = try saved("palette-A"), paletteAID = id(paletteA)
+        let paletteB = try saved("palette-B"), paletteBID = id(paletteB)
+        _ = host.setEditorLayout(.twoColumns)
+        host.moveTabs([paletteBID], target: paletteBID, to: .second)
+        host.activate(host.presentation(for: paletteAID)!)
+        _ = paletteA.editor.setSelectionAnchor(0, caret: 5)
+        _ = paletteB.editor.setSelectionAnchor(0, caret: 5)
+        automation.showPalette()
+        let palette = try requireValue(
+            FormPanel.visible.first { $0.window.identifier?.rawValue == "automation.palette" }, "T4 actual palette")
+        host.focusGroup(.second)
+        let run = try requireValue(
+            DocumentChecks.descendants(palette.window.contentView!).compactMap { $0 as? NSButton }.first {
+                $0.identifier?.rawValue == "automation.palette.choose"
+            }, "T4 actual palette Run")
+        run.performClick(nil)
+        check(
+            paletteA.editor.text == "alpha beta\n" && paletteB.editor.text == "OMEGA beta\n",
+            "T4 palette Run chooses current focused view, not opening view")
         reset()
         let a = try saved("snapshot-A", "é\nalpha\n"), aid = id(a)
         let b = try saved("snapshot-B", "other\n"), bid = id(b)
@@ -219,7 +240,9 @@ import Darwin
         host.presentation(for: a2)!.primaryEditor.restoreClosedTabView(anchor: 3, caret: 8, firstVisibleLine: 1)
         host.activate(host.presentation(for: bid)!)
         host.focusGroup(.second)
-        a.editor.text = "é\nalpha edited\n"
+        a.editor.text = "é\n" + (0..<80).map { "line \($0) alphabet" }.joined(separator: "\n")
+        host.presentation(for: aid)!.primaryEditor.restoreClosedTabView(anchor: 3, caret: 8, firstVisibleLine: 3)
+        host.presentation(for: a2)!.primaryEditor.restoreClosedTabView(anchor: 8, caret: 3, firstVisibleLine: 30)
         a.flushRecovery()
         let captured = try app.workspace.capture(name: "Stage4")
         check(
@@ -243,6 +266,21 @@ import Darwin
             Set(restored.map(\.runtimeID)).isDisjoint(with: [a.runtimeID, b.runtimeID])
                 && Set(restored.map(\.recoveryID)).isDisjoint(with: Set(captured.documents.map(\.id))),
             "T4 restores fresh runtime and recovery identities")
+        let savedLayout = try requireValue(captured.layoutState, "T4 saved layout")
+        for (savedGroup, actualGroup) in zip(savedLayout.groups, host.model.groups) {
+            check(
+                savedGroup.tabs.map(\.isPinned) == actualGroup.tabs.map(\.isPinned), "T4 restored pin flags and order")
+            check(
+                savedGroup.activeTabIndex == actualGroup.tabs.firstIndex { $0.id == actualGroup.activeTab },
+                "T4 restored per-group active index")
+            for (savedTab, actualTab) in zip(savedGroup.tabs, actualGroup.tabs) {
+                let editor = host.presentation(for: actualTab.id)!.primaryEditor
+                check(
+                    editor.selectionAnchor == savedTab.anchorByte && editor.selectionCaret == savedTab.caretByte,
+                    "T4 exact per-view oriented UTF8 selection restored")
+                check(editor.firstVisibleLine == savedTab.firstVisibleLine, "T4 exact per-view scroll restored")
+            }
+        }
         let av = host.presentations.filter { ($0.document as? TextDocument) === restored[0] }
         check(
             av.count == 2 && av[0].primaryEditor.sharesDocument(with: av[1].primaryEditor),
@@ -256,6 +294,18 @@ import Darwin
         check(
             NSDocumentController.shared.documents.count == 2 && host.presentations.count == 2,
             "T4 restored collapse deduplicates views without documents")
+        // Persisted view coordinates are advisory, clamped independently from strict snapshot selection.
+        var clamp = loaded
+        clamp.layoutState!.groups[0].tabs[0].anchorByte = 1 // continuation byte of é
+        clamp.layoutState!.groups[0].tabs[0].caretByte = Int.max
+        clamp.layoutState!.groups[0].tabs[0].firstVisibleLine = Int.max
+        reset()
+        let clamped = try app.workspace.restore(clamp)
+        let clampEditor = host.presentation(for: host.model.groups[0].tabs[0].id)!.primaryEditor
+        check(
+            clampEditor.selectionAnchor == 0 && clampEditor.selectionCaret == clamped[0].editor.byteLength,
+            "T4 out-of-range and mid-UTF8 view coordinates clamp")
+        check(clampEditor.firstVisibleLine < 100, "T4 extreme scroll clamped")
         // Empty focused pane wins over the legacy activeDocument field.
         var emptyFocus = loaded
         emptyFocus.layoutState!.focusedGroup = .fourth
