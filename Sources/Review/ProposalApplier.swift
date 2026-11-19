@@ -6,19 +6,23 @@ import EditorBridge
 
 @MainActor final class ReviewRequest {
     let capture: ReviewDocumentCapture
+    private let engine: any ReviewDiffing
     private let proposalID = UUID()
     private var token = ReviewCancellation()
     private var issued = false
     private var generation: UInt = 0
     private(set) var invalidated = false
-    init(capture: ReviewDocumentCapture) { self.capture = capture }
+    init(capture: ReviewDocumentCapture, engine: any ReviewDiffing = FirstPartyReviewDiff()) {
+        self.capture = capture
+        self.engine = engine
+    }
     func cancel() {
         invalidated = true
         token.cancel()
         generation &+= 1
     }
     func compare(
-        to modified: TextSnapshot, strategy: ReviewDiffStrategy = .myers,
+        to modified: TextSnapshot,
         policy: ReviewDiffPolicy = .default, hooks: ReviewDiffHooks = .init()
     ) async -> ReviewChangeSet? {
         guard !invalidated, !issued else { return nil }
@@ -27,8 +31,8 @@ import EditorBridge
         let currentToken = ReviewCancellation()
         token = currentToken
         let job = generation
-        let result = await ReviewDiffEngine.compare(
-            capture.snapshot, modified, strategy: strategy, policy: policy, token: currentToken, hooks: hooks)
+        let result = await engine.compare(
+            capture.snapshot, modified, policy: policy, token: currentToken, hooks: hooks)
         guard !invalidated, !currentToken.isCancelled, job == generation else { return nil }
         do { try capture.validateCurrent() } catch { return nil }
         return result

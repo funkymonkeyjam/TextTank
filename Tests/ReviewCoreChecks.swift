@@ -146,6 +146,10 @@ import CryptoKit
             try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]).write(
                 to: TestPaths.repoRoot.appendingPathComponent("harness/logs/review-algorithm-comparison.json"))
             let left = try snapshot("a\nb\nc\n"), right = try snapshot("c\nb\na\n")
+            let replaceable: any ReviewDiffing = FirstPartyReviewDiff(strategy: .anchored)
+            let protocolResult = await replaceable.compare(
+                left, right, policy: .correctness, token: ReviewCancellation(), hooks: .init())
+            check(replay(protocolResult, left, right) == right.bytes, "F0 shared replaceable engine protocol")
             let collisions = await ReviewDiffEngine.compare(
                 left, right, strategy: .anchored,
                 policy: .correctness, hooks: .init(hashByte: { _, _ in 0 }))

@@ -297,11 +297,13 @@ private final class ReviewOwnedGate: @unchecked Sendable {
                 ReviewRequest(capture: saveCapture).issue(edits: [edit(saveCapture)]), "F0 URL-change target")
             reopened.fileURL = isolated.url.appendingPathComponent("save-as.txt")
             check(saveHandle.apply() == .applied, "F0 URL change preserves exact live identity")
-            let comparison = fresh(), captured = try capture(comparison), review = ReviewRequest(capture: captured)
+            let comparison = fresh(), captured = try capture(comparison),
+                review = ReviewRequest(capture: captured, engine: FirstPartyReviewDiff(strategy: .anchored))
             let replacement = try TextSnapshot(
                 bytes: Data("different\n".utf8), source: .freeText(UUID()), label: "owned")
             let result = await review.compare(to: replacement)
             let full = try requireValue(result, "F0 off-main request complete delivery")
+            check(full.metrics.phases.contains(.anchors), "F0 Runtime uses injected engine protocol")
             let completeHandle = try requireValue(
                 review.issue(changes: full, modified: replacement), "F0 complete-only proposal")
             check(

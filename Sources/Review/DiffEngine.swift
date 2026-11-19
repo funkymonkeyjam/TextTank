@@ -1,6 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
+/// One replaceable, Sendable computation boundary for later explicitly approved engines.
+package protocol ReviewDiffing: Sendable {
+    func compare(
+        _ original: TextSnapshot, _ modified: TextSnapshot, policy: ReviewDiffPolicy,
+        token: ReviewCancellation, hooks: ReviewDiffHooks
+    ) async -> ReviewChangeSet
+}
+package struct FirstPartyReviewDiff: ReviewDiffing {
+    package let strategy: ReviewDiffStrategy
+    package init(strategy: ReviewDiffStrategy = .myers) { self.strategy = strategy }
+    package func compare(
+        _ original: TextSnapshot, _ modified: TextSnapshot, policy: ReviewDiffPolicy,
+        token: ReviewCancellation, hooks: ReviewDiffHooks
+    ) async -> ReviewChangeSet {
+        await ReviewDiffEngine.compare(
+            original, modified, strategy: strategy, policy: policy, token: token, hooks: hooks)
+    }
+}
+
 /// Every public computation is detached from MainActor; workers receive values only.
 package enum ReviewDiffEngine {
     package static func compare(
