@@ -46,7 +46,7 @@ import Foundation
             // JSONSerialization's NSString bridge strips a leading FEFF. Keep the exact BOM
             // golden oracle above, and use separate ASCII content for envelope mutations.
             var mutationSession = session
-            mutationSession.documents[0].text = "plain snapshot"
+            mutationSession.documents[0].text = "plain\nsnapshot"
             mutationSession.documents[0].selection = SessionSelection(anchorByte: 5, caretByte: 0)
             let mutationBytes = try mutationSession.encoded()
             var raw = try JSONSerialization.jsonObject(with: mutationBytes) as! [String: Any]
