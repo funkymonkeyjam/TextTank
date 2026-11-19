@@ -96,14 +96,35 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
         return await FirstPartyReviewDiff().compare(a, b, policy: policy, token: token, hooks: hooks)
     }
 }
+@MainActor private final class CompareCheckLaunch: NSObject, NSApplicationDelegate {
+    var onLaunch: (() -> Void)?
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
+    func applicationDidFinishLaunching(_ notification: Notification) { onLaunch?() }
+}
 @main struct CompareControllerChecks {
-    @MainActor static func main() async {
-        await Checks.run("CompareControllerChecks") {
+    @MainActor static func main() {
+        do {
             let isolated = try IsolatedSupportDirectory("D1Controllers")
-            let documents = TextDocumentController()
-            let app = NSApplication.shared
-            app.setActivationPolicy(.regular)
             NativeFixtureEnvironment.install()
+            let documents = TextDocumentController()
+            let app = NSApplication.shared, launch = CompareCheckLaunch()
+            app.setActivationPolicy(.regular)
+            app.delegate = launch
+            launch.onLaunch = {
+                Task { await runChecks(isolated, documents, app) }
+            }
+            withExtendedLifetime(launch) { app.run() }
+            Checks.fail("Owned comparison app stopped before completion", file: #filePath, line: #line)
+        } catch { Checks.fail("Comparison process setup: \(error)", file: #filePath, line: #line) }
+        Checks.finish("CompareControllerChecks")
+    }
+    @MainActor static func runChecks(
+        _ isolated: IsolatedSupportDirectory, _ documents: TextDocumentController, _ app: NSApplication
+    ) async {
+        await Checks.run("CompareControllerChecks") {
+            check(
+                app.isRunning && NSDocumentController.shared === documents,
+                "D1 native checks own the real app event loop and document controller")
             let previous = EditorServices.current, delegate = AppDelegate()
             delegate.installEditorServices()
             LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")
@@ -450,13 +471,96 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
                 "D1 explicit saved-file Refresh resolves the current pinned saved location")
             savedComparison.window?.close()
 
+            @MainActor func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+            let pickerService = service(), pickerDoc = fresh("picker source\n"), pickerOther = fresh("picker other\n")
+            let pickerDisk = folder.appendingPathComponent("picker-saved.txt")
+            try Data("picker source\n".utf8).write(to: pickerDisk)
+            pickerDoc.fileURL = pickerDisk
+            pickerService.allEditors = { [pickerDoc.editor, pickerOther.editor] }
+            var pickerClipboardReads = 0
+            pickerService.readClipboard = {
+                pickerClipboardReads += 1
+                return (Data("private chosen text\n".utf8), 42)
+            }
+            for mode in 0..<5 {
+                _ = pickerDoc.editor.setSelectionAnchor(0, caret: 6)
+                let picker = CompareSourcePicker(service: pickerService, preferred: pickerDoc.editor)
+                picker.kind.selectItem(at: mode)
+                _ = NSApp.sendAction(picker.kind.action!, to: picker.kind.target, from: picker.kind)
+                if mode == 4 {
+                    picker.chooseFile(utf8, side: 0)
+                    picker.chooseFile(utf16, side: 1)
+                }
+                let root = try requireValue(picker.window?.contentView, "D1 picker content")
+                let button = try requireValue(
+                    descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Compare" },
+                    "D1 picker Compare action")
+                let reads = pickerClipboardReads
+                check(button.isEnabled, "D1 actual picker source variant \(mode) enabled")
+                button.performClick(nil)
+                let deadline = ProcessInfo.processInfo.systemUptime + 8
+                while pickerService.windows.isEmpty && ProcessInfo.processInfo.systemUptime < deadline {
+                    try await Task.sleep(nanoseconds: 2_000_000)
+                }
+                let result = try requireValue(pickerService.windows.first, "D1 actual picker variant result")
+                try await settled(result)
+                check(result.projection != nil, "D1 actual picker variant \(mode) publishes complete captured model")
+                check(
+                    pickerClipboardReads - reads == ((mode == 2 || mode == 3) ? 1 : 0),
+                    "D1 only explicit clipboard picker variants read")
+                result.window?.close()
+                picker.window?.close()
+            }
+            let retainedDoc = fresh("whole live text\n")
+            retainedDoc.presentation?.clone(nil)
+            var retiredView: TTEditor? = retainedDoc.presentation?.secondary
+            weak var releasedView = retiredView
+            let retainedPicker = CompareSourcePicker(service: pickerService, preferred: retiredView)
+            // Include this document before constructing its picker choices.
+            retainedPicker.window?.close()
+            pickerService.allEditors = { [retiredView ?? retainedDoc.editor, pickerOther.editor] }
+            let survivingPicker = CompareSourcePicker(service: pickerService, preferred: retiredView)
+            retainedDoc.presentation?.closeSplit(nil)
+            retiredView = nil
+            survivingPicker.kind.selectItem(at: 2)
+            _ = NSApp.sendAction(
+                survivingPicker.kind.action!, to: survivingPicker.kind.target, from: survivingPicker.kind)
+            let survivingStart = try requireValue(
+                descendants(survivingPicker.window!.contentView!).compactMap { $0 as? NSButton }.first {
+                    $0.title == "Compare"
+                }, "D1 surviving picker Compare")
+            check(
+                releasedView == nil && survivingStart.isEnabled,
+                "D1 whole-document picker survives released original Clone view")
+            survivingPicker.window?.close()
+            let horizontal = service(),
+                scrolling = try await horizontal.open(
+                    original: values(String(repeating: "wide ", count: 500) + "\n"),
+                    modified: values(String(repeating: "wide ", count: 500) + "changed\n"))
+            try await settled(scrolling)
+            scrolling.left.editor.comparisonHorizontalOffset = 160
+            try await Task.sleep(nanoseconds: 30_000_000)
+            check(
+                scrolling.left.editor.comparisonHorizontalOffset > 0
+                    && scrolling.right.editor.comparisonHorizontalOffset
+                        == scrolling.left.editor.comparisonHorizontalOffset,
+                "D1 actual horizontal-only viewport notification links peer without vertical movement")
+            scrolling.perform(.linked)
+            let frozenOffset = scrolling.right.editor.comparisonHorizontalOffset
+            scrolling.left.editor.comparisonHorizontalOffset = 240
+            try await Task.sleep(nanoseconds: 30_000_000)
+            check(
+                scrolling.right.editor.comparisonHorizontalOffset == frozenOffset
+                    && scrolling.left.editor.comparisonHorizontalOffset != frozenOffset,
+                "D1 link off preserves independent horizontal positions")
+            scrolling.window?.close()
             let routing = service(), route = fresh("route source\n"),
                 routed = try await routing.open(original: input(route), modified: values("route result\n"))
             try await settled(routed)
             delegate.buildMenus()
             host.window?.makeKeyAndOrderFront(nil)
             app.activate(ignoringOtherApps: true)
-            _ = NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
+            _ = NSRunningApplication.current.activate(options: [.activateAllWindows])
             routed.window?.makeKeyAndOrderFront(nil)
             _ = routed.window?.makeFirstResponder(routed.left.editor)
             try await Task.sleep(nanoseconds: 30_000_000)
@@ -464,6 +568,37 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
                 routed.window?.isKeyWindow == true && CompareCommandScope.blocksWorkspace,
                 "D1 owned comparison is key and blocks workspace scope")
             check(delegate.currentEditor == nil, "D1 current-editor providers cannot leak a background target")
+            let newItem = NSMenuItem(title: "New", action: #selector(AppDelegate.newDocument(_:)), keyEquivalent: "n")
+            let documentCount = documents.documents.count
+            check(!delegate.validateMenuItem(newItem), "D1 New validates disabled behind comparison")
+            delegate.newDocument(nil)
+            check(
+                documents.documents.count == documentCount && routed.window?.isKeyWindow == true,
+                "D1 direct New cannot create or focus a background document")
+            let openItem = NSMenuItem(
+                title: "Open", action: #selector(NSDocumentController.openDocument(_:)), keyEquivalent: "o")
+            check(!documents.validateUserInterfaceItem(openItem), "D1 Open validates disabled behind comparison")
+            documents.openDocument(nil)
+            documents.saveAllDocuments(nil)
+            let recent = NSMenuItem(title: "Recent", action: #selector(RecentDocumentsMenu.open(_:)), keyEquivalent: "")
+            recent.representedObject = pickerDisk
+            delegate.recentDocumentsMenu.open(recent)
+            delegate.workspace.saveSession(nil)
+            delegate.workspace.openSession(nil)
+            delegate.workspaceBrowser.addFolder(nil)
+            check(
+                documents.documents.count == documentCount && routed.window?.isKeyWindow == true,
+                "D1 direct Open/Recent/Save All/session/folder dispatch cannot open sheets or alter workspace")
+            let originalFormat = route.format
+            let encoding = NSMenuItem(
+                title: "Convert", action: #selector(TextDocument.convertEncoding(_:)), keyEquivalent: "")
+            encoding.representedObject = "utf16le"
+            route.convertEncoding(encoding)
+            route.reloadEncoding(encoding)
+            route.runPageLayout(nil)
+            check(
+                route.format == originalFormat && routed.window?.isKeyWindow == true,
+                "D1 direct encoding and page setup dispatch preserve captured workspace")
             let routeState = State(route),
                 command = NSMenuItem(
                     title: "Duplicate", action: #selector(EditorWindowController.command(_:)), keyEquivalent: "")

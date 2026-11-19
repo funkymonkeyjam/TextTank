@@ -167,6 +167,10 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 guard let self, !self.arranging else { return }
                 if self.linked { (side == .original ? self.right : self.left).setTop(top) }
             }
+            pane.onHorizontalScroll = { [weak self] offset in
+                guard let self, !self.arranging, self.linked else { return }
+                (side == .original ? self.right : self.left).setHorizontalOffset(offset)
+            }
             pane.onResize = { [weak self] in self?.requestGeometry() }
             pane.onFontChange = { [weak self] font in
                 guard let self, self.commonFont != font else { return }

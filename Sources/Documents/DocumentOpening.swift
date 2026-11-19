@@ -90,6 +90,27 @@ enum EncodingChoice {
 /// the stock controller cannot do there. Create it before anything touches
 /// `NSDocumentController.shared`.
 final class TextDocumentController: NSDocumentController {
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if CompareCommandScope.blocksWorkspace,
+            [#selector(openDocument(_:)), #selector(newDocument(_:)), #selector(saveAllDocuments(_:))].contains(
+                item.action)
+        {
+            return false
+        }
+        return super.validateUserInterfaceItem(item)
+    }
+    override func openDocument(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        super.openDocument(sender)
+    }
+    override func newDocument(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        super.newDocument(sender)
+    }
+    override func saveAllDocuments(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        super.saveAllDocuments(sender)
+    }
     override func addDocument(_ document: NSDocument) {
         super.addDocument(document)
         (document as? TextDocument)?.makeWindowControllers()

@@ -4,7 +4,8 @@ import NativeSearch
 import AppKit
 
 /// File > Open Recent, filled from the system's recent-documents list each time it opens.
-@MainActor final class RecentDocumentsMenu: NSObject, NSMenuDelegate {
+@MainActor final class RecentDocumentsMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
+    func validateMenuItem(_ item: NSMenuItem) -> Bool { !CompareCommandScope.blocksWorkspace }
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let urls = NSDocumentController.shared.recentDocumentURLs
@@ -34,6 +35,7 @@ import AppKit
         action: UnsafeMutablePointer<Selector?>
     ) -> Bool { false }
     @objc func open(_ sender: NSMenuItem) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard let url = sender.representedObject as? URL else { return }
         NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, error in
             if let error, (error as NSError).code != NSUserCancelledError { NSApp.presentError(error) }

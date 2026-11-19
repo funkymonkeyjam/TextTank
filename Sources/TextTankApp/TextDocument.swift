@@ -47,6 +47,7 @@ import AppKit
         super.revertToSaved(sender)
     }
     override func runPageLayout(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         revealForNativeAction()
         super.runPageLayout(sender)
     }
@@ -296,6 +297,7 @@ import AppKit
         flushRecovery()
     }
     @objc func reloadEncoding(_ sender: NSMenuItem) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard let raw = sender.representedObject as? String, let encoding = FileEncoding(rawValue: raw) else { return }
         if isDocumentEdited {
             let alert = TTAlert()
@@ -683,6 +685,7 @@ import AppKit
         writeCopy(to: url) { [weak self] error in if let error { self?.presentError(error) } }
     }
     @objc func convertEncoding(_ sender: NSMenuItem) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard let code = sender.representedObject as? String else { return }
         do { try convertEncoding(to: code) } catch { presentError(error) }
     }

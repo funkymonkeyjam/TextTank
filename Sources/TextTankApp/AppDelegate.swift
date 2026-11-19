@@ -41,7 +41,8 @@ import AppKit
     /// a Run result or another auxiliary window may be main. Nil once that document has closed.
     var currentDocumentController: EditorWindowController? {
         let controller = knownWorkspace.map { $0.active } ?? lastDocumentController
-        guard !CompareCommandScope.blocksWorkspace, let controller, !controller.isRetired, !controller.host.isMutatingGroups,
+        guard !CompareCommandScope.blocksWorkspace, let controller, !controller.isRetired,
+            !controller.host.isMutatingGroups,
             (controller.document as? TextDocument)?.isOpen == true
         else { return nil }
         return controller
@@ -51,6 +52,7 @@ import AppKit
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         guard knownWorkspace?.isMutatingGroups != true else { return false }
         switch item.action {
+        case #selector(newDocument(_:)): return !CompareCommandScope.blocksWorkspace
         case #selector(performTabCommand(_:)):
             guard let raw = item.representedObject as? String, let command = TabCommand(rawValue: raw) else {
                 return false
@@ -130,7 +132,9 @@ import AppKit
         return controller
     }()
     @MainActor lazy var compare: CompareService = {
-        let value=CompareService();value.currentEditor={ [weak self] in self?.currentEditor };return value
+        let value = CompareService()
+        value.currentEditor = { [weak self] in self?.currentEditor }
+        return value
     }()
     @MainActor lazy var macros = MacroController(editorProvider: { [weak self] in self?.currentEditor })
     @MainActor lazy var automations: AutomationController = {
@@ -257,6 +261,7 @@ import AppKit
         lastDocumentController = controller
     }
     @objc func newDocument(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard knownWorkspace?.isMutatingGroups != true else { return }
         DocumentFactory.makeUntitled()
     }
@@ -481,14 +486,18 @@ import AppKit
                 .uniqueLines, .removeEmptyLines, .trimLeading, .trimBoth, .titleCase, .invertCase
             ]), "an EditorTransform has no Edit menu item")
         let search = menu("Search")
-        let comparisons=NSMenuItem(title:"Compare",action:nil,keyEquivalent:"")
-        let compareMenu=NSMenu(title:"Compare")
-        compare.addMainItems(to:compareMenu)
+        let comparisons = NSMenuItem(title: "Compare", action: nil, keyEquivalent: "")
+        let compareMenu = NSMenu(title: "Compare")
+        compare.addMainItems(to: compareMenu)
         compareMenu.addItem(.separator())
         for command in CompareCommand.allCases {
-            compareMenu.addItem(title:command.title,action:#selector(CompareController.performCompareCommand(_:)),target:nil,representedObject:command.rawValue)
+            compareMenu.addItem(
+                title: command.title, action: #selector(CompareController.performCompareCommand(_:)), target: nil,
+                representedObject: command.rawValue)
         }
-        comparisons.submenu=compareMenu;search.addItem(comparisons);search.addItem(.separator())
+        comparisons.submenu = compareMenu
+        search.addItem(comparisons)
+        search.addItem(.separator())
 
         // One Find. Command-F opens the find bar in the document window; Find Next, Find Previous
         // and Use Selection for Find share its text with the system find pasteboard. Find and

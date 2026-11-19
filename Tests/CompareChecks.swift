@@ -29,12 +29,36 @@ import Foundation
             let corpus = try JSONDecoder().decode(
                 [Pair].self,
                 from: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("review/corpus.json")))
-            let extra = [
+            var extra = [
                 Pair(name: "empty", before: "", after: ""), Pair(name: "leading", before: "b\n", after: "a\nb\n"),
                 Pair(name: "EOF", before: "old", after: "new\n"),
                 Pair(name: "FEFF/NUL", before: "\u{feff}\0x\r", after: "\u{feff}\0y\n"),
                 Pair(name: "clusters", before: "a👩🏽‍💻 e\u{301}\r\n", after: "b👩🏽‍💻 e\u{300}\n")
             ]
+            extra += [
+                Pair(
+                    name: "huge-line", before: String(repeating: "x", count: 2 * 1024 * 1024),
+                    after: String(repeating: "x", count: 1024 * 1024) + "y"
+                        + String(repeating: "x", count: 1024 * 1024 - 1)),
+                Pair(
+                    name: "huge-prefix-suffix",
+                    before: String(repeating: "p", count: 2 * 1024 * 1024) + "\na\n"
+                        + String(repeating: "s", count: 2 * 1024 * 1024),
+                    after: String(repeating: "p", count: 2 * 1024 * 1024) + "\nb\n"
+                        + String(repeating: "s", count: 2 * 1024 * 1024))
+            ]
+            for n in 0..<48 {
+                extra.append(
+                    Pair(
+                        name: "generated-\(n)", before: (0..<24).map { "\(($0*7+n)%11)\n" }.joined(),
+                        after: (0..<27).map { "\(($0*3+n)%13)\n" }.joined()))
+            }
+            let unique = (0..<250).map { "line-\($0)\n" }
+            extra.append(
+                Pair(
+                    name: "unique-anchors", before: unique.joined(),
+                    after: (["new\n"] + unique.dropFirst() + ["end\n"]).joined()))
+            extra.append(Pair(name: "reverse-unique", before: unique.joined(), after: unique.reversed().joined()))
             for pair in corpus + extra {
                 for strategy in ReviewDiffStrategy.allCases {
                     for reverse in [false, true] {
@@ -43,7 +67,15 @@ import Foundation
                         let changes = await FirstPartyReviewDiff(strategy: strategy).compare(
                             a, b,
                             policy: .correctness, token: ReviewCancellation(), hooks: .init())
-                        let projection = try await CompareProjection.build(original: a, modified: b, changes: changes)
+                        // Explicit correctness-only projection for the inherited multi-MiB corpus.
+                        // Runtime always retains the unchanged 2s/32m default.
+                        var projectionPolicy = ComparePolicy.default
+                        if pair.name.hasPrefix("huge-") {
+                            projectionPolicy.seconds = 30
+                            projectionPolicy.maximumWork = 256_000_000
+                        }
+                        let projection = try await CompareProjection.build(
+                            original: a, modified: b, changes: changes, policy: projectionPolicy)
                         for side in [CompareSide.original, .modified] {
                             check(
                                 reconstructed(projection, side, unified: false) == projection.snapshot(side).bytes,
@@ -108,6 +140,30 @@ import Foundation
                 _ = try await CompareProjection.build(original: a, modified: b, changes: changes, policy: policy)
                 check(false, "D1 output refused")
             } catch { check(error as? CompareFailure == .budget(.output), "D1 output pre-admission") }
+            for dimension in 0..<3 {
+                var limited = ComparePolicy.default
+                if dimension == 0 { limited.maximumWorkspaceBytes = 0 }
+                if dimension == 1 { limited.maximumRows = 0 }
+                if dimension == 2 { limited.seconds = 0 }
+                do {
+                    _ = try await CompareProjection.build(original: a, modified: b, changes: changes, policy: limited)
+                    check(false, "D1 projection resource guard refuses")
+                } catch {
+                    check(
+                        error as? CompareFailure
+                            == .budget(dimension == 0 ? .workspace : dimension == 1 ? .output : .time),
+                        "D1 separate projection guard reason")
+                }
+            }
+            for phase in [ReviewDiffPhase.lines, .output] {
+                let cancelled = ReviewCancellation()
+                do {
+                    _ = try await CompareProjection.build(
+                        original: a, modified: b, changes: changes, token: cancelled,
+                        hooks: .init(checkpoint: { at, _ in if at == phase { cancelled.cancel() } }))
+                    check(false, "D1 phase cancellation")
+                } catch { check(error as? CompareFailure == .cancelled, "D1 cancellation during indexing/output") }
+            }
             let token = ReviewCancellation()
             token.cancel()
             do {

@@ -11,7 +11,10 @@ import AppKit
 }
 
 @MainActor
-final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
+final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate,
+    NSMenuItemValidation
+{
+    func validateMenuItem(_ item: NSMenuItem) -> Bool { !CompareCommandScope.blocksWorkspace }
     let store: WorkspaceBrowserStore
     let monitor = DocumentMonitor()
     var chooseEncoding: @MainActor (URL, Error) -> FileEncoding? = EncodingChoice.present
@@ -142,6 +145,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         }.prefix(100).map { $0 }
     }
     @objc private func toggleMonitor(_ sender: NSMenuItem) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         if monitor.document != nil {
             monitor.stop()
             sender.state = .off
@@ -158,6 +162,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         } catch { TTAlert.present(error) }
     }
     @objc private func reloadMonitored(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard let document = monitor.document else {
             monitorStatus.stringValue = "No document is being monitored."
             return
@@ -283,6 +288,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         expanded.remove(WorkspaceBrowserState.identity(node.entry.url))
     }
     @objc func addFolder(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         do { guard try StoreRecovery.ensureWritable(store.loadState) else { return } } catch {
             TTAlert.present(error)
             return
@@ -299,6 +305,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         } catch { TTAlert.present(error) }
     }
     @objc func removeFolder(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard selectedMode == .folders, let node = outline.item(atRow: outline.selectedRow) as? WorkspaceBrowserNode,
             store.contains(node.entry.url)
         else {
@@ -311,10 +318,12 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         } catch { TTAlert.present(error) }
     }
     @objc private func openRecent(_ sender: NSMenuItem) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard let url = sender.representedObject as? URL else { return }
         do { _ = try openOfferingEncoding(url) } catch { present(error) }
     }
     @objc func openSelected(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         let index = outline.selectedRow
         guard index >= 0 else { return }
         if selectedMode == .openDocuments {

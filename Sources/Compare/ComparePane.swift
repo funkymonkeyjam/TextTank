@@ -10,6 +10,8 @@ import TextTankCore
     private let scroller = NSScroller(frame: NSRect(x: 0, y: 0, width: 18, height: 200))
     private let emptyLabel = NSTextField(labelWithString: "No source lines")
     var onScroll: ((Int) -> Void)?
+    var onHorizontalScroll: ((Int) -> Void)?
+    private var lastHorizontalOffset = 0
     var onResize: (() -> Void)?
     var onFontChange: ((NSFont) -> Void)?
     private var lastFont: NSFont?
@@ -42,6 +44,11 @@ import TextTankCore
                 self.lastFont = font
                 self.onFontChange?(font)
             }
+            let offset = self.editor.comparisonHorizontalOffset
+            if offset != self.lastHorizontalOffset {
+                self.lastHorizontalOffset = offset
+                self.onHorizontalScroll?(offset)
+            }
             let value = self.leadingRows + self.editor.comparisonTopDisplayLine
             if self.top >= self.leadingRows && value != self.top {
                 self.setTop(value)
@@ -50,6 +57,10 @@ import TextTankCore
         }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func setHorizontalOffset(_ offset: Int) {
+        editor.comparisonHorizontalOffset = offset
+        lastHorizontalOffset = editor.comparisonHorizontalOffset
+    }
     var lineHeight: Int { editor.comparisonLineHeight }
     var visibleRows: Int { max(1, Int(bounds.height) / max(1, lineHeight)) }
     func setTop(_ value: Int) {

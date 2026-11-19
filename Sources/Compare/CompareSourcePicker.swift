@@ -188,17 +188,20 @@ import EditorBridge
                 && (original.selectedItem?.representedObject as? CompareChoice)?.document?.isOpen == true
                 && (modified.selectedItem?.representedObject as? CompareChoice)?.document?.isOpen == true
             reason = "Choose two different documents."
-        } else if let choice = original.selectedItem?.representedObject as? CompareChoice, let editor = choice.editor {
-            let doc = choice.document
+        } else if let choice = original.selectedItem?.representedObject as? CompareChoice, let doc = choice.document,
+            doc.isOpen
+        {
+            let editor = type == 3 ? choice.editor : doc.editor
             if type == 1 {
-                available = doc?.isOpen == true && doc?.fileURL != nil
+                available = (doc.diskURL ?? doc.fileURL) != nil
                 reason = "Save this document before comparing it with its file on disk."
             }
             if type == 3 {
                 available =
-                    doc?.isOpen == true && EditorLifetime.document(for: editor) === doc && editor.selectionCount == 1
-                    && editor.selectionStart != editor.selectionEnd
-                    && !editor.selectionIsRectangular
+                    editor.map {
+                        EditorLifetime.document(for: $0) === doc && $0.selectionCount == 1
+                            && $0.selectionStart != $0.selectionEnd && !$0.selectionIsRectangular
+                    } == true
                 reason = "Choose one nonempty text selection; multiple and rectangular selections cannot be compared."
             }
         } else {
@@ -206,8 +209,9 @@ import EditorBridge
             reason = "This source has closed. Choose another document."
         }
         for popup in [original, modified] where !popup.isHidden {
-            if let choice = popup.selectedItem?.representedObject as? CompareChoice, let editor = choice.editor,
-                editor.byteLength > 8 * 1024 * 1024
+            if let choice = popup.selectedItem?.representedObject as? CompareChoice, let doc = choice.document,
+                doc.isOpen,
+                doc.editor.byteLength > 8 * 1024 * 1024
             {
                 available = false
                 reason = "This text exceeds the 8 MiB comparison limit."

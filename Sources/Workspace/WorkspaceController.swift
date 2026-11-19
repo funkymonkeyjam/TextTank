@@ -4,7 +4,8 @@ import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
-@MainActor final class WorkspaceController: NSObject {
+@MainActor final class WorkspaceController: NSObject, NSMenuItemValidation {
+    func validateMenuItem(_ item: NSMenuItem) -> Bool { !CompareCommandScope.blocksWorkspace }
     /// The document a saved session marks as active. The application supplies its one
     /// definition of the current document; a controller made on its own asks the main window.
     var activeDocument: () -> TextDocument? = { EditorServices.current?.activePresentation?.document as? TextDocument }
@@ -31,6 +32,7 @@ import AppKit
         return session
     }
     @objc func saveSession(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "TextTank-session." + WorkspaceStore.sessionFileExtension
         panel.title = "Save Session Snapshot"
@@ -42,6 +44,7 @@ import AppKit
         }
     }
     @objc func openSession(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -93,6 +96,7 @@ import AppKit
     /// The review-and-restore prompt for one snapshot file. Also reached when a snapshot is
     /// opened from Finder or File > Open, so it is never shown as an editable JSON document.
     func openSession(at url: URL) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         do {
             let session = try WorkspaceStore.load(from: url)
             // The first prompt is built from the session alone. The files it names are read
