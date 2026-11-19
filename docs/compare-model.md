@@ -1,0 +1,39 @@
+# Read-only comparison model (D1)
+
+D1 consumes Foundation TextSnapshot and ReviewChangeSet. Scintilla remains the one mutable authority for every real document. A comparison has two immutable captured texts, never a second editable version of an open document. No apply handle, merge, patch, filter, provider, network or persisted comparison is introduced.
+
+## Capture and lifetime
+
+One MainActor CompareService entry accepts immutable snapshots or explicit source inputs. Resolve document identity before prompts, capture synchronously, then use only Sendable values off-thread. Revalidate identity/revision/reload epoch after awaits and before delivery. Completed stale views remain labelled Out of date; in-flight stale results are dropped. Refresh is explicit and replaces both inputs as one generation; no menu validation, polling or view toggle reads disk/clipboard.
+
+Whole-document capture may resolve a surviving representative after nonfinal view retirement. Selection capture also holds a weak exact originating editor and refuses empty, multiple, rectangular or split-grapheme ranges. The selected slice is freeText plus a parent binding, not a mis-sized DocumentTarget. It inherits the8MiB whole-parent admission. Selection Refresh only uses that same still-live view; retirement disables Refresh until an explicit new source choice. Same-path reopen never retargets a binding. Caret/focus/group/pin operations do not invalidate whole-document bytes.
+
+Select for Compare freezes the clicked document's capture/stamp, with a non-color/accessible tab cue. Compare with Selected uses the marked Original and clicked Modified even when focus differs. Reject missing/closed/stale marks or the same live DocumentID (including clones), including direct service entry. Unbound historical value snapshots may compare versions of one document without Refresh/live-current claims.
+
+File capture uses strict FileCodec and the bounded no-follow regular-file reader,8MiB raw and decoded. Clipboard reads occur only on explicit clipboard Start/Refresh and use the injected runtime capability. AppKit can allocate an offered clipboard representation before admission; input limits are not process-memory bounds. File encoding/BOM metadata is distinct from exact decoded UTF8 text. Only a complete empty change list reports **Byte-identical text**, with decoded-text qualification and visible encoding/BOM metadata.
+
+## Pure projection and resource limits
+
+CompareCore is Foundation-only in TextTankCore; Runtime owns UI, source binding and scheduling. One validated ReviewChangeSet supplies both views. Validate snapshot IDs, bounds, monotonic line-aligned blocks and byte/grapheme highlight boundaries before presentation. Equal logical side slots pair unchanged/changed source lines, with nil for absent-side geometry. Unified rows retain unchanged once and changed original then modified lines. Every content segment names its source range; synthetic gaps, EOF placeholders and collapse summaries contribute no bytes. Reconstruct both inputs exactly, including mixed EOL and missing final newline. Empty input has zero source lines.
+
+F0 default policies/engines/apply semantics stay unchanged. A bounded line-index overload may reuse F0's scanner with explicit caller policy/token/hooks; never silently select the correctness30s profile for UI. D1 projection starts at32m work/2s/128MiB explicit workspace/64MiB output/500000rows. Charge indexing, equality/range checks, grapheme boundaries, construction, collapse and navigation; cancellation polls within1024 charged operations plus documented bounded opaque calls. No huge unmetered line token arrays or quadratic work. Default large inputs may stop explicitly; incomplete never means identical. Inline exhaustion retains complete line results with a separate warning.
+
+Three context lines are shown around changes. Fold only unchanged runs outside their union; accessible summaries expand individually/all. Next/Previous do not wrap (initial Next first/Previous last). Mode switching preserves change ordinal, expansion/whitespace and independent positions without recomputation or I/O.
+
+## Native presentation and commands
+
+DS-10-15,20-25,30-31,40-45,50-53,60-63,65-67,70-74,80-85,90-92,95-97,100-101 apply. Comparison is a nonmain ToolPanel, native title/toolbar, keyboard/Window-menu reachable, Escape/Command-W closes it, remembered frame. Source picker is modeless with owned async file sheets, retained invalid choices and inline refusal. Existing top-level menu order/system Find shortcuts remain unchanged (DS-D4/DS-25). New Compare commands live under Search; tab context routes share definitions and validation.
+
+Side renderers are independent snapshot-only TTEditors, never shared with a source or registered as documents; text is exact, Undo reset, readOnly locked. Unified is a virtualized native table over source rows. Neither enters session/recovery. Key comparison/picker routes must not dispatch editing/Save/Undo/macros to the workspace left main by ToolPanel. Both source/view controls and change cues have scoped AX labels; announce status/navigation, not progress ticks. Text>=4.5:1 and marks>=3:1 in light/dark with words/symbols, never color alone. Layout minimum720x420, native toolbar overflow, no essential truncation. Wrap off by default, explicit toggle.
+
+## Provisional integrator bridge agreement
+
+The integrator authorizes an owned geometry prototype before final API commitment. Existing firstVisibleLine is a display-line getter; do not use selection-changing restoreClosedTabView for scrolling. Reserve indicators21/22 and markers2/3/4, preserving search20/bookmark1/history-marker21-24/folds25-31. Add typed decoration, stream/rectangle query, visible/document-line+subline/wrap mapping, selection-free viewport setters, nontext annotation/gap/collapse helpers and coalesced scroll notification. No raw-message escape hatch. Header/helper additions stay grouped; separately required notification/appearance callback hunks are explicit and do not reformat neighbors.
+
+Logical absent rows require virtual space, including external leading/empty spacers where no preceding line exists; never insert padding newlines in side text/snapshots. Wrapped row heights and hidden runs require engine display/source mapping plus actual geometry evidence. Reentrancy/generation guards prevent peer-scroll loops. Resize/zoom/wrap rebuilds geometry without diff. Prototype unequal leading/trailing/middle, empty and wrapped cases, then commit final typed API semantics before full D1b. If required geometry fails, revise/review the plan rather than cut behavior.
+
+At most two result windows/one active pipeline; queued/running work has indeterminate progress and Cancel. Virtualize native cells and batch at most512row operations with an8ms target main-loop slice; measure opaque capture/line shaping separately. Closing releases snapshots/tasks/observers and drops late generations. Guards are provisional, not measured speed or RSS promises.
+
+## Evidence and stop
+
+Retain all54 accepted suites/seven document-native processes and add pure layering/projection plus native controller checks using actual signed modules (Tests sources only, no product TESTING). Author and different verifier build/run full canonical checks/default100MiB/static/provenance, inspect optimized Release, retain failures/identities. Maximum two formal product repair rounds. Physical wrapped reading/keyboard/VoiceOver are partial until observed by a person; native geometry/tree evidence still required. After acceptance update report preserving all44previous pages, safely deliver exact verified Release/latest-only installation, then stop after D1.
