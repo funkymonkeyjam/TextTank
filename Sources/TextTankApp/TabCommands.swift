@@ -111,7 +111,9 @@ import EditorBridge
     func state(_ command: TabCommand, target: TabID?, scope: TabTargetCapture? = nil) -> (
         enabled: Bool, reason: String?
     ) {
-        if CompareCommandScope.blocksWorkspace { return (false,"Close or leave the comparison window before managing document tabs.") }
+        if CompareCommandScope.blocksWorkspace {
+            return (false, "Close or leave the comparison window before managing document tabs.")
+        }
         if host.isMutatingGroups || isBusy || isReopening || host.window?.attachedSheet != nil {
             return (false, "Wait for the current tab operation to finish.")
         }
@@ -162,9 +164,11 @@ import EditorBridge
                 item.isEnabled = stateFor(item).enabled
             }
         }
-        if let compare=EditorServices.current?.compare {
-            compare.addTabItems(to:menu) { [weak host] in
-                guard let doc=host?.presentation(for:target)?.document as? TextDocument,doc.isOpen else { return nil }
+        if let compare = EditorServices.current?.compare {
+            compare.addTabItems(to: menu) { [weak host] in
+                guard let doc = host?.presentation(for: target)?.document as? TextDocument, doc.isOpen else {
+                    return nil
+                }
                 return doc.editor
             }
         }

@@ -51,11 +51,16 @@ import NativeSearch
             "F186 status intent updates only the owned label and leaves the document untouched")
     }
     static func checkMenuTargets(_ menu: NSMenu, composition: AppDelegate) throws {
-        let rows =
+        let legacyRows =
             try JSONSerialization.jsonObject(
                 with: Data(
                     contentsOf:
                         TestPaths.fixtures.appendingPathComponent("menu-tree-wave-3.json"))) as! [[String: String]]
+        let additions =
+            try JSONSerialization.jsonObject(
+                with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("menu-tree-wave-5-d1-additions.json")))
+            as! [[String: String]]
+        let rows = legacyRows + additions
         let commands = rows.filter { $0["target"] == "explicit" && $0["action"] != "submenuAction:" }
         var wrong: [String] = []
         for row in commands {
@@ -76,6 +81,7 @@ import NativeSearch
                 switch path[1] {
                 case 1: expected = composition.searchController
                 case 5: expected = composition.folderSearch
+                case 13: expected = composition.compare
                 default: expected = composition
                 }
             case 6: expected = composition.runner

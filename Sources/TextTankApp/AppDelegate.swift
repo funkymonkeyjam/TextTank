@@ -52,6 +52,8 @@ import AppKit
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         guard knownWorkspace?.isMutatingGroups != true else { return false }
         switch item.action {
+        case #selector(CompareController.performCompareCommand(_:)):
+            return CompareController.key?.validateMenuItem(item) ?? false
         case #selector(newDocument(_:)): return !CompareCommandScope.blocksWorkspace
         case #selector(performTabCommand(_:)):
             guard let raw = item.representedObject as? String, let command = TabCommand(rawValue: raw) else {
@@ -259,6 +261,9 @@ import AppKit
     func noteActive(_ controller: EditorWindowController?) {
         if let controller { knownWorkspace = controller.host }
         lastDocumentController = controller
+    }
+    @objc func performCompareCommand(_ sender: Any?) {
+        CompareController.key?.performCompareCommand(sender)
     }
     @objc func newDocument(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
@@ -486,19 +491,6 @@ import AppKit
                 .uniqueLines, .removeEmptyLines, .trimLeading, .trimBoth, .titleCase, .invertCase
             ]), "an EditorTransform has no Edit menu item")
         let search = menu("Search")
-        let comparisons = NSMenuItem(title: "Compare", action: nil, keyEquivalent: "")
-        let compareMenu = NSMenu(title: "Compare")
-        compare.addMainItems(to: compareMenu)
-        compareMenu.addItem(.separator())
-        for command in CompareCommand.allCases {
-            compareMenu.addItem(
-                title: command.title, action: #selector(CompareController.performCompareCommand(_:)), target: nil,
-                representedObject: command.rawValue)
-        }
-        comparisons.submenu = compareMenu
-        search.addItem(comparisons)
-        search.addItem(.separator())
-
         // One Find. Command-F opens the find bar in the document window; Find Next, Find Previous
         // and Use Selection for Find share its text with the system find pasteboard. Find and
         // Replace is the window with scopes, regular expressions and results.
@@ -522,6 +514,19 @@ import AppKit
         for value: EditorCommand in [
             .gotoMatchingBrace, .selectMatchingBrace, .bookmarkToggle, .bookmarkNext, .bookmarkPrevious
         ] { command(search, value) }
+        let comparisons = NSMenuItem(title: "Compare", action: nil, keyEquivalent: "")
+        let compareMenu = NSMenu(title: "Compare")
+        compare.addMainItems(to: compareMenu)
+        compareMenu.addItem(.separator())
+        for command in CompareCommand.allCases {
+            compareMenu.addItem(
+                title: command.title, action: #selector(CompareController.performCompareCommand(_:)), target: nil,
+                representedObject: command.rawValue)
+        }
+        comparisons.submenu = compareMenu
+        search.addItem(.separator())
+        search.addItem(comparisons)
+
         let runRoot = NSMenuItem()
         runRoot.title = "Run"
         runRoot.submenu = runner.makeMenu()

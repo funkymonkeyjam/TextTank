@@ -118,3 +118,5 @@ object. Driver file-list membership alone cannot prove that refresh. Missing pri
 evidence or changed object bytes reject reuse.
 
 D1 adds `scripts/test-compare.sh` using signed canonical Core/Runtime/EditorBridge images. Controller checks create owned documents/files and inject a named private pasteboard only under `TEXTTANK_TEST_PASTEBOARD=1`; they never inspect the general clipboard. Pure projection checks reconstruct both sources from side/unified/segmented mappings. Physical keyboard, wrapped reading and VoiceOver speech remain separate observations. `docs/compare-model.md` is included in the explicit packaged review documents.
+
+The D1 controller client also uses a byte-identical owned app wrapper and the actual NSApplication event loop; key-window command-routing assertions require genuine native key state. Legacy menu-tree golden bytes stay unchanged: a separate D1 additions fixture is inserted after all existing Search entries, and exact action targets are checked for the new source commands as well.
