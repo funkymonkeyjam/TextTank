@@ -280,6 +280,42 @@ import CryptoKit
             limits = .default
             limits.maximumWork = 0
             check(validate([good], policy: limits) == .failure(.budgetExceeded), "F0 validation work admission")
+            let manyTarget = DocumentTarget(
+                documentID: doc, revision: 0, byteLength: 10_000, selections: [.init(anchorByte: 0, caretByte: 0)])
+            let many = try TextSnapshot(
+                bytes: Data(repeating: 97, count: 10_000), source: .document(doc), label: "admission",
+                document: manyTarget)
+            let entries = (0..<10_000).map { offset in
+                ReviewEdit(
+                    range: .init(snapshot: many.id, lower: offset, upper: offset + 1), expected: Data([97]),
+                    replacement: Data([97]))
+            }
+            let admitted = EditProposal(target: manyTarget, snapshot: many.id, edits: entries)
+            check(
+                try ReviewPreflight.validate(admitted, current: many.bytes, target: manyTarget).get().isEmpty,
+                "F0 exact10000 no-op count admitted before filtering")
+            let tooMany = EditProposal(target: manyTarget, snapshot: many.id, edits: entries + [entries[0]])
+            check(
+                ReviewPreflight.validate(tooMany, current: many.bytes, target: manyTarget) == .failure(.budgetExceeded),
+                "F0 count10001 rejects before payload")
+            for maximum in [4, 5, 6] {
+                var policy = ReviewApplyPolicy.default
+                policy.maximumExpectedBytes = maximum
+                let proposal = EditProposal(target: target, snapshot: a.id, edits: [edit(0, 6, a.bytes, Data())])
+                let result = ReviewPreflight.validate(proposal, current: a.bytes, target: target, policy: policy)
+                check(
+                    maximum < 6 ? result == .failure(.budgetExceeded) : (try? result.get()) != nil,
+                    "F0 expected-byte admission boundary \(maximum)")
+            }
+            let block = ReviewChangeBlock(
+                original: .init(snapshot: a.id, lower: 0, upper: 6),
+                modified: .init(snapshot: clone.id, lower: 0, upper: 6), kind: .modify,
+                inline: .unrefined(.notAttempted))
+            let malformedChanges = ReviewChangeSet(
+                original: a.id, modified: clone.id, blocks: [block, block], completeness: .complete, metrics: .init())
+            rejects("F0 malformed complete change factory rejects before span copies") {
+                _ = try ReviewPreflight.proposal(from: malformedChanges, original: a, modified: clone)
+            }
             check(
                 ReviewUTF8.text(Data("\u{feff}\0".utf8)).map { Data($0.utf8) } == Data("\u{feff}\0".utf8),
                 "F0 replacement conversion preserves FEFF/NUL")

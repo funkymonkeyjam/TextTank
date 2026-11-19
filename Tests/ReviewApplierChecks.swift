@@ -75,6 +75,34 @@ private final class ReviewOwnedGate: @unchecked Sendable {
                 }
             }
             check(NSDocumentController.shared === documents, "F0 owned document controller")
+            // First nonfinal presentation retirement in this owned process, without prewarming.
+            let retired = ReviewWeakEditor(nil), retiredClone = ReviewWeakEditor(nil)
+            let (survivorDoc, second, survive) = try autoreleasepool {
+                let document = fresh()
+                document.presentation?.clone(nil)
+                retired.value = document.editor
+                retiredClone.value = document.presentation?.secondary
+                let captured = try capture(document)
+                let tab = host.model.groups.flatMap(\.tabs).first { $0.documentID == document.runtimeID }!.id
+                _ = host.setEditorLayout(.twoColumns)
+                let second = try requireValue(host.openView(tab, in: .second), "F0 second presentation")
+                let handle = try requireValue(
+                    ReviewRequest(capture: captured).issue(edits: [edit(captured)]), "F0 surviving handle")
+                host.closeTab(tab, sender: nil)
+                return (document, second, handle)
+            }
+            let releaseDeadline = ProcessInfo.processInfo.systemUptime + 2
+            while (retired.value != nil || retiredClone.value != nil)
+                && ProcessInfo.processInfo.systemUptime < releaseDeadline
+            {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            check(
+                host.presentation(for: second) != nil && retired.value == nil && retiredClone.value == nil,
+                "F0 cold nonfinal original primary+Clone release")
+            check(
+                survive.apply() == .applied && survivorDoc.editor.text == "OMEGA beta\n",
+                "F0 surviving representative apply")
             let d = fresh("\u{feff}a\0\r\né")
             let c = try capture(d)
             check(c.snapshot.bytes == Data("\u{feff}a\0\r\né".utf8), "F0 synchronous exact native capture")
@@ -191,20 +219,6 @@ private final class ReviewOwnedGate: @unchecked Sendable {
             check(multi.editor.text == "alpha beta\n", "F0 batch one Undo exact")
             multi.editor.executeCommand(.init(rawValue: "redo"))
             check(multi.editor.text == "A B\n", "F0 batch one Redo exact")
-            // Surviving presentation resolves captured document; original editor can really release.
-            var origin: TextDocument? = fresh()
-            let survivorDoc = origin!, cap = try capture(survivorDoc)
-            let tab = host.model.groups.flatMap(\.tabs).first { $0.documentID == survivorDoc.runtimeID }!.id
-            _ = host.setEditorLayout(.twoColumns)
-            let second = try requireValue(host.openView(tab, in: .second), "F0 second presentation")
-            let retired = ReviewWeakEditor(host.presentation(for: tab)?.primaryEditor)
-            let survive = try requireValue(ReviewRequest(capture: cap).issue(edits: [edit(cap)]), "F0 surviving handle")
-            host.closeTab(tab, sender: nil)
-            origin = nil
-            check(host.presentation(for: second) != nil && retired.value == nil, "F0 cold nonfinal original release")
-            check(
-                survive.apply() == .applied && survivorDoc.editor.text == "OMEGA beta\n",
-                "F0 surviving representative apply")
             let closing = fresh(), closedCap = try capture(closing)
             let closedHandle = try requireValue(
                 ReviewRequest(capture: closedCap).issue(edits: [edit(closedCap)]), "F0 closed handle")
@@ -238,6 +252,51 @@ private final class ReviewOwnedGate: @unchecked Sendable {
                 _ = try await ReviewSnapshotCapture.file(link)
                 check(false, "F0 no-follow capture")
             } catch { check(true, "F0 no-follow capture") }
+            for encoding in [FileEncoding.utf8, .utf16LE, .utf16BE, .windows1252, .latin1] {
+                let format = FileFormat(
+                    encoding: encoding, bom: encoding == .utf16LE || encoding == .utf16BE || encoding == .utf8)
+                let text = "café\r\nlast"
+                let file = isolated.url.appendingPathComponent("codec-" + encoding.rawValue)
+                try FileCodec.encode(text, format: format).write(to: file)
+                let snapshot = try await ReviewSnapshotCapture.file(file, as: encoding)
+                check(
+                    snapshot.bytes == Data(text.utf8) && snapshot.format == format,
+                    "F0 strict file capture format \(encoding)")
+            }
+            for bytes in [Data([0xff, 0xfe, 0x41]), Data([0xff, 0xfe, 0, 0]), Data([0xed, 0xa0, 0x80])] {
+                try bytes.write(to: malformed)
+                do {
+                    _ = try await ReviewSnapshotCapture.file(malformed)
+                    check(false, "F0 malformed transport encoding rejects")
+                } catch { check(true, "F0 malformed transport encoding rejects") }
+            }
+            let oversized = isolated.url.appendingPathComponent("oversized.txt")
+            try Data(repeating: 65, count: 8 * 1024 * 1024 + 1).write(to: oversized)
+            do {
+                _ = try await ReviewSnapshotCapture.file(oversized)
+                check(false, "F0 raw file admission cap")
+            } catch { check(true, "F0 raw file admission cap") }
+            let expands = isolated.url.appendingPathComponent("expands.txt")
+            try Data(repeating: 0x80, count: 3 * 1024 * 1024).write(to: expands)
+            do {
+                _ = try await ReviewSnapshotCapture.file(expands, as: .windows1252)
+                check(false, "F0 decoded file admission cap")
+            } catch { check(true, "F0 decoded file admission cap") }
+            let oldCapture = try capture(loaded)
+            let oldHandle = try requireValue(
+                ReviewRequest(capture: oldCapture).issue(edits: [edit(oldCapture)]), "F0 same-path old handle")
+            loaded.close()
+            let reopened = try DocumentFactory.openCaptured(
+                WorkspaceStore.captureRegularFile(url), from: url, display: false)
+            let reopenedState = State(reopened)
+            check(
+                oldHandle.apply() == .rejected(.closed) && State(reopened) == reopenedState,
+                "F0 same path reopen cannot retarget")
+            let saveCapture = try capture(reopened)
+            let saveHandle = try requireValue(
+                ReviewRequest(capture: saveCapture).issue(edits: [edit(saveCapture)]), "F0 URL-change target")
+            reopened.fileURL = isolated.url.appendingPathComponent("save-as.txt")
+            check(saveHandle.apply() == .applied, "F0 URL change preserves exact live identity")
             let comparison = fresh(), captured = try capture(comparison), review = ReviewRequest(capture: captured)
             let replacement = try TextSnapshot(
                 bytes: Data("different\n".utf8), source: .freeText(UUID()), label: "owned")
