@@ -955,7 +955,8 @@ extension DocumentChecks {
             check(
                 present == [
                     "Settings.json", "SearchOptions.json", "FolderSearchSettings.json", "WorkspaceBrowser.json",
-                    "RunLibrary.json", "Session.texttanksession", "RecoverySnapshot.json", "ReminderBatch.json",
+                    "RunLibrary.json", "Session.texttanksession", "SessionLayout.texttanksession",
+                    "RecoverySnapshot.json", "ReminderBatch.json",
                     "MacroLibrary.json", "Automations.json", "LanguageCatalog.json", "LanguageOverrides.json"
                 ], "every committed persistence fixture is decoded by a check")
             check(!writing, "persistence fixtures were not rewritten by this run")

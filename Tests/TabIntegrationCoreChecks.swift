@@ -75,6 +75,42 @@ import Foundation
             bad = session
             bad.documents[0].selection.caretByte = 1
             rejects("T4 malformed legacy document selection remains fatal") { try bad.validate() }
+            for version in [0, 2, 99] {
+                var future = session.layoutState!
+                future = WorkspaceLayoutState(
+                    version: version, layout: future.layout, focusedGroup: future.focusedGroup, groups: future.groups)
+                bad = session
+                bad.layoutState = future
+                check(bad.layoutStatus == .invalid, "T4 valid-shaped unsupported layout version rejected")
+            }
+            for index in [-1, 2, 999] {
+                bad = session
+                bad.layoutState!.groups[0].activeTabIndex = index
+                check(bad.layoutStatus == .invalid, "T4 out-of-range active index rejected")
+            }
+            bad = session
+            bad.layoutState!.groups[0].activeTabIndex = nil
+            check(bad.layoutStatus == .invalid, "T4 nonempty group needs active index")
+            bad = session
+            bad.layoutState!.groups[0].tabs[0].anchorByte = -1
+            check(bad.layoutStatus == .invalid, "T4 negative view offset invalid")
+            bad = session
+            bad.layoutState!.groups.swapAt(0, 1)
+            check(bad.layoutStatus == .invalid, "T4 unordered slots invalid")
+            let envelope = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
+            for key in ["schemaVersion", "id", "name", "documents", "savedAt"] {
+                var missing = envelope
+                missing.removeValue(forKey: key)
+                rejects("T4 required legacy envelope field never defaulted: \(key)") {
+                    _ = try WorkspaceSession.decode(JSONSerialization.data(withJSONObject: missing))
+                }
+            }
+            rejects("T4 negative target offset") {
+                try DocumentTarget(
+                    documentID: doc, revision: 7, byteLength: 2,
+                    selections: [SessionSelection(anchorByte: -1, caretByte: 0)]
+                ).validate()
+            }
             let ids = session.documents.map { DocumentID($0.id) }, runtime = [DocumentID(), DocumentID()]
             var before = TabWorkspace()
             _ = try before.open(runtime[0], openDocuments: [runtime[0]])
@@ -94,8 +130,14 @@ import Foundation
             check(
                 plan.result.focusedGroup == .second && plan.result.groups[0].tabs.first?.isPinned == true,
                 "T4 session plans focus and pins exactly")
+            rejects("T4 alias saved IDs cannot map to one runtime document") {
+                _ = try before.planSessionLayout(
+                    layout, documentIDs: [ids[0]: runtime[0], ids[1]: runtime[0]], openDocuments: Set(runtime))
+            }
+            rejects("T4 missing saved document mapping rejected before publication") {
+                _ = try before.planSessionLayout(layout, documentIDs: [ids[0]: runtime[0]], openDocuments: Set(runtime))
+            }
             Checks.summary { "PASS TabIntegrationCoreChecks: \(Checks.count) assertions" }
         }
-        Checks.finish("TabIntegrationCoreChecks")
     }
 }

@@ -160,6 +160,37 @@ import Darwin
                 check(!source.editor.text.contains("OMEGA"), "T4 stale result never applied \(operation)")
             }
         }
+        // Main selection need not be the earliest range. Retiring its view keeps each result paired.
+        reset()
+        let multi = try saved("multi", "alpha | alpha"), multiID = id(multi)
+        _ = host.setEditorLayout(.twoColumns)
+        _ = host.openView(multiID, in: .second)
+        host.activate(host.presentation(for: multiID)!)
+        _ = multi.editor.setSelectionRanges([
+            TTSelectionRange(anchor: 13, caret: 8), TTSelectionRange(anchor: 0, caret: 5)
+        ])
+        var previews = 0
+        let multiTimer = Timer(timeInterval: 0.01, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard let window = NSApp.modalWindow, let view = window.contentView,
+                    let accept = DocumentChecks.descendants(view).compactMap({ $0 as? NSButton }).first(where: {
+                        $0.title == "Accept"
+                    })
+                else { return }
+                if previews == 0 { host.closeTab(multiID, sender: nil) }
+                previews += 1
+                accept.performClick(nil)
+            }
+        }
+        RunLoop.main.add(multiTimer, forMode: .modalPanel)
+        defer { multiTimer.invalidate() }
+        try automation.runSavedAutomation(id: workflow.id)
+        multiTimer.invalidate()
+        check(
+            previews == 2 && multi.editor.text == "OMEGA | OMEGA",
+            "T4 retired reversed-order multiple selections apply with paired outputs")
+        multi.editor.executeCommand(.init(rawValue: "undo"))
+        check(multi.editor.text == "alpha | alpha", "T4 retired multiselection one Undo")
         reset()
         let direct = try saved("direct"), directID = id(direct)
         _ = host.setEditorLayout(.grid2x2)

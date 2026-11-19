@@ -644,7 +644,10 @@ extension Notification.Name {
     }
     private func run(_ workflow: AutomationDefinition, target: AutomationDocumentTarget?) throws {
         onInvocation()
-        if workflow.input == .selection || workflow.input == .document || workflow.output == .editor {
+        if workflow.input == .document && target == nil {
+            throw AutomationError.invalid("This automation requires an open editor document.")
+        }
+        if workflow.input == .selection || workflow.output == .editor {
             guard let target else { throw AutomationError.invalid("This automation requires an open editor document.") }
             if workflow.output == .editor { try target.requireWritable() }
             guard target.selections.count == 1 || (workflow.input == .selection && workflow.output == .editor) else {

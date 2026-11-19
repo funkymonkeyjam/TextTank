@@ -100,6 +100,10 @@ import EditorBridge
     }
     func requireWritable() throws {
         let editor = try resolve()
+        if value == nil {
+            try editor.requireWritable()
+            return
+        }
         guard !editor.readOnly else { throw AutomationError.invalid("“\(name)” is read-only. Nothing was replaced.") }
     }
     func apply(_ outputs: [String], wholeDocument: Bool) throws {
@@ -111,7 +115,9 @@ import EditorBridge
         } else if let origin, EditorLifetime.isOpen(origin) {
             applied = origin.replaceSelections(outputs, expectedRevision: revision)
         } else {
-            let edits = zip(selections, outputs).map { range, text in
+            let edits = zip(selections, outputs).sorted {
+                min($0.0.anchorByte, $0.0.caretByte) < min($1.0.anchorByte, $1.0.caretByte)
+            }.map { range, text in
                 TTTextEdit(
                     range: TTByteRange(
                         location: min(range.anchorByte, range.caretByte),
