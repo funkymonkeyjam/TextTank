@@ -176,5 +176,55 @@ and announcement. Single retains its normal minimum; no gratuitous shrink. Same 
 preserves divider ratios; layout changes reset equal shares, with aligned Grid columns.
 Visible group-active status work is bounded (no per-Clone job); hidden/retired work stops,
 while recovery/monitoring remain per document. Reference shortcuts remain unassigned
-until conflict verification. Stage 4 persistence, extra windows, tear-off, comparison/AI,
-named collections and automatic layout restore remain outside this contract.
+until conflict verification. Stage 4 extends explicit session persistence below; extra
+windows, tear-off, comparison/AI engines, named collections and automatic restore remain outside this contract.
+
+
+## Stage 4: document targets and explicit session layouts
+
+`DocumentTarget` is a Foundation value: runtime DocumentID, shared editor revision,
+load epoch, byte length and oriented UTF-8 selection ranges captured on the main actor
+when work starts. It contains no tab, group, pane, path or focused-editor reference.
+Runtime resolution retains the same open TextDocument identity through switches, moves,
+layout changes, collapse and non-final view closes. Final close invalidates it; reopening
+the same path cannot revive it. A successful reload advances the document load epoch,
+even for identical bytes; failed reads that change nothing do not. Results require both
+the captured epoch and the expected-revision bridge guard. Read-only rejection names
+the document. Future comparison and AI consumers must use this contract.
+
+An automation chooses the focused group's active view at workflow invocation. For the
+modeless palette, this is Run, not opening/Cancel; after Run starts the target is frozen
+before parameter prompts, progress or preview. Selection drift of a still-live origin
+view remains a rejection. If that view retires while the document survives, apply to the
+same document's representative using captured byte ranges, without substituting a
+survivor's selection or moving it to fake a match. One result remains one grouped Undo.
+Direct deterministic automations gain no required preview or confirmation. UUIDs route
+workflows; names remain editable data. Existing standalone native editor clients retain
+their explicit view/window-lifetime behavior, separate from real document targets.
+
+`WorkspaceSession` version 1 gains Optional `layoutState`; absent remains the old wire
+format and golden bytes. Session documents/text occur once per NSDocument. Layout tabs
+store SessionDocument IDs (not live runtime IDs), ordered groups, focused group, active
+indices, pins and per-view selection/first visible line. Restore allocates fresh runtime
+and recovery identities, maps saved IDs explicitly and creates shared views of each
+single restored Scintilla document/Undo history. View offsets clamp to UTF-8 boundaries.
+The original strict SessionDocument selection/format/text/envelope validation remains.
+
+All documents and the layout policy are validated before any document opens. Invalid,
+unknown/missing-document, unsupported or malformed optional layouts are recoverable:
+valid document snapshots still restore. Empty workspaces use the valid saved layout if
+it fits, otherwise Single Group in session order with one view per document and a visible
+announcement. Nonempty-workspace safety takes precedence over this fallback: preserve
+existing layout, tabs and focus group, append restored documents to the captured focused
+group and announce that the saved layout was not applied. Determine the policy before
+creating documents and revalidate it at actual Restore after any modal/inspection wait.
+Confirmation describes whether the saved layout will be applied. Original files stay
+untouched; every snapshot opens as a new unsaved document. Existing session original-file
+inspection remains explicit, off-main and once per document.
+
+Recovery keeps its existing format and one snapshot/document; relaunch recovery yields
+one document/view and never restores a layout. A later explicit session restore creates
+new independent unsaved documents, intentionally not content-deduplicated with recovery.
+Closed-tab history stays transient and is never serialized. No automatic last-session
+reopen, second workspace window, collections, comparison engine or AI provider is added.
+DS-14/20-23/35/40-43/62/70-73/84/90-92/100-101 govern these additions.
