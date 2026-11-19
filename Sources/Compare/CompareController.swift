@@ -38,7 +38,8 @@ import EditorBridge
 }
 @MainActor
 final class CompareController: NSWindowController, CompareWindowScope, NSWindowDelegate,
-    NSToolbarDelegate, NSMenuItemValidation, NSToolbarItemValidation, NSTableViewDataSource, NSTableViewDelegate
+    NSToolbarDelegate, NSMenuItemValidation, NSToolbarItemValidation, NSTableViewDataSource, NSTableViewDelegate,
+    NSSplitViewDelegate
 {
     static var key: CompareController? { NSApp?.keyWindow?.windowController as? CompareController }
     weak var service: CompareService?
@@ -106,6 +107,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         let labels = NSStackView(views: sourceLabels)
         labels.orientation = .horizontal
         labels.distribution = .fillEqually
+        split.delegate = self
         split.isVertical = true
         split.dividerStyle = .thin
         split.addArrangedSubview(left)
@@ -140,9 +142,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             bottom.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             bottom.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             bottom.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -8),
-            bottom.heightAnchor.constraint(greaterThanOrEqualToConstant: 28),
-            left.widthAnchor.constraint(greaterThanOrEqualToConstant: 240),
-            right.widthAnchor.constraint(greaterThanOrEqualToConstant: 240)
+            bottom.heightAnchor.constraint(greaterThanOrEqualToConstant: 28)
         ])
         let column = NSTableColumn(identifier: .init("comparison"))
         column.title = "Original / Modified changes"
@@ -213,6 +213,22 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             MainActor.assumeIsolated { self?.pollSources() }
         }
     }
+    func splitView(_ splitView: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) {
+        let available = max(0, splitView.bounds.width - splitView.dividerThickness)
+        let oldAvailable = max(1, oldSize.width - splitView.dividerThickness)
+        let minimum = min(240, available / 2)
+        let fraction = oldSize.width > 0 ? left.frame.width / oldAvailable : 0.5
+        let width = min(available - minimum, max(minimum, available * fraction))
+        left.frame = NSRect(x: 0, y: 0, width: width, height: splitView.bounds.height)
+        right.frame = NSRect(
+            x: width + splitView.dividerThickness, y: 0, width: available - width, height: splitView.bounds.height)
+    }
+    func splitView(
+        _ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int
+    ) -> CGFloat { min(240, splitView.bounds.width / 2) }
+    func splitView(
+        _ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int
+    ) -> CGFloat { max(splitView.bounds.width / 2, splitView.bounds.width - 240 - splitView.dividerThickness) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     private func loadSources(_ a: CompareSource, _ b: CompareSource) {
         original = a

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import Darwin
 @testable import TextTankCore
 @testable import TextTankRuntime
 import EditorBridge
@@ -94,6 +95,27 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
                 original: a.id, modified: b.id, blocks: [], completeness: .budgetStopped(.work), metrics: .init())
         }
         return await FirstPartyReviewDiff().compare(a, b, policy: policy, token: token, hooks: hooks)
+    }
+}
+private actor CompareFileGate {
+    var started = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    func wait() async {
+        started = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+@MainActor private final class CompareTickMeasurement {
+    var latest = ProcessInfo.processInfo.systemUptime, maximum = 0.0, ticks = 0
+    func tick() {
+        let now = ProcessInfo.processInfo.systemUptime
+        maximum = max(maximum, now - latest)
+        latest = now
+        ticks += 1
     }
 }
 @MainActor private final class CompareCheckLaunch: NSObject, NSApplicationDelegate {
@@ -191,6 +213,24 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
                 !window.left.editor.sharesDocument(with: a.editor)
                     && !window.right.editor.sharesDocument(with: b.editor), "D1 renderer is not a source clone")
             check(window.left.editor.readOnly && window.right.editor.readOnly, "D1 both renderers locked")
+            check(
+                window.left.editor.comparisonY(forByte: 6) + Int(window.left.editor.frame.minY) == window.right.editor
+                    .comparisonY(forByte: 15) + Int(window.right.editor.frame.minY),
+                "D1 actual controller unequal internal geometry aligns unchanged end")
+            let sourceFont = a.editor.comparisonFont
+            window.left.editor.comparisonFont = NSFont.monospacedSystemFont(
+                ofSize: sourceFont.pointSize + 2, weight: .regular)
+            try await Task.sleep(nanoseconds: 30_000_000)
+            try await settled(window)
+            check(
+                window.left.editor.comparisonFont == window.right.editor.comparisonFont
+                    && a.editor.comparisonFont == sourceFont,
+                "D1 scratch zoom synchronizes peers without changing source font")
+            window.window?.setContentSize(NSSize(width: 720, height: 420))
+            try await settled(window)
+            check(
+                window.left.bounds.width >= 240 && window.right.bounds.width >= 240 && window.left.bounds.height > 100,
+                "D1 minimum native layout keeps both text panes reachable")
             let count = engine.calls
             window.perform(.next)
             check(window.currentChange == 0, "D1 next navigation selects first block")
@@ -471,6 +511,59 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
                 "D1 explicit saved-file Refresh resolves the current pinned saved location")
             savedComparison.window?.close()
 
+            let raced = fresh("raced source\n"), racedURL = folder.appendingPathComponent("raced-saved.txt")
+            try Data("raced disk\n".utf8).write(to: racedURL)
+            raced.fileURL = racedURL
+            let raceService = service(), gate = CompareFileGate(), raceParent = try CompareDocumentInput(raced.editor)
+            raceService.fileSnapshot = { url, encoding in
+                let captured = try await ReviewSnapshotCapture.file(url, as: encoding)
+                await gate.wait()
+                return captured
+            }
+            let raceTask = Task {
+                _ = try await raceService.open(
+                    original: .document(raceParent), modified: .savedFile(CompareSavedFileInput(raceParent)))
+            }
+            let raceDeadline = ProcessInfo.processInfo.systemUptime + 8
+            while !(await gate.started) && ProcessInfo.processInfo.systemUptime < raceDeadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            let readStarted = await gate.started
+            check(readStarted, "D1 saved-file read reaches held async boundary")
+            raced.fileURL = folder.appendingPathComponent("raced-new-location.txt")
+            await gate.release()
+            do {
+                _ = try await raceTask.value
+                check(false, "D1 changed saved location must refuse publication")
+            } catch {
+                check(
+                    error as? ReviewRejection == .bytesChanged && raceService.windows.isEmpty,
+                    "D1 saved-location change during actual file read drops whole result")
+            }
+            for workload in 0..<2 {
+                let text =
+                    workload == 0
+                    ? String(repeating: "x", count: 2 * 1024 * 1024)
+                    : String(repeating: "repeated line\r\n", count: 20000)
+                let first = try values(text), second = try values(text + "changed"), measure = CompareTickMeasurement()
+                let timer = Timer.scheduledTimer(withTimeInterval: 0.005, repeats: true) { _ in
+                    MainActor.assumeIsolated { measure.tick() }
+                }
+                let start = ProcessInfo.processInfo.systemUptime, measured = service(),
+                    result = try await measured.open(original: first, modified: second)
+                try await settled(result)
+                measure.tick()
+                timer.invalidate()
+                var usage = rusage()
+                _ = getrusage(RUSAGE_SELF, &usage)
+                print(
+                    "D1_MEASURE workload=\(workload) inputBytes=\(text.utf8.count) seconds=\(ProcessInfo.processInfo.systemUptime-start) maxMainTickSeconds=\(measure.maximum) ticks=\(measure.ticks) processHighWaterBytes=\(usage.ru_maxrss) complete=\(result.projection != nil) status=\(result.statusText)"
+                )
+                check(
+                    measure.ticks > 0 && (result.projection != nil || result.statusText.contains("Incomplete")),
+                    "D1 default-policy large/long workload remains cancellable with explicit result")
+                result.window?.close()
+            }
             @MainActor func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
             let pickerService = service(), pickerDoc = fresh("picker source\n"), pickerOther = fresh("picker other\n")
             let pickerDisk = folder.appendingPathComponent("picker-saved.txt")
@@ -520,8 +613,10 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
             retainedPicker.window?.close()
             pickerService.allEditors = { [retiredView ?? retainedDoc.editor, pickerOther.editor] }
             let survivingPicker = CompareSourcePicker(service: pickerService, preferred: retiredView)
+            host.window?.makeKeyAndOrderFront(nil)
             retainedDoc.presentation?.closeSplit(nil)
             retiredView = nil
+            try await Task.sleep(nanoseconds: 30_000_000)
             survivingPicker.kind.selectItem(at: 2)
             _ = NSApp.sendAction(
                 survivingPicker.kind.action!, to: survivingPicker.kind.target, from: survivingPicker.kind)
@@ -532,6 +627,18 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
             check(
                 releasedView == nil && survivingStart.isEnabled,
                 "D1 whole-document picker survives released original Clone view")
+            releasedView = nil
+            app.activate(ignoringOtherApps: true)
+            _ = NSRunningApplication.current.activate(options: [.activateAllWindows])
+            survivingPicker.window?.makeKeyAndOrderFront(nil)
+            try await Task.sleep(nanoseconds: 30_000_000)
+            let pickerCount = documents.documents.count
+            let pickerNew = NSMenuItem(title: "New", action: #selector(AppDelegate.newDocument(_:)), keyEquivalent: "n")
+            check(
+                survivingPicker.window?.isKeyWindow == true && !delegate.validateMenuItem(pickerNew),
+                "D1 key picker blocks workspace New validation")
+            delegate.newDocument(nil)
+            check(documents.documents.count == pickerCount, "D1 key picker direct New preserves workspace")
             survivingPicker.window?.close()
             let horizontal = service(),
                 scrolling = try await horizontal.open(
@@ -612,6 +719,32 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
             check(
                 State(route) == routeState && !route.editor.readOnly,
                 "D1 actual stale UI dispatch cannot mutate source text/read-only/selection")
+            for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+                routed.window?.appearance = NSAppearance(named: appearance)
+                routed.window?.setContentSize(NSSize(width: 720, height: 420))
+                try await settled(routed)
+                let content = try requireValue(routed.window?.contentView, "D1 owned rendered content")
+                content.layoutSubtreeIfNeeded()
+                content.displayIfNeeded()
+                if let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+                    content.cacheDisplay(in: content.bounds, to: bitmap)
+                    if let png = bitmap.representation(using: .png, properties: [:]) {
+                        try png.write(
+                            to: URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(
+                                "harness/logs/compare-\(name)-minimum.png"))
+                    } else {
+                        check(false, "D1 PNG render encoding")
+                    }
+                } else {
+                    check(false, "D1 owned bitmap render")
+                }
+                print(
+                    "D1_LAYOUT \(name) content=\(content.bounds) left=\(routed.left.frame) right=\(routed.right.frame)")
+                check(
+                    routed.left.frame.width >= 240 && routed.right.frame.width >= 240,
+                    "D1 resized minimum keeps both actual pane frames at least240points")
+                check(!content.hasAmbiguousLayout, "D1 native comparison layout is determined in \(name)")
+            }
             check(
                 routed.window?.canBecomeMain == false && routed.window?.windowController?.document == nil,
                 "D1 comparison has no document or main-window lifecycle")
