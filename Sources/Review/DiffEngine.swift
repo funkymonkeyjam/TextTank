@@ -284,17 +284,19 @@ private final class ReviewLineSolver {
             anchors.append(candidates[index])
             index = previous[index]
         }
-        anchors.reverse()
         meter.metrics.anchors = anchors.count
-        var jobs: [ReviewLineRange] = [], x = 0, y = 0
+        // Backtracking already yields descending anchors. Build the LIFO gaps directly,
+        // avoiding two opaque, uncharged O(anchor-count) reversals.
+        var jobs: [ReviewLineRange] = [], nextA = a.ranges.count, nextB = b.ranges.count
         for (ax, by) in anchors {
             try meter.spend()
-            jobs.append(.init(a: x, endA: ax, b: y, endB: by))
-            x = ax + 1
-            y = by + 1
+            jobs.append(.init(a: ax + 1, endA: nextA, b: by + 1, endB: nextB))
+            nextA = ax
+            nextB = by
         }
-        jobs.append(.init(a: x, endA: a.ranges.count, b: y, endB: b.ranges.count))
-        return jobs.reversed()
+        try meter.spend()
+        jobs.append(.init(a: 0, endA: nextA, b: 0, endB: nextB))
+        return jobs
     }
     func validate(_ blocks: [ReviewChangeBlock]) throws {
         var x = 0, y = 0
