@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import Foundation
+
+package struct ReviewEdit: Equatable, Sendable {
+    package let range: ReviewByteRange
+    package let expected: Data
+    package let replacement: Data
+    package init(range: ReviewByteRange, expected: Data, replacement: Data) {
+        self.range = range; self.expected = expected; self.replacement = replacement
+    }
+}
+package struct EditProposal: Sendable {
+    package let target: DocumentTarget
+    package let snapshot: SnapshotID
+    package let edits: [ReviewEdit]
+    package init(target: DocumentTarget, snapshot: SnapshotID, edits: [ReviewEdit]) {
+        self.target = target; self.snapshot = snapshot; self.edits = edits
+    }
+}
+package struct ReviewApplyPolicy: Sendable {
+    package var maximumEdits = 10_000
+    package var maximumExpectedBytes = 8*1024*1024
+    package var maximumReplacementBytes = 8*1024*1024
+    package var maximumResultBytes = 8*1024*1024
+    package var maximumWork = 64_000_000
+    package init() {}
+    package static let `default` = ReviewApplyPolicy()
+}
+package enum ReviewPreflight {
+    package static func validate(_ proposal: EditProposal, current: Data, target: DocumentTarget,
+        policy: ReviewApplyPolicy = .default) -> Result<[ReviewEdit],ReviewRejection> {
+        do { return .success(try validated(proposal, current: current, target: target, policy: policy)) }
+        catch let error as ReviewRejection { return .failure(error) }
+        catch { return .failure(.invalidRange) }
+    }
+    private static func validated(_ proposal: EditProposal, current: Data, target: DocumentTarget,
+        policy: ReviewApplyPolicy) throws -> [ReviewEdit] {
+        guard proposal.target.documentID == target.documentID else { throw ReviewRejection.closed }
+        guard proposal.target.loadEpoch == target.loadEpoch else { throw ReviewRejection.reloaded }
+        guard proposal.target.revision == target.revision else { throw ReviewRejection.revisionChanged }
+        guard policy.maximumEdits >= 0, proposal.edits.count <= min(10_000,policy.maximumEdits),
+            current.count <= 8*1024*1024, policy.maximumWork >= 0 else { throw ReviewRejection.budgetExceeded }
+        var expected = 0, replacements = 0, removed = 0, work = 0
+        func add(_ value: Int, to total: inout Int, limit: Int) throws {
+            let sum = total.addingReportingOverflow(value)
+            guard value >= 0, !sum.overflow, sum.partialValue <= limit else { throw ReviewRejection.budgetExceeded }
+            total = sum.partialValue
+        }
+        // Admission before payload inspection, copies, String conversion or no-op filtering.
+        for edit in proposal.edits {
+            try add(1,to: &work,limit: policy.maximumWork)
+            try add(edit.expected.count,to: &expected,limit: min(8*1024*1024,policy.maximumExpectedBytes))
+            try add(edit.replacement.count,to: &replacements,limit: min(8*1024*1024,policy.maximumReplacementBytes))
+            guard edit.range.lower >= 0, edit.range.upper >= edit.range.lower,
+                edit.range.upper <= current.count else { throw ReviewRejection.invalidRange }
+            try add(edit.range.upper-edit.range.lower,to: &removed,limit: current.count)
+        }
+        let projected = (current.count-removed).addingReportingOverflow(replacements)
+        guard !projected.overflow, projected.partialValue <= min(8*1024*1024,policy.maximumResultBytes) else {
+            throw ReviewRejection.budgetExceeded
+        }
+        try add(current.count,to: &work,limit: policy.maximumWork)
+        // Two replacement passes: strict validation and the later exact conversion/round-trip.
+        try add(replacements,to: &work,limit: policy.maximumWork)
+        try add(replacements,to: &work,limit: policy.maximumWork)
+        try add(expected,to: &work,limit: policy.maximumWork)
+        guard ReviewUTF8.valid(current) else { throw ReviewRejection.invalidText }
+        guard current.count == proposal.target.byteLength && current.count == target.byteLength else {
+            throw ReviewRejection.bytesChanged
+        }
+        var previous: ReviewByteRange?, effective: [ReviewEdit] = []
+        for edit in proposal.edits {
+            let range = edit.range
+            guard range.snapshot == proposal.snapshot, ReviewUTF8.boundary(current,range.lower),
+                ReviewUTF8.boundary(current,range.upper), edit.expected.count == range.upper-range.lower else {
+                throw ReviewRejection.invalidRange
+            }
+            if let p = previous {
+                guard range.lower > p.lower, range.lower >= p.upper,
+                    !(range.lower == p.upper && range.lower == range.upper) else { throw ReviewRejection.invalidRange }
+            }
+            guard current.withUnsafeBytes({ raw in
+                edit.expected.withUnsafeBytes { expected in
+                    raw[range.lower..<range.upper].elementsEqual(expected)
+                }
+            }) else { throw ReviewRejection.bytesChanged }
+            guard ReviewUTF8.valid(edit.replacement) else { throw ReviewRejection.invalidText }
+            if edit.expected != edit.replacement { effective.append(edit) }
+            previous = range
+        }
+        return effective
+    }
+    package static func proposal(from changes: ReviewChangeSet, original: TextSnapshot,
+        modified: TextSnapshot) throws -> EditProposal {
+        guard changes.completeness == .complete, changes.original == original.id,
+            changes.modified == modified.id, let target = original.document else { throw ReviewRejection.incomplete }
+        guard changes.blocks.count <= ReviewApplyPolicy.default.maximumEdits else { throw ReviewRejection.budgetExceeded }
+        var edits: [ReviewEdit] = []
+        for block in changes.blocks {
+            guard block.original.snapshot == original.id, block.modified.snapshot == modified.id,
+                block.original.lower >= 0, block.original.upper >= block.original.lower,
+                block.original.upper <= original.bytes.count, block.modified.lower >= 0,
+                block.modified.upper >= block.modified.lower, block.modified.upper <= modified.bytes.count else {
+                throw ReviewRejection.invalidRange
+            }
+            edits.append(.init(range: block.original,
+                expected: ReviewUTF8.slice(original.bytes,block.original.lower,block.original.upper),
+                replacement: ReviewUTF8.slice(modified.bytes,block.modified.lower,block.modified.upper)))
+        }
+        let proposal = EditProposal(target: target,snapshot: original.id,edits: edits)
+        _ = try validate(proposal,current: original.bytes,target: target).get()
+        return proposal
+    }
+}
