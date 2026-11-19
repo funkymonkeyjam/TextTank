@@ -5,9 +5,11 @@ import EditorBridge
 
 @MainActor private final class CompareChoice: NSObject {
     weak var editor: TTEditor?
+    weak var document: TextDocument?
     let id: DocumentID
     init(_ editor: TTEditor, _ id: DocumentID) {
         self.editor = editor
+        self.document = EditorLifetime.document(for: editor)
         self.id = id
     }
 }
@@ -29,6 +31,8 @@ import EditorBridge
     private var task: Task<Void, Never>?
     private var isClosed = false, busy = false
     private var filePanel: NSOpenPanel?
+    var makeFilePanel: () -> NSOpenPanel = { NSOpenPanel() }
+    private var sourceTimer: Timer?
     init(service: CompareService, preferred: TTEditor?) {
         self.service = service
         let panel = ToolPanel(
@@ -110,15 +114,32 @@ import EditorBridge
         ])
         WindowFrames.track(panel, as: "TextTank.CompareSources")
         update()
+        sourceTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { if self?.isClosed == false { self?.update() } }
+        }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     private func selected(_ popup: NSPopUpButton, selection: Bool = false) throws -> CompareInput {
-        guard let choice = popup.selectedItem?.representedObject as? CompareChoice, let editor = choice.editor,
-            let doc = EditorLifetime.document(for: editor), doc.isOpen, doc.runtimeID == choice.id
+        guard let choice = popup.selectedItem?.representedObject as? CompareChoice, let doc = choice.document,
+            doc.isOpen, doc.runtimeID == choice.id
         else { throw ReviewRejection.closed }
-        return .document(try CompareDocumentInput(selection ? editor : doc.editor, selection: selection))
+        if selection {
+            guard let editor = choice.editor, EditorLifetime.document(for: editor) === doc else {
+                throw CompareOpenFailure.originClosed
+            }
+            return .document(try CompareDocumentInput(editor, selection: true))
+        }
+        return .document(try CompareDocumentInput(doc.editor))
     }
-    @objc private func changed(_ sender: Any?) { update() }
+    @objc private func changed(_ sender: Any?) {
+        if let popup = sender as? NSPopUpButton, popup === original || popup === modified,
+            let choice = popup.selectedItem?.representedObject as? CompareChoice, let doc = choice.document, doc.isOpen
+        {
+            // A new explicit source choice may establish a new selection-view binding.
+            choice.editor = doc.activeEditor
+        }
+        update()
+    }
     private func update() {
         let type = kind.indexOfSelectedItem
         original.isHidden = type == 4
@@ -136,17 +157,21 @@ import EditorBridge
         } else if type == 0 {
             let a = (original.selectedItem?.representedObject as? CompareChoice)?.id,
                 b = (modified.selectedItem?.representedObject as? CompareChoice)?.id
-            available = a != nil && b != nil && a != b
+            available =
+                a != nil && b != nil && a != b
+                && (original.selectedItem?.representedObject as? CompareChoice)?.document?.isOpen == true
+                && (modified.selectedItem?.representedObject as? CompareChoice)?.document?.isOpen == true
             reason = "Choose two different documents."
         } else if let choice = original.selectedItem?.representedObject as? CompareChoice, let editor = choice.editor {
-            let doc = EditorLifetime.document(for: editor)
+            let doc = choice.document
             if type == 1 {
-                available = doc?.fileURL != nil
+                available = doc?.isOpen == true && doc?.fileURL != nil
                 reason = "Save this document before comparing it with its file on disk."
             }
             if type == 3 {
                 available =
-                    editor.selectionCount == 1 && editor.selectionStart != editor.selectionEnd
+                    doc?.isOpen == true && EditorLifetime.document(for: editor) === doc && editor.selectionCount == 1
+                    && editor.selectionStart != editor.selectionEnd
                     && !editor.selectionIsRectangular
                 reason = "Choose one nonempty text selection; multiple and rectangular selections cannot be compared."
             }
@@ -172,7 +197,7 @@ import EditorBridge
     }
     @objc private func chooseFile(_ sender: NSButton) {
         guard !busy, filePanel == nil, let window else { return }
-        let panel = NSOpenPanel()
+        let panel = makeFilePanel()
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
@@ -183,14 +208,21 @@ import EditorBridge
                 guard let self, !self.isClosed else { return }
                 self.filePanel = nil
                 if response == .OK, let url = panel.url {
-                    self.urls[sender.tag] = url
-                    self.fileLabels[sender.tag].stringValue = url.lastPathComponent
+                    self.chooseFile(url, side: sender.tag)
                 }
                 self.update()
             }
         }
     }
+    func chooseFile(_ url: URL, side: Int) {
+        guard side == 0 || side == 1, !busy else { return }
+        urls[side] = url
+        fileLabels[side].stringValue = url.lastPathComponent
+        fileLabels[side].toolTip = url.path
+        update()
+    }
     @objc private func begin(_ sender: Any?) {
+        update()
         guard !busy, let service, start.isEnabled else { return }
         do {
             let a: CompareInput, b: CompareInput
@@ -242,6 +274,8 @@ import EditorBridge
     func windowWillClose(_ notification: Notification) {
         guard !isClosed else { return }
         isClosed = true
+        sourceTimer?.invalidate()
+        sourceTimer = nil
         task?.cancel()
         filePanel?.cancel(nil)
         filePanel = nil

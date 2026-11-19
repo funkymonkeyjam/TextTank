@@ -253,6 +253,7 @@ import AppKit
         } catch  where error.isFileNotFound { return .missing }
     }
     @objc func toggleReadOnly(_ sender: NSMenuItem) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         // Read-only belongs to the Scintilla document, so this covers a split view's other pane.
         // The checkmark is set when a menu is validated, for the document that menu acts on.
         editor.readOnly.toggle()
@@ -268,6 +269,7 @@ import AppKit
         return super.validateUserInterfaceItem(item)
     }
     @objc func checkExternalChanges(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard fileURL != nil else { return }
         do {
             let state = try diskState()
@@ -674,6 +676,7 @@ import AppKit
         } catch { completion(error) }
     }
     @objc func saveCopy(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggestedCopyName
         guard panel.runModal() == .OK, let url = panel.url else { return }

@@ -250,6 +250,9 @@ __attribute__((objc_subclassing_restricted))
 @property(nonatomic) NSInteger comparisonHorizontalOffset;
 @property(nonatomic, readonly) NSInteger comparisonDisplayRows;
 @property(nonatomic, readonly) NSInteger comparisonLineHeight;
+/// Read the view's actual font including zoom; setting is allowed only in comparison mode
+/// and keeps both renderers on one scale without touching their text or selections.
+@property(nonatomic, strong) NSFont *comparisonFont;
 - (NSInteger)comparisonDocumentLineForDisplayLine:(NSInteger)line;
 - (NSInteger)comparisonDisplayLineForDocumentLine:(NSInteger)line;
 - (NSInteger)comparisonWrapCountForLine:(NSInteger)line;

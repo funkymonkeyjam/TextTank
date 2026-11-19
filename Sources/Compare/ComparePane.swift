@@ -11,6 +11,8 @@ import TextTankCore
     private let emptyLabel = NSTextField(labelWithString: "No source lines")
     var onScroll: ((Int) -> Void)?
     var onResize: (() -> Void)?
+    var onFontChange: ((NSFont) -> Void)?
+    private var lastFont: NSFont?
     var onExpand: ((Int) -> Void)?
     var foldRows: [(top: Int, height: Int, count: Int, index: Int)] = []
     private var foldButtons: [Int: NSButton] = [:]
@@ -35,6 +37,11 @@ import TextTankCore
         emptyLabel.isHidden = true
         editor.onComparisonViewportChange = { [weak self] in
             guard let self else { return }
+            let font = self.editor.comparisonFont
+            if self.lastFont != font {
+                self.lastFont = font
+                self.onFontChange?(font)
+            }
             let value = self.leadingRows + self.editor.comparisonTopDisplayLine
             if self.top >= self.leadingRows && value != self.top {
                 self.setTop(value)

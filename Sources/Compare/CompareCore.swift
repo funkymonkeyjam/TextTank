@@ -105,6 +105,7 @@ package struct CompareProjection: Sendable {
                 throw CompareFailure.budget(.output)
             }
             try meter.reserve(estimate)
+            var retainedSpanBytes = 0
             try meter.enter(.output)
             func lines(_ table: ReviewLines) throws -> [CompareLine] {
                 var result: [CompareLine] = []
@@ -223,6 +224,15 @@ package struct CompareProjection: Sendable {
                         limited = true
                         continue
                     }
+                    let retained = refinements.count * MemoryLayout<ReviewInlineSpan>.stride
+                    guard retained <= min(64 * 1024 * 1024, policy.maximumOutputBytes) - estimate - retainedSpanBytes
+                    else {
+                        spans.append([])
+                        limited = true
+                        continue
+                    }
+                    retainedSpanBytes += retained
+                    try meter.reserve(retained)
                     let temporary = size * 64 + refinements.count * 128
                     try meter.reserve(temporary)
                     func boundaries(_ s: TextSnapshot, _ r: ReviewByteRange) throws -> Set<Int> {

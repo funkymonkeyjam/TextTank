@@ -1556,6 +1556,23 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self assertThread]; const sptr_t last=MAX(0,[_engine message:SCI_GETLINECOUNT]-1);
     return MAX(1,[_engine message:SCI_VISIBLEFROMDOCLINE wParam:last]+[_engine message:SCI_WRAPCOUNT wParam:last]+[_engine message:SCI_ANNOTATIONGETLINES wParam:last]);
 }
+- (NSFont *)comparisonFont {
+    [self assertThread];
+    const sptr_t length=[_engine message:SCI_STYLEGETFONT wParam:0 lParam:0];
+    NSString *name=@"Menlo";
+    if(length>0 && length<=200) {
+        std::vector<char> bytes((size_t)length+1,0);
+        [_engine message:SCI_STYLEGETFONT wParam:0 lParam:(sptr_t)bytes.data()];
+        name=[[NSString alloc] initWithBytes:bytes.data() length:(NSUInteger)length encoding:NSUTF8StringEncoding] ?: name;
+    }
+    const double size=MAX(6,MIN(96,[_engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:0]/100.0+[_engine message:SCI_GETZOOM]));
+    return [NSFont fontWithName:name size:size] ?: [NSFont monospacedSystemFontOfSize:size weight:NSFontWeightRegular];
+}
+- (void)setComparisonFont:(NSFont *)font {
+    [self assertThread];if(!_comparisonPresentation || ![font isKindOfClass:NSFont.class] || !std::isfinite(font.pointSize) || font.pointSize<6 || font.pointSize>96)return;
+    for(int style : {0,STYLE_DEFAULT,STYLE_LINENUMBER})[self setSyntaxFont:style name:font.fontName size:font.pointSize];
+    [_engine message:SCI_SETZOOM wParam:0];[self comparisonViewportChanged];
+}
 - (NSInteger)comparisonLineHeight { [self assertThread]; return MAX(1,[_engine message:SCI_TEXTHEIGHT wParam:0]); }
 - (NSInteger)comparisonDocumentLineForDisplayLine:(NSInteger)line {
     [self assertThread]; if(line<0 || line>=self.comparisonDisplayRows)return -1;

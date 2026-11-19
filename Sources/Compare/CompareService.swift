@@ -86,9 +86,23 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         case .file, .clipboard: return true
         }
     }
+    var canRetainForRefresh: Bool {
+        if case .snapshot = input { return true }
+        return canRefresh
+    }
+    var refreshReason: String? {
+        switch input {
+        case .document(let source) where !source.canRefresh:
+            return source.selection == nil
+                ? "The source document closed. Choose its source again."
+                : "The selection's original view closed. Choose its source again."
+        case .snapshot: return "This is captured text without a live source."
+        default: return nil
+        }
+    }
     func refreshInput() throws -> CompareInput {
         if case .document(let source) = input { return try source.refreshInput() }
-        guard canRefresh else { throw CompareOpenFailure.originClosed }
+        // Fixed value inputs remain fixed when the other live source is explicitly refreshed.
         return input
     }
     var label: String {
@@ -107,6 +121,18 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         if let f = snapshot.format {
             title += " · " + f.encoding.displayName + (f.bom ? " · byte-order mark" : " · no byte-order mark")
         }
+        if snapshot.bytes.isEmpty {
+            title += " · Empty text"
+        } else if snapshot.bytes.last == 10 {
+            title +=
+                snapshot.bytes.count > 1 && snapshot.bytes[snapshot.bytes.count - 2] == 13
+                ? " · Ends with CRLF" : " · Ends with LF"
+        } else if snapshot.bytes.last == 13 {
+            title += " · Ends with CR"
+        } else {
+            title += " · Missing final newline"
+        }
+        if isStale { title += " · Out of date" }
         return title
     }
 }
@@ -196,6 +222,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         let snapshot: TextSnapshot, change: Int?
         switch input {
         case .snapshot(let value):
+            guard value.label.utf8.count <= 1024 else { throw CompareFailure.invalid }
             snapshot = try TextSnapshot(
                 bytes: value.bytes, source: value.source, label: value.label, document: value.document,
                 format: value.format)

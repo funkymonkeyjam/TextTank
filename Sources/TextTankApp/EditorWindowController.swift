@@ -766,6 +766,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
     @objc func command(_ sender: NSMenuItem) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard let id = sender.representedObject as? String else { return }
         if (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder is NSTextView {
             // Native editing selectors reach the field directly; this is only the custom-command path.
@@ -794,6 +795,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// Runs one editor command on the active editor. A command that edits text is refused with the
     /// read-only reason before anything else happens, so a macro recording is left as it was.
     func perform(command id: String) throws {
+        guard !CompareCommandScope.blocksWorkspace else { throw EditorCommandFailure.unsupported }
         let editor = activeEditor
         if id.hasPrefix("transform."), let transform = EditorTransform(rawValue: String(id.dropFirst(10))) {
             try editor.requireWritable()
@@ -1010,6 +1012,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             })
     }
     @objc func clone(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard !statusClosed, (document as? TextDocument)?.isOpen == true else { return }
         host.activate(self, focus: false)
         if secondary != nil {
@@ -1058,6 +1061,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             x: left + splitView.dividerThickness, y: 0, width: available - left, height: splitView.bounds.height)
     }
     @objc func closeSplit(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard let clone = secondary else { return }
         clone.onFocus = nil
         lastEditor = primaryEditor
@@ -1098,8 +1102,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             return true
         }
     }
-    @objc func toggleWrap(_ sender: Any?) { activeEditor.wrap.toggle() }
+    @objc func toggleWrap(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return } activeEditor.wrap.toggle() }
     @objc func comment(_ sender: NSMenuItem) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard let raw = sender.representedObject as? String, let command = CommentCommand(rawValue: raw),
             let app = EditorServices.current, let document = document as? TextDocument
         else { return }
@@ -1116,6 +1122,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         } catch { TTAlert.present(error) }
     }
     @objc func columnInsert(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         let editor = activeEditor
         do { try editor.requireWritable() } catch {
             TTAlert.explain(error)

@@ -65,6 +65,12 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     private var pending: (CompareSource, CompareSource)?
     private var refreshing = false
     private var retainedFailure: String?
+    private var presentationComplete = false
+    private struct PreviousPresentation {
+        let original: CompareSource, modified: CompareSource, projection: CompareProjection
+        let navigation: CompareNavigation, font: NSFont, expanded: Set<Int>
+    }
+    private var rollback: PreviousPresentation?
     private var rowTops: [Int] = []
     private var rowIndices: [Int] = []
     private var token = ReviewCancellation()
@@ -74,6 +80,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     private var wheelMonitor: Any?
     private var arranging = false
     private var geometryRequested = false
+    private var commonFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
     var unifiedTableView: NSTableView { table }
     var currentChange: Int? { navigation.current }
     var hasPendingGeometry: Bool { arranging || geometryRequested }
@@ -161,6 +168,13 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 if self.linked { (side == .original ? self.right : self.left).setTop(top) }
             }
             pane.onResize = { [weak self] in self?.requestGeometry() }
+            pane.onFontChange = { [weak self] font in
+                guard let self, self.commonFont != font else { return }
+                self.commonFont = font
+                self.left.editor.comparisonFont = font
+                self.right.editor.comparisonFont = font
+                self.requestGeometry()
+            }
             pane.onExpand = { [weak self] fold in
                 self?.expanded.insert(fold)
                 self?.requestGeometry()
@@ -199,6 +213,13 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     private func loadSources(_ a: CompareSource, _ b: CompareSource) {
         original = a
         modified = b
+        if case .document(let input) = a.input, let (_, view) = try? input.capture.resolve() {
+            commonFont = view.comparisonFont
+        } else {
+            commonFont = left.editor.comparisonFont
+        }
+        left.editor.comparisonFont = commonFont
+        right.editor.comparisonFont = commonFont
         for (source, pane) in [(a, left), (b, right)] {
             pane.editor.readOnly = false
             pane.editor.text = ReviewUTF8.text(source.snapshot.bytes) ?? ""
@@ -263,6 +284,17 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 self.progress.stopAnimation(nil)
                 self.cancelButton.isHidden = true
                 if let p {
+                    if let old = self.projection, let original = self.original, let modified = self.modified,
+                        self.presentationComplete
+                    {
+                        self.rollback = PreviousPresentation(
+                            original: original, modified: modified, projection: old, navigation: self.navigation,
+                            font: self.commonFont, expanded: self.expanded)
+                    }
+                    self.unifiedRows = []
+                    self.changeTops = [:]
+                    self.changeTableRows = [:]
+                    self.table.reloadData()
                     self.loadSources(a, b)
                     self.projection = p
                     self.pending = nil
@@ -317,8 +349,13 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             p.changes.identical
             ? "Byte-identical text. The decoded text matches byte for byte. File encodings or byte-order marks may differ."
             : String(format: p.changes.blocks.count == 1 ? "1 change." : "%ld changes.", p.changes.blocks.count)
+        if outOfDate, let retainedFailure {
+            showStatus(
+                "Out of date. " + retainedFailure + " The previous captured comparison is shown. Refresh explicitly.")
+            return
+        }
         showStatus(
-            (outOfDate ? "Out of date. Refresh explicitly. " : "") + base
+            (outOfDate ? "Out of date. Captured comparison: " : "") + base
                 + (p.inlineLimited ? " Some changed spans could not be refined; line changes remain visible." : "")
                 + (retainedFailure.map { " " + $0 } ?? ""))
     }
@@ -354,6 +391,18 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         service?.cancelQueued(self)
         progress.stopAnimation(nil)
         cancelButton.isHidden = true
+        if let previous = rollback, !isClosed {
+            rollback = nil
+            loadSources(previous.original, previous.modified)
+            projection = previous.projection
+            navigation = previous.navigation
+            expanded = previous.expanded
+            commonFont = previous.font
+            left.editor.comparisonFont = commonFont
+            right.editor.comparisonFont = commonFont
+            retainedFailure = "Refresh cancelled. No document was changed."
+            requestGeometry()
+        }
         if projection != nil { outOfDate = true }
         showStatus("Comparison cancelled. No document was changed.")
     }
@@ -367,6 +416,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             NSEvent.removeMonitor(wheelMonitor)
             self.wheelMonitor = nil
         }
+        rollback = nil
         original = nil
         modified = nil
         pending = nil
@@ -383,6 +433,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     func requestGeometry() {
         guard !isClosed, projection != nil else { return }
         geometry?.cancel()
+        presentationComplete = false
         geometryStamp = UUID()
         let identity = geometryStamp
         geometryRequested = true
@@ -397,13 +448,38 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 self.arranging = false
                 self.progress.stopAnimation(nil)
                 self.cancelButton.isHidden = true
-                self.showStatus("Incomplete presentation. The display limit was reached. No document was changed.")
+                if let previous = self.rollback {
+                    self.rollback = nil
+                    self.loadSources(previous.original, previous.modified)
+                    self.commonFont = previous.font
+                    self.left.editor.comparisonFont = previous.font
+                    self.right.editor.comparisonFont = previous.font
+                    self.projection = previous.projection
+                    self.navigation = previous.navigation
+                    self.expanded = previous.expanded
+                    self.outOfDate = true
+                    self.retainedFailure = "The refreshed presentation exceeded its display limit."
+                    self.requestGeometry()
+                } else {
+                    self.unifiedRows = []
+                    self.table.reloadData()
+                    self.split.isHidden = false
+                    self.tableScroll.isHidden = true
+                    self.unifiedMode = false
+                    self.showStatus(
+                        "Incomplete presentation. The display limit was reached. No document was changed. Try turning off Wrap Lines."
+                    )
+                }
             }
         }
     }
     private func arrange(identity: UUID) async throws {
         guard let p = projection, !isClosed else { return }
         arranging = true
+        if rollback != nil {
+            split.isHidden = true
+            tableScroll.isHidden = true
+        }
         progress.startAnimation(nil)
         cancelButton.isHidden = false
         defer {
@@ -411,9 +487,20 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 arranging = false
                 progress.stopAnimation(nil)
                 cancelButton.isHidden = true
+                window?.toolbar?.validateVisibleItems()
             }
         }
         let stamp = generation, oldLeft = left.top, oldRight = right.top
+        func anchor(_ top: Int) -> (row: Int, subline: Int) {
+            var lo = 0, hi = rowTops.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if rowTops[mid] <= top { lo = mid + 1 } else { hi = mid }
+            }
+            let i = max(0, lo - 1)
+            return rowIndices.indices.contains(i) ? (rowIndices[i], max(0, top - rowTops[i])) : (0, 0)
+        }
+        let anchorA = anchor(oldLeft), anchorB = anchor(oldRight)
         let collapsing = collapsed, expansions = expanded, wrap = wrapped, spaces = whitespace
         var sliceStarted = ProcessInfo.processInfo.systemUptime
         for pane in [left, right] {
@@ -472,6 +559,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         var gapsA: [Int: Int] = [:], gapsB: [Int: Int] = [:], lastA: Int?, lastB: Int?, leadA = 0, leadB = 0, top = 0
         var folds: [(top: Int, height: Int, count: Int, index: Int)] = [], tops: [Int] = [], indices: [Int] = [],
             changesAt: [Int: Int] = [:]
+        var positions: [Int: (top: Int, height: Int)] = [:], foldPositions: [Int: Int] = [:]
         func intersecting(_ spans: [ReviewInlineSpan], line: ReviewByteRange, side: CompareSide) throws -> [TTByteRange]
         {
             func range(_ i: Int) -> ReviewByteRange { side == .original ? spans[i].original : spans[i].modified }
@@ -504,6 +592,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             if let fold = value.fold {
                 let height = max(1, Int(ceil(28 / Double(left.lineHeight))))
                 folds.append((top, height, p.folds[fold].count, fold))
+                foldPositions[fold] = top
                 try gap(lastA, height, &gapsA, &leadA)
                 try gap(lastB, height, &gapsB, &leadB)
                 top += height
@@ -514,6 +603,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 let height = max(1, max(a, b))
                 tops.append(top)
                 indices.append(index)
+                positions[index] = (top, height)
                 if let line = row.original {
                     lastA = line
                     try gap(line, height - a, &gapsA, &leadA)
@@ -561,11 +651,20 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         rowTops = tops
         rowIndices = indices
         changeTops = changesAt
-        for (pane, leading, old) in [(left, leadA, oldLeft), (right, leadB, oldRight)] {
+        func restored(_ anchor: (row: Int, subline: Int)) -> Int {
+            if let point = positions[anchor.row] { return point.top + min(anchor.subline, max(0, point.height - 1)) }
+            var lo = 0, hi = p.folds.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if p.folds[mid].rows.upperBound <= anchor.row { lo = mid + 1 } else { hi = mid }
+            }
+            return foldPositions[lo] ?? 0
+        }
+        for (pane, leading, anchor) in [(left, leadA, anchorA), (right, leadB, anchorB)] {
             pane.leadingRows = leading
             pane.totalRows = max(1, top)
             pane.foldRows = folds
-            pane.setTop(old)
+            pane.setTop(restored(anchor))
         }
         // Segments are bounded off-thread by CompareProjection. Fold lookup is binary;
         // no rows*folds scan and no multi-megabyte text layout on MainActor.
@@ -595,10 +694,15 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         try valid()
         unifiedRows = result
         changeTableRows = tableChanges
-        let font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        let font = NSFont.monospacedSystemFont(ofSize: commonFont.pointSize, weight: .regular)
         table.tableColumns.first?.width = max(
             1000, CGFloat(maxBytes + 120) * ("M" as NSString).size(withAttributes: [.font: font]).width)
         table.reloadData()
+        presentationComplete = true
+        rollback = nil
+        split.isHidden = unifiedMode
+        tableScroll.isHidden = !unifiedMode
+        window?.toolbar?.validateVisibleItems()
         showResultStatus()
     }
     func numberOfRows(in tableView: NSTableView) -> Int { unifiedRows.count }
@@ -635,7 +739,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 (tableView.makeView(withIdentifier: .init("source-row"), owner: self) as? NSTextField)
                 ?? NSTextField(labelWithString: "")
             cell.identifier = .init("source-row")
-            cell.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            cell.font = .monospacedSystemFont(ofSize: commonFont.pointSize, weight: .regular)
             let styled = NSMutableAttributedString(string: prefix + shown + suffix)
             if let change = value.change {
                 // A segment contains complete clusters. Byte->UTF16 conversion is bounded to
@@ -653,6 +757,8 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                     }
                 }
             }
+            let naturalWidth = styled.size().width + 24
+            if let column = table.tableColumns.first, naturalWidth > column.width { column.width = naturalWidth }
             cell.attributedStringValue = styled
             cell.setAccessibilityLabel(prefix + text + suffix)
             cell.setAccessibilityHelp("Underlined spans changed within this line.")
@@ -758,6 +864,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             worker?.cancel()
             geometry?.cancel()
             outOfDate = true
+            rollback = nil
             refreshing = true
             isBusy = true
             showStatus("Refreshing…")
@@ -787,11 +894,16 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     private func enabled(_ command: CompareCommand) -> Bool {
         guard !isClosed else { return false }
         if command == .cancel { return isBusy || arranging }
-        if command == .refresh { return !isBusy && original?.canRefresh == true && modified?.canRefresh == true }
-        guard projection != nil, !isBusy, !arranging else { return false }
+        if command == .refresh {
+            return !isBusy && !hasPendingGeometry && original?.canRetainForRefresh == true
+                && modified?.canRetainForRefresh == true
+                && (original?.canRefresh == true || modified?.canRefresh == true)
+        }
+        guard projection != nil, !isBusy, !hasPendingGeometry else { return false }
         switch command {
-        case .next: return navigation.hasNext
-        case .previous: return navigation.hasPrevious
+        case .next: return presentationComplete && navigation.hasNext
+        case .previous: return presentationComplete && navigation.hasPrevious
+        case .sideBySide, .unified: return presentationComplete
         case .wrap: return !unifiedMode
         default: return true
         }
@@ -812,6 +924,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             return false
         }
         item.state = checked(command) ? .on : .off
+        if command == .refresh, !enabled(command) { item.toolTip = original?.refreshReason ?? modified?.refreshReason }
         return enabled(command)
     }
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
@@ -821,6 +934,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             systemSymbolName: selected ? "checkmark.circle" : command.symbol,
             accessibilityDescription: command.title + (selected ? ", on" : ""))
         item.toolTip = command.title + (selected ? " (on)" : "")
+        if command == .refresh, !enabled(command) { item.toolTip = original?.refreshReason ?? modified?.refreshReason }
         return enabled(command)
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
