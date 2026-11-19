@@ -55,7 +55,8 @@ package enum ReviewUTF8 {
     }
     static func boundary(_ data: Data, _ offset: Int) -> Bool {
         guard offset >= 0, offset <= data.count else { return false }
-        return offset == data.count || data.withUnsafeBytes { ($0[offset] & 0xc0) != 0x80 }
+        return offset == data.count
+            || data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in (raw[offset] & 0xc0) != 0x80 }
     }
 }
 package struct TextSnapshot: Sendable {
