@@ -978,8 +978,8 @@
       "verification_state": "focused checks present; consult exact-candidate validation",
       "implementation_paths": [
         {
-          "path": "Sources/Automations/AutomationController.swift",
-          "symbol": "editor.replaceSelections"
+          "path": "Sources/TextTankApp/EditorLifetime.swift",
+          "symbol": "origin.replaceSelections"
         }
       ],
       "checks": [
