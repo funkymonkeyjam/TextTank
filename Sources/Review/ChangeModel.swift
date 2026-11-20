@@ -159,7 +159,7 @@ struct ReviewLine {
 struct ReviewLines {
     let snapshot: TextSnapshot
     let ranges: [ReviewLine]
-    init(_ snapshot: TextSnapshot, meter: ReviewMeter) throws {
+    init(_ snapshot: TextSnapshot, meter: ReviewMeter, lfOnly: Bool = false) throws {
         self.snapshot = snapshot
         try meter.enter(.lines)
         guard snapshot.bytes.count <= min(8 * 1024 * 1024, meter.policy.maximumInputBytes),
@@ -179,12 +179,12 @@ struct ReviewLines {
                 let c = bytes[i]
                 hash = meter.hooks.hashByte(hash, c)
                 i += 1
-                if c == 13, i < bytes.count, bytes[i] == 10 {
+                if !lfOnly, c == 13, i < bytes.count, bytes[i] == 10 {
                     try meter.spend()
                     hash = meter.hooks.hashByte(hash, bytes[i])
                     i += 1
                 }
-                if c == 10 || c == 13 {
+                if c == 10 || (!lfOnly && c == 13) {
                     guard lines.count < capacity else { throw ReviewHalt.budget(.lines) }
                     lines.append(.init(lower: start, upper: i, hash: hash))
                     start = i

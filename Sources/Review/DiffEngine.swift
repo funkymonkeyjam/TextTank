@@ -34,10 +34,25 @@ package enum ReviewDiffEngine {
                 }.value
             }, onCancel: { token.cancel() })
     }
+    /// Patch records are LF framed. This entry never changes ordinary review tokenization.
+    package static func compareLF(
+        _ original: TextSnapshot, _ modified: TextSnapshot,
+        strategy: ReviewDiffStrategy = .myers, policy: ReviewDiffPolicy = .default,
+        token: ReviewCancellation = ReviewCancellation(), hooks: ReviewDiffHooks = .init()
+    ) async -> ReviewChangeSet {
+        await withTaskCancellationHandler {
+            await Task.detached {
+                compute(
+                    original, modified, strategy: strategy, policy: policy, token: token, hooks: hooks, lfOnly: true)
+            }.value
+        } onCancel: {
+            token.cancel()
+        }
+    }
     private static func compute(
         _ original: TextSnapshot, _ modified: TextSnapshot,
         strategy: ReviewDiffStrategy, policy: ReviewDiffPolicy, token: ReviewCancellation,
-        hooks: ReviewDiffHooks
+        hooks: ReviewDiffHooks, lfOnly: Bool = false
     ) -> ReviewChangeSet {
         let meter = ReviewMeter(policy, token: token, hooks: hooks)
         var blocks: [ReviewChangeBlock] = []
@@ -45,7 +60,8 @@ package enum ReviewDiffEngine {
         do {
             guard !Thread.isMainThread else { throw ReviewHalt.budget(.mainThread) }
             try meter.enter(.lines)
-            let a = try ReviewLines(original, meter: meter), b = try ReviewLines(modified, meter: meter)
+            let a = try ReviewLines(original, meter: meter, lfOnly: lfOnly),
+                b = try ReviewLines(modified, meter: meter, lfOnly: lfOnly)
             let solver = ReviewLineSolver(a, b, meter: meter)
             let ranges = try solver.solve(strategy: strategy)
             try meter.enter(.output)
@@ -63,7 +79,7 @@ package enum ReviewDiffEngine {
             try solver.validate(blocks)
             try meter.poll()
             // Inline has one aggregate, independent meter; line result stays exact on degradation.
-            try ReviewInline.refine(&blocks, original, modified, lineMeter: meter)
+            if !lfOnly { try ReviewInline.refine(&blocks, original, modified, lineMeter: meter) }
             meter.metrics.phases.insert(.delivery)
             hooks.checkpoint?(.delivery, meter.metrics.work)
             if token.isCancelled { throw ReviewHalt.cancelled }
