@@ -74,7 +74,8 @@ private actor MergeStageGate {
                     let source = side == .original ? bc.snapshot : ac.snapshot
                     dest.presentation?.clone(nil)
                     let clone = try requireValue(dest.presentation?.secondary, "D2 clone")
-                    let before = dest.editor.utf8Data, revision = dest.editor.revision, format = dest.format
+                    let before = dest.editor.utf8Data, revision = dest.editor.revision, format = dest.format,
+                        insertionMode = dest.editor.statusInfo.eol
                     let plan = try await MergeCore.plan(
                         original: ac.snapshot, modified: bc.snapshot, changes: changes, destination: side,
                         parent: captured.snapshot, slice: nil, selected: Array(changes.blocks.indices))
@@ -86,7 +87,10 @@ private actor MergeStageGate {
                     check(
                         dest.editor.utf8Data == source.bytes && clone.utf8Data == source.bytes,
                         "D2 native exact both clones")
-                    check(dest.format == format, "D2 native format unchanged")
+                    check(
+                        dest.format == format && dest.editor.statusInfo.eol == insertionMode
+                            && clone.statusInfo.eol == insertionMode,
+                        "D2 native encoding BOM and shared insertion mode unchanged")
                     check(handle.apply() == .rejected(.alreadyUsed), "D2 native handle single use")
                     if before != source.bytes {
                         clone.executeCommand(.init(rawValue: "undo"))
@@ -272,6 +276,12 @@ private actor MergeStageGate {
             check(!cmp.merge.canPerform(.applySelected) && cmp.merge.destination == nil, "D2 no automatic destination")
             check(cmp.merge.chooseDestination(.original), "D2 explicit Original destination")
             check(cmp.merge.setSelection([0]) && cmp.merge.canPerform(.applySelected), "D2 selected block validates")
+            cmp.perform(.next)
+            check(cmp.statusText.contains(dest.displayName), "D2 navigation retains visible destination scope")
+            let applyToolbar = NSToolbarItem(itemIdentifier: .init(CompareCommand.applySelected.rawValue))
+            check(
+                cmp.validateToolbarItem(applyToolbar) && applyToolbar.toolTip?.contains(dest.displayName) == true,
+                "D2 Apply toolbar names explicit destination")
             cmp.merge.applySelected()
             check(cmp.merge.isBusy && !cmp.merge.canPerform(.applySelected), "D2 busy before first await")
             cmp.merge.applySelected()
@@ -327,6 +337,21 @@ private actor MergeStageGate {
             check(
                 encodingDoc.editor.text == "old\n" && encodingComparison.merge.lastOutcome == .failed
                     && encodingDoc.format.encoding == .latin1, "D2 unrepresentable rejects atomically at application")
+            for encoding in [FileEncoding.utf8, .utf16LE, .utf16BE] {
+                let bomDoc = fresh("old\r\n"), expectedFormat = FileFormat(encoding: encoding, bom: true)
+                bomDoc.format = expectedFormat
+                let insertion = bomDoc.editor.statusInfo.eol
+                let bomComparison = try await comparison(live(bomDoc), value("new\n"))
+                check(
+                    bomComparison.merge.chooseDestination(.original) && bomComparison.merge.setSelection([0]),
+                    "D2 BOM destination chosen")
+                bomComparison.merge.applySelected()
+                try await ready(bomComparison)
+                check(
+                    bomDoc.editor.text == "new\n" && bomDoc.format == expectedFormat
+                        && bomDoc.editor.statusInfo.eol == insertion,
+                    "D2 representable merge preserves original encoding BOM and insertion mode")
+            }
             let metadataDoc = fresh("old\n"), metadataCmp = try await comparison(live(metadataDoc), value("new\n"))
             check(
                 metadataCmp.merge.chooseDestination(.original) && metadataCmp.merge.setSelection([0]),
@@ -355,6 +380,18 @@ private actor MergeStageGate {
             check(
                 copies == 1 && Data((board.string(forType: .string) ?? "").utf8) == expectedPatch,
                 "D2 explicit private clipboard exact patch")
+            let special = try await comparison(value("\u{feff}a\0\n"), value("\u{feff}b\0\n"))
+            special.merge.publishClipboard = { text in
+                board.clearContents()
+                return board.setString(text, forType: .string)
+            }
+            special.merge.copyPatch()
+            try await ready(special)
+            let literalSpecial = Data(
+                "--- a/owned.txt\n+++ b/owned.txt\n@@ -1,1 +1,1 @@\n-\u{feff}a\0\n+\u{feff}b\0\n".utf8)
+            check(
+                Data((board.string(forType: .string) ?? "").utf8) == literalSpecial,
+                "D2 actual private clipboard preserves NUL and real FEFF payload")
             let exported = isolated.url.appendingPathComponent("controller-export.diff")
             copy.merge.choosePatchFile = { _ in exported }
             copy.merge.exportPatch()
@@ -379,11 +416,15 @@ private actor MergeStageGate {
             check(
                 savedCmp.merge.chooseDestination(.original) && savedCmp.merge.setSelection([0]),
                 "D2 tab/saved destination")
+            let savedDiskIdentity = try PreparedFileIdentity.capture(protectedURL)
             savedCmp.merge.applySelected()
             try await ready(savedCmp)
             check(
                 saved.editor.text == "disk\n" && !savedCmp.outOfDate && savedCmp.projection?.changes.identical == true,
                 "D2 saved association rebinds known own apply without read")
+            check(
+                try saved.isDocumentEdited && PreparedFileIdentity.capture(protectedURL) == savedDiskIdentity,
+                "D2 merge never saves or rewrites destination disk file")
             saved.editor.text = "new draft\n"
             savedCmp.perform(.refresh)
             try await ready(savedCmp)

@@ -89,18 +89,20 @@ package enum UnifiedPatch {
             guard value.utf8.count <= 16_384 else { throw MergeFailure(.budgetExceeded) }
             let name = (value as NSString).lastPathComponent
             let input = name.isEmpty ? "Untitled" : name
+            let dotOnly = input == "." || input == ".."
             var bytes = Data()
             for c in input.utf8 {
                 try meter.spend()
-                if (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
-                    || [UInt8(45), 46, 95].contains(c)
+                if !dotOnly
+                    && ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+                        || [UInt8(45), 46, 95].contains(c))
                 {
                     labels += 1
-                    guard labels <= 16_384 else { throw MergeFailure(.budgetExceeded) }
+                    guard labels <= 16_384 - 14 else { throw MergeFailure(.budgetExceeded) }
                     bytes.append(c)
                 } else {
                     labels += 4
-                    guard labels <= 16_384 else { throw MergeFailure(.budgetExceeded) }
+                    guard labels <= 16_384 - 14 else { throw MergeFailure(.budgetExceeded) }
                     bytes.append(contentsOf: String(format: "\\x%02X", c).utf8)
                 }
             }

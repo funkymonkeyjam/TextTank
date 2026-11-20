@@ -319,6 +319,12 @@ enum MergePatchOracle {
             check(
                 !header.contains("/private/") && !header.contains("\t") && !header.contains("+++ injected"),
                 "D2 private header sanitized")
+            let traversal = try TextSnapshot(bytes: a.bytes, source: .freeText(UUID()), label: "../../..")
+            let traversalDiff = await ReviewDiffEngine.compare(traversal, b)
+            let traversalPatch = try await UnifiedPatch.write(original: traversal, modified: b, changes: traversalDiff)
+            check(
+                String(decoding: MergePatchOracle.records(traversalPatch)[0], as: UTF8.self).contains("\\x2E\\x2E"),
+                "D2 dot-only display labels cannot form traversal paths")
             let positive = Data("--- a/owned.txt\n+++ b/owned.txt\n@@ -1,1 +1,1 @@\n-a\n+b\n".utf8)
             check(
                 try MergePatchOracle.apply(positive, to: Data("a\n".utf8)) == Data("b\n".utf8),

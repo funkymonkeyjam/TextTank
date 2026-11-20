@@ -52,7 +52,7 @@ import EditorBridge
         case .selectChanges: return "checklist"
         case .selectAllChanges: return "checkmark.circle"
         case .clearChangeSelection: return "circle"
-        case .applySelected: return "arrow.right"
+        case .applySelected: return "checkmark"
         case .showDestination: return "doc.text"
         case .exportPatch: return "square.and.arrow.up"
         case .copyPatch: return "doc.on.doc"
@@ -319,10 +319,13 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         }
     }
     func showStatus(_ text: String) {
-        statusText = text
-        status.stringValue = text
-        status.toolTip = text
-        status.setAccessibilityLabel(text)
+        let message =
+            !merge.selectedBlocks.isEmpty && !merge.isBusy && text != merge.selectionSummary
+            ? text + " " + merge.selectionSummary : text
+        statusText = message
+        status.stringValue = message
+        status.toolTip = message
+        status.setAccessibilityLabel(message)
     }
     func showQueued() {
         isBusy = true
@@ -1040,7 +1043,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             return false
         }
         item.state = checked(command) ? .on : .off
-        if command.isMergeCommand { item.toolTip = merge.validationReason(command) }
+        if command.isMergeCommand { item.toolTip = merge.commandHint(command) }
         if command == .refresh, !enabled(command) { item.toolTip = original?.refreshReason ?? modified?.refreshReason }
         return enabled(command)
     }
@@ -1049,10 +1052,11 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         let selected = checked(command)
         item.image = NSImage(
             systemSymbolName: selected ? "checkmark.circle" : command.symbol,
-            accessibilityDescription: command.title + (selected ? ", on" : ""))
+            accessibilityDescription: command.isMergeCommand
+                ? merge.commandHint(command) : command.title + (selected ? ", on" : ""))
         item.toolTip =
             command.isMergeCommand
-            ? (merge.validationReason(command) ?? command.title) : command.title + (selected ? " (on)" : "")
+            ? merge.commandHint(command) : command.title + (selected ? " (on)" : "")
         if command == .refresh, !enabled(command) { item.toolTip = original?.refreshReason ?? modified?.refreshReason }
         return enabled(command)
     }

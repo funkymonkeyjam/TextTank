@@ -70,6 +70,18 @@ import EditorBridge
         if command == .applySelected { return selectionSummary }
         return "Choose an open, editable destination document."
     }
+    func commandHint(_ command: CompareCommand) -> String {
+        if let reason = validationReason(command) { return reason }
+        if command == .applySelected, let destination {
+            return String(
+                format: "Apply selected changes to %@. Applying does not save the document.",
+                destinationTitle(destination))
+        }
+        if CompareCommand.patchCommands.contains(command) {
+            return "Export the complete Original to Modified comparison, including all changes, as UTF-8 text."
+        }
+        return command.title
+    }
     private var admitted: Bool {
         guard let side = destination, let parent = input(side)?.capture.snapshot,
             let p = comparison?.projection, selectionStamp == comparison?.comparisonStamp
@@ -450,13 +462,32 @@ import EditorBridge
                 return
                     "The operation exceeded a processing limit. No document was changed and no patch was published. Select fewer changes or use smaller sources."
             }
-            if let block = failure.block {
+            if let block = failure.block, (0..<100_000).contains(block) {
                 return String(
                     format:
                         "Change %d could not be applied because its text or range changed. No document was changed. Refresh the comparison.",
                     block + 1)
             }
-            return CompareService.message(failure.reason)
+            switch failure.reason {
+            case .closed: return "The destination document closed. No document was changed. Choose its source again."
+            case .readOnly:
+                return
+                    "The destination is read-only. No document was changed. Make it editable and refresh the comparison."
+            case .revisionChanged, .reloaded, .bytesChanged:
+                return "A source changed or was reloaded. No document was changed. Refresh the comparison."
+            case .invalidRange, .invalidText:
+                return
+                    "The selected changes could not be applied safely. No document was changed. Refresh the comparison."
+            case .incomplete:
+                return
+                    "A complete, current, unfiltered comparison is required. No document was changed and no patch was published. Refresh the comparison."
+            case .cancelled: return "The operation was cancelled. No document was changed."
+            case .alreadyUsed: return "This operation has already finished. Select changes again before applying."
+            case .budgetExceeded:
+                return
+                    "The operation exceeded a processing limit. No document was changed and no patch was published. Use smaller sources."
+            }
+
         }
         if error is PreparedOutputFailure {
             return
@@ -569,6 +600,8 @@ final class MergeSelectionSheet: NSWindowController, CompareWindowScope, NSWindo
         summary.stringValue = mergeOwner.selectionSummary
         summary.setAccessibilityLabel(mergeOwner.selectionSummary)
         apply.isEnabled = mergeOwner.canPerform(.applySelected)
+        apply.toolTip = mergeOwner.commandHint(.applySelected)
+        apply.setAccessibilityLabel(mergeOwner.commandHint(.applySelected))
         selectAll.isEnabled = mergeOwner.canPerform(.selectAllChanges)
         clear.isEnabled = mergeOwner.canPerform(.clearChangeSelection)
         table.reloadData()
