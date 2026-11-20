@@ -1,0 +1,101 @@
+[
+  {
+    "position": "5.13.15",
+    "title": "",
+    "action": "",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": ""
+  },
+  {
+    "position": "5.13.16",
+    "title": "Merge Changes",
+    "action": "submenuAction:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "explicit",
+    "object": ""
+  },
+  {
+    "position": "5.13.16.0",
+    "title": "Choose Destination…",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "chooseDestination"
+  },
+  {
+    "position": "5.13.16.1",
+    "title": "Select Changes…",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "selectChanges"
+  },
+  {
+    "position": "5.13.16.2",
+    "title": "Select All Changes",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "selectAllChanges"
+  },
+  {
+    "position": "5.13.16.3",
+    "title": "Clear Selection",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "clearChangeSelection"
+  },
+  {
+    "position": "5.13.16.4",
+    "title": "Apply Selected Changes",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "applySelected"
+  },
+  {
+    "position": "5.13.16.5",
+    "title": "Show Destination",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "showDestination"
+  },
+  {
+    "position": "5.13.17",
+    "title": "Patch",
+    "action": "submenuAction:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "explicit",
+    "object": ""
+  },
+  {
+    "position": "5.13.17.0",
+    "title": "Export Unified Patch…",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "exportPatch"
+  },
+  {
+    "position": "5.13.17.1",
+    "title": "Copy Patch",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "copyPatch"
+  }
+]

@@ -5,6 +5,13 @@ import EditorBridge
 
 @MainActor enum CompareCommand: String, CaseIterable {
     case previous, next, sideBySide, unified, linked, collapse, expandAll, whitespace, wrap, refresh, cancel
+    case chooseDestination, selectChanges, selectAllChanges, clearChangeSelection, applySelected, showDestination,
+        exportPatch, copyPatch
+    static var mergeCommands: [CompareCommand] {
+        [.chooseDestination, .selectChanges, .selectAllChanges, .clearChangeSelection, .applySelected, .showDestination]
+    }
+    static var patchCommands: [CompareCommand] { [.exportPatch, .copyPatch] }
+    var isMergeCommand: Bool { Self.mergeCommands.contains(self) || Self.patchCommands.contains(self) }
     var title: String {
         switch self {
         case .previous: return "Previous Change"
@@ -18,6 +25,14 @@ import EditorBridge
         case .wrap: return "Wrap Lines"
         case .refresh: return "Refresh Comparison"
         case .cancel: return "Cancel Comparison"
+        case .chooseDestination: return "Choose Destination…"
+        case .selectChanges: return "Select Changes…"
+        case .selectAllChanges: return "Select All Changes"
+        case .clearChangeSelection: return "Clear Selection"
+        case .applySelected: return "Apply Selected Changes"
+        case .showDestination: return "Show Destination"
+        case .exportPatch: return "Export Unified Patch…"
+        case .copyPatch: return "Copy Patch"
         }
     }
     var symbol: String {
@@ -33,6 +48,14 @@ import EditorBridge
         case .wrap: return "arrow.turn.down.left"
         case .refresh: return "arrow.clockwise"
         case .cancel: return "xmark"
+        case .chooseDestination: return "arrow.down.to.line"
+        case .selectChanges: return "checklist"
+        case .selectAllChanges: return "checkmark.circle"
+        case .clearChangeSelection: return "circle"
+        case .applySelected: return "arrow.right"
+        case .showDestination: return "doc.text"
+        case .exportPatch: return "square.and.arrow.up"
+        case .copyPatch: return "doc.on.doc"
         }
     }
 }
@@ -41,7 +64,40 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     NSToolbarDelegate, NSMenuItemValidation, NSToolbarItemValidation, NSTableViewDataSource, NSTableViewDelegate,
     NSSplitViewDelegate
 {
-    static var key: CompareController? { NSApp?.keyWindow?.windowController as? CompareController }
+    static var key: CompareController? {
+        var window = NSApp?.keyWindow
+        while let candidate = window {
+            if let controller = candidate.windowController as? CompareController { return controller }
+            window = candidate.sheetParent
+        }
+        return nil
+    }
+    lazy var merge = MergeController(comparison: self)
+    var comparisonStamp: UUID { generation }
+    var readyForMerge: Bool {
+        !isClosed && !isBusy && !outOfDate && !hasPendingGeometry && presentationComplete && projection != nil
+            && original?.isStale == false && modified?.isStale == false
+    }
+    func markMergeOutOfDate(_ message: String) {
+        outOfDate = true
+        retainedFailure = message
+        showStatus(message)
+    }
+    func recomputeAfterMerge(_ a: CompareSource, _ b: CompareSource) {
+        guard !isClosed, let service else { return }
+        token.cancel()
+        worker?.cancel()
+        geometry?.cancel()
+        generation = UUID()
+        pending = (a, b)
+        rollback = nil
+        refreshing = true
+        outOfDate = true
+        isBusy = true
+        retainedFailure = nil
+        service.enqueue(self)
+    }
+
     weak var service: CompareService?
     private(set) var original: CompareSource?
     private(set) var modified: CompareSource?
@@ -233,6 +289,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     private func loadSources(_ a: CompareSource, _ b: CompareSource) {
         original = a
         modified = b
+        merge.resultReplaced()
         if case .document(let input) = a.input, let (_, view) = try? input.capture.resolve() {
             commonFont = view.comparisonFont
         } else {
@@ -261,7 +318,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             }
         }
     }
-    private func showStatus(_ text: String) {
+    func showStatus(_ text: String) {
         statusText = text
         status.stringValue = text
         status.toolTip = text
@@ -269,7 +326,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     }
     func showQueued() {
         isBusy = true
-        showStatus("Waiting to compare…")
+        showStatus(merge.appliedAwaitingComparison ? "Changes applied. Waiting to compare…" : "Waiting to compare…")
         progress.startAnimation(nil)
         cancelButton.isHidden = false
     }
@@ -330,7 +387,8 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 } else {
                     self.pending = nil
                     self.refreshing = false
-                    let reason = "Incomplete comparison. \(Self.reason(result.completeness)) No document was changed."
+                    let reason =
+                        "Incomplete comparison. \(Self.reason(result.completeness)) " + self.merge.interruptionDetail
                     if self.projection != nil {
                         self.outOfDate = true
                         self.retainedFailure = reason
@@ -386,12 +444,13 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 + (retainedFailure.map { " " + $0 } ?? ""))
     }
     func pollSources() {
-        guard !isClosed else { return }
+        guard !isClosed, !merge.isCommitting, !(merge.isBusy && merge.appliedAwaitingComparison) else { return }
         updateLabels()
         if isBusy && refreshing && pending == nil { return }
         let a = pending?.0 ?? original, b = pending?.1 ?? modified
         if a?.isStale == true || b?.isStale == true {
             outOfDate = true
+            merge.sourceInvalidated()
             if isBusy {
                 cancel(nil)
                 showStatus("Out of date. A source changed or closed. Refresh explicitly.")
@@ -403,6 +462,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         }
     }
     @objc func cancel(_ sender: Any?) {
+        merge.cancelWork()
         token.cancel()
         worker?.cancel()
         refreshTask?.cancel()
@@ -426,11 +486,11 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             commonFont = previous.font
             left.editor.comparisonFont = commonFont
             right.editor.comparisonFont = commonFont
-            retainedFailure = "Refresh cancelled. No document was changed."
+            retainedFailure = "Refresh cancelled. " + merge.interruptionDetail
             requestGeometry()
         }
         if projection != nil { outOfDate = true }
-        showStatus("Comparison cancelled. No document was changed.")
+        showStatus("Comparison cancelled. " + merge.interruptionDetail)
     }
     func windowWillClose(_ notification: Notification) {
         guard !isClosed else { return }
@@ -726,6 +786,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             1000, CGFloat(maxBytes + 120) * ("M" as NSString).size(withAttributes: [.font: font]).width)
         table.reloadData()
         presentationComplete = true
+        merge.presentationCompleted()
         rollback = nil
         split.isHidden = unifiedMode
         tableScroll.isHidden = !unifiedMode
@@ -859,6 +920,10 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     }
     func perform(_ command: CompareCommand) {
         guard enabled(command) else { return }
+        if command.isMergeCommand {
+            merge.perform(command)
+            return
+        }
         switch command {
         case .next:
             navigation.move(next: true)
@@ -889,10 +954,12 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             requestGeometry()
         case .refresh: refresh()
         case .cancel: cancel(nil)
+        default: break
         }
         window?.toolbar?.validateVisibleItems()
     }
     private func refresh() {
+        merge.resultReplaced()
         guard let a = original, let b = modified, let service else { return }
         do {
             let x = try a.refreshInput(), y = try b.refreshInput()
@@ -931,7 +998,9 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     }
     private func enabled(_ command: CompareCommand) -> Bool {
         guard !isClosed else { return false }
-        if command == .cancel { return isBusy || arranging }
+        if command.isMergeCommand { return merge.canPerform(command) }
+        if command == .cancel { return isBusy || arranging || merge.isBusy }
+        guard !merge.isBusy, merge.sheet == nil else { return false }
         if command == .refresh {
             return !isBusy && !hasPendingGeometry && original?.canRetainForRefresh == true
                 && modified?.canRetainForRefresh == true
@@ -962,6 +1031,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             return false
         }
         item.state = checked(command) ? .on : .off
+        if command.isMergeCommand { item.toolTip = merge.validationReason(command) }
         if command == .refresh, !enabled(command) { item.toolTip = original?.refreshReason ?? modified?.refreshReason }
         return enabled(command)
     }
@@ -971,7 +1041,9 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         item.image = NSImage(
             systemSymbolName: selected ? "checkmark.circle" : command.symbol,
             accessibilityDescription: command.title + (selected ? ", on" : ""))
-        item.toolTip = command.title + (selected ? " (on)" : "")
+        item.toolTip =
+            command.isMergeCommand
+            ? (merge.validationReason(command) ?? command.title) : command.title + (selected ? " (on)" : "")
         if command == .refresh, !enabled(command) { item.toolTip = original?.refreshReason ?? modified?.refreshReason }
         return enabled(command)
     }
@@ -979,7 +1051,10 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         CompareCommand.allCases.map { .init($0.rawValue) } + [.flexibleSpace]
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [CompareCommand.previous, .next, .sideBySide, .unified, .linked, .collapse, .whitespace, .wrap, .refresh].map {
+        [
+            CompareCommand.previous, .next, .sideBySide, .unified, .linked, .collapse, .whitespace, .wrap, .refresh,
+            .selectChanges, .applySelected
+        ].map {
             .init($0.rawValue)
         }
     }

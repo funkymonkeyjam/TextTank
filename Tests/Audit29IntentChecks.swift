@@ -60,7 +60,13 @@ import NativeSearch
             try JSONSerialization.jsonObject(
                 with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("menu-tree-wave-5-d1-additions.json")))
             as! [[String: String]]
-        let rows = legacyRows + additions
+        let mergeAdditions =
+            try JSONSerialization.jsonObject(
+                with: Data(
+                    contentsOf:
+                        TestPaths.fixtures.appendingPathComponent("menu-tree-wave-5-d2-additions.json")))
+            as! [[String: String]]
+        let rows = legacyRows + additions + mergeAdditions
         let commands = rows.filter { $0["target"] == "explicit" && $0["action"] != "submenuAction:" }
         var wrong: [String] = []
         for row in commands {

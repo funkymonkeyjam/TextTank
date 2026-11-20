@@ -120,3 +120,14 @@ evidence or changed object bytes reject reuse.
 D1 adds `scripts/test-compare.sh` using signed canonical Core/Runtime/EditorBridge images. Controller checks create owned documents/files and inject a named private pasteboard only under `TEXTTANK_TEST_PASTEBOARD=1`; they never inspect the general clipboard. Pure projection checks reconstruct both sources from side/unified/segmented mappings. Physical keyboard, wrapped reading and VoiceOver speech remain separate observations. `docs/compare-model.md` is included in the explicit packaged review documents.
 
 The D1 controller client also uses a byte-identical owned app wrapper and the actual NSApplication event loop; key-window command-routing assertions require genuine native key state. Legacy menu-tree golden bytes stay unchanged: a separate D1 additions fixture is inserted after all existing Search entries, and exact action targets are checked for the new source commands as well.
+
+
+D2 adds merge-core-layering, merge-checks and merge-controller-checks, for60 named suites while retaining
+all57 D1 names and seven document processes. Tests import the canonical signed Core/Runtime/native
+images. The pure suite uses independent descending subset replay and an independent serialized LF
+patch reader, frozen two-strategy corpus/sequences plus owned installed-Git interoperability fixtures.
+The native suite first checks the sole applier/clone Undo and staged-output failures, then destination/
+selection/recompute/encoding/clipboard/file/sheet controls. Default production policies and explicitly
+selected512m/30s headless correctness profiles are separate; final F0 admission never increases.
+Production Release remains optimized/non-testable. Counts describe registration; candidate results and
+physical/platform limits remain in exact validation evidence.

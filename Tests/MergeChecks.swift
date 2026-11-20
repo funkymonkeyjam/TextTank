@@ -196,7 +196,8 @@ enum MergePatchOracle {
                         } else {
                             for seed in 0..<16 { sets.append(all.filter { ($0 * 17 + seed * 31) % 7 < 3 }) }
                         }
-                        for selected in sets {
+                        var seenSelections = Set<[Int]>()
+                        for selected in sets where seenSelections.insert(selected).inserted {
                             let plan = try await MergeCore.plan(
                                 original: a, modified: b, changes: changes, destination: side, parent: destination,
                                 slice: nil, selected: selected, policy: .correctness)

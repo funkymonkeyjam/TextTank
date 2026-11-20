@@ -53,3 +53,16 @@ Explicit standalone file encodings are available in the picker; Automatic accept
 Native split-view delegates clamp both actual pane frames to240points when the comparison is resized or its divider dragged; the root remains Auto Layout. This is verified after resizing a wider window to the720point minimum. Target-Mac observations include a roughly half-second opaque Scintilla load/shape pause on a2MiB single line; the8ms target applies to explicit row batches, not those opaque operations or process RSS.
 
 Final native boundary amendment: the existing TTContentView incoming drag handlers refuse immediately for comparisonPresentation renderers, before pasteboard reads or asynchronous document-open dispatch. Ordinary editor drag behavior is unchanged. The existing blank-row gutter filler is hidden only for comparisonPresentation so synthetic non-source rows receive no invented source line number; real Scintilla source numbers remain. Both use the existing typed mode flag, with native assertions and no public message API.
+
+
+## D2 consumer extension
+
+D1's captured read-only presentation and bridge agreement remain intact. [merge-model](merge-model.md)
+owns explicit source-document application through Foundation and complete UTF8 patch export. Destination
+selection never means editing these independent scratch renderers. Comparison capture additionally
+records shared insertion-EOL/readOnly metadata; saved-file association also binds the saved digest.
+Metadata-only changes invalidate application/export until explicit Refresh. A known own merge derives
+fresh parent/slice coordinates (including empty), retains the opposite captured value without I/O and
+queues normal bounded recomputation. Pending own commit suppresses only its synchronous stale callback;
+other windows and final post-await guards still invalidate. Interrupted postcommit work stays visibly
+stale and says applied changes remain. Native auxiliary jobs share the one service computation slot.

@@ -518,10 +518,24 @@ import AppKit
         let compareMenu = NSMenu(title: "Compare")
         compare.addMainItems(to: compareMenu)
         compareMenu.addItem(.separator())
-        for command in CompareCommand.allCases {
+        for command in CompareCommand.allCases where !command.isMergeCommand {
             compareMenu.addItem(
                 title: command.title, action: #selector(CompareController.performCompareCommand(_:)), target: nil,
                 representedObject: command.rawValue)
+        }
+        compareMenu.addItem(.separator())
+        for (title, commands) in [
+            ("Merge Changes", CompareCommand.mergeCommands), ("Patch", CompareCommand.patchCommands)
+        ] {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let menu = NSMenu(title: title)
+            for command in commands {
+                menu.addItem(
+                    title: command.title, action: #selector(CompareController.performCompareCommand(_:)), target: nil,
+                    representedObject: command.rawValue)
+            }
+            item.submenu = menu
+            compareMenu.addItem(item)
         }
         comparisons.submenu = compareMenu
         search.addItem(.separator())

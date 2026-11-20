@@ -19,9 +19,13 @@ import EditorBridge
     weak var origin: TTEditor?
     let selection: Range<Int>?
     let wasEdited: Bool
+    let insertionMode: TTLineEndingMode
+    let wasReadOnly: Bool
     init(_ editor: TTEditor, selection: Bool = false) throws {
         capture = try ReviewSnapshotCapture.document(editor)
         origin = editor
+        insertionMode = editor.statusInfo.eol
+        wasReadOnly = editor.readOnly
         let (doc, _) = try capture.resolve()
         wasEdited = doc.isDocumentEdited || editor.modified || doc.format != doc.savedFormat
         if selection {
@@ -32,6 +36,28 @@ import EditorBridge
         } else {
             self.selection = nil
         }
+    }
+    /// Known post-application extent; unlike the public picker this may be empty.
+    init(capture: ReviewDocumentCapture, origin: TTEditor?, range: Range<Int>?) throws {
+        self.capture = capture
+        self.origin = origin
+        selection = range
+        let (doc, editor) = try capture.resolve()
+        if let range {
+            guard range.lowerBound >= 0, range.upperBound <= capture.snapshot.bytes.count,
+                let origin, EditorLifetime.document(for: origin) === doc
+            else { throw CompareOpenFailure.originClosed }
+        }
+        insertionMode = editor.statusInfo.eol
+        wasReadOnly = editor.readOnly
+        wasEdited = doc.isDocumentEdited || editor.modified || doc.format != doc.savedFormat
+    }
+    func validateMetadata() throws {
+        try capture.validateCurrent()
+        let (doc, editor) = try capture.resolve()
+        guard doc.format == capture.snapshot.format, editor.statusInfo.eol == insertionMode,
+            editor.readOnly == wasReadOnly
+        else { throw ReviewRejection.bytesChanged }
     }
     var canRefresh: Bool {
         guard let (doc, _) = try? capture.resolve() else { return false }
@@ -57,6 +83,7 @@ import EditorBridge
     let overrideEncoding: FileEncoding?
     private let edited: Bool
     private let savedFormat: FileFormat
+    private let savedFingerprint: String?
     init(_ parent: CompareDocumentInput, encoding: FileEncoding? = nil) throws {
         let (doc, editor) = try parent.capture.resolve()
         guard let url = doc.diskURL ?? doc.fileURL else { throw ReviewRejection.closed }
@@ -65,16 +92,28 @@ import EditorBridge
         self.overrideEncoding = encoding
         self.encoding = encoding ?? doc.savedFormat.encoding
         self.savedFormat = doc.savedFormat
+        self.savedFingerprint = doc.originalDiskFingerprint
         edited = doc.isDocumentEdited || editor.modified || doc.format != doc.savedFormat
     }
     func validate() throws {
-        try parent.capture.validateCurrent()
+        try parent.validateMetadata()
         let (doc, editor) = try parent.capture.resolve()
         guard (doc.diskURL ?? doc.fileURL) == url, doc.savedFormat == savedFormat,
+            doc.originalDiskFingerprint == savedFingerprint,
             (doc.isDocumentEdited || editor.modified || doc.format != doc.savedFormat) == edited
         else {
             throw ReviewRejection.bytesChanged
         }
+    }
+    func reboundAfterKnownApply(_ fresh: CompareDocumentInput) throws -> CompareSavedFileInput {
+        let (doc, editor) = try fresh.capture.resolve()
+        guard parent.capture.snapshot.document?.documentID == fresh.capture.snapshot.document?.documentID,
+            parent.capture.snapshot.document?.loadEpoch == fresh.capture.snapshot.document?.loadEpoch,
+            (doc.diskURL ?? doc.fileURL) == url, doc.savedFormat == savedFormat,
+            doc.originalDiskFingerprint == savedFingerprint
+        else { throw ReviewRejection.bytesChanged }
+        let whole = try CompareDocumentInput(capture: fresh.capture, origin: editor, range: nil)
+        return try CompareSavedFileInput(whole, encoding: overrideEncoding)
     }
     func refreshInput() throws -> CompareInput {
         let (_, editor) = try parent.capture.resolve()
@@ -103,13 +142,13 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         self.clipboardChange = clipboardChange
     }
     func validate() throws {
-        if case .document(let source) = input { try source.capture.validateCurrent() }
+        if case .document(let source) = input { try source.validateMetadata() }
         if case .savedFile(let source) = input { try source.validate() }
     }
     var isStale: Bool {
         if case .savedFile(let source) = input { return (try? source.validate()) == nil }
         guard case .document(let source) = input else { return false }
-        guard (try? source.capture.validateCurrent()) != nil, let (doc, _) = try? source.capture.resolve() else {
+        guard (try? source.validateMetadata()) != nil, let (doc, _) = try? source.capture.resolve() else {
             return true
         }
         return doc.format != source.capture.snapshot.format
@@ -210,6 +249,11 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     private var admissions = 0
     private var active: UUID?
     private var waiting: [CompareController] = []
+    private struct AuxiliaryJob {
+        let id: UUID
+        let start: @MainActor (@escaping @MainActor () -> Void) -> Void
+    }
+    private var auxiliary: [AuxiliaryJob] = []
     private(set) var marked: CompareDocumentInput?
     private var picker: CompareSourcePicker?
     var currentEditor: () -> TTEditor? = { nil }
@@ -359,7 +403,17 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     private func pump() {
         guard active == nil else { return }
         waiting.removeAll { $0.isClosed }
-        guard !waiting.isEmpty else { return }
+        guard !waiting.isEmpty else {
+            guard !auxiliary.isEmpty else { return }
+            let job = auxiliary.removeFirst()
+            active = job.id
+            job.start { [weak self] in
+                guard let self, self.active == job.id else { return }
+                self.active = nil
+                self.pump()
+            }
+            return
+        }
         let controller = waiting.removeFirst(), job = UUID()
         active = job
         controller.run(job: job, engine: engine) { [weak self] in
@@ -368,6 +422,11 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
             self.pump()
         }
     }
+    func enqueueAuxiliary(_ id: UUID, start: @escaping @MainActor (@escaping @MainActor () -> Void) -> Void) {
+        auxiliary.append(.init(id: id, start: start))
+        pump()
+    }
+    func cancelAuxiliary(_ id: UUID) { auxiliary.removeAll { $0.id == id } }
     func cancelQueued(_ controller: CompareController) { waiting.removeAll { $0 === controller } }
     func closed(_ controller: CompareController) {
         waiting.removeAll { $0 === controller }

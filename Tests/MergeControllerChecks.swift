@@ -223,6 +223,180 @@ import EditorBridge
                 "D2 all failed/cancelled temp cleanup")
             try PrivateFileStore.write(oldOutput, to: output, maximumBytes: 32)
             check(try Data(contentsOf: output) == oldOutput, "D2 legacy atomic writer unchanged")
+
+            // D2 native controller contract, added test-first after headless Gate A.
+            var comparisonServices: [CompareService] = []
+            defer { comparisonServices.flatMap(\.windows).forEach { $0.window?.close() } }
+            @MainActor func comparison(_ a: CompareInput, _ b: CompareInput) async throws -> CompareController {
+                let service = CompareService()
+                service.showWindows = false
+                comparisonServices.append(service)
+                let window = try await service.open(original: a, modified: b)
+                try await ready(window)
+                return window
+            }
+            @MainActor func ready(_ comparison: CompareController) async throws {
+                let deadline = ProcessInfo.processInfo.systemUptime + 10
+                while (comparison.isBusy || comparison.hasPendingGeometry || comparison.merge.isBusy)
+                    && ProcessInfo.processInfo.systemUptime < deadline
+                {
+                    try await Task.sleep(nanoseconds: 1_000_000)
+                }
+                try require(
+                    !comparison.isBusy && !comparison.hasPendingGeometry && !comparison.merge.isBusy,
+                    "D2 native pipeline settles")
+            }
+            @MainActor func live(_ document: TextDocument, selected: Bool = false) throws -> CompareInput {
+                .document(try CompareDocumentInput(document.editor, selection: selected))
+            }
+            @MainActor func value(_ text: String) throws -> CompareInput {
+                .snapshot(try TextSnapshot(bytes: Data(text.utf8), source: .freeText(UUID()), label: "owned.txt"))
+            }
+            let dest = fresh("a\nkeep\nz\n"), opposite = fresh("A\nkeep\nZ\n")
+            let cmp = try await comparison(live(dest), live(opposite))
+            check(!cmp.merge.canPerform(.applySelected) && cmp.merge.destination == nil, "D2 no automatic destination")
+            check(cmp.merge.chooseDestination(.original), "D2 explicit Original destination")
+            check(cmp.merge.setSelection([0]) && cmp.merge.canPerform(.applySelected), "D2 selected block validates")
+            cmp.merge.applySelected()
+            check(cmp.merge.isBusy && !cmp.merge.canPerform(.applySelected), "D2 busy before first await")
+            cmp.merge.applySelected()
+            try await ready(cmp)
+            check(
+                cmp.merge.lastOutcome == .applied && dest.editor.text == "A\nkeep\nz\n",
+                "D2 partial native controller exact selected")
+            check(
+                cmp.projection?.changes.blocks.count == 1 && cmp.merge.selectedBlocks.isEmpty && !cmp.outOfDate,
+                "D2 fresh remaining comparison clears coordinates")
+            check(cmp.merge.setSelection([0]), "D2 select recomputed new ordinal")
+            cmp.merge.applySelected()
+            try await ready(cmp)
+            check(
+                dest.editor.text == opposite.editor.text && cmp.projection?.changes.identical == true,
+                "D2 controller sequence converges")
+            dest.editor.executeCommand(.init(rawValue: "undo"))
+            cmp.pollSources()
+            check(cmp.outOfDate && !cmp.merge.canPerform(.applySelected), "D2 ordinary Undo stales comparison")
+            check(cmp.merge.canPerform(.showDestination), "D2 Show Destination available when stale")
+            cmp.perform(.refresh)
+            try await ready(cmp)
+            check(!cmp.outOfDate && cmp.projection?.changes.blocks.count == 1, "D2 explicit Refresh after Undo")
+            let reverse = try await comparison(live(dest), live(opposite))
+            check(reverse.merge.chooseDestination(.modified), "D2 explicit Modified destination")
+            check(reverse.merge.setSelection([0]), "D2 reverse selection")
+            reverse.merge.applySelected()
+            try await ready(reverse)
+            check(opposite.editor.utf8Data == dest.editor.utf8Data, "D2 reverse controller exact")
+            let immutable = try await comparison(value("a\n"), value("b\n"))
+            check(
+                !immutable.merge.chooseDestination(.original) && !immutable.merge.chooseDestination(.modified),
+                "D2 value sources never editable destinations")
+            let sliceDoc = fresh("prefix\nold\nsuffix\n")
+            sliceDoc.editor.setSelectionAnchor(7, caret: 11)
+            let selected = try await comparison(live(sliceDoc, selected: true), value(""))
+            check(
+                selected.merge.chooseDestination(.original) && selected.merge.setSelection([0]),
+                "D2 selection destination chooses parent")
+            selected.merge.applySelected()
+            try await ready(selected)
+            check(
+                sliceDoc.editor.text == "prefix\nsuffix\n" && selected.original?.snapshot.bytes.isEmpty == true
+                    && !selected.outOfDate, "D2 empty postapply bound selection recomputes")
+            let encodingDoc = fresh("old\n")
+            encodingDoc.format = .init(encoding: .latin1)
+            let encodingComparison = try await comparison(live(encodingDoc), value("emoji👩🏽‍💻\n"))
+            check(
+                encodingComparison.merge.chooseDestination(.original) && encodingComparison.merge.setSelection([0]),
+                "D2 legacy destination chosen")
+            encodingComparison.merge.applySelected()
+            try await ready(encodingComparison)
+            check(
+                encodingDoc.editor.text == "old\n" && encodingComparison.merge.lastOutcome == .failed
+                    && encodingDoc.format.encoding == .latin1, "D2 unrepresentable rejects atomically at application")
+            let metadataDoc = fresh("old\n"), metadataCmp = try await comparison(live(metadataDoc), value("new\n"))
+            check(
+                metadataCmp.merge.chooseDestination(.original) && metadataCmp.merge.setSelection([0]),
+                "D2 metadata selection setup")
+            _ = metadataDoc.editor.setLineEndingMode(.crlf)
+            metadataCmp.pollSources()
+            check(
+                metadataCmp.outOfDate && metadataCmp.merge.selectedBlocks.isEmpty
+                    && !metadataCmp.merge.canPerform(.applySelected),
+                "D2 metadata-only EOL change invalidates old comparison")
+            let copy = try await comparison(value("a\r\nb"), value("a\nc\r"))
+            let board = NSPasteboard.withUniqueName()
+            defer { board.releaseGlobally() }
+            var copies = 0
+            copy.merge.publishClipboard = { text in
+                copies += 1
+                board.clearContents()
+                return board.setString(text, forType: .string)
+            }
+            check(copy.merge.canPerform(.copyPatch), "D2 complete value comparison can export")
+            check(copies == 0, "D2 validation never publishes clipboard")
+            copy.merge.copyPatch()
+            try await ready(copy)
+            let expectedPatch = try await UnifiedPatch.write(
+                original: copy.original!.snapshot, modified: copy.modified!.snapshot, changes: copy.projection!.changes)
+            check(
+                copies == 1 && Data((board.string(forType: .string) ?? "").utf8) == expectedPatch,
+                "D2 explicit private clipboard exact patch")
+            let exported = isolated.url.appendingPathComponent("controller-export.diff")
+            copy.merge.choosePatchFile = { _ in exported }
+            copy.merge.exportPatch()
+            try await ready(copy)
+            check(
+                copy.merge.lastOutcome == .exported && (try Data(contentsOf: exported)) == expectedPatch,
+                "D2 explicit file command exact patch")
+            copy.merge.choosePatchFile = { _ in nil }
+            copy.merge.exportPatch()
+            try await ready(copy)
+            check(
+                copy.merge.lastOutcome == .cancelled && (try Data(contentsOf: exported)) == expectedPatch,
+                "D2 export cancellation preserves old output")
+            let protectedURL = isolated.url.appendingPathComponent("source.txt")
+            try Data("disk\n".utf8).write(to: protectedURL)
+            let saved = try DocumentFactory.openCaptured(
+                WorkspaceStore.captureRegularFile(protectedURL), from: protectedURL, display: false)
+            saved.editor.text = "draft\n"
+            let savedInput = try CompareDocumentInput(saved.editor)
+            let savedCmp = try await comparison(
+                .document(savedInput), .savedFile(try CompareSavedFileInput(savedInput)))
+            check(
+                savedCmp.merge.chooseDestination(.original) && savedCmp.merge.setSelection([0]),
+                "D2 tab/saved destination")
+            savedCmp.merge.applySelected()
+            try await ready(savedCmp)
+            check(
+                saved.editor.text == "disk\n" && !savedCmp.outOfDate && savedCmp.projection?.changes.identical == true,
+                "D2 saved association rebinds known own apply without read")
+            saved.editor.text = "new draft\n"
+            savedCmp.perform(.refresh)
+            try await ready(savedCmp)
+            let alias = isolated.url.appendingPathComponent("source-hardlink.txt")
+            try FileManager.default.linkItem(at: protectedURL, to: alias)
+            savedCmp.merge.choosePatchFile = { _ in alias }
+            savedCmp.merge.exportPatch()
+            try await ready(savedCmp)
+            check(
+                savedCmp.merge.lastOutcome == .failed && (try Data(contentsOf: protectedURL)) == Data("disk\n".utf8),
+                "D2 export refuses source hardlink")
+            cmp.window?.makeKeyAndOrderFront(nil)
+            cmp.merge.showSelectionSheet()
+            let selectionSheet = try requireValue(cmp.merge.sheet, "D2 native selection sheet")
+            selectionSheet.window?.contentView?.layoutSubtreeIfNeeded()
+            check(
+                cmp.window?.attachedSheet === selectionSheet.window && !selectionSheet.window!.canBecomeMain,
+                "D2 auxiliary sheet native scoped owner")
+            check(
+                selectionSheet.table.numberOfRows == cmp.projection?.changes.blocks.count,
+                "D2 virtualized rows correspond to whole blocks")
+            let checkbox = selectionSheet.table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSButton
+            check(
+                checkbox?.accessibilityLabel()?.contains("Change 1") == true, "D2 actual checkbox scoped accessibility")
+            selectionSheet.dismiss(cancelled: true)
+            check(
+                cmp.window?.attachedSheet == nil && cmp.merge.selectedBlocks.isEmpty,
+                "D2 native sheet Cancel releases selection")
         }
     }
 }

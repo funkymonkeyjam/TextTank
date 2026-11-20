@@ -544,3 +544,21 @@ restore, extra window, collection, comparison engine or AI provider is introduce
 ## Read-only comparison (D1)
 
 [compare-model](compare-model.md) defines the snapshot/source bindings, bounded Core projection and typed bridge contract. CompareService captures explicit inputs and schedules one diff pipeline with at most two result windows. CompareController owns independent locked snapshot renderers and a virtual native unified table; no source document, Undo stack, saved layout or recovery record is created. A failed Refresh retains the previous complete generation. Explicit file encodings use FileCodec; Tab and Saved File binds the captured document and its pinned saved location. ToolPanel key-window scope blocks background document commands. DS-20–25, DS-30–31, DS-50–53, DS-70–74 and DS-90–92 govern the native controls, truthful feedback and accessibility.
+
+
+## Selective merge and patch export (D2)
+
+[merge-model](merge-model.md) binds whole-block selection to a comparison generation and an explicit
+open destination, including parent-relative selection slices. MergeCore plans exact selected-only
+coalesced edits off MainActor; strict destination encoding admission precedes the sole Foundation
+ReviewRequest/atomic applier. No comparison renderer becomes editable and no alternate Undo authority
+is introduced. Known own-commit rebinding preserves a Tab/Saved captured disk value without rereading.
+Fresh destination recomputation invalidates all old coordinates; failure keeps applied text and a
+visibly stale capture. Show Destination activates the exact bound document for ordinary Undo/Redo.
+
+CompareService serializes merge/patch auxiliary jobs with comparison computation. Native virtualized
+checkbox sheets and menu/toolbar definitions share validation. UnifiedPatch uses an explicit LF-only
+first-party solver entry; ordinary F0/D1 CR/CRLF/LF defaults remain unchanged. File publication stages
+a bounded0600 temp on a worker, then MainActor revalidates live sources/job/protected URL-inode identity
+and performs a short single-use prepared-ticket rename without await. Legacy PrivateFileStore.write
+is unchanged. No patch execution/import, implicit clipboard read/save, filter, provider or dependency.

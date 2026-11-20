@@ -56,6 +56,35 @@ package enum MergeCore {
         result.maximumWork = 64_000_000
         return result
     }
+    /// Metadata-only UI admission. The worker still validates every byte before constructing edits.
+    package static func selectionFits(
+        changes: ReviewChangeSet, destination: CompareSide,
+        parentByteLength: Int, selected: Set<Int>
+    ) -> Bool {
+        guard changes.completeness == .complete, !selected.isEmpty, selected.count <= 100_000,
+            changes.blocks.count <= 100_000, parentByteLength >= 0, parentByteLength <= 8 * 1024 * 1024,
+            selected.allSatisfy({ changes.blocks.indices.contains($0) })
+        else { return false }
+        var removed = 0, replacement = 0, count = 0, lower = -1, upper = 0
+        for i in changes.blocks.indices where selected.contains(i) {
+            let block = changes.blocks[i]
+            let r = destination == .original ? block.original : block.modified
+            let source = destination == .original ? block.modified : block.original
+            guard r.lower >= 0, r.upper >= r.lower, r.upper <= parentByteLength,
+                source.lower >= 0, source.upper >= source.lower, source.upper <= 8 * 1024 * 1024,
+                r.lower >= upper
+            else { return false }
+            removed += r.upper - r.lower
+            replacement += source.upper - source.lower
+            if count == 0 || !(r.lower == lower || (r.lower == upper && r.lower == r.upper)) {
+                count += 1
+                lower = r.lower
+            }
+            upper = max(upper, r.upper)
+            guard removed <= parentByteLength, replacement <= 8 * 1024 * 1024, count <= 10_000 else { return false }
+        }
+        return parentByteLength - removed + replacement <= 8 * 1024 * 1024
+    }
     package static func plan(
         original: TextSnapshot, modified: TextSnapshot, changes: ReviewChangeSet,
         destination: CompareSide, parent: TextSnapshot, slice: Range<Int>?, selected: [Int],
