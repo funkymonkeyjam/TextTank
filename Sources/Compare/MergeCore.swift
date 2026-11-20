@@ -148,7 +148,7 @@ package enum MergeCore {
         _ side: CompareSide, _ parent: TextSnapshot, _ slice: Range<Int>?, _ selected: [Int], meter: ReviewMeter
     ) throws -> MergePlan {
         try meter.poll()
-        guard let target = parent.document, parent.bytes.count <= 8 * 1024 * 1024,
+        guard let target = parent.document, parent.bytes.count <= min(8 * 1024 * 1024, meter.policy.maximumInputBytes),
             selected.count <= 100_000, changes.blocks.count <= 100_000
         else { throw MergeFailure(.budgetExceeded) }
         let dest = side == .original ? a : b, source = side == .original ? b : a
@@ -182,10 +182,11 @@ package enum MergeCore {
             guard removed <= 8 * 1024 * 1024, replacementTotal <= 8 * 1024 * 1024 else {
                 throw MergeFailure(.budgetExceeded)
             }
-            if let last = groups.last, lo == last.lower || (lo == last.upper && lo == hi) {
-                groups[groups.count - 1].upper = max(last.upper, hi)
-                groups[groups.count - 1].ordinals.append(i)
-                groups[groups.count - 1].replacementBytes += n
+            let lastIndex = groups.count - 1
+            if lastIndex >= 0 && (lo == groups[lastIndex].lower || (lo == groups[lastIndex].upper && lo == hi)) {
+                groups[lastIndex].upper = max(groups[lastIndex].upper, hi)
+                groups[lastIndex].ordinals.append(i)
+                groups[lastIndex].replacementBytes += n
             } else {
                 groups.append(.init(lower: lo, upper: hi, ordinals: [i], replacementBytes: n))
             }

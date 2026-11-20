@@ -27,6 +27,7 @@ enum MergePatchOracle {
                 throw ReviewRejection.invalidText
             }
             let v = (1...4).map { Int(ns.substring(with: m.range(at: $0)))! }
+            try require(v[1] > 0 || v[3] > 0)
             let oldStart = v[1] == 0 ? v[0] : v[0] - 1, newStart = v[3] == 0 ? v[2] : v[2] - 1
             try require(oldStart >= oldIndex && oldStart <= old.count && !(oldEnded && oldStart > oldIndex))
             for n in oldIndex..<oldStart {
@@ -47,6 +48,7 @@ enum MergePatchOracle {
                 let noLF = i < rows.count && rows[i] == Data("\\ No newline at end of file\n".utf8)
                 if noLF {
                     payload.removeLast()
+                    try require(!payload.isEmpty)
                     i += 1
                 }
                 if prefix != 43 {
@@ -96,6 +98,37 @@ enum MergePatchOracle {
         }
         return result
     }
+    static func interop(_ patch: Data, before: Data, after: Data, name: String) throws {
+        let root = TestPaths.repoRoot.deletingLastPathComponent().appendingPathComponent(
+            "tmp/cap-D2-interop-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("owned.txt"), diff = root.appendingPathComponent("change.patch")
+        try before.write(to: file)
+        try patch.write(to: diff)
+        func run(_ args: [String]) throws -> (Int32, String) {
+            let process = Process(), pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["-C", root.path] + args
+            process.standardOutput = pipe
+            process.standardError = pipe
+            try process.run()
+            let bytes = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return (process.terminationStatus, String(decoding: bytes, as: UTF8.self))
+        }
+        let initialized = try run(["init", "-q"])
+        try require(initialized.0 == 0, "D2 owned patch fixture Git init")
+        if patch.isEmpty {
+            check(before == after, "D2 empty patch interop no-op")
+            return
+        }
+        let result = try run(["apply", "--verbose", "--whitespace=nowarn", diff.path])
+        check(
+            result.0 == 0 && !result.1.lowercased().contains("offset") && !result.1.lowercased().contains("fuzz"),
+            "D2 standard Git patch accepts exact \(name): \(result.1)")
+        check((try? Data(contentsOf: file)) ?? Data() == after, "D2 standard tool byte reconstruction \(name)")
+    }
     static func main() async {
         await Checks.run("MergeChecks") {
             var pairs = try JSONDecoder().decode(
@@ -129,6 +162,14 @@ enum MergePatchOracle {
                     after: (0..<40).map { $0 == 2 || $0 == 35 ? "changed\($0)\n" : "row\($0)\n" }.joined())
             ]
             var evaluated = 0
+            let tool = Process(), versionPipe = Pipe()
+            tool.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            tool.arguments = ["--version"]
+            tool.standardOutput = versionPipe
+            try tool.run()
+            let toolVersion = versionPipe.fileHandleForReading.readDataToEndOfFile()
+            tool.waitUntilExit()
+            print("D2_PATCH_TOOL " + String(decoding: toolVersion, as: UTF8.self))
             for strategy in ReviewDiffStrategy.allCases {
                 for pair in pairs {
                     let a = try snapshot(pair.before), b = try snapshot(pair.after)
@@ -140,6 +181,11 @@ enum MergePatchOracle {
                         try MergePatchOracle.apply(patch, to: a.bytes) == b.bytes,
                         "D2 independent patch \(pair.name) \(strategy)")
                     check(patch.isEmpty == (a.bytes == b.bytes), "D2 empty patch exactly identical")
+                    if strategy == .myers
+                        && (pairs.prefix(9).contains { $0.name == pair.name } || pair.name == "distant-context")
+                    {
+                        try interop(patch, before: a.bytes, after: b.bytes, name: pair.name)
+                    }
                     for side in [CompareSide.original, .modified] {
                         let destination = side == .original ? a : b, source = side == .original ? b : a
                         let count = changes.blocks.count, all = Array(0..<count)
@@ -199,6 +245,21 @@ enum MergePatchOracle {
                 check(side != .original || plan.proposal.edits.count == 1, "D2 minimal ambiguous coalescing")
                 try plan.preflight(current: dest.bytes, target: dest.document!)
             }
+            let manyCount = 10_001, manySource = try snapshot(String(repeating: "x\n", count: manyCount) + "keep\n")
+            let manyBlocks = (0..<manyCount).map { i in
+                ReviewChangeBlock(
+                    original: .init(snapshot: a.id, lower: 0, upper: 0),
+                    modified: .init(snapshot: manySource.id, lower: i * 2, upper: i * 2 + 2), kind: .insert,
+                    inline: .unrefined(.notAttempted))
+            }
+            let manyChanges = ReviewChangeSet(
+                original: a.id, modified: manySource.id, blocks: manyBlocks, completeness: .complete, metrics: .init())
+            let many = try await MergeCore.plan(
+                original: a, modified: manySource, changes: manyChanges, destination: .original, parent: a, slice: nil,
+                selected: Array(0..<manyCount))
+            check(
+                many.proposal.edits.count == 1 && many.projectedParent == manySource.bytes,
+                "D2 10001 same-anchor blocks one admitted edit without quadratic COW")
             let parent = try snapshot("prefix\nold\nsuffix\n"), slice = try snapshot("old\n", document: false),
                 value = try snapshot("NEW\r\n", document: false)
             let change = await ReviewDiffEngine.compare(slice, value)

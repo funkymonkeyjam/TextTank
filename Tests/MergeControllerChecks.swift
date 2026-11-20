@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import Darwin
 @testable import TextTankCore
 @testable import TextTankRuntime
 import EditorBridge
@@ -122,6 +123,106 @@ import EditorBridge
                     doc.editor.utf8Data == bytes && doc.editor.revision == revision,
                     "D2 refusal no byte/revision effect")
             }
+
+            // Headless staged-output gate, before any D2 UI is wired.
+            let output = isolated.url.appendingPathComponent("patch.diff"), oldOutput = Data("OLD".utf8),
+                patchBytes = Data("PATCH\r\n".utf8)
+            try oldOutput.write(to: output)
+            let staged = try await Task.detached { try PrivateFileStore.prepareOutput(patchBytes, to: output) }.value
+            check(try Data(contentsOf: output) == oldOutput, "D2 staging has no publication")
+            try staged.commit()
+            check(try Data(contentsOf: output) == patchBytes, "D2 guarded staged publication exact")
+            let attributes = try FileManager.default.attributesOfItem(atPath: output.path)
+            check((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600, "D2 output is0600")
+            do {
+                try staged.commit()
+                check(false, "D2 duplicate ticket")
+            } catch { check(true, "D2 single-use commit") }
+            let cancelledOutput = try await Task.detached { try PrivateFileStore.prepareOutput(oldOutput, to: output) }
+                .value
+            cancelledOutput.cancel()
+            cancelledOutput.cancel()
+            check(try Data(contentsOf: output) == patchBytes, "D2 cancel staged output preserves previous bytes")
+            do {
+                try cancelledOutput.commit()
+                check(false, "D2 cancelled publication")
+            } catch { check(true, "D2 cancelled ticket refuses") }
+            for fault in ["write", "sync", "close"] {
+                do {
+                    _ = try await Task.detached {
+                        try PrivateFileStore.prepareOutput(
+                            oldOutput, to: output,
+                            synchronize: { fd in fault == "sync" ? -1 : fsync(fd) },
+                            closeFile: { fd in
+                                let result = Darwin.close(fd)
+                                return fault == "close" ? -1 : result
+                            },
+                            writeChunk: { fd, bytes, count in fault == "write" ? 0 : Darwin.write(fd, bytes, count) })
+                    }.value
+                    check(false, "D2 staged \(fault) fault")
+                } catch { check(true, "D2 staged \(fault) refuses") }
+                check(try Data(contentsOf: output) == patchBytes, "D2 stage fault old bytes unchanged")
+            }
+            let targetSwap = try await Task.detached { try PrivateFileStore.prepareOutput(oldOutput, to: output) }.value
+            try Data("other writer".utf8).write(to: output)
+            do {
+                try targetSwap.commit()
+                check(false, "D2 changed target")
+            } catch { check(true, "D2 final target metadata revalidation") }
+            check(try Data(contentsOf: output) == Data("other writer".utf8), "D2 changed target retained")
+            let expectedTarget = try PreparedFileIdentity.capture(output)
+            try patchBytes.write(to: output)
+            do {
+                _ = try await Task.detached {
+                    try PrivateFileStore.prepareOutput(oldOutput, to: output, expectedTarget: expectedTarget)
+                }.value
+                check(false, "D2 target changed before staging")
+            } catch { check(true, "D2 panel-to-stage target guard") }
+            let absentURL = isolated.url.appendingPathComponent("absent.diff")
+            let absent = try await Task.detached { try PrivateFileStore.prepareOutput(oldOutput, to: absentURL) }.value
+            try patchBytes.write(to: absentURL)
+            do {
+                try absent.commit()
+                check(false, "D2 appeared target")
+            } catch { check(true, "D2 absent-to-existing refuses") }
+            let link = isolated.url.appendingPathComponent("link.diff")
+            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: output)
+            do {
+                _ = try await Task.detached { try PrivateFileStore.prepareOutput(oldOutput, to: link) }.value
+                check(false, "D2 symlink stage")
+            } catch { check(true, "D2 nofollow output target") }
+            let folder = isolated.url.appendingPathComponent("parent"),
+                moved = isolated.url.appendingPathComponent("parent-moved")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+            let nested = folder.appendingPathComponent("patch.diff")
+            try oldOutput.write(to: nested)
+            let parentTicket = try await Task.detached { try PrivateFileStore.prepareOutput(patchBytes, to: nested) }
+                .value
+            try FileManager.default.moveItem(at: folder, to: moved)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+            do {
+                try parentTicket.commit()
+                check(false, "D2 parent swap")
+            } catch { check(true, "D2 directory identity guard") }
+            check(
+                try Data(contentsOf: moved.appendingPathComponent("patch.diff")) == oldOutput,
+                "D2 moved parent old output retained")
+            check(!FileManager.default.fileExists(atPath: nested.path), "D2 new parent no publication")
+            do {
+                _ = try await Task.detached {
+                    try PrivateFileStore.prepareOutput(oldOutput, to: output, isCancelled: { true })
+                }.value
+                check(false, "D2 pre-stage cancellation")
+            } catch { check(true, "D2 no staging after cancel") }
+            let leftovers = try FileManager.default.contentsOfDirectory(atPath: isolated.url.path).filter {
+                $0.hasPrefix(".texttank-patch-")
+            }
+            let movedLeftovers = try FileManager.default.contentsOfDirectory(atPath: moved.path)
+            check(
+                leftovers.isEmpty && movedLeftovers.allSatisfy { !$0.hasPrefix(".texttank-patch-") },
+                "D2 all failed/cancelled temp cleanup")
+            try PrivateFileStore.write(oldOutput, to: output, maximumBytes: 32)
+            check(try Data(contentsOf: output) == oldOutput, "D2 legacy atomic writer unchanged")
         }
     }
 }

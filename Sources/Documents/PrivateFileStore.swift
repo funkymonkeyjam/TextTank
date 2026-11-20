@@ -334,6 +334,140 @@ package enum PrivateFileStore {
     }
 }
 
+package enum PreparedOutputFailure: Error, Sendable { case alreadyUsed, cancelled, changed }
+
+/// Metadata only; no file contents are read. Missing and regular-file states are distinct.
+package enum PreparedFileIdentity: Equatable, Sendable {
+    case missing
+    case regular(
+        device: Int64, inode: UInt64, length: Int64, modified: Int64, modifiedNS: Int64,
+        changed: Int64, changedNS: Int64)
+    static func inspect(_ directory: Int32, _ name: String) throws -> PreparedFileIdentity {
+        var info = stat()
+        if fstatat(directory, name, &info, AT_SYMLINK_NOFOLLOW) == 0 {
+            guard info.st_mode & S_IFMT == S_IFREG else { throw PrivateFileError.unsafeLocation }
+            return .regular(
+                device: Int64(info.st_dev), inode: info.st_ino, length: info.st_size,
+                modified: Int64(info.st_mtimespec.tv_sec), modifiedNS: Int64(info.st_mtimespec.tv_nsec),
+                changed: Int64(info.st_ctimespec.tv_sec), changedNS: Int64(info.st_ctimespec.tv_nsec))
+        }
+        guard errno == ENOENT else {
+            throw FileOperationFailure(errno, operation: "inspect patch destination", path: name)
+        }
+        return .missing
+    }
+    package static func capture(_ url: URL) throws -> PreparedFileIdentity {
+        let directory = try PrivateFileStore.directoryDescriptor(for: url)
+        defer { close(directory) }
+        return try inspect(directory, url.lastPathComponent)
+    }
+}
+
+/// Sole ownership of a staged temp and directory descriptor. No callbacks under its lock.
+/// Runtime calls commit synchronously on MainActor immediately after its live-job guards.
+package final class PreparedPrivateFile: @unchecked Sendable {
+    private let lock = NSLock()
+    private let directory: Int32, device: dev_t, inode: ino_t
+    private let url: URL, temporary: String, expected: PreparedFileIdentity
+    private var terminal = false
+    fileprivate init(directory: Int32, info: stat, url: URL, temporary: String, expected: PreparedFileIdentity) {
+        self.directory = directory
+        device = info.st_dev
+        inode = info.st_ino
+        self.url = url
+        self.temporary = temporary
+        self.expected = expected
+    }
+    deinit { cancel() }
+    package func cancel() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !terminal else { return }
+        terminal = true
+        unlinkat(directory, temporary, 0)
+        close(directory)
+    }
+    /// All throwing checks precede rename. Success is committed; no fallible step follows it.
+    package func commit() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !terminal else { throw PreparedOutputFailure.alreadyUsed }
+        terminal = true
+        defer {
+            unlinkat(directory, temporary, 0)
+            close(directory)
+        }
+        var current = stat()
+        guard lstat(url.deletingLastPathComponent().path, &current) == 0,
+            current.st_mode & S_IFMT == S_IFDIR, current.st_dev == device, current.st_ino == inode,
+            try PreparedFileIdentity.inspect(directory, url.lastPathComponent) == expected
+        else {
+            throw PreparedOutputFailure.changed
+        }
+        guard renameat(directory, temporary, directory, url.lastPathComponent) == 0 else {
+            throw FileOperationFailure(errno, operation: "publish patch", path: url.path)
+        }
+    }
+}
+
+extension PrivateFileStore {
+    /// Worker-only staging. Legacy write stays unchanged; callers own the short final commit.
+    package static func prepareOutput(
+        _ data: Data, to url: URL, maximumBytes: Int = 32 * 1024 * 1024,
+        expectedTarget: PreparedFileIdentity? = nil, isCancelled: @Sendable () -> Bool = { false },
+        synchronize: @Sendable (Int32) -> Int32 = { fsync($0) },
+        closeFile: @Sendable (Int32) -> Int32 = { close($0) },
+        writeChunk: @Sendable (Int32, UnsafeRawPointer?, Int) -> Int = { Darwin.write($0, $1, $2) }
+    ) throws -> PreparedPrivateFile {
+        guard !isCancelled() else { throw PreparedOutputFailure.cancelled }
+        guard maximumBytes >= 0, data.count <= min(32 * 1024 * 1024, maximumBytes) else {
+            throw PrivateFileError.tooLarge(limit: maximumBytes, url: url)
+        }
+        let directory = try directoryDescriptor(for: url)
+        var transferred = false
+        defer { if !transferred { close(directory) } }
+        var info = stat()
+        guard fstat(directory, &info) == 0 else { throw PrivateFileError.unsafeLocation }
+        let expected = try PreparedFileIdentity.inspect(directory, url.lastPathComponent)
+        if let expectedTarget, expectedTarget != expected { throw PreparedOutputFailure.changed }
+        let temporary = ".texttank-patch-" + UUID().uuidString
+        let descriptor = openat(
+            directory, temporary, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
+        guard descriptor >= 0 else { throw FileOperationFailure(errno, operation: "stage patch", path: url.path) }
+        var descriptorOpen = true
+        defer {
+            if descriptorOpen { close(descriptor) }
+            if !transferred { unlinkat(directory, temporary, 0) }
+        }
+        guard fchmod(descriptor, mode_t(0o600)) == 0 else { throw PrivateFileError.unsafeLocation }
+        try data.withUnsafeBytes { bytes in
+            var offset = 0
+            while offset < bytes.count {
+                guard !isCancelled() else { throw PreparedOutputFailure.cancelled }
+                let size = min(65_536, bytes.count - offset)
+                let count = writeChunk(descriptor, bytes.baseAddress!.advanced(by: offset), size)
+                if count < 0 && errno == EINTR { continue }
+                guard count > 0, count <= size else {
+                    throw FileOperationFailure(count < 0 ? errno : EIO, operation: "stage patch bytes", path: url.path)
+                }
+                offset += count
+            }
+        }
+        guard !isCancelled() else { throw PreparedOutputFailure.cancelled }
+        guard synchronize(descriptor) == 0 else {
+            throw FileOperationFailure(errno, operation: "synchronize patch", path: url.path)
+        }
+        let closed = closeFile(descriptor)
+        descriptorOpen = false
+        guard closed == 0 else { throw FileOperationFailure(errno, operation: "close patch", path: url.path) }
+        guard !isCancelled() else { throw PreparedOutputFailure.cancelled }
+        let ticket = PreparedPrivateFile(
+            directory: directory, info: info, url: url, temporary: temporary, expected: expected)
+        transferred = true
+        return ticket
+    }
+}
+
 /// Codable model comparisons use deterministic bytes, including exact Unicode spelling.
 /// Failed encodes are conservatively unequal; the caller's validation reports the real error.
 package enum PersistedValue {
