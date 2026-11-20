@@ -184,7 +184,7 @@ package enum MergeCore {
         let extent = slice ?? 0..<parent.bytes.count
         guard extent.lowerBound >= 0, extent.upperBound <= parent.bytes.count,
             ReviewUTF8.boundary(parent.bytes, extent.lowerBound), ReviewUTF8.boundary(parent.bytes, extent.upperBound),
-            slice != nil || dest.id == parent.id
+            slice != nil || (dest.document == parent.document && dest.source == parent.source)
         else { throw MergeFailure(.invalidRange) }
         guard try equal(parent.bytes, extent, dest.bytes, 0..<dest.bytes.count, meter: meter) else {
             throw MergeFailure(.bytesChanged)
@@ -202,8 +202,9 @@ package enum MergeCore {
             let block = changes.blocks[i]
             return side == .original ? (block.original, block.modified) : (block.modified, block.original)
         }
-        for i in flags.indices where flags[i] {
+        for i in flags.indices {
             try meter.spend()
+            guard flags[i] else { continue }
             let (r, s) = ranges(i), lo = r.lower + extent.lowerBound, hi = r.upper + extent.lowerBound
             let n = s.upper - s.lower
             removed += hi - lo
@@ -264,10 +265,16 @@ package enum MergeCore {
         try charge(projected.count * 2, meter: meter)
         guard let text = ReviewUTF8.text(projected) else { throw MergeFailure(.invalidText) }
         _ = try FileCodec.encode(text, format: parent.format ?? .init())
+        var contributors: [[Int]] = []
+        contributors.reserveCapacity(groups.count)
+        for group in groups {
+            try meter.spend()
+            contributors.append(group.ordinals)
+        }
         try meter.poll()
         return .init(
             proposal: proposal, projectedParent: projected,
             mergedSliceLength: extent.count - removed + replacementTotal,
-            contributors: groups.map(\.ordinals), blocks: checks)
+            contributors: contributors, blocks: checks)
     }
 }

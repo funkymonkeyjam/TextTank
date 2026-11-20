@@ -104,6 +104,11 @@ import EditorBridge
         updateSelection()
         return true
     }
+    func destinationTitle(_ side: CompareSide) -> String {
+        let source = side == .original ? comparison?.original : comparison?.modified
+        return String(
+            format: side == .original ? "Original: %@" : "Modified: %@", source?.displayName ?? "Closed source")
+    }
     var selectionSummary: String {
         guard let side = destination, let source = side == .original ? comparison?.original : comparison?.modified
         else {
@@ -535,6 +540,8 @@ final class MergeSelectionSheet: NSWindowController, CompareWindowScope, NSWindo
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func refresh() {
         guard let mergeOwner else { return }
+        destination.item(at: 1)?.title = mergeOwner.destinationTitle(.original)
+        destination.item(at: 2)?.title = mergeOwner.destinationTitle(.modified)
         destination.item(at: 1)?.isEnabled = mergeOwner.canChoose(.original)
         destination.item(at: 2)?.isEnabled = mergeOwner.canChoose(.modified)
         destination.selectItem(

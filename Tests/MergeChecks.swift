@@ -246,6 +246,15 @@ enum MergePatchOracle {
                 check(side != .original || plan.proposal.edits.count == 1, "D2 minimal ambiguous coalescing")
                 try plan.preflight(current: dest.bytes, target: dest.document!)
             }
+            let copied = try TextSnapshot(
+                bytes: a.bytes, source: a.source, label: a.label, document: a.document, format: a.format)
+            let copiedChanges = await ReviewDiffEngine.compare(copied, b)
+            let copiedPlan = try await MergeCore.plan(
+                original: copied, modified: b, changes: copiedChanges, destination: .original, parent: a, slice: nil,
+                selected: Array(copiedChanges.blocks.indices))
+            check(
+                copied.id != a.id && copiedPlan.projectedParent == b.bytes && copiedPlan.proposal.snapshot == a.id,
+                "D2 copied comparison binds original parent stamp and exact bytes")
             let manyCount = 10_001, manySource = try snapshot(String(repeating: "x\n", count: manyCount) + "keep\n")
             let manyBlocks = (0..<manyCount).map { i in
                 ReviewChangeBlock(

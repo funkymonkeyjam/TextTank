@@ -345,13 +345,13 @@ import EditorBridge
             copy.merge.exportPatch()
             try await ready(copy)
             check(
-                copy.merge.lastOutcome == .exported && (try Data(contentsOf: exported)) == expectedPatch,
+                try copy.merge.lastOutcome == .exported && Data(contentsOf: exported) == expectedPatch,
                 "D2 explicit file command exact patch")
             copy.merge.choosePatchFile = { _ in nil }
             copy.merge.exportPatch()
             try await ready(copy)
             check(
-                copy.merge.lastOutcome == .cancelled && (try Data(contentsOf: exported)) == expectedPatch,
+                try copy.merge.lastOutcome == .cancelled && Data(contentsOf: exported) == expectedPatch,
                 "D2 export cancellation preserves old output")
             let protectedURL = isolated.url.appendingPathComponent("source.txt")
             try Data("disk\n".utf8).write(to: protectedURL)
@@ -378,21 +378,35 @@ import EditorBridge
             savedCmp.merge.exportPatch()
             try await ready(savedCmp)
             check(
-                savedCmp.merge.lastOutcome == .failed && (try Data(contentsOf: protectedURL)) == Data("disk\n".utf8),
+                try savedCmp.merge.lastOutcome == .failed && Data(contentsOf: protectedURL) == Data("disk\n".utf8),
                 "D2 export refuses source hardlink")
-            cmp.window?.makeKeyAndOrderFront(nil)
-            cmp.merge.showSelectionSheet()
-            let selectionSheet = try requireValue(cmp.merge.sheet, "D2 native selection sheet")
+            let sheetDoc = fresh("old\n")
+            let sheetCmp = try await comparison(live(sheetDoc), value("new\n"))
+            check(sheetCmp.merge.chooseDestination(.original), "D2 sheet explicit destination")
+            sheetCmp.window?.makeKeyAndOrderFront(nil)
+            sheetCmp.merge.showSelectionSheet()
+            let selectionSheet = try requireValue(sheetCmp.merge.sheet, "D2 native selection sheet")
             selectionSheet.window?.contentView?.layoutSubtreeIfNeeded()
             check(
-                cmp.window?.attachedSheet === selectionSheet.window && !selectionSheet.window!.canBecomeMain,
+                sheetCmp.window?.attachedSheet === selectionSheet.window && !selectionSheet.window!.canBecomeMain,
                 "D2 auxiliary sheet native scoped owner")
             check(
-                selectionSheet.table.numberOfRows == cmp.projection?.changes.blocks.count,
+                selectionSheet.table.numberOfRows == sheetCmp.projection?.changes.blocks.count,
                 "D2 virtualized rows correspond to whole blocks")
             let checkbox = selectionSheet.table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSButton
             check(
                 checkbox?.accessibilityLabel()?.contains("Change 1") == true, "D2 actual checkbox scoped accessibility")
+            checkbox?.performClick(nil)
+            let selectedCheckbox = selectionSheet.table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSButton
+            check(
+                sheetCmp.merge.selectedBlocks == [0] && selectedCheckbox?.state == .on,
+                "D2 actual native checkbox selected non-colour cue")
+            check(
+                (selectedCheckbox?.accessibilityValue() as? NSNumber)?.intValue == 1,
+                "D2 actual checkbox selected AX value")
+            check(
+                selectionSheet.destination.selectedItem?.title.contains(sheetDoc.displayName) == true,
+                "D2 destination popup names exact document")
             selectionSheet.dismiss(cancelled: true)
             check(
                 cmp.window?.attachedSheet == nil && cmp.merge.selectedBlocks.isEmpty,
