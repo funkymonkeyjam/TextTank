@@ -142,7 +142,7 @@ import EditorBridge
     }
     func showSelectionSheet() {
         guard canPerform(.selectChanges), sheet == nil, let comparison, let window = comparison.window else { return }
-        let value = MergeSelectionSheet(owner: self, projection: comparison.projection!)
+        let value = MergeSelectionSheet(mergeOwner: self, projection: comparison.projection!)
         sheet = value
         window.beginSheet(value.window!)
     }
@@ -395,7 +395,7 @@ import EditorBridge
         try PrivateFileStore.validateLocalURL(destination)
         let canonical = destination.standardizedFileURL.resolvingSymlinksInPath()
         var target = stat()
-        let exists = Darwin.stat(destination.path, &target) == 0
+        let exists = Darwin.lstat(canonical.path, &target) == 0
         for source in [a, b] {
             var urls: [URL] = []
             switch source.input {
@@ -409,7 +409,8 @@ import EditorBridge
             for url in urls {
                 var info = stat()
                 guard canonical != url.standardizedFileURL.resolvingSymlinksInPath(),
-                    !(exists && Darwin.stat(url.path, &info) == 0 && target.st_dev == info.st_dev
+                    !(exists && Darwin.lstat(url.standardizedFileURL.resolvingSymlinksInPath().path, &info) == 0
+                        && target.st_dev == info.st_dev
                         && target.st_ino == info.st_ino)
                 else {
                     throw ProtectedPatchSource()
@@ -452,7 +453,7 @@ import EditorBridge
 final class MergeSelectionSheet: NSWindowController, CompareWindowScope, NSWindowDelegate, NSTableViewDataSource,
     NSTableViewDelegate
 {
-    private weak var owner: MergeController?
+    private weak var mergeOwner: MergeController?
     private let projection: CompareProjection
     let table = NSTableView(), destination = NSPopUpButton()
     private let summary = AnnouncingLabel(wrappingLabelWithString: "")
@@ -460,8 +461,8 @@ final class MergeSelectionSheet: NSWindowController, CompareWindowScope, NSWindo
     private let selectAll = NSButton(title: CompareCommand.selectAllChanges.title, target: nil, action: nil)
     private let clear = NSButton(title: CompareCommand.clearChangeSelection.title, target: nil, action: nil)
     private var dismissed = false
-    init(owner: MergeController, projection: CompareProjection) {
-        self.owner = owner
+    init(mergeOwner: MergeController, projection: CompareProjection) {
+        self.mergeOwner = mergeOwner
         self.projection = projection
         let panel = ToolPanel(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 520), styleMask: [.titled, .closable, .resizable])
@@ -533,15 +534,16 @@ final class MergeSelectionSheet: NSWindowController, CompareWindowScope, NSWindo
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func refresh() {
-        guard let owner else { return }
-        destination.item(at: 1)?.isEnabled = owner.canChoose(.original)
-        destination.item(at: 2)?.isEnabled = owner.canChoose(.modified)
-        destination.selectItem(at: owner.destination == .original ? 1 : owner.destination == .modified ? 2 : 0)
-        summary.stringValue = owner.selectionSummary
-        summary.setAccessibilityLabel(owner.selectionSummary)
-        apply.isEnabled = owner.canPerform(.applySelected)
-        selectAll.isEnabled = owner.canPerform(.selectAllChanges)
-        clear.isEnabled = owner.canPerform(.clearChangeSelection)
+        guard let mergeOwner else { return }
+        destination.item(at: 1)?.isEnabled = mergeOwner.canChoose(.original)
+        destination.item(at: 2)?.isEnabled = mergeOwner.canChoose(.modified)
+        destination.selectItem(
+            at: mergeOwner.destination == .original ? 1 : mergeOwner.destination == .modified ? 2 : 0)
+        summary.stringValue = mergeOwner.selectionSummary
+        summary.setAccessibilityLabel(mergeOwner.selectionSummary)
+        apply.isEnabled = mergeOwner.canPerform(.applySelected)
+        selectAll.isEnabled = mergeOwner.canPerform(.selectAllChanges)
+        clear.isEnabled = mergeOwner.canPerform(.clearChangeSelection)
         table.reloadData()
     }
     func numberOfRows(in tableView: NSTableView) -> Int { projection.changes.blocks.count }
@@ -565,7 +567,7 @@ final class MergeSelectionSheet: NSWindowController, CompareWindowScope, NSWindo
         return String(format: "%@: lines %d to %d.", name, index(range.lower) + 1, index(range.upper))
     }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard projection.changes.blocks.indices.contains(row), let owner else { return nil }
+        guard projection.changes.blocks.indices.contains(row), let mergeOwner else { return nil }
         let id = NSUserInterfaceItemIdentifier("MergeChange")
         let button = tableView.makeView(withIdentifier: id, owner: self) as? NSButton ?? NSButton()
         button.identifier = id
@@ -583,27 +585,27 @@ final class MergeSelectionSheet: NSWindowController, CompareWindowScope, NSWindo
             lines(block.modified, side: .modified))
         (button.cell as? NSButtonCell)?.wraps = true
         button.setAccessibilityLabel(button.title)
-        button.state = owner.selectedBlocks.contains(row) ? .on : .off
-        button.isEnabled = owner.destination != nil
+        button.state = mergeOwner.selectedBlocks.contains(row) ? .on : .off
+        button.isEnabled = mergeOwner.destination != nil
         button.target = self
         button.action = #selector(toggled(_:))
         return button
     }
     @objc private func toggled(_ sender: NSButton) {
-        guard let owner, projection.changes.blocks.indices.contains(sender.tag) else { return }
-        var values = owner.selectedBlocks
+        guard let mergeOwner, projection.changes.blocks.indices.contains(sender.tag) else { return }
+        var values = mergeOwner.selectedBlocks
         if sender.state == .on { values.insert(sender.tag) } else { values.remove(sender.tag) }
-        _ = owner.setSelection(values)
+        _ = mergeOwner.setSelection(values)
     }
     @objc private func destinationChanged(_ sender: NSPopUpButton) {
         if sender.indexOfSelectedItem > 0 {
-            _ = owner?.chooseDestination(sender.indexOfSelectedItem == 1 ? .original : .modified)
+            _ = mergeOwner?.chooseDestination(sender.indexOfSelectedItem == 1 ? .original : .modified)
         }
         refresh()
     }
-    @objc private func all(_ sender: Any?) { owner?.perform(.selectAllChanges) }
-    @objc private func clear(_ sender: Any?) { owner?.perform(.clearChangeSelection) }
-    @objc private func apply(_ sender: Any?) { owner?.applySelected() }
+    @objc private func all(_ sender: Any?) { mergeOwner?.perform(.selectAllChanges) }
+    @objc private func clear(_ sender: Any?) { mergeOwner?.perform(.clearChangeSelection) }
+    @objc private func apply(_ sender: Any?) { mergeOwner?.applySelected() }
     @objc private func done(_ sender: Any?) { dismiss(cancelled: false) }
     @objc private func cancel(_ sender: Any?) { dismiss(cancelled: true) }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -617,6 +619,6 @@ final class MergeSelectionSheet: NSWindowController, CompareWindowScope, NSWindo
         window.orderOut(nil)
         window.delegate = nil
         window.close()
-        owner?.sheetDismissed(self, cancelled: cancelled)
+        mergeOwner?.sheetDismissed(self, cancelled: cancelled)
     }
 }
