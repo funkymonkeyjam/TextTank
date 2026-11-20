@@ -406,15 +406,23 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                     self.refreshing = false
                     if self.projection != nil {
                         self.outOfDate = true
-                        self.retainedFailure = CompareService.message(error)
+                        self.retainedFailure = self.comparisonFailure(error)
                         self.showResultStatus()
                     } else {
-                        self.showStatus(CompareService.message(error))
+                        self.showStatus(self.comparisonFailure(error))
                     }
                 }
             }
             finished()
         }
+    }
+    private func comparisonFailure(_ error: Error) -> String {
+        guard merge.appliedAwaitingComparison else { return CompareService.message(error) }
+        if case CompareFailure.budget(let reason) = error {
+            return "The remaining comparison could not be displayed. " + CompareService.budgetMessage(reason) + " "
+                + merge.interruptionDetail
+        }
+        return "The remaining comparison could not be updated. " + merge.interruptionDetail
     }
     static func reason(_ completeness: ReviewCompleteness) -> String {
         switch completeness {
@@ -553,7 +561,8 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                     self.tableScroll.isHidden = true
                     self.unifiedMode = false
                     self.showStatus(
-                        "Incomplete presentation. The display limit was reached. No document was changed. Try turning off Wrap Lines."
+                        "Incomplete presentation. The display limit was reached. " + self.merge.interruptionDetail
+                            + " Try turning off Wrap Lines."
                     )
                 }
             }
@@ -989,12 +998,12 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                         self.pending = nil
                         self.progress.stopAnimation(nil)
                         self.cancelButton.isHidden = true
-                        self.retainedFailure = CompareService.message(error)
-                        self.showStatus("Out of date. " + CompareService.message(error))
+                        self.retainedFailure = self.comparisonFailure(error)
+                        self.showStatus("Out of date. " + self.comparisonFailure(error))
                     }
                 }
             }
-        } catch { showStatus(CompareService.message(error)) }
+        } catch { showStatus(comparisonFailure(error)) }
     }
     private func enabled(_ command: CompareCommand) -> Bool {
         guard !isClosed else { return false }

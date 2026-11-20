@@ -66,9 +66,11 @@ package struct TextSnapshot: Sendable {
     package let document: DocumentTarget?
     package let label: String
     package let format: FileFormat?
+    /// Pathless identity of the descriptor actually captured, for D2 source-file protection.
+    package let capturedFileIdentity: FileSignature?
     package init(
         bytes: Data, source: ReviewSourceID, label: String, document: DocumentTarget? = nil,
-        format: FileFormat? = nil
+        format: FileFormat? = nil, capturedFileIdentity: FileSignature? = nil
     ) throws {
         guard bytes.count <= ReviewDiffPolicy.default.maximumInputBytes else { throw ReviewRejection.budgetExceeded }
         guard ReviewUTF8.valid(bytes) else { throw ReviewRejection.invalidText }
@@ -80,12 +82,16 @@ package struct TextSnapshot: Sendable {
         } else if document != nil {
             throw ReviewRejection.invalidRange
         }
+        if capturedFileIdentity != nil {
+            guard case .file = source else { throw ReviewRejection.invalidRange }
+        }
         id = SnapshotID()
         self.bytes = bytes.withUnsafeBytes { Data($0) }
         self.source = source
         self.document = document
         self.label = label
         self.format = format
+        self.capturedFileIdentity = capturedFileIdentity
     }
 }
 package struct ReviewByteRange: Equatable, Sendable {

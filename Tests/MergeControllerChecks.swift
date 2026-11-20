@@ -10,6 +10,21 @@ import EditorBridge
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
     func applicationDidFinishLaunching(_ notification: Notification) { onLaunch?() }
 }
+private actor MergeStageGate {
+    private(set) var entered = false
+    private var released = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    func wait() async {
+        entered = true
+        if released { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
 @main struct MergeControllerChecks {
     struct Pair: Decodable { let name: String, before: String, after: String }
     @MainActor static func main() {
@@ -380,6 +395,93 @@ import EditorBridge
             check(
                 try savedCmp.merge.lastOutcome == .failed && Data(contentsOf: protectedURL) == Data("disk\n".utf8),
                 "D2 export refuses source hardlink")
+            let movedURL = isolated.url.appendingPathComponent("moved-source.txt")
+            let movedArchive = isolated.url.appendingPathComponent("moved-source-original.txt")
+            let movedAlias = isolated.url.appendingPathComponent("moved-source-alias.txt")
+            let capturedBytes = Data("captured\n".utf8), replacementBytes = Data("replacement\n".utf8)
+            try capturedBytes.write(to: movedURL)
+            let movedComparison = try await comparison(.file(movedURL), value("changed\n"))
+            check(
+                movedComparison.original?.snapshot.capturedFileIdentity != nil,
+                "D2 actual file descriptor identity retained")
+            try FileManager.default.moveItem(at: movedURL, to: movedArchive)
+            try FileManager.default.linkItem(at: movedArchive, to: movedAlias)
+            try replacementBytes.write(to: movedURL)
+            movedComparison.merge.choosePatchFile = { _ in movedAlias }
+            movedComparison.merge.exportPatch()
+            try await ready(movedComparison)
+            check(
+                try movedComparison.merge.lastOutcome == .failed && Data(contentsOf: movedArchive) == capturedBytes
+                    && Data(contentsOf: movedAlias) == capturedBytes && Data(contentsOf: movedURL) == replacementBytes,
+                "D2 captured moved inode remains protected after original path replacement")
+            for scenario in ["cancel", "edit", "close"] {
+                let heldDoc = fresh("held old\n")
+                let held = try await comparison(live(heldDoc), value("held new\n"))
+                let outputURL = isolated.url.appendingPathComponent("held-" + scenario + ".patch")
+                try oldOutput.write(to: outputURL)
+                let gate = MergeStageGate()
+                held.merge.choosePatchFile = { _ in outputURL }
+                held.merge.stagePatchOutput = { data, url, expected, cancellation in
+                    let real = try await Task.detached {
+                        try PrivateFileStore.prepareOutput(
+                            data, to: url, expectedTarget: expected, isCancelled: { cancellation.isCancelled })
+                    }.value
+                    await gate.wait()
+                    return real
+                }
+                held.merge.exportPatch()
+                let limit = ProcessInfo.processInfo.systemUptime + 10
+                while !(await gate.entered) && ProcessInfo.processInfo.systemUptime < limit {
+                    try await Task.sleep(nanoseconds: 1_000_000)
+                }
+                let entered = await gate.entered
+                try require(entered, "D2 real staged output reached final-commit boundary")
+                check(try Data(contentsOf: outputURL) == oldOutput, "D2 held real staged output unpublished")
+                switch scenario {
+                case "edit":
+                    heldDoc.editor.text = "intervening edit\n"
+                    held.pollSources()
+                case "close": held.window?.close()
+                default: held.perform(.cancel)
+                }
+                await gate.release()
+                while held.service?.hasActivePipeline == true && ProcessInfo.processInfo.systemUptime < limit {
+                    try await Task.sleep(nanoseconds: 1_000_000)
+                }
+                check(
+                    held.service?.hasActivePipeline != true && held.merge.lastOutcome != .exported,
+                    "D2 held stage \(scenario) drops late publication")
+                check(try Data(contentsOf: outputURL) == oldOutput, "D2 final-guard \(scenario) preserves old file")
+                check(
+                    try FileManager.default.contentsOfDirectory(atPath: isolated.url.path).allSatisfy {
+                        !$0.hasPrefix(".texttank-patch-")
+                    }, "D2 held stage \(scenario) cleans real temp")
+            }
+            // Observe the real AppKit Save panel, then cancel through its normal action.
+            copy.merge.choosePatchFile = nil
+            var nativeSavePanel: NSSavePanel?
+            copy.merge.makeSavePanel = {
+                let panel = NSSavePanel()
+                nativeSavePanel = panel
+                return panel
+            }
+            copy.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            copy.merge.exportPatch()
+            let panelDeadline = ProcessInfo.processInfo.systemUptime + 10
+            while nativeSavePanel?.isVisible != true && ProcessInfo.processInfo.systemUptime < panelDeadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            let actualPanel = try requireValue(nativeSavePanel, "D2 actual native save panel created")
+            check(
+                actualPanel.isVisible && copy.window?.attachedSheet === actualPanel,
+                "D2 actual save panel attached to comparison")
+            check(
+                actualPanel.message.contains("UTF-8") && actualPanel.message.contains("complete"),
+                "D2 native export sheet explains encoding and scope")
+            actualPanel.cancel(nil)
+            try await ready(copy)
+            check(copy.merge.lastOutcome == .cancelled, "D2 real native save panel Cancel")
             let sheetDoc = fresh("old\n")
             let sheetCmp = try await comparison(live(sheetDoc), value("new\n"))
             check(sheetCmp.merge.chooseDestination(.original), "D2 sheet explicit destination")
@@ -408,6 +510,9 @@ import EditorBridge
                 selectionSheet.destination.selectedItem?.title.contains(sheetDoc.displayName) == true,
                 "D2 destination popup names exact document")
             selectionSheet.dismiss(cancelled: true)
+            selectedCheckbox?.performClick(nil)
+            check(sheetCmp.merge.selectedBlocks.isEmpty, "D2 retained dismissed checkbox cannot select a newer intent")
+
             check(
                 cmp.window?.attachedSheet == nil && cmp.merge.selectedBlocks.isEmpty,
                 "D2 native sheet Cancel releases selection")

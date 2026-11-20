@@ -248,6 +248,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     private(set) var windows: [CompareController] = []
     private var admissions = 0
     private var active: UUID?
+    var hasActivePipeline: Bool { active != nil }
     private var waiting: [CompareController] = []
     private struct AuxiliaryJob {
         let id: UUID
@@ -334,7 +335,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
             guard value.label.utf8.count <= 1024 else { throw CompareFailure.invalid }
             snapshot = try TextSnapshot(
                 bytes: value.bytes, source: value.source, label: value.label, document: value.document,
-                format: value.format)
+                format: value.format, capturedFileIdentity: value.capturedFileIdentity)
             change = nil
         case .document(let doc):
             try doc.capture.validateCurrent()

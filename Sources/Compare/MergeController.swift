@@ -26,6 +26,16 @@ import EditorBridge
         board.clearContents()
         return board.setString(text, forType: .string)
     }
+    var workHooks = ReviewDiffHooks()
+    var stagePatchOutput:
+        @Sendable (Data, URL, PreparedFileIdentity, ReviewCancellation) async throws -> PreparedPrivateFile = {
+            bytes, url, expected, cancellation in
+            try await Task.detached {
+                try PrivateFileStore.prepareOutput(
+                    bytes, to: url, expectedTarget: expected,
+                    isCancelled: { cancellation.isCancelled })
+            }.value
+        }
     var rawComparison = true
     init(comparison: CompareController) { self.comparison = comparison }
     var interruptionDetail: String {
@@ -145,6 +155,10 @@ import EditorBridge
         default: break
         }
     }
+    func represents(_ projection: CompareProjection) -> Bool {
+        ready && comparison?.projection?.original.id == projection.original.id
+            && comparison?.projection?.modified.id == projection.modified.id
+    }
     func showSelectionSheet() {
         guard canPerform(.selectChanges), sheet == nil, let comparison, let window = comparison.window else { return }
         let value = MergeSelectionSheet(mergeOwner: self, projection: comparison.projection!)
@@ -216,6 +230,7 @@ import EditorBridge
         else { return }
         let side = destination, chosen = side.flatMap(input), selected = selectedBlocks.sorted()
         let stamp = comparison.comparisonStamp, job = UUID()
+        let hooks = workHooks, stage = stagePatchOutput
         sheet?.dismiss(cancelled: false)
         operation = job
         token = ReviewCancellation()
@@ -243,7 +258,7 @@ import EditorBridge
                         let plan = try await MergeCore.plan(
                             original: a.snapshot, modified: b.snapshot, changes: p.changes,
                             destination: side, parent: chosen.capture.snapshot, slice: chosen.selection,
-                            selected: selected, token: cancellation)
+                            selected: selected, token: cancellation, hooks: hooks)
                         try self.validate(comparison, p, stamp: stamp, job: job, a: a, b: b)
                         try chosen.validateMetadata()
                         guard self.canChoose(side), let handle = request.issue(edits: plan.proposal.edits) else {
@@ -291,7 +306,7 @@ import EditorBridge
                     } else {
                         let bytes = try await UnifiedPatch.write(
                             original: a.snapshot, modified: b.snapshot,
-                            changes: p.changes, token: cancellation, raw: self.rawComparison)
+                            changes: p.changes, token: cancellation, hooks: hooks, raw: self.rawComparison)
                         try self.validate(comparison, p, stamp: stamp, job: job, a: a, b: b)
                         if command == .copyPatch {
                             guard let text = ReviewUTF8.text(bytes), Data(text.utf8) == bytes else {
@@ -310,11 +325,7 @@ import EditorBridge
                             try self.validate(comparison, p, stamp: stamp, job: job, a: a, b: b)
                             try self.protectSources(url, a: a, b: b)
                             let expected = try PreparedFileIdentity.capture(url)
-                            let staged = try await Task.detached {
-                                try PrivateFileStore.prepareOutput(
-                                    bytes, to: url, expectedTarget: expected,
-                                    isCancelled: { cancellation.isCancelled })
-                            }.value
+                            let staged = try await stage(bytes, url, expected, cancellation)
                             defer { staged.cancel() }
                             // No actor hop between final source/job checks and the short rename commit.
                             try self.validate(comparison, p, stamp: stamp, job: job, a: a, b: b)
@@ -402,6 +413,11 @@ import EditorBridge
         var target = stat()
         let exists = Darwin.lstat(canonical.path, &target) == 0
         for source in [a, b] {
+            if let captured = source.snapshot.capturedFileIdentity, exists,
+                captured.device == Int64(target.st_dev), captured.inode == target.st_ino
+            {
+                throw ProtectedPatchSource()
+            }
             var urls: [URL] = []
             switch source.input {
             case .file(let url, _): urls = [url]
@@ -466,6 +482,10 @@ final class MergeSelectionSheet: NSWindowController, CompareWindowScope, NSWindo
     private let selectAll = NSButton(title: CompareCommand.selectAllChanges.title, target: nil, action: nil)
     private let clear = NSButton(title: CompareCommand.clearChangeSelection.title, target: nil, action: nil)
     private var dismissed = false
+    private var acceptsActions: Bool {
+        !dismissed && mergeOwner?.sheet === self && mergeOwner?.represents(projection) == true
+    }
+
     init(mergeOwner: MergeController, projection: CompareProjection) {
         self.mergeOwner = mergeOwner
         self.projection = projection
@@ -591,7 +611,10 @@ final class MergeSelectionSheet: NSWindowController, CompareWindowScope, NSWindo
             format: "Change %d: %@.\n%@ %@", row + 1, kind, lines(block.original, side: .original),
             lines(block.modified, side: .modified))
         (button.cell as? NSButtonCell)?.wraps = true
+        button.setAccessibilityElement(true)
+        button.setAccessibilityRole(.checkBox)
         button.setAccessibilityLabel(button.title)
+        button.setAccessibilityValue(NSNumber(value: mergeOwner.selectedBlocks.contains(row)))
         button.state = mergeOwner.selectedBlocks.contains(row) ? .on : .off
         button.isEnabled = mergeOwner.destination != nil
         button.target = self
@@ -599,20 +622,21 @@ final class MergeSelectionSheet: NSWindowController, CompareWindowScope, NSWindo
         return button
     }
     @objc private func toggled(_ sender: NSButton) {
-        guard let mergeOwner, projection.changes.blocks.indices.contains(sender.tag) else { return }
+        guard acceptsActions, let mergeOwner, projection.changes.blocks.indices.contains(sender.tag) else { return }
         var values = mergeOwner.selectedBlocks
         if sender.state == .on { values.insert(sender.tag) } else { values.remove(sender.tag) }
         _ = mergeOwner.setSelection(values)
     }
     @objc private func destinationChanged(_ sender: NSPopUpButton) {
+        guard acceptsActions else { return }
         if sender.indexOfSelectedItem > 0 {
             _ = mergeOwner?.chooseDestination(sender.indexOfSelectedItem == 1 ? .original : .modified)
         }
         refresh()
     }
-    @objc private func all(_ sender: Any?) { mergeOwner?.perform(.selectAllChanges) }
-    @objc private func clear(_ sender: Any?) { mergeOwner?.perform(.clearChangeSelection) }
-    @objc private func apply(_ sender: Any?) { mergeOwner?.applySelected() }
+    @objc private func all(_ sender: Any?) { if acceptsActions { mergeOwner?.perform(.selectAllChanges) } }
+    @objc private func clear(_ sender: Any?) { if acceptsActions { mergeOwner?.perform(.clearChangeSelection) } }
+    @objc private func apply(_ sender: Any?) { if acceptsActions { mergeOwner?.applySelected() } }
     @objc private func done(_ sender: Any?) { dismiss(cancelled: false) }
     @objc private func cancel(_ sender: Any?) { dismiss(cancelled: true) }
     func windowShouldClose(_ sender: NSWindow) -> Bool {

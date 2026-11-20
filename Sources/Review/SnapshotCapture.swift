@@ -46,14 +46,16 @@ import EditorBridge
     }
     nonisolated static func file(_ url: URL, as encoding: FileEncoding? = nil) async throws -> TextSnapshot {
         try await Task.detached {
-            let captured = try WorkspaceStore.captureRegularFile(url, maximumBytes: 8 * 1024 * 1024)
+            // The same bounded descriptor-anchored no-follow reader, retaining its actual
+            // opened-file identity even when unsettled metadata cannot stand in for bytes.
+            let captured = try PrivateFileStore.readSample(url, maximumBytes: 8 * 1024 * 1024)
             let decoded =
                 try encoding.map { try FileCodec.decode(captured.data, encoding: $0) }
                 ?? FileCodec.decode(captured.data)
             guard decoded.text.utf8.count <= 8 * 1024 * 1024 else { throw ReviewRejection.budgetExceeded }
             return try TextSnapshot(
                 bytes: Data(decoded.text.utf8), source: .file(UUID()), label: url.lastPathComponent,
-                format: decoded.format)
+                format: decoded.format, capturedFileIdentity: FileSignature(captured.before))
         }.value
     }
 }

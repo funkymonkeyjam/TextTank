@@ -75,6 +75,10 @@ explicit LF-only entry; preserve all F0/D1 default tokenization. Emit safe ---/+
 starts/counts including zero-count BOF, three LF-record context lines and merged overlapping context.
 Each affected LF-less final payload gets the standard missing-newline marker. Never normalize payload.
 
+Captured file snapshots additionally retain a pathless descriptor-derived device/inode signature.
+Protect that original inode as well as current source URLs, including a moved source with an old-inode
+hardlink alias and a replaced original pathname. This additive F0 metadata has no persisted schema.
+
 Header labels are escaped basenames/Untitled with distinct a/ and b/ prefixes, no absolute paths,
 timestamps or raw control/whitespace/nonASCII injection. Bound combined escaped headers to16KiB before
 allocation. Labels are metadata only. An independent test-only reader must reconstruct every corpus
