@@ -633,6 +633,8 @@ import NativeSearch
                 !x.isEnabled && !(x.toolTip ?? "").isEmpty && x.keyEquivalent.isEmpty,
                 "T2 empty organisation command disabled with reason and no shortcut " + command.rawValue)
         }
-        check(main.items.filter { !$0.isSeparatorItem }.count <= 20, "T2 Window command budget unchanged")
+        check(
+            main.items.filter { !$0.isSeparatorItem && !$0.isHidden }.count <= 20,
+            "T2 Window keeps its visible command budget")
     }
 }

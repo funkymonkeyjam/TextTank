@@ -90,10 +90,12 @@ essential state without a giant minimum window width. Recovery failure remains
 latched above transient messages until the document reports successful recovery.
 The original full recovered-copy and error wording is retained in the model.
 
-The visible-only 0.2-second polling timer remains under DB-R8. In the native check,
-a real Language menu action changes the document's profile but queued editor events
-do not update the field; an actual polling tick does. This is evidence from the
-owned fixture, not a claim about every running-app/OS event sequence. Existing
+The visible-only 0.2-second polling timer remains under DB-R8. A lexer change now
+schedules a coalesced editor-state notification so that brace feedback and Language
+status reflect the new profile. The native check observes the first Language menu
+action with the timer disabled, then invokes a second action and runs one real
+polling tick before that action’s queued notification. Both paths update the field.
+Existing
 checks still require no recurring work in hidden/minimized tabs, no whole-text
 capture during continuous edits in either event/tick order, one capture after an
 idle interval, one in-flight worker and exact revision checks before publication.
