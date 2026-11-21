@@ -4,6 +4,8 @@ TextTank is an independent Mac-only, free and offline-capable general editor. Sw
 
 The selected identity is Carbon Caret: original TT/negative-space caret, Space Grotesk 650 wordmark, Inter support, carbon `#15201F`, paper `#F4F6F0`, citrus `#C7F45B`. Light-mode action text uses `#3A5B00`; native controls retain system fonts. “Plain text. Sharp tools.” is the primary line. Selection of a name is not a claim of legal clearance.
 
+The [numbered code audit register](finding-ids.md) gives the historical titles for F and G finding IDs cited in source and checks.
+
 ## Evidence already gathered
 
 * Official Notepad++ architecture was investigated from the frozen source. No Windows build or runtime comparison was performed.
