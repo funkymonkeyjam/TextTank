@@ -64,10 +64,10 @@ Use synthetic scratch files, not personal documents.
 
 A short inventory of features that the walkthrough above does not name, and of where two commands moved.
 
-- **Status bar.** Every field at the bottom of a document window is a button that opens options: document (Save, Save As, Read Only), bookmarks, language, position (Go to Line…), selection, text size, indentation (tabs or spaces and width, for this document), encoding (re-read or convert), line endings and wrap.
+- **Status bar.** Every field below the active editor is a button that opens options: document (Save, Save As, Read Only), bookmarks, language, position (Go to Line…), selection, text size, indentation (tabs or spaces and width, for this document), encoding (re-read or convert), line endings and wrap.
 - **Go to Line.** Search → Go to Line… (⌘L), and the position field of the status bar.
 - **Closing.** The red close button of the window quits TextTank, reviewing unsaved documents first. One tab closes from its own × button, File → Close or ⌘W.
-- **Tabs.** Window → Next Tab (⌃⇥), Previous Tab (⌃⇧⇥) and Open Documents…. Closing a tab shows the tab beside it; closing a background tab from its × returns to the tab that was active. Document windows do not enter full screen, because each tab is its own window.
+- **Tabs.** Window → Next Tab (⌃⇥), Previous Tab (⌃⇧⇥) and Open Documents…. Closing a tab shows the tab beside it; closing a background tab from its × returns to the tab that was active. Documents open as tabs in one workspace window. Enter full screen using the green window control, switch tabs, then leave full screen and check that the active tab and its edits are still there.
 - **Find bar and Find window.** Search → Find… (⌘F) opens the find bar above the text; typing previews matches and shows a count. Escape restores an unaccepted selection. Replace changes the selected match and advances. Replace All changes the current document in one Undo. More… opens the panel with the current query, replacement and options. Return finds the next match, ⇧Return the previous one, Escape or Done closes it. Find Next (⌘G), Find Previous (⇧⌘G) and Use Selection for Find (⌘E) share its text with the system find pasteboard, and act on the Find and Replace window instead while that window is open. A failed find says “No matches” in the status line. Search → Find and Replace… (⌥⌘F) is a panel: the document's own commands (Save, Encoding, Close Split View) keep working while it has the keyboard, Return in its Find field is Find Next, Escape closes it, and Return on a selected result opens it. Its Mark Matches, Clear Marks and Bookmark Matches buttons highlight or bookmark matches without editing.
 - **Find in Folder and Function List.** Return on a selected row opens it, as a double-click does. Escape closes Find in Folder while it is idle.
 - **Automations.** Automations → Automation Palette… (⇧⌘P) is the one entry for the palette. A right-click in the text shows the edit commands followed by the saved automations. Automations → Review Reminder Export History… lists earlier exports and offers Request Access and Resume Unsent.
@@ -80,7 +80,7 @@ A short inventory of features that the walkthrough above does not name, and of w
 - **Save state.** The status line reads Edited from the moment a document changes, then “Edited — recovery copy kept” once the crash-recovery copy is written. It reads Saved only for an unchanged saved document.
 - **Confirmations.** Where the first button deletes or replaces something on disk, Return is Cancel and the action needs a click. Settings → Reset Defaults asks first. Saving Settings leaves indentation or wrapping chosen for one document in the status bar as it was.
 - **Standard menus.** TextTank → Services, Hide TextTank, Hide Others and Show All; Window → Bring All to Front; Help, whose search field finds any menu command.
-- **Window positions.** The document window and each tool window reopen where they were left.
+- **Window positions.** The workspace window and each tool window reopen where they were left.
 
 ## Evidence and repaired findings
 
