@@ -535,7 +535,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
             let (first, second) = visibleEditors(),
             let left = EditorLifetime.document(for: first), let right = EditorLifetime.document(for: second),
             left.isOpen, right.isOpen, left !== right,
-            first.byteLength <= 8 * 1024 * 1024, second.byteLength <= 8 * 1024 * 1024
+            first.byteLength <= SizePolicy.standard.reviewText, second.byteLength <= SizePolicy.standard.reviewText
         else { return nil }
         return (first, second)
     }
