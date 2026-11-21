@@ -1090,16 +1090,16 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         [encoded addObject:bytes];
     }
     // Last range first, so the offsets of the ranges still to be replaced stay valid.
-    [_engine message:SCI_BEGINUNDOACTION];
+    [self openUndoGroup];
     for (NSUInteger i=ranges.count;i-->0;) {
         const NSRange range=NSMakeRange((NSUInteger)ranges[i].location,(NSUInteger)ranges[i].length);
         [_engine message:SCI_SETTARGETRANGE wParam:range.location lParam:NSMaxRange(range)];
         [_engine message:SCI_REPLACETARGET wParam:encoded[i].length lParam:(sptr_t)encoded[i].bytes];
     }
-    [_engine message:SCI_ENDUNDOACTION];
     const sptr_t caret=(sptr_t)((NSUInteger)ranges[0].location+encoded[0].length);
     [_engine message:SCI_SETSEL wParam:caret lParam:caret];
     [_engine message:SCI_SCROLLCARET];
+    [self closeUndoGroup];
     return YES;
 }
 - (NSInteger)selectionCount { [self assertThread]; return [_engine message:SCI_GETSELECTIONS]; }

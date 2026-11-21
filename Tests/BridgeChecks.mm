@@ -864,6 +864,52 @@ int main(int argc, char **argv) {
         eol.text=@"ab";[eol setLineEndingMode:TTE(@"LF")];[eol setSelectionAnchor:2 caret:2];[eol executeCommand:@"newLine"];
         check([eol.text isEqual:@"ab\n"] && eol.statusInfo.eol==TTLineEndingModeLF, "Return in LF mode inserts LF");
         });
+        ttchecks::section("Replace All coalesces document callbacks", [&] {
+            TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 400, 300)];
+            TTEditor *clone = [[TTEditor alloc] initWithFrame:editor.frame];
+            ScintillaView *native = (ScintillaView *)editor.subviews.firstObject;
+            const NSUInteger count = 1000;
+            NSString *input = [@"" stringByPaddingToLength:count * 2 withString:@"a|" startingAtIndex:0];
+            NSString *expected = [@"" stringByPaddingToLength:count * 2 withString:@"é|" startingAtIndex:0];
+            editor.text = input;
+            [clone shareDocumentWith:editor];
+            [editor setSelectionAnchor:3 caret:7];
+            [editor resetUndoHistory];
+            [editor setSavePoint];
+            const NSUInteger originalRevision = editor.revision, cloneRevision = clone.revision;
+            __block NSUInteger changes = 0, cloneChanges = 0;
+            editor.onChange = ^{ ++changes; };
+            clone.onChange = ^{ ++cloneChanges; };
+            NSMutableArray<TTByteRange *> *ranges = [NSMutableArray arrayWithCapacity:count];
+            NSMutableArray<NSString *> *replacements = [NSMutableArray arrayWithCapacity:count];
+            for (NSUInteger i = 0; i < count; ++i) {
+                [ranges addObject:R(NSMakeRange(i * 2, 1))];
+                [replacements addObject:@"é"];
+            }
+            NSArray *before = editor.selectionRanges;
+            check(![editor replaceRanges:@[ranges[0], R(NSMakeRange(editor.byteLength, 1))]
+                               withTexts:@[@"x", @"y"] expectedRevision:originalRevision], "invalid final range rejects the whole batch");
+            check(![editor replaceRanges:ranges withTexts:replacements expectedRevision:originalRevision + 1], "stale batch is refused");
+            editor.readOnly = YES;
+            check(![editor replaceRanges:ranges withTexts:replacements expectedRevision:originalRevision], "read-only batch is refused");
+            editor.readOnly = NO;
+            check(changes == 0 && cloneChanges == 0 && editor.revision == originalRevision && clone.revision == cloneRevision &&
+                  [editor.text isEqual:input] && [editor.selectionRanges isEqual:before] && ![native message:SCI_CANUNDO],
+                  "refused batches leave shared bytes, selections, history, revisions and callbacks untouched");
+
+            check([editor replaceRanges:ranges withTexts:replacements expectedRevision:originalRevision], "1000 disjoint byte replacements apply");
+            NSData *bytes = [expected dataUsingEncoding:NSUTF8StringEncoding];
+            check(changes == 1 && cloneChanges == 1 && [editor.utf8Data isEqual:bytes] && [clone.utf8Data isEqual:bytes],
+                  "1000 replacements publish one change to each view with exact UTF-8 bytes");
+            check(editor.revision == originalRevision + 2 * count && clone.revision == cloneRevision + 2 * count &&
+                  editor.selectionCaret == 2, "revision advances for each native delete and insert and the first replacement sets the caret");
+            [editor executeCommand:@"undo"];
+            check([editor.text isEqual:input] && [clone.text isEqual:input] && !editor.modified && ![native message:SCI_CANUNDO],
+                  "one Undo restores every original byte, the save point and the empty history");
+            [editor executeCommand:@"redo"];
+            check([editor.utf8Data isEqual:bytes] && [clone.utf8Data isEqual:bytes] && ![native message:SCI_CANREDO],
+                  "one Redo restores the entire UTF-8 batch in both views");
+        });
         ttchecks::section("batch range replacement and revision authority", [&] {
         // F44, F224: one bridge call replaces many ranges under one undo action, all-or-nothing.
         TTEditor *batch=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,300)];
@@ -894,7 +940,7 @@ int main(int argc, char **argv) {
         batch.onChange=nil;
         check([batch.text isEqual:@"é uno:1 é 🥑  end"] && batch.modified, "Batch replacement writes exact bytes at both ranges");
         check(batch.selectionCount==1 && batch.selectionAnchor==11 && batch.selectionCaret==11, "Batch replacement leaves one caret after the first replacement");
-        check(batch.revision>batchRevision && batchChanges>=3 && batchChanges<=5, "Batch replacement bumps the revision and reports only its own inserts and deletes");
+        check(batch.revision==batchRevision+3 && batchChanges==1, "Batch replacement reports one change while revision advances for all three native edits");
         [batch executeCommand:@"undo"];
         check([batch.text isEqual:batchText] && !batch.modified && ![batchNative message:SCI_CANUNDO], "Batch replacement is one undo step back to the save point");
         batch.text=@"ab";[batch resetUndoHistory];batchRevision=batch.revision;
