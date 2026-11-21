@@ -108,6 +108,40 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
     var menuProvider: ((StatusField) -> NSMenu?)?
     private let stack = NSStackView()
     private let spacer = NSView()
+    private let recording = NSButton(title: "", target: nil, action: nil)
+    private weak var recorder: MacroController?
+    func bindRecorder(_ controller: MacroController?) {
+        guard recorder !== controller else { return }
+        if let recorder {
+            NotificationCenter.default.removeObserver(self, name: MacroController.recordingDidChange, object: recorder)
+        }
+        recorder = controller
+        if let controller {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(refreshRecording), name: MacroController.recordingDidChange,
+                object: controller)
+        }
+        refreshRecording()
+    }
+    @objc private func refreshRecording() {
+        let status = recorder?.recordingStatus ?? .idle
+        recording.isHidden = status == .idle
+        recording.target = recorder
+        recording.action = #selector(MacroController.stopRecording)
+        switch status {
+        case .idle: break
+        case .recording:
+            recording.title = "● Recording"
+            recording.setAccessibilityLabel("Stop macro recording")
+            recording.toolTip = "A macro is being recorded. Stop recording."
+        case .discarded(let reason):
+            recording.title = "Macro Discarded"
+            recording.setAccessibilityLabel("Finish discarded macro recording")
+            recording.toolTip = reason
+        }
+        recording.setAccessibilityHelp(recording.toolTip)
+        needsLayout = true
+    }
     private let diskAction = NSButton(title: "Reload…", target: nil, action: nil)
     private let diskCompare = NSButton(title: "Compare…", target: nil, action: nil)
     func setExternalAction(for observer: ExternalFileObservation) {
@@ -160,6 +194,11 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         addSubview(stack)
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
         spacer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        recording.controlSize = .small
+        recording.identifier = .init("status.macroRecording")
+        recording.setContentCompressionResistancePriority(.required, for: .horizontal)
+        recording.isHidden = true
+        stack.addArrangedSubview(recording)
         stack.addArrangedSubview(spacer)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
@@ -259,11 +298,12 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
                     (text as NSString).size(withAttributes: [
                         .font: label.font ?? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
                     ]).width) + 2
-            let actionWidth = [diskAction, diskCompare].filter { $0.superview != nil && !$0.isHidden }.reduce(
-                CGFloat(0)
-            ) {
-                $0 + ceil($1.intrinsicContentSize.width) + stack.spacing
-            }
+            let actionWidth = [diskAction, diskCompare, recording].filter { $0.superview != nil && !$0.isHidden }
+                .reduce(
+                    CGFloat(0)
+                ) {
+                    $0 + ceil($1.intrinsicContentSize.width) + stack.spacing
+                }
             return textWidth + actionWidth + visible.reduce(0) { $0 + (widths[$1.field]?.constant ?? 0) }
                 + CGFloat(visible.count + 1) * stack.spacing
         }
