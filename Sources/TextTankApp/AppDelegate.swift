@@ -265,15 +265,20 @@ import AppKit
             _ = alert.runModal()
         }
         NSApp.activate()
-        restoreLaunchDocuments(review: restoreRecovery) { notices in
-            let alert = TTAlert()
-            alert.messageText = "Some session items need review"
-            alert.informativeText =
-                notices.prefix(12).joined(separator: "\n")
-                + (notices.count > 12 ? "\n…and \(notices.count - 12) more." : "")
-            alert.addButton(withTitle: "OK")
-            _ = alert.runModal()
-        }
+        var sessionNotices: [String] = []
+        restoreLaunchDocuments(review: restoreRecovery) { sessionNotices.append(contentsOf: $0) }
+        showSessionNotices(sessionNotices)
+    }
+    /// Restore and recovery review finish before reporting skipped paths in their workspace.
+    func showSessionNotices(_ notices: [String]) {
+        guard !notices.isEmpty, let window = workspaceWindow.window else { return }
+        let alert = TTAlert()
+        alert.messageText = "Some session items need review"
+        alert.informativeText =
+            notices.prefix(12).joined(separator: "\n")
+            + (notices.count > 12 ? "\n…and \(notices.count - 12) more." : "")
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window) { _ in }
     }
     func restoreLaunchDocuments(review: ([URL: TextDocument]) -> Void, report: ([String]) -> Void) {
         let session = AutomaticSession()
