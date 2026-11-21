@@ -499,34 +499,35 @@ private actor MergeStageGate {
                     }, "D2 held stage \(scenario) cleans real temp")
             }
             // Observe the real AppKit Save panel, then cancel through its normal action.
-            copy.merge.choosePatchFile = nil
+            let panelService = CompareService()
+            comparisonServices.append(panelService)
+            NSApp.activate(ignoringOtherApps: true)
+            let panelComparison = try await panelService.open(original: value("before"), modified: value("after"))
             var nativeSavePanel: NSSavePanel?
-            copy.merge.makeSavePanel = {
+            panelComparison.merge.makeSavePanel = {
                 let panel = NSSavePanel()
                 nativeSavePanel = panel
                 return panel
             }
-            copy.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            let canExport = await waitUntil("exporting comparison to become key and ready") {
-                copy.window?.isKeyWindow == true && copy.merge.canPerform(.exportPatch)
+            let canExport = await waitUntil("visible comparison to enable patch export") {
+                panelComparison.window?.isVisible == true && panelComparison.merge.canPerform(.exportPatch)
             }
             try require(canExport, "D2 native export has a ready document window")
-            copy.merge.exportPatch()
+            panelComparison.merge.exportPatch()
             let panelDeadline = ProcessInfo.processInfo.systemUptime + 10
             while nativeSavePanel?.isVisible != true && ProcessInfo.processInfo.systemUptime < panelDeadline {
                 try await Task.sleep(nanoseconds: 1_000_000)
             }
             let actualPanel = try requireValue(nativeSavePanel, "D2 actual native save panel created")
             check(
-                actualPanel.isVisible && copy.window?.attachedSheet === actualPanel,
+                actualPanel.isVisible && panelComparison.window?.attachedSheet === actualPanel,
                 "D2 actual save panel attached to comparison")
             check(
                 actualPanel.message.contains("UTF-8") && actualPanel.message.contains("complete"),
                 "D2 native export sheet explains encoding and scope")
             actualPanel.cancel(nil)
-            try await ready(copy)
-            check(copy.merge.lastOutcome == .cancelled, "D2 real native save panel Cancel")
+            try await ready(panelComparison)
+            check(panelComparison.merge.lastOutcome == .cancelled, "D2 real native save panel Cancel")
             let sheetDoc = fresh("old\n")
             let sheetCmp = try await comparison(live(sheetDoc), value("new\n"))
             check(sheetCmp.merge.chooseDestination(.original), "D2 sheet explicit destination")
