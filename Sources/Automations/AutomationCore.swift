@@ -376,7 +376,7 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
     /// Draft-only test harness: never resolves inputs/parameters or invokes an output.
     package func testSample(_ input: String, control: AutomationRunControl? = nil) throws -> String {
         try validate(requiringValues: true)
-        guard input.utf8.count <= 65536 else { throw AutomationError.invalid("Use a sample of at most 64 KiB.") }
+        guard input.utf8.count <= SizePolicy.standard.automationStepPreviewSample else { throw AutomationError.invalid("Use a sample of at most \(SizePolicy.describe(SizePolicy.standard.automationStepPreviewSample)).") }
         var text = input
         let started = ProcessInfo.processInfo.systemUptime
         // One budget for every pattern rule, exactly as in a run.

@@ -20,7 +20,7 @@ package struct FolderSearchRequest: Sendable {
         extensions: Set<String> = [], filenameFilters: String = "*.*", excludingSearchedFiles: Set<String> = [],
         displayTabWidth: Int = 4, maximumFiles: Int = 10000, maximumEntries: Int = 100000,
         maximumFileBytes: Int = SizePolicy.standard.folderInput, maximumTotalBytes: Int = SizePolicy.standard.folderTotal,
-        maximumInspectionBytes: Int = 64 * 1024 * 1024, maximumResults: Int = 10000, previewUTF16Length: Int = 240,
+        maximumInspectionBytes: Int = SizePolicy.standard.folderInspection, maximumResults: Int = 10000, previewUTF16Length: Int = 240,
         listsPolicyExclusions: Bool = false
     ) {
         self.directory = directory
@@ -111,7 +111,8 @@ package struct FolderSearchMatch: Equatable, Sendable {
 }
 package enum FolderSearchSkipReason: Hashable, Sendable {
     case symbolicLink, hidden, nonRecursiveDirectory, extensionFiltered, filenameFiltered, folderFiltered,
-        duplicateScope, notRegularFile, fileTooLarge
+        duplicateScope, notRegularFile
+    case fileTooLarge(Int)
     /// A recovery copy, journal or temporary file written by folder replacement.
     case recoveryArtifact, binaryFormat
     case invalidEncoding(String), unreadable(String)
@@ -141,7 +142,7 @@ package enum FolderSearchSkipReason: Hashable, Sendable {
         case .notRegularFile: return "not a regular file"
         case .recoveryArtifact: return "TextTank recovery copy"
         case .binaryFormat: return "binary file"
-        case .fileTooLarge: return "larger than the per-file limit"
+        case .fileTooLarge(let limit): return "exceeds the \(SizePolicy.describe(limit)) per-file limit; search a smaller file"
         case .invalidEncoding(let detail): return "not valid text: \(detail)"
         case .unreadable(let detail): return detail
         }
@@ -626,7 +627,7 @@ package enum FolderSearch {
                 case ReadFailure.timeLimit:
                     report.reachedLimit = .elapsed
                     break searchLoop
-                case ReadFailure.tooLarge: report.skip(url, .fileTooLarge, listing: listing)
+                case ReadFailure.tooLarge: report.skip(url, .fileTooLarge(request.maximumFileBytes), listing: listing)
                 case ReadFailure.binary: report.skip(url, .binaryFormat, listing: listing)
                 case ReadFailure.cannotInspect:
                     report.reachedLimit = .inspectionBytes

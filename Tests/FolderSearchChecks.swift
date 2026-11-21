@@ -280,7 +280,9 @@ import Darwin
             limited.maximumTotalBytes = 10000
             limited.maximumFileBytes = 2
             await checkAsync(
-                try await FolderSearch.search(limited).skipped.contains { $0.reason == .fileTooLarge },
+                try await FolderSearch.search(limited).skipped.contains {
+                    $0.reason == .fileTooLarge(2) && $0.reason.explanation.contains("2 bytes")
+                },
                 "individual large file excluded with explicit reason")
             let token = FolderSearchCancellation()
             let cancelled = try await FolderSearch.search(
