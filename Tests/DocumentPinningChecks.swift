@@ -1115,16 +1115,24 @@ extension DocumentChecks {
                 "toggleOvertype", "joinLines", "trimTrailing", "gotoMatchingBrace", "selectMatchingBrace",
                 "bookmarkToggle", "bookmarkNext", "bookmarkPrevious"
             ]
+            let basics: Set<String> = [
+                "bookmarkClearAll", "bookmarkCopyLines", "bookmarkCutLines", "bookmarkDeleteLines", "bookmarkInvert",
+                "foldCurrent", "foldLevel1", "foldLevel2", "foldLevel3", "foldLevel4", "foldLevel5", "foldLevel6",
+                "foldLevel7", "foldLevel8"
+            ]
+            let allowed = dispatch.union(basics)
+            let native = Set(TTEditor.supportedCommandIdentifiers().map(\.rawValue))
             let commands = represented(#selector(EditorWindowController.command(_:)))
             let unknown = commands.filter { id in
-                id.hasPrefix("transform.")
-                    ? EditorTransform(rawValue: String(id.dropFirst(10))) == nil : !dispatch.contains(id)
+                if id.hasPrefix("transform.") { return EditorTransform(rawValue: String(id.dropFirst(10))) == nil }
+                guard allowed.contains(id), let command = EditorCommand(rawValue: id) else { return true }
+                return !native.contains(command.nativeIdentifier.rawValue)
             }
             if !check(
-                unknown.isEmpty && commands.count >= 40,
+                unknown.isEmpty && commands.count >= 40 && basics.isSubset(of: Set(commands)),
                 "every editor command menu item names a transform or a command the bridge dispatches")
             {
-                print("NOTE unknown command names: \(unknown)")
+                print("NOTE unknown command names: \(unknown); missing menu routes: \(basics.subtracting(commands).sorted())")
             }
             check(
                 Set(commands.filter { $0.hasPrefix("transform.") }.map { String($0.dropFirst(10)) })
