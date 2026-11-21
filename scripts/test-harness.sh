@@ -18,6 +18,7 @@ if [[ "${1:-}" == --runner-selftest ]]; then
     suite_run stand-in-unbuilt "$SELFTEST_WORK/unbuilt.log" /bin/sh -c "echo must not run"
     suite_run stand-in-fail "$SELFTEST_WORK/fail.log" /bin/sh -c "echo FAIL Tests/StandIn.swift:7 deliberate failure; exit 3"
     suite_run stand-in-hang "$SELFTEST_WORK/hang.log" /bin/sleep 30
+    suite_run inherited-output "$SELFTEST_WORK/inherited.log" /bin/sh -c "sleep 6 & echo PASS OwnedChecks: 1 assertions"
     suite_run stand-in-after "$SELFTEST_WORK/after.log" /bin/sh -c "echo PASS StandInAfter: 2 assertions"
     TEXTTANK_NATIVE_COMPLETION_REQUIRED=1 suite_run stand-in-no-summary "$SELFTEST_WORK/no-summary.log" /bin/sh -c "echo PASS partial native fixture; exit 0"
     TEXTTANK_NATIVE_COMPLETION_REQUIRED=1 suite_run stand-in-complete "$SELFTEST_WORK/complete.log" /bin/sh -c "echo PASS CompleteChecks: 1 assertions"
@@ -40,9 +41,10 @@ if [[ "${1:-}" == --runner-selftest ]]; then
   refuse "suite whose build failed is not run" '^must not run$'
   expect "failed suite is listed with its exit status and log" '^  FAILED +stand-in-fail +exit 3; log '
   expect "hung suite is stopped by the watchdog and named" '^  TIMEOUT +stand-in-hang +no result after 1 s; log '
+  expect "successful command with an inherited pipe is timed out even after printing its marker" '^  TIMEOUT +inherited-output +no result after 1 s'
   expect "suites after a failure and a hang still run" '^  PASS +stand-in-after +PASS StandInAfter: 2 assertions$'
   expect "summary repeats the named failure line from the log" '^FAIL Tests/StandIn.swift:7 deliberate failure$'
-  expect "summary counts passed and not passed" '^3 passed, 7 not passed$'
+  expect "summary counts passed and not passed" '^3 passed, 8 not passed$'
   expect "native exit zero without completion marker is a failure" '^  FAILED +stand-in-no-summary +exit 1; log '
   expect "native completion marker accepts a legitimate summary" '^  PASS +stand-in-complete +PASS CompleteChecks: 1 assertions$'
   expect "a failed real tee cannot accept a readable stale native summary" '^  FAILED +stand-in-tee-fail +exit 1; log unavailable: '
@@ -58,7 +60,7 @@ if [[ "${1:-}" == --runner-selftest ]]; then
   expect "failed build step prints the end of its log" '^selftest error line$'
   expect "failed build step prints the full log path" '^Full log: /.*harness/logs/build-selftest\.log$'
   rm -f harness/logs/build-selftest.log
-  if [[ "$failures" == 0 ]]; then echo "PASS RunnerSelfTest: 21 assertions"; exit 0; fi
+  if [[ "$failures" == 0 ]]; then echo "PASS RunnerSelfTest: 22 assertions"; exit 0; fi
   echo "FAILED RunnerSelfTest: $failures failed"; cat "$work/output.txt"; exit 1
 fi
 
