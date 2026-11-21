@@ -332,12 +332,28 @@ private actor MergeStageGate {
             let output = isolated.url.appendingPathComponent("patch.diff"), oldOutput = Data("OLD".utf8),
                 patchBytes = Data("PATCH\r\n".utf8)
             try oldOutput.write(to: output)
+            let fm = FileManager.default
+            try fm.setAttributes([.posixPermissions: 0o640], ofItemAtPath: output.path)
             let staged = try await Task.detached { try PrivateFileStore.prepareOutput(patchBytes, to: output) }.value
             check(try Data(contentsOf: output) == oldOutput, "D2 staging has no publication")
             try staged.commit()
             check(try Data(contentsOf: output) == patchBytes, "D2 guarded staged publication exact")
             let attributes = try FileManager.default.attributesOfItem(atPath: output.path)
-            check((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600, "D2 output is0600")
+            check((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o640, "D2 existing patch retains access")
+            let freshOutput = isolated.url.appendingPathComponent("new-private.diff")
+            try PrivateFileStore.prepareOutput(patchBytes, to: freshOutput).commit()
+            let freshAccess = try fm.attributesOfItem(atPath: freshOutput.path)
+            check((freshAccess[.posixPermissions] as? NSNumber)?.intValue == 0o600, "D2 new patch is owner-only")
+            let staleAccess = try PrivateFileStore.prepareOutput(oldOutput, to: output)
+            try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: output.path)
+            do {
+                try staleAccess.commit()
+                check(false, "D2 stale destination access")
+            } catch {
+                let mode = try fm.attributesOfItem(atPath: output.path)[.posixPermissions] as? NSNumber
+                check(try Data(contentsOf: output) == patchBytes && mode?.intValue == 0o644,
+                    "D2 changed destination access and bytes survive stale export")
+            }
             do {
                 try staged.commit()
                 check(false, "D2 duplicate ticket")
