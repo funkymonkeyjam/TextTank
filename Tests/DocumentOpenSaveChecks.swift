@@ -52,6 +52,72 @@ extension DocumentChecks {
                 receipt.pid == ProcessInfo.processInfo.processIdentifier && receipt.state == .closed,
                 "completion carries the responding process identity and closed state")
         }
+        section("macOS Services selected text", #line) {
+            let originalProvider = NSApp.servicesProvider
+            defer { NSApp.servicesProvider = originalProvider }
+            let delegate = AppDelegate()
+            delegate.installTextServices()
+            let provider = try requireValue(
+                NSApp.servicesProvider as? TextServices, "native Services provider installed")
+            let board = NSPasteboard(name: .init("org.texttank.tests.service." + UUID().uuidString))
+            defer { board.releaseGlobally() }
+            let selected = "first\r\n雪\n"
+            _ = board.setString(selected, forType: .string)
+            var failure: NSString?
+            let before = documents.documents.count
+            provider.newTextTankDocument(board, userData: nil, error: &failure)
+            let doc = try requireValue(documents.documents.last as? TextDocument, "Services routes into TextDocument")
+            defer { doc.close() }
+            check(
+                failure == nil && documents.documents.count == before + 1 && doc.fileURL == nil
+                    && doc.editor.checkedUTF8Data == Data(selected.utf8) && board.string(forType: .string) == selected,
+                "selection opens as an independent untitled document")
+            let libraryURL = AppStorage.url(.automations)
+            let old = try? Data(contentsOf: libraryURL)
+            defer {
+                if let old {
+                    try? old.write(to: libraryURL, options: .atomic)
+                } else {
+                    try? FileManager.default.removeItem(at: libraryURL)
+                }
+            }
+            let good = AutomationDefinition(
+                id: UUID(), name: "Duplicate removal", input: .selection, steps: [.init(kind: .deduplicateLines)],
+                output: .editor)
+            var bad = good
+            bad.id = UUID()
+            bad.name = "External"
+            bad.output = .reminders
+            let lib = try AutomationLibrary(workflows: [good, bad]).encoded()
+            try lib.write(to: libraryURL, options: .atomic)
+            let run = TextServices(
+                newDocument: { _ in check(false, "transform opened a document") },
+                choose: { options in
+                    check(options.map(\.id) == [good.id], "chooser offers only supplied-text automations")
+                    return options.first
+                })
+            _ = board.setString("a\na\nb", forType: .string)
+            run.runTextTankAutomation(board, userData: nil, error: &failure)
+            check(
+                try failure == nil && board.string(forType: .string) == "a\nb"
+                    && documents.documents.count == before + 1 && Data(contentsOf: libraryURL) == lib,
+                "Services returns transformed selection through only the supplied pasteboard")
+            let cancel = TextServices(newDocument: { _ in }, choose: { _ in nil })
+            let gen = board.changeCount
+            cancel.runTextTankAutomation(board, userData: nil, error: &failure)
+            check(failure == nil && board.changeCount == gen, "cancel preserves invocation pasteboard")
+            let mutation = TextServices(
+                newDocument: { _ in },
+                choose: { options in
+                    _ = board.setString("newer selection", forType: .string)
+                    return options.first
+                })
+            mutation.runTextTankAutomation(board, userData: nil, error: &failure)
+            check(
+                failure != nil && board.string(forType: .string) == "newer selection",
+                "stale service refuses to replace the changed selection")
+        }
+
         section("explicit local text URL", #line) {
             let folder = area.appendingPathComponent("explicit-url", isDirectory: true)
             try files.createDirectory(at: folder, withIntermediateDirectories: true)

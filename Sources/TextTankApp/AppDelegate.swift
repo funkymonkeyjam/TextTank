@@ -234,7 +234,12 @@ import AppKit
             } catch { TTAlert.present(error) }
         }
     }
+    private lazy var textServices = TextServices(newDocument: Self.openAutomationOutput)
+
+    func installTextServices() { NSApp.servicesProvider = textServices }
+
     func applicationWillFinishLaunching(_ notification: Notification) {
+        installTextServices()
         DistributedNotificationCenter.default().addObserver(
             self, selector: #selector(handleCommandLine(_:)),
             name: TTInvocation.wakeName, object: String(ProcessInfo.processInfo.processIdentifier),
