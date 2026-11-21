@@ -73,6 +73,20 @@ import Darwin
         check(
             empty.count == 4 && empty.allSatisfy { $0.status == .unchanged && $0.backup == nil },
             "zero matches finish without writing or stopping the other roots")
+        // Only six bytes below the snapshot ceiling before applying the replacement.
+        let near = initial + Data(repeating: 65, count: 8 * 1024 * 1024 - 12)
+        try near.write(to: files[0])
+        let projectedRows = try await FolderSearch.search(request).matches
+        options.query = "needle"
+        options.replacement = "a longer replacement"
+        do {
+            _ = try await FolderReplacement.preview(fallbackDirectory: folders[0], matches: projectedRows, options: options)
+            check(false, "oversized projected result returned a patch")
+        } catch {
+            check(error.localizedDescription.contains("8 MiB") && error.localizedDescription.contains("shorten the replacement"),
+                  "projected per-side limit names its actual ceiling independently of the patch output limit")
+        }
+        check(try Data(contentsOf: files[0]) == near, "projected-side refusal preserves exact original bytes")
         let long = Data(repeating: 65, count: 1024 * 1024) + initial
         for file in files { try long.write(to: file) }
         let largeRows = try await FolderSearch.searchAcross(request, directories: folders).matches
