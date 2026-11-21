@@ -4,11 +4,11 @@
 # non-zero if any of them did not pass. See scripts/suite-lib.sh.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Capture before toolchain and build guards so their failures retain dirty-path evidence.
+python3 scripts/record-validation.py capture
 source scripts/suite-lib.sh
 suite_begin
 suite_require_build
-# Bind acceptance to clean start/end git trees, including standalone full-suite invocations.
-python3 scripts/record-validation.py capture
 suite_script scripts/test-harness.sh
 suite_script scripts/test-build-pipeline.sh
 suite_run concurrency-guard-checks harness/logs/concurrency-guard-checks.log python3 Tests/ConcurrencyGuardChecks.py

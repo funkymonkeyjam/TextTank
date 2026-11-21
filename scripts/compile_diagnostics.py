@@ -36,7 +36,7 @@ def scan(lines, emit=False):
         if emit:
             sys.stdout.buffer.write(raw)
             sys.stdout.buffer.flush()
-        value = diagnostic(raw.decode('utf-8', errors='replace'))
+        value = diagnostic(raw.decode('utf-8', errors='replace' if emit else 'strict'))
         if value:
             headers.append(value)
     return headers, digest.hexdigest()
@@ -45,6 +45,8 @@ def scan(lines, emit=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--log', type=Path)
+    parser.add_argument('--log-warning-policy', choices=['strict', 'advisory'],
+                        help='for saved build logs only; strict by default')
     parser.add_argument('--report', type=Path)
     parser.add_argument('command', nargs=argparse.REMAINDER)
     options = parser.parse_args()
@@ -53,6 +55,8 @@ def main():
         command = command[1:]
     if bool(options.log) == bool(command):
         parser.error('provide either --log or a command after --')
+    if options.log_warning_policy and not options.log:
+        parser.error('--log-warning-policy requires --log')
     compiler_status = 0
     if options.log:
         with options.log.open('rb') as source:
@@ -64,12 +68,18 @@ def main():
         compiler_status = process.wait()
         if compiler_status < 0:
             compiler_status = 128 - compiler_status
-    status = compiler_status or (1 if headers else 0)
-    if headers:
-        print(f'First-party Swift diagnostic gate rejected {len(headers)} actual headers', file=sys.stderr)
+    advisory = options.log_warning_policy == 'advisory'
+    fatal = [header for header in headers if not advisory or header['severity'] == 'error']
+    status = compiler_status or int(bool(fatal))
+    if fatal:
+        print(f'First-party Swift diagnostic gate rejected {len(fatal)} actual headers', file=sys.stderr)
+    if advisory and len(headers) > len(fatal):
+        print(f'Advisory Swift warnings: {len(headers) - len(fatal)}; see {options.log}', file=sys.stderr)
     report = {'compiler_exit': compiler_status, 'guard_exit': status, 'command': command,
               'log': str(options.log) if options.log else None, 'output_sha256': digest,
               'diagnostic_headers': headers}
+    if options.log:
+        report['log_warning_policy'] = options.log_warning_policy or 'strict'
     if options.report:
         temporary = options.report.with_name(options.report.name + '.tmp')
         temporary.write_text(json.dumps(report, indent=2) + '\n')

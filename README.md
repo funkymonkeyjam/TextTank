@@ -1,12 +1,14 @@
 # TextTank
 
+[![Native Mac checks on main](https://github.com/funkymonkeyjam/TextTank/actions/workflows/native.yml/badge.svg?branch=main)](https://github.com/funkymonkeyjam/TextTank/actions/workflows/native.yml?query=branch%3Amain)
+
 Plain text. Sharp tools.
 
 An independent native macOS plain-text and code editor using Swift/AppKit, Scintilla Cocoa and Lexilla. **Incomplete preview:** standard Notepad++ capability coverage remains required and is not certified. User-named automations, recorded macros, explicit Run commands and local text tools are implemented with focused checks; they are not a full-parity claim. Core editing and deterministic automations require no account or paid service.
 
 ## Requirements
 
-- An arm64 Mac with full Xcode and its command-line tools selected, Git, make and Python 3.9 or newer. Local development and the native CI check use Xcode 27.2. A configured toolchain is not evidence that this candidate ran on it.
+- An arm64 Mac with full Xcode and its command-line tools selected, Git, make and Python 3.9 or newer. Local development and the required `native` CI check use Xcode 27.2. CI also runs an advisory compatibility check with Xcode 16.4. Each run reports the acceptance outcome for each toolchain.
 - The deployment target is macOS 14; actual macOS 14/15 and Intel runtime behavior is not certified. Only arm64 is supported by these build scripts.
 - Initial acquisition of pinned Scintilla/Lexilla archives needs network access. An existing verified `Vendor/` tree builds without downloads. No model, service or executable is contacted by ordinary editing or import.
 
