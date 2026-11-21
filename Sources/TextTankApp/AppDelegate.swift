@@ -193,6 +193,7 @@ import AppKit
         }
     }
     func applicationDidBecomeActive(_ notification: Notification) {
+        startForegroundInterfaceIfNeeded()
         let front = currentDocument
         front?.externalFile.setApplicationActive(true)
         front?.externalFile.check(prioritized: true)
@@ -260,7 +261,20 @@ import AppKit
             knownWorkspace?.showTabMessage(error.localizedDescription)
         }
     }
+    private enum LaunchInterface { case waitingForLaunch, waitingForForeground, started }
+    private var launchInterface = LaunchInterface.waitingForLaunch
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard launchInterface == .waitingForLaunch else { return }
+        launchInterface = .waitingForForeground
+        if NSApp.isActive { startForegroundInterfaceIfNeeded() }
+    }
+
+    /// A background App Intent can finish entirely inside the app's normal process without
+    /// displaying startup alerts, restoring tabs, seeding manager presets or starting a session timer.
+    private func startForegroundInterfaceIfNeeded() {
+        guard launchInterface == .waitingForForeground else { return }
+        launchInterface = .started
         buildMenus()
         settings.apply()
         searchController.onCommand = { [weak self] options, action, editor in
@@ -316,9 +330,11 @@ import AppKit
             alert.informativeText = message
             _ = alert.runModal()
         }
-        NSApp.activate()
         var sessionNotices: [String] = []
-        restoreLaunchDocuments(review: restoreRecovery) { sessionNotices.append(contentsOf: $0) }
+        restoreLaunchDocuments(
+            createUntitledIfEmpty: !CommandLine.arguments.contains("--texttank-external-request"),
+            review: restoreRecovery
+        ) { sessionNotices.append(contentsOf: $0) }
         showSessionNotices(sessionNotices)
     }
     /// Restore and recovery review finish before reporting skipped paths in their workspace.
@@ -332,7 +348,9 @@ import AppKit
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window) { _ in }
     }
-    func restoreLaunchDocuments(review: ([URL: TextDocument]) -> Void, report: ([String]) -> Void) {
+    func restoreLaunchDocuments(
+        createUntitledIfEmpty: Bool = true, review: ([URL: TextDocument]) -> Void, report: ([String]) -> Void
+    ) {
         let session = AutomaticSession()
         automaticSession = session
         var originals = [URL: TextDocument]()
@@ -354,7 +372,7 @@ import AppKit
             }
         }
         review(originals)
-        if NSDocumentController.shared.documents.isEmpty { newDocument(nil) }
+        if createUntitledIfEmpty && NSDocumentController.shared.documents.isEmpty { newDocument(nil) }
         session.start { [weak self] in self?.checkpointSession() }
     }
     func checkpointSession() {
