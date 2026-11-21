@@ -146,7 +146,7 @@ package enum PrivateFileError: LocalizedError {
         case .unsafeLocation:
             return "This action requires a regular local file in a real directory. The file was not changed."
         case .tooLarge(let limit, let url):
-            return "“\(url.lastPathComponent)” exceeds this action’s limit of \(limit) bytes. The file was not changed."
+            return "“\(url.lastPathComponent)” exceeds this action’s limit of \(SizePolicy.describe(limit)). Use less data or choose a smaller file."
         }
     }
 }
@@ -468,15 +468,16 @@ package final class PreparedPrivateFile: @unchecked Sendable {
 extension PrivateFileStore {
     /// Worker-only staging. Legacy write stays unchanged; callers own the short final commit.
     package static func prepareOutput(
-        _ data: Data, to url: URL, maximumBytes: Int = 32 * 1024 * 1024,
+        _ data: Data, to url: URL, maximumBytes: Int = SizePolicy.standard.privateOutput,
         expectedTarget: PreparedFileIdentity? = nil, isCancelled: @Sendable () -> Bool = { false },
         synchronize: @Sendable (Int32) -> Int32 = { fsync($0) },
         closeFile: @Sendable (Int32) -> Int32 = { close($0) },
         writeChunk: @Sendable (Int32, UnsafeRawPointer?, Int) -> Int = { Darwin.write($0, $1, $2) }
     ) throws -> PreparedPrivateFile {
         guard !isCancelled() else { throw PreparedOutputFailure.cancelled }
-        guard maximumBytes >= 0, data.count <= min(32 * 1024 * 1024, maximumBytes) else {
-            throw PrivateFileError.tooLarge(limit: maximumBytes, url: url)
+        let effectiveLimit = min(SizePolicy.standard.privateOutput, maximumBytes)
+        guard effectiveLimit >= 0, data.count <= effectiveLimit else {
+            throw PrivateFileError.tooLarge(limit: effectiveLimit, url: url)
         }
         let directory = try directoryDescriptor(for: url)
         var transferred = false

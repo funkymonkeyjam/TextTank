@@ -315,7 +315,7 @@ import Darwin
             try require(truncate(big.path, off_t(DocumentMonitor.maximumBytes) + 1) == 0, "fixture: sparse large file")
             let tooBig = DocumentMonitor.inspect(big, expected: freshDigest)
             check(
-                tooBig.status == .unavailable("File exceeds the 32 MiB monitoring limit; editor text is preserved.")
+                tooBig.status == .unavailable("File exceeds the 32 MiB monitoring limit. Check disk metadata or open a smaller file.")
                     && !tooBig.readFile, "a file over the monitoring limit is reported without being read")
             try FileManager.default.removeItem(at: big)
             check(

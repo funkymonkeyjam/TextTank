@@ -311,10 +311,10 @@ package enum WorkspaceError: LocalizedError {
             return "This action requires a regular local file in a real directory, not a symbolic link."
         case .fileTooLarge(let limit, let url):
             return
-                "“\(url.lastPathComponent)” exceeds this action’s limit of \(limit) bytes. Its bytes have not been changed."
+                "“\(url.lastPathComponent)” exceeds this action’s limit of \(SizePolicy.describe(limit)). Use less data or choose a smaller file."
         case .tooLarge:
             return
-                "The session or referenced file exceeds the 512 MiB inspection limit. Its bytes have not been changed."
+                "The session or referenced file exceeds the \(SizePolicy.describe(SizePolicy.standard.workspaceSession)) inspection limit. Use a smaller session or file."
         }
     }
 }
@@ -323,7 +323,7 @@ package enum WorkspaceError: LocalizedError {
 /// The session requests a device flush before rename and another for its containing folder afterward.
 /// Filesystems without device-flush support use POSIX fsync.
 package enum WorkspaceStore {
-    static package let maximumSessionBytes = 512 * 1024 * 1024
+    static package let maximumSessionBytes = SizePolicy.standard.workspaceSession
     /// The one extension TextTank proposes for session snapshots and declares in Info.plist as
     /// `app.texttank.session`. Reading never depends on it: a snapshot loads under any name.
     static package let sessionFileExtension = "texttanksession"
@@ -512,7 +512,7 @@ package struct LastSessionLayout: Codable, Equatable, Sendable {
         }
         package var url: URL { URL(fileURLWithPath: path) }
     }
-    package static let maximumBytes = 4 * 1024 * 1024
+    package static let maximumBytes = SizePolicy.standard.workspaceLayout
     package let version: Int
     package let files: [File]
     package let layout: WorkspaceLayoutState

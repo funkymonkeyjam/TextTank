@@ -183,12 +183,12 @@ import AppKit
     private var recoveryBurstStart: TimeInterval?
     private var scheduledDeadline: TimeInterval?
     static func automaticRecoveryScale(byteCount: Int) -> Double? {
-        let mib = 1024 * 1024
+        let limits = SizePolicy.standard
         switch byteCount {
-        case ...(8 * mib): return 1
-        case ...(32 * mib): return 2
-        case ...(128 * mib): return 4
-        case ...(256 * mib): return 8
+        case ...limits.recoverySmall: return 1
+        case ...limits.recoveryMedium: return 2
+        case ...limits.recoveryLarge: return 4
+        case ...limits.automaticRecovery: return 8
         default: return nil
         }
     }
@@ -578,7 +578,7 @@ import AppKit
             status = "Saved"
         }
         if automaticRecoveryPaused {
-            status += " · Automatic recovery paused above 256 MiB."
+            status += " · Automatic recovery paused above \(SizePolicy.describe(SizePolicy.standard.automaticRecovery))."
                 + (shouldKeepRecoveryCopy ? " Save to keep changes." : "")
         }
         return externalFile.notice.map { status + " — " + $0 } ?? status
@@ -612,7 +612,7 @@ import AppKit
         let summary = error is PublishedFileSyncFailure ? "⚠︎ Recovery copy unconfirmed" : "⚠︎ Recovery copy not written"
         let paused = automaticRecoveryPaused
         let message =
-            (paused ? "Automatic recovery paused above 256 MiB. Save to keep changes. " : "")
+            (paused ? "Automatic recovery paused above \(SizePolicy.describe(SizePolicy.standard.automaticRecovery)). Save to keep changes. " : "")
             + summary + ": " + error.localizedDescription
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach {
             $0.showRecoveryStatus(message, failed: true, failureSummary: paused ? "Recovery paused · Save" : summary)
@@ -1114,7 +1114,7 @@ import AppKit
     }
     /// Printing lays the whole document out on the main thread before the print panel appears.
     /// At and above this many UTF-8 bytes the person is told so first and can cancel.
-    static var largePrintBytes = 4 * 1024 * 1024
+    static var largePrintBytes = SizePolicy.standard.printConfirmation
     /// Asks whether to go on with a slow print; returns false to cancel. Replaced in checks.
     var confirmLargePrint: (_ message: String, _ detail: String) -> Bool = { message, detail in
         let alert = TTAlert()

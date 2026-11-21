@@ -19,7 +19,7 @@ package struct FolderSearchRequest: Sendable {
         wholeWord: Bool = false, dotMatchesNewline: Bool = false, recursive: Bool = true, includeHidden: Bool = false,
         extensions: Set<String> = [], filenameFilters: String = "*.*", excludingSearchedFiles: Set<String> = [],
         displayTabWidth: Int = 4, maximumFiles: Int = 10000, maximumEntries: Int = 100000,
-        maximumFileBytes: Int = 32 * 1024 * 1024, maximumTotalBytes: Int = 256 * 1024 * 1024,
+        maximumFileBytes: Int = SizePolicy.standard.folderInput, maximumTotalBytes: Int = SizePolicy.standard.folderTotal,
         maximumResults: Int = 10000, previewUTF16Length: Int = 240, listsPolicyExclusions: Bool = false
     ) {
         self.directory = directory

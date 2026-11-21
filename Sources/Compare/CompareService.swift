@@ -325,7 +325,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
             return "The selected range does not follow text boundaries. Choose a complete text selection and try again."
         case CompareFailure.budget(let reason): return budgetMessage(reason) + " No document was changed."
         case PrivateFileError.tooLarge(let limit, _) where limit == SizePolicy.standard.reviewText:
-            return "The source file exceeds the \(limit / (1024 * 1024)) MiB file-read limit. Choose a smaller file or compare an excerpt in a new document."
+            return "The source file exceeds the \(SizePolicy.describe(limit)) file-read limit. Choose a smaller file or compare an excerpt in a new document."
         case ReviewRejection.budgetExceeded: return SizePolicy.standard.reviewTextNotice
         case ReviewRejection.closed, ReviewRejection.revisionChanged, ReviewRejection.reloaded,
             ReviewRejection.bytesChanged:

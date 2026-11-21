@@ -34,12 +34,15 @@ package struct FolderReplacementOutcome: Sendable {
 /// final stat/rename interval. Open documents are excluded by the UI.
 package enum FolderReplacement {
     private enum Failure: LocalizedError {
-        case unsafe, changed, large, cancelled
+        case unsafe, changed, inputTooLarge, resultTooLarge, cancelled
         var errorDescription: String? {
             switch self {
             case .unsafe: return "Not a writable single-link regular file inside the chosen directory."
             case .changed: return "File changed since search; search again before replacing."
-            case .large: return "File exceeds the 32 MiB replacement limit."
+            case .inputTooLarge:
+                return "The source exceeds the \(SizePolicy.describe(SizePolicy.standard.folderInput)) replacement input limit. Choose a smaller file."
+            case .resultTooLarge:
+                return "The encoded result exceeds the \(SizePolicy.describe(SizePolicy.standard.folderReplacementOutput)) replacement output limit. Shorten the replacement or target fewer matches."
             case .cancelled: return "Cancelled before committing this file."
             }
         }
@@ -99,7 +102,7 @@ package enum FolderReplacement {
                 guard fstat(source, &initial) == 0, initial.st_mode & S_IFMT == S_IFREG, initial.st_nlink == 1,
                     initial.st_mode & 0o222 != 0, initial.st_uid == getuid()
                 else { throw Failure.unsafe }
-                guard initial.st_size >= 0, initial.st_size <= 32 * 1024 * 1024 else { throw Failure.large }
+                guard initial.st_size >= 0, initial.st_size <= SizePolicy.standard.folderInput else { throw Failure.inputTooLarge }
                 let original = try read(source, size: Int(initial.st_size), cancellation: cancellation, path: url.path)
                 guard sha(original) == expected else { throw Failure.changed }
                 let decoded = try FileCodec.decode(original)
@@ -121,7 +124,7 @@ package enum FolderReplacement {
                     results.append(.init(url: url, status: .unchanged, message: "No byte changes.", backup: nil))
                     continue
                 }
-                guard encoded.count <= 64 * 1024 * 1024 else { throw Failure.large }
+                guard encoded.count <= SizePolicy.standard.folderReplacementOutput else { throw Failure.resultTooLarge }
                 let tempName = ".texttank-replacement-" + UUID().uuidString
                 let temp = openat(parent, tempName, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
                 guard temp >= 0 else {
