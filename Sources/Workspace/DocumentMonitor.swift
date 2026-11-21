@@ -84,7 +84,7 @@ enum DocumentMonitorStatus: Equatable, Sendable {
     /// `known` is an earlier settled sample of the same file. While the file's metadata still
     /// equals its signature, the file holds the bytes that gave its digest and is not read.
     nonisolated static func inspect(
-        _ url: URL, expected: String?, known: FileSample? = nil, now: Int64? = nil, contentLimit: Int = maximumBytes
+        _ url: URL, expected: String?, known: FileSample? = nil, now: Int64? = nil, authorized: FileSignature? = nil
     )
         -> Inspection
     {
@@ -95,6 +95,7 @@ enum DocumentMonitorStatus: Equatable, Sendable {
                     status: known.digest == expected ? .unchanged : .changed, sample: known, readFile: false,
                     digest: known.digest, identity: identity)
             }
+            let contentLimit = authorized == identity ? Int(clamping: identity.size) : maximumBytes
             if identity.size > contentLimit {
                 let message =
                     known?.signature == nil
@@ -102,7 +103,8 @@ enum DocumentMonitorStatus: Equatable, Sendable {
                     : "Disk metadata changed; the file exceeds the 32 MiB content check limit."
                 return Inspection(status: .unavailable(message), sample: nil, readFile: false, identity: identity)
             }
-            let sample = try WorkspaceStore.sample(ofRegularFileAt: url, maximumBytes: contentLimit, now: now)
+            let sample = try WorkspaceStore.sample(
+                ofRegularFileAt: url, maximumBytes: contentLimit, now: now, matching: identity)
             guard try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max) == identity else {
                 return Inspection(
                     status: .unavailable("The file changed while it was being checked."), sample: nil, readFile: true)

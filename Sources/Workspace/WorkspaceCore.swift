@@ -373,11 +373,14 @@ package enum WorkspaceStore {
     /// second the signature is judged settled against; it is taken before the file is opened.
     static package func sample(
         ofRegularFileAt url: URL, maximumBytes: Int = maximumSessionBytes, now: Int64? = nil,
-        isCancelled: () -> Bool = { false }
+        matching expected: FileSignature? = nil, isCancelled: () -> Bool = { false }
     ) throws -> FileSample {
         let now = now ?? currentSecond()
         let opened = try openRegularFile(url, maximumBytes: maximumBytes)
         defer { close(opened.descriptor) }
+        if let expected, FileSignature(opened.info) != expected {
+            throw WorkspaceError.invalid("The file changed before its contents could be verified.")
+        }
         var hasher = SHA256()
         var total = 0
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)

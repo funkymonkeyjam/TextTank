@@ -12,6 +12,10 @@ import TextTankCore
         let dirty: Bool
         let generation: UInt
     }
+    private struct ContentCheck {
+        let state: State
+        let identity: FileSignature
+    }
     private struct Candidate {
         let state: State
         let digest: String
@@ -25,18 +29,18 @@ import TextTankCore
     }()
     private var generation: UInt = 0
     private weak var inspectionOperation: Operation?
-    private var checking = false
+    private(set) var checking = false
     private var checkAgain = false
     private var frontmost = false
-    private var explicitContentCheck = false
+    private var pendingContentCheck: ContentCheck?
     private var reloading = false
-    private var unverifiedLargeFile = false
+    private var largeFile: ContentCheck?
     private var known: FileSample?
     private var candidate: Candidate?
     private(set) var notice: String?
     var actionTitle: String? {
         if candidate != nil { return "Reload…" }
-        return unverifiedLargeFile ? "Check Contents…" : nil
+        return largeFile != nil ? "Check Contents…" : nil
     }
     typealias Reader = @Sendable (URL, Int) throws -> CapturedFileRead
     var readCandidate: Reader = { try WorkspaceStore.captureRegularFile($0, maximumBytes: $1) }
@@ -60,7 +64,8 @@ import TextTankCore
             checkAgain = false
         }
         known = nil
-        unverifiedLargeFile = false
+        pendingContentCheck = nil
+        largeFile = nil
         candidate = nil
         if notice != nil {
             notice = nil
@@ -80,8 +85,8 @@ import TextTankCore
         frontmost = false
         let known = known ?? document?.savedDiskSample
         let inspect = inspect
-        let verifyContents = explicitContentCheck
-        explicitContentCheck = false
+        let contentCheck = pendingContentCheck.flatMap { $0.state == expected ? $0 : nil }
+        pendingContentCheck = nil
         let deliver: @MainActor @Sendable (DocumentMonitor.Inspection) -> Void = { [weak self] result in
             guard let self else { return }
             self.inspectionOperation = nil
@@ -89,6 +94,7 @@ import TextTankCore
             let repeatCheck = self.checkAgain || self.state != expected
             self.checkAgain = false
             if repeatCheck {
+                if self.state == expected, self.pendingContentCheck == nil { self.pendingContentCheck = contentCheck }
                 self.check()
                 return
             }
@@ -101,8 +107,10 @@ import TextTankCore
             case .unavailable(let reason): message = "Could not verify disk file: " + reason
             }
             let previousAction = self.actionTitle
-            self.unverifiedLargeFile =
-                result.digest == nil && (result.identity?.size ?? 0) > DocumentMonitor.maximumBytes
+            self.largeFile = result.identity.flatMap {
+                result.digest == nil && $0.size > DocumentMonitor.maximumBytes
+                    ? ContentCheck(state: expected, identity: $0) : nil
+            }
             self.candidate = nil
             if case .changed = result.status, let digest = result.digest, let identity = result.identity {
                 self.candidate = Candidate(state: expected, digest: digest, identity: identity)
@@ -113,11 +121,13 @@ import TextTankCore
             }
         }
         let op = BlockOperation {
-            let result =
-                verifyContents
-                ? DocumentMonitor.inspect(
-                    expected.url, expected: expected.baseline, known: known, contentLimit: Int.max)
-                : inspect(expected.url, expected.baseline, known)
+            let result: DocumentMonitor.Inspection
+            if let contentCheck {
+                result = DocumentMonitor.inspect(
+                    expected.url, expected: expected.baseline, known: known, authorized: contentCheck.identity)
+            } else {
+                result = inspect(expected.url, expected.baseline, known)
+            }
             DispatchQueue.main.async { deliver(result) }
         }
         op.queuePriority = highPriority ? .veryHigh : .normal
@@ -127,8 +137,8 @@ import TextTankCore
 
     @objc func reload(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace, document?.isOpen == true else { return }
-        if unverifiedLargeFile {
-            explicitContentCheck = true
+        if let largeFile {
+            pendingContentCheck = largeFile.state == state ? largeFile : nil
             check(prioritized: true)
             return
         }

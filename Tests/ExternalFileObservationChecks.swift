@@ -6,6 +6,7 @@ import EditorBridge
 
 @MainActor enum ExternalFileObservationChecks {
     static func run(in root: URL) throws {
+        try contentCheckBinding(in: root)
         let file = root.appendingPathComponent("observe-cp1252.txt")
         let original = Data([0x80, 0x31])
         try original.write(to: file)
@@ -299,5 +300,91 @@ import EditorBridge
             review.title == "Reload…" && growing.editor.text == "small" && !growing.isDocumentEdited,
             "explicit oversized inspection streams bytes and preserves the editor until a separate Reload")
 
+    }
+    private static func contentCheckBinding(in root: URL) throws {
+        @MainActor func flatten(_ v: NSView) -> [NSView] { [v] + v.subviews.flatMap(flatten) }
+        @MainActor func create(_ label: String) throws -> (URL, TextDocument, EditorWindowController) {
+            let u = root.appendingPathComponent(label + ".txt")
+            try Data("old".utf8).write(to: u)
+            let d = try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(u), from: u, display: false)
+            let p = try requireValue(d.presentation, "owned workspace")
+            return (u, d, p)
+        }
+        let big = off_t(DocumentMonitor.maximumBytes) + 1
+        for mode in ["same", "rebound", "replacement"] {
+            let rebind = mode == "rebound"
+            let (old, d, p) = try create("source-" + mode)
+            defer { d.close() }
+            try require(truncate(old.path, big) == 0, "extend source above passive limit")
+            p.host.activate(p, focus: false)
+            _ = spinUntil("initial bounded notice") { d.externalFile.actionTitle == "Check Contents…" }
+            let button = try requireValue(
+                flatten(p.presentationRoot).compactMap { $0 as? NSButton }.first {
+                    $0.identifier?.rawValue == "status.reloadExternalFile" && !$0.isHidden
+                }, "visible content check")
+            let started = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+            d.externalFile.inspect = { u, b, k in
+                let r = DocumentMonitor.inspect(u, expected: b, known: k)
+                started.signal()
+                _ = release.wait(timeout: .now() + 5)
+                return r
+            }
+            p.host.activate(p, focus: false)
+            _ = spinUntil("real passive operation in flight") { started.wait(timeout: .now()) == .success }
+            button.performClick(nil)
+            if rebind {
+                let fresh = root.appendingPathComponent("replacement.txt")
+                try Data("new".utf8).write(to: fresh)
+                d.fileURL = fresh
+                let c = try WorkspaceStore.captureRegularFile(fresh)
+                try d.read(captured: c.data, sample: c.sample, from: fresh, ofType: TextDocument.plainTextType)
+                try require(truncate(fresh.path, big + 1) == 0, "new pathname now exceeds passive limit")
+                d.externalFile.inspect = { DocumentMonitor.inspect($0, expected: $1, known: $2) }
+            }
+            if mode == "replacement" {
+                let newFile = root.appendingPathComponent("same-name-new-inode.txt")
+                let originalIdentity = try WorkspaceStore.signature(ofRegularFileAt: old, maximumBytes: Int.max)
+                try Data("other".utf8).write(to: newFile)
+                try require(truncate(newFile.path, big + 1) == 0, "second inode grows beyond passive limit")
+                try require(
+                    rename(newFile.path, old.path) == 0, "substitute a different large inode under the same name")
+                var beganContentRead = false
+                do {
+                    _ = try WorkspaceStore.sample(
+                        ofRegularFileAt: old, maximumBytes: Int.max, matching: originalIdentity
+                    ) {
+                        beganContentRead = true
+                        return false
+                    }
+                    check(false, "replaced descriptor must reject superseded content permission")
+                } catch WorkspaceError.invalid {
+                    check(!beganContentRead, "identity mismatch at the open descriptor rejects before streaming bytes")
+                }
+                d.externalFile.inspect = { DocumentMonitor.inspect($0, expected: $1, known: $2) }
+            }
+            release.signal()
+            _ = spinUntil("release queued explicit check") {
+                guard !d.externalFile.checking else { return false }
+                if rebind { return d.externalFile.notice != nil }
+                if mode == "replacement" { return d.externalFile.notice?.contains("32 MiB") == true }
+                return d.externalFile.actionTitle == "Reload…"
+            }
+            print(
+                "Queued content check", mode, "status", d.externalFile.notice ?? "nil", "action",
+                d.externalFile.actionTitle ?? "nil", "editorBytes", d.editor.text)
+            if rebind {
+                check(
+                    d.externalFile.actionTitle == "Check Contents…" && d.editor.text == "new",
+                    "a queued explicit content check cannot authorize a different oversized file")
+            } else if mode == "replacement" {
+                check(
+                    d.externalFile.actionTitle == "Check Contents…" && d.editor.text == "old",
+                    "same-path replacement needs its own content-check choice")
+            } else {
+                check(
+                    d.externalFile.actionTitle == "Reload…" && d.editor.text == "old",
+                    "the explicit check survives coalescing on its original path")
+            }
+        }
     }
 }
