@@ -181,19 +181,26 @@ import EditorBridge
         let optOut = delegate()
         var options = optOut.settings.value
         check(options.reopensLastSession, "missing launch setting defaults to restore")
+        let previousForms = Set(FormPanel.visible.map { ObjectIdentifier($0.window) })
         optOut.settings.showSettings(nil)
         func descendant(_ view: NSView) -> NSPopUpButton? {
             if view.identifier?.rawValue == "settings.atLaunch" { return view as? NSPopUpButton }
             return view.subviews.lazy.compactMap { descendant($0) }.first
         }
-        let popup = try required(app.windows.compactMap(\.contentView).compactMap { descendant($0) }.first)
+        let openedForms = FormPanel.visible.filter { !previousForms.contains(ObjectIdentifier($0.window)) }
+        try require(
+            openedForms.count == 1 && openedForms.first?.window.identifier?.rawValue == "TextTank.Settings",
+            "showSettings presents one new Settings form for this launch preference")
+        let form = openedForms[0]
+        defer { form.close() }
+        let popup = try required(form.window.contentView.flatMap { descendant($0) })
         check(popup.titleOfSelectedItem == "Reopen last session", "native Settings popup reflects the default")
         popup.selectItem(at: 1)
         let change = try required(popup.action)
         check(
             app.sendAction(change, to: popup.target, from: popup) && !optOut.settings.value.reopensLastSession,
             "native At launch change writes New document")
-        popup.window?.close()
+        form.close()
         let cold = try EditorSettings.decode(Data(contentsOf: optOut.settings.url))
         check(
             !cold.reopensLastSession,
