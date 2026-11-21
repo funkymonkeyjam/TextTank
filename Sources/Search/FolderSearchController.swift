@@ -55,6 +55,12 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     private var folder: URL?
     private var searchedFolder: URL?
     private weak var recoveryHistory: FolderReplacementHistoryPanel?
+    private var previewButton: NSButton!, exportButton: NSButton!
+    private var activePatch: FolderReplacement.PatchPreview? {
+        didSet { exportButton?.isEnabled = activePatch != nil && !isSearching }
+    }
+    private weak var patchSavePanel: NSSavePanel?
+    var choosePatchFile: ((NSWindow) async -> URL?)?
     private var replaceButton: NSButton!
     private(set) var lastReplacementOutcomes: [FolderReplacementOutcome] = []
     private var matches: [FolderSearchMatch] = []
@@ -89,7 +95,12 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     private var work: Task<Void, Never>?
     private var searchButton: NSButton!, cancelButton: NSButton!
     /// True while a search or a replacement is running.
-    private(set) var isSearching = false
+    private(set) var isSearching = false {
+        didSet {
+            previewButton?.isEnabled = !isSearching && replaceButton.isEnabled
+            exportButton?.isEnabled = !isSearching && activePatch != nil
+        }
+    }
     /// Nil while work is running and before the first action.
     private(set) var lastOutcome: FolderSearchOutcome?
     /// Called with the reason when opening a result moved the caret, which macros cannot record (F277).
@@ -150,7 +161,11 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         let undo = NSButton(
             title: "Undo Last Folder Replace…", target: self, action: #selector(undoLastFolderReplace(_:)))
         let review = NSButton(title: "Review Backups…", target: self, action: #selector(showRecoveryBatches(_:)))
-        let replacements = NSStackView(views: [replacementField, replaceButton])
+        previewButton = NSButton(title: "Preview Patch", target: self, action: #selector(previewFolderPatch(_:)))
+        exportButton = NSButton(title: "Export Preview…", target: self, action: #selector(exportFolderPatch(_:)))
+        previewButton.isEnabled = false
+        exportButton.isEnabled = false
+        let replacements = NSStackView(views: [replacementField, replaceButton, previewButton, exportButton])
         let recoveryActions = NSStackView(views: [history, undo, review])
         for (id, title, width) in [
             ("file", "File", 300.0), ("line", "Line:Column", 100.0), ("preview", "Preview", 500.0)
@@ -362,6 +377,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         let flag = FolderSearchCancellation(), gate = FolderProgressGate()
         cancellation = flag
         matches = []
+        activePatch = nil
         replaceButton.isEnabled = false
         searchedFolder = folder
         table.reloadData()
@@ -461,6 +477,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             flag = FolderSearchCancellation(), token = UUID(), beforeCommit = replacementBeforeCommit
         generation = token
         cancellation = flag
+        activePatch = nil
         replacing = true
         searchButton.isEnabled = false
         replaceButton.isEnabled = false
@@ -498,6 +515,117 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             self.finish()
         }
     }
+    @objc func previewFolderPatch(_ sender: Any?) {
+        guard cancellation == nil, replaceButton.isEnabled, let directory = searchedFolder else { return }
+        window?.makeFirstResponder(nil)
+        let rows = matches, excluded = Set(NSDocumentController.shared.documents.compactMap { $0.fileURL })
+        var options = searchedOptions
+        options.replacement = replacementField.stringValue
+        let token = UUID(), flag = FolderSearchCancellation()
+        generation = token
+        cancellation = flag
+        activePatch = nil
+        isSearching = true
+        replaceButton.isEnabled = false
+        searchButton.isEnabled = false
+        cancelButton.isEnabled = true
+        status.stringValue = "Preparing a replacement patch…"
+        work = Task { @MainActor [weak self] in
+            do {
+                let patch = try await FolderReplacement.preview(
+                    fallbackDirectory: directory, matches: rows, options: options, excluding: excluded,
+                    cancellation: flag)
+                guard let self, self.generation == token, !flag.isCancelled else { throw CancellationError() }
+                self.activePatch = patch
+                let count = patch.bytes.count
+                let excerpt = String(decoding: patch.bytes.prefix(64 * 1024), as: UTF8.self)
+                let mapping =
+                    patch.roots.count > 1
+                    ? patch.roots.enumerated().map { "folder-\($0.offset + 1) = \($0.element.path)" }.joined(
+                        separator: "\n") + "\n\n"
+                    : ""
+                self.details.string =
+                    mapping + excerpt
+                    + (count > 64 * 1024 ? "\n… Preview limited to 64 KiB. Export writes the complete patch." : "")
+                self.status.stringValue =
+                    "Preview: \(patch.changedFiles) changed files; \(patch.skippedOpenFiles) open files skipped. Source files untouched."
+                    + (patch.textConversions > 0
+                        ? " \(patch.textConversions) source files are represented as UTF-8 text." : "")
+            } catch {
+                guard let self, self.generation == token else { return }
+                self.details.string = ""
+                self.status.stringValue =
+                    flag.isCancelled
+                    ? "Patch preview cancelled." : "Could not prepare the complete patch. " + error.localizedDescription
+            }
+            guard let self, self.generation == token else { return }
+            self.replaceButton.isEnabled = true
+            self.finish()
+        }
+    }
+
+    @objc func exportFolderPatch(_ sender: Any?) {
+        guard cancellation == nil, let patch = activePatch, let window else { return }
+        let token = UUID(), flag = FolderSearchCancellation()
+        generation = token
+        cancellation = flag
+        isSearching = true
+        let previouslyEnabled = replaceButton.isEnabled
+        replaceButton.isEnabled = false
+        searchButton.isEnabled = false
+        work = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.generation == token {
+                    self.replaceButton.isEnabled = previouslyEnabled
+                    self.finish()
+                }
+            }
+            let destination: URL?
+            if let choose = self.choosePatchFile {
+                destination = await choose(window)
+            } else {
+                let panel = NSSavePanel()
+                panel.title = "Export Folder Replacement Patch"
+                panel.nameFieldStringValue = "folder-replacement.patch"
+                self.patchSavePanel = panel
+                destination = await withCheckedContinuation { next in
+                    panel.beginSheetModal(for: window) { result in
+                        MainActor.assumeIsolated { next.resume(returning: result == .OK ? panel.url : nil) }
+                    }
+                }
+                self.patchSavePanel = nil
+            }
+            guard self.generation == token, !flag.isCancelled else { return }
+            guard let destination else {
+                self.status.stringValue = "Patch export cancelled."
+                return
+            }
+            do {
+                @MainActor func validate() throws {
+                    guard self.generation == token, !flag.isCancelled else { throw CancellationError() }
+                    try patch.checkDestination(
+                        destination, openFiles: NSDocumentController.shared.documents.compactMap { $0.fileURL })
+                }
+                try validate()
+                let target = try PreparedFileIdentity.capture(destination)
+                let staged = try await Task.detached(priority: .userInitiated) {
+                    try PrivateFileStore.prepareOutput(
+                        patch.bytes, to: destination, expectedTarget: target,
+                        isCancelled: { flag.isCancelled })
+                }.value
+                defer { staged.cancel() }
+                try validate()
+                try staged.commit()
+                self.status.stringValue =
+                    "Exported the previewed replacement patch to " + destination.lastPathComponent + "."
+            } catch {
+                guard self.generation == token else { return }
+                self.status.stringValue = "Could not export the replacement patch. " + error.localizedDescription
+            }
+        }
+    }
+
     @objc func showRecoveryBatches(_ sender: Any?) {
         let panel = recoveryHistory ?? FolderReplacementHistoryPanel()
         recoveryHistory = panel
@@ -508,6 +636,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         let flag = FolderSearchCancellation(), token = UUID()
         generation = token
         cancellation = flag
+        activePatch = nil
         replacing = true
         isSearching = true
         searchButton.isEnabled = false
@@ -641,6 +770,8 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         work?.cancel()
     }
     func windowWillClose(_ notification: Notification) {
+        activePatch = nil
+        if let panel = patchSavePanel { window?.endSheet(panel, returnCode: .cancel) }
         savePreferencesOrReport()
         cancelSearch(nil)
         generation = UUID()

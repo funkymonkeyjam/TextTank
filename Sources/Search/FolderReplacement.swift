@@ -44,6 +44,62 @@ package enum FolderReplacement {
             }
         }
     }
+    private struct Projection {
+        let original: Data, encoded: Data, oldText: String, newText: String, format: FileFormat, count: Int
+    }
+    private struct SelectedFile {
+        let parent: Int32, source: Int32, info: stat, parts: [String]
+        init(root: Int32, prefix: String, url: URL, privateRoot: String) throws {
+            guard let parts = FolderSearch.relativeComponents(of: url.path, under: prefix),
+                !FolderSearch.isRecoveryArtifact(parts[parts.count - 1]),
+                !FolderReplacementBatch.contains(url.path, in: privateRoot)
+            else { throw Failure.unsafe }
+            let parent = try openParent(root: root, parts: parts)
+            let source = openat(parent, parts.last!, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            var info = stat()
+            guard source >= 0, fstat(source, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+                info.st_nlink == 1, info.st_mode & 0o222 != 0, info.st_uid == getuid()
+            else {
+                close(parent)
+                if source >= 0 { close(source) }
+                throw Failure.unsafe
+            }
+            self.parts = parts
+            self.parent = parent
+            self.source = source
+            self.info = info
+        }
+        func closeDescriptors() {
+            close(source)
+            close(parent)
+        }
+        func project(url: URL, expected: String, options: SearchOptions, cancellation: FolderSearchCancellation) throws
+            -> Projection
+        {
+            guard info.st_size >= 0, info.st_size <= 32 * 1024 * 1024 else { throw Failure.large }
+            let original = try read(source, size: Int(info.st_size), cancellation: cancellation, path: url.path)
+            guard sha(original) == expected else { throw Failure.changed }
+            let decoded = try FileCodec.decode(original)
+            let found = try SearchCore.search(
+                decoded.text, options: options, cancellation: cancellation.engineToken, limit: 100_000)
+            guard !found.truncated else {
+                throw FolderSearchError.invalidRequest("Replacement result limit reached; file not changed.")
+            }
+            let output: String
+            do {
+                output = try SearchCore.replacing(
+                    decoded.text, with: found.hits, cancellation: cancellation.engineToken)
+            } catch {
+                if cancellation.isCancelled { throw Failure.cancelled }
+                throw error
+            }
+            let encoded = try FileCodec.encode(output, format: decoded.format)
+            guard encoded.count <= 64 * 1024 * 1024 else { throw Failure.large }
+            return Projection(
+                original: original, encoded: encoded, oldText: decoded.text,
+                newText: output, format: decoded.format, count: found.hits.count)
+        }
+    }
     static package func replace(
         directory: URL, matches: [FolderSearchMatch], options: SearchOptions, excluding: Set<URL> = [],
         cancellation: FolderSearchCancellation = FolderSearchCancellation(),
@@ -80,44 +136,16 @@ package enum FolderReplacement {
             }
             var backup: URL?, reportURL: URL?
             do {
-                // The matches are the caller's, so this is the guard that keeps a recovery copy,
-                // journal or temporary file from ever being rewritten.
-                guard let parts = FolderSearch.relativeComponents(of: url.path, under: prefix),
-                    !FolderSearch.isRecoveryArtifact(parts[parts.count - 1]),
-                    !FolderReplacementBatch.contains(url.path, in: privateRoot)
-                else { throw Failure.unsafe }
-                let parent = try openParent(root: root, parts: parts)
-                defer { close(parent) }
-                let name = parts.last!, source = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-                guard source >= 0 else { throw Failure.unsafe }
-                defer { close(source) }
-                var initial = stat()
-                guard fstat(source, &initial) == 0, initial.st_mode & S_IFMT == S_IFREG, initial.st_nlink == 1,
-                    initial.st_mode & 0o222 != 0, initial.st_uid == getuid()
-                else { throw Failure.unsafe }
-                guard initial.st_size >= 0, initial.st_size <= 32 * 1024 * 1024 else { throw Failure.large }
-                let original = try read(source, size: Int(initial.st_size), cancellation: cancellation, path: url.path)
-                guard sha(original) == expected else { throw Failure.changed }
-                let decoded = try FileCodec.decode(original)
-                let found = try SearchCore.search(
-                    decoded.text, options: options, cancellation: cancellation.engineToken, limit: 100000)
-                guard !found.truncated else {
-                    throw FolderSearchError.invalidRequest("Replacement result limit reached; file not changed.")
-                }
-                let output: String
-                do {
-                    output = try SearchCore.replacing(
-                        decoded.text, with: found.hits, cancellation: cancellation.engineToken)
-                } catch {
-                    if cancellation.isCancelled { throw Failure.cancelled }
-                    throw error
-                }
-                let encoded = try FileCodec.encode(output, format: decoded.format)
+                let file = try SelectedFile(root: root, prefix: prefix, url: url, privateRoot: privateRoot)
+                defer { file.closeDescriptors() }
+                let parent = file.parent, source = file.source, initial = file.info, name = file.parts.last!
+                let projection = try file.project(
+                    url: url, expected: expected, options: options, cancellation: cancellation)
+                let original = projection.original, encoded = projection.encoded
                 if encoded == original {
                     results.append(.init(url: url, status: .unchanged, message: "No byte changes.", backup: nil))
                     continue
                 }
-                guard encoded.count <= 64 * 1024 * 1024 else { throw Failure.large }
                 let stage = try StagingFile(for: url, parent: parent)
                 let temp = stage.file
                 try write(encoded, to: temp, path: url.path)
@@ -166,7 +194,7 @@ package enum FolderReplacement {
                 results.append(
                     .init(
                         url: url, status: .replaced,
-                        message: "Replaced \(found.hits.count) match(es)."
+                        message: "Replaced \(projection.count) match(es)."
                             + (durable && journalConfirmed
                                 ? ""
                                 : " Completion journal/directory synchronization failed; private recovery evidence retained."),
@@ -194,6 +222,108 @@ package enum FolderReplacement {
             }
         }
         return results
+    }
+    package struct PatchPreview: Sendable {
+        package let bytes: Data
+        package let changedFiles: Int, skippedOpenFiles: Int, textConversions: Int
+        package let roots: [URL]
+        private let sourcePaths: Set<String>
+        private let sourceIdentities: [FileSignature]
+
+        fileprivate init(
+            bytes: Data, changedFiles: Int, skippedOpenFiles: Int, textConversions: Int,
+            roots: [URL], sourcePaths: Set<String>, sourceIdentities: [FileSignature]
+        ) {
+            self.bytes = bytes
+            self.changedFiles = changedFiles
+            self.skippedOpenFiles = skippedOpenFiles
+            self.textConversions = textConversions
+            self.roots = roots
+            self.sourcePaths = sourcePaths
+            self.sourceIdentities = sourceIdentities
+        }
+        package func checkDestination(_ url: URL, openFiles: [URL]) throws {
+            try PrivateFileStore.validateLocalURL(url)
+            let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+            var info = stat()
+            let exists = lstat(path, &info) == 0
+            guard !sourcePaths.contains(path),
+                !openFiles.contains(where: { $0.standardizedFileURL.resolvingSymlinksInPath().path == path }),
+                !exists
+                    || (info.st_nlink == 1
+                        && !sourceIdentities.contains(where: {
+                            $0.device == Int64(info.st_dev) && $0.inode == info.st_ino
+                        }))
+            else {
+                throw FolderSearchError.invalidRequest("Choose a patch destination outside the matched and open files.")
+            }
+        }
+    }
+
+    /// Project the same completed search used by Replace, without staging source files or creating a backup batch.
+    static package func preview(
+        fallbackDirectory: URL, matches: [FolderSearchMatch], options: SearchOptions, excluding: Set<URL> = [],
+        cancellation: FolderSearchCancellation = .init(), maximumBytes: Int = 32 * 1024 * 1024
+    ) async throws -> PatchPreview {
+        let grouped = Dictionary(grouping: matches, by: { $0.sourceRoot ?? fallbackDirectory })
+        let roots = grouped.keys.sorted { $0.path < $1.path }
+        let excluded = Set(excluding.map { $0.standardizedFileURL.resolvingSymlinksInPath().path })
+        let privateRoot = FolderReplacementBatch.canonicalPath(of: AppStorage.url(.folderReplacements))
+        let sourcePaths = Set(matches.map { $0.url.standardizedFileURL.resolvingSymlinksInPath().path })
+        var patch = Data(), identities: [FileSignature] = []
+        var changed = 0, skipped = 0, conversions = 0
+        let limit = min(maximumBytes, 32 * 1024 * 1024)
+        let deadline = ProcessInfo.processInfo.systemUptime + 30
+        for (index, directory) in roots.enumerated() {
+            let opened = try FolderSearch.openCanonicalDirectory(directory)
+            defer { close(opened.fd) }
+            let prefix = opened.path.hasSuffix("/") ? opened.path : opened.path + "/"
+            let byFile = Dictionary(grouping: grouped[directory]!, by: { $0.url })
+            for url in byFile.keys.sorted(by: { $0.path < $1.path }) {
+                guard !cancellation.isCancelled, !Task.isCancelled else { throw CancellationError() }
+                guard ProcessInfo.processInfo.systemUptime < deadline else { throw MergeFailure(.budgetExceeded) }
+                if excluded.contains(url.standardizedFileURL.resolvingSymlinksInPath().path) {
+                    skipped += 1
+                    continue
+                }
+                let rows = byFile[url]!
+                guard let expected = rows.first?.sourceSHA256,
+                    rows.allSatisfy({ $0.sourceSHA256 == expected })
+                else { throw Failure.changed }
+                let file = try SelectedFile(root: opened.fd, prefix: prefix, url: url, privateRoot: privateRoot)
+                defer { file.closeDescriptors() }
+                let p = try file.project(url: url, expected: expected, options: options, cancellation: cancellation)
+                identities.append(FileSignature(file.info))
+                guard p.original != p.encoded else { continue }
+                let utf8 = p.format.encoding == .utf8
+                let a = try TextSnapshot(
+                    bytes: utf8 ? p.original : Data(p.oldText.utf8), source: .file(UUID()), label: url.lastPathComponent
+                )
+                let b = try TextSnapshot(
+                    bytes: utf8 ? p.encoded : Data(p.newText.utf8), source: .file(UUID()), label: url.lastPathComponent)
+                var policy = ReviewDiffPolicy.default
+                policy.maximumOutputBytes = max(0, limit - patch.count)
+                policy.seconds = min(policy.seconds, deadline - ProcessInfo.processInfo.systemUptime)
+                let delta = await ReviewDiffEngine.compare(a, b, policy: policy)
+                guard !cancellation.isCancelled, !Task.isCancelled else { throw CancellationError() }
+                let parts = roots.count == 1 ? file.parts : ["folder-\(index + 1)"] + file.parts
+                let bytes = try await UnifiedPatch.write(
+                    original: a, modified: b, changes: delta,
+                    policy: policy, relativeComponents: parts)
+                let note =
+                    utf8
+                    ? Data() : Data("# TextTank UTF-8 text preview of \(p.format.encoding.displayName) source\n".utf8)
+                guard note.count + bytes.count <= limit - patch.count else { throw MergeFailure(.budgetExceeded) }
+                patch.append(note)
+                patch.append(bytes)
+                if !utf8 { conversions += 1 }
+                changed += 1
+            }
+        }
+        guard !cancellation.isCancelled, !Task.isCancelled else { throw CancellationError() }
+        return PatchPreview(
+            bytes: patch, changedFiles: changed, skippedOpenFiles: skipped, textConversions: conversions,
+            roots: roots, sourcePaths: sourcePaths, sourceIdentities: identities)
     }
     package enum UndoStatus: String, Sendable {
         case restored, alreadyOriginal, skipped, changed, failed, cancelled

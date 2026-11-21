@@ -2,6 +2,107 @@
 import Foundation
 import Darwin
 @main struct SearchReplacementChecks {
+    static func previewCases(in root: URL) async throws {
+        let fm = FileManager.default, source = root.appendingPathComponent("patch-source")
+        let apply = root.appendingPathComponent("patch-copy"), store = AppStorage.url(.folderReplacements)
+        func history() -> [String] { (try? fm.contentsOfDirectory(atPath: store.path).sorted()) ?? [] }
+        let initialHistory = history()
+        let relative = ["left/owned name.txt", "right/owned name.txt", "雪/quote\".txt"]
+        let initial = Data([0xEF, 0xBB, 0xBF]) + Data("needle\r\nlast needle".utf8)
+        let changed = Data([0xEF, 0xBB, 0xBF]) + Data("fixed\r\nlast fixed".utf8)
+        for directory in [source, apply] {
+            for path in relative {
+                let file = directory.appendingPathComponent(path)
+                try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try initial.write(to: file)
+            }
+        }
+        let report = try await FolderSearch.search(FolderSearchRequest(directory: source, query: "needle"))
+        var opts = SearchOptions()
+        opts.query = "needle"
+        opts.replacement = "fixed"
+        let patch = try await FolderReplacement.preview(
+            fallbackDirectory: source, matches: report.matches, options: opts)
+        check(
+            patch.changedFiles == 3 && patch.textConversions == 0 && patch.skippedOpenFiles == 0,
+            "patch previews both nested duplicate basenames and the quoted Unicode file")
+        check(
+            try relative.allSatisfy { try Data(contentsOf: source.appendingPathComponent($0)) == initial }
+                && history() == initialHistory, "dry run leaves every original, format and recovery history untouched")
+        let exported = root.appendingPathComponent("owned-preview.patch")
+        try patch.checkDestination(exported, openFiles: [])
+        try PrivateFileStore.prepareOutput(patch.bytes, to: exported).commit()
+        for args in [["apply", "--check"], ["apply"]] {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.currentDirectoryURL = apply
+            process.arguments = args + [exported.path]
+            try process.run()
+            process.waitUntilExit()
+            check(process.terminationStatus == 0, "git accepts the exported unified patch on the owned copy")
+        }
+        check(
+            try relative.allSatisfy { try Data(contentsOf: apply.appendingPathComponent($0)) == changed },
+            "export applies exact BOM, CRLF, Unicode path and missing final newline on all copied files")
+        let held = source.appendingPathComponent(relative[0])
+        do {
+            try patch.checkDestination(held, openFiles: [])
+            check(false, "export over a matched source")
+        } catch { check(true, "matched originals cannot be patch destinations") }
+        let alias = root.appendingPathComponent("also-source")
+        try fm.linkItem(at: held, to: alias)
+        do {
+            try patch.checkDestination(alias, openFiles: [])
+            check(false, "export over a source alias")
+        } catch { check(true, "another name for an original cannot receive the patch") }
+        try fm.removeItem(at: alias)
+        let left = source.appendingPathComponent("left"), right = source.appendingPathComponent("right")
+        let multi = try await FolderSearch.searchAcross(
+            FolderSearchRequest(directory: left, query: "needle"), directories: [left, right])
+        let mapped = try await FolderReplacement.preview(fallbackDirectory: left, matches: multi.matches, options: opts)
+        let labels = String(decoding: mapped.bytes, as: UTF8.self)
+        check(
+            mapped.roots.count == 2 && labels.contains("folder-1/owned name.txt")
+                && labels.contains("folder-2/owned name.txt") && !labels.contains(root.path),
+            "multi-root patch keeps distinct directory mappings and exports no absolute paths")
+        let excludes = try await FolderReplacement.preview(
+            fallbackDirectory: source, matches: report.matches,
+            options: opts, excluding: [held])
+        check(excludes.skippedOpenFiles == 1 && excludes.changedFiles == 2, "preview accounts for open source files")
+        do {
+            _ = try await FolderReplacement.preview(
+                fallbackDirectory: source, matches: report.matches, options: opts, maximumBytes: 24)
+            check(false, "partial over-budget patch")
+        } catch { check(true, "an over-budget preview refuses the whole patch") }
+        let flag = FolderSearchCancellation()
+        flag.cancel()
+        do {
+            _ = try await FolderReplacement.preview(
+                fallbackDirectory: source, matches: report.matches, options: opts, cancellation: flag)
+            check(false, "cancelled patch")
+        } catch { check(true, "cancelled preview returns no patch") }
+        try Data("later edit".utf8).write(to: held)
+        do {
+            _ = try await FolderReplacement.preview(fallbackDirectory: source, matches: report.matches, options: opts)
+            check(false, "stale preview exported")
+        } catch {
+            check(
+                try Data(contentsOf: held) == Data("later edit".utf8) && history() == initialHistory,
+                "one changed source refuses the entire preview while preserving new text and history")
+        }
+        let utf16 = root.appendingPathComponent("utf16-patch")
+        try fm.createDirectory(at: utf16, withIntermediateDirectories: false)
+        let nonUTF8 = utf16.appendingPathComponent("wide.txt")
+        let original = try FileCodec.encode("needle\r\n", format: FileFormat(encoding: .utf16LE, bom: true))
+        try original.write(to: nonUTF8)
+        let wide = try await FolderSearch.search(FolderSearchRequest(directory: utf16, query: "needle"))
+        let text = try await FolderReplacement.preview(fallbackDirectory: utf16, matches: wide.matches, options: opts)
+        check(
+            try text.textConversions == 1 && String(decoding: text.bytes, as: UTF8.self).contains("UTF-16")
+                && Data(contentsOf: nonUTF8) == original,
+            "UTF-16 patch identifies its text representation; source bytes preserved")
+    }
+
     static func undoCases(in root: URL) async throws {
         let dir = root.appendingPathComponent("undo")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
@@ -639,6 +740,7 @@ import Darwin
                     && FolderReplacementBatch.read(interruptedManifest).entries.first?.1 == .restored
                     && Data(contentsOf: interruptedFile) == initialBytes,
                 "a newly launched Undo recognizes a prepared entry whose file was never changed")
+            try await previewCases(in: root)
             try await undoCases(in: root)
             try await historyCases(in: root)
             try await journalFailureCases(in: root)

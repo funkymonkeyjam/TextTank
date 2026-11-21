@@ -396,6 +396,44 @@ import NativeSearch
                 "fixture: replace-flow search dispatched")
             await waitUntil("the replace-flow search to finish") { !flow.isSearching }
             try require(flow.numberOfRows(in: flow.table) == 2, "fixture: both files matched on disk")
+            let buttons = everyView(try requireValue(flow.window?.contentView, "folder patch buttons")).compactMap {
+                $0 as? NSButton
+            }
+            let dryRun = try requireValue(
+                buttons.first { $0.action == #selector(FolderSearchController.previewFolderPatch(_:)) }, "Preview Patch"
+            )
+            let export = try requireValue(
+                buttons.first { $0.action == #selector(FolderSearchController.exportFolderPatch(_:)) }, "Export Preview"
+            )
+            dryRun.performClick(nil)
+            await waitUntil("replacement patch preview") { !flow.isSearching }
+            check(
+                export.isEnabled && flow.details.string.contains("+pin closed")
+                    && !flow.details.string.contains("+pin open") && flow.status.stringValue.contains("1 open"),
+                "actual Preview Patch shows closed-file change and explicitly counts the skipped dirty document")
+            flow.choosePatchFile = { _ in nil }
+            export.performClick(nil)
+            await waitUntil("cancel export") { !flow.isSearching }
+            check(
+                try flow.status.stringValue.contains("cancelled")
+                    && Data(contentsOf: closedFile) == Data("needle closed\n".utf8),
+                "save panel cancel leaves staged files unchanged")
+            flow.choosePatchFile = { _ in closedFile }
+            export.performClick(nil)
+            await waitUntil("protect selected source") { !flow.isSearching }
+            check(
+                try flow.status.stringValue.contains("Could not export")
+                    && Data(contentsOf: closedFile) == Data("needle closed\n".utf8),
+                "ordinary export refuses a selected source")
+            let destination = support.appendingPathComponent("explicit-folder.patch")
+            flow.choosePatchFile = { _ in destination }
+            export.performClick(nil)
+            await waitUntil("export the previewed bytes") { !flow.isSearching }
+            check(
+                try String(contentsOf: destination, encoding: .utf8) == flow.details.string
+                    && Data(contentsOf: openFile) == Data("needle open\n".utf8)
+                    && openDocument.editor.text.hasPrefix("unsaved "),
+                "Export Preview writes only selected destination while disk originals and dirty editor stay intact")
             var confirmed = false
             let giveUp = Date().addingTimeInterval(10)
             let confirm = Timer(timeInterval: 0.05, repeats: true) { _ in
@@ -486,7 +524,8 @@ import NativeSearch
                 reviewedFiles.string.contains("restored") && reviewedFiles.string.contains(closedFile.path),
                 "actual history displays original path and recovered file state")
             let age: NSPopUpButton = try requireValue(
-                controls.compactMap { $0 as? NSPopUpButton }.first { $0.menu?.item(withTag: 90) != nil }, "retention picker")
+                controls.compactMap { $0 as? NSPopUpButton }.first { $0.menu?.item(withTag: 90) != nil },
+                "retention picker")
             for accept in [false, true] {
                 age.selectItem(withTag: 7)
                 _ = NSApp.sendAction(age.action!, to: age.target, from: age)
