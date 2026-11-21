@@ -2,6 +2,7 @@
 #import "TTEditor.h"
 #import "ScintillaView.h"
 #include "ILexer.h"
+#include "ILoader.h"
 #include "Lexilla.h"
 #include <vector>
 #include <string>
@@ -544,6 +545,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     NSIndexSet *_eligiblePairPositions;
     NSMutableIndexSet *_insertedPairPositions;
     char _pairBytes[2];
+    BOOL _hasSharedDocument;
     id _accessibilityDisplayObserver;
     BOOL _braceCacheValid;
     sptr_t _braceCaret, _braceEndStyled;
@@ -580,6 +582,31 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (void)applyComparisonStyle;
 - (void)comparisonViewportChanged;
 @end
+@implementation TTInitialUTF8Load {
+    Scintilla::ILoader *_loader;
+    NSUInteger _remainingBytes;
+}
+- (instancetype)initWithByteCount:(NSUInteger)bytes {
+    if (!(self = [super init]) || bytes > INT32_MAX) return nil;
+    // Creating a loader resets the requesting view's contraction state in Scintilla 5.6.9.
+    // Use a private view so a failed/cancelled read cannot disturb a live editing view.
+    _remainingBytes = bytes;
+    ScintillaView *factory = [[ScintillaView alloc] initWithFrame:NSZeroRect];
+    _loader = reinterpret_cast<Scintilla::ILoader *>([factory message:SCI_CREATELOADER wParam:bytes lParam:0]);
+    return _loader ? self : nil;
+}
+- (void)dealloc { if (_loader) _loader->Release(); }
+- (BOOL)appendContent:(TTDocumentUTF8 *)content {
+    NSData *data = content.data;
+    if (!_loader || !data || data.length > _remainingBytes) return NO;
+    if (data.length && _loader->AddData(static_cast<const char *>(data.bytes), data.length) != SC_STATUS_OK) return NO;
+    _remainingBytes -= data.length;
+    return YES;
+}
+- (void *)readyDocument { return _loader && !_remainingBytes ? _loader->ConvertToDocument() : nullptr; }
+- (void)finishTransfer { if (_loader) { _loader->Release(); _loader = nullptr; } }
+@end
+
 @implementation TTDocumentUTF8
 - (instancetype)initWithData:(NSData *)data {
     if (!(self = [super init]) || !data) return nil;
@@ -1163,6 +1190,27 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self assertThread];
     return content && !self.readOnly && [self loadEncodedDocumentData:content.data];
 }
+- (BOOL)adoptInitialUTF8Load:(TTInitialUTF8Load *)load {
+    [self assertThread];
+    if (self.readOnly || _hasSharedDocument || [self undoGroupOpen] || self.revision || self.byteLength || [_engine message:SCI_CANUNDO] || [_engine message:SCI_CANREDO]) return NO;
+    void *document = [load readyDocument];
+    if (!document) return NO;
+    const sptr_t width = [_engine message:SCI_GETTABWIDTH];
+    const sptr_t tabs = [_engine message:SCI_GETUSETABS];
+    [_engine message:SCI_SETDOCPOINTER wParam:0 lParam:reinterpret_cast<sptr_t>(document)];
+    [load finishTransfer];
+    [_engine message:SCI_SETCODEPAGE wParam:SC_CP_UTF8];
+    [_engine message:SCI_SETTABWIDTH wParam:width];
+    [_engine message:SCI_SETUSETABS wParam:tabs];
+    [_engine message:SCI_SETUNDOCOLLECTION wParam:1];
+    ++_revision;
+    ++_selectionGeneration;
+    _braceCacheValid = NO;
+    [self updateLineNumberMargin:NO];
+    [self deliverChange];
+    [self scheduleStateNotification];
+    return YES;
+}
 - (BOOL)loadEncodedDocumentData:(NSData *)data {
     // No undo record is kept of a load: Scintilla would otherwise hold a second copy of the
     // replaced and the inserted bytes only for the history to be emptied straight afterwards.
@@ -1320,6 +1368,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self assertThread];
     // SCI_SETDOCPOINTER acquires the new document before releasing the old one.
     // Each attached Scintilla view owns a reference, so either view may close first.
+    _hasSharedDocument = YES;
+    other->_hasSharedDocument = YES;
     [_engine message:SCI_SETDOCPOINTER wParam:0 lParam:[other.engine message:SCI_GETDOCPOINTER]];
     self.revision = other.revision;
     _braceCacheValid = NO;

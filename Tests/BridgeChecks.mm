@@ -2035,6 +2035,20 @@ int main(int argc, char **argv) {
         TTEditor *byteEditor = [[TTEditor alloc] initWithFrame:NSZeroRect];
         check([byteEditor loadDocumentUTF8:checkedBytes] && [byteEditor.utf8Data isEqual:unchangedBytes],
               "a byte load freezes mutable source and preserves content FEFF and embedded NUL");
+        TTEditor *initialEditor = [[TTEditor alloc] initWithFrame:NSZeroRect];
+        TTInitialUTF8Load *initial = [[TTInitialUTF8Load alloc] initWithByteCount:unchangedBytes.length];
+        check(![initialEditor adoptInitialUTF8Load:initial] && initialEditor.revision == 0,
+              "a partially read initial document cannot replace the original editor");
+        check([initial appendContent:checkedBytes] && ![initial appendContent:checkedBytes],
+              "a staged initial document only accepts the declared number of bytes");
+        TTEditor *shared = [[TTEditor alloc] initWithFrame:NSZeroRect];
+        TTEditor *other = [[TTEditor alloc] initWithFrame:NSZeroRect];
+        [other shareDocumentWith:shared];
+        check(![shared adoptInitialUTF8Load:initial] && [shared sharesDocumentWith:other],
+              "first import cannot detach a pristine editor from its clone");
+        check([initialEditor adoptInitialUTF8Load:initial] && [initialEditor.utf8Data isEqual:unchangedBytes]
+                  && ![initialEditor adoptInitialUTF8Load:initial],
+              "complete first import transfers once and preserves content BOM and NUL");
         const unsigned char invalidTail[] = {0xf4, 0x90, 0x80, 0x80};
         check(![[TTDocumentUTF8 alloc] initWithData:[NSData dataWithBytes:invalidTail length:sizeof(invalidTail)]],
               "invalid UTF-8 is refused before a document load can reset history");

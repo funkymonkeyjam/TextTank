@@ -375,10 +375,20 @@ package enum WorkspaceStore {
         ofRegularFileAt url: URL, maximumBytes: Int = maximumSessionBytes, now: Int64? = nil,
         matching expected: FileSignature? = nil, isCancelled: () -> Bool = { false }
     ) throws -> FileSample {
+        try readChunks(of: url, maximumBytes: maximumBytes, now: now, matching: expected, requireStableRead: false, isCancelled: isCancelled) { _ in }
+    }
+    /// The consumer and digest see the same descriptor bytes. Initial import requires stable identity and length.
+    static package func readChunks(of url: URL, maximumBytes: Int, now: Int64? = nil, matching expected: FileSignature?,
+                                   requireStableRead: Bool = true, isCancelled: () -> Bool, consume: (UnsafeRawBufferPointer) throws -> Void) throws -> FileSample {
         let now = now ?? currentSecond()
         let opened = try openRegularFile(url, maximumBytes: maximumBytes)
         defer { close(opened.descriptor) }
+        func changed() -> NSError {
+            NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError,
+                    userInfo: [NSLocalizedDescriptionKey: "The file changed while opening. Open it again."])
+        }
         if let expected, FileSignature(opened.info) != expected {
+            if requireStableRead { throw changed() }
             throw WorkspaceError.invalid("The file changed before its contents could be verified.")
         }
         var hasher = SHA256()
@@ -393,13 +403,22 @@ package enum WorkspaceStore {
             }
             if count == 0 { break }
             total += count
+            if requireStableRead, let expected, total > expected.size { throw changed() }
             guard total <= maximumBytes else { throw WorkspaceError.fileTooLarge(limit: maximumBytes, url: url) }
-            buffer.withUnsafeBytes { hasher.update(bufferPointer: UnsafeRawBufferPointer(rebasing: $0[0..<count])) }
+            try buffer.withUnsafeBytes {
+                let bytes = UnsafeRawBufferPointer(rebasing: $0[0..<count])
+                hasher.update(bufferPointer: bytes)
+                try consume(bytes)
+            }
         }
         var after = stat()
         guard fstat(opened.descriptor, &after) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         let signature = FileSignature(after)
         let stable = signature == FileSignature(opened.info) && signature.size == Int64(total)
+        if requireStableRead, let expected {
+            guard stable, signature == expected,
+                  try Self.signature(ofRegularFileAt: url, maximumBytes: maximumBytes) == expected else { throw changed() }
+        }
         return FileSample(
             digest: hex(hasher.finalize()), signature: stable && signature.isSettled(at: now) ? signature : nil)
     }

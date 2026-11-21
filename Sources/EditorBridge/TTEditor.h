@@ -90,6 +90,13 @@ __attribute__((objc_subclassing_restricted))
 - (instancetype)init NS_UNAVAILABLE;
 @end
 
+/// An unmounted Scintilla document, discarded on any failed or cancelled initial read.
+__attribute__((objc_subclassing_restricted))
+@interface TTInitialUTF8Load : NSObject
+- (nullable instancetype)initWithByteCount:(NSUInteger)bytes;
+- (instancetype)init NS_UNAVAILABLE;
+- (BOOL)appendContent:(TTDocumentUTF8 *)bytes;
+@end
 /// Main-thread-only view. All positions remain inside the UTF-8 Scintilla model.
 ///
 /// A split view is two TTEditor views on one Scintilla document (shareDocumentWith:). State
@@ -144,6 +151,8 @@ __attribute__((objc_subclassing_restricted))
 - (BOOL)loadDocumentText:(NSString *)text;
 /// The checked bytes are borrowed only for the synchronous native load.
 - (BOOL)loadDocumentUTF8:(TTDocumentUTF8 *)content NS_SWIFT_NAME(loadDocumentUTF8(_:));
+/// Adopt a completed load only into the original pristine editor. No existing buffer is replaced.
+- (BOOL)adoptInitialUTF8Load:(TTInitialUTF8Load *)load;
 /// Replaces ascending, non-overlapping byte ranges (TTByteRange values) under one undo action,
 /// without driving the selection per range. Revision, read-only state, bounds, UTF-8
 /// lead-byte alignment and encodability are all checked before the first edit; NO changes

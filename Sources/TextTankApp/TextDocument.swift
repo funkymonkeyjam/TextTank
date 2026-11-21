@@ -749,6 +749,7 @@ import AppKit
         // that read belongs to the bytes it read; anything else leaves the next check to hash.
         let now = WorkspaceStore.currentSecond()
         let before = try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max)
+        if let before, try readInitialUTF8IfEligible(from: url, signature: before, ofType: typeName) { return }
         // AppKit may autorelease the source data. Release that read's temporaries before
         // document registration and window construction need their own working storage.
         try autoreleasepool { try super.read(from: url, ofType: typeName) }
@@ -758,6 +759,111 @@ import AppKit
             diskSignature = before
         }
     }
+    /// Only a first open of a regular, large UTF-8 file uses a staged native document. Other
+    /// formats and all existing editing sessions retain their exact ordinary read/reload paths.
+    func readInitialUTF8IfEligible(from url: URL, signature: FileSignature, ofType type: String,
+                                   isCancelled: () -> Bool = { false }) throws -> Bool {
+        guard signature.size >= 32 * 1024 * 1024, signature.size <= Int32.max,
+              type == Self.plainTextType, openEncoding == nil || openEncoding == .utf8,
+              !opened, !languageResolved, presentations.isEmpty, editor.byteLength == 0, editor.revision == 0,
+              !editor.readOnly else { return false }
+        let stream = InitialFileStream(capacity: UInt(signature.size), detectsEncoding: openEncoding == nil)
+        do {
+            let sample = try WorkspaceStore.readChunks(of: url, maximumBytes: Int.max, matching: signature,
+                                                       isCancelled: isCancelled) { bytes in
+                try autoreleasepool { try stream.consume(Data(bytes)) }
+            }
+            try stream.finish()
+            if isCancelled() { throw CancellationError() }
+            guard !opened, !languageResolved, presentations.isEmpty, editor.revision == 0, editor.byteLength == 0,
+                  !editor.readOnly else { throw CocoaError(.userCancelled) }
+            guard let loader = stream.loader else { throw CocoaError(.fileReadUnknown) }
+            try applyFile(.stream(loader, stream.lineEnding ?? .lf, stream.languageSample),
+                          format: .init(encoding: .utf8, bom: stream.bom), baseline: sample, explicitEncoding: openEncoding)
+            return true
+        } catch InitialFileStream.OrdinaryRead.required {
+            return false
+        }
+    }
+
+    private final class InitialFileStream {
+        enum OrdinaryRead: Error { case required }
+        private(set) var loader: TTInitialUTF8Load?
+        let capacity: UInt
+        let detectsEncoding: Bool
+        private var pending = Data()
+        private var started = false
+        private var pendingCR = false
+        private var sampleComplete = false
+        private(set) var bom = false
+        private(set) var lineEnding: LineEnding?
+        private(set) var languageSample = ""
+        init(capacity: UInt, detectsEncoding: Bool) {
+            self.capacity = capacity
+            self.detectsEncoding = detectsEncoding
+        }
+        func consume(_ chunk: Data) throws {
+            pending.append(chunk)
+            if !started {
+                guard pending.count >= 4 else { return }
+                if detectsEncoding, (try? FileCodec.detectedEncoding(pending)) != .utf8 { throw OrdinaryRead.required }
+                bom = pending.starts(with: [0xEF, 0xBB, 0xBF])
+                if bom { pending.removeFirst(3) }
+                loader = TTInitialUTF8Load(byteCount: capacity - (bom ? 3 : 0))
+                guard loader != nil else { throw CocoaError(.fileReadUnknown) }
+                started = true
+            }
+            // Retain at most three trailing bytes so independent native validations never split a scalar.
+            var end = pending.endIndex - min(3, pending.count)
+            while end < pending.endIndex && pending[end] & 0xC0 == 0x80 { end += 1 }
+            try append(pending[..<end])
+            pending = Data(pending[end...])
+        }
+        func finish() throws {
+            try append(pending)
+            if pendingCR { lineEnding = .cr }
+        }
+        private func append(_ data: Data) throws {
+            guard !data.isEmpty else { return }
+            guard let checked = TTDocumentUTF8(data: data) else { throw FileCodecError.invalidBytes(.utf8) }
+            guard loader?.appendContent(checked) == true else { throw CocoaError(.fileReadUnknown) }
+            if lineEnding == nil {
+                if pendingCR {
+                    lineEnding = data.first == 10 ? .crlf : .cr
+                    pendingCR = false
+                } else if let i = data.withUnsafeBytes({ bytes -> Int? in
+                    guard let base = bytes.baseAddress else { return nil }
+                    let lf = memchr(base, 10, bytes.count).map { base.distance(to: $0) }
+                    let cr = memchr(base, 13, lf ?? bytes.count).map { base.distance(to: $0) }
+                    return (cr ?? lf).map { data.startIndex + $0 }
+                }) {
+                    let next = data.index(after: i)
+                    if data[i] == 10 { lineEnding = .lf }
+                    else if next == data.endIndex { pendingCR = true }
+                    else { lineEnding = data[next] == 10 ? .crlf : .cr }
+                }
+            }
+            guard !sampleComplete else { return }
+            if languageSample.isEmpty && data.first != 35 {
+                sampleComplete = true
+                return
+            }
+            languageSample.append(String(decoding: data, as: UTF8.self))
+            if languageSample != "#" && !languageSample.hasPrefix("#!") {
+                languageSample = ""
+                sampleComplete = true
+                return
+            }
+            if languageSample.contains(where: \.isNewline) || languageSample.count > 513 {
+                languageSample = String(languageSample.prefix(513))
+                sampleComplete = true
+            } else if languageSample.utf8.count > 131072 {
+                // Extremely long grapheme clusters retain ordinary shebang recognition semantics.
+                throw OrdinaryRead.required
+            }
+        }
+    }
+
     /// Reads bytes the caller captured from `url` through the regular-file descriptor guard.
     /// Naming the file lets a UTF-32-looking signature offer the explicit UTF-16 LE open.
     /// `encoding` is the person's explicit choice, as in `read(from:ofType:as:)`.
@@ -869,9 +975,11 @@ import AppKit
     private enum FileContent {
         case utf8(TTDocumentUTF8)
         case text(String)
+        case stream(TTInitialUTF8Load, LineEnding, String)
 
         var lineEnding: LineEnding {
             switch self {
+            case .stream(_, let eol, _): return eol
             case .text(let text): return .detect(in: text)
             case .utf8(let content): return content.data.withUnsafeBytes { LineEnding.detect(inUTF8: $0) }
             }
@@ -880,6 +988,7 @@ import AppKit
         // Language detection consults at most the first 512 Characters and only for a shebang.
         var languageSample: String {
             switch self {
+            case .stream(_, _, let sample): return sample
             case .text(let text): return text
             case .utf8(let content):
                 let data = content.data
@@ -912,16 +1021,25 @@ import AppKit
             content = .text(decoded.text)
             diskFormat = decoded.format
         }
-        let baseline = sample()
-        loadEpoch &+= 1
-        EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was reloaded.")
+        try applyFile(content, format: diskFormat, baseline: sample(), explicitEncoding: explicitEncoding)
+    }
+    private func applyFile(_ content: FileContent, format diskFormat: FileFormat, baseline: FileSample,
+                           explicitEncoding: FileEncoding?) throws {
         loading = true
         let locked = editor.readOnly
+        if case let .stream(staged, _, _) = content {
+            guard editor.adoptInitialUTF8Load(staged) else {
+                loading = false
+                throw CocoaError(.userCancelled)
+            }
+        }
+        loadEpoch &+= 1
+        EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was reloaded.")
         editor.readOnly = false
-        // One minimal-span edit: bookmarks, folds and the caret outside the changed bytes survive a
-        // reload. An empty buffer (first open) takes this as a plain insert.
-        // No undo record is kept: the history is emptied below, as for every open and reload.
+        // Reload the existing document with a minimal-span edit so unaffected bookmarks, folds
+        // and the caret survive. A streamed first open has already adopted its finished buffer.
         switch content {
+        case .stream: break
         case .utf8(let bytes): _ = editor.loadDocumentUTF8(bytes)
         case .text(let text): _ = editor.loadDocumentText(text)
         }
