@@ -10,8 +10,7 @@ import AppKit
     /// Called when a configured command is actually started and again before its result is
     /// applied to the document. Neither is ever part of a macro recording.
     var onUnrecordableAction: () -> Void = {}
-    var confirmFirstRun: @MainActor (_ invocation: ConfiguredRun, _ directory: URL) -> Bool = RunController
-        .askBeforeRunning
+    var confirmFirstRun: (@MainActor (_ invocation: ConfiguredRun, _ directory: URL) -> Bool)?
     private var askingBeforeRun = false
     private var commands: [ConfiguredRun] = []
     let loadState: StoreLoadState
@@ -348,20 +347,22 @@ import AppKit
         }
         return FileManager.default.homeDirectoryForCurrentUser
     }
-    private static func askBeforeRunning(_ command: ConfiguredRun, directory: URL) -> Bool {
-        let alert = TTAlert()
-        alert.messageText = "Run “" + command.name + "”?"
-        alert.informativeText =
+    private func askBeforeRunning(
+        _ command: ConfiguredRun, directory: URL, parent: NSWindow?, launch: @escaping () throws -> Void
+    ) {
+        let form = FormPanel(title: "Run “" + command.name + "”?", identifier: "run.approval")
+        let explanation =
             command.shellMode
             ? "Shell mode runs the script argument through /bin/zsh. Confirm only if you intend to run the full script shown below."
             : "Review the executable, arguments and working directory. TextTank will remember this command after it runs."
+        form.add(NSTextField(wrappingLabelWithString: explanation))
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes, .sortedKeys]
         struct Invocation: Encodable { let argv: [String], workingDirectory: String, mode: String }
         let value = Invocation(
             argv: [command.executable] + command.arguments, workingDirectory: directory.path,
             mode: command.shellMode ? "Shell" : command.extensionMode ? "Text extension" : "Executable")
-        guard let bytes = try? encoder.encode(value) else { return false }
+        guard let bytes = try? encoder.encode(value) else { askingBeforeRun = false; return }
         let text = NSTextView()
         text.isEditable = false
         text.isSelectable = true
@@ -376,12 +377,32 @@ import AppKit
         text.frame = scroll.contentView.bounds
         text.autoresizingMask = [.width]
         text.isVerticallyResizable = true
-        alert.accessoryView = scroll
-        let run = alert.addButton(withTitle: "Run Command")
-        run.identifier = .init("run.approval.confirm")
-        run.hasDestructiveAction = true
-        alert.addButton(withTitle: "Cancel", role: .cancel)
-        return alert.runModal() == .alertFirstButtonReturn
+        form.add(scroll)
+        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 145).isActive = true
+        var parentObservation: NSObjectProtocol?
+        if let parent {
+            parentObservation = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: parent, queue: .main
+            ) { [weak form] _ in MainActor.assumeIsolated { form?.close() } }
+        }
+        form.onClose = { [weak self] in
+            if let parentObservation { NotificationCenter.default.removeObserver(parentObservation) }
+            self?.askingBeforeRun = false
+        }
+        let confirm = form.button("Run Command", identifier: "run.approval.confirm") { [weak form] in
+            do {
+                try launch()
+                form?.close()
+            } catch {
+                form?.showValidation(error)
+            }
+        }
+        confirm.hasDestructiveAction = true
+        let cancel = form.button("Cancel", identifier: "run.approval.cancel", cancel: true) { [weak form] in
+            form?.close()
+        }
+        form.window.initialFirstResponder = cancel
+        form.show(parent: parent)
     }
 
     @objc private func run(_ sender: NSMenuItem) {
@@ -397,12 +418,14 @@ import AppKit
         let target = editor(), selected = (target?.selectionStart != target?.selectionEnd),
             revision = target?.revision ?? 0
         let anchor = target?.selectionAnchor ?? 0, caret = target?.selectionCaret ?? 0
+        func validateDestination() throws {
+            guard configured.extensionMode else { return }
+            guard let target else { throw RunFailure.noDocument }
+            try target.requireWritable()
+            guard target.selectionCount == 1 else { throw RunFailure.multipleSelections }
+        }
         do {
-            if configured.extensionMode {
-                guard let target else { throw RunFailure.noDocument }
-                try target.requireWritable()
-                guard target.selectionCount == 1 else { throw RunFailure.multipleSelections }
-            }
+            try validateDestination()
             let document = file()
             let command = try configured.resolved(file: document, selection: target?.selectedText ?? "")
             let directory = Self.workingDirectory(for: document)
@@ -412,51 +435,65 @@ import AppKit
             let digest = try configured.approvalDigest()
             // An unavailable approval record never authorizes a command. Explicit review still works.
             let known = (try? PrivateFileStore.read(approvalFile, maximumBytes: 32)) == digest
-            if !known {
-                let fromLibrary = commands.contains { $0.id == configured.id }
-                askingBeforeRun = true
-                let approved = confirmFirstRun(command, directory)
-                askingBeforeRun = false
-                guard approved else { return }
-                let current = commands.first { $0.id == configured.id }
-                guard try !fromLibrary || current?.approvalDigest() == digest else {
-                    throw RunFailure.configuration(
-                        field: .identity,
-                        message: "The saved command changed while it was being reviewed. Choose it again.")
+            let fromLibrary = commands.contains { $0.id == configured.id }
+            func launch() throws {
+                if !known {
+                    if configured.extensionMode, target?.readOnly == true {
+                        throw RunFailure.configuration(
+                            field: .identity,
+                            message: "The document became read-only during review. Nothing was run.")
+                    }
+                    try validateDestination()
+                    let current = commands.first { $0.id == configured.id }
+                    guard try !fromLibrary || current?.approvalDigest() == digest else {
+                        throw RunFailure.configuration(
+                            field: .identity,
+                            message: "The saved command changed while it was being reviewed. Choose it again.")
+                    }
+                    guard file() == document, editor() === target, target?.revision ?? 0 == revision,
+                        target?.selectionAnchor ?? 0 == anchor, target?.selectionCaret ?? 0 == caret
+                    else { throw RunFailure.documentChanged }
                 }
-                guard file() == document, editor() === target, target?.revision ?? 0 == revision,
-                    target?.selectionAnchor ?? 0 == anchor, target?.selectionCaret ?? 0 == caret
-                else { throw RunFailure.documentChanged }
-            }
-            let input =
-                configured.extensionMode
-                ? Data((selected ? (target?.selectedText ?? "") : (target?.text ?? "")).utf8) : Data()
-            pending = nil
-            applyButton?.isEnabled = false
-            resultWindow?.close()
-            resultWindow = nil
-            let run = RunExecution()
-            execution = run
-            onUnrecordableAction()
-            // Capture weak UI references on main; the worker holds only this delivery
-            // and immutable command/input values, never strengthening an editor/controller.
-            let deliver: @MainActor @Sendable (Result<RunResult, Error>) -> Void = { [weak self, weak target] outcome in
-                self?.execution = nil
-                var approvalError: Error?
-                if !known, case .success(let result) = outcome, result.didLaunch {
-                    do {
-                        try PrivateFileStore.prepareDirectory(approvalFolder)
-                        try PrivateFileStore.write(digest, to: approvalFile, maximumBytes: 32)
-                    } catch { approvalError = error }
+                let input =
+                    configured.extensionMode
+                    ? Data((selected ? (target?.selectedText ?? "") : (target?.text ?? "")).utf8) : Data()
+                pending = nil
+                applyButton?.isEnabled = false
+                resultWindow?.close()
+                resultWindow = nil
+                let run = RunExecution()
+                execution = run
+                onUnrecordableAction()
+                // Capture weak UI references on main; the worker holds only this delivery
+                // and immutable command/input values, never strengthening an editor/controller.
+                let deliver: @MainActor @Sendable (Result<RunResult, Error>) -> Void = {
+                    [weak self, weak target] outcome in
+                    self?.execution = nil
+                    var approvalError: Error?
+                    if !known, case .success(let result) = outcome, result.didLaunch {
+                        do {
+                            try PrivateFileStore.prepareDirectory(approvalFolder)
+                            try PrivateFileStore.write(digest, to: approvalFile, maximumBytes: 32)
+                        } catch { approvalError = error }
+                    }
+                    self?.show(
+                        outcome, command: command, target: target, revision: revision, selection: selected,
+                        anchor: anchor, caret: caret)
+                    if let approvalError { TTAlert.present(approvalError) }
                 }
-                self?.show(
-                    outcome, command: command, target: target, revision: revision, selection: selected,
-                    anchor: anchor, caret: caret)
-                if let approvalError { TTAlert.present(approvalError) }
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let outcome = Result { try run.execute(command, input: input, workingDirectory: directory) }
+                    DispatchQueue.main.async { deliver(outcome) }
+                }
             }
-            DispatchQueue.global(qos: .userInitiated).async {
-                let outcome = Result { try run.execute(command, input: input, workingDirectory: directory) }
-                DispatchQueue.main.async { deliver(outcome) }
+            guard !known else { try launch(); return }
+            askingBeforeRun = true
+            if let confirmFirstRun {
+                defer { askingBeforeRun = false }
+                if confirmFirstRun(command, directory) { try launch() }
+            } else {
+                let parent = target?.window ?? NSApp.keyWindow
+                askBeforeRunning(command, directory: directory, parent: parent, launch: launch)
             }
         }
     }

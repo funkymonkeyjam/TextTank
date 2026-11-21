@@ -474,13 +474,13 @@
         }
       }
     },
-    "folder.limit.bytes": {
+    "folder.limit.text-bytes": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "total data read"
+            "value": "searchable text bytes"
           }
         }
       }
