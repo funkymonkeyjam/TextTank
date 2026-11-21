@@ -263,6 +263,9 @@ import Darwin
         check(app.validateMenuItem(chooserItem), "T3 chooser remains available from empty group")
         app.newDocument(nil)
         let created = try requireValue(app.currentDocument, "T3 New in empty group")
+        let visiblePair = host.visibleComparisonEditors
+        check(visiblePair?.0 === ap.activeEditor && visiblePair?.1 === created.activeEditor,
+            "Compare Two Visible Tabs resolves each mounted group's actual active pane in visual order")
         check(
             host.model.groups[1].tabs.contains { $0.documentID == created.runtimeID }
                 && host.model.groups[0].tabs.map(\.id) == [aid], "T3 ordinary New scopes to focused group")

@@ -151,6 +151,7 @@ import AppKit
                 reason: "Applying selected comparison changes cannot be recorded. No partial macro will be saved.")
         }
         value.currentEditor = { [weak self] in self?.currentEditor }
+        value.visibleEditors = { [weak self] in self?.knownWorkspace?.visibleComparisonEditors }
         return value
     }()
     @MainActor lazy var macros = MacroController(editorProvider: { [weak self] in self?.currentEditor })
@@ -663,6 +664,7 @@ import AppKit
             item.submenu = menu
             compareMenu.addItem(item)
         }
+        compareMenu.addItem(title: "Compare Two Visible Tabs", action: #selector(CompareService.compareVisibleTabs(_:)), target: compare)
         comparisons.submenu = compareMenu
         search.addItem(.separator())
         search.addItem(comparisons)
