@@ -2,6 +2,97 @@
 import Foundation
 import Darwin
 @main struct SearchReplacementChecks {
+    static func undoCases(in root: URL) async throws {
+        let dir = root.appendingPathComponent("undo")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
+        let names = ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "f.txt"]
+        let files = names.map { dir.appendingPathComponent($0) }
+        let original = Data("one 🥑\r\n".utf8), replacement = Data("two 🥑\r\n".utf8)
+        for file in files { try original.write(to: file) }
+        let a = files[0], b = files[1], c = files[2], d = files[3], e = files[4], f = files[5]
+        let attr = "app.texttank.undo", old = Data("original attribute".utf8), fresh = Data("different attribute".utf8)
+        func install(_ bytes: Data, _ key: String, _ file: URL) throws {
+            guard bytes.withUnsafeBytes({ setxattr(file.path, key, $0.baseAddress, $0.count, 0, 0) }) == 0 else {
+                throw POSIXError(.EIO)
+            }
+        }
+        try install(old, attr, a)
+        chmod(a.path, 0o640)
+        let report = try await FolderSearch.search(FolderSearchRequest(directory: dir, query: "one"))
+        var opts = SearchOptions()
+        opts.query = "one"
+        opts.replacement = "two"
+        func makeBatch() throws -> URL {
+            let writer = FolderReplacementBatch()
+            let changed = try FolderReplacement.replace(
+                directory: dir, matches: report.matches, options: opts, batch: writer)
+            try require(
+                changed.count == files.count && changed.allSatisfy { $0.status == .replaced },
+                "six files committed to the Undo fixture")
+            rejects("an active batch defers Undo") { _ = try FolderReplacement.undo(manifest: writer.manifest) }
+            return writer.manifest
+        }
+        let manifest = try makeBatch()
+        check(
+            try FolderReplacementBatch.latestManifest()?.standardizedFileURL == manifest.standardizedFileURL,
+            "newest confirmed batch resolves from disk")
+        let cancelled = FolderSearchCancellation()
+        cancelled.cancel()
+        let noChange = try FolderReplacement.undo(manifest: manifest, cancellation: cancelled)
+        check(
+            try noChange.allSatisfy { $0.status == .cancelled } && Data(contentsOf: a) == replacement,
+            "cancelled Undo keeps replacements and pending entries")
+        let snap = try FolderReplacementBatch.read(manifest)
+        let damaged = try requireValue(
+            snap.entries.first { $0.0.path.hasSuffix("/e.txt") }, "private original selected for mismatch")
+        let damagedBackup = manifest.deletingLastPathComponent().appendingPathComponent(damaged.0.backupName)
+        try Data("damaged private copy".utf8).write(to: damagedBackup)
+        try Data("later edit".utf8).write(to: b)
+        try install(fresh, attr, a)
+        try install(fresh, "app.texttank.new-after-replacement", a)
+        chmod(a.path, 0o600)
+        try original.write(to: f)
+        let rows = try FolderReplacement.undo(
+            manifest: manifest, excluding: [c],
+            beforeCommit: { file in
+                if file.lastPathComponent == "d.txt" { try! Data("just before rename".utf8).write(to: file) }
+            })
+        let statuses = Dictionary(uniqueKeysWithValues: rows.map { ($0.url.lastPathComponent, $0.status) })
+        check(
+            statuses == [
+                "a.txt": .restored, "b.txt": .changed, "c.txt": .skipped, "d.txt": .changed, "e.txt": .failed,
+                "f.txt": .alreadyOriginal
+            ],
+            "Undo reports original, externally changed, open, concurrent, corrupt-backup and already-original files separately"
+        )
+        var info = stat(), recovered = [UInt8](repeating: 0, count: old.count)
+        check(
+            try Data(contentsOf: a) == original && stat(a.path, &info) == 0 && info.st_mode & 0o777 == 0o640
+                && getxattr(a.path, attr, &recovered, recovered.count, 0, 0) == old.count && Data(recovered) == old
+                && getxattr(a.path, "app.texttank.new-after-replacement", nil, 0, 0, 0) < 0 && errno == ENOATTR,
+            "restored exact UTF-8, CRLF, mode and original xattr set")
+        check(
+            try Data(contentsOf: b) == Data("later edit".utf8) && Data(contentsOf: c) == replacement
+                && Data(contentsOf: d) == Data("just before rename".utf8) && Data(contentsOf: e) == replacement,
+            "all skipped, conflicted and unverified files keep their bytes")
+        let after = try FolderReplacementBatch.read(manifest)
+        check(
+            after.entries.filter { $0.1 == .restored }.count == 2
+                && after.entries.filter { $0.1 == .replaced }.count == 4,
+            "partial Undo preserves remaining recovery entries")
+        try original.write(to: damagedBackup)
+        let retry = try FolderReplacement.undo(manifest: manifest)
+        check(
+            try retry.filter { $0.status == .restored }.count == 2 && Data(contentsOf: c) == original
+                && Data(contentsOf: e) == original && Data(contentsOf: b) == Data("later edit".utf8),
+            "retry only restores remaining files whose replacement still matches")
+        let again = try FolderReplacement.undo(manifest: manifest)
+        check(
+            again.filter { $0.status == .alreadyOriginal }.count == 4
+                && again.filter { $0.status == .changed }.count == 2,
+            "repeated Undo does not revisit older batches or overwrite external edits")
+    }
+
     static func main() async {
         if CommandLine.arguments.count == 3 {
             let argument = URL(fileURLWithPath: CommandLine.arguments[2])
@@ -16,6 +107,9 @@ import Darwin
                     _ = try FolderReplacement.replace(
                         directory: argument, matches: matches, options: options,
                         beforeCommit: { _ in _exit(23) })
+                case "--undo-already-original":
+                    let rows = try FolderReplacement.undo(manifest: argument)
+                    exit(rows.count == 1 && rows[0].status == .alreadyOriginal ? 0 : 2)
                 case "--inspect-replacement":
                     let entries = try FolderReplacementBatch.read(argument).entries
                     guard entries.count == 1, entries[0].1 == .prepared else { exit(2) }
@@ -381,6 +475,12 @@ import Darwin
                     && Data(contentsOf: interruptedFile) == initialBytes
                     && FileManager.default.contentsOfDirectory(atPath: interruptedRoot.path) == ["document.txt"],
                 "a fresh process reads interrupted private originals and the user directory remains intact")
+            check(
+                try child("--undo-already-original", interruptedManifest) == 0
+                    && FolderReplacementBatch.read(interruptedManifest).entries.first?.1 == .restored
+                    && Data(contentsOf: interruptedFile) == initialBytes,
+                "a newly launched Undo recognizes a prepared entry whose file was never changed")
+            try await undoCases(in: root)
             Checks.summary { "PASS SearchReplacementChecks: \(Checks.count) assertions" }
         }
     }

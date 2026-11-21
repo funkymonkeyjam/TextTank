@@ -49,13 +49,74 @@ package final class FolderReplacementBatch {
     private static let maximumManifestBytes = 64 * 1024 * 1024
     package let directory: URL
     package var manifest: URL { directory.appendingPathComponent(Self.manifestName) }
-    private let id = UUID()
+    private let id: UUID
     private let created = Date()
     private var stream: Int32 = -1
     private var retained = 0
     private var stopped = false
     package init(store: URL = AppStorage.url(.folderReplacements)) {
+        id = UUID()
         directory = store.appendingPathComponent(id.uuidString, isDirectory: true)
+    }
+    init(reopening manifest: URL) throws {
+        directory = manifest.deletingLastPathComponent()
+        guard manifest.lastPathComponent == Self.manifestName, let uuid = UUID(uuidString: directory.lastPathComponent),
+            Self.canonicalPath(of: directory.deletingLastPathComponent())
+                == Self.canonicalPath(of: AppStorage.url(.folderReplacements))
+        else { throw PrivateFileError.unsafeLocation }
+        id = uuid
+        let parent = try PrivateFileStore.directoryDescriptor(for: manifest)
+        defer { close(parent) }
+        let fd = openat(parent, Self.manifestName, O_RDWR | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else {
+            throw FileOperationFailure(errno, operation: "open private recovery manifest", path: manifest.path)
+        }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1,
+            info.st_uid == getuid(), info.st_mode & 0o077 == 0,
+            info.st_size > 0, info.st_size <= Self.maximumManifestBytes
+        else {
+            close(fd)
+            throw PrivateFileError.unsafeLocation
+        }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            close(fd)
+            throw FolderSearchError.invalidRequest("This folder replacement batch is still in use.")
+        }
+        stream = fd
+    }
+    /// Truncate only a torn, uncommitted final line, after every complete record parsed successfully.
+    func snapshotForUndo() throws -> Snapshot {
+        var info = stat()
+        guard fstat(stream, &info) == 0, info.st_size > 0, info.st_size <= Self.maximumManifestBytes,
+            lseek(stream, 0, SEEK_SET) == 0
+        else { throw PrivateFileError.unsafeLocation }
+        let bytes = try FolderReplacement.read(
+            stream, size: Int(info.st_size), cancellation: FolderSearchCancellation(), path: manifest.path)
+        let snapshot = try Self.decode(bytes, manifest: manifest)
+        guard let last = bytes.lastIndex(of: 10) else { throw PrivateFileError.unsafeLocation }
+        let end = off_t(last + 1)
+        guard (end == bytes.count || ftruncate(stream, end) == 0), lseek(stream, 0, SEEK_END) == end else {
+            throw FileOperationFailure(errno, operation: "position private recovery manifest", path: manifest.path)
+        }
+        return snapshot
+    }
+    package static func latestManifest() throws -> URL? {
+        let store = AppStorage.url(.folderReplacements)
+        let children: [URL]
+        do {
+            children = try FileManager.default.contentsOfDirectory(
+                at: store, includingPropertiesForKeys: [.creationDateKey])
+        } catch  where error.isFileNotFound { return nil }
+        let candidates = try children.filter { UUID(uuidString: $0.lastPathComponent) != nil }.map { child in
+            let values = try child.resourceValues(forKeys: [.creationDateKey, .isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink == false, let created = values.creationDate
+            else { throw PrivateFileError.unsafeLocation }
+            return (created, child)
+        }
+        return candidates.max {
+            $0.0 == $1.0 ? $0.1.lastPathComponent < $1.1.lastPathComponent : $0.0 < $1.0
+        }?.1.appendingPathComponent(manifestName)
     }
     deinit { if stream >= 0 { close(stream) } }
     private func openManifest() throws {
@@ -78,7 +139,11 @@ package final class FolderReplacementBatch {
             bytes.append(10)
             guard
                 let fd = try PrivateFileStore.write(
-                    bytes, to: manifest, maximumBytes: Self.maximumManifestBytes, synchronizeDirectory: { fsync($0) },
+                    bytes, to: manifest, maximumBytes: Self.maximumManifestBytes,
+                    synchronize: { fd in
+                        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { return -1 }
+                        return fsync(fd)
+                    }, synchronizeDirectory: { fsync($0) },
                     requireMissing: true, retainingDescriptor: true)
             else { throw PrivateFileError.unsafeLocation }
             stream = fd
@@ -160,6 +225,9 @@ package final class FolderReplacementBatch {
     }
     package static func read(_ manifest: URL) throws -> Snapshot {
         let bytes = try PrivateFileStore.read(manifest, maximumBytes: maximumManifestBytes)
+        return try decode(bytes, manifest: manifest)
+    }
+    private static func decode(_ bytes: Data, manifest: URL) throws -> Snapshot {
         var lines = bytes.split(separator: 10, omittingEmptySubsequences: false)
         // The writer syncs each complete line before acting on it. Ignore an uncommitted tail.
         if !lines.isEmpty { lines.removeLast() }

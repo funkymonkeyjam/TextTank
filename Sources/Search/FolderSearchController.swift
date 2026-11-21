@@ -23,6 +23,7 @@ enum FolderSearchOutcome: Equatable {
     case needsInput
     case searched(matches: Int, filesSearched: Int, skipped: Int, cancelled: Bool, limitReached: Bool)
     case replaced(replaced: Int, notReplaced: Int)
+    case restored(restored: Int, other: Int)
     case noReplacementReport
     case staleResult
     case failed(String)
@@ -145,7 +146,9 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         options.spacing = 8
         let semantics = NSStackView(views: [mode, wordButton, dotButton, hiddenButton])
         let history = NSButton(title: "Replacement Report", target: self, action: #selector(showReplacementReport(_:)))
-        let replacements = NSStackView(views: [replacementField, replaceButton, history])
+        let undo = NSButton(
+            title: "Undo Last Folder Replace…", target: self, action: #selector(undoLastFolderReplace(_:)))
+        let replacements = NSStackView(views: [replacementField, replaceButton, history, undo])
         for (id, title, width) in [
             ("file", "File", 300.0), ("line", "Line:Column", 100.0), ("preview", "Preview", 500.0)
         ] {
@@ -490,6 +493,81 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             self.finish()
         }
     }
+    @objc func undoLastFolderReplace(_ sender: Any?) {
+        guard cancellation == nil, let window, window.attachedSheet == nil else { return }
+        let flag = FolderSearchCancellation(), token = UUID()
+        generation = token
+        cancellation = flag
+        replacing = true
+        isSearching = true
+        searchButton.isEnabled = false
+        let couldReplace = replaceButton.isEnabled
+        replaceButton.isEnabled = false
+        cancelButton.isEnabled = true
+        lastOutcome = nil
+        status.stringValue = "Reading the last folder replacement…"
+        work = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var began = false
+            defer {
+                if began {
+                    self.matches = []
+                    self.table.reloadData()
+                } else {
+                    self.replaceButton.isEnabled = couldReplace
+                }
+                self.finish()
+            }
+            do {
+                let preview = try await Task.detached(priority: .userInitiated) { () throws -> (URL, Int)? in
+                    guard let manifest = try FolderReplacementBatch.latestManifest() else { return nil }
+                    return (
+                        manifest, try FolderReplacementBatch.read(manifest).entries.filter { $0.1 != .restored }.count
+                    )
+                }.value
+                guard self.generation == token, !flag.isCancelled else { return }
+                guard let (manifest, pendingCount) = preview, pendingCount > 0 else {
+                    self.status.stringValue = "There are no files to restore in the last folder replacement."
+                    self.lastOutcome = .noReplacementReport
+                    return
+                }
+                let alert = TTAlert()
+                alert.messageText = "Undo Last Folder Replace?"
+                let total = String.localizedStringWithFormat(
+                    pendingCount == 1 ? "%@ file" : "%@ files", Strings.number(pendingCount))
+                alert.informativeText =
+                    "Check \(total) in the last replacement batch. TextTank restores original bytes and file metadata only where the saved replacement still matches. Open or externally changed files are kept and listed in the report."
+                let restore = alert.addButton(withTitle: "Restore Original Files")
+                restore.identifier = .init("folder.undo.confirm")
+                restore.hasDestructiveAction = true
+                alert.addButton(withTitle: "Cancel", role: .cancel)
+                let decision = await withCheckedContinuation { continuation in
+                    alert.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+                }
+                guard self.generation == token else { return }
+                guard decision == .alertFirstButtonReturn, !flag.isCancelled else {
+                    self.status.stringValue = "Folder replacement Undo cancelled."
+                    return
+                }
+                began = true
+                self.status.stringValue = "Restoring original files…"
+                let openFiles = Set(NSDocumentController.shared.documents.compactMap(\.fileURL))
+                let restored = try await Task.detached(priority: .userInitiated) {
+                    try FolderReplacement.undo(manifest: manifest, excluding: openFiles, cancellation: flag)
+                }.value
+                guard self.generation == token else { return }
+                let count = restored.filter { $0.status == .restored }.count
+                self.status.stringValue = "\(count) restored · \(restored.count - count) kept or skipped."
+                self.details.string = restored.map { "\($0.url.path): \($0.message)" }.joined(separator: "\n")
+                self.lastOutcome = .restored(restored: count, other: restored.count - count)
+            } catch {
+                guard self.generation == token else { return }
+                self.status.stringValue = error.localizedDescription
+                self.lastOutcome = .failed(error.localizedDescription)
+            }
+        }
+    }
+
     func retainReplacementOutcomes(_ outcomes: [FolderReplacementOutcome]) { lastReplacementOutcomes = outcomes }
     @objc func showReplacementReport(_ sender: Any?) {
         guard !lastReplacementOutcomes.isEmpty else {

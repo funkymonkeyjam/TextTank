@@ -286,7 +286,8 @@ import NativeSearch
             let documentsBefore = NSDocumentController.shared.documents.count
             check(
                 NSApp.sendAction(NSSelectorFromString("replaceMatchedFiles:"), to: busy, from: nil)
-                    && confirmations.count == 1 && confirmations[0].contains("private recovery batch in TextTank Application Support"),
+                    && confirmations.count == 1
+                    && confirmations[0].contains("private recovery batch in TextTank Application Support"),
                 "Replace Matched Files asks once, with the explanation, through the confirmation seam")
             await waitUntil("the replacement to reach its first commit") { gate.isHolding }
             busy.queryField.stringValue = "other"
@@ -321,13 +322,16 @@ import NativeSearch
             let started = pressReturn(), restarted = pressReturn()
             check(started && restarted && busy.isSearching, "Return while a search is running starts the search again")
             await waitUntil("the restarted search to finish") { !busy.isSearching }
-            let privateManifest = try requireValue(busy.lastReplacementOutcomes.first?.recoveryReport, "private batch location")
+            let privateManifest = try requireValue(
+                busy.lastReplacementOutcomes.first?.recoveryReport, "private batch location")
             check(
                 try busy.lastOutcome
                     == .searched(matches: 3, filesSearched: 3, skipped: 4, cancelled: false, limitReached: false)
                     && busy.numberOfRows(in: busy.table) == 3
                     && FolderReplacementBatch.read(privateManifest).entries.count == 3
-                    && !FileManager.default.contentsOfDirectory(atPath: busyRoot.path).contains { $0.hasPrefix(".texttank-") },
+                    && !FileManager.default.contentsOfDirectory(atPath: busyRoot.path).contains {
+                        $0.hasPrefix(".texttank-")
+                    },
                 "the restarted search sees only four fixture exclusions and all three backups are private")
             busy.activateResult(row: 2)
             check(
@@ -430,6 +434,37 @@ import NativeSearch
                 flow.lastOutcome == .replaced(replaced: 1, notReplaced: 1) && flow.lastReplacementOutcomes.count == 2
                     && flow.numberOfRows(in: flow.table) == 0,
                 "the replacement report counts one replaced and one skipped file and clears the stale results")
+            let coldFolder = FolderSearchController(
+                preferencesURL: support.appendingPathComponent("reopened-folder.json"))
+            let coldWindow = try requireValue(coldFolder.window, "cold folder window")
+            let undoButton = try requireValue(
+                coldWindow.contentView.flatMap {
+                    everyView($0).compactMap { $0 as? NSButton }
+                        .first { $0.action == #selector(FolderSearchController.undoLastFolderReplace(_:)) }
+                }, "named folder Undo command")
+            for shouldRestore in [false, true] {
+                undoButton.performClick(nil)
+                await waitUntil("the owned folder Undo confirmation to appear") { coldWindow.attachedSheet != nil }
+                let sheet = try requireValue(coldWindow.attachedSheet?.contentView, "owned Undo confirmation sheet")
+                let buttons = everyView(sheet).compactMap { $0 as? NSButton }
+                let confirm = try requireValue(
+                    buttons.first { $0.identifier?.rawValue == "folder.undo.confirm" }, "restore choice")
+                check(confirm.hasDestructiveAction, "restoring originals requires an explicit destructive choice")
+                let cancel = try requireValue(buttons.first { $0.title == "Cancel" }, "cancel choice")
+                (shouldRestore ? confirm : cancel).performClick(nil)
+                await waitUntil("the owned folder Undo command to finish") { !coldFolder.isSearching }
+                let expected = shouldRestore ? "needle closed\n" : "pin closed\n"
+                check(
+                    try Data(contentsOf: closedFile) == Data(expected.utf8)
+                        && openDocument.editor.text == "unsaved needle open\n" && openDocument.isDocumentEdited,
+                    shouldRestore
+                        ? "a fresh window restores its recorded replacement and preserves the unsaved neighbor"
+                        : "Cancel leaves replacement and unsaved neighbor unchanged")
+            }
+            check(
+                coldFolder.lastOutcome == .restored(restored: 1, other: 0)
+                    && coldFolder.details.string.contains(closedFile.lastPathComponent),
+                "Undo shows its per-file report")
             openDocument.close()
             document.close()
             // Package 21 (F293, G391, G400): Find in Folder is a panel that leaves the document
