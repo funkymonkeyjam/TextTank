@@ -678,17 +678,32 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
                     original: values(String(repeating: "wide ", count: 500) + "\n"),
                     modified: values(String(repeating: "wide ", count: 500) + "changed\n"))
             try await settled(scrolling)
+            let originalTop = (scrolling.left.top, scrolling.right.top)
+            var changes = 0
+            let observe = scrolling.left.editor.onComparisonViewportChange
+            scrolling.left.editor.onComparisonViewportChange = {
+                observe?()
+                changes += 1
+            }
             scrolling.left.editor.comparisonHorizontalOffset = 160
-            try await Task.sleep(nanoseconds: 30_000_000)
+            await waitUntil("linked horizontal viewport notification") {
+                scrolling.window?.displayIfNeeded()
+                return changes > 0 && scrolling.left.editor.comparisonHorizontalOffset > 0
+                    && scrolling.right.editor.comparisonHorizontalOffset == scrolling.left.editor.comparisonHorizontalOffset
+            }
             check(
                 scrolling.left.editor.comparisonHorizontalOffset > 0
-                    && scrolling.right.editor.comparisonHorizontalOffset
-                        == scrolling.left.editor.comparisonHorizontalOffset,
+                    && scrolling.right.editor.comparisonHorizontalOffset == scrolling.left.editor.comparisonHorizontalOffset
+                    && (scrolling.left.top, scrolling.right.top) == originalTop,
                 "D1 actual horizontal-only viewport notification links peer without vertical movement")
             scrolling.perform(.linked)
             let frozenOffset = scrolling.right.editor.comparisonHorizontalOffset
+            let priorChanges = changes
             scrolling.left.editor.comparisonHorizontalOffset = 240
-            try await Task.sleep(nanoseconds: 30_000_000)
+            await waitUntil("unlinked horizontal viewport notification") {
+                scrolling.window?.displayIfNeeded()
+                return changes > priorChanges
+            }
             check(
                 scrolling.right.editor.comparisonHorizontalOffset == frozenOffset
                     && scrolling.left.editor.comparisonHorizontalOffset != frozenOffset,
