@@ -7,6 +7,7 @@ import re
 import subprocess
 
 FRAMEWORKS = ('Scintilla', 'NativeSearch', 'EditorBridge', 'TextTankCore', 'TextTankRuntime')
+HELPER = 'Contents/Helpers/tt'
 MACH_MAGIC = {bytes.fromhex(value) for value in ('cffaedfe', 'cefaedfe', 'feedfacf', 'feedface', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca')}
 LOADS = {'LC_LOAD_DYLIB', 'LC_LOAD_WEAK_DYLIB', 'LC_REEXPORT_DYLIB', 'LC_LOAD_UPWARD_DYLIB', 'LC_LAZY_LOAD_DYLIB'}
 
@@ -76,6 +77,7 @@ def verify(app, deployment='14.0'):
     main = f'Contents/MacOS/{executable}'
     expected = {f'Contents/Frameworks/{name}.framework/Versions/A/{name}': name for name in FRAMEWORKS}
     expected[main] = 'executable'
+    expected[HELPER] = 'command-line-helper'
     debug = f'Contents/MacOS/{executable}.debug.dylib'
     preview = 'Contents/MacOS/__preview.dylib'
     if (app / debug).exists():
@@ -109,11 +111,11 @@ def verify(app, deployment='14.0'):
         if value['identity'] != identity:
             raise ValueError(f'{role} has an unsupported install name: {value["identity"]}')
 
-    def location(token, loader):
+    def location(token, loader, entry):
         if token == '@loader_path' or token.startswith('@loader_path/'):
             return str((app / loader).parent) + token[len('@loader_path'):]
         if token == '@executable_path' or token.startswith('@executable_path/'):
-            return str((app / main).parent) + token[len('@executable_path'):]
+            return str((app / entry).parent) + token[len('@executable_path'):]
         if token.startswith('/'):
             return token
         raise ValueError(f'Unsupported relative/recursive runpath: {token}')
@@ -124,9 +126,9 @@ def verify(app, deployment='14.0'):
                  'Scintilla': {'NativeSearch', 'EditorBridge', 'TextTankCore', 'TextTankRuntime'}}
     edges, visited, active = {}, set(), []
 
-    def walk(name, inherited):
+    def walk(name, inherited, entry):
         value = images[name]
-        own_paths = [location(token, name) for token in value['rpaths']]
+        own_paths = [location(token, name, entry) for token in value['rpaths']]
         for path in own_paths:
             if not system_path(path.rstrip('/') + '/') and not Path(path).resolve().is_relative_to(app):
                 raise ValueError(f'Runpath leaves selected bundle: {name}: {path}')
@@ -148,7 +150,7 @@ def verify(app, deployment='14.0'):
             if token.startswith('@rpath/'):
                 candidates = [str(Path(path) / token[len('@rpath/'):]) for path in runpaths]
             else:
-                candidates = [location(token, name)]
+                candidates = [location(token, name, entry)]
             selected = next((Path(path).resolve() for path in candidates if Path(path).is_file()), None)
             if selected is None:
                 # Shared-cache system Swift libraries need not exist as standalone files.
@@ -166,6 +168,8 @@ def verify(app, deployment='14.0'):
             if target not in images:
                 raise ValueError(f'Dependency resolves to unclassified code: {name}: {target}')
             role, target_role = value['role'], images[target]['role']
+            if role == 'command-line-helper' or target_role == 'command-line-helper':
+                raise ValueError('The standalone tt helper may only load system libraries')
             if target_role in forbidden.get(role, set()):
                 if role == 'EditorBridge' and target_role == 'NativeSearch':
                     raise ValueError('EditorBridge depends on the snapshot search engine')
@@ -175,19 +179,20 @@ def verify(app, deployment='14.0'):
             if target_role == 'preview-auxiliary':
                 raise ValueError('Runtime dependency resolves to inert preview auxiliary')
             resolved_loads.append({**load, 'image': target})
-            walk(target, runpaths)
+            walk(target, runpaths, entry)
         active.pop()
         if name in edges and edges[name] != resolved_loads:
             raise ValueError(f'Dependency resolution changes with loader chain: {name}')
         edges[name] = resolved_loads
         visited.add(state)
 
-    walk(main, [])
+    walk(main, [], main)
     reachable = set(edges)
-    required_runtime = set(images) - {preview}
+    required_runtime = set(images) - {preview, HELPER}
     if reachable != required_runtime:
         raise ValueError(f'Application runtime closure misses images: {sorted(required_runtime-reachable)}')
+    walk(HELPER, [], HELPER)
     if preview in images:
-        walk(preview, [location(path, main) for path in images[main]['rpaths']])
+        walk(preview, [location(path, main, main) for path in images[main]['rpaths']], main)
     return {'schema': 1, 'images': images, 'edges': edges,
-            'runtime_images': sorted(reachable), 'auxiliary_images': [preview] if preview in images else []}
+            'runtime_images': sorted(reachable), 'command_line_images': [HELPER], 'auxiliary_images': [preview] if preview in images else []}

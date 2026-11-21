@@ -417,6 +417,7 @@ def record(root, configuration, images, app, settings, lexer, previous=None, pre
     events = {name: link_events(path) for name, path in logs.items()}
     compiles = {name: compile_events(path) for name, path in logs.items()}
     outputs = [(Path(value['produced']), name, 'framework', 'scintilla' if name == 'Scintilla' else 'app') for name, value in images.items()]
+    outputs.append((app.parent / 'tt', 'tt', 'command-line-helper', 'app'))
     debug = app / 'Contents/MacOS/TextTank.debug.dylib'
     for path in (app / 'Contents/MacOS').iterdir():
         if path.name == 'TextTank':

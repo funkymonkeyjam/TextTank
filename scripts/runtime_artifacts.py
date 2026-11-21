@@ -178,6 +178,8 @@ def capture_links(root, app, configuration, destination, before_path):
         previous = {}
     lexer = build_evidence.cpp_producer(root, configuration, settings, previous.get('user_lexer_producer'))
     images, _ = code_and_metadata(root, app, configuration)
+    if digest(app.parent / 'tt') != digest(app / runtime_linkage.HELPER):
+        raise ValueError('Embedded unsigned tt does not match its actual linked producer')
     producers, refreshes = link_evidence.record(root, configuration, images, app, settings, lexer,
                                      previous.get('link_producers'), previous.get('linked_outputs'), previous.get('compiler_refreshes'))
     closure = runtime_linkage.verify(app, load_identity(root)['deploymentTarget'])
@@ -218,8 +220,10 @@ def record(root, app, configuration, destination, before_path):
     command('codesign', '--verify', '--deep', '--strict', str(app))
     images, metadata = code_and_metadata(root, app, configuration)
     closure = runtime_linkage.verify(app, load_identity(root)['deploymentTarget'])
-    expected = {value['produced'] for value in images.values()} | {str(app / name) for name in closure['images'] if name.startswith('Contents/MacOS/')}
+    expected = {value['produced'] for value in images.values()} | {str(app / name) for name in closure['images'] if name.startswith('Contents/MacOS/')} | {str(app.parent / 'tt')}
     links = link_evidence.validate(root, captured['link_producers'], settings, producer, expected, captured['compiler_refreshes'])
+    if uuid(app.parent / 'tt') != uuid(app / runtime_linkage.HELPER):
+        raise ValueError('Signed tt identity differs from its actual linked producer')
     # Signature bytes may change; each signed result must keep its actual linked UUID.
     unsigned = captured['unsigned_closure']
     if {key: {field: item for field, item in value.items() if field != 'sha256'} for key, value in unsigned['images'].items()} != {key: {field: item for field, item in value.items() if field != 'sha256'} for key, value in closure['images'].items()} or unsigned['edges'] != closure['edges']:
@@ -278,7 +282,7 @@ def validate(root, manifest, configuration):
     closure = runtime_linkage.verify(app, value['identity']['deploymentTarget'])
     if closure != value['dependency_closure']:
         raise ValueError('Actual signed dependency/runpath closure changed')
-    expected = {item['produced'] for item in images.values()} | {str(app / name) for name in closure['images'] if name.startswith('Contents/MacOS/')}
+    expected = {item['produced'] for item in images.values()} | {str(app / name) for name in closure['images'] if name.startswith('Contents/MacOS/')} | {str(app.parent / 'tt')}
     link_evidence.validate(build_root, value['link_producers'], value['target_settings'], producer, expected, value['compiler_refreshes'])
     if value['linked_outputs'] != {path: link_evidence.regular(path) for path in expected}:
         raise ValueError('Actual signed/produced link output bytes changed')
