@@ -63,7 +63,16 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     let status = AnnouncingLabel(labelWithString: "Search current document, selection or open documents")
     let table = ActivatingTableView()
     private var options = SearchOptions(), generation = UUID(), cancellation: TTSearchCancellation?
-    private var task: Task<Void, Never>?
+    private(set) var task: Task<Void, Never>?
+    /// The next match must be searched against the text after the replacement.
+    var searchAfterReplace: @MainActor (String, SearchOptions, TTSearchCancellation, Int) async throws -> SearchReport =
+        {
+            text, options, cancellation, tabWidth in
+            try await Task.detached(priority: .userInitiated) {
+                try SearchCore.search(
+                    text, options: options, cancellation: cancellation, purpose: .navigation, displayTabWidth: tabWidth)
+            }.value
+        }
     /// One searched document: the editor is held weakly, so results never keep a closed document
     /// alive, and `text` is the one snapshot shared by all of its rows (F122). `range` is the
     /// UTF-16 scope in Selection scope and nil for the whole text.
@@ -513,10 +522,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     let text = editor.text, revision = editor.revision,
                         tabWidth = editor.statusInfo.tabWidth
                     self.appliedReplace = (self.status.stringValue, self.lastOutcome)
-                    let report = try? await Task.detached(priority: .userInitiated) {
-                        try SearchCore.search(
-                            text, options: opts, cancellation: flag, purpose: .navigation, displayTabWidth: tabWidth)
-                    }.value
+                    let report = try? await self.searchAfterReplace(text, opts, flag, tabWidth)
                     guard self.generation == token, !flag.cancelled else { return }
                     if let report {
                         self.advance(

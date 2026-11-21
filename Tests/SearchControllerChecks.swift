@@ -31,6 +31,70 @@ private final class SelectionReadCounterEditor: TTEditor {
     }
 }
 @main struct SearchControllerChecks {
+    @MainActor static func followUpCancelChecks(_ controller: SearchController, editor: TTEditor) async throws {
+        let nativeSearch = controller.searchAfterReplace
+        let originalRecorder = controller.onCommand
+        defer {
+            controller.searchAfterReplace = nativeSearch
+            controller.onCommand = originalRecorder
+        }
+        for cancel in [false, true] {
+            var captured: SearchReport?
+            var release: CheckedContinuation<Void, Never>?
+            var released = false
+            var recorded: [String] = []
+            func publish() {
+                released = true
+                release?.resume()
+                release = nil
+            }
+            defer { publish() }
+            controller.onCommand = { _, action, _ in recorded.append(action) }
+            controller.searchAfterReplace = { text, options, flag, tabWidth in
+                let report = try await nativeSearch(text, options, flag, tabWidth)
+                captured = report
+                if !released { await withCheckedContinuation { release = $0 } }
+                return report
+            }
+            editor.text = "a a"
+            editor.resetUndoHistory()
+            editor.setSavePoint()
+            _ = editor.setSelectionAnchor(0, caret: 1)
+            controller.replaceOne(nil)
+            let operation = try requireValue(controller.task, "Replace started its search")
+            guard await waitUntil("the real follow-up search to reach publication", { release != nil }) else {
+                controller.cancel(nil)
+                return
+            }
+            check(
+                captured?.hits.map(\.range) == [NSRange(location: 2, length: 1)]
+                    && controller.isSearching && recorded == ["replaceOne"],
+                "real follow-up result is pending after the replacement was recorded")
+            if cancel { controller.cancel(nil) }
+            publish()
+            await operation.value
+            if cancel {
+                check(
+                    editor.text == "b a" && editor.selectionAnchor == 0 && editor.selectionCaret == 1,
+                    "fixture: the search was cancelled after the replacement and before the next match was selected")
+                check(
+                    controller.lastOutcome == .replaced(changed: 1, stale: 0)
+                        && controller.status.stringValue.hasPrefix("Replaced 1 match")
+                        && controller.status.stringValue.hasSuffix("Cancelled before the next match was selected.")
+                        && !controller.status.stringValue.contains("no pending replacements applied")
+                        && !controller.isSearching && recorded == ["replaceOne"],
+                    "Cancel during the search that follows a Replace still reports the replacement")
+            } else {
+                check(
+                    editor.text == "b a" && editor.selectionAnchor == 2 && editor.selectionCaret == 3
+                        && controller.lastOutcome == .replaced(changed: 1, stale: 0)
+                        && controller.status.stringValue.hasSuffix("Selected the next match.")
+                        && !controller.isSearching && recorded == ["replaceOne", "next"],
+                    "releasing the same real report without Cancel selects and records the next match")
+            }
+        }
+    }
+
     @MainActor static func main() async {
         await Checks.run("SearchControllerChecks") {
             let support = try IsolatedSupportDirectory("TextTankSearchControllerChecks")
@@ -1427,33 +1491,7 @@ private final class SelectionReadCounterEditor: TTEditor {
             // F45: cancelling while the following match is being looked for does not deny the
             // replacement that was already made.
             literal("a", "b", scope: 0, wrap: false)
-            load(editor, "a a")
-            _ = editor.setSelectionAnchor(0, caret: 1)
-            recorded = []
-            var cancelQueued = false
-            let changeHandler = editor.onChange
-            editor.onChange = {
-                changeHandler?()
-                guard !cancelQueued else { return }
-                cancelQueued = true
-                // Runs on the main queue after the replacement and before the follow-up search returns.
-                DispatchQueue.main.async { controller.cancel(nil) }
-            }
-            controller.replaceOne(nil)
-            await finished()
-            editor.onChange = changeHandler
-            try await Task.sleep(nanoseconds: 50_000_000)
-            check(
-                // G374: the replacement of the selected match stays selected.
-                cancelQueued && editor.text == "b a" && editor.selectionAnchor == 0 && editor.selectionCaret == 1,
-                "fixture: the search was cancelled after the replacement and before the next match was selected")
-            check(
-                controller.lastOutcome == .replaced(changed: 1, stale: 0)
-                    && controller.status.stringValue.hasPrefix("Replaced 1 match")
-                    && controller.status.stringValue.hasSuffix("Cancelled before the next match was selected.")
-                    && !controller.status.stringValue.contains("no pending replacements applied")
-                    && !controller.isSearching && recorded == ["replaceOne"],
-                "Cancel during the search that follows a Replace still reports the replacement")
+            try await followUpCancelChecks(controller, editor: editor)
             editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "a a" && !editor.modified, "that cancelled Replace is one Undo")
             controller.replaceAll(nil)
