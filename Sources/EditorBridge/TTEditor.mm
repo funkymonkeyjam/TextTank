@@ -580,6 +580,29 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (void)applyComparisonStyle;
 - (void)comparisonViewportChanged;
 @end
+@implementation TTDocumentUTF8
+- (instancetype)initWithData:(NSData *)data {
+    if (!(self = [super init]) || !data) return nil;
+    // Freeze mutable NSData before validating it. Cocoa copies immutable NSData by reference.
+    NSData *snapshot = [data copy];
+    const auto *bytes = static_cast<const uint8_t *>(snapshot.bytes);
+    // Bound validation storage even for multibyte content. Foundation's decoder rejects malformed
+    // sequences and accepts valid noncharacters; the original bytes go straight to Scintilla.
+    for (NSUInteger start = 0; start < snapshot.length;) {
+        NSUInteger end = start + MIN(snapshot.length - start, (NSUInteger)65536);
+        while (end > start && end < snapshot.length && (bytes[end] & 0xc0) == 0x80) --end;
+        if (end == start) return nil;
+        CFStringRef decoded = CFStringCreateWithBytesNoCopy(kCFAllocatorDefault, bytes + start, end - start,
+                                                           kCFStringEncodingUTF8, false, kCFAllocatorNull);
+        if (!decoded) return nil;
+        CFRelease(decoded);
+        start = end;
+    }
+    _data = snapshot;
+    return self;
+}
+@end
+
 @implementation TTEditor
 @synthesize comparisonPresentation = _comparisonPresentation;
 @synthesize braceHighlightEnabled = _braceHighlightEnabled;
@@ -1120,6 +1143,13 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self assertThread];
     if (self.readOnly) return NO;
     NSData *data = TTUTF8(text); if (!data || self.readOnly) return NO;
+    return [self loadEncodedDocumentData:data];
+}
+- (BOOL)loadDocumentUTF8:(TTDocumentUTF8 *)content {
+    [self assertThread];
+    return content && !self.readOnly && [self loadEncodedDocumentData:content.data];
+}
+- (BOOL)loadEncodedDocumentData:(NSData *)data {
     // No undo record is kept of a load: Scintilla would otherwise hold a second copy of the
     // replaced and the inserted bytes only for the history to be emptied straight afterwards.
     [_engine message:SCI_SETUNDOCOLLECTION wParam:0];

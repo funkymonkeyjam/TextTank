@@ -86,8 +86,11 @@ package enum LineEnding: String, CaseIterable {
     case lf = "LF", crlf = "CRLF", cr = "CR"
     /// CR LF gives CRLF, a lone CR gives CR, LF gives LF; text with no line break gives LF.
     static package func detect(in text: String) -> LineEnding {
+        detect(inUTF8: text.utf8)
+    }
+    static package func detect<Bytes: Collection>(inUTF8 bytes: Bytes) -> LineEnding where Bytes.Element == UInt8 {
         var priorCR = false
-        for byte in text.utf8 {
+        for byte in bytes {
             if priorCR { return byte == 10 ? .crlf : .cr }
             if byte == 10 { return .lf }
             priorCR = byte == 13
@@ -105,15 +108,17 @@ package enum FileCodec {
         0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, nil, 0x017E, 0x0178
     ]
     static package func decode(_ data: Data) throws -> DecodedFile {
+        try decode(data, encoding: detectedEncoding(data))
+    }
+    static package func detectedEncoding(_ data: Data) throws -> FileEncoding {
         // UTF-32LE overlaps UTF-16LE + leading NUL. Do not silently interpret an
         // apparent UTF-32 file as editable UTF-16; explicit UTF-16 selection remains valid.
         if data.starts(with: [0xFF, 0xFE, 0, 0]) || data.starts(with: [0, 0, 0xFE, 0xFF]) {
             throw FileCodecError.unsupportedUTF32
         }
-        if data.starts(with: [0xEF, 0xBB, 0xBF]) { return try decode(data, encoding: .utf8) }
-        if data.starts(with: [0xFF, 0xFE]) { return try decode(data, encoding: .utf16LE) }
-        if data.starts(with: [0xFE, 0xFF]) { return try decode(data, encoding: .utf16BE) }
-        return try decode(data, encoding: .utf8)
+        if data.starts(with: [0xFF, 0xFE]) { return .utf16LE }
+        if data.starts(with: [0xFE, 0xFF]) { return .utf16BE }
+        return .utf8
     }
     /// Strict UTF-8 content with no external BOM interpretation. Works on the macOS 14 deployment target.
     package static func decodeUTF8Content(_ bytes: UnsafeRawBufferPointer) -> String? {

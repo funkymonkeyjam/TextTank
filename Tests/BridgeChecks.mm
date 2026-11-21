@@ -2028,6 +2028,16 @@ int main(int argc, char **argv) {
         const unichar units[] = {'a', 0, 0x03b2, '\r', '\n', 0xd83d, 0xde42};
         counted.backing = [NSString stringWithCharacters:units length:sizeof(units) / sizeof(units[0])];
         NSData *expected = [counted.backing dataUsingEncoding:NSUTF8StringEncoding];
+        NSMutableData *originalBytes = [NSMutableData dataWithBytes:"\xef\xbb\xbf\0z" length:5];
+        TTDocumentUTF8 *checkedBytes = [[TTDocumentUTF8 alloc] initWithData:originalBytes];
+        NSData *unchangedBytes = [originalBytes copy];
+        [originalBytes resetBytesInRange:NSMakeRange(0, originalBytes.length)];
+        TTEditor *byteEditor = [[TTEditor alloc] initWithFrame:NSZeroRect];
+        check([byteEditor loadDocumentUTF8:checkedBytes] && [byteEditor.utf8Data isEqual:unchangedBytes],
+              "a byte load freezes mutable source and preserves content FEFF and embedded NUL");
+        const unsigned char invalidTail[] = {0xf4, 0x90, 0x80, 0x80};
+        check(![[TTDocumentUTF8 alloc] initWithData:[NSData dataWithBytes:invalidTail length:sizeof(invalidTail)]],
+              "invalid UTF-8 is refused before a document load can reset history");
         check([countedEditor loadDocumentText:counted] && counted.utf8Conversions == 1 && [countedEditor.utf8Data isEqual:expected],
               "a load performs one UTF-8 conversion and retains NUL, multibyte text, and CRLF");
         NSUInteger unchanged = countedEditor.revision;

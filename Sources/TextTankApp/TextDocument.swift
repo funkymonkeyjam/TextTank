@@ -438,8 +438,7 @@ import AppKit
             throw DocumentActionError.unsavedChanges
         }
         let (bytes, sample) = try onDiskFile { try WorkspaceStore.readRegularFileSample($0, maximumBytes: Int.max) }
-        let decoded = try FileCodec.decode(bytes, encoding: encoding)
-        loadDecoded(decoded, sample: sample, explicitEncoding: rememberEncoding ? encoding : revertEncoding)
+        try loadFile(bytes, as: encoding, sample: sample, explicitEncoding: rememberEncoding ? encoding : revertEncoding)
         updateChangeCount(.changeCleared)
         flushRecovery()
     }
@@ -735,7 +734,9 @@ import AppKit
         // that read belongs to the bytes it read; anything else leaves the next check to hash.
         let now = WorkspaceStore.currentSecond()
         let before = try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max)
-        try super.read(from: url, ofType: typeName)
+        // AppKit may autorelease the source data. Release that read's temporaries before
+        // document registration and window construction need their own working storage.
+        try autoreleasepool { try super.read(from: url, ofType: typeName) }
         if let before, before.isSettled(at: now),
             (try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max)) == before
         {
@@ -765,23 +766,17 @@ import AppKit
         try MainActor.assumeIsolated { try readDataOnMain(from: data, ofType: typeName) }
     }
     private func readDataOnMain(from data: Data, ofType typeName: String) throws {
-        let decoded: DecodedFile
-        if let openEncoding {
-            decoded = try FileCodec.decode(data, encoding: openEncoding)
-        } else {
-            do { decoded = try FileCodec.decode(data) } catch FileCodecError.unsupportedUTF32 {
-                // FF FE 00 00 is also what UTF-16 LE with a BOM looks like when the text starts
-                // with NUL, which TextTank itself can save. Detection stays strict; the user is
-                // offered the explicit choice the codec's message asks for.
-                guard let readingURL, data.starts(with: [0xFF, 0xFE, 0, 0]) else {
-                    throw FileCodecError.unsupportedUTF32
-                }
-                throw ExplicitEncodingOpener(url: readingURL, typeName: typeName, encoding: .utf16LE).error()
+        do {
+            try loadFile(data, as: openEncoding,
+                         sample: capturedSample ?? FileSample(digest: WorkspaceStore.fingerprint(data), signature: nil),
+                         explicitEncoding: openEncoding)
+        } catch FileCodecError.unsupportedUTF32 {
+            // A UTF-16 LE file with a leading NUL shares this marker. Keep the explicit recovery offer.
+            guard openEncoding == nil, let readingURL, data.starts(with: [0xFF, 0xFE, 0, 0]) else {
+                throw FileCodecError.unsupportedUTF32
             }
+            throw ExplicitEncodingOpener(url: readingURL, typeName: typeName, encoding: .utf16LE).error()
         }
-        loadDecoded(
-            decoded, sample: capturedSample ?? FileSample(digest: WorkspaceStore.fingerprint(data), signature: nil),
-            explicitEncoding: openEncoding)
     }
     /// The same strict decode with an encoding the person chose, for callers that already hold
     /// the bytes. A failure throws the codec's error and loads nothing.
@@ -856,7 +851,53 @@ import AppKit
         doc.flushRecovery()
         return doc
     }
-    private func loadDecoded(_ decoded: DecodedFile, sample: FileSample, explicitEncoding: FileEncoding?) {
+    private enum FileContent {
+        case utf8(TTDocumentUTF8)
+        case text(String)
+
+        var lineEnding: LineEnding {
+            switch self {
+            case .text(let text): return .detect(in: text)
+            case .utf8(let content): return content.data.withUnsafeBytes { LineEnding.detect(inUTF8: $0) }
+            }
+        }
+
+        // Language detection consults at most the first 512 Characters and only for a shebang.
+        var languageSample: String {
+            switch self {
+            case .text(let text): return text
+            case .utf8(let content):
+                let data = content.data
+                guard data.starts(with: [35, 33]) else { return "" }
+                var length = min(2048, data.count)
+                while true {
+                    let prefix = String(decoding: data.prefix(length), as: UTF8.self)
+                    if length == data.count || prefix.contains(where: \.isNewline) || prefix.count > 513 {
+                        return prefix
+                    }
+                    length += min(length, data.count - length)
+                }
+            }
+        }
+    }
+
+    private func loadFile(_ source: Data, as selected: FileEncoding?, sample: @autoclosure () -> FileSample,
+                          explicitEncoding: FileEncoding?) throws {
+        let encoding = try selected ?? FileCodec.detectedEncoding(source)
+        let content: FileContent, diskFormat: FileFormat
+        if encoding == .utf8 {
+            let bom = source.starts(with: [0xEF, 0xBB, 0xBF])
+            guard let checked = TTDocumentUTF8(data: source.dropFirst(bom ? 3 : 0)) else {
+                throw FileCodecError.invalidBytes(.utf8)
+            }
+            content = .utf8(checked)
+            diskFormat = .init(encoding: .utf8, bom: bom)
+        } else {
+            let decoded = try FileCodec.decode(source, encoding: encoding)
+            content = .text(decoded.text)
+            diskFormat = decoded.format
+        }
+        let baseline = sample()
         loadEpoch &+= 1
         EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was reloaded.")
         loading = true
@@ -865,14 +906,17 @@ import AppKit
         // One minimal-span edit: bookmarks, folds and the caret outside the changed bytes survive a
         // reload. An empty buffer (first open) takes this as a plain insert.
         // No undo record is kept: the history is emptied below, as for every open and reload.
-        _ = editor.loadDocumentText(decoded.text)
-        editor.setLineEndingMode(LineEnding.detect(in: decoded.text).nativeMode)
+        switch content {
+        case .utf8(let bytes): _ = editor.loadDocumentUTF8(bytes)
+        case .text(let text): _ = editor.loadDocumentText(text)
+        }
+        editor.setLineEndingMode(content.lineEnding.nativeMode)
         editor.resetUndoHistory()
-        format = decoded.format
+        format = diskFormat
         savedFormat = format
         revertEncoding = explicitEncoding
-        diskDigest = sample.digest
-        diskSignature = sample.signature
+        diskDigest = baseline.digest
+        diskSignature = baseline.signature
         externalFile.invalidate()
         savepointMatchesDisk = true
         editor.setSavePoint()
@@ -881,7 +925,7 @@ import AppKit
         guard !languageResolved else { return }
         languageResolved = true
         if let languages = EditorServices.current?.languages,
-            let id = languages.detect(filename: fileURL?.lastPathComponent ?? "", text: decoded.text)
+            let id = languages.detect(filename: fileURL?.lastPathComponent ?? "", text: content.languageSample)
         {
             _ = applyLanguage(id, using: languages)
         }
