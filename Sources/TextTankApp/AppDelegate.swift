@@ -165,6 +165,7 @@ import AppKit
                     "status.remindersAdded", "Items were added in Reminders. Editor Undo does not remove them."),
                 seconds: 8, announce: false)
         }
+        controller.comparisonService = { [weak self] in self?.compare }
         controller.onInvocation = { [weak self] in
             self?.macros.invalidateRecording(
                 reason: "An automation was invoked during macro recording. Automation side effects are not recorded.")

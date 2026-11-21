@@ -40,6 +40,103 @@ private actor MergeStageGate {
         } catch { Checks.fail("Merge process setup: \(error)", file: #filePath, line: #line) }
         Checks.finish("MergeControllerChecks")
     }
+    @MainActor private static func previewViews(_ view: NSView) -> [NSView] {
+        [view] + view.subviews.flatMap(previewViews)
+    }
+
+    @MainActor static func automationPreviewChecks(_ delegate: AppDelegate) async throws {
+        let service = delegate.compare
+        let showsWindows = service.showWindows
+        service.showWindows = false
+        defer { service.showWindows = showsWindows }
+        let before = "old 雪\r\nkeep\r\nold\r\n", after = "new 雪\r\nkeep\r\nnew\r\n"
+        let doc = DocumentFactory.makeUntitled(display: false, populate: { _ = $0.editor.loadDocumentText(before) })
+        let other = DocumentFactory.makeUntitled(display: false, populate: { _ = $0.editor.loadDocumentText("neighbor") })
+        defer { doc.close(); other.close() }
+        var focused = doc.editor
+        let automation = AutomationController(editorProvider: { focused }, newDocument: { _ in })
+        automation.comparisonService = { service }
+        var workflow = AutomationDefinition.example
+        workflow.id = UUID()
+        workflow.name = "Review saved text changes"
+        workflow.input = .document
+        workflow.output = .previewChanges
+        workflow.steps = [.init(kind: .replaceLiteral, find: "old", replacement: "new")]
+        workflow.previewBeforeApply = false
+        try automation.persistLibrary(AutomationLibrary(workflows: [workflow]))
+        func settle(_ predicate: () -> Bool) async throws {
+            let deadline = Date().addingTimeInterval(8)
+            while !predicate(), Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+            try require(predicate(), "saved automation comparison completed")
+        }
+        func openReview() async throws -> CompareController {
+            focused = doc.editor
+            let prior = service.windows
+            try automation.runSavedAutomation(id: workflow.id)
+            focused = other.editor
+            try await settle { service.windows.contains { c in !prior.contains { $0 === c } && c.readyForMerge } }
+            return try requireValue(service.windows.last, "automation result window")
+        }
+        doc.editor.resetUndoHistory()
+        let review = try await openReview()
+        check(review.merge.destination == .original && review.modified?.snapshot.bytes == Data(after.utf8)
+              && review.original?.snapshot.bytes == Data(before.utf8), "saved workflow captured the original editor and exact transformed result")
+        let projection = try requireValue(review.projection, "completed automation diff")
+        check(review.merge.selectedBlocks == Set(projection.changes.blocks.indices) && review.merge.canPerform(.applySelected),
+              "the first presentation selects its changes and allows individual blocks to be unticked")
+        review.merge.applySelected()
+        try await settle { !review.merge.isBusy && review.merge.lastOutcome == .applied }
+        check(Data(doc.editor.text.utf8) == Data(after.utf8) && other.editor.text == "neighbor",
+              "all selected changes target the captured document after focus changes")
+        _ = doc.editor.executeCommand(.init(rawValue: "undo"))
+        check(Data(doc.editor.text.utf8) == Data(before.utf8), "one Undo restores exact original bytes")
+        review.close()
+        let cancel = try await openReview()
+        cancel.close()
+        check(Data(doc.editor.text.utf8) == Data(before.utf8), "closing an unapplied review preserves the editor")
+        let stale = try await openReview()
+        stale.merge.perform(.selectAllChanges)
+        _ = doc.editor.setSelectionAnchor(0, caret: 0)
+        _ = doc.editor.replaceSelection("external ")
+        stale.merge.applySelected()
+        try await settle { !stale.merge.isBusy }
+        check(doc.editor.text == "external " + before && other.editor.text == "neighbor",
+              "stale automation output cannot overwrite a later edit")
+        check(stale.modified?.canRetainForRefresh == false, "a frozen automation result cannot be rebound to a later document")
+        stale.close()
+        _ = doc.editor.loadDocumentText("outside old inside old remains")
+        _ = doc.editor.setSelectionAnchor(8, caret: 11)
+        workflow.input = .selection
+        try automation.persistLibrary(AutomationLibrary(workflows: [workflow]))
+        let selection = try await openReview()
+        check(selection.modified?.snapshot.bytes == Data("outside new inside old remains".utf8),
+              "selection output compares the projected whole document including unchanged text")
+        selection.close()
+        // A short captured selection avoids allocating a large editable preview control.
+        let huge = "old" + String(repeating: "x", count: 8 * 1024 * 1024)
+        _ = doc.editor.loadDocumentText(huge)
+        _ = doc.editor.setSelectionAnchor(0, caret: 3)
+        focused = doc.editor
+        var sawReason = false
+        let timeout = Date().addingTimeInterval(5)
+        let dismiss = Timer(timeInterval: 0.03, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard let window = NSApp.modalWindow, let content = window.contentView else { return }
+                let controls = previewViews(content)
+                let explanation = controls.compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue.contains("8 MiB per side") })
+                guard explanation || Date() > timeout, let cancel = controls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
+                else { return }
+                sawReason = explanation
+                cancel.performClick(nil)
+            }
+        }
+        RunLoop.main.add(dismiss, forMode: .modalPanel)
+        defer { dismiss.invalidate() }
+        try automation.runSavedAutomation(id: workflow.id)
+        check(sawReason && doc.editor.text == huge && service.windows.isEmpty,
+              "over-limit original describes the editable fallback and explicit Cancel preserves the captured editor")
+    }
+
     @MainActor static func mergeRecordingChecks(_ delegate: AppDelegate) async throws {
         enum Scenario: CaseIterable {
             case apply, clone, unrelated, cancel, stale, readOnly, noChange, rejected, reentrant
@@ -246,6 +343,7 @@ private actor MergeStageGate {
             check(
                 app.isRunning && NSDocumentController.shared === documents,
                 "D2 owned native event loop/document controller")
+            try await automationPreviewChecks(delegate)
             try await mergeRecordingChecks(delegate)
             let pairs = try JSONDecoder().decode(
                 [Pair].self, from: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("review/corpus.json")))

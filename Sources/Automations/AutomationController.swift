@@ -73,6 +73,7 @@ private struct AutomationCheckboxEdits {
         }
     }
     private var runControl: AutomationRunControl?
+    var comparisonService: () -> CompareService? = { nil }
     /// The pasteboard used for clipboard input and output. Checks substitute a private one.
     var pasteboard: NSPasteboard?
     private var activePasteboard: NSPasteboard? { pasteboard ?? RuntimeEnvironment.current.generalPasteboard() }
@@ -170,7 +171,7 @@ private struct AutomationCheckboxEdits {
             return false
         }
         if (workflow.input == .document || workflow.input == .selection) && editor == nil { return false }
-        if workflow.output == .editor && (editor == nil || editor?.readOnly == true) { return false }
+        if (workflow.output == .editor || workflow.output == .previewChanges) && (editor == nil || editor?.readOnly == true) { return false }
         return true
     }
     /// Every menu, shortcut, toolbar and palette resolves the current saved definition by UUID.
@@ -702,9 +703,9 @@ private struct AutomationCheckboxEdits {
         if workflow.input == .document && target == nil {
             throw AutomationError.invalid("This automation requires an open editor document.")
         }
-        if workflow.input == .selection || workflow.output == .editor {
+        if workflow.input == .selection || workflow.output == .editor || workflow.output == .previewChanges {
             guard let target else { throw AutomationError.invalid("This automation requires an open editor document.") }
-            if workflow.output == .editor { try target.requireWritable() }
+            if workflow.output == .editor || workflow.output == .previewChanges { try target.requireWritable() }
             guard target.selections.count == 1 || (workflow.input == .selection && workflow.output == .editor) else {
                 throw AutomationError.invalid(
                     "Multiple selections require selection input and editor output. Other outputs are not changed.")
@@ -776,10 +777,15 @@ private struct AutomationCheckboxEdits {
             input = value
         }
         var output = try transformWithProgress(resolved, input: input)
-        if workflow.previewBeforeApply == true {
+        let reviewChanges = workflow.output == .previewChanges
+        if reviewChanges {
+            guard let target else { throw AutomationError.invalid("Preview as Changes requires an open document.") }
+            if try openChangePreview(workflow, output: output, target: target) { return }
+        }
+        if workflow.previewBeforeApply == true || reviewChanges {
             let alert = TTAlert()
             alert.messageText = workflow.name
-            if workflow.output == .editor {
+            if workflow.output == .editor || reviewChanges {
                 let format =
                     workflow.input == .document
                     ? Strings.text(
@@ -791,6 +797,11 @@ private struct AutomationCheckboxEdits {
                         "Input: %@. Replace the captured selection. Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
                     )
                 alert.informativeText = String(format: format, workflow.input.displayName)
+                if reviewChanges {
+                    let scope = workflow.input == .document ? "the entire captured document" : "the captured selection"
+                    alert.informativeText = "Preview as Changes supports up to 8 MiB per side. Edit this output before applying it to "
+                        + scope + ", or cancel to keep the document unchanged."
+                }
             } else {
                 alert.informativeText = String(
                     format: Strings.text(
@@ -816,7 +827,7 @@ private struct AutomationCheckboxEdits {
         }
         try revalidateSource()
         switch workflow.output {
-        case .editor:
+        case .previewChanges, .editor:
             guard let target else {
                 throw AutomationError.invalid("The original document closed. Nothing was replaced.")
             }
@@ -839,6 +850,40 @@ private struct AutomationCheckboxEdits {
             try revalidateSource()
             try Data(output.utf8).write(to: url, options: .atomic)
         }
+    }
+    /// Returns false when the size limit requires the ordinary editable output preview.
+    private func openChangePreview(
+        _ workflow: AutomationDefinition, output: String, target: AutomationDocumentTarget
+    ) throws -> Bool {
+        let editor = try target.resolve(checkSelection: workflow.input != .document)
+        guard !editor.readOnly, target.value != nil, let service = comparisonService() else {
+            throw AutomationError.invalid("The captured document is unavailable for comparison.")
+        }
+        let length = Int(editor.byteLength)
+        let range: Range<Int>
+        if workflow.input == .document {
+            range = 0..<length
+        } else {
+            guard target.selections.count == 1, let selected = target.selections.first else {
+                throw AutomationError.invalid("Choose one selection or caret for Preview as Changes.")
+            }
+            range = min(selected.anchorByte, selected.caretByte)..<max(selected.anchorByte, selected.caretByte)
+            guard range.lowerBound >= 0, range.upperBound <= length else { throw ReviewRejection.invalidRange }
+        }
+        let limit = ReviewDiffPolicy.default.maximumInputBytes
+        guard length <= limit, length - range.count + output.utf8.count <= limit else { return false }
+        let original = try CompareDocumentInput(editor)
+        var bytes = original.capture.snapshot.bytes
+        bytes.replaceSubrange(range, with: output.utf8)
+        let result = try TextSnapshot(bytes: bytes, source: .freeText(UUID()), label: workflow.name + " — Output",
+                                      format: original.capture.snapshot.format)
+        Task { [weak self] in
+            do {
+                _ = try await service.open(original: .document(original), modified: .automationResult(result),
+                                           destination: .original)
+            } catch { self?.showError(error) }
+        }
+        return true
     }
     private var runPanel: NSPanel?
     /// Cancel ends the modal itself. The worker is only asked to stop, because sorting, splitting
