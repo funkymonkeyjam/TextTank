@@ -130,7 +130,7 @@ enum MergePatchOracle {
         check((try? Data(contentsOf: file)) ?? Data() == after, "D2 standard tool byte reconstruction \(name)")
     }
     static func main() async {
-        await Checks.run("MergeChecks") {
+        func runCases() async throws {
             var pairs = try JSONDecoder().decode(
                 [Pair].self, from: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("review/corpus.json")))
             pairs += [
@@ -344,5 +344,6 @@ enum MergePatchOracle {
                 "D2_CORPUS pairs=\(pairs.count) strategies=2 directions=2 subset_plans=\(evaluated) profile=512m30s finalF0caps=unchanged"
             )
         }
+        await Checks.run("MergeChecks") { try await runCases() }
     }
 }
