@@ -72,7 +72,12 @@ import EditorBridge
             current.row.enabled, current.target === expected, current.row.detail == original.row.detail,
             current.item.action == original.item.action, let action = current.item.action
         else { return false }
-        return NSApp.sendAction(action, to: expected, from: current.item)
+        // Group invocations carry the original tab, group membership and destination generation.
+        // Its controller must receive that captured sender and can still reject it if the layout changed.
+        if let validator = expected as? NSMenuItemValidation, !validator.validateMenuItem(original.item) {
+            return false
+        }
+        return NSApp.sendAction(action, to: expected, from: original.item)
     }
 
     func commands(in bar: NSMenu) -> [Entry] {
@@ -80,12 +85,18 @@ import EditorBridge
         func collect(_ menu: NSMenu, path: [String]) {
             guard menu !== NSApp.servicesMenu else { return }
             // Macro, language, automation, and group menus populate their items at menu-open time.
-            menu.delegate?.menuNeedsUpdate?(menu)
+            if menu.delegate is MacroController || menu.delegate is AutomationController
+                || menu.delegate is LanguageController || menu.delegate is GroupCommandController
+            {
+                menu.delegate?.menuNeedsUpdate?(menu)
+            }
             for item in menu.items where !item.isHidden && !item.isSeparatorItem && !item.title.isEmpty {
                 let route = path + [item.title]
                 if let child = item.submenu {
                     // Recently opened file names are documents, not commands.
-                    if item.title != "Open Recent" { collect(child, path: route) }
+                    if !(child.delegate is RecentDocumentsMenu) && item.title != "Reopen Recent File" {
+                        collect(child, path: route)
+                    }
                     continue
                 }
                 guard let action = item.action else { continue }

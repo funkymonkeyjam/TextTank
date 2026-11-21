@@ -166,7 +166,7 @@ extension DocumentChecks {
                 && titles.contains(where: { $0.hasPrefix("Language › ") })
                 && titles.contains(where: { $0.hasPrefix("Macros › ") }),
                 "actual editor, language, saved automation chooser and macro menu routes are discoverable")
-            check(!titles.contains(where: { $0.contains(" › Services › ") || $0.hasSuffix(" › Command Palette…") }),
+            check(!titles.contains(where: { $0.contains(" › Services › ") || $0.contains(" › Reopen Recent File › ") || $0.hasSuffix(" › Command Palette…") }),
                 "system services and recursive palette invocation are omitted")
             check(entries.contains { $0.item.action == NSSelectorFromString("runAction:") && $0.row.detail.hasPrefix("Reads ") && $0.row.detail.contains("Writes ") },
                 "saved workflows identify their actual input and output")
