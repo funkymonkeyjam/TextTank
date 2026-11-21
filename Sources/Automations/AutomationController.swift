@@ -73,6 +73,8 @@ private struct AutomationCheckboxEdits {
         }
     }
     private var runControl: AutomationRunControl?
+    var comparisonService: () -> CompareService? = { nil }
+    var prepareTransformedPaste: (TTEditor) -> ((Bool) -> Void)? = { _ in nil }
     /// The pasteboard used for clipboard input and output. Checks substitute a private one.
     var pasteboard: NSPasteboard?
     private var activePasteboard: NSPasteboard? { pasteboard ?? RuntimeEnvironment.current.generalPasteboard() }
@@ -170,19 +172,33 @@ private struct AutomationCheckboxEdits {
             return false
         }
         if (workflow.input == .document || workflow.input == .selection) && editor == nil { return false }
-        if workflow.output == .editor && (editor == nil || editor?.readOnly == true) { return false }
+        if (workflow.output == .editor || workflow.output == .previewChanges) && (editor == nil || editor?.readOnly == true) { return false }
         return true
     }
     /// Every menu, shortcut, toolbar and palette resolves the current saved definition by UUID.
-    func runSavedAutomation(id: UUID) throws {
+    func runSavedAutomation(id: UUID, pasteThrough: Bool = false) throws {
         guard !busy else { return }
         try requireNoExport()
-        guard let workflow = library.workflows.first(where: { $0.id == id }) else {
+        guard var workflow = library.workflows.first(where: { $0.id == id }) else {
             throw AutomationError.invalid("This automation no longer exists.")
         }
         busy = true
         defer { busy = false }
-        try run(workflow, target: AutomationDocumentTarget(editorProvider()))
+        let editor = editorProvider()
+        let target = AutomationDocumentTarget(editor)
+        var capturedPaste: String?
+        if pasteThrough {
+            guard let editor, !editor.readOnly, !editor.selectionIsRectangular, editor.selectionRanges.count == 1,
+                let target, target.value != nil
+            else { throw AutomationError.invalid("Paste Through requires one writable editor selection or caret.") }
+            guard let board = activePasteboard, let text = Self.plainText(from: board), !text.isEmpty else {
+                throw AutomationError.invalid("The clipboard contains no text to paste.")
+            }
+            capturedPaste = text
+            workflow.input = .clipboard
+            workflow.output = .editor
+        }
+        try run(workflow, target: target, capturedPaste: capturedPaste)
     }
     private func invocationMenu(title: String, launcher: Bool = false) -> NSMenu {
         let result = NSMenu(title: title)
@@ -191,8 +207,36 @@ private struct AutomationCheckboxEdits {
         populateInvocations(result)
         return result
     }
+    func pasteThroughMenu() -> NSMenu {
+        let menu = NSMenu(title: Strings.text("automation.paste_through", "Paste Through"))
+        menu.identifier = .init("TextTank.PasteThrough")
+        menu.delegate = self
+        populateInvocations(menu)
+        return menu
+    }
+    private func savedPasteChoice() throws -> UUID? {
+        do {
+            let bytes = try PrivateFileStore.read(AppStorage.url(.pasteThroughChoice), maximumBytes: 256)
+            return try JSONDecoder().decode(UUID.self, from: bytes)
+        } catch where error.posixCode == .ENOENT { return nil }
+    }
+    private func rememberPasteChoice(_ id: UUID) {
+        do {
+            let previous = try savedPasteChoice()
+            if previous == id { return }
+            try PrivateFileStore.write(try JSONEncoder().encode(id), to: AppStorage.url(.pasteThroughChoice),
+                                       maximumBytes: 256, beforeCommit: {
+                guard try self.savedPasteChoice() == previous else { throw CocoaError(.fileWriteUnknown) }
+            }, requireMissing: previous == nil)
+        } catch {
+            EditorServices.current?.activePresentation?.showTransientStatus(
+                "Pasted transformed text. The last Paste Through choice could not be saved.", seconds: 8)
+        }
+    }
     private func populateInvocations(_ menu: NSMenu) {
         menu.removeAllItems()
+        let paste = menu.identifier?.rawValue == "TextTank.PasteThrough"
+        let lastPaste = paste ? try? savedPasteChoice() : nil
         if menu.identifier?.rawValue == "TextTank.AutomationLauncher" {
             menu.addItem(withTitle: "Automations", action: nil, keyEquivalent: "")
         }
@@ -200,10 +244,12 @@ private struct AutomationCheckboxEdits {
             ($0.pinToToolbar == true ? 0 : 1) < ($1.pinToToolbar == true ? 0 : 1)
         }) {
             let item = NSMenuItem(
-                title: (workflow.pinToToolbar == true ? "★ " : "") + workflow.name, action: #selector(runAction(_:)),
+                title: (workflow.pinToToolbar == true ? "★ " : "") + workflow.name,
+                action: paste ? #selector(pasteAction(_:)) : #selector(runAction(_:)),
                 keyEquivalent: "")
             item.target = self
             item.representedObject = workflow.id.uuidString
+            if paste { item.state = lastPaste == workflow.id ? .on : .off }
             menu.addItem(item)
         }
         let manage = NSMenuItem(title: "Manage Automations…", action: #selector(manageAction), keyEquivalent: "")
@@ -293,6 +339,14 @@ private struct AutomationCheckboxEdits {
     @objc private func restoreDefaultsAction() { restoreDefaultAutomations() }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(restoreDefaultsAction) { return !busy && !exportInProgress }
+        if menuItem.action == #selector(pasteAction(_:)) {
+            guard !busy, !exportInProgress, let editor = editorProvider(), !editor.readOnly,
+                !editor.selectionIsRectangular, editor.selectionRanges.count == 1,
+                EditorLifetime.document(for: editor) != nil,
+                let raw = menuItem.representedObject as? String, let id = UUID(uuidString: raw)
+            else { return false }
+            return library.workflows.contains { $0.id == id }
+        }
         if menuItem.action == #selector(runAction(_:)) {
             guard let value = menuItem.representedObject as? String, let id = UUID(uuidString: value) else {
                 return false
@@ -697,14 +751,18 @@ private struct AutomationCheckboxEdits {
         }
         do { try runSavedAutomation(id: id) } catch { showError(error) }
     }
-    private func run(_ workflow: AutomationDefinition, target: AutomationDocumentTarget?) throws {
-        onInvocation()
+    @objc private func pasteAction(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let id = UUID(uuidString: raw) else { return }
+        do { try runSavedAutomation(id: id, pasteThrough: true) } catch { showError(error) }
+    }
+    private func run(_ workflow: AutomationDefinition, target: AutomationDocumentTarget?, capturedPaste: String? = nil) throws {
+        if capturedPaste == nil { onInvocation() }
         if workflow.input == .document && target == nil {
             throw AutomationError.invalid("This automation requires an open editor document.")
         }
-        if workflow.input == .selection || workflow.output == .editor {
+        if workflow.input == .selection || workflow.output == .editor || workflow.output == .previewChanges {
             guard let target else { throw AutomationError.invalid("This automation requires an open editor document.") }
-            if workflow.output == .editor { try target.requireWritable() }
+            if workflow.output == .editor || workflow.output == .previewChanges { try target.requireWritable() }
             guard target.selections.count == 1 || (workflow.input == .selection && workflow.output == .editor) else {
                 throw AutomationError.invalid(
                     "Multiple selections require selection input and editor output. Other outputs are not changed.")
@@ -749,7 +807,7 @@ private struct AutomationCheckboxEdits {
                 }
                 outputs.append(output)
             }
-            try target.apply(outputs, wholeDocument: false)
+            try target.apply(outputs, wholeDocument: false, operationName: workflow.name)
             return
         }
         let input: String
@@ -770,16 +828,21 @@ private struct AutomationCheckboxEdits {
             // File input explicitly accepts valid UTF-8 only; never guess or replace invalid bytes.
             input = try AutomationFileInput.read(url)
         case .clipboard:
-            guard let board = activePasteboard, let value = Self.plainText(from: board) else {
+            guard let value = capturedPaste ?? activePasteboard.flatMap(Self.plainText(from:)) else {
                 throw AutomationError.invalid("The clipboard does not contain supported text.")
             }
             input = value
         }
         var output = try transformWithProgress(resolved, input: input)
-        if workflow.previewBeforeApply == true {
+        let reviewChanges = workflow.output == .previewChanges
+        if reviewChanges {
+            guard let target else { throw AutomationError.invalid("Preview as Changes requires an open document.") }
+            if try openChangePreview(workflow, output: output, target: target) { return }
+        }
+        if workflow.previewBeforeApply == true || reviewChanges {
             let alert = TTAlert()
             alert.messageText = workflow.name
-            if workflow.output == .editor {
+            if workflow.output == .editor || reviewChanges {
                 let format =
                     workflow.input == .document
                     ? Strings.text(
@@ -791,6 +854,11 @@ private struct AutomationCheckboxEdits {
                         "Input: %@. Replace the captured selection. Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
                     )
                 alert.informativeText = String(format: format, workflow.input.displayName)
+                if reviewChanges {
+                    let scope = workflow.input == .document ? "the entire captured document" : "the captured selection"
+                    alert.informativeText = "Preview as Changes supports up to 8 MiB per side. Edit this output before applying it to "
+                        + scope + ", or cancel to keep the document unchanged."
+                }
             } else {
                 alert.informativeText = String(
                     format: Strings.text(
@@ -816,11 +884,20 @@ private struct AutomationCheckboxEdits {
         }
         try revalidateSource()
         switch workflow.output {
-        case .editor:
+        case .previewChanges, .editor:
             guard let target else {
                 throw AutomationError.invalid("The original document closed. Nothing was replaced.")
             }
-            try target.apply([output], wholeDocument: workflow.input == .document)
+            if capturedPaste != nil {
+                guard !output.isEmpty else { return }
+                let finish = try prepareTransformedPaste(target.resolve())
+                do { try target.apply([output], wholeDocument: false, operationName: workflow.name) }
+                catch { finish?(false); throw error }
+                finish?(true)
+                rememberPasteChoice(workflow.id)
+            } else {
+                try target.apply([output], wholeDocument: workflow.input == .document, operationName: workflow.name)
+            }
         case .clipboard:
             guard let board = activePasteboard else {
                 throw AutomationError.invalid("Clipboard access is unavailable for this isolated support directory.")
@@ -839,6 +916,40 @@ private struct AutomationCheckboxEdits {
             try revalidateSource()
             try Data(output.utf8).write(to: url, options: .atomic)
         }
+    }
+    /// Returns false when the size limit requires the ordinary editable output preview.
+    private func openChangePreview(
+        _ workflow: AutomationDefinition, output: String, target: AutomationDocumentTarget
+    ) throws -> Bool {
+        let editor = try target.resolve(checkSelection: workflow.input != .document)
+        guard !editor.readOnly, target.value != nil, let service = comparisonService() else {
+            throw AutomationError.invalid("The captured document is unavailable for comparison.")
+        }
+        let length = Int(editor.byteLength)
+        let range: Range<Int>
+        if workflow.input == .document {
+            range = 0..<length
+        } else {
+            guard target.selections.count == 1, let selected = target.selections.first else {
+                throw AutomationError.invalid("Choose one selection or caret for Preview as Changes.")
+            }
+            range = min(selected.anchorByte, selected.caretByte)..<max(selected.anchorByte, selected.caretByte)
+            guard range.lowerBound >= 0, range.upperBound <= length else { throw ReviewRejection.invalidRange }
+        }
+        let limit = ReviewDiffPolicy.default.maximumInputBytes
+        guard length <= limit, length - range.count + output.utf8.count <= limit else { return false }
+        let original = try CompareDocumentInput(editor)
+        var bytes = original.capture.snapshot.bytes
+        bytes.replaceSubrange(range, with: output.utf8)
+        let result = try TextSnapshot(bytes: bytes, source: .freeText(UUID()), label: workflow.name + " — Output",
+                                      format: original.capture.snapshot.format)
+        Task { [weak self] in
+            do {
+                _ = try await service.open(original: .document(original), modified: .automationResult(result),
+                                           destination: .original)
+            } catch { self?.showError(error) }
+        }
+        return true
     }
     private var runPanel: NSPanel?
     /// Cancel ends the modal itself. The worker is only asked to stop, because sorting, splitting

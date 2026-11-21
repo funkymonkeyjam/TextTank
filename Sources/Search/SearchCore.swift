@@ -107,11 +107,13 @@ package enum SearchFailure: LocalizedError, CustomNSError, Equatable {
     case positionMapping
     case preferencesTooLarge, preferencesVersion, inlineResultLimit, inlineReplacement(ReplacementCondition)
     case invalidBookmarkLimit, bookmarkCancelled, bookmarkOffsetsUnordered, bookmarkOffsetOutOfBounds
+    case replacementByteLimit(Int)
     case replacementCancelled, invalidReplacementRange, macroResultLimit, macroReplacement(String)
     case unknownRecordedAction, macroStopped(String)
     static package var errorDomain: String { "TextTank.Search" }
     package var errorCode: Int {
         switch self {
+        case .replacementByteLimit: return 15
         case .inlineResultLimit: return 12
         case .inlineReplacement: return 13
         case .positionMapping: return 14
@@ -128,6 +130,8 @@ package enum SearchFailure: LocalizedError, CustomNSError, Equatable {
     }
     package var errorDescription: String? {
         switch self {
+        case .replacementByteLimit(let bytes):
+            return "Replacement exceeds the \(bytes / 1_048_576) MiB result limit. Nothing was changed."
         case .inlineResultLimit:
             return "The search reached the result limit. Narrow the Find text and search again; nothing was changed."
         case .inlineReplacement(.readOnly):
@@ -368,12 +372,23 @@ package enum SearchCore {
     /// appended once, so the cost is linear however many matches change length. Hits must be in
     /// ascending order, must not overlap and must not split a surrogate pair (invalidReplacementRange).
     /// A cancelled token stops the pass with replacementCancelled and nothing is returned.
-    static package func replacing(_ text: String, with hits: [SearchHit], cancellation: TTSearchCancellation? = nil)
+    static package func replacing(
+        _ text: String, with hits: [SearchHit], cancellation: TTSearchCancellation? = nil, maximumResultBytes: Int? = nil
+    )
         throws
         -> String
     {
         let source = text as NSString, length = source.length
         let result = NSMutableString(capacity: length)
+        var remaining = maximumResultBytes
+        func append(_ part: String) throws {
+            if let available = remaining, let maximumResultBytes {
+                let count = part.utf8.count
+                guard count <= available else { throw SearchFailure.replacementByteLimit(maximumResultBytes) }
+                remaining = available - count
+            }
+            result.append(part)
+        }
         var previousEnd = 0
         for (number, hit) in hits.enumerated() {
             if number & 1023 == 0, cancellation?.cancelled == true {
@@ -386,13 +401,13 @@ package enum SearchCore {
                 throw SearchFailure.invalidReplacementRange
             }
             if hit.range.location > previousEnd {
-                result.append(
+                try append(
                     source.substring(with: NSRange(location: previousEnd, length: hit.range.location - previousEnd)))
             }
-            result.append(hit.replacement)
+            try append(hit.replacement)
             previousEnd = NSMaxRange(hit.range)
         }
-        if previousEnd < length { result.append(source.substring(from: previousEnd)) }
+        if previousEnd < length { try append(source.substring(from: previousEnd)) }
         return result as String
     }
 }

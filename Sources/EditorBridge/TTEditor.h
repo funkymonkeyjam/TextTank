@@ -115,6 +115,7 @@ __attribute__((objc_subclassing_restricted))
 - (BOOL)hasLineLongerThan:(NSUInteger)limit;
 /// Length of the document in UTF-8 bytes, without copying it.
 @property(nonatomic, readonly) NSInteger byteLength;
+@property(nonatomic, readonly) NSInteger lineCount;
 /// The document's exact UTF-8 bytes as one immutable copy, safe to hand to a background queue.
 @property(nonatomic, readonly) NSData *utf8Data;
 /// Immutable editor bytes for persistence and printing. Nil means the full range could not be copied.
@@ -218,6 +219,12 @@ __attribute__((objc_subclassing_restricted))
 - (void)stopRecording;
 - (BOOL)executeMacroStep:(TTMacroAction *)step;
 - (void)beginUndoGroup;
+/// The outermost named group appends a native container token only after a real edit.
+- (void)beginUndoGroupNamed:(NSString *)name NS_SWIFT_NAME(beginUndoGroup(named:));
+/// Overrides the next group actually opened by a validated synchronous bridge operation.
+/// Returns the previous override so callers can restore a nesting scope.
+- (nullable NSString *)exchangeNextUndoName:(nullable NSString *)name;
+- (nullable NSString *)historyNameForRedo:(BOOL)redo NS_SWIFT_NAME(historyName(redo:));
 - (void)endUndoGroup;
 /// Inherit the current line’s leading tabs and spaces on interactive Return. Defaults to YES.
 @property(nonatomic) BOOL autoIndentEnabled;

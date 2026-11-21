@@ -45,7 +45,133 @@ import Darwin
         } catch { Checks.fail("T4 native setup: \(error)", file: #filePath, line: #line) }
         Checks.finish("TabIntegrationNativeChecks")
     }
+    @MainActor private static func pasteViews(_ view: NSView) -> [NSView] {
+        [view] + view.subviews.flatMap(pasteViews)
+    }
+
+    @MainActor static func pasteThroughChecks() throws {
+        let isolated = try IsolatedSupportDirectory("PasteThroughWorkflow")
+        defer { isolated.restore() }
+        let doc = DocumentFactory.makeUntitled(display: false, populate: { _ = $0.editor.loadDocumentText("A 雪 B") })
+        let neighbor = DocumentFactory.makeUntitled(display: false, populate: { _ = $0.editor.loadDocumentText("other") })
+        defer { doc.close(); neighbor.close() }
+        var editor = doc.editor
+        let app = AutomationController(editorProvider: { editor }, newDocument: { _ in })
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        app.pasteboard = board
+        var workflow = AutomationDefinition.example
+        workflow.id = UUID()
+        workflow.name = "Private clipboard transform"
+        workflow.steps = [.init(kind: .replaceLiteral, find: "cat", replacement: "犬")]
+        workflow.input = .file
+        workflow.output = .newDocument
+        workflow.previewBeforeApply = false
+        try app.persistLibrary(.init(workflows: [workflow]))
+        let store = AppStorage.url(.automations), saved = try Data(contentsOf: store)
+        let paste = app.pasteThroughMenu()
+        let action = try requireValue(paste.items.first { $0.representedObject as? String == workflow.id.uuidString },
+                                      "explicit saved Paste Through menu item")
+        let first = try requireValue(action.action, "Paste Through selector")
+        let recorder = MacroController(editorProvider: { editor })
+        var committed = 0
+        app.prepareTransformedPaste = { target in
+            let finish = recorder.prepareUnrecordedChange(in: target, reason: "A transformed paste was committed.")
+            return { applied in
+                if applied { committed += 1 }
+                finish?(applied)
+            }
+        }
+        _ = doc.editor.setSelectionAnchor(2, caret: 5)
+        doc.editor.resetUndoHistory()
+        board.clearContents()
+        _ = board.setString("cat\r\n", forType: .string)
+        let originalChange = board.changeCount
+        check(NSApp.sendAction(first, to: action.target, from: action), "real saved transformation action dispatches")
+        check(doc.editor.text == "A 犬\r\n B" && neighbor.editor.text == "other" && committed == 1,
+              "saved step replaces only the captured multibyte selection")
+        _ = doc.editor.executeCommand(.init(rawValue: "undo"))
+        check(doc.editor.text == "A 雪 B" && board.changeCount == originalChange && board.string(forType: .string) == "cat\r\n",
+              "one Undo restores bytes and transformed paste never writes the clipboard")
+        let fresh = AutomationController(editorProvider: { editor }, newDocument: { _ in })
+        check(fresh.pasteThroughMenu().items.first { $0.representedObject as? String == workflow.id.uuidString }?.state == .on,
+              "a fresh controller reads the last successful choice from its separate store")
+        check(try Data(contentsOf: store) == saved, "invocation preserves every byte of the saved workflow library")
+        _ = doc.editor.setSelectionAnchor(1, caret: 1)
+        try app.runSavedAutomation(id: workflow.id, pasteThrough: true)
+        check(doc.editor.text == "A犬\r\n 雪 B", "caret-only invocation inserts the same transformed text")
+        _ = doc.editor.executeCommand(.init(rawValue: "undo"))
+        board.clearContents()
+        let emptyBoardCount = board.changeCount
+        recorder.startRecording()
+        do { try app.runSavedAutomation(id: workflow.id, pasteThrough: true); check(false, "empty clipboard rejected") } catch {}
+        do { try app.runSavedAutomation(id: UUID(), pasteThrough: true); check(false, "missing workflow rejected") } catch {}
+        check(doc.editor.text == "A 雪 B" && board.changeCount == emptyBoardCount && recorder.isRecording(in: doc.editor),
+              "empty and missing cases preserve document, clipboard and active macro capture")
+        _ = board.setString("cat", forType: .string)
+        _ = doc.editor.setSelectionRanges([TTSelectionRange(anchor: 0, caret: 1), TTSelectionRange(anchor: 2, caret: 5)])
+        do { try app.runSavedAutomation(id: workflow.id, pasteThrough: true); check(false, "multiple selections rejected") } catch {}
+        check(doc.editor.text == "A 雪 B" && recorder.isRecording(in: doc.editor), "invalid selection keeps text and macro")
+        _ = doc.editor.setSelectionAnchor(0, caret: 0)
+        _ = doc.editor.executeCommand(.init(rawValue: "newLine"))
+        recorder.stopRecording()
+        _ = doc.editor.executeCommand(.init(rawValue: "undo"))
+        workflow.previewBeforeApply = true
+        try app.persistLibrary(.init(workflows: [workflow]))
+        let beforeCancel = try Data(contentsOf: store), originalText = doc.editor.text
+        var confirmed = false, didRespond = false, changeDestination = false
+        let response = Timer(timeInterval: 0.03, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard let content = NSApp.modalWindow?.contentView,
+                      let button = pasteViews(content).compactMap({ $0 as? NSButton }).first(where: { $0.title == (confirmed ? "Apply" : "Cancel") })
+                else { return }
+                editor = neighbor.editor
+                if changeDestination { _ = doc.editor.replaceSelection("outside ") }
+                if confirmed {
+                    app.pasteboard?.clearContents()
+                    _ = app.pasteboard?.setString("different clipboard after capture", forType: .string)
+                }
+                didRespond = true
+                button.performClick(nil)
+            }
+        }
+        RunLoop.main.add(response, forMode: .modalPanel)
+        defer { response.invalidate() }
+        try app.runSavedAutomation(id: workflow.id, pasteThrough: true)
+        check(try didRespond && doc.editor.text == originalText && neighbor.editor.text == "other"
+              && Data(contentsOf: store) == beforeCancel && committed == 2,
+              "Cancel after focus moves leaves both editors, saved library and committed-action count intact")
+        confirmed = true
+        didRespond = false
+        editor = doc.editor
+        _ = doc.editor.setSelectionAnchor(0, caret: 0)
+        try app.runSavedAutomation(id: workflow.id, pasteThrough: true)
+        check(try didRespond && doc.editor.text == "犬" + originalText && neighbor.editor.text == "other"
+              && board.string(forType: .string) == "different clipboard after capture" && Data(contentsOf: store) == beforeCancel,
+              "confirmed paste uses the frozen input and captured caret even after focus and clipboard change")
+        _ = doc.editor.executeCommand(.init(rawValue: "undo"))
+        check(doc.editor.text == originalText, "one native Undo reverses the confirmed captured paste")
+        editor = doc.editor
+        changeDestination = true
+        _ = doc.editor.setSelectionAnchor(0, caret: 0)
+        do { try app.runSavedAutomation(id: workflow.id, pasteThrough: true); check(false, "stale captured destination rejected") } catch {}
+        check(try doc.editor.text == "outside " + originalText && neighbor.editor.text == "other"
+              && committed == 3 && Data(contentsOf: store) == beforeCancel, "confirmed stale paste keeps the external edit")
+        editor = doc.editor
+        workflow.previewBeforeApply = false
+        workflow.steps = [.init(kind: .replaceLiteral, find: "cat", replacement: "")]
+        try app.persistLibrary(.init(workflows: [workflow]))
+        _ = doc.editor.setSelectionAnchor(0, caret: 7)
+        board.clearContents()
+        _ = board.setString("cat", forType: .string)
+        let selectedText = doc.editor.text, boardCount = board.changeCount
+        try app.runSavedAutomation(id: workflow.id, pasteThrough: true)
+        check(doc.editor.text == selectedText && board.changeCount == boardCount && committed == 3,
+              "empty transformed output leaves the selected range and clipboard intact")
+    }
+
     static func run(root: URL) throws {
+        try pasteThroughChecks()
         let priorDelegate = NSApp.delegate, priorServices = EditorServices.current,
             front = NSWorkspace.shared.frontmostApplication
         let app = AppDelegate()

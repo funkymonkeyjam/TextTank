@@ -40,6 +40,7 @@ In Configure Rule the text field is called Text to match, or Pattern for the pat
 | Sort lines (case-sensitive) | `sortLines` | none | Sorts by character code: capitals before lowercase, accented letters after z. Needs uniform line endings. |
 | Remove duplicate lines | `deduplicateLines` | none | Keeps the first of each byte-identical line. Needs uniform line endings. |
 | Find and replace text | `replaceLiteral` | `find`, `replacement`, `askForFind`, `askForReplacement` | Replaces every occurrence of the literal, case-sensitive text. An empty replacement removes it. |
+| Replace regular expression | `replaceRegex` | `find`, `replacement`, `askForFind`, `askForReplacement` | Uses the Find bar’s case-sensitive Boost regular expressions and capture replacements such as `$1`. All regex rules share the workflow time budget. |
 | Clear lines equal to text | `removeLinesEqualTo` | `find`, `askForFind` | Empties each line that is exactly the literal text. The line ending stays. |
 | Clear lines containing text | `removeLinesContaining` | `find`, `askForFind` | Empties each line that contains the literal text. The line ending stays. |
 | Clear lines starting with text | `removeLinesStartingWith` | `find`, `askForFind` | Empties each line that starts with the literal text. The line ending stays. |

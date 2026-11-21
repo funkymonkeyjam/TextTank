@@ -8,6 +8,7 @@ import EditorBridge
     enum Outcome { case none, applied, noChange, copied, exported, cancelled, failed }
     private weak var comparison: CompareController?
     private(set) var destination: CompareSide?
+    private var selectInitialChanges: Bool
     private(set) var selectedBlocks = Set<Int>()
     private var selectionStamp: UUID?
     private(set) var isBusy = false
@@ -37,7 +38,11 @@ import EditorBridge
             }.value
         }
     var rawComparison = true
-    init(comparison: CompareController) { self.comparison = comparison }
+    init(comparison: CompareController, destination: CompareSide? = nil) {
+        self.comparison = comparison
+        self.destination = destination
+        selectInitialChanges = destination != nil
+    }
     var interruptionDetail: String {
         appliedAwaitingComparison
             ? "Applied changes remain in the destination. Show Destination to use Undo, or refresh the comparison."
@@ -192,6 +197,10 @@ import EditorBridge
         if isBusy { cancelWork() }
     }
     func presentationCompleted() {
+        if selectInitialChanges, ready, let blocks = comparison?.projection?.changes.blocks {
+            selectInitialChanges = false
+            if blocks.count <= 100_000 { _ = setSelection(Set(blocks.indices)) }
+        }
         if comparison?.original?.isStale == false && comparison?.modified?.isStale == false {
             appliedAwaitingComparison = false
         }

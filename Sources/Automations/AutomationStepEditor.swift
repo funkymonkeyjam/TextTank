@@ -24,6 +24,8 @@ extension AutomationDefinition.Step.Kind {
         case .deduplicateLines:
             return
                 "Keeps the first of each identical line and drops later repeats. Leave this rule out when repeated rows should stay. Mixed line endings are refused."
+        case .replaceRegex:
+            return "Uses the Find bar’s Boost regular expressions. Use $1, $2 and so on for captured groups. Leave Replace with empty to delete matches."
         case .replaceLiteral:
             return
                 "Replaces exact, case-sensitive text. Leave Replace with empty to remove it. Special characters are ordinary text."

@@ -742,13 +742,26 @@ import Darwin
                     try answered?.transform("drop\nkeep") == "\nkeep",
                     "F71 \(kind.rawValue) runs with the value supplied at run time")
             }
+            let regexRule = AutomationDefinition.Step(kind: .replaceRegex, find: "(雪)([0-9]+)", replacement: "$2·$1")
+            let regexSample = try AutomationDefinition.testRules([regexRule], sample: "雪12\r\n👩🏽‍🚀雪3")
+            check(regexSample == "12·雪\r\n👩🏽‍🚀3·雪", "Regex Replace uses Find captures and preserves unmatched Unicode")
+            let zeroMatches = try AutomationDefinition.testRules([regexRule], sample: "unchanged")
+            check(zeroMatches == "unchanged", "Regex Replace with zero matches preserves bytes")
+            let zeroWidth = try AutomationDefinition.testRules(
+                [.init(kind: .replaceRegex, find: "(?=雪)", replacement: "A")], sample: "雪雪")
+            check(zeroWidth == "A雪A雪", "Regex Replace advances after zero-width Unicode matches")
+            rejects("Regex Replace rejects partial sample results", message: "1 MiB") {
+                _ = try AutomationDefinition.testRules(
+                    [.init(kind: .replaceRegex, find: "x", replacement: String(repeating: "雪", count: 2000))],
+                    sample: String(repeating: "x", count: 200))
+            }
             // F188: Swift names say what a rule does; the stored spellings are pinned.
             check(
                 AutomationDefinition.Step.Kind.allCases.map(\.rawValue) == [
                     "removeListMarkers", "removeBlankLines", "sortLines", "deduplicateLines", "replaceLiteral",
                     "removeLinesEqualTo", "removeLinesContaining", "removeLinesStartingWith", "trimWhitespace",
                     "removeMatchingLines", "removeMarkdownHeadings", "removeMarkdownFormatting",
-                    "removeCheckboxMarkers", "removeNoteReferences", "keepMarkedListRows", "sortLinesLocalized"
+                    "removeCheckboxMarkers", "removeNoteReferences", "keepMarkedListRows", "sortLinesLocalized", "replaceRegex"
                 ], "F188 every persisted step spelling and its order is unchanged")
             check(
                 AutomationDefinition.Step.Kind.clearLinesEqualTo.rawValue == "removeLinesEqualTo"
@@ -929,9 +942,9 @@ import Darwin
                 // G387: one list of find-accepting kinds, used by validation.
                 check(
                     Set(kinds.filter(\.acceptsFind)) == [
-                        .replaceLiteral, .clearLinesMatching, .clearLinesEqualTo, .clearLinesContaining,
+                        .replaceLiteral, .replaceRegex, .clearLinesMatching, .clearLinesEqualTo, .clearLinesContaining,
                         .clearLinesStartingWith
-                    ] && kinds.filter(\.acceptsReplacement) == [.replaceLiteral],
+                    ] && kinds.filter(\.acceptsReplacement) == [.replaceLiteral, .replaceRegex],
                     "G387 the kinds that take text to match and a replacement are listed once on the kind")
                 for kind in kinds {
                     let withFind = Step(kind: kind, find: "x", replacement: kind.acceptsReplacement ? "y" : nil)

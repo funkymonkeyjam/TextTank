@@ -125,6 +125,7 @@ import EditorBridge
 }
 @MainActor enum CompareInput {
     case snapshot(TextSnapshot)
+    case automationResult(TextSnapshot)
     case document(CompareDocumentInput)
     case file(URL, encoding: FileEncoding? = nil)
     case savedFile(CompareSavedFileInput)
@@ -158,7 +159,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     }
     var canRefresh: Bool {
         switch input {
-        case .snapshot: return false
+        case .snapshot, .automationResult: return false
         case .document(let d): return d.canRefresh
         case .file, .clipboard: return true
         case .savedFile(let source): return (try? source.parent.capture.resolve()) != nil
@@ -174,11 +175,13 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
             return source.selection == nil
                 ? "The source document closed. Choose its source again."
                 : "The selection's original view closed. Choose its source again."
+        case .automationResult: return "Run the automation again to compare with a new document revision."
         case .snapshot: return "This is captured text without a live source."
         default: return nil
         }
     }
     func refreshInput() throws -> CompareInput {
+        if case .automationResult = input { throw ReviewRejection.revisionChanged }
         if case .document(let source) = input { return try source.refreshInput() }
         if case .savedFile(let source) = input { return try source.refreshInput() }
         // Fixed value inputs remain fixed when the other live source is explicitly refreshed.
@@ -262,6 +265,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     private var picker: CompareSourcePicker?
     private var savedPickers: [DocumentID: CompareSourcePicker] = [:]
     var currentEditor: () -> TTEditor? = { nil }
+    var visibleEditors: () -> (TTEditor, TTEditor)? = { nil }
     var prepareSelectedChange: ReviewChangePreparation?
     var allEditors: () -> [TTEditor] = {
         NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.activeEditor }
@@ -338,7 +342,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         try Task.checkCancellation()
         let snapshot: TextSnapshot, change: Int?
         switch input {
-        case .snapshot(let value):
+        case .snapshot(let value), .automationResult(let value):
             guard value.label.utf8.count <= 1024 else { throw CompareFailure.invalid }
             snapshot = try TextSnapshot(
                 bytes: value.bytes, source: value.source, label: value.label, document: value.document,
@@ -386,7 +390,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         return (a, b)
     }
     /// The sole comparison-opening entry. Caller document inputs are already captured before awaits.
-    func open(original: CompareInput, modified: CompareInput) async throws -> CompareController {
+    func open(original: CompareInput, modified: CompareInput, destination: CompareSide? = nil) async throws -> CompareController {
         guard windows.count + admissions < 2 else { throw CompareOpenFailure.limit }
         admissions += 1
         defer { admissions -= 1 }
@@ -397,7 +401,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
             cancellation.cancel()
         }
         try Task.checkCancellation()
-        let controller = CompareController(service: self, original: pair.0, modified: pair.1)
+        let controller = CompareController(service: self, original: pair.0, modified: pair.1, destination: destination)
         windows.append(controller)
         if showWindows {
             controller.showWindow(nil)
@@ -526,6 +530,26 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         guard let editor = currentEditor() else { return }
         do { try mark(editor) } catch { report(error) }
     }
+    private func visiblePair() -> (TTEditor, TTEditor)? {
+        guard !CompareCommandScope.blocksWorkspace, windows.count + admissions < 2,
+            let (first, second) = visibleEditors(),
+            let left = EditorLifetime.document(for: first), let right = EditorLifetime.document(for: second),
+            left.isOpen, right.isOpen, left !== right,
+            first.byteLength <= 8 * 1024 * 1024, second.byteLength <= 8 * 1024 * 1024
+        else { return nil }
+        return (first, second)
+    }
+    @objc func compareVisibleTabs(_ sender: Any?) {
+        guard let (first, second) = visiblePair() else { return }
+        do {
+            let original = try CompareDocumentInput(first), modified = try CompareDocumentInput(second)
+            Task { [weak self] in
+                guard let self else { return }
+                do { _ = try await open(original: .document(original), modified: .document(modified)) }
+                catch { report(error) }
+            }
+        } catch { report(error) }
+    }
     @objc func compareCurrent(_ sender: Any?) {
         guard let editor = currentEditor() else { return }
         compare(editor)
@@ -576,6 +600,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         }
 
         switch item.action {
+        case #selector(compareVisibleTabs(_:)): return visiblePair() != nil
         case #selector(showPicker(_:)): return windows.count + admissions < 2
         case #selector(markCurrent(_:)):
             let editor = currentEditor()

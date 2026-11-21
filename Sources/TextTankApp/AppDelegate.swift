@@ -3,7 +3,7 @@ import EditorBridge
 import NativeSearch
 import AppKit
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
     private var automaticSession: AutomaticSession?
     var smokeFile: URL?
     private weak var knownWorkspace: WorkspaceWindowController?
@@ -152,6 +152,7 @@ import AppKit
                 reason: "Applying selected comparison changes cannot be recorded. No partial macro will be saved.")
         }
         value.currentEditor = { [weak self] in self?.currentEditor }
+        value.visibleEditors = { [weak self] in self?.knownWorkspace?.visibleComparisonEditors }
         return value
     }()
     @MainActor lazy var macros = MacroController(editorProvider: { [weak self] in self?.currentEditor })
@@ -165,6 +166,10 @@ import AppKit
                 compactMessage: Strings.text(
                     "status.remindersAdded", "Items were added in Reminders. Editor Undo does not remove them."),
                 seconds: 8, announce: false)
+        }
+        controller.comparisonService = { [weak self] in self?.compare }
+        controller.prepareTransformedPaste = { [weak self] editor in
+            self?.macros.prepareUnrecordedChange(in: editor, reason: "Paste Through changed the recorded document.")
         }
         controller.onInvocation = { [weak self] in
             self?.macros.invalidateRecording(
@@ -487,6 +492,22 @@ import AppKit
             DispatchQueue.main.async { [weak self] in self?.deliverLaunchInventory() }
         }
     }
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        Self.updateHistoryTitles(in: menu, responder: (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder)
+    }
+    static func updateHistoryTitles(in menu: NSMenu, responder: NSResponder?) {
+        var view = responder as? NSView
+        while let current = view, !(current is TTEditor) { view = current.superview }
+        let editor = view as? TTEditor
+        for item in menu.items {
+            guard let id = item.representedObject as? String, id == "undo" || id == "redo" else { continue }
+            let redo = id == "redo", base = redo ? EditorCommand.redo.title : EditorCommand.undo.title
+            if let name = editor?.historyName(redo: redo) { item.title = base + " " + name }
+            else if editor == nil, let manager = responder?.undoManager {
+                item.title = redo ? manager.redoMenuItemTitle : manager.undoMenuItemTitle
+            } else { item.title = base }
+        }
+    }
     @MainActor func buildMenus() {
         let bar = NSMenu()
         NSApp.mainMenu = bar
@@ -564,6 +585,7 @@ import AppKit
                 action: #selector(TextDocument.reloadEncoding(_:)), representedObject: value.rawValue)
         }
         let edit = menu("Edit")
+        edit.delegate = self
         // Grouped by what the command acts on. Every item keeps its command identifier as its
         // represented object, so shortcuts, macros and validation find it wherever it sits.
         @MainActor func group(_ title: String) -> NSMenu {
@@ -611,6 +633,10 @@ import AppKit
             title: EditorCommand.paste.title, action: #selector(NSText.paste(_:)),
             keyEquivalent: EditorCommand.paste.defaultMenuShortcut,
             representedObject: EditorCommand.paste.rawValue)
+        let pasteChoices = automations.pasteThroughMenu()
+        let transformedPaste = NSMenuItem(title: pasteChoices.title, action: nil, keyEquivalent: "")
+        transformedPaste.submenu = pasteChoices
+        edit.addItem(transformedPaste)
         edit.addItem(
             title: EditorCommand.selectAll.title, action: #selector(NSText.selectAll(_:)),
             keyEquivalent: EditorCommand.selectAll.defaultMenuShortcut,
@@ -721,6 +747,7 @@ import AppKit
             item.submenu = menu
             compareMenu.addItem(item)
         }
+        compareMenu.addItem(title: "Compare Two Visible Tabs", action: #selector(CompareService.compareVisibleTabs(_:)), target: compare)
         comparisons.submenu = compareMenu
         search.addItem(.separator())
         search.addItem(comparisons)
