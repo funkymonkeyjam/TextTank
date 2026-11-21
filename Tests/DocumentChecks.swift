@@ -33,6 +33,9 @@ import NativeSearch
     }
     @MainActor static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.count == 2, arguments.first == "--automatic-session-quit" {
+            AutomaticSessionQuitChecks.runChild(mode: arguments[arguments.index(after: arguments.startIndex)])
+        }
         if arguments == ["--tab-integrations"] { TabIntegrationNativeChecks.runApplicationProcess() }
         if arguments == ["--tab-groups"] { TabGroupNativeChecks.runApplicationProcess() }
         if arguments == ["--tab-organization"] { TabOrganizationNativeChecks.runApplicationProcess() }

@@ -223,6 +223,7 @@ import EditorBridge
         check(preserved == future, "periodic and committed quit preserve unreadable/newer automatic session bytes")
         try saved.write(to: metadata)
         try checkPublication(in: root, host: broken.workspaceWindow)
+        try AutomaticSessionQuitChecks.checkBoth(in: root)
         withExtendedLifetime([first, second]) {}
     }
     private static func checkPublication(in root: URL, host: WorkspaceWindowController) throws {
