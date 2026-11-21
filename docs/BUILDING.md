@@ -133,3 +133,9 @@ selection/recompute/encoding/clipboard/file/sheet controls. Default production p
 selected512m/30s headless correctness profiles are separate; final F0 admission never increases.
 Production Release remains optimized/non-testable. Counts describe registration; candidate results and
 physical/platform limits remain in exact validation evidence.
+
+## Bundled application smoke
+
+Run `scripts/test-bundle.sh` after `scripts/build.sh` with the same configuration. The normal native suite exercises the Debug bundle and the review package wrapper exercises Release. The check verifies the expanded property list, copied resources, compiled localization catalog, embedded Scintilla linkage and strict signature. It gives the actual bundled executable a disposable UTF-8 file and allows 20 seconds for successful exit.
+
+The executable accepts `--smoke-test FILE` as its first two arguments. It opens that file through the application’s document controller, constructs its editor window offscreen, writes one JSON line with the opened path and editor byte count, and exits. It uses a newly created private support directory and omits the smoke document from Recent Documents.

@@ -29,7 +29,7 @@ def verify_resources(app):
             raise ValueError(f'Incorrect bundle {key}: {product.get(key)!r}')
     # Brand SVGs/ICON.md are design sources. The two font licenses ship with the app.
     for path in sorted(source.rglob('*')):
-        if not path.is_file() or path == source / 'Info.plist':
+        if not path.is_file() or path.name.startswith('.') or path == source / 'Info.plist':
             continue
         if path.parent == source / 'Brand' and (path.suffix == '.svg' or path.name == 'ICON.md'):
             continue
@@ -54,7 +54,8 @@ def launch(executable):
         file = root / 'owned smoke document.txt'
         expected = 'Bundled editor\n雪\n'.encode()
         file.write_bytes(expected)
-        env = dict(os.environ, TMPDIR=str(root), TEXTTANK_SUPPORT_DIRECTORY=str(root / 'support'))
+        env = dict(os.environ, TMPDIR=str(root), CFFIXED_USER_HOME=str(root),
+                   TEXTTANK_SUPPORT_DIRECTORY=str(root / 'support'))
         result = subprocess.run([executable, '--smoke-test', file], env=env, capture_output=True, timeout=20)
         if result.returncode:
             raise ValueError(f'Bundle launch failed ({result.returncode}): {result.stderr.decode(errors="replace")}')
