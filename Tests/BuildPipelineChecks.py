@@ -530,7 +530,9 @@ sys.exit(93)
             self.assertEqual(original.read_bytes(), b'pinned source')
 
     def test_every_native_check_keeps_an_explicit_script_source_reference(self):
-        scripts = '\n'.join(path.read_text() for path in (ROOT / 'scripts').glob('*.sh'))
+        script_root = ROOT / 'scripts'
+        drivers = [*script_root.glob('*.sh'), *script_root.glob('test-*.py')]
+        scripts = '\n'.join(path.read_text() for path in drivers)
         native_checks = [path for path in (ROOT / 'Tests').glob('*Checks.*') if path.suffix in ('.swift', '.mm')]
         self.assertGreater(len(native_checks), 20)
         for path in native_checks:
