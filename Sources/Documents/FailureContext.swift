@@ -83,8 +83,9 @@ package struct JSONInputFailure: LocalizedError {
 /// Named Swift errors retain the existing bridged domain/codes for callers that display them
 /// through Cocoa. Code numbers are compatibility metadata, never behavior selectors.
 package enum DocumentActionError: LocalizedError, CustomNSError {
-    case diskChanged, notSaved, unsavedChanges, unsafeDiskPath(URL, underlying: Error)
+    case diskChanged(UUID), notSaved, unsavedChanges, unsafeDiskPath(URL, underlying: Error)
     case multipleSelections, selectionTooLarge, changeRejected, replacementRejected, lineEndingsRejected
+    package static let saveConflictAttemptKey = "TextTankSaveConflictAttempt"
     static package var errorDomain: String { "TextTank" }
     package var errorCode: Int {
         switch self {
@@ -118,6 +119,7 @@ package enum DocumentActionError: LocalizedError, CustomNSError {
     }
     package var errorUserInfo: [String: Any] {
         var info: [String: Any] = [NSLocalizedDescriptionKey: errorDescription ?? ""]
+        if case .diskChanged(let attempt) = self { info[Self.saveConflictAttemptKey] = attempt.uuidString }
         if case .unsafeDiskPath(_, let error) = self { info[NSUnderlyingErrorKey] = error }
         return info
     }

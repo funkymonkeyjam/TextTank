@@ -139,8 +139,11 @@ import AppKit
         }
         return controller
     }()
+    private var reviewingTermination = false
+    private weak var initializedCompare: CompareService?
     @MainActor lazy var compare: CompareService = {
         let value = CompareService()
+        initializedCompare = value
         value.prepareSelectedChange = { [weak self] destination in
             self?.macros.prepareUnrecordedChange(
                 in: destination,
@@ -282,6 +285,7 @@ import AppKit
         services.languagesProvider = { [weak self] in self?.languages }
         services.macrosProvider = { [weak self] in self?.macros }
         services.automationsProvider = { [weak self] in self?.automations }
+        services.reviewingTermination = { [weak self] in self?.reviewingTermination == true }
         services.compareProvider = { [weak self] in self?.compare }
         services.searchProvider = { [weak self] in self?.searchController }
         services.newDocument = { [weak self] in self?.newDocument($0) }
@@ -325,6 +329,9 @@ import AppKit
             closeAllForTermination()
             return .terminateNow
         }
+        guard !reviewingTermination else { return .terminateLater }
+        reviewingTermination = true
+        initializedCompare?.cancelPendingSavedComparisons()
         DispatchQueue.main.async { self.requestUnsavedReview(self) }
         return .terminateLater
     }
@@ -342,6 +349,7 @@ import AppKit
     var replyToTerminate: @MainActor (Bool) -> Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
     @objc func reviewed(_ controller: NSDocumentController, didReviewAll: Bool, contextInfo: UnsafeMutableRawPointer?) {
         if didReviewAll { closeAllForTermination() }
+        reviewingTermination = false
         replyToTerminate(didReviewAll)
     }
     @MainActor func buildMenus() {

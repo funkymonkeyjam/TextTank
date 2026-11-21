@@ -394,6 +394,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         } onCancel: {
             cancellation.cancel()
         }
+        try Task.checkCancellation()
         let controller = CompareController(service: self, original: pair.0, modified: pair.1)
         windows.append(controller)
         if showWindows {
@@ -485,8 +486,11 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         value.showWindow(nil)
         value.window?.makeKeyAndOrderFront(nil)
     }
+    func cancelPendingSavedComparisons() {
+        Array(savedPickers.values).forEach { $0.window?.close() }
+    }
     func hasSavedSource(_ document: TextDocument) -> Bool {
-        document.isOpen && document.diskURL != nil
+        EditorServices.current?.reviewingTermination() != true && document.isOpen && document.diskURL != nil
             && document.editor.byteLength <= ReviewDiffPolicy.default.maximumInputBytes
     }
     func canCompareSaved(_ document: TextDocument) -> Bool {

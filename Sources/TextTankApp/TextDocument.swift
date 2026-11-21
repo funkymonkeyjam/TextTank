@@ -18,6 +18,7 @@ import AppKit
         guard let first = presentations.first else { return nil }
         return first.host.presentation(for: runtimeID) ?? first
     }
+    private var lastSaveConflict: SavedVersionDecision?
     private var tabClosePending = false
     override var windowForSheet: NSWindow? { isClosed ? nil : presentation?.hostWindow }
     private func revealForNativeAction() {
@@ -31,10 +32,49 @@ import AppKit
         revealForNativeAction()
         super.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: contextInfo)
     }
+    override func willPresentError(_ error: Error) -> Error {
+        let presented = super.willPresentError(error) as NSError
+        guard let conflict = lastSaveConflict, conflict.allowsComparison,
+            (error as NSError).userInfo[DocumentActionError.saveConflictAttemptKey] as? String == conflict.id.uuidString
+        else { return presented }
+        var info = presented.userInfo
+        info[NSLocalizedRecoveryOptionsErrorKey] = ["Cancel", "Compare…"]
+        info[NSLocalizedRecoverySuggestionErrorKey] =
+            "The file changed outside TextTank. Compare it with your edits, or use Save As to keep a separate copy."
+        info[NSRecoveryAttempterErrorKey] = conflict
+        return NSError(domain: presented.domain, code: presented.code, userInfo: info)
+    }
     override func save(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
         revealForNativeAction()
+        // AppKit asks whether to overwrite before it calls writeSafely. A proved
+        // byte conflict already prevents TextTank from writing this saved document.
+        if let window = windowForSheet, window.attachedSheet == nil, let conflict = conflictForSaveCommand() {
+            presentError(conflict, modalFor: window, delegate: nil, didPresent: nil, contextInfo: nil)
+            return
+        }
         super.save(sender)
+    }
+    private func conflictForSaveCommand() -> DocumentActionError? {
+        guard isDocumentEdited, let url = diskURL, let diskDigest,
+            presentation?.host.tabCommands.isBusy != true,
+            EditorServices.current?.compare?.canCompareSaved(self) == true
+        else { return nil }
+        let limit = ReviewDiffPolicy.default.maximumInputBytes
+        guard let identity = try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: limit),
+            identity != diskSignature,
+            let sample = try? WorkspaceStore.sample(ofRegularFileAt: url, maximumBytes: limit, matching: identity)
+        else { return nil }
+        guard sample.digest != diskDigest else {
+            diskSignature = sample.signature
+            return nil
+        }
+        return saveConflict(at: url, identity: identity)
+    }
+    private func saveConflict(at url: URL, identity: FileSignature? = nil) -> DocumentActionError {
+        let decision = SavedVersionDecision(self, at: url, observed: identity)
+        lastSaveConflict = decision
+        return .diskChanged(decision.id)
     }
     override func saveAs(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
@@ -867,7 +907,7 @@ import AppKit
         if inPlace, diskDigest != nil, try diskState(trustingSettledMetadata: true) == .changed,
             saveOperation != .saveAsOperation
         {
-            throw DocumentActionError.diskChanged
+            throw saveConflict(at: destination)
         }
         let submitted = try FileCodec.encode(Self.capturedText(from: editor.checkedUTF8Data), format: format),
             submittedFormat = format,
@@ -932,5 +972,64 @@ enum EditorCaptureError: LocalizedError, Equatable {
         case .incomplete: return "TextTank could not read the entire editor buffer."
         case .invalidUTF8: return "The editor buffer contains invalid UTF-8 text."
         }
+    }
+}
+
+/// A native sheet can outlive the document state it described. Only a fresh, explicit
+/// decision may compare those inputs; it never resumes a failed save or closes a document.
+@MainActor private final class SavedVersionDecision: NSObject {
+    let id = UUID()
+    private weak var document: TextDocument?
+    private let url: URL
+    private let epoch: UInt
+    private let revision: UInt
+    private let format: FileFormat
+    private let baseline: String?
+    private let identity: FileSignature?
+    private var handled = false
+    init(_ document: TextDocument, at url: URL, observed: FileSignature? = nil) {
+        self.document = document
+        self.url = url
+        epoch = document.loadEpoch
+        revision = document.editor.revision
+        format = document.format
+        baseline = document.originalDiskFingerprint
+        identity =
+            observed
+            ?? (try? WorkspaceStore.signature(
+                ofRegularFileAt: url, maximumBytes: ReviewDiffPolicy.default.maximumInputBytes))
+    }
+    var isCurrent: Bool {
+        guard let document else { return false }
+        return document.isOpen && document.diskURL == url && document.loadEpoch == epoch
+            && document.editor.revision == revision && document.format == format
+            && document.originalDiskFingerprint == baseline
+    }
+    var allowsComparison: Bool {
+        guard identity != nil, isCurrent, let document, document.presentation?.host.tabCommands.isBusy != true
+        else { return false }
+        return EditorServices.current?.compare?.canCompareSaved(document) == true
+    }
+    func compareAfterDismissal() {
+        guard !handled else { return }
+        handled = true
+        DispatchQueue.main.async { [self] in
+            guard allowsComparison, let document, let identity else { return }
+            EditorServices.current?.compare?.compareSaved(document, expecting: identity)
+        }
+    }
+    override func attemptRecovery(fromError error: Error, optionIndex index: Int) -> Bool {
+        precondition(Thread.isMainThread)
+        MainActor.assumeIsolated {
+            if index == 1 { compareAfterDismissal() } else { handled = true }
+        }
+        return false
+    }
+    override func attemptRecovery(
+        fromError error: Error, optionIndex index: Int, delegate: Any?, didRecoverSelector: Selector?,
+        contextInfo: UnsafeMutableRawPointer?
+    ) {
+        let recovered = attemptRecovery(fromError: error, optionIndex: index)
+        ErrorRecoveryReply.send(recovered, to: delegate, selector: didRecoverSelector, contextInfo: contextInfo)
     }
 }

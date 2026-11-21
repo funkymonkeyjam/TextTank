@@ -23,6 +23,7 @@ import AppKit
     var languagesProvider: () -> LanguageController? = { nil }
     var macrosProvider: () -> MacroController? = { nil }
     var automationsProvider: () -> AutomationController? = { nil }
+    var reviewingTermination: () -> Bool = { false }
     var compareProvider: () -> CompareService? = { nil }
     var compare: CompareService? { compareProvider() }
     var searchProvider: () -> SearchController? = { nil }

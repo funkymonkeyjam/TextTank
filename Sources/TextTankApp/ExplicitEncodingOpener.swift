@@ -52,6 +52,15 @@ import AppKit
         // Only the Bool crosses the synchronous UI boundary. Raw Objective-C callback
         // identity/context remain on this actual main-thread entry, with no actor transfer.
         let recovered = attemptRecovery(fromError: error, optionIndex: recoveryOptionIndex)
+        ErrorRecoveryReply.send(recovered, to: delegate, selector: didRecoverSelector, contextInfo: contextInfo)
+    }
+}
+
+enum ErrorRecoveryReply {
+    static func send(
+        _ recovered: Bool, to delegate: Any?, selector didRecoverSelector: Selector?,
+        contextInfo: UnsafeMutableRawPointer?
+    ) {
         guard let target = delegate as AnyObject?, let didRecoverSelector,
             let method = class_getInstanceMethod(type(of: target), didRecoverSelector)
         else { return }
