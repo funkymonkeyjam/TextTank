@@ -139,9 +139,8 @@ func rawMode() throws {
             (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable': 'TextTank'}))
             images = {}
             sources = {}
-            compiler = subprocess.check_output(['xcrun', '--find', 'clang'], text=True).strip()
             def build(arguments):
-                result = subprocess.run([compiler, '-target', 'arm64-apple-macos14.0', *arguments], capture_output=True, text=True)
+                result = subprocess.run(['xcrun', '--sdk', 'macosx', 'clang', '-target', 'arm64-apple-macos14.0', *arguments], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
             for name in ['Scintilla', 'NativeSearch', 'EditorBridge', 'TextTankCore', 'TextTankRuntime']:
                 images[name] = app / f'Contents/Frameworks/{name}.framework/Versions/A/{name}'

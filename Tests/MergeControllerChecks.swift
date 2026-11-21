@@ -508,6 +508,10 @@ private actor MergeStageGate {
             }
             copy.window?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            let canExport = await waitUntil("exporting comparison to become key and ready") {
+                copy.window?.isKeyWindow == true && copy.merge.canPerform(.exportPatch)
+            }
+            try require(canExport, "D2 native export has a ready document window")
             copy.merge.exportPatch()
             let panelDeadline = ProcessInfo.processInfo.systemUptime + 10
             while nativeSavePanel?.isVisible != true && ProcessInfo.processInfo.systemUptime < panelDeadline {
