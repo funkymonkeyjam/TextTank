@@ -204,6 +204,54 @@ import Darwin
             "cleanup preserves the separate directory behind a storage alias")
     }
 
+    static func journalFailureCases(in root: URL) async throws {
+        let dir = root.appendingPathComponent("journal-errors")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
+        let a = dir.appendingPathComponent("a.txt"), b = dir.appendingPathComponent("b.txt")
+        let original = Data("original".utf8)
+        try original.write(to: a)
+        try original.write(to: b)
+        let matches = try await FolderSearch.search(FolderSearchRequest(directory: dir, query: "original")).matches
+        var options = SearchOptions()
+        options.query = "original"
+        options.replacement = "replacement"
+        let batch = FolderReplacementBatch(synchronizeManifest: { _ in
+            errno = EIO
+            return -1
+        })
+        let results = try FolderReplacement.replace(directory: dir, matches: matches, options: options, batch: batch)
+        let entries = try FolderReplacementBatch.read(batch.manifest).entries
+        try require(
+            entries.count == 1 && entries[0].1 == .prepared, "injected sync failure followed a complete prepared record"
+        )
+        let backup = batch.directory.appendingPathComponent(entries[0].0.backupName)
+        check(
+            try results.allSatisfy { $0.status == .failed } && Data(contentsOf: a) == original
+                && Data(contentsOf: b) == original,
+            "failed preparation keeps original files and stops the batch before another replacement")
+        check(
+            (try? Data(contentsOf: backup)) == original && results[0].backup == backup
+                && results[0].recoveryReport == batch.manifest,
+            "unconfirmed prepared entry keeps and reports its matching private original")
+        var calls = 0
+        let afterRename = FolderReplacementBatch(synchronizeManifest: { fd in
+            calls += 1
+            if calls == 2 {
+                errno = EIO
+                return -1
+            }
+            return fsync(fd)
+        })
+        let completed = try FolderReplacement.replace(
+            directory: dir, matches: matches, options: options, batch: afterRename)
+        check(
+            try completed[0].status == .replaced && completed[0].message.contains("synchronization failed")
+                && completed[0].backup.flatMap { try? Data(contentsOf: $0) } == original
+                && Data(contentsOf: a) == Data("replacement".utf8)
+                && completed[1].status == .failed && Data(contentsOf: b) == original,
+            "unconfirmed completion reports the actual changed file, keeps its backup and preserves its neighbor")
+    }
+
     static func main() async {
         if CommandLine.arguments.count == 3 {
             let argument = URL(fileURLWithPath: CommandLine.arguments[2])
@@ -593,6 +641,7 @@ import Darwin
                 "a newly launched Undo recognizes a prepared entry whose file was never changed")
             try await undoCases(in: root)
             try await historyCases(in: root)
+            try await journalFailureCases(in: root)
             Checks.summary { "PASS SearchReplacementChecks: \(Checks.count) assertions" }
         }
     }

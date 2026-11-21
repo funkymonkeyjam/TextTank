@@ -169,8 +169,13 @@ package enum FolderReplacement {
                         message: "Replaced \(found.hits.count) match(es)."
                             + (durable && journalConfirmed
                                 ? ""
-                                : " Completion journal/directory synchronization failed; prepared recovery report retained."),
+                                : " Completion journal/directory synchronization failed; private recovery evidence retained."),
                         backup: backup, recoveryReport: reportURL))
+            } catch let pending as FolderReplacementBatch.UnconfirmedPreparation {
+                results.append(
+                    .init(
+                        url: url, status: .failed, message: pending.localizedDescription,
+                        backup: pending.backup, recoveryReport: pending.manifest))
             } catch Failure.changed {
                 results.append(
                     .init(

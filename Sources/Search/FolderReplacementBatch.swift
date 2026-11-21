@@ -14,6 +14,15 @@ package final class FolderReplacementBatch {
         package let originalMode: UInt16
         package var backupName: String { id.uuidString + ".original" }
     }
+    struct UnconfirmedPreparation: LocalizedError {
+        let backup: URL
+        let manifest: URL
+        let failure: String
+        var errorDescription: String? {
+            "The source file was kept. Its private original is retained because the prepared recovery record could not be confirmed. "
+                + failure
+        }
+    }
     package enum State: String, Codable, Sendable { case prepared, replaced, abandoned, restored }
     private struct Header: Codable {
         let version: Int
@@ -51,16 +60,22 @@ package final class FolderReplacementBatch {
     private static let maximumManifestBytes = 64 * 1024 * 1024
     package let directory: URL
     package var manifest: URL { directory.appendingPathComponent(Self.manifestName) }
+    private let synchronizeManifest: (Int32) -> Int32
     private let id: UUID
     private let created = Date()
     private var stream: Int32 = -1
     private var retained = 0
     private var stopped = false
-    package init(store: URL = AppStorage.url(.folderReplacements)) {
+    package init(
+        store: URL = AppStorage.url(.folderReplacements),
+        synchronizeManifest: @escaping (Int32) -> Int32 = { fsync($0) }
+    ) {
+        self.synchronizeManifest = synchronizeManifest
         id = UUID()
         directory = store.appendingPathComponent(id.uuidString, isDirectory: true)
     }
     init(reopening manifest: URL, retired: Bool = false) throws {
+        synchronizeManifest = { fsync($0) }
         directory = manifest.deletingLastPathComponent()
         let name = directory.lastPathComponent
         let identity = retired && name.hasPrefix(".deleting-") ? String(name.dropFirst(".deleting-".count)) : name
@@ -206,12 +221,15 @@ package final class FolderReplacementBatch {
         var bytes = try JSONEncoder().encode(change)
         bytes.append(10)
         var info = stat()
-        guard fstat(stream, &info) == 0, info.st_size <= Self.maximumManifestBytes - bytes.count else {
+        guard fstat(stream, &info) == 0 else {
+            throw FileOperationFailure(errno, operation: "inspect folder replacement manifest", path: manifest.path)
+        }
+        guard info.st_size >= 0, info.st_size <= Self.maximumManifestBytes - bytes.count else {
             throw FolderSearchError.invalidRequest("The private recovery manifest exceeds its size limit.")
         }
         do {
             try FolderReplacement.write(bytes, to: stream, path: manifest.path)
-            guard fsync(stream) == 0 else {
+            guard synchronizeManifest(stream) == 0 else {
                 throw FileOperationFailure(errno, operation: "sync folder replacement manifest", path: manifest.path)
             }
         } catch {
@@ -237,8 +255,16 @@ package final class FolderReplacementBatch {
             retained += 1
             return backup
         } catch {
+            // A complete prepared line can already be visible even when its write or fsync
+            // reports an error. Its original must survive until the batch can be reviewed.
+            if published && stopped {
+                throw UnconfirmedPreparation(backup: backup, manifest: manifest, failure: error.localizedDescription)
+            }
             if published || error is PublishedFileSyncFailure {
-                try FileManager.default.removeItem(at: backup)
+                do { try FileManager.default.removeItem(at: backup) } catch {
+                    throw UnconfirmedPreparation(
+                        backup: backup, manifest: manifest, failure: error.localizedDescription)
+                }
             }
             try removeIfEmpty()
             throw error
