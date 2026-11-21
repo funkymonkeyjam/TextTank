@@ -138,6 +138,10 @@ __attribute__((objc_subclassing_restricted))
 /// lead-byte alignment and encodability are all checked before the first edit; NO changes
 /// nothing. Afterwards there is one caret, just after the first replacement, scrolled into view.
 - (BOOL)replaceRanges:(NSArray<TTByteRange *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision NS_SWIFT_NAME(replaceRanges(_:withTexts:expectedRevision:));
+/// Search publishes its semantic macro step after the validated native edit returns. A Stop or a
+/// second search before confirmation discards the unfinished recording.
+- (BOOL)replaceSearchRanges:(NSArray<TTByteRange *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision NS_SWIFT_NAME(replaceSearchRanges(_:withTexts:expectedRevision:));
+- (BOOL)confirmRecordedSearchReplacement;
 @property(nonatomic) BOOL readOnly;
 /// The one read-only guard: every command that edits text calls it before anything else,
 /// including before any dialog, so the reason is always the same and always stated first.

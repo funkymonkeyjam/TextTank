@@ -451,6 +451,33 @@ import Foundation
             func commands(_ macro: RecordedMacro?) -> [String] { macro?.steps.compactMap(\.command) ?? [] }
 
             do {
+                let recorder = MacroController(editorProvider: { editor })
+                load("saved", caret: 5)
+                recorder.startRecording()
+                type("X")
+                let range = [TTByteRange(location: 0, length: 1)]
+                check(
+                    editor.replaceRanges(range, withTexts: ["s"], expectedRevision: editor.revision),
+                    "same-byte generic edit succeeds")
+                check(
+                    try recorder.finishRecording()?.steps == [.insertText("X")],
+                    "same-byte generic edit preserves the complete recorded literal")
+                _ = editor.setSelectionAnchor(editor.byteLength, caret: editor.byteLength)
+                recorder.startRecording()
+                type("X")
+                check(
+                    editor.replaceRanges(range, withTexts: ["S"], expectedRevision: editor.revision),
+                    "generic edit removed from any application-level macro registration still commits")
+                do {
+                    _ = try recorder.finishRecording()
+                    check(false, "unregistered generic edit must refuse to save a partial recording")
+                } catch {
+                    check(
+                        error.localizedDescription.contains("without a recorded macro step"),
+                        "unregistered generic edit rejects the partial recording")
+                }
+            }
+            do {
                 let isolated = try IsolatedSupportDirectory("ReturnMacroCodec")
                 let previousEnding = editor.statusInfo.eol
                 defer {

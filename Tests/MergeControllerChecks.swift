@@ -139,7 +139,8 @@ private actor MergeStageGate {
               "over-limit original describes the editable fallback and explicit Cancel preserves the captured editor")
     }
 
-    @MainActor static func mergeRecordingChecks(_ delegate: AppDelegate) async throws {
+    @MainActor static func mergeRecordingChecks(_ delegate: AppDelegate, withoutRegistration: Bool = false) async throws
+    {
         enum Scenario: CaseIterable {
             case apply, clone, unrelated, cancel, stale, readOnly, noChange, rejected, reentrant
         }
@@ -176,7 +177,8 @@ private actor MergeStageGate {
                 check(false, "Applied merge cannot finish as a partial macro")
             } catch {
                 check(
-                    error.localizedDescription.contains("Applying selected comparison changes"),
+                    error.localizedDescription.contains(
+                        withoutRegistration ? "without a recorded macro step" : "Applying selected comparison changes"),
                     "Finish explains the discarded merge recording")
             }
         }
@@ -186,6 +188,8 @@ private actor MergeStageGate {
             return nil
         }
         for scenario in Scenario.allCases {
+            if withoutRegistration && scenario == .rejected { continue } // This case exercises the manual reservation.
+            service.prepareSelectedChange = withoutRegistration ? nil : prepare
             var notices: [String] = []
             recorder.onInvalidated = { notices.append($0) }
             let destination = newDocument()
@@ -302,7 +306,9 @@ private actor MergeStageGate {
                     "One Undo restores exact destination across views \(scenario)")
             } else {
                 let expected = Array(repeating: RecordedMacro.Step.insertText("\n"), count: scenario == .stale ? 2 : 1)
-                check(notices.isEmpty, "No spurious discard notice \(scenario)")
+                check(
+                    notices.count == (withoutRegistration && scenario == .reentrant ? 1 : 0),
+                    "No spurious discard notice \(scenario)")
                 check(
                     try recorder.finishRecording()?.steps == expected,
                     "Valid independent or unaffected recording retains actual Return \(scenario)")
@@ -347,6 +353,7 @@ private actor MergeStageGate {
                 "D2 owned native event loop/document controller")
             try await automationPreviewChecks(delegate)
             try await mergeRecordingChecks(delegate)
+            try await mergeRecordingChecks(delegate, withoutRegistration: true)
             let pairs = try JSONDecoder().decode(
                 [Pair].self, from: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("review/corpus.json")))
             for pair in pairs {
