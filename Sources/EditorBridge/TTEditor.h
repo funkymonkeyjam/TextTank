@@ -104,6 +104,8 @@ __attribute__((objc_subclassing_restricted))
 /// Reading makes one copy, decoded straight from the engine's buffer. Do not read it only for
 /// its size (byteLength) or for a background scan of the bytes (utf8Data).
 @property(nonatomic, copy) NSString *text;
+/// Tests physical line content in bytes, excluding CR and LF, without copying the text.
+- (BOOL)hasLineLongerThan:(NSUInteger)limit;
 /// Length of the document in UTF-8 bytes, without copying it.
 @property(nonatomic, readonly) NSInteger byteLength;
 /// The document's exact UTF-8 bytes as one immutable copy, safe to hand to a background queue.

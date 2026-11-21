@@ -254,7 +254,22 @@ import AppKit
     private(set) var languageIdentifier = LanguageProfile.plainTextID { didSet { languageResolved = true } }
     /// State notification after LanguageController already installed the lexer and view styles.
     /// Never applies a profile again: menu/style callbacks use this path.
-    func noteAppliedLanguage(_ identifier: String) { languageIdentifier = identifier }
+    private(set) var deferredLargeFileLanguage: String?
+    func noteAppliedLanguage(_ identifier: String) {
+        languageIdentifier = identifier
+        deferredLargeFileLanguage = nil
+    }
+    func enableLargeFileEditing() {
+        guard let identifier = deferredLargeFileLanguage else { return }
+        if identifier == LanguageProfile.plainTextID {
+            usePlainTextLanguage()
+        } else if !applyLanguage(identifier, using: EditorServices.current?.languages) {
+            presentations.forEach { $0.showTransientStatus("The saved language profile is unavailable. Choose a language.") }
+            return
+        }
+        for view in presentations.flatMap(\.views) { view.wrap = EditorServices.current?.settings?.value.wrap ?? false }
+        presentations.forEach { $0.refreshStatusDetails() }
+    }
     /// Explicit document-level language intent for loads/restores; metadata changes only after success.
     @discardableResult func applyLanguage(_ identifier: String, using controller: LanguageController?) -> Bool {
         guard let controller, controller.applyToDocument(identifier: identifier, through: editor) else { return false }
@@ -924,10 +939,14 @@ import AppKit
         loading = false
         guard !languageResolved else { return }
         languageResolved = true
-        if let languages = EditorServices.current?.languages,
-            let id = languages.detect(filename: fileURL?.lastPathComponent ?? "", text: content.languageSample)
-        {
-            _ = applyLanguage(id, using: languages)
+        let languages = EditorServices.current?.languages
+        let detected = languages?.detect(filename: fileURL?.lastPathComponent ?? "", text: content.languageSample)
+        if editor.byteLength >= 32 * 1024 * 1024 || editor.hasLineLongerThan(1024 * 1024) {
+            // A newly opened editor has no installed lexer. Keep the detected choice for the opt-in action.
+            deferredLargeFileLanguage = detected ?? LanguageProfile.plainTextID
+            editor.wrap = false
+        } else if let detected {
+            _ = applyLanguage(detected, using: languages)
         }
     }
     /// The source's own extension; ".txt" only for an untitled document, nothing for a name without one.

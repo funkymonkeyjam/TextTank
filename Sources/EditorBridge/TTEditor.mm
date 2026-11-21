@@ -882,6 +882,20 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     // The pointer is valid only until the next message, and none is sent before the copy is done.
     return TTStringFromUTF8((const void *)[_engine message:SCI_GETRANGEPOINTER wParam:0 lParam:length], (NSUInteger)length);
 }
+- (BOOL)hasLineLongerThan:(NSUInteger)limit {
+    [self assertThread];
+    const NSUInteger length = self.byteLength;
+    if (length <= limit) return NO;
+    const auto *bytes = reinterpret_cast<const uint8_t *>(
+        [_engine message:SCI_GETRANGEPOINTER wParam:0 lParam:length]);
+    NSUInteger lineLength = 0;
+    for (NSUInteger index = 0; index < length; ++index) {
+        const uint8_t byte = bytes[index];
+        if (byte == '\r' || byte == '\n') lineLength = 0;
+        else if (++lineLength > limit) return YES;
+    }
+    return NO;
+}
 - (NSInteger)byteLength { [self assertThread]; return [_engine message:SCI_GETLENGTH]; }
 - (NSData *)utf8Data { return self.checkedUTF8Data ?: [NSData data]; }
 - (NSData * _Nullable)checkedUTF8Data {
