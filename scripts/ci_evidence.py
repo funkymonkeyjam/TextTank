@@ -92,8 +92,13 @@ def github(path):
     # Read only the canonical GitHub repository. Authentication stays with gh.
     env = dict(os.environ)
     env.pop('GH_DEBUG', None)
-    return subprocess.check_output(['gh', 'api', '--hostname', 'github.com', f'repos/{REPOSITORY}/{path}'],
-                                   env=env, timeout=40)
+    args = ['gh', 'api', '--hostname', 'github.com']
+    if re.fullmatch(r'actions/(?:artifacts/[0-9]+/zip|jobs/[0-9]+/logs)', path):
+        # Some gh versions require explicit consent for control bytes even when stdout is a pipe.
+        help_text = subprocess.check_output(['gh', 'api', '--help'], env=env, timeout=40)
+        if b'--allow-escape-sequences' in help_text:
+            args.append('--allow-escape-sequences')
+    return subprocess.check_output([*args, f'repos/{REPOSITORY}/{path}'], env=env, timeout=40)
 
 
 def select(items, name):

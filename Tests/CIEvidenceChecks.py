@@ -105,6 +105,24 @@ class CIEvidenceChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.verify()
 
+    def test_raw_github_responses_use_only_supported_api_flags(self):
+        raw = bytes([0, 27, 91, 75, 255])
+        for path in ('actions/jobs/55/logs', 'actions/artifacts/66/zip'):
+            for help_text in (b'--hostname', b'--allow-escape-sequences[=true|false]'):
+                with self.subTest(path=path, help_text=help_text), patch.object(
+                    ci.subprocess, 'check_output', side_effect=[help_text, raw]
+                ) as run:
+                    self.assertEqual(ci.github(path), raw)
+                    self.assertEqual(run.call_args_list[0].args[0], ['gh', 'api', '--help'])
+                    expected = ['gh', 'api', '--hostname', 'github.com']
+                    if b'--allow-escape-sequences' in help_text:
+                        expected.append('--allow-escape-sequences')
+                    self.assertEqual(run.call_args.args[0], [*expected, f'repos/{ci.REPOSITORY}/{path}'])
+        with patch.object(ci.subprocess, 'check_output', return_value=b'{}') as run:
+            self.assertEqual(ci.github('actions/workflows/native.yml'), b'{}')
+            run.assert_called_once()
+            self.assertNotIn('--allow-escape-sequences', run.call_args.args[0])
+
     def test_generate_from_native_acceptance_and_private_environment(self):
         log = b'Start\nSuite summary\n  PASS  bundle-smoke  PASS bound\n  PASS  bridge-checks  PASS native\n\n2 passed, 0 not passed\n'
         def command(*args):
