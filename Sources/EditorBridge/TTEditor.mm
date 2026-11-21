@@ -985,8 +985,10 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (BOOL)replaceDocumentText:(NSString *)text expectedRevision:(NSUInteger)revision {
     [self assertThread];
     if (self.revision != revision) return NO;
-    [self assertThread];
     NSData *data = TTUTF8(text); if (!data || self.readOnly) return NO;
+    return [self replaceDocumentWithEncodedUTF8:data];
+}
+- (BOOL)replaceDocumentWithEncodedUTF8:(NSData *)data {
     const sptr_t oldLength = [_engine message:SCI_GETLENGTH], newLength = (sptr_t)data.length;
     // Valid until the next modification; it is not read after the replacement.
     const unsigned char *before = (const unsigned char *)[_engine message:SCI_GETCHARACTERPOINTER];
@@ -1068,11 +1070,12 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (BOOL)loadDocumentText:(NSString *)text {
     [self assertThread];
-    if (self.readOnly || !TTUTF8(text)) return NO;
+    if (self.readOnly) return NO;
+    NSData *data = TTUTF8(text); if (!data || self.readOnly) return NO;
     // No undo record is kept of a load: Scintilla would otherwise hold a second copy of the
     // replaced and the inserted bytes only for the history to be emptied straight afterwards.
     [_engine message:SCI_SETUNDOCOLLECTION wParam:0];
-    const BOOL loaded = [self replaceDocumentText:text];
+    const BOOL loaded = [self replaceDocumentWithEncodedUTF8:data];
     [_engine message:SCI_SETUNDOCOLLECTION wParam:1];
     [_engine message:SCI_EMPTYUNDOBUFFER];
     return loaded;
