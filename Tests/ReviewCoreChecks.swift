@@ -28,6 +28,11 @@ import CryptoKit
     }
     static func main() async {
         await Checks.run("ReviewCoreChecks") {
+            let reviewBoundary = Data(repeating: 97, count: 8 * 1024 * 1024)
+            check(try snapshot(reviewBoundary).bytes == reviewBoundary, "the full historical review input remains admissible")
+            rejects("one extra input byte exceeds the common review ceiling", where: {
+                ($0 as? ReviewRejection) == .budgetExceeded
+            }) { _ = try snapshot(reviewBoundary + Data([98])) }
             let doc = DocumentID()
             let target = DocumentTarget(
                 documentID: doc, revision: 7, loadEpoch: 2, byteLength: 6,

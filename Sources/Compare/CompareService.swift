@@ -272,7 +272,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
             throw CompareOpenFailure.clipboard
         }
         let bytes = Data(text.utf8)
-        guard bytes.count <= 8 * 1024 * 1024 else { throw ReviewRejection.budgetExceeded }
+        guard bytes.count <= SizePolicy.standard.reviewText else { throw ReviewRejection.budgetExceeded }
         return (bytes, board.changeCount)
     }
     var fileSnapshot: @Sendable (URL, FileEncoding?) async throws -> TextSnapshot = { url, encoding in
@@ -291,7 +291,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     }
     static func budgetMessage(_ reason: ReviewBudgetReason) -> String {
         switch reason {
-        case .input: return "One source exceeds the text size limit."
+        case .input: return SizePolicy.standard.reviewTextNotice
         case .lines: return "One source has too many lines."
         case .work: return "The comparison work limit was reached."
         case .time: return "The comparison time limit was reached."
@@ -324,7 +324,9 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         case CompareFailure.invalid:
             return "The selected range does not follow text boundaries. Choose a complete text selection and try again."
         case CompareFailure.budget(let reason): return budgetMessage(reason) + " No document was changed."
-        case ReviewRejection.budgetExceeded: return "One source exceeds the 8 MiB text limit. No document was changed."
+        case PrivateFileError.tooLarge(let limit, _) where limit == SizePolicy.standard.reviewText:
+            return "The source file exceeds the \(limit / (1024 * 1024)) MiB file-read limit. Choose a smaller file or compare an excerpt in a new document."
+        case ReviewRejection.budgetExceeded: return SizePolicy.standard.reviewTextNotice
         case ReviewRejection.closed, ReviewRejection.revisionChanged, ReviewRejection.reloaded,
             ReviewRejection.bytesChanged:
             return "The source changed or closed. Choose it again or refresh explicitly."
@@ -463,8 +465,8 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         guard let editor, let doc = EditorLifetime.document(for: editor), doc.isOpen else {
             return (false, "There is no open document to compare.")
         }
-        guard editor.byteLength <= 8 * 1024 * 1024 else {
-            return (false, "This text exceeds the 8 MiB comparison limit.")
+        guard editor.byteLength <= SizePolicy.standard.reviewText else {
+            return (false, SizePolicy.standard.reviewTextNotice)
         }
         guard marked.capture.snapshot.document?.documentID != doc.runtimeID else {
             return (false, "Choose a different document; clone views share the same text.")
@@ -565,7 +567,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         if let call = item.representedObject as? CompareTabInvocation {
             if call.mark {
                 return call.editor().map {
-                    EditorLifetime.document(for: $0)?.isOpen == true && $0.byteLength <= 8 * 1024 * 1024
+                    EditorLifetime.document(for: $0)?.isOpen == true && $0.byteLength <= SizePolicy.standard.reviewText
                 } ?? false
             }
             let state = canCompare(call.editor())
@@ -578,8 +580,8 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         case #selector(markCurrent(_:)):
             let editor = currentEditor()
             item.toolTip =
-                editor?.byteLength ?? 0 > 8 * 1024 * 1024 ? "This text exceeds the 8 MiB comparison limit." : nil
-            return editor != nil && editor!.byteLength <= 8 * 1024 * 1024
+                editor?.byteLength ?? 0 > SizePolicy.standard.reviewText ? SizePolicy.standard.reviewTextNotice : nil
+            return editor != nil && editor!.byteLength <= SizePolicy.standard.reviewText
         case #selector(compareCurrent(_:)):
             let state = canCompare(currentEditor())
             item.toolTip = state.1

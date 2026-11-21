@@ -76,7 +76,7 @@ package enum UnifiedPatch {
                 hunks.append(h)
             }
         }
-        let cap = min(32 * 1024 * 1024, meter.policy.maximumOutputBytes)
+        let cap = min(SizePolicy.standard.reviewOutput, meter.policy.maximumOutputBytes)
         var output = Data(), labels = 0
         func append(_ bytes: Data) throws {
             guard bytes.count <= cap - output.count else { throw MergeFailure(.budgetExceeded) }

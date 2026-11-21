@@ -8,8 +8,8 @@ package enum CompareFailure: Error, Equatable, Sendable {
 package struct ComparePolicy: Sendable {
     package var maximumWork = 32_000_000
     package var seconds = 2.0
-    package var maximumWorkspaceBytes = 128 * 1024 * 1024
-    package var maximumOutputBytes = 64 * 1024 * 1024
+    package var maximumWorkspaceBytes = SizePolicy.standard.reviewWorkspace
+    package var maximumOutputBytes = SizePolicy.standard.displayOutput
     package var maximumRows = 500_000
     package init() {}
     package static let `default` = ComparePolicy()
@@ -101,7 +101,7 @@ package struct CompareProjection: Sendable {
             let rowCap = min(500_000, policy.maximumRows)
             guard total <= rowCap else { throw CompareFailure.budget(.output) }
             let estimate = total * 320 + changes.blocks.count * 80 + ((a.bytes.count + b.bytes.count) / 4096 + 2) * 128
-            guard estimate <= min(64 * 1024 * 1024, policy.maximumOutputBytes) else {
+            guard estimate <= min(SizePolicy.standard.displayOutput, policy.maximumOutputBytes) else {
                 throw CompareFailure.budget(.output)
             }
             try meter.reserve(estimate)
@@ -225,7 +225,7 @@ package struct CompareProjection: Sendable {
                         continue
                     }
                     let retained = refinements.count * MemoryLayout<ReviewInlineSpan>.stride
-                    guard retained <= min(64 * 1024 * 1024, policy.maximumOutputBytes) - estimate - retainedSpanBytes
+                    guard retained <= min(SizePolicy.standard.displayOutput, policy.maximumOutputBytes) - estimate - retainedSpanBytes
                     else {
                         spans.append([])
                         limited = true

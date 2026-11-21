@@ -44,20 +44,20 @@ package struct ReviewChangeSet: Sendable {
 package struct ReviewInlinePolicy: Sendable {
     package var maximumWork = 250_000
     package var seconds = 0.250
-    package var maximumWorkspaceBytes = 16 * 1024 * 1024
+    package var maximumWorkspaceBytes = SizePolicy.standard.inlineWorkspace
     package var maximumSpans = 32_000
-    package var maximumOutputBytes = 8 * 1024 * 1024
-    package var maximumSpanBytes = 64 * 1024
+    package var maximumOutputBytes = SizePolicy.standard.inlineOutput
+    package var maximumSpanBytes = SizePolicy.standard.inlineSpan
     package var maximumTokens = 32_000
 }
 package struct ReviewDiffPolicy: Sendable {
-    package var maximumInputBytes = 8 * 1024 * 1024
+    package var maximumInputBytes = SizePolicy.standard.reviewText
     package var maximumLines = 250_000
     package var maximumWork = 128_000_000
     package var seconds = 2.0
-    package var maximumWorkspaceBytes = 128 * 1024 * 1024
+    package var maximumWorkspaceBytes = SizePolicy.standard.reviewWorkspace
     package var maximumBlocks = 100_000
-    package var maximumOutputBytes = 32 * 1024 * 1024
+    package var maximumOutputBytes = SizePolicy.standard.reviewOutput
     package var inline = ReviewInlinePolicy()
     package init() {}
     package static let `default` = ReviewDiffPolicy()
@@ -137,7 +137,7 @@ final class ReviewMeter {
     }
     func reserve(_ bytes: Int) throws {
         try poll()
-        let limit = min(128 * 1024 * 1024, policy.maximumWorkspaceBytes)
+        let limit = min(SizePolicy.standard.reviewWorkspace, policy.maximumWorkspaceBytes)
         guard bytes >= 0, workspace <= limit,
             bytes <= limit - workspace
         else { throw ReviewHalt.budget(.workspace) }
@@ -148,7 +148,7 @@ final class ReviewMeter {
     func result(_ count: Int) throws {
         let bytes = count.multipliedReportingOverflow(by: 256)
         guard count <= min(100_000, policy.maximumBlocks), !bytes.overflow,
-            bytes.partialValue <= min(32 * 1024 * 1024, policy.maximumOutputBytes)
+            bytes.partialValue <= min(SizePolicy.standard.reviewOutput, policy.maximumOutputBytes)
         else { throw ReviewHalt.budget(.output) }
         metrics.resultBytes = bytes.partialValue
     }
@@ -162,7 +162,7 @@ struct ReviewLines {
     init(_ snapshot: TextSnapshot, meter: ReviewMeter, lfOnly: Bool = false) throws {
         self.snapshot = snapshot
         try meter.enter(.lines)
-        guard snapshot.bytes.count <= min(8 * 1024 * 1024, meter.policy.maximumInputBytes),
+        guard snapshot.bytes.count <= min(SizePolicy.standard.reviewText, meter.policy.maximumInputBytes),
             meter.policy.maximumLines >= 0
         else {
             throw ReviewHalt.budget(.input)

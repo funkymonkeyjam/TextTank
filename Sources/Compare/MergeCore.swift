@@ -62,7 +62,7 @@ package enum MergeCore {
         parentByteLength: Int, selected: Set<Int>
     ) -> Bool {
         guard changes.completeness == .complete, !selected.isEmpty, selected.count <= 100_000,
-            changes.blocks.count <= 100_000, parentByteLength >= 0, parentByteLength <= 8 * 1024 * 1024,
+            changes.blocks.count <= 100_000, parentByteLength >= 0, parentByteLength <= SizePolicy.standard.reviewText,
             selected.allSatisfy({ changes.blocks.indices.contains($0) })
         else { return false }
         var removed = 0, replacement = 0, count = 0, lower = -1, upper = 0
@@ -71,7 +71,7 @@ package enum MergeCore {
             let r = destination == .original ? block.original : block.modified
             let source = destination == .original ? block.modified : block.original
             guard r.lower >= 0, r.upper >= r.lower, r.upper <= parentByteLength,
-                source.lower >= 0, source.upper >= source.lower, source.upper <= 8 * 1024 * 1024,
+                source.lower >= 0, source.upper >= source.lower, source.upper <= SizePolicy.standard.reviewText,
                 r.lower >= upper
             else { return false }
             removed += r.upper - r.lower
@@ -81,9 +81,9 @@ package enum MergeCore {
                 lower = r.lower
             }
             upper = max(upper, r.upper)
-            guard removed <= parentByteLength, replacement <= 8 * 1024 * 1024, count <= 10_000 else { return false }
+            guard removed <= parentByteLength, replacement <= SizePolicy.standard.reviewText, count <= 10_000 else { return false }
         }
-        return parentByteLength - removed + replacement <= 8 * 1024 * 1024
+        return parentByteLength - removed + replacement <= SizePolicy.standard.reviewText
     }
     package static func plan(
         original: TextSnapshot, modified: TextSnapshot, changes: ReviewChangeSet,
@@ -141,8 +141,8 @@ package enum MergeCore {
             throw MergeFailure(.incomplete)
         }
         guard changes.blocks.count <= min(100_000, meter.policy.maximumBlocks),
-            a.bytes.count <= min(8 * 1024 * 1024, meter.policy.maximumInputBytes),
-            b.bytes.count <= min(8 * 1024 * 1024, meter.policy.maximumInputBytes)
+            a.bytes.count <= min(SizePolicy.standard.reviewText, meter.policy.maximumInputBytes),
+            b.bytes.count <= min(SizePolicy.standard.reviewText, meter.policy.maximumInputBytes)
         else { throw MergeFailure(.budgetExceeded) }
         try meter.reserve(changes.blocks.count * 128)
         var x = 0, y = 0
@@ -177,7 +177,7 @@ package enum MergeCore {
         _ side: CompareSide, _ parent: TextSnapshot, _ slice: Range<Int>?, _ selected: [Int], meter: ReviewMeter
     ) throws -> MergePlan {
         try meter.poll()
-        guard let target = parent.document, parent.bytes.count <= min(8 * 1024 * 1024, meter.policy.maximumInputBytes),
+        guard let target = parent.document, parent.bytes.count <= min(SizePolicy.standard.reviewText, meter.policy.maximumInputBytes),
             selected.count <= 100_000, changes.blocks.count <= 100_000
         else { throw MergeFailure(.budgetExceeded) }
         let dest = side == .original ? a : b, source = side == .original ? b : a
@@ -209,7 +209,7 @@ package enum MergeCore {
             let n = s.upper - s.lower
             removed += hi - lo
             replacementTotal += n
-            guard removed <= 8 * 1024 * 1024, replacementTotal <= 8 * 1024 * 1024 else {
+            guard removed <= SizePolicy.standard.reviewText, replacementTotal <= SizePolicy.standard.reviewText else {
                 throw MergeFailure(.budgetExceeded)
             }
             let lastIndex = groups.count - 1
@@ -223,7 +223,7 @@ package enum MergeCore {
         }
         let projectedLength = parent.bytes.count - removed + replacementTotal
         guard groups.count <= min(10_000, ReviewApplyPolicy.default.maximumEdits), projectedLength >= 0,
-            projectedLength <= 8 * 1024 * 1024
+            projectedLength <= SizePolicy.standard.reviewText
         else { throw MergeFailure(.budgetExceeded) }
         try meter.enter(.output)
         var edits: [ReviewEdit] = [], checks: [MergeBlockCheck] = [], projected = Data()

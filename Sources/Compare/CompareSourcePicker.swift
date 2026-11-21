@@ -212,10 +212,10 @@ import EditorBridge
         for popup in [original, modified] where !popup.isHidden {
             if let choice = popup.selectedItem?.representedObject as? CompareChoice, let doc = choice.document,
                 doc.isOpen,
-                doc.editor.byteLength > 8 * 1024 * 1024
+                doc.editor.byteLength > SizePolicy.standard.reviewText
             {
                 available = false
-                reason = "This text exceeds the 8 MiB comparison limit."
+                reason = SizePolicy.standard.reviewTextNotice
             }
         }
         start.isEnabled = !busy && available

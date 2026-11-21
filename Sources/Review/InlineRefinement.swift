@@ -12,7 +12,7 @@ enum ReviewInline {
         var policy = ReviewDiffPolicy()
         policy.maximumWork = min(250_000, limits.maximumWork)
         policy.seconds = min(0.250, limits.seconds)
-        policy.maximumWorkspaceBytes = min(16 * 1024 * 1024, limits.maximumWorkspaceBytes)
+        policy.maximumWorkspaceBytes = min(SizePolicy.standard.inlineWorkspace, limits.maximumWorkspaceBytes)
         let meter = ReviewMeter(policy, token: lineMeter.token, hooks: lineMeter.hooks)
         lineMeter.metrics.phases.insert(.inline)
         var tokens = 0, spans = 0, exhausted = false
@@ -24,7 +24,7 @@ enum ReviewInline {
                 try meter.spend()
                 let na = block.original.upper - block.original.lower,
                     nb = block.modified.upper - block.modified.lower
-                guard na + nb <= min(64 * 1024, limits.maximumSpanBytes) else { throw ReviewHalt.budget(.span) }
+                guard na + nb <= min(SizePolicy.standard.inlineSpan, limits.maximumSpanBytes) else { throw ReviewHalt.budget(.span) }
                 // Include String storage, token ranges, and conservative temporary capacity.
                 let storage = (na + nb + 1) * 96
                 try meter.reserve(storage)
@@ -74,7 +74,7 @@ enum ReviewInline {
                     endB -= 1
                 }
                 guard spans < min(32_000, limits.maximumSpans),
-                    (spans + 1) * 256 <= min(8 * 1024 * 1024, limits.maximumOutputBytes)
+                    (spans + 1) * 256 <= min(SizePolicy.standard.inlineOutput, limits.maximumOutputBytes)
                 else {
                     throw ReviewHalt.budget(.output)
                 }
