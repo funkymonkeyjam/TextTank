@@ -8,16 +8,10 @@ package enum TextTankApplication {
                 smokeFailure("Expected --smoke-test FILE.")
             }
             let file = URL(fileURLWithPath: CommandLine.arguments[2]).standardizedFileURL
-            let manager = FileManager.default
-            let support = manager.temporaryDirectory.appendingPathComponent("TextTank-smoke-" + UUID().uuidString)
-            do {
-                try manager.createDirectory(at: support, withIntermediateDirectories: false,
-                                            attributes: [.posixPermissions: 0o700])
-            } catch { smokeFailure(error.localizedDescription) }
-            defer { try? manager.removeItem(at: support) }
-            guard setenv("TEXTTANK_SUPPORT_DIRECTORY", support.path, 1) == 0, !AppStorage.permitsLegacyDefaults else {
-                smokeFailure("Could not isolate application support.", cleanup: support)
-            }
+            let support: URL
+            do { support = try AppStorage.makeTemporarySupportDirectory() }
+            catch { smokeFailure(error.localizedDescription) }
+            defer { try? FileManager.default.removeItem(at: support) }
             run(smokeFile: file) { error in smokeFailure(error.localizedDescription, cleanup: support) }
             return
         }

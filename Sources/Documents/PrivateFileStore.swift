@@ -20,7 +20,22 @@ package enum AppStorage {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("TextTank", isDirectory: true)
     }
-    private static var override: String? { ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"] }
+    private static let overrideKey = "TEXTTANK_SUPPORT_DIRECTORY"
+    private static var override: String? { ProcessInfo.processInfo.environment[overrideKey] }
+
+    /// Give a dedicated smoke process its own empty store before any application services start.
+    static package func makeTemporarySupportDirectory() throws -> URL {
+        let manager = FileManager.default
+        let directory = manager.temporaryDirectory.appendingPathComponent("TextTank-smoke-" + UUID().uuidString)
+        try manager.createDirectory(at: directory, withIntermediateDirectories: false,
+                                    attributes: [.posixPermissions: 0o700])
+        guard setenv(overrideKey, directory.path, 1) == 0 else {
+            let code = errno
+            try? manager.removeItem(at: directory)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+        }
+        return directory
+    }
     static package var supportDirectory: URL { resolve(override: override, fallback: defaultDirectory) }
     /// An isolated/portable store never imports from the person's shared defaults implicitly.
     static package var permitsLegacyDefaults: Bool {
