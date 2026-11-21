@@ -9,6 +9,11 @@ import Foundation
 final package class RecoveryWriter: @unchecked Sendable {
     package init() {}
 
+    /// Validation runs independently of potentially blocked disk I/O. The owning document admits
+    /// one capture at a time and resamples a deferred timer after its current capture is prepared.
+    package typealias Write = @Sendable () throws -> Void
+    package typealias Prepare = @Sendable () throws -> Write
+    private let preparationQueue = DispatchQueue(label: "TextTank.recovery.prepare", qos: .utility)
     private let queue = DispatchQueue(label: "TextTank.recovery", qos: .utility)
     private let lock = NSLock()
     private var pending: (@Sendable () -> Void)?
@@ -24,6 +29,24 @@ final package class RecoveryWriter: @unchecked Sendable {
         // Keep its last reference alive until the state lock has been released.
         withExtendedLifetime(displaced) {}
         if start { queue.async { self.drain() } }
+    }
+    /// Only a complete, validated capture can displace the previous pending disk write.
+    package func submitPrepared(
+        _ prepare: @escaping Prepare, didPrepare: @escaping @Sendable () -> Void,
+        completion: @escaping @Sendable (Error?) -> Void
+    ) {
+        preparationQueue.async {
+            defer { didPrepare() }
+            do {
+                let write = try prepare()
+                self.submit {
+                    do {
+                        try write()
+                        completion(nil)
+                    } catch { completion(error) }
+                }
+            } catch { completion(error) }
+        }
     }
     private func drain() {
         while true {
@@ -44,6 +67,21 @@ final package class RecoveryWriter: @unchecked Sendable {
     /// it, and writing it only for the cleanup to replace or delete it would be wasted work.
     /// Callers must not finish from an operation already running on this writer's queue.
     package func finish(_ operation: @Sendable () throws -> Void) rethrows {
+        preparationQueue.sync {}
+        try finishPending(operation)
+    }
+    /// The caller captures synchronously after older preparation settles. A failed capture has
+    /// nothing to replace the last good write with, so let that write finish before returning.
+    package func finishPrepared(_ prepare: () throws -> Write) throws {
+        preparationQueue.sync {}
+        let write: Write
+        do { write = try prepare() } catch {
+            queue.sync {}
+            throw error
+        }
+        try finishPending(write)
+    }
+    private func finishPending(_ operation: @Sendable () throws -> Void) rethrows {
         dispatchPrecondition(condition: .notOnQueue(queue))
         lock.lock()
         let displaced = pending

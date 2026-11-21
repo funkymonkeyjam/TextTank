@@ -82,6 +82,10 @@ import AppKit
     private var recoveryTimer: Timer?
     private var recoveryDeadlineTimer: Timer?
     private let recoveryWriter = RecoveryWriter()
+    /// One immutable capture can be preparing. A timer that fires meanwhile requests one fresh
+    /// capture after preparation, without copying bytes or waiting for validation or disk I/O.
+    private var preparingRecoveryGeneration: Int?
+    private var deferredRecoveryCapture = false
     /// Invalidates completion callbacks whenever recovery is rescheduled, flushed or closed.
     private var recoveryGeneration = 0
     /// Terminal once close starts: no timer or late completion may enqueue another copy.
@@ -360,14 +364,27 @@ import AppKit
         recoveryDeadlineTimer?.invalidate()
         recoveryDeadlineTimer = nil
     }
-    private func recoveryOperation() -> @Sendable () throws -> Void {
+    /// Editor bytes are content. A leading U+FEFF is text even when the eventual file has a BOM.
+    private nonisolated static func capturedText(from bytes: Data?) throws -> String {
+        guard let bytes else { throw EditorCaptureError.incomplete }
+        guard let text = bytes.withUnsafeBytes(FileCodec.decodeUTF8Content) else {
+            throw EditorCaptureError.invalidUTF8
+        }
+        return text
+    }
+    private func recoveryPreparation() -> RecoveryWriter.Prepare {
         let store = Self.recovery, id = recoveryID, revision = recoveryRevision
         if shouldKeepRecoveryCopy {
-            let snapshot = RecoverySnapshot(
-                id: id, text: editor.text, format: format, originalURL: fileURL?.absoluteString, revision: revision)
-            return { try store.save(snapshot) }
+            let bytes = editor.checkedUTF8Data, capturedFormat = format, originalURL = fileURL?.absoluteString
+            let capturedAt = Date()
+            return {
+                let snapshot = try RecoverySnapshot(
+                    id: id, text: Self.capturedText(from: bytes), format: capturedFormat,
+                    originalURL: originalURL, revision: revision, savedAt: capturedAt)
+                return { try store.save(snapshot) }
+            }
         }
-        return { try store.remove(id: id, throughRevision: revision) }
+        return { { try store.remove(id: id, throughRevision: revision) } }
     }
     /// The words for this document's save state. An edited document never reads "Saved": it reads
     /// "Edited" from the moment of the change, and says so about the recovery copy only once that
@@ -445,27 +462,37 @@ import AppKit
     private func enqueueRecovery() {
         guard !recoveryClosed else { return }
         cancelRecoveryTimers()
-        let generation = recoveryGeneration, operation = recoveryOperation()
+        guard preparingRecoveryGeneration == nil else {
+            deferredRecoveryCapture = true
+            return
+        }
+        let generation = recoveryGeneration
+        preparingRecoveryGeneration = generation
+        deferredRecoveryCapture = false
+        let resume: @MainActor @Sendable () -> Void = { [weak self] in
+            guard let self, self.preparingRecoveryGeneration == generation else { return }
+            self.preparingRecoveryGeneration = nil
+            if self.deferredRecoveryCapture { self.enqueueRecovery() }
+        }
         let deliver: @MainActor @Sendable (Error?) -> Void = { [weak self] error in
             guard let self, !self.recoveryClosed, self.recoveryGeneration == generation else { return }
             self.reportRecovery(error)
         }
-        recoveryWriter.submit {
-            let error: Error?
-            do {
-                try operation()
-                error = nil
-            } catch let failure { error = failure }
-            DispatchQueue.main.async { deliver(error) }
-        }
+        recoveryWriter.submitPrepared(
+            recoveryPreparation(), didPrepare: { DispatchQueue.main.async { resume() } },
+            completion: { error in DispatchQueue.main.async { deliver(error) } })
     }
     func flushRecovery() {
         guard !recoveryClosed else { return }
         cancelRecoveryTimers()
         recoveryGeneration += 1
-        let operation: @Sendable () throws -> Void = recoveryOperation()
+        preparingRecoveryGeneration = nil
+        deferredRecoveryCapture = false
         do {
-            try recoveryWriter.finish(operation)
+            try recoveryWriter.finishPrepared {
+                let prepare = recoveryPreparation()
+                return try prepare()
+            }
             reportRecovery(nil)
         } catch { reportRecovery(error) }
     }
@@ -477,6 +504,8 @@ import AppKit
         cancelRecoveryTimers()
         recoveryGeneration += 1
         recoveryClosed = true
+        preparingRecoveryGeneration = nil
+        deferredRecoveryCapture = false
         editor.onReadOnlyAttempt = nil
         editor.readOnly = true
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.prepareForClose() }
@@ -695,7 +724,7 @@ import AppKit
         guard let target = FileFormat.convertTargets.first(where: { $0.code == code })?.format else {
             throw FileCodecError.invalidConversionTarget
         }
-        _ = try FileCodec.encode(editor.text, format: target)
+        _ = try FileCodec.encode(Self.capturedText(from: editor.checkedUTF8Data), format: target)
         format = target
         flushRecovery()
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.refreshStatusDetails() }
@@ -735,6 +764,7 @@ import AppKit
     }
     override func printOperation(withSettings printSettings: [NSPrintInfo.AttributeKey: Any]) throws -> NSPrintOperation
     {
+        let text = try Self.capturedText(from: editor.checkedUTF8Data)
         let settings = printInfo.copy() as! NSPrintInfo
         settings.dictionary().addEntries(from: printSettings)
         settings.horizontalPagination = .fit
@@ -753,7 +783,7 @@ import AppKit
         printable.isVerticallyResizable = true
         printable.textContainer?.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
         printable.textContainer?.widthTracksTextView = true
-        printable.string = editor.text
+        printable.string = text
         if let container = printable.textContainer, let layout = printable.layoutManager {
             layout.ensureLayout(for: container)
             printable.setFrameSize(NSSize(width: width, height: max(1, ceil(layout.usedRect(for: container).height))))
@@ -769,7 +799,7 @@ import AppKit
     private func dataOnMain(ofType typeName: String) throws -> Data {
         dependencies.duringWrite?()
         if let savePayload { return savePayload }
-        return try FileCodec.encode(editor.text, format: format)
+        return try FileCodec.encode(Self.capturedText(from: editor.checkedUTF8Data), format: format)
     }
     override func writeSafely(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType)
         throws
@@ -792,7 +822,8 @@ import AppKit
         {
             throw DocumentActionError.diskChanged
         }
-        let submitted = try FileCodec.encode(editor.text, format: format), submittedFormat = format,
+        let submitted = try FileCodec.encode(Self.capturedText(from: editor.checkedUTF8Data), format: format),
+            submittedFormat = format,
             submittedRevision = editor.revision
         savePayload = submitted
         defer { savePayload = nil }
@@ -838,5 +869,16 @@ private final class DocumentDiskLocation: @unchecked Sendable {
         value = next
         lock.unlock()
         withExtendedLifetime(displaced) {}
+    }
+}
+
+/// Snapshot failure is distinct from successfully capturing an empty editor.
+enum EditorCaptureError: LocalizedError, Equatable {
+    case incomplete, invalidUTF8
+    var errorDescription: String? {
+        switch self {
+        case .incomplete: return "TextTank could not read the entire editor buffer."
+        case .invalidUTF8: return "The editor buffer contains invalid UTF-8 text."
+        }
     }
 }

@@ -115,6 +115,16 @@ package enum FileCodec {
         if data.starts(with: [0xFE, 0xFF]) { return try decode(data, encoding: .utf16BE) }
         return try decode(data, encoding: .utf8)
     }
+    /// Strict UTF-8 content with no external BOM interpretation. Works on the macOS 14 deployment target.
+    package static func decodeUTF8Content(_ bytes: UnsafeRawBufferPointer) -> String? {
+        var decoded = String(decoding: bytes, as: UTF8.self)
+        let exact = decoded.withUTF8 { utf8 in
+            utf8.count == bytes.count
+                && (bytes.isEmpty || memcmp(utf8.baseAddress!, bytes.baseAddress!, bytes.count) == 0)
+        }
+        return exact ? decoded : nil
+    }
+
     /// Validates and decodes in place: the bytes are read where they are, with no intermediate
     /// array, and each encoding builds its text in one pass.
     static package func decode(_ data: Data, encoding: FileEncoding) throws -> DecodedFile {
@@ -124,14 +134,7 @@ package enum FileCodec {
             let bytes = UnsafeRawBufferPointer(rebasing: all[(hasBOM ? marker.count : 0)...])
             switch encoding {
             case .utf8:
-                // String(decoding:as:) preserves a leading U+FEFF on macOS 14.
-                // Its replacement behavior is rejected by exact UTF-8 byte comparison.
-                var decoded = String(decoding: bytes, as: UTF8.self)
-                let exact = decoded.withUTF8 { utf8 in
-                    utf8.count == bytes.count
-                        && (bytes.isEmpty || memcmp(utf8.baseAddress!, bytes.baseAddress!, bytes.count) == 0)
-                }
-                guard exact else { throw FileCodecError.invalidBytes(encoding) }
+                guard let decoded = decodeUTF8Content(bytes) else { throw FileCodecError.invalidBytes(encoding) }
                 return decoded
             case .utf16LE, .utf16BE:
                 guard bytes.count % 2 == 0 else { throw FileCodecError.invalidBytes(encoding) }

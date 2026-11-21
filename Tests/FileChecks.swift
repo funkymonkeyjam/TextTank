@@ -352,6 +352,31 @@ import Darwin
             writer.submit { settled.signal() }
             check(settled.wait(timeout: .now() + 2) == .success, "the writer accepts work after a finish")
             check(!recorded().contains("queued"), "a queued recovery snapshot is not written after finish")
+            // A failed later capture cannot displace a complete draft that is waiting for disk I/O.
+            let checkedWriter = RecoveryWriter(), diskReady = DispatchSemaphore(value: 0)
+            let diskRelease = DispatchSemaphore(value: 0), prepared = DispatchSemaphore(value: 0)
+            let history = RecoveryEvents()
+            checkedWriter.submit {
+                diskReady.signal()
+                _ = diskRelease.wait(timeout: .now() + 5)
+            }
+            check(diskReady.wait(timeout: .now() + 2) == .success, "controlled recovery disk queue is occupied")
+            checkedWriter.submitPrepared(
+                { { history.record("valid") } }, didPrepare: { prepared.signal() },
+                completion: { _ in })
+            check(prepared.wait(timeout: .now() + 2) == .success, "validation can finish while disk is blocked")
+            checkedWriter.submitPrepared(
+                { throw RecoveryError.invalidSnapshot }, didPrepare: { prepared.signal() },
+                completion: { if $0 != nil { history.record("invalid") } })
+            check(prepared.wait(timeout: .now() + 2) == .success, "invalid capture reports without admitting a write")
+            DispatchQueue.global().async { diskRelease.signal() }
+            rejects("invalid explicit flush reports its own error", expecting: RecoveryError.invalidSnapshot) {
+                try checkedWriter.finishPrepared { throw RecoveryError.invalidSnapshot }
+            }
+            check(
+                history.read() == ["invalid", "valid"],
+                "failed flush retains and waits for the last valid pending draft")
+
             // F114/F135: this store's own previous snapshot is compared by revision from memory.
             let cacheURL = root.appendingPathComponent("revision-cache"),
                 cacheStore = RecoveryStore(directory: cacheURL)

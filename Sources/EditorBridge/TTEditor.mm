@@ -812,16 +812,21 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     return TTStringFromUTF8((const void *)[_engine message:SCI_GETRANGEPOINTER wParam:0 lParam:length], (NSUInteger)length);
 }
 - (NSInteger)byteLength { [self assertThread]; return [_engine message:SCI_GETLENGTH]; }
-- (NSData *)utf8Data {
+- (NSData *)utf8Data { return self.checkedUTF8Data ?: [NSData data]; }
+- (NSData * _Nullable)checkedUTF8Data {
     [self assertThread];
     const sptr_t length = [_engine message:SCI_GETLENGTH];
-    if (length <= 0) return [NSData data];
+    if (length < 0) return nil;
+    if (length == 0) return [NSData data];
     // One copy into a buffer the NSData owns. SCI_GETTEXTRANGEFULL does not move Scintilla's gap,
     // so a periodic capture never makes the next keystroke pay to move it back.
     char *buffer = (char *)malloc((size_t)length + 1);
-    if (!buffer) return [NSData data];
+    if (!buffer) return nil;
     Sci_TextRangeFull range = {{0, length}, buffer};
-    [_engine message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&range];
+    if ([_engine message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&range] != length) {
+        free(buffer);
+        return nil;
+    }
     return [NSData dataWithBytesNoCopy:buffer length:(NSUInteger)length freeWhenDone:YES];
 }
 - (void)setText:(NSString *)text {

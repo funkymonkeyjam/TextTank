@@ -100,6 +100,9 @@ __attribute__((objc_subclassing_restricted))
 @property(nonatomic, readonly) NSInteger byteLength;
 /// The document's exact UTF-8 bytes as one immutable copy, safe to hand to a background queue.
 @property(nonatomic, readonly) NSData *utf8Data;
+/// Immutable editor bytes for persistence and printing. Nil means the full range could not be copied.
+/// An empty document succeeds with zero bytes. Callers validate the UTF-8 content separately.
+@property(nonatomic, readonly, nullable) NSData *checkedUTF8Data;
 @property(nonatomic, readonly) NSString *selectedText;
 @property(nonatomic, readonly) BOOL modified;
 @property(nonatomic, readonly) NSUInteger revision;

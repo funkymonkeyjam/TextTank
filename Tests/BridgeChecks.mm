@@ -1688,6 +1688,16 @@ int main(int argc, char **argv) {
         TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
         auto bytesOf = [](NSString *text) { return [text dataUsingEncoding:NSUTF8StringEncoding]; };
         check(ed.text!=nil && ed.text.length==0 && [ed.text isEqual:@""] && ed.byteLength==0 && ed.utf8Data.length==0, "an empty document reads as an empty string with no bytes");
+        check(ed.checkedUTF8Data != nil && ed.checkedUTF8Data.length == 0, "checked capture succeeds on empty content");
+        {
+            const unsigned char invalid[]={0xff};
+            ScintillaView *native=(ScintillaView *)ed.subviews.firstObject;
+            [native message:SCI_APPENDTEXT wParam:sizeof(invalid) lParam:(sptr_t)invalid];
+            NSData *snapshot=ed.checkedUTF8Data;
+            [ed executeCommand:@"undo"];
+            check([snapshot isEqual:[NSData dataWithBytes:invalid length:sizeof(invalid)]] && ed.checkedUTF8Data.length==0,
+                  "checked bytes are immutable and preserve invalid input for the strict consumer");
+        }
         ed.text=@"﻿";
         const unsigned char bom[]={0xEF,0xBB,0xBF};
         check(ed.text.length==1 && [bytesOf(ed.text) isEqual:[NSData dataWithBytes:bom length:3]] && ed.byteLength==3, "a document that is exactly U+FEFF reads back as that one scalar");
