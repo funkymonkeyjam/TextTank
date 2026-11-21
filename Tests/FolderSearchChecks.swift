@@ -4,6 +4,54 @@ import Foundation
 import Darwin
 
 @main struct FolderSearchChecks {
+    static func inspectBeforeBudget(in root: URL) async throws {
+        let fm = FileManager.default
+        let scope = root.appendingPathComponent("inspection")
+        defer { try? fm.removeItem(at: scope) }
+        let roots = ["a", "b", "c"].map { scope.appendingPathComponent($0) }
+        for folder in roots { try fm.createDirectory(at: folder, withIntermediateDirectories: true) }
+        let image = roots[0].appendingPathComponent("album.png"),
+            broken = roots[1].appendingPathComponent("invalid.txt")
+        let text = roots[2].appendingPathComponent("owner.txt")
+        try (Data([137, 80, 78, 71, 13, 10, 26, 10]) + Data(repeating: 0, count: 2 * 1024 * 1024)).write(to: image)
+        try Data([255, 255, 255]).write(to: broken)
+        try Data("needle".utf8).write(to: text)
+        var small = FolderSearchRequest(directory: roots[0], query: "needle")
+        small.maximumTotalBytes = 8
+        small.maximumFiles = 1
+        let result = try await FolderSearch.searchAcross(small, directories: roots)
+        check(
+            result.matches.map(\.url.lastPathComponent) == ["owner.txt"] && result.bytesRead == 6
+                && result.filesConsidered == 1 && result.reachedLimit == nil,
+            "early binary and undecodable inputs leave the searchable file and byte budget available")
+        check(
+            result.excludedCounts[.binaryFormat] == 1 && result.inspectionBytes == 1027
+                && result.notSearched.count == 1,
+            "bounded image sample and invalid bytes are accounted across roots with distinct coverage outcomes")
+        let late = Data(repeating: 65, count: 1200) + Data([0xFF])
+        try late.write(to: broken)
+        let invalidLater = try await FolderSearch.searchAcross(small, directories: roots)
+        check(
+            invalidLater.matches.count == 1 && invalidLater.inspectionBytes == 1024 + late.count,
+            "late decoding failure also leaves the searchable byte budget available")
+        small.maximumInspectionBytes = 1024
+        let exhausted = try await FolderSearch.searchAcross(small, directories: roots)
+        check(
+            exhausted.reachedLimit == .inspectionBytes && exhausted.inspectionBytes == 1024 && exhausted.bytesRead == 0,
+            "separate inspection allowance stops repetitive rejected inputs")
+        let valid = String(repeating: "a", count: 1023) + "🦋\0needle"
+        try Data(valid.utf8).write(to: text)
+        let boundary = try await FolderSearch.search(FolderSearchRequest(directory: roots[2], query: "needle"))
+        check(
+            boundary.matches.count == 1 && boundary.bytesRead == valid.utf8.count && boundary.inspectionBytes == 0,
+            "UTF-8 scalar split at probe boundary and embedded NUL stay searchable")
+        let wide = try FileCodec.encode("𐐷\0needle", format: FileFormat(encoding: .utf16BE, bom: true))
+        try wide.write(to: text)
+        let utf16 = try await FolderSearch.search(FolderSearchRequest(directory: roots[2], query: "needle"))
+        check(
+            utf16.matches.count == 1 && utf16.bytesRead == wide.count && utf16.inspectionBytes == 0,
+            "UTF-16 marker retains text, including NUL and a surrogate pair")
+    }
     static func main() async {
         await Checks.run("FolderSearchChecks") {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -16,6 +64,7 @@ import Darwin
                 try? FileManager.default.removeItem(at: root)
                 try? FileManager.default.removeItem(at: outside)
             }
+            try await inspectBeforeBudget(in: root)
             let displayRoot = root.appendingPathComponent("display-columns")
             try FileManager.default.createDirectory(at: displayRoot, withIntermediateDirectories: true)
             try Data("\t😀e\u{301}x\r\n".utf8).write(to: displayRoot.appendingPathComponent("columns.txt"))
