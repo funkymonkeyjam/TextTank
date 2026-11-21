@@ -91,6 +91,9 @@ static BOOL TTValidatedByteRange(id candidate, NSUInteger documentLength, NSRang
 static const int TTBookmarkMarker = 1;
 static const int TTBookmarkMask = 1 << TTBookmarkMarker;
 static const int TTSearchIndicator = 20;
+// The native brace overlays are per view. They never fill a shared document indicator range.
+static const int TTMatchedBraceIndicator = 23, TTUnmatchedBraceIndicator = 24;
+struct TTBracePair { sptr_t position, match; };
 static NSColor *TTColorFromScintilla(sptr_t color) {
     return [NSColor colorWithSRGBRed:(color & 255)/255.0 green:((color >> 8)&255)/255.0 blue:((color >> 16)&255)/255.0 alpha:1];
 }
@@ -493,6 +496,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @interface TTEditor () <ScintillaNotificationProtocol> {
     TTLineNumberState _lineNumberState;
     BOOL _indentingReturn;
+    BOOL _braceCacheValid;
+    sptr_t _braceCaret, _braceEndStyled;
+    NSUInteger _braceRevision;
     NSString *_recordedReturnIndent;
 }
 @property(nonatomic, strong) ScintillaView *engine;
@@ -525,6 +531,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @end
 @implementation TTEditor
 @synthesize comparisonPresentation = _comparisonPresentation;
+@synthesize braceHighlightEnabled = _braceHighlightEnabled;
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
         NSAssert(NSThread.isMainThread, @"Editor must be created on the main thread");
@@ -532,6 +539,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         _engine = [[TTScintillaView alloc] initWithFrame:NSZeroRect];
         ((TTContentView *)_engine.content).editor = self;
         _autoIndentEnabled = YES;
+        _braceHighlightEnabled = YES;
         _engine.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         [self addSubview:_engine];
         _engine.delegate = self;
@@ -632,6 +640,16 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [_engine message:SCI_SETFOLDMARGINCOLOUR wParam:1 lParam:background];[_engine message:SCI_SETFOLDMARGINHICOLOUR wParam:1 lParam:background];
     for(int marker=SC_MARKNUM_FOLDEREND;marker<=SC_MARKNUM_FOLDEROPEN;++marker){[_engine message:SCI_MARKERSETFORE wParam:marker lParam:background];[_engine message:SCI_MARKERSETBACK wParam:marker lParam:foreground];}
     [self applySearchIndicatorStyle];
+    // Transparent outline for a pair and a squiggle for a mismatch. Native indicator drawing
+    // preserves lexer glyph styles, including imported styles that use slots 34 and 35.
+    [_engine message:SCI_INDICSETSTYLE wParam:TTMatchedBraceIndicator lParam:INDIC_STRAIGHTBOX];
+    [_engine message:SCI_INDICSETFORE wParam:TTMatchedBraceIndicator lParam:dark ? 0xC4E29D : 0x3A5122];
+    [_engine message:SCI_INDICSETALPHA wParam:TTMatchedBraceIndicator lParam:0];
+    [_engine message:SCI_INDICSETOUTLINEALPHA wParam:TTMatchedBraceIndicator lParam:255];
+    [_engine message:SCI_INDICSETSTYLE wParam:TTUnmatchedBraceIndicator lParam:INDIC_SQUIGGLE];
+    [_engine message:SCI_INDICSETFORE wParam:TTUnmatchedBraceIndicator lParam:dark ? 0x98A3FF : 0x272F97];
+    [_engine message:SCI_BRACEHIGHLIGHTINDICATOR wParam:1 lParam:TTMatchedBraceIndicator];
+    [_engine message:SCI_BRACEBADLIGHTINDICATOR wParam:1 lParam:TTUnmatchedBraceIndicator];
     if (_comparisonPresentation) [self applyComparisonStyle];
     // The bookmark dot: brand green on the light margin, citrus on the dark one, each at least 3:1.
     _bookmarkColour = dark ? 0x5BF4C7 : (highContrast ? 0x002E1C : 0x005B3A);
@@ -734,6 +752,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     dispatch_async(dispatch_get_main_queue(), ^{
         TTEditor *editor = weakSelf; if (!editor) return;
         editor.stateNotificationScheduled = NO;
+        [editor refreshBraceHighlight];
         [NSNotificationCenter.defaultCenter postNotificationName:TTEditorStateDidChangeNotification object:editor];
     });
 }
@@ -1173,6 +1192,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     // Each attached Scintilla view owns a reference, so either view may close first.
     [_engine message:SCI_SETDOCPOINTER wParam:0 lParam:[other.engine message:SCI_GETDOCPOINTER]];
     self.revision = other.revision;
+    _braceCacheValid = NO;
     [self noteStateChange];
     // The line count changed with no modification notification.
     [self updateLineNumberMargin:NO];
@@ -1197,6 +1217,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self assertThread]; if (!other || other == self) return;
     [self adoptSyntaxStylesFrom:other];
     self.autoIndentEnabled = other.autoIndentEnabled;
+    self.braceHighlightEnabled = other.braceHighlightEnabled;
     [_engine message:SCI_SETZOOM wParam:(uptr_t)[other.engine message:SCI_GETZOOM]];
     [_engine message:SCI_SETWRAPMODE wParam:(uptr_t)[other.engine message:SCI_GETWRAPMODE]];
     [_engine message:SCI_SETVIEWWS wParam:(uptr_t)[other.engine message:SCI_GETVIEWWS]];
@@ -1255,6 +1276,77 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self invalidateLineNumbersIfChanged];
     [self noteStateChange];
     return YES;
+}
+// The pinned Scintilla matcher ignores maxReStyle and may scan to EOF. For a live cue,
+// call it only if the boundary is close or a partner is proved within this byte budget.
+// Native text is UTF-8; ASCII delimiters never occur inside a multibyte character.
+- (BOOL)canResolveLiveBraceAt:(sptr_t)position brace:(char)brace opposite:(char)opposite forward:(BOOL)forward {
+    constexpr sptr_t budget = 4096;
+    const sptr_t available = forward ? [_engine message:SCI_GETLENGTH] - position - 1 : position;
+    if (available <= budget) return YES;
+    const sptr_t start = forward ? position + 1 : position - budget;
+    const sptr_t end = start + budget;
+    // GETSTYLEDTEXTFULL returns interleaved bytes and unsigned style indices plus two NULs.
+    // Match Document::BraceMatch's exact style rule, including its strict endStyled boundary.
+    char cells[2 * budget + 2];
+    Sci_TextRangeFull range = {{start,end},cells};
+    if ([_engine message:SCI_GETSTYLEDTEXTFULL wParam:0 lParam:(sptr_t)&range] != 2 * budget) return NO;
+    const sptr_t style = [_engine message:SCI_GETSTYLEINDEXAT wParam:position];
+    const sptr_t endStyled = [_engine message:SCI_GETENDSTYLED];
+    int depth = 1;
+    for (sptr_t i = 0; i < budget; ++i) {
+        const sptr_t offset = forward ? i : budget - 1 - i;
+        const char byte = cells[2 * offset];
+        if (byte != brace && byte != opposite) continue;
+        if (start + offset <= endStyled && (unsigned char)cells[2 * offset + 1] != style) continue;
+        depth += byte == brace ? 1 : -1;
+        if (!depth) return YES;
+    }
+    return NO;
+}
+// The current brace takes precedence; when definitely unmatched, try the preceding byte.
+// If the live search is indeterminate, clear the cue. Explicit Go and Select always resolve fully.
+- (TTBracePair)bracePairAtCaret:(sptr_t)caret live:(BOOL)live {
+    TTBracePair result = {-1, -1};
+    constexpr char delimiters[] = "()[]{}<>";
+    for (const sptr_t position : {caret, caret - 1}) {
+        if (position < 0) continue;
+        const int byte = (int)[_engine message:SCI_GETCHARAT wParam:position];
+        const char *found = byte > 0 ? std::strchr(delimiters, byte) : nullptr;
+        if (!found) continue;
+        const auto index = found - delimiters;
+        if (live && ![self canResolveLiveBraceAt:position brace:*found opposite:delimiters[index ^ 1] forward:(index % 2 == 0)]) {
+            return {-1, -1};
+        }
+        const sptr_t match = [_engine message:SCI_BRACEMATCH wParam:position lParam:0];
+        if (match >= 0) return {position, match};
+        if (result.position < 0) result.position = position;
+    }
+    return result;
+}
+- (void)refreshBraceHighlight {
+    if (!_braceHighlightEnabled || _comparisonPresentation) return;
+    const sptr_t caret = [_engine message:SCI_GETCURRENTPOS];
+    const sptr_t endStyled = [_engine message:SCI_GETENDSTYLED];
+    if (_braceCacheValid && _braceRevision == _revision && _braceCaret == caret && _braceEndStyled == endStyled) return;
+    _braceCacheValid = YES;
+    _braceRevision = _revision;
+    _braceEndStyled = endStyled;
+    _braceCaret = caret;
+    const TTBracePair pair = [self bracePairAtCaret:caret live:YES];
+    if (pair.position >= 0 && pair.match < 0) {
+        [_engine message:SCI_BRACEBADLIGHT wParam:pair.position];
+    } else {
+        [_engine message:SCI_BRACEHIGHLIGHT wParam:pair.position lParam:pair.match];
+    }
+}
+- (void)setBraceHighlightEnabled:(BOOL)enabled {
+    [self assertThread];
+    if (_braceHighlightEnabled == enabled) return;
+    _braceHighlightEnabled = enabled;
+    _braceCacheValid = NO;
+    if (!enabled) [_engine message:SCI_BRACEHIGHLIGHT wParam:(uptr_t)-1 lParam:-1];
+    else [self scheduleStateNotification];
 }
 - (BOOL)runCommand:(NSString *)identifier {
     if (![identifier isKindOfClass:NSString.class]) return NO;
@@ -1317,12 +1409,10 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         [self closeUndoGroup]; return YES;
     }
     if ([identifier isEqualToString:@"gotoMatchingBrace"] || [identifier isEqualToString:@"selectMatchingBrace"]) {
-        sptr_t position = [_engine message:SCI_GETCURRENTPOS];
-        sptr_t match = [_engine message:SCI_BRACEMATCH wParam:position lParam:0];
-        if (match < 0 && position > 0) { --position; match = [_engine message:SCI_BRACEMATCH wParam:position lParam:0]; }
-        if (match >= 0) {
-            if ([identifier isEqualToString:@"selectMatchingBrace"]) [_engine message:SCI_SETSEL wParam:MIN(position,match) lParam:MAX(position,match)+1];
-            else [_engine message:SCI_GOTOPOS wParam:match];
+        const TTBracePair pair = [self bracePairAtCaret:[_engine message:SCI_GETCURRENTPOS] live:NO];
+        if (pair.match >= 0) {
+            if ([identifier isEqualToString:@"selectMatchingBrace"]) [_engine message:SCI_SETSEL wParam:MIN(pair.position,pair.match) lParam:MAX(pair.position,pair.match)+1];
+            else [_engine message:SCI_GOTOPOS wParam:pair.match];
             [_engine message:SCI_SCROLLCARET];
         }
         return YES;
@@ -1454,6 +1544,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 /// Installs the lexer and its defaults without lexing; every caller colourises exactly once afterwards.
 - (void)installLexer:(NSString *)language {
+    _braceCacheValid = NO;
+    [self scheduleStateNotification];
     [_syntaxStyles removeAllObjects];[_syntaxFonts removeAllObjects];
     auto lexer = [language isEqualToString:@"user"] ? TextTankCreateUserLexer() : CreateLexer(language.UTF8String);
     if (!lexer) lexer = CreateLexer("null");
@@ -1572,6 +1664,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (void)setComparisonPresentation:(BOOL)value {
     [self assertThread]; _comparisonPresentation=value;
+    _braceCacheValid = NO;
+    if (value) [_engine message:SCI_BRACEHIGHLIGHT wParam:(uptr_t)-1 lParam:-1];
+    else [self scheduleStateNotification];
     _emptyLineNumbers.hidden=value;
     [_engine message:SCI_SETVSCROLLBAR wParam:!value];
     [_engine message:SCI_SETENDATLASTLINE wParam:!value];
@@ -1810,6 +1905,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (void)notification:(SCNotification *)notification {
     const unsigned int code = notification->nmhdr.code;
     const int type = notification->modificationType;
+    if (_braceCacheValid && _braceHighlightEnabled && !_comparisonPresentation &&
+        code == SCN_MODIFIED && (type & (SC_MOD_CHANGESTYLE | SC_MOD_LEXERSTATE))) {
+        _braceCacheValid = NO;
+        [self scheduleStateNotification];
+    }
     if (_indentingReturn && code == SCN_MODIFIED && (type & SC_MOD_INSERTCHECK)) {
         [self inheritIndentAtInsertion:notification];
     }

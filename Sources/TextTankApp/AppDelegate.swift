@@ -568,6 +568,9 @@ import AppKit
         view.addItem(
             title: "Auto-Indent on Return", action: #selector(SettingsController.toggleAutoIndent(_:)), target: settings
         )
+        view.addItem(
+            title: "Highlight Matching Braces", action: #selector(SettingsController.toggleBraceHighlight(_:)),
+            target: settings)
         let languageRoot = NSMenuItem()
         languageRoot.title = "Language"
         languageRoot.submenu = languages.menu()

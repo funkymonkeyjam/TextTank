@@ -19,6 +19,8 @@ package struct EditorSettings: Codable, Equatable {
     package var version: Int
     package var tabWidth: Int
     package var useTabs: Bool
+    package var braceHighlight: Bool?
+    package var braceHighlightEnabled: Bool { braceHighlight ?? true }
     package var autoIndent: Bool?
     package var autoIndentEnabled: Bool { autoIndent ?? true }
     package var wrap: Bool
@@ -228,10 +230,11 @@ package struct SettingsShortcutDraft {
     }
 }
 package enum EditorViewPreference: String {
-    case autoIndent
+    case autoIndent, braceHighlight
     fileprivate func enabled(in settings: EditorSettings) -> Bool {
         switch self {
         case .autoIndent: return settings.autoIndentEnabled
+        case .braceHighlight: return settings.braceHighlightEnabled
         }
     }
     /// The caller has already decoded and validated the complete settings object. Locate only

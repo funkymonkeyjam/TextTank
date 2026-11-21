@@ -85,22 +85,27 @@ import AppKit
     func apply(to editor: TTEditor) {
         editor.configureTabWidth(value.tabWidth, useTabs: value.useTabs)
         editor.autoIndentEnabled = value.autoIndentEnabled
+        editor.braceHighlightEnabled = value.braceHighlightEnabled
         editor.wrap = value.wrap
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        guard item.action == #selector(toggleAutoIndent(_:)) else { return true }
-        item.state = value.autoIndentEnabled ? .on : .off
+        if item.action == #selector(toggleAutoIndent(_:)) {
+            item.state = value.autoIndentEnabled ? .on : .off
+        } else if item.action == #selector(toggleBraceHighlight(_:)) {
+            item.state = value.braceHighlightEnabled ? .on : .off
+        }
         return true
     }
-    @objc func toggleAutoIndent(_ sender: Any?) {
-        // Recovery requires explicit consent in Settings before replacing a damaged file.
+    @objc func toggleAutoIndent(_ sender: Any?) { updateViewPreference(.autoIndent, sender: sender) }
+    @objc func toggleBraceHighlight(_ sender: Any?) { updateViewPreference(.braceHighlight, sender: sender) }
+    private func updateViewPreference(_ preference: EditorViewPreference, sender: Any?) {
         guard loadError == nil, ignoredShortcutBindings.isEmpty else {
             showSettings(sender)
             return
         }
         let previous = value
         do {
-            try store.updateViewPreference(.autoIndent, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu)) {
+            try store.updateViewPreference(preference, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu)) {
                 !$0
             }
             apply(replacing: previous)
@@ -200,7 +205,7 @@ import AppKit
                     let confirm = TTAlert()
                     confirm.messageText = "Reset all editor settings to their defaults?"
                     confirm.informativeText =
-                        "Tab width, indentation, wrapping, appearance and every assigned shortcut return to their defaults. Documents are not changed."
+                        "Tab width, indentation, brace highlighting, wrapping, appearance and every assigned shortcut return to their defaults. Documents are not changed."
                     confirm.addButton(withTitle: "Cancel", role: .cancel)
                     confirm.addButton(withTitle: "Reset Defaults").hasDestructiveAction = true
                     guard confirm.runModal() == .alertSecondButtonReturn else { return }

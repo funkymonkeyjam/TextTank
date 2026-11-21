@@ -94,7 +94,7 @@ import NativeSearch
             case 7: expected = composition.utilities
             case 8:
                 expected =
-                    row["action"] == "toggleAutoIndent:"
+                    ["toggleAutoIndent:", "toggleBraceHighlight:"].contains(row["action"] ?? "")
                     ? composition.settings : composition.workspaceWindow.groupCommands
             case 9: expected = composition.languages
             case 10: expected = composition.macros

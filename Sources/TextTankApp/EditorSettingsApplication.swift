@@ -12,6 +12,7 @@ import AppKit
             let views = doc.presentations.flatMap(\.views)
             for editor in views.isEmpty ? [doc.editor] : views {
                 editor.autoIndentEnabled = value.autoIndentEnabled
+                editor.braceHighlightEnabled = value.braceHighlightEnabled
                 if let previous {
                     let info = editor.statusInfo
                     if previous.tabWidth != value.tabWidth || previous.useTabs != value.useTabs,
