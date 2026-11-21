@@ -2,6 +2,110 @@
 import Foundation
 import Darwin
 @main struct SearchReplacementChecks {
+    private final class Clock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0.0
+        func read() -> TimeInterval { lock.withLock { value } }
+        func expire() { lock.withLock { value = 31 } }
+    }
+    static func aggregateDeadlineCases(in root: URL) async throws {
+        let scope = root.appendingPathComponent("replace-time")
+        defer { try? FileManager.default.removeItem(at: scope) }
+        let folders = ["a", "b", "c", "d"].map { scope.appendingPathComponent($0) }
+        let files = folders.map { $0.appendingPathComponent("owned.txt") }
+        let initial = Data("needle".utf8), changed = Data("fixed".utf8)
+        for (dir, file) in zip(folders, files) {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try initial.write(to: file)
+        }
+        let request = FolderSearchRequest(directory: folders[0], query: "needle")
+        let rows = try await FolderSearch.searchAcross(request, directories: folders).matches
+        var options = SearchOptions()
+        options.query = "needle"
+        options.mode = .regularExpression
+        options.replacement = "fixed"
+        let clock = Clock()
+        let partial = FolderReplacement.replaceSelected(
+            fallbackDirectory: folders[0], matches: rows, options: options, budget: .init(clock: { clock.read() })
+        ) { file in
+            if file.deletingLastPathComponent().lastPathComponent == "b" { clock.expire() }
+        }
+        check(
+            partial.map(\.status) == [.replaced, .stopped, .stopped, .stopped]
+                && partial[1].message.contains("time limit"), "one deadline stops the current and subsequent roots")
+        check(
+            try Data(contentsOf: files[0]) == changed
+                && files.dropFirst().allSatisfy { try Data(contentsOf: $0) == initial },
+            "the prepared second change and unvisited files remain byte-identical")
+        let manifest = try requireValue(
+            partial.first?.recoveryReport, "first completed replacement retained the Undo batch")
+        let restored = try FolderReplacement.undo(manifest: manifest)
+        check(
+            try restored.contains { $0.status == .restored }
+                && files.allSatisfy { try Data(contentsOf: $0) == initial },
+            "Undo through the retained batch restores all completed changes")
+        let cancelled = FolderSearchCancellation()
+        cancelled.cancel()
+        check(
+            FolderReplacement.replaceSelected(
+                fallbackDirectory: folders[0], matches: rows, options: options,
+                cancellation: cancelled
+            ).allSatisfy { $0.status == .cancelled },
+            "user cancellation reports cancellation separately from an expired operation")
+        do {
+            _ = try await FolderReplacement.preview(
+                fallbackDirectory: folders[0], matches: rows, options: options,
+                budget: .init(seconds: 0))
+            check(false, "expired preview returned bytes")
+        } catch { check(error.localizedDescription.contains("time limit"), "preview names elapsed budget") }
+        do {
+            _ = try await FolderReplacement.preview(
+                fallbackDirectory: folders[0], matches: rows, options: options,
+                maximumBytes: 17)
+            check(false, "over-limit preview returned bytes")
+        } catch {
+            check(
+                error.localizedDescription.contains("17 bytes") && error.localizedDescription.contains("fewer files"),
+                "preview explains the separate output cap with a remedy")
+        }
+        options.query = "missing"
+        let empty = FolderReplacement.replaceSelected(fallbackDirectory: folders[0], matches: rows, options: options)
+        check(
+            empty.count == 4 && empty.allSatisfy { $0.status == .unchanged && $0.backup == nil },
+            "zero matches finish without writing or stopping the other roots")
+        let long = Data(repeating: 65, count: 1024 * 1024) + initial
+        for file in files { try long.write(to: file) }
+        let largeRows = try await FolderSearch.searchAcross(request, directories: folders).matches
+        options.query = "missing"
+        let timed = FolderReplacement.replaceSelected(
+            fallbackDirectory: folders[0], matches: largeRows,
+            options: options, budget: .init(perFile: 0.002))
+        check(
+            timed.map(\.status) == [.timedOut, .timedOut, .stopped, .stopped]
+                && timed[3].message.contains("Three consecutive"), "three real native regex timeouts stop later roots")
+        // Freeze only the outer clock. A stop here requires the native search to receive the shorter remaining time.
+        let shortBudget = FolderReplacement.OperationBudget(seconds: 0.002, clock: { 0 })
+        let elapsed = FolderReplacement.replaceSelected(
+            fallbackDirectory: folders[0], matches: largeRows, options: options,
+            budget: shortBudget)
+        check(
+            elapsed.count == 4 && elapsed.allSatisfy { $0.status == .stopped && $0.message.contains("time limit") },
+            "the native search receives the remaining aggregate allowance and retires later roots")
+        do {
+            _ = try await FolderReplacement.preview(
+                fallbackDirectory: folders[0], matches: largeRows, options: options,
+                budget: shortBudget)
+            check(false, "native preview exceeded its operation allowance")
+        } catch {
+            check(
+                error.localizedDescription.contains("time limit"),
+                "dry-run projection shares the native search deadline")
+        }
+        check(
+            try files.allSatisfy { try Data(contentsOf: $0) == long },
+            "regex timeouts leave exact original bytes on every root")
+    }
+
     static func previewCases(in root: URL) async throws {
         let fm = FileManager.default, source = root.appendingPathComponent("patch-source")
         let apply = root.appendingPathComponent("patch-copy"), store = AppStorage.url(.folderReplacements)
@@ -741,6 +845,7 @@ import Darwin
                     && Data(contentsOf: interruptedFile) == initialBytes,
                 "a newly launched Undo recognizes a prepared entry whose file was never changed")
             try await previewCases(in: root)
+            try await aggregateDeadlineCases(in: root)
             try await undoCases(in: root)
             try await historyCases(in: root)
             try await journalFailureCases(in: root)

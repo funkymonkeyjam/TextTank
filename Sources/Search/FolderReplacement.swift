@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import Darwin
+import NativeSearch
 
 package struct FolderReplacementOutcome: Sendable {
     package init(url: URL, status: Status, message: String, backup: URL?, recoveryReport: URL? = nil) {
@@ -12,7 +13,7 @@ package struct FolderReplacementOutcome: Sendable {
     }
 
     package enum Status: String, Sendable {
-        case replaced, unchanged, conflict, skipped, failed, cancelled
+        case replaced, unchanged, conflict, skipped, failed, cancelled, timedOut, stopped
         package var displayName: String {
             switch self {
             case .replaced: return Strings.text("replacement.replaced", "Replaced")
@@ -20,6 +21,8 @@ package struct FolderReplacementOutcome: Sendable {
             case .conflict: return Strings.text("replacement.conflict", "Changed since search")
             case .skipped: return Strings.text("replacement.skipped", "Skipped")
             case .failed: return Strings.text("replacement.failed", "Failed")
+            case .timedOut: return "Search timed out"
+            case .stopped: return "Stopped early"
             case .cancelled: return Strings.text("replacement.cancelled", "Cancelled")
             }
         }
@@ -40,10 +43,80 @@ package enum FolderReplacement {
             case .unsafe: return "Not a writable single-link regular file inside the chosen directory."
             case .changed: return "File changed since search; search again before replacing."
             case .inputTooLarge:
-                return "The source exceeds the \(SizePolicy.describe(SizePolicy.standard.folderInput)) replacement input limit. Choose a smaller file."
+                return
+                    "The source exceeds the \(SizePolicy.describe(SizePolicy.standard.folderInput)) replacement input limit. Choose a smaller file."
             case .resultTooLarge:
-                return "The encoded result exceeds the \(SizePolicy.describe(SizePolicy.standard.folderReplacementOutput)) replacement output limit. Shorten the replacement or target fewer matches."
+                return
+                    "The encoded result exceeds the \(SizePolicy.describe(SizePolicy.standard.folderReplacementOutput)) replacement output limit. Shorten the replacement or target fewer matches."
             case .cancelled: return "Cancelled before committing this file."
+            }
+        }
+    }
+    package struct OperationBudget: Sendable {
+        private let deadline: TimeInterval
+        private let clock: @Sendable () -> TimeInterval
+        private let perFile: TimeInterval
+        private var consecutiveTimeouts = 0
+        private var exhausted = false
+
+        package init(
+            seconds: TimeInterval = 30, perFile: TimeInterval = SearchCore.defaultTimeLimit,
+            clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+        ) {
+            self.clock = clock
+            deadline = clock() + seconds
+            self.perFile = perFile
+        }
+
+        fileprivate func remaining(_ cancellation: FolderSearchCancellation) throws -> TimeInterval {
+            if cancellation.isCancelled || Task.isCancelled { throw Failure.cancelled }
+            if consecutiveTimeouts >= 3 { throw Limit.repeatedTimeout }
+            let seconds = deadline - clock()
+            guard !exhausted, seconds > 0 else { throw Limit.elapsed }
+            return seconds
+        }
+
+        fileprivate mutating func search(_ text: String, options: SearchOptions, cancellation: FolderSearchCancellation)
+            throws -> SearchReport
+        {
+            let available = try remaining(cancellation)
+            do {
+                let matches = try SearchCore.search(
+                    text, options: options, cancellation: cancellation.engineToken,
+                    limit: 100_000, timeLimit: min(perFile, available))
+                consecutiveTimeouts = 0
+                return matches
+            } catch {
+                _ = try remaining(cancellation)
+                guard TTSearchEngine.timedOut(error as NSError) else {
+                    consecutiveTimeouts = 0
+                    throw error
+                }
+                if available <= perFile {
+                    exhausted = true
+                    throw Limit.elapsed
+                }
+                consecutiveTimeouts += 1
+                throw consecutiveTimeouts >= 3 ? Limit.repeatedTimeout : Limit.fileTimeout
+            }
+        }
+    }
+
+    private enum Limit: LocalizedError {
+        case elapsed, repeatedTimeout, fileTimeout, comparisonTime, patchOutput(Int), comparison(ReviewBudgetReason)
+        var errorDescription: String? {
+            switch self {
+            case .elapsed:
+                return "The folder operation reached its time limit. Select fewer files or simplify the search."
+            case .repeatedTimeout:
+                return "Three consecutive file searches timed out. Simplify the pattern before trying again."
+            case .fileTimeout: return "This file search timed out. Simplify the pattern or choose a smaller file."
+            case .comparisonTime: return "Comparing this file exceeded the preview time limit. Select a smaller change."
+            case .patchOutput(let limit):
+                return
+                    "The patch exceeds the \(SizePolicy.describe(limit)) output limit. Preview fewer files or smaller changes."
+            case .comparison(let reason):
+                return "The comparison reached its \(reason.rawValue) limit. Preview a smaller file or change."
             }
         }
     }
@@ -76,15 +149,21 @@ package enum FolderReplacement {
             close(source)
             close(parent)
         }
-        func project(url: URL, expected: String, options: SearchOptions, cancellation: FolderSearchCancellation) throws
+        func project(
+            url: URL, expected: String, options: SearchOptions, cancellation: FolderSearchCancellation,
+            budget: inout OperationBudget
+        ) throws
             -> Projection
         {
-            guard info.st_size >= 0, info.st_size <= SizePolicy.standard.folderInput else { throw Failure.inputTooLarge }
-            let original = try read(source, size: Int(info.st_size), cancellation: cancellation, path: url.path)
+            guard info.st_size >= 0, info.st_size <= SizePolicy.standard.folderInput else {
+                throw Failure.inputTooLarge
+            }
+            let original = try read(
+                source, size: Int(info.st_size), cancellation: cancellation, path: url.path, budget: budget)
             guard sha(original) == expected else { throw Failure.changed }
             let decoded = try FileCodec.decode(original)
-            let found = try SearchCore.search(
-                decoded.text, options: options, cancellation: cancellation.engineToken, limit: 100_000)
+            let found = try budget.search(decoded.text, options: options, cancellation: cancellation)
+            _ = try budget.remaining(cancellation)
             guard !found.truncated else {
                 throw FolderSearchError.invalidRequest("Replacement result limit reached; file not changed.")
             }
@@ -97,6 +176,7 @@ package enum FolderReplacement {
                 throw error
             }
             let encoded = try FileCodec.encode(output, format: decoded.format)
+            _ = try budget.remaining(cancellation)
             guard encoded.count <= SizePolicy.standard.folderReplacementOutput else { throw Failure.resultTooLarge }
             return Projection(
                 original: original, encoded: encoded, oldText: decoded.text,
@@ -108,6 +188,58 @@ package enum FolderReplacement {
         cancellation: FolderSearchCancellation = FolderSearchCancellation(),
         batch: FolderReplacementBatch = FolderReplacementBatch(), beforeCommit: ((URL) -> Void)? = nil
     ) throws -> [FolderReplacementOutcome] {
+        var budget = OperationBudget()
+        return try replace(
+            directory: directory, matches: matches, options: options, excluding: excluding,
+            cancellation: cancellation, batch: batch, budget: &budget, beforeCommit: beforeCommit)
+    }
+
+    /// All roots of a confirmed user operation share their timeout streak, deadline and Undo batch.
+    static package func replaceSelected(
+        fallbackDirectory: URL, matches: [FolderSearchMatch], options: SearchOptions, excluding: Set<URL> = [],
+        cancellation: FolderSearchCancellation = .init(), budget initialBudget: OperationBudget = .init(),
+        beforeCommit: ((URL) -> Void)? = nil
+    ) -> [FolderReplacementOutcome] {
+        let roots = Dictionary(grouping: matches, by: { $0.sourceRoot ?? fallbackDirectory })
+        let batch = FolderReplacementBatch()
+        var budget = initialBudget, results: [FolderReplacementOutcome] = []
+        for directory in roots.keys.sorted(by: { $0.path < $1.path }) {
+            let selected = roots[directory]!
+            do {
+                results += try replace(
+                    directory: directory, matches: selected, options: options, excluding: excluding,
+                    cancellation: cancellation, batch: batch, budget: &budget, beforeCommit: beforeCommit)
+            } catch {
+                results += Set(selected.map(\.url)).sorted(by: { $0.path < $1.path }).map {
+                    problem(error, url: $0, backup: nil, report: nil)
+                }
+            }
+        }
+        return results
+    }
+
+    private static func problem(_ error: Error, url: URL, backup: URL?, report: URL?) -> FolderReplacementOutcome {
+        let status: FolderReplacementOutcome.Status
+        switch error {
+        case Failure.cancelled, is CancellationError: status = .cancelled
+        case Limit.fileTimeout: status = .timedOut
+        case Limit.elapsed, Limit.repeatedTimeout: status = .stopped
+        default: status = .failed
+        }
+        return .init(
+            url: url, status: status, message: error.localizedDescription, backup: backup, recoveryReport: report)
+    }
+
+    private static func replace(
+        directory: URL, matches: [FolderSearchMatch], options: SearchOptions, excluding: Set<URL>,
+        cancellation: FolderSearchCancellation, batch: FolderReplacementBatch, budget: inout OperationBudget,
+        beforeCommit: ((URL) -> Void)?
+    ) throws -> [FolderReplacementOutcome] {
+        do { _ = try budget.remaining(cancellation) } catch {
+            return Set(matches.map(\.url)).sorted(by: { $0.path < $1.path }).map {
+                problem(error, url: $0, backup: nil, report: nil)
+            }
+        }
         guard let opened = try? FolderSearch.openCanonicalDirectory(directory) else { throw Failure.unsafe }
         let root = opened.fd, rootPath = opened.path, prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
         defer { close(root) }
@@ -116,9 +248,8 @@ package enum FolderReplacement {
         let grouped = Dictionary(grouping: matches, by: { $0.url })
         var results: [FolderReplacementOutcome] = []
         for url in grouped.keys.sorted(by: { $0.path < $1.path }) {
-            if cancellation.isCancelled {
-                results.append(
-                    .init(url: url, status: .cancelled, message: "Not processed after cancellation.", backup: nil))
+            do { _ = try budget.remaining(cancellation) } catch {
+                results.append(problem(error, url: url, backup: nil, report: nil))
                 continue
             }
             if excluded.contains(url.resolvingSymlinksInPath().standardizedFileURL.path) {
@@ -143,7 +274,7 @@ package enum FolderReplacement {
                 defer { file.closeDescriptors() }
                 let parent = file.parent, source = file.source, initial = file.info, name = file.parts.last!
                 let projection = try file.project(
-                    url: url, expected: expected, options: options, cancellation: cancellation)
+                    url: url, expected: expected, options: options, cancellation: cancellation, budget: &budget)
                 let original = projection.original, encoded = projection.encoded
                 if encoded == original {
                     results.append(.init(url: url, status: .unchanged, message: "No byte changes.", backup: nil))
@@ -166,15 +297,17 @@ package enum FolderReplacement {
                 let entry = FolderReplacementBatch.Entry(
                     id: UUID(), root: rootPath, path: url.path, originalSHA256: expected,
                     replacementSHA256: sha(encoded), originalMode: UInt16(initial.st_mode & 0o7777))
+                _ = try budget.remaining(cancellation)
                 backup = try batch.prepare(source: source, original: original, entry: entry)
                 reportURL = batch.manifest
                 var renameAttempted = false
                 do {
                     beforeCommit?(url)
-                    if cancellation.isCancelled { throw Failure.cancelled }
+                    _ = try budget.remaining(cancellation)
                     try verifyCurrent(
                         parent: parent, name: name, initial: initial, bytes: original,
-                        cancellation: cancellation, path: url.path)
+                        cancellation: cancellation, path: url.path, budget: budget)
+                    _ = try budget.remaining(cancellation)
                     renameAttempted = true
                     guard renameat(stage.folder, StagingFile.name, parent, name) == 0 else {
                         throw FileOperationFailure(
@@ -212,16 +345,8 @@ package enum FolderReplacement {
                     .init(
                         url: url, status: .conflict, message: Failure.changed.localizedDescription, backup: backup,
                         recoveryReport: reportURL))
-            } catch Failure.cancelled {
-                results.append(
-                    .init(
-                        url: url, status: .cancelled, message: Failure.cancelled.localizedDescription, backup: backup,
-                        recoveryReport: reportURL))
             } catch {
-                results.append(
-                    .init(
-                        url: url, status: .failed, message: error.localizedDescription, backup: backup,
-                        recoveryReport: reportURL))
+                results.append(problem(error, url: url, backup: backup, report: reportURL))
             }
         }
         return results
@@ -266,7 +391,8 @@ package enum FolderReplacement {
     /// Project the same completed search used by Replace, without staging source files or creating a backup batch.
     static package func preview(
         fallbackDirectory: URL, matches: [FolderSearchMatch], options: SearchOptions, excluding: Set<URL> = [],
-        cancellation: FolderSearchCancellation = .init(), maximumBytes: Int = 32 * 1024 * 1024
+        cancellation: FolderSearchCancellation = .init(), maximumBytes: Int = 32 * 1024 * 1024,
+        budget initialBudget: OperationBudget = .init()
     ) async throws -> PatchPreview {
         let grouped = Dictionary(grouping: matches, by: { $0.sourceRoot ?? fallbackDirectory })
         let roots = grouped.keys.sorted { $0.path < $1.path }
@@ -275,8 +401,8 @@ package enum FolderReplacement {
         let sourcePaths = Set(matches.map { $0.url.standardizedFileURL.resolvingSymlinksInPath().path })
         var patch = Data(), identities: [FileSignature] = []
         var changed = 0, skipped = 0, conversions = 0
-        let limit = min(maximumBytes, 32 * 1024 * 1024)
-        let deadline = ProcessInfo.processInfo.systemUptime + 30
+        let limit = max(0, min(maximumBytes, 32 * 1024 * 1024))
+        var budget = initialBudget
         for (index, directory) in roots.enumerated() {
             let opened = try FolderSearch.openCanonicalDirectory(directory)
             defer { close(opened.fd) }
@@ -284,7 +410,7 @@ package enum FolderReplacement {
             let byFile = Dictionary(grouping: grouped[directory]!, by: { $0.url })
             for url in byFile.keys.sorted(by: { $0.path < $1.path }) {
                 guard !cancellation.isCancelled, !Task.isCancelled else { throw CancellationError() }
-                guard ProcessInfo.processInfo.systemUptime < deadline else { throw MergeFailure(.budgetExceeded) }
+                _ = try budget.remaining(cancellation)
                 if excluded.contains(url.standardizedFileURL.resolvingSymlinksInPath().path) {
                     skipped += 1
                     continue
@@ -295,7 +421,8 @@ package enum FolderReplacement {
                 else { throw Failure.changed }
                 let file = try SelectedFile(root: opened.fd, prefix: prefix, url: url, privateRoot: privateRoot)
                 defer { file.closeDescriptors() }
-                let p = try file.project(url: url, expected: expected, options: options, cancellation: cancellation)
+                let p = try file.project(
+                    url: url, expected: expected, options: options, cancellation: cancellation, budget: &budget)
                 identities.append(FileSignature(file.info))
                 guard p.original != p.encoded else { continue }
                 let utf8 = p.format.encoding == .utf8
@@ -305,18 +432,35 @@ package enum FolderReplacement {
                 let b = try TextSnapshot(
                     bytes: utf8 ? p.encoded : Data(p.newText.utf8), source: .file(UUID()), label: url.lastPathComponent)
                 var policy = ReviewDiffPolicy.default
-                policy.maximumOutputBytes = max(0, limit - patch.count)
-                policy.seconds = min(policy.seconds, deadline - ProcessInfo.processInfo.systemUptime)
+                policy.seconds = min(policy.seconds, try budget.remaining(cancellation))
                 let delta = await ReviewDiffEngine.compare(a, b, policy: policy)
                 guard !cancellation.isCancelled, !Task.isCancelled else { throw CancellationError() }
                 let parts = roots.count == 1 ? file.parts : ["folder-\(index + 1)"] + file.parts
-                let bytes = try await UnifiedPatch.write(
-                    original: a, modified: b, changes: delta,
-                    policy: policy, relativeComponents: parts)
+                _ = try budget.remaining(cancellation)
+                switch delta.completeness {
+                case .complete: break
+                case .cancelled: throw CancellationError()
+                case .budgetStopped(.time): throw Limit.comparisonTime
+                case .budgetStopped(let reason): throw Limit.comparison(reason)
+                }
+                policy.seconds = min(
+                    CompareTimeAllowance.standard.patchPolicy.seconds, try budget.remaining(cancellation))
+                let bytes: Data
+                do {
+                    bytes = try await UnifiedPatch.write(
+                        original: a, modified: b, changes: delta,
+                        policy: policy, relativeComponents: parts,
+                        maximumPatchBytes: limit - patch.count)
+                } catch let failure as MergeFailure {
+                    _ = try budget.remaining(cancellation)
+                    if failure.budget == .time { throw Limit.comparisonTime }
+                    if failure.budget == .output { throw Limit.patchOutput(limit) }
+                    throw failure
+                }
                 let note =
                     utf8
                     ? Data() : Data("# TextTank UTF-8 text preview of \(p.format.encoding.displayName) source\n".utf8)
-                guard note.count + bytes.count <= limit - patch.count else { throw MergeFailure(.budgetExceeded) }
+                guard note.count + bytes.count <= limit - patch.count else { throw Limit.patchOutput(limit) }
                 patch.append(note)
                 patch.append(bytes)
                 if !utf8 { conversions += 1 }
@@ -324,6 +468,7 @@ package enum FolderReplacement {
             }
         }
         guard !cancellation.isCancelled, !Task.isCancelled else { throw CancellationError() }
+        _ = try budget.remaining(cancellation)
         return PatchPreview(
             bytes: patch, changedFiles: changed, skippedOpenFiles: skipped, textConversions: conversions,
             roots: roots, sourcePaths: sourcePaths, sourceIdentities: identities)
@@ -499,7 +644,7 @@ package enum FolderReplacement {
     }
     private static func verifyCurrent(
         parent: Int32, name: String, initial: stat, bytes: Data,
-        cancellation: FolderSearchCancellation, path: String
+        cancellation: FolderSearchCancellation, path: String, budget: OperationBudget? = nil
     ) throws {
         let current = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
         guard current >= 0 else { throw Failure.changed }
@@ -513,16 +658,19 @@ package enum FolderReplacement {
             latest.st_gid == initial.st_gid, latest.st_flags == initial.st_flags,
             latest.st_ctimespec.tv_sec == initial.st_ctimespec.tv_sec,
             latest.st_ctimespec.tv_nsec == initial.st_ctimespec.tv_nsec,
-            try read(current, size: Int(latest.st_size), cancellation: cancellation, path: path)
+            try read(current, size: Int(latest.st_size), cancellation: cancellation, path: path, budget: budget)
                 == bytes
         else { throw Failure.changed }
     }
     private static func sha(_ data: Data) -> String { FolderSearch.sha256Hex(data) }
-    static func read(_ fd: Int32, size: Int, cancellation: FolderSearchCancellation, path: String) throws
+    static func read(
+        _ fd: Int32, size: Int, cancellation: FolderSearchCancellation, path: String, budget: OperationBudget? = nil
+    ) throws
         -> Data
     {
         var output = Data(), bytes = [UInt8](repeating: 0, count: 65536)
         while output.count < size {
+            _ = try budget?.remaining(cancellation)
             if cancellation.isCancelled { throw Failure.cancelled }
             let count = Darwin.read(fd, &bytes, min(bytes.count, size - output.count))
             if count < 0 && errno == EINTR { continue }
