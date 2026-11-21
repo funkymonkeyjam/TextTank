@@ -131,3 +131,15 @@ selection/recompute/encoding/clipboard/file/sheet controls. Default production p
 selected512m/30s headless correctness profiles are separate; final F0 admission never increases.
 Production Release remains optimized/non-testable. Counts describe registration; candidate results and
 physical/platform limits remain in exact validation evidence.
+
+## Bundled command-line editor
+
+Choose **TextTank → Install tt Command-Line Tool…** and select a directory you own. TextTank makes a symlink to the helper inside the app. You can also run `/Applications/TextTank.app/Contents/Helpers/tt` directly. To use the short name, choose a directory that is already on your shell’s PATH.
+
+- `tt "notes file.txt:12"` opens a local text file at line 12. An existing filename ending with a colon and digits takes precedence.
+- `printf 'first line\n' | tt -` opens UTF-8 standard input as an unsaved document.
+- `tt --wait notes.txt` waits until that document closes. For a single Git invocation, use `GIT_EDITOR='tt --wait' git commit`.
+- `tt --diff before.txt after.txt` compares two local files.
+- `tt -- -leading-dash.txt` opens a filename beginning with a dash.
+
+The app and tool must run in the same macOS login session. The tool reports open, decode and comparison errors on standard error and exits unsuccessfully. Closing a different document leaves a waiting invocation active.

@@ -31,6 +31,27 @@ extension DocumentChecks {
             document.editor.replaceSelection(text)
         }
 
+        section("bundled command-line request contents and receipt", #line) {
+            let sender = try TTInvocation(create: true)
+            let recipient = try TTInvocation(id: sender.id, create: false)
+            try sender.publish(.request) { try $0.write(contentsOf: JSONEncoder().encode(TTRequest.input(wait: true))) }
+            let content = Data("first\r\n雪".utf8)
+            try sender.publish(.input) { try $0.write(contentsOf: content) }
+            check(try recipient.claim() && !recipient.claim(), "one receiver claims the request once")
+            let bytes = try requireValue(try recipient.read(.processing), "receiver can inspect claimed request")
+            guard case .input(let wait) = try JSONDecoder().decode(TTRequest.self, from: bytes) else {
+                throw TTToolError("The request changed during handoff.")
+            }
+            check(
+                try wait && recipient.consumeInput() == content && recipient.read(.input) == nil,
+                "UTF-8 input survives handoff and private input is retired after capture")
+            try recipient.report(.closed)
+            let reply = try requireValue(try sender.read(.reply), "client receives document close")
+            let receipt = try JSONDecoder().decode(TTReply.self, from: reply)
+            check(
+                receipt.pid == ProcessInfo.processInfo.processIdentifier && receipt.state == .closed,
+                "completion carries the responding process identity and closed state")
+        }
         section("explicit local text URL", #line) {
             let folder = area.appendingPathComponent("explicit-url", isDirectory: true)
             try files.createDirectory(at: folder, withIntermediateDirectories: true)

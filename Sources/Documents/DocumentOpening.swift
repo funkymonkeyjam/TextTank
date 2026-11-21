@@ -331,6 +331,14 @@ struct TextOpenRequest {
         line = try coordinate("line")
         column = try coordinate("column")
     }
+    init(path: String, line: Int?) throws {
+        guard path.hasPrefix("/"), !path.hasPrefix("//"), !path.contains("\0"), line.map({ $0 > 0 }) ?? true else {
+            throw Self.invalidURL
+        }
+        self.file = URL(fileURLWithPath: path).standardizedFileURL
+        self.line = line
+        self.column = nil
+    }
     static func localFile(_ file: URL) throws -> URL {
         let folder = file.deletingLastPathComponent().resolvingSymlinksInPath()
         let url = folder.appendingPathComponent(file.lastPathComponent)

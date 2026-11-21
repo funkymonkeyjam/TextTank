@@ -208,7 +208,37 @@ import AppKit
         }
     }
 
+    private lazy var commandLine = CommandLineController { [weak self] in self?.compare }
+    @objc func handleCommandLine(_ notice: Notification) {
+        guard let raw = notice.userInfo?["request"] as? String,
+            let id = UUID(uuidString: raw)
+        else { return }
+        Task { await commandLine.accept(id) }
+    }
+    @objc func installCommandLine(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.title = "Install the tt Command-Line Tool"
+        panel.message = "Choose a folder you own for a link to TextTank’s tt tool."
+        panel.prompt = "Install"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+        panel.begin { [weak self] result in
+            guard result == .OK, let url = panel.url else { return }
+            do {
+                let path = try CommandLineController.install(
+                    helper: Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/tt"), in: url)
+                self?.knownWorkspace?.showTabMessage("Installed tt at " + path.path)
+            } catch { TTAlert.present(error) }
+        }
+    }
     func applicationWillFinishLaunching(_ notification: Notification) {
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(handleCommandLine(_:)),
+            name: TTInvocation.wakeName, object: String(ProcessInfo.processInfo.processIdentifier),
+            suspensionBehavior: .deliverImmediately)
         NSAppleEventManager.shared().setEventHandler(
             self, andSelector: #selector(handleOpenTextURL(_:reply:)), forEventClass: AEEventClass(kInternetEventClass),
             andEventID: AEEventID(kAEGetURL))
@@ -454,6 +484,9 @@ import AppKit
         app.addItem(
             title: "Settings…", action: #selector(SettingsController.showSettings(_:)), keyEquivalent: ",",
             target: settings)
+        app.addItem(
+            title: "Install tt Command-Line Tool…", action: #selector(installCommandLine(_:)), keyEquivalent: "",
+            target: self)
         app.addItem(.separator())
         // The standard application items. AppKit fills the Services menu.
         let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
