@@ -19,6 +19,8 @@ package struct EditorSettings: Codable, Equatable {
     package var version: Int
     package var tabWidth: Int
     package var useTabs: Bool
+    package var autoIndent: Bool?
+    package var autoIndentEnabled: Bool { autoIndent ?? true }
     package var wrap: Bool
     package var appearance: String
     // Key equivalents use AppKit's uppercase convention for Shift.

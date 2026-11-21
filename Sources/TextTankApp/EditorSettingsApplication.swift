@@ -11,6 +11,7 @@ import AppKit
         for doc in NSDocumentController.shared.documents.compactMap({ $0 as? TextDocument }) {
             let views = doc.presentations.flatMap(\.views)
             for editor in views.isEmpty ? [doc.editor] : views {
+                editor.autoIndentEnabled = value.autoIndentEnabled
                 if let previous {
                     let info = editor.statusInfo
                     if previous.tabWidth != value.tabWidth || previous.useTabs != value.useTabs,
