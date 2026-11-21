@@ -29,7 +29,7 @@ def module(name, filename):
 
 class BuildPipelineChecks(unittest.TestCase):
     def swift_header_probe(self, header, body):
-        with tempfile.TemporaryDirectory(prefix='bridge-types-', dir=ROOT / 'tmp') as work:
+        with tempfile.TemporaryDirectory(prefix='bridge-types-', dir=ROOT / 'build/tests') as work:
             folder = Path(work)
             copied = folder / header.name
             shutil.copyfile(header, copied)
@@ -71,7 +71,7 @@ func rawMode() throws {
         # Compile a copied header with no neighbouring Search directory; a hidden
         # transitive import is a real compiler failure rather than a text match.
         sdk = subprocess.check_output(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], text=True).strip()
-        with tempfile.TemporaryDirectory(prefix='editor-header-', dir=ROOT / 'tmp') as work:
+        with tempfile.TemporaryDirectory(prefix='editor-header-', dir=ROOT / 'build/tests') as work:
             folder = Path(work)
             header = folder / 'EditorBridge/TTEditor.h'
             header.parent.mkdir()
