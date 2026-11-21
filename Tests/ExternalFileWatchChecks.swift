@@ -5,15 +5,15 @@ import Darwin
 
 @MainActor enum ExternalFileWatchChecks {
     /// Count the actual descriptors pointing into the fixture, independent of the watcher's state.
-    private static func descriptors(in folder: URL) -> (owned: Int, total: Int) {
+    private static func descriptors(in folder: URL) -> (owned: Int, total: Int, distinct: Int) {
         let capacity = Int(proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, nil, 0))
-        guard capacity > 0 else { return (-1, -1) }
+        guard capacity > 0 else { return (-1, -1, -1) }
         let stride = MemoryLayout<proc_fdinfo>.stride
         var entries = [proc_fdinfo](repeating: proc_fdinfo(), count: capacity / stride + 32)
         let size = entries.withUnsafeMutableBytes {
             proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, $0.baseAddress, Int32($0.count))
         }
-        guard size > 0 else { return (-1, -1) }
+        guard size > 0 else { return (-1, -1, -1) }
         struct Node: Hashable {
             let device: dev_t, inode: ino_t
             init(_ value: stat) {
@@ -22,18 +22,22 @@ import Darwin
             }
         }
         guard let children = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
-        else { return (-1, -1) }
+        else { return (-1, -1, -1) }
         let ownedFiles = Set(
             children.compactMap { url -> Node? in
                 var value = stat()
                 return lstat(url.path, &value) == 0 && value.st_mode & S_IFMT == S_IFREG ? Node(value) : nil
             })
         var owned = 0
+        var distinct = Set<Node>()
         for entry in entries.prefix(Int(size) / stride) {
             var value = stat()
-            if fstat(entry.proc_fd, &value) == 0 && ownedFiles.contains(Node(value)) { owned += 1 }
+            if fstat(entry.proc_fd, &value) == 0 && ownedFiles.contains(Node(value)) {
+                owned += 1
+                distinct.insert(Node(value))
+            }
         }
-        return (owned, Int(size) / stride)
+        return (owned, Int(size) / stride, distinct.count)
     }
 
     static func run(in root: URL) throws {
@@ -135,6 +139,9 @@ import Darwin
                 try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(file), from: file, display: false))
             docs.last?.externalFile.setApplicationActive(false)
         }
+        _ = spinUntil("initial file inspections have released their reads") {
+            docs.allSatisfy { !$0.externalFile.checking } && descriptors(in: folder).owned == baseline.owned
+        }
         let before = descriptors(in: folder)
         var original = rlimit()
         let reduced = ProcessInfo.processInfo.environment["TEXTTANK_WATCH_REDUCED_FDS"] == "1"
@@ -146,17 +153,25 @@ import Darwin
         }
         defer { if reduced { _ = setrlimit(RLIMIT_NOFILE, &original) } }
         docs.forEach { $0.externalFile.setApplicationActive(true) }
+        var armed = before
         if reduced {
             _ = spinUntil("watch admission under limited fds") { descriptors(in: folder).owned > before.owned }
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-        } else {
-            _ = spinUntil("one native watch per open file") { descriptors(in: folder).owned == before.owned + number }
         }
-        let armed = descriptors(in: folder)
+        // A normal inspection and a vnode subscription can hold the same file independently.
+        // Sample the settled file descriptors once and assert on that same kernel census.
+        _ = spinUntil("settled native watches under the descriptor budget") {
+            guard docs.allSatisfy({ !$0.externalFile.checking }) else { return false }
+            armed = descriptors(in: folder)
+            guard armed.distinct == armed.owned else { return false }
+            return reduced
+                ? armed.owned > before.owned && armed.owned < before.owned + number
+                : armed.owned == before.owned + number
+        }
         check(
-            reduced
+            armed.distinct == armed.owned && (reduced
                 ? (armed.owned > before.owned && armed.owned < before.owned + number)
-                : armed.owned == before.owned + number,
+                : armed.owned == before.owned + number),
             "available descriptor budget bounds watcher admission")
         let last = try requireValue(docs.last, "last owned document")
         let lastURL = try requireValue(last.fileURL, "last disk file")
