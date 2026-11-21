@@ -11,6 +11,7 @@ import tempfile
 import sys
 import re
 from bootstrap import obtain_archive
+import runtime_artifacts
 
 
 # Review documentation is an explicit product-facing set. Session state, agent
@@ -101,10 +102,30 @@ def prune_previous(output):
         shutil.rmtree(path)
 
 
+def copy_verified_release(root, destination):
+    if os.environ.get('CONFIGURATION') != 'Release':
+        raise ValueError('Review packaging requires CONFIGURATION=Release.')
+    app = root / 'build/DerivedData/Build/Products/Release/TextTank.app'
+    if os.environ.get('APP_PATH') != str(app):
+        raise ValueError('Use the canonical Release application selected by scripts/package-review.sh.')
+    manifest = root / 'build/artifacts/Release/manifest.json'
+    manifest_hash = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    producer = runtime_artifacts.validate(root, manifest, 'Release')
+    if pathlib.Path(producer['app']) != app or runtime_artifacts.digest(manifest) != manifest_hash:
+        raise ValueError('Release manifest or application changed during validation.')
+    subprocess.run(['ditto', '--norsrc', '--noextattr', '--noqtn', str(app), str(destination)], check=True)
+    if runtime_artifacts.snapshot(destination) != producer['app_files']:
+        raise ValueError('Packaged application differs from its verified Release producer.')
+    subprocess.run(['codesign', '--verify', '--deep', '--strict', str(destination)], check=True)
+    return manifest_hash
+
+
 def main():
     root = pathlib.Path(__file__).resolve().parents[1]
     os.chdir(root)
     sha = sys.argv[1]
+    if sha != subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip():
+        raise ValueError('The package source commit must match the checked-out Release producer.')
     output = root / 'output'
     output.mkdir(exist_ok=True)
     stage = pathlib.Path(tempfile.mkdtemp(prefix='.texttank-review-stage-', dir=output))
@@ -113,13 +134,7 @@ def main():
         package.mkdir()
         sources = package / 'Source'
         sources.mkdir()
-        if not os.environ.get('APP_PATH'):
-            raise ValueError('Use scripts/package-review.sh to select the canonical application path.')
-        app = pathlib.Path(os.environ['APP_PATH'])
-        if not app.is_dir():
-            raise SystemExit('Built application is missing')
-        subprocess.run(['ditto', '--norsrc', '--noextattr', '--noqtn', str(app), str(package / 'TextTank.app')], check=True)
-        subprocess.run(['codesign', '--verify', '--deep', '--strict', str(package / 'TextTank.app')], check=True)
+        release_manifest = copy_verified_release(root, package / 'TextTank.app')
         source_tar = sources / 'TextTank-source.tar.gz'
         archive = subprocess.Popen(['git', 'archive', '--format=tar', '--prefix=TextTank-source/', sha], stdout=subprocess.PIPE)
         with source_tar.open('wb') as target:
@@ -191,6 +206,8 @@ def main():
             'source_commit': sha,
             'source_tree': source_tree,
             'built_from_clean_commit': True,
+            'build_configuration': 'Release',
+            'release_manifest_sha256': release_manifest,
             'created_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'app_tree_sha256': tree_hash(package / 'TextTank.app'),
             'app_tree_hash_algorithm': 'Sorted relative paths: SHA256 of type byte F/L, NUL, UTF8 path, NUL, raw SHA256 file bytes or UTF8 symlink target, NUL; directories/xattrs excluded.',

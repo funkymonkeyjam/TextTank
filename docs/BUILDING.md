@@ -32,6 +32,8 @@ Packaging stages on the delivery filesystem and removes its stage on failure. Af
 
 `build-pipeline-checks` adds isolated fault scenarios for archive/extraction boundaries, extra sources, stale headers, bad configuration/arguments, mismatched or tampered evidence, public log paths, retention, resource/license inputs and the strict icon renderer. It supplements all existing native suites.
 
+Review packaging defaults to Release and rejects Debug. The package manifest records the optimized build configuration and the digest of its validated Release artifact manifest. The copied app must match the verified producer entry for entry. The ordinary development build and native test defaults remain Debug.
+
 Product documentation is copied from the explicit `REVIEW_DOCUMENTS` list in `scripts/package_review.py`; session prompts, run-state and dated worker notes are not review docs. The legacy `render-audit-report.swift` is retained because external callers are unknown; it is not part of build, acceptance or packaging validation. Its presence in a project source archive is not a claim that it produces current candidate evidence.
 
 The generated graph includes NativeSearch, a Foundation Objective-C++ framework. Canonical
