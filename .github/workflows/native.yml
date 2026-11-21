@@ -64,7 +64,12 @@ jobs:
           python3 scripts/generate-project.py
           git diff --exit-code -- TextTank.xcodeproj
       - name: Build pinned native app
-        run: scripts/build.sh
+        run: |
+          if [[ "$TEXTTANK_WARNINGS_AS_ERRORS" == 0 ]]; then
+            scripts/build.sh --advisory-swift-warnings
+          else
+            scripts/build.sh
+          fi
       - name: Run acceptance checks
         id: acceptance
         run: scripts/test.sh

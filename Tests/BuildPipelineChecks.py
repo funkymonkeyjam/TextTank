@@ -395,6 +395,37 @@ sys.exit(93)
             self.assertTrue(record['source_start']['dirty'])
             self.assertEqual(record['local_acceptance']['observed_skips'], [])
 
+    def test_advisory_log_warnings_retain_headers_and_strict_failures(self):
+        guard = [sys.executable, str(ROOT / 'scripts/compile_diagnostics.py')]
+        with tempfile.TemporaryDirectory() as work:
+            log = Path(work) / 'build.log'
+            report = Path(work) / 'diagnostics.json'
+            scan = [*guard, '--log', str(log), '--report', str(report)]
+            advisory = [*scan, '--log-warning-policy', 'advisory']
+            warning = b'Sources/Owner.swift:10:2: warning: example\n'
+            error = b'Sources/Other.swift:20:3: error: stopped\n'
+            for command, contents, status, severities in [
+                (scan, warning, 1, ['warning']),
+                (advisory, warning, 0, ['warning']),
+                (advisory, warning + error, 1, ['warning', 'error']),
+            ]:
+                log.write_bytes(contents)
+                result = subprocess.run(command, capture_output=True)
+                self.assertEqual(result.returncode, status, result.stderr)
+                evidence = json.loads(report.read_bytes())
+                self.assertEqual(evidence['guard_exit'], status)
+                self.assertEqual(evidence['output_sha256'], hashlib.sha256(contents).hexdigest())
+                self.assertEqual([header['severity'] for header in evidence['diagnostic_headers']], severities)
+                self.assertEqual(evidence['log_warning_policy'], 'advisory' if command == advisory else 'strict')
+            log.write_bytes(warning + b'\xff\n')
+            self.assertNotEqual(subprocess.run(advisory, capture_output=True).returncode, 0)
+            log.unlink()
+            self.assertNotEqual(subprocess.run(advisory, capture_output=True).returncode, 0)
+        failed_compiler = ['--', sys.executable, '-c', 'raise SystemExit(37)']
+        self.assertEqual(subprocess.run([*guard, *failed_compiler], capture_output=True).returncode, 37)
+        misplaced = [*guard, '--log-warning-policy', 'advisory', *failed_compiler]
+        self.assertEqual(subprocess.run(misplaced, capture_output=True).returncode, 2)
+
     def test_canonical_build_identity_is_shared_and_rejects_unsupported_arch(self):
         config = module('build_config', 'build_config.py')
         identity = config.load_identity(ROOT)
