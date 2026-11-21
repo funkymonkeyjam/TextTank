@@ -246,9 +246,9 @@ private actor MergeStageGate {
             // D2 native controller contract, added test-first after headless Gate A.
             var comparisonServices: [CompareService] = []
             defer { comparisonServices.flatMap(\.windows).forEach { $0.window?.close() } }
-            @MainActor func comparison(_ a: CompareInput, _ b: CompareInput) async throws -> CompareController {
+            @MainActor func comparison(_ a: CompareInput, _ b: CompareInput, visible: Bool = false) async throws -> CompareController {
                 let service = CompareService()
-                service.showWindows = false
+                service.showWindows = visible
                 comparisonServices.append(service)
                 let window = try await service.open(original: a, modified: b)
                 try await ready(window)
@@ -499,10 +499,8 @@ private actor MergeStageGate {
                     }, "D2 held stage \(scenario) cleans real temp")
             }
             // Observe the real AppKit Save panel, then cancel through its normal action.
-            let panelService = CompareService()
-            comparisonServices.append(panelService)
             NSApp.activate(ignoringOtherApps: true)
-            let panelComparison = try await panelService.open(original: value("before"), modified: value("after"))
+            let panelComparison = try await comparison(value("before"), value("after"), visible: true)
             var nativeSavePanel: NSSavePanel?
             panelComparison.merge.makeSavePanel = {
                 let panel = NSSavePanel()
@@ -529,9 +527,11 @@ private actor MergeStageGate {
             try await ready(panelComparison)
             check(panelComparison.merge.lastOutcome == .cancelled, "D2 real native save panel Cancel")
             let sheetDoc = fresh("old\n")
-            let sheetCmp = try await comparison(live(sheetDoc), value("new\n"))
+            let sheetCmp = try await comparison(live(sheetDoc), value("new\n"), visible: true)
             check(sheetCmp.merge.chooseDestination(.original), "D2 sheet explicit destination")
-            sheetCmp.window?.makeKeyAndOrderFront(nil)
+            await waitUntil("visible comparison to enable change selection") {
+                sheetCmp.window?.isVisible == true && sheetCmp.merge.canPerform(.selectChanges)
+            }
             sheetCmp.merge.showSelectionSheet()
             let selectionSheet = try requireValue(sheetCmp.merge.sheet, "D2 native selection sheet")
             selectionSheet.window?.contentView?.layoutSubtreeIfNeeded()
