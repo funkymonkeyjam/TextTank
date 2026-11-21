@@ -136,6 +136,8 @@ struct ReminderJournalIssue {
 /// main-actor state, so an export runs it on `ReminderJournalFile`, off the main thread.
 enum ReminderJournal {
     static let maximumBytes = 32 * 1024 * 1024
+    // The v2 schema adds only this bounded header allowance to the existing v1 size limit.
+    static let maximumActiveBytes = maximumBytes + 64
     /// Bytes reserved after each row for its status, reminder identifier and message, so a row's
     /// outcome can be written in place. The barrier text and an EventKit identifier fit.
     static let slotWidth = 240
@@ -146,7 +148,22 @@ enum ReminderJournal {
         let device: dev_t
         let inode: ino_t
     }
+    /// An armed range is valid only for this immutable batch and its original row order.
+    /// Every new external call is inside a range that reached the device first.
+    struct Intent {
+        let range: Range<Int>
+        let retryingFailed: Bool
+        static let maximumRows = 32
+        var bytes: Data {
+            Data(String(format: "[%5d,%5d,%d]", range.lowerBound, range.upperBound, retryingFailed ? 1 : 0).utf8)
+        }
+    }
+    private struct IntentEnvelope: Decodable {
+        let minimumReaderVersion: Int
+        let intent: [Int]
+    }
     struct Layout {
+        let intentOffset: Int?
         var data: Data
         /// Byte range of each row's slot in `data`, in row order.
         var slots: [Range<Int>]
@@ -167,22 +184,44 @@ enum ReminderJournal {
 
     /// Strict read of one journal: a regular file within the size limit that decodes to schema
     /// version 1 under the expected identifier. Never blocks on a FIFO and never follows a link.
-    static func read(_ url: URL, id: UUID) throws -> (batch: ReminderBatch, identity: Identity) {
+    static func read(_ url: URL, id: UUID) throws -> (batch: ReminderBatch, identity: Identity, wasArmed: Bool) {
         let sample: (data: Data, before: stat, after: stat?)
-        do { sample = try PrivateFileStore.readSample(url, maximumBytes: maximumBytes) } catch PrivateFileError
+        do { sample = try PrivateFileStore.readSample(url, maximumBytes: maximumActiveBytes) } catch PrivateFileError
             .unsafeLocation
         { throw ReminderConnectorError.invalidBatch } catch PrivateFileError.tooLarge {
             throw ReminderConnectorError.invalidBatch
         }
         let data = sample.data, info = sample.before
-        let batch = try JSONDecoder().decode(ReminderBatch.self, from: data)
+        var batch = try JSONDecoder().decode(ReminderBatch.self, from: data)
         // Preserve the reader's concrete DecodingError for malformed journals; the envelope
         // gate still runs before a decoded batch can be accepted or used.
-        try PersistedFormat.check(data, context: "Reminders export record")
+        let wasArmed = batch.schemaVersion == 2
+        if wasArmed {
+            let envelope = try JSONDecoder().decode(IntentEnvelope.self, from: data)
+            let values = envelope.intent
+            guard envelope.minimumReaderVersion == 2, values.count == 3,
+                values[0] >= 0, values[0] < values[1], values[1] <= batch.rows.count,
+                values[1] - values[0] <= Intent.maximumRows, (0...1).contains(values[2])
+            else { throw ReminderConnectorError.invalidBatch }
+            // Phase 1 changes old, explicitly retryable failures to pending before any
+            // external call. Phase 0 permits sends, so a pending cache image is uncertain.
+            for i in values[0]..<values[1] where batch.rows[i].status == .pending {
+                if values[2] == 1 {
+                    batch.rows[i].status = .failed
+                } else {
+                    batch.rows[i].status = .uncertain
+                    batch.rows[i].message = "Sending was interrupted. Check Reminders before sending this item again."
+                }
+            }
+            batch.schemaVersion = 1
+        } else {
+            guard data.count <= maximumBytes else { throw ReminderConnectorError.invalidBatch }
+            try PersistedFormat.check(data, context: "Reminders export record")
+        }
         guard batch.schemaVersion == 1, batch.id == id, Set(batch.rows.map(\.id)).count == batch.rows.count,
             batch.rows.allSatisfy({ $0.status != .confirmed || !($0.reminderID ?? "").isEmpty })
         else { throw ReminderConnectorError.invalidBatch }
-        return (batch, Identity(device: info.st_dev, inode: info.st_ino))
+        return (batch, Identity(device: info.st_dev, inode: info.st_ino), wasArmed)
     }
 
     /// The mutable part of a row as JSON members: `"status":…` and, when present, the reminder
@@ -203,18 +242,27 @@ enum ReminderJournal {
     /// The journal as version 1 JSON, one row per line, each row ending in a space-padded slot.
     /// JSON allows that whitespace, so the file decodes exactly like the compact form. The size is
     /// bounded while the bytes are assembled, before a complete journal is allocated.
-    static func layout(_ batch: ReminderBatch, slotWidth: Int = slotWidth) throws -> Layout {
+    static func layout(_ batch: ReminderBatch, slotWidth: Int = slotWidth, intent: Intent? = nil) throws -> Layout {
         let encoder = JSONEncoder()
         var data = Data(), slots: [Range<Int>] = []
         slots.reserveCapacity(batch.rows.count)
+        let byteLimit = intent == nil ? maximumBytes : maximumActiveBytes
         func add(_ piece: Data) throws {
-            guard piece.count <= maximumBytes - data.count else {
+            guard piece.count <= byteLimit - data.count else {
                 throw ReminderConnectorError.journalTooLarge(limit: maximumBytes)
             }
             data.append(piece)
         }
         func add(_ text: String) throws { try add(Data(text.utf8)) }
-        try add("{\"schemaVersion\":\(batch.schemaVersion),\"id\":")
+        var intentOffset: Int?
+        if let intent {
+            try add("{\"schemaVersion\":2,\"minimumReaderVersion\":2,\"intent\":")
+            intentOffset = data.count
+            try add(intent.bytes)
+            try add(",\"id\":")
+        } else {
+            try add("{\"schemaVersion\":\(batch.schemaVersion),\"id\":")
+        }
         try add(encoder.encode(batch.id))
         try add(",\"destinationID\":")
         try add(encoder.encode(batch.destinationID))
@@ -243,7 +291,7 @@ enum ReminderJournal {
             try add("}")
         }
         try add("\n]}")
-        return Layout(data: data, slots: slots)
+        return Layout(intentOffset: intentOffset, data: data, slots: slots)
     }
 }
 
@@ -260,6 +308,10 @@ actor ReminderJournalFile {
     private var identity: ReminderJournal.Identity?
     private var slots: [Range<Int>] = []
     private let encoder = JSONEncoder()
+    private var intent: ReminderJournal.Intent?
+    private var intentOffset: Int?
+    private var loadedArmed = false
+    private var syncedAncestors = false
 
     init(directory: URL, id: UUID) {
         self.id = id
@@ -272,22 +324,101 @@ actor ReminderJournalFile {
         guard try ReminderJournal.identity(atPath: url.path) != nil else { return nil }
         let stored = try ReminderJournal.read(url, id: id)
         identity = stored.identity
+        loadedArmed = stored.wasArmed
         return stored.batch
     }
 
     /// A previous run may have published every acknowledgement and then failed to sync its directory.
     func confirmLoadedFile() throws {
         guard let identity else { throw ReminderConnectorError.invalidBatch }
-        try PrivateFileStore.confirmExistingWrite(at: url) { info in
+        try PrivateFileStore.confirmExistingWrite(at: url, synchronize: Self.deviceFlush) { info in
             info.st_dev == identity.device && info.st_ino == identity.inode
         }
     }
+    /// A device that cannot flush the send intent cannot accept a nontransactional send safely.
+    private static func deviceFlush(_ fd: Int32) -> Int32 {
+        var result: Int32
+        repeat { result = fcntl(fd, F_FULLFSYNC) } while result != 0 && errno == EINTR
+        return result
+    }
+    /// Anchor directory links on this volume once, including a just-created support hierarchy.
+    private func confirmDirectoryChain() throws {
+        guard !syncedAncestors else { return }
+        var fd = open(url.deletingLastPathComponent().path, O_DIRECTORY | O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { throw FileOperationFailure(errno, operation: "open export folder", path: url.path) }
+        defer { close(fd) }
+        while true {
+            var here = stat(), above = stat()
+            guard fstat(fd, &here) == 0 else {
+                throw FileOperationFailure(errno, operation: "inspect export folder", path: url.path)
+            }
+            let parent = openat(fd, "..", O_SEARCH | O_CLOEXEC)
+            guard parent >= 0 else {
+                throw FileOperationFailure(errno, operation: "open enclosing export folder", path: url.path)
+            }
+            guard fstat(parent, &above) == 0 else {
+                let error = FileOperationFailure(errno, operation: "inspect enclosing export folder", path: url.path)
+                close(parent)
+                throw error
+            }
+            if here.st_dev != above.st_dev || here.st_ino == above.st_ino {
+                close(parent)
+                break
+            }
+            close(fd)
+            fd = parent
+            guard Self.deviceFlush(fd) == 0 else {
+                throw FileOperationFailure(errno, operation: "confirm export folder location", path: url.path)
+            }
+        }
+        syncedAncestors = true
+    }
+    func arm(_ next: ReminderJournal.Intent, batch: ReminderBatch) throws {
+        try confirmDirectoryChain()
+        try publishIntent(next, batch: batch)
+        if next.retryingFailed {
+            // Distinguish the earlier failed attempt from a real negative acknowledgement
+            // during this attempt. A crash during preparation preserves explicit retry.
+            var prepared = batch
+            for index in next.range {
+                prepared.rows[index].status = .pending
+                try record(prepared, row: index)
+            }
+            try confirmRows()
+            try publishIntent(.init(range: next.range, retryingFailed: false), batch: prepared)
+        }
+    }
+    private func publishIntent(_ next: ReminderJournal.Intent, batch: ReminderBatch) throws {
+        if let intentOffset {
+            guard try ReminderJournal.identity(atPath: url.path) == identity else {
+                throw ReminderConnectorError.invalidBatch
+            }
+            try Self.write(next.bytes, to: descriptor, at: intentOffset)
+            try confirmRows()
+            intent = next
+        } else {
+            try replace(with: batch, armed: next, strong: true)
+        }
+    }
+    func confirmRows() throws {
+        guard Self.deviceFlush(descriptor) == 0 else {
+            throw PublishedFileSyncFailure(failure: .init(errno, operation: "confirm reminder journal", path: url.path))
+        }
+    }
+    func finish(_ batch: ReminderBatch) throws {
+        guard intent != nil || loadedArmed else { return }
+        // Flush outstanding row acknowledgements before removing the older-reader guard.
+        if descriptor >= 0 { try confirmRows() }
+        try replace(with: batch, armed: nil, strong: true)
+    }
     /// Makes the batch durable with row `index` as it is now. Returns after the bytes are synced.
     func record(_ batch: ReminderBatch, row index: Int? = nil) throws {
-        guard descriptor >= 0, let index, slots.indices.contains(index) else { return try replace(with: batch) }
+        guard descriptor >= 0, let index, slots.indices.contains(index) else {
+            return try replace(with: batch, armed: intent, strong: intent != nil)
+        }
         let content = try ReminderJournal.slot(batch.rows[index], encoder: encoder)
         let slot = slots[index]
-        guard content.count <= slot.count else { return try replace(with: batch) }
+        guard content.count <= slot.count else { return try replace(with: batch, armed: intent, strong: intent != nil) }
         guard try ReminderJournal.identity(atPath: url.path) == identity else {
             throw ReminderConnectorError.invalidBatch
         }
@@ -300,20 +431,22 @@ actor ReminderJournalFile {
         }
     }
 
-    private func replace(with batch: ReminderBatch) throws {
+    private func replace(with batch: ReminderBatch, armed: ReminderJournal.Intent?, strong: Bool) throws {
         let layout: ReminderJournal.Layout
-        do { layout = try ReminderJournal.layout(batch) } catch ReminderConnectorError.journalTooLarge {
+        do { layout = try ReminderJournal.layout(batch, intent: armed) } catch ReminderConnectorError.journalTooLarge {
             // A batch too close to the size limit for padded slots keeps the compact layout.
-            layout = try ReminderJournal.layout(batch, slotWidth: 0)
+            layout = try ReminderJournal.layout(batch, slotWidth: 0, intent: armed)
         }
         // Keep the live descriptor for slotted pwrite/fsync updates after the atomic replace.
         // The journal's own identity guard remains immediately before commit.
         let expectedIdentity = identity
         guard
             let created = try PrivateFileStore.write(
-                layout.data, to: url, maximumBytes: ReminderJournal.maximumBytes,
-                temporaryPrefix: "", temporarySuffix: ".pending", synchronize: PrivateFileStore.flushToStorage,
-                synchronizeDirectory: PrivateFileStore.flushToStorage,
+                layout.data, to: url,
+                maximumBytes: armed == nil ? ReminderJournal.maximumBytes : ReminderJournal.maximumActiveBytes,
+                temporaryPrefix: "", temporarySuffix: ".pending",
+                synchronize: strong ? Self.deviceFlush : PrivateFileStore.flushToStorage,
+                synchronizeDirectory: strong ? Self.deviceFlush : PrivateFileStore.flushToStorage,
                 beforeCommit: {
                     guard try ReminderJournal.identity(atPath: self.url.path) == expectedIdentity else {
                         throw ReminderConnectorError.invalidBatch
@@ -324,6 +457,9 @@ actor ReminderJournalFile {
         descriptor = created
         identity = ReminderJournal.identity(of: created)
         slots = layout.slots
+        intentOffset = layout.intentOffset
+        intent = armed
+        loadedArmed = false
     }
 
     private static func write(_ data: Data, to descriptor: Int32, at offset: Int) throws {
@@ -469,11 +605,29 @@ actor ReminderJournalFile {
             try await journal.record(batch)
         }
         progress?(batch.rows.filter { $0.status != .pending }.count, batch.rows.count)
+        var armedEnd = 0
         var attempted = false
         for index in batch.rows.indices {
             if Task.isCancelled { break } // Unsent pending rows remain resumable under this batch ID.
             guard batch.rows[index].status == .pending || (retryFailed && batch.rows[index].status == .failed) else {
                 continue
+            }
+            if index >= armedEnd {
+                let status = batch.rows[index].status
+                // Small exports retain one-row reconciliation. Larger exports bound the number
+                // of rows that a crash can leave for manual review.
+                let limit =
+                    batch.rows.count <= ReminderJournal.Intent.maximumRows ? 1 : ReminderJournal.Intent.maximumRows
+                var end = index + 1
+                while end < batch.rows.count && end - index < limit && batch.rows[end].status == status { end += 1 }
+                do {
+                    try await journal.arm(.init(range: index..<end, retryingFailed: status == .failed), batch: batch)
+                } catch {
+                    if attempted { throw ReminderConnectorError.journalFailed(batch, underlying: error) }
+                    throw error
+                }
+                armedEnd = end
+                if Task.isCancelled { break }
             }
             // A durable uncertainty barrier precedes each nontransactional external write.
             let before = batch.rows[index]
@@ -502,11 +656,18 @@ actor ReminderJournalFile {
             }
             // After an acknowledgement failure, the visible record may be uncertain or updated. The
             // write is not retried; the in-memory outcome travels with the error.
-            do { try await journal.record(batch, row: index) } catch {
+            do {
+                try await journal.record(batch, row: index)
+                if index + 1 == armedEnd { try await journal.confirmRows() }
+            } catch {
                 throw ReminderConnectorError.journalFailed(batch, underlying: error)
             }
             progress?(index + 1, batch.rows.count)
             await Task.yield() // Allow UI cancellation without releasing the batch journal lock.
+        }
+        do { try await journal.finish(batch) } catch {
+            if attempted { throw ReminderConnectorError.journalFailed(batch, underlying: error) }
+            throw error
         }
         return batch
     }

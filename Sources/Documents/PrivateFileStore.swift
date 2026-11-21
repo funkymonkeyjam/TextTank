@@ -275,7 +275,9 @@ package enum PrivateFileStore {
         return result
     }
     /// A matching recovery revision may be a prior publication whose directory sync failed.
-    static package func confirmExistingWrite(at url: URL, matches: (stat) -> Bool = { _ in true }) throws {
+    static package func confirmExistingWrite(
+        at url: URL, synchronize: (Int32) -> Int32 = flushToStorage, matches: (stat) -> Bool = { _ in true }
+    ) throws {
         let directory = try directoryDescriptor(for: url)
         defer { close(directory) }
         let fd = openat(directory, url.lastPathComponent, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
@@ -286,7 +288,7 @@ package enum PrivateFileStore {
             throw PrivateFileError.unsafeLocation
         }
         for descriptor in [fd, directory] {
-            guard flushToStorage(descriptor) == 0 else {
+            guard synchronize(descriptor) == 0 else {
                 throw PublishedFileSyncFailure(
                     failure: .init(errno, operation: "synchronize saved file or folder", path: url.path))
             }

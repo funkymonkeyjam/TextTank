@@ -766,6 +766,50 @@ import Darwin
                         && oldRun.rows[0].reminderID == "earlier-1" && same(oldStored, oldRun),
                     "a compact journal of an earlier build resumes: only the unsent row is sent and recorded")
             }
+            await Checks.section("bounded send intent and cold acknowledgement") {
+                let directory = root.appendingPathComponent("armed-journal"), id = UUID()
+                let fake = FakeReminderStore(), rows = (0..<36).map { "intent-\($0)" }
+                let connector = RemindersConnector(storageURL: directory, store: fake)
+                let url = directory.appendingPathComponent(id.uuidString + ".json")
+                var beforeSecond: Data?
+                fake.beforeSave = { position in
+                    if position == 1 { beforeSecond = try? Data(contentsOf: url) }
+                }
+                _ = try await connector.export(rows: rows, destinationID: "a", batchID: id)
+                let image = try requireValue(beforeSecond, "fixture: open intent before second send")
+                let previous = try JSONDecoder().decode(ReminderBatch.self, from: image)
+                check(
+                    previous.schemaVersion == 2 && previous.rows[2].status == .pending,
+                    "armed journal keeps ordinary row states and requires a newer journal reader")
+                rejects(
+                    "the v1 minimum-reader gate refuses the armed file",
+                    where: { error in
+                        if case PersistedFormatError.needsReader(2) = error { return true }
+                        return false
+                    }
+                ) { try PersistedFormat.check(image, context: "old Reminders export reader") }
+                let finished = try Data(contentsOf: url)
+                check(
+                    try JSONDecoder().decode(ReminderBatch.self, from: finished).schemaVersion == 1,
+                    "normal completion publishes a readable v1 journal")
+                let restored = root.appendingPathComponent("earlier-armed-image")
+                try FileManager.default.createDirectory(at: restored, withIntermediateDirectories: false)
+                try image.write(to: restored.appendingPathComponent(url.lastPathComponent))
+                let fresh = FakeReminderStore(), retry = RemindersConnector(storageURL: restored, store: fresh)
+                let normalized = try requireValue(try retry.storedBatches().first, "fixture: read active record")
+                check(
+                    normalized.rows[0].status == .confirmed
+                        && normalized.rows[1..<32].allSatisfy { $0.status == .uncertain }
+                        && normalized.rows[32...].allSatisfy { $0.status == .pending },
+                    "cold history retains confirmed IDs, marks only the unresolved armed range uncertain and leaves the unarmed suffix pending"
+                )
+                let resumed = try await retry.export(rows: rows, destinationID: "a", batchID: id, retryFailed: true)
+                check(
+                    fresh.saves.map(\.0) == Array(rows[32...])
+                        && resumed.rows[0].reminderID == previous.rows[0].reminderID
+                        && resumed.rows[1..<32].allSatisfy { $0.status == .uncertain },
+                    "actual same-ID retry sends only the provably unattempted suffix")
+            }
             await Checks.section("row cost does not grow with the batch") {
                 func inode(_ url: URL) -> UInt64 {
                     var info = stat()
