@@ -1796,7 +1796,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     });
     return languages;
 }
-/// Installs the lexer and its defaults without lexing; every caller colourises exactly once afterwards.
+/// Install the lexer and defaults before styling the visible range with its completed configuration.
 - (void)installLexer:(NSString *)language {
     _braceCacheValid = NO;
     [self scheduleStateNotification];
@@ -1813,10 +1813,20 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     if (_cppDefaults) [_engine message:SCI_SETKEYWORDS wParam:0 lParam:(sptr_t)"if else for while return class struct import func let var true false null int void const static public private"];
     [self applyPalette];
 }
+- (void)styleVisibleDocumentPrefix {
+    const sptr_t length = [_engine message:SCI_GETLENGTH];
+    const sptr_t first = [_engine message:SCI_GETFIRSTVISIBLELINE];
+    const sptr_t visible = MAX(1, [_engine message:SCI_LINESONSCREEN]);
+    const sptr_t nextLine = [_engine message:SCI_DOCLINEFROMVISIBLE wParam:first + visible + 1];
+    const sptr_t lineCount = [_engine message:SCI_GETLINECOUNT];
+    const sptr_t end = nextLine < 0 || nextLine >= lineCount - 1 ? length
+        : [_engine message:SCI_POSITIONFROMLINE wParam:nextLine];
+    [_engine message:SCI_COLOURISE wParam:0 lParam:end];
+}
 - (void)setLanguage:(NSString *)language {
     [self assertThread];
     [self installLexer:language];
-    [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
+    [self styleVisibleDocumentPrefix];
 }
 - (void)setLanguage:(NSString *)language keywordLists:(NSDictionary<NSNumber *, NSString *> *)keywordLists properties:(NSDictionary<NSString *, NSString *> *)properties {
     [self assertThread];
@@ -1832,9 +1842,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         if ([name rangeOfString:@"\0"].location!=NSNotFound || [value rangeOfString:@"\0"].location!=NSNotFound) return;
         [self->_engine message:SCI_SETPROPERTY wParam:(uptr_t)name.UTF8String lParam:(sptr_t)value.UTF8String];
     }];
-    // Scintilla neither invalidates styling on a lexer swap nor repaints after a list or property
-    // change, so one explicit full pass is what makes the final configuration take effect.
-    [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
+    // Invalidate the prior lexer from byte zero; subsequent paints request additional styling.
+    [self styleVisibleDocumentPrefix];
 }
 - (NSAttributedString *)attributedTextForSelection:(BOOL)selection {
     [self assertThread]; [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
