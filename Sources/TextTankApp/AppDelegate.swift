@@ -166,6 +166,9 @@ import AppKit
                 seconds: 8, announce: false)
         }
         controller.comparisonService = { [weak self] in self?.compare }
+        controller.prepareTransformedPaste = { [weak self] editor in
+            self?.macros.prepareUnrecordedChange(in: editor, reason: "Paste Through changed the recorded document.")
+        }
         controller.onInvocation = { [weak self] in
             self?.macros.invalidateRecording(
                 reason: "An automation was invoked during macro recording. Automation side effects are not recorded.")
@@ -546,6 +549,10 @@ import AppKit
             title: EditorCommand.paste.title, action: #selector(NSText.paste(_:)),
             keyEquivalent: EditorCommand.paste.defaultMenuShortcut,
             representedObject: EditorCommand.paste.rawValue)
+        let pasteChoices = automations.pasteThroughMenu()
+        let transformedPaste = NSMenuItem(title: pasteChoices.title, action: nil, keyEquivalent: "")
+        transformedPaste.submenu = pasteChoices
+        edit.addItem(transformedPaste)
         edit.addItem(
             title: EditorCommand.selectAll.title, action: #selector(NSText.selectAll(_:)),
             keyEquivalent: EditorCommand.selectAll.defaultMenuShortcut,

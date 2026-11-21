@@ -74,6 +74,7 @@ private struct AutomationCheckboxEdits {
     }
     private var runControl: AutomationRunControl?
     var comparisonService: () -> CompareService? = { nil }
+    var prepareTransformedPaste: (TTEditor) -> ((Bool) -> Void)? = { _ in nil }
     /// The pasteboard used for clipboard input and output. Checks substitute a private one.
     var pasteboard: NSPasteboard?
     private var activePasteboard: NSPasteboard? { pasteboard ?? RuntimeEnvironment.current.generalPasteboard() }
@@ -175,15 +176,29 @@ private struct AutomationCheckboxEdits {
         return true
     }
     /// Every menu, shortcut, toolbar and palette resolves the current saved definition by UUID.
-    func runSavedAutomation(id: UUID) throws {
+    func runSavedAutomation(id: UUID, pasteThrough: Bool = false) throws {
         guard !busy else { return }
         try requireNoExport()
-        guard let workflow = library.workflows.first(where: { $0.id == id }) else {
+        guard var workflow = library.workflows.first(where: { $0.id == id }) else {
             throw AutomationError.invalid("This automation no longer exists.")
         }
         busy = true
         defer { busy = false }
-        try run(workflow, target: AutomationDocumentTarget(editorProvider()))
+        let editor = editorProvider()
+        let target = AutomationDocumentTarget(editor)
+        var capturedPaste: String?
+        if pasteThrough {
+            guard let editor, !editor.readOnly, !editor.selectionIsRectangular, editor.selectionRanges.count == 1,
+                let target, target.value != nil
+            else { throw AutomationError.invalid("Paste Through requires one writable editor selection or caret.") }
+            guard let board = activePasteboard, let text = Self.plainText(from: board), !text.isEmpty else {
+                throw AutomationError.invalid("The clipboard contains no text to paste.")
+            }
+            capturedPaste = text
+            workflow.input = .clipboard
+            workflow.output = .editor
+        }
+        try run(workflow, target: target, capturedPaste: capturedPaste)
     }
     private func invocationMenu(title: String, launcher: Bool = false) -> NSMenu {
         let result = NSMenu(title: title)
@@ -192,8 +207,36 @@ private struct AutomationCheckboxEdits {
         populateInvocations(result)
         return result
     }
+    func pasteThroughMenu() -> NSMenu {
+        let menu = NSMenu(title: Strings.text("automation.paste_through", "Paste Through"))
+        menu.identifier = .init("TextTank.PasteThrough")
+        menu.delegate = self
+        populateInvocations(menu)
+        return menu
+    }
+    private func savedPasteChoice() throws -> UUID? {
+        do {
+            let bytes = try PrivateFileStore.read(AppStorage.url(.pasteThroughChoice), maximumBytes: 256)
+            return try JSONDecoder().decode(UUID.self, from: bytes)
+        } catch where error.posixCode == .ENOENT { return nil }
+    }
+    private func rememberPasteChoice(_ id: UUID) {
+        do {
+            let previous = try savedPasteChoice()
+            if previous == id { return }
+            try PrivateFileStore.write(try JSONEncoder().encode(id), to: AppStorage.url(.pasteThroughChoice),
+                                       maximumBytes: 256, beforeCommit: {
+                guard try self.savedPasteChoice() == previous else { throw CocoaError(.fileWriteUnknown) }
+            }, requireMissing: previous == nil)
+        } catch {
+            EditorServices.current?.activePresentation?.showTransientStatus(
+                "Pasted transformed text. The last Paste Through choice could not be saved.", seconds: 8)
+        }
+    }
     private func populateInvocations(_ menu: NSMenu) {
         menu.removeAllItems()
+        let paste = menu.identifier?.rawValue == "TextTank.PasteThrough"
+        let lastPaste = paste ? try? savedPasteChoice() : nil
         if menu.identifier?.rawValue == "TextTank.AutomationLauncher" {
             menu.addItem(withTitle: "Automations", action: nil, keyEquivalent: "")
         }
@@ -201,10 +244,12 @@ private struct AutomationCheckboxEdits {
             ($0.pinToToolbar == true ? 0 : 1) < ($1.pinToToolbar == true ? 0 : 1)
         }) {
             let item = NSMenuItem(
-                title: (workflow.pinToToolbar == true ? "★ " : "") + workflow.name, action: #selector(runAction(_:)),
+                title: (workflow.pinToToolbar == true ? "★ " : "") + workflow.name,
+                action: paste ? #selector(pasteAction(_:)) : #selector(runAction(_:)),
                 keyEquivalent: "")
             item.target = self
             item.representedObject = workflow.id.uuidString
+            if paste { item.state = lastPaste == workflow.id ? .on : .off }
             menu.addItem(item)
         }
         let manage = NSMenuItem(title: "Manage Automations…", action: #selector(manageAction), keyEquivalent: "")
@@ -294,6 +339,14 @@ private struct AutomationCheckboxEdits {
     @objc private func restoreDefaultsAction() { restoreDefaultAutomations() }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(restoreDefaultsAction) { return !busy && !exportInProgress }
+        if menuItem.action == #selector(pasteAction(_:)) {
+            guard !busy, !exportInProgress, let editor = editorProvider(), !editor.readOnly,
+                !editor.selectionIsRectangular, editor.selectionRanges.count == 1,
+                EditorLifetime.document(for: editor) != nil,
+                let raw = menuItem.representedObject as? String, let id = UUID(uuidString: raw)
+            else { return false }
+            return library.workflows.contains { $0.id == id }
+        }
         if menuItem.action == #selector(runAction(_:)) {
             guard let value = menuItem.representedObject as? String, let id = UUID(uuidString: value) else {
                 return false
@@ -698,8 +751,12 @@ private struct AutomationCheckboxEdits {
         }
         do { try runSavedAutomation(id: id) } catch { showError(error) }
     }
-    private func run(_ workflow: AutomationDefinition, target: AutomationDocumentTarget?) throws {
-        onInvocation()
+    @objc private func pasteAction(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let id = UUID(uuidString: raw) else { return }
+        do { try runSavedAutomation(id: id, pasteThrough: true) } catch { showError(error) }
+    }
+    private func run(_ workflow: AutomationDefinition, target: AutomationDocumentTarget?, capturedPaste: String? = nil) throws {
+        if capturedPaste == nil { onInvocation() }
         if workflow.input == .document && target == nil {
             throw AutomationError.invalid("This automation requires an open editor document.")
         }
@@ -771,7 +828,7 @@ private struct AutomationCheckboxEdits {
             // File input explicitly accepts valid UTF-8 only; never guess or replace invalid bytes.
             input = try AutomationFileInput.read(url)
         case .clipboard:
-            guard let board = activePasteboard, let value = Self.plainText(from: board) else {
+            guard let value = capturedPaste ?? activePasteboard.flatMap(Self.plainText(from:)) else {
                 throw AutomationError.invalid("The clipboard does not contain supported text.")
             }
             input = value
@@ -831,7 +888,16 @@ private struct AutomationCheckboxEdits {
             guard let target else {
                 throw AutomationError.invalid("The original document closed. Nothing was replaced.")
             }
-            try target.apply([output], wholeDocument: workflow.input == .document)
+            if capturedPaste != nil {
+                guard !output.isEmpty else { return }
+                let finish = try prepareTransformedPaste(target.resolve())
+                do { try target.apply([output], wholeDocument: false) }
+                catch { finish?(false); throw error }
+                finish?(true)
+                rememberPasteChoice(workflow.id)
+            } else {
+                try target.apply([output], wholeDocument: workflow.input == .document)
+            }
         case .clipboard:
             guard let board = activePasteboard else {
                 throw AutomationError.invalid("Clipboard access is unavailable for this isolated support directory.")
