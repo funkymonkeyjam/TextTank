@@ -16,16 +16,25 @@ def git(root, *args):
     return subprocess.check_output(['git', *args], cwd=root, text=True, stderr=subprocess.DEVNULL).strip()
 
 
-def source_state(root):
+def source_state(root, *, report_dirty=False):
     try:
         if git(root, 'rev-parse', '--is-inside-work-tree') != 'true':
             raise ValueError('not a git checkout')
         if Path(git(root, 'rev-parse', '--show-toplevel')).resolve() != root.resolve():
             return {'source_commit': None, 'source_tree': None, 'dirty': None,
                     'source_state_reason': 'selected source directory is not the git checkout root'}
+        # Porcelain v1 C-quotes control characters in filenames. Keep its
+        # two status columns intact, including a leading space for unstaged edits.
+        status = subprocess.check_output(
+            ['git', '-c', 'core.quotePath=true', 'status', '--porcelain=v1', '--untracked-files=all'],
+            cwd=root, stderr=subprocess.DEVNULL).decode('ascii')
+        if status and report_dirty:
+            print('Dirty paths at acceptance start:')
+            # The legacy Actions log-command marker can occur mid-line.
+            print(status.replace('##[', r'#\043['), end='')
         return {'source_commit': git(root, 'rev-parse', 'HEAD'),
                 'source_tree': git(root, 'rev-parse', 'HEAD^{tree}'),
-                'dirty': bool(git(root, 'status', '--porcelain'))}
+                'dirty': bool(status)}
     except (OSError, ValueError, subprocess.CalledProcessError):
         return {'source_commit': None, 'source_tree': None, 'dirty': None}
 
@@ -93,7 +102,7 @@ def main():
     recording.add_argument('--exit-code', required=True, type=exit_code)
     args = parser.parse_args()
     if args.command == 'capture':
-        write_json(ROOT / 'harness/logs/test-source-state.json', source_state(ROOT))
+        write_json(ROOT / 'harness/logs/test-source-state.json', source_state(ROOT, report_dirty=True))
     else:
         record(ROOT, args.exit_code)
 

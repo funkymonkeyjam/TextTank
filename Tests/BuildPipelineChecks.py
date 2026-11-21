@@ -340,7 +340,10 @@ sys.exit(93)
             archive = outer / 'archive'
             archive.mkdir()
             (archive / 'source.swift').write_text('// source not tracked by outer repository\n')
-            state = recording.source_state(archive)
+            (outer / 'outer-only.txt').touch()
+            with patch('sys.stdout', new_callable=io.StringIO) as output:
+                state = recording.source_state(archive, report_dirty=True)
+            self.assertEqual(output.getvalue(), '')
             self.assertIsNone(state['source_tree'])
             logs = archive / 'harness/logs'
             recording.write_json(logs / 'test-source-state.json', state)
@@ -350,6 +353,47 @@ sys.exit(93)
             self.assertIn('root', record['source_stable_reason'])
             with self.assertRaises(ValueError):
                 package.verify_validation(archive, recording.source_state(outer)['source_tree'])
+
+    def test_acceptance_reports_dirty_paths_before_toolchain_guard(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            scripts = root / 'scripts'
+            scripts.mkdir()
+            for name in ('test.sh', 'test-suites.sh', 'record-validation.py', 'suite-lib.sh', 'env.sh'):
+                shutil.copy2(ROOT / 'scripts' / name, scripts / name)
+            (root / '.gitignore').write_text('harness/logs/\n')
+            for name in ('staged', 'unstaged'):
+                (root / name).touch()
+            for command in (['git', 'init', '-q'], ['git', 'add', '.'],
+                            ['git', '-c', 'user.name=Checks', '-c', 'user.email=checks@example.invalid',
+                             'commit', '-qm', 'fixture']):
+                subprocess.run(command, cwd=root, check=True, capture_output=True)
+
+            def early_exit():
+                result = subprocess.run([scripts / 'test.sh'], cwd=root, env={**os.environ, 'CONFIGURATION': 'invalid'},
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                logs = root / 'harness/logs'
+                self.assertEqual(result.stdout, (logs / 'full-acceptance.log').read_text())
+                record = json.loads((logs / 'candidate-validation.json').read_text())
+                self.assertEqual(record['local_acceptance']['exit_code'], 2)
+                return result.stdout, record
+
+            clean, record = early_exit()
+            self.assertNotIn('Dirty paths', clean)
+            self.assertTrue(record['source_stable'])
+            for name in ('staged', 'unstaged'):
+                (root / name).write_text('private fixture contents\n')
+            subprocess.run(['git', 'add', 'staged'], cwd=root, check=True)
+            (root / 'nested').mkdir()
+            (root / 'nested' / 'line\nSKIP false\t##[warning]path').touch()
+            dirty, record = early_exit()
+            self.assertEqual(dirty.splitlines(), [
+                'Dirty paths at acceptance start:', 'M  staged', ' M unstaged',
+                r'?? "nested/line\nSKIP false\t#\043[warning]path"', 'CONFIGURATION must be Debug or Release.'])
+            self.assertFalse(record['source_stable'])
+            self.assertTrue(record['source_start']['dirty'])
+            self.assertEqual(record['local_acceptance']['observed_skips'], [])
 
     def test_canonical_build_identity_is_shared_and_rejects_unsupported_arch(self):
         config = module('build_config', 'build_config.py')
