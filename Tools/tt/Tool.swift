@@ -51,6 +51,9 @@ enum TTTool {
     }
     @MainActor static func launch(_ target: URL, activate: Bool = true) async throws -> NSRunningApplication {
         let config = NSWorkspace.OpenConfiguration()
+        // LaunchServices passes arguments only to a newly launched app. The PID-addressed
+        // request still owns the operation and also serves already running instances.
+        config.arguments = ["--texttank-external-request"]
         config.activates = activate
         return try await NSWorkspace.shared.openApplication(at: target, configuration: config)
     }
