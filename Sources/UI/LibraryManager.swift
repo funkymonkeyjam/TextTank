@@ -14,6 +14,8 @@ import AppKit
     private var selectionButtons: [NSButton] = []
     private var allButtons: [NSButton] = []
     private var saveButton: NSButton!
+    private weak var closeReviewSaveButton: NSButton?
+    private var hasUnsavedChanges: () -> Bool
     var rows: () -> [Row] = { [] }
     var canEdit: () -> Bool = { true }
     var rename: (UUID, String) -> Void = { _, _ in }
@@ -28,12 +30,14 @@ import AppKit
         let values = rows()
         return values.indices.contains(table.selectedRow) ? values[table.selectedRow].id : nil
     }
-    init(title: String, identifier: String) {
+    init(title: String, identifier: String, hasUnsavedChanges: @escaping () -> Bool) {
+        self.hasUnsavedChanges = hasUnsavedChanges
         form = FormPanel(title: title, identifier: identifier, size: NSSize(width: 760, height: 480))
         super.init()
         form.window.contentMinSize = NSSize(width: 650, height: 360)
         form.retainPresentationOwner(self)
         form.onClose = { [weak self] in self?.retire() }
+        form.shouldCloseWindow = { [weak self] in self?.shouldCloseWindow() ?? true }
         form.note(
             "Changes are kept in this window until you choose Save. Cancel leaves the saved library unchanged. Double-click a name to rename it."
         )
@@ -59,11 +63,7 @@ import AppKit
         actionBar.spacing = 8
         form.add(actionBar)
         saveButton = form.button("Save", identifier: identifier + ".save") { [weak self] in
-            guard let self, self.form.commitEditing() else { return }
-            do {
-                guard self.canEdit() else { throw FormFailure.busy }
-                if try self.save() { self.form.close() } else { self.refresh() }
-            } catch { self.form.showValidation(error, field: self.selectedNameField()) }
+            self?.saveAndClose()
         }
         sheetObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didEndSheetNotification, object: form.window, queue: .main
@@ -73,6 +73,36 @@ import AppKit
         }
         saveButton.keyEquivalent = "\r"
         form.button("Cancel", identifier: identifier + ".cancel", cancel: true) { [weak self] in self?.form.close() }
+    }
+    private func saveAndClose() {
+        guard form.acceptsActions, form.commitEditing() else { return }
+        do {
+            guard canEdit() else { throw FormFailure.busy }
+            if try save() { form.close() } else { refresh() }
+        } catch { form.showValidation(error, field: selectedNameField()) }
+    }
+    private func shouldCloseWindow() -> Bool {
+        guard form.window.attachedSheet == nil, form.commitEditing() else { return false }
+        form.window.isDocumentEdited = hasUnsavedChanges()
+        guard form.window.isDocumentEdited else { return true }
+        // DS-41/42/45: Escape keeps the working copy; Save uses the existing validation and persistence path.
+        let confirm = TTAlert()
+        confirm.messageText = "Save changes in “\(form.window.title)” before closing?"
+        confirm.informativeText = "Discarding permanently removes the unsaved changes in this window."
+        closeReviewSaveButton = confirm.addButton(withTitle: "Save")
+        closeReviewSaveButton?.isEnabled = canEdit()
+        confirm.addButton(withTitle: "Keep Editing", role: .cancel)
+        confirm.addButton(withTitle: "Discard Changes").hasDestructiveAction = true
+        confirm.beginSheetModal(for: form.window) { [weak self] response in
+            guard let self, self.form.acceptsActions else { return }
+            self.closeReviewSaveButton = nil
+            switch response {
+            case .alertFirstButtonReturn: self.saveAndClose()
+            case .alertThirdButtonReturn: self.form.close()
+            default: break
+            }
+        }
+        return false
     }
     private func retire() {
         let callback = onClose
@@ -84,6 +114,7 @@ import AppKit
         allButtons.removeAll()
         selectionButtons.removeAll()
         actionTargets.removeAll()
+        hasUnsavedChanges = { false }
         save = { true }
         add = {}
         rows = { [] }
@@ -149,6 +180,7 @@ import AppKit
     }
     func reload(select id: UUID? = nil) {
         let selected = id ?? selectedID
+        form.window.isDocumentEdited = hasUnsavedChanges()
         table.reloadData()
         if let index = rows().firstIndex(where: { $0.id == selected }) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
@@ -159,7 +191,9 @@ import AppKit
         onSelection?(selectedID)
     }
     func refresh() {
-        let enabled = canEdit() && form.window.attachedSheet == nil
+        let editable = canEdit()
+        closeReviewSaveButton?.isEnabled = editable
+        let enabled = editable && form.window.attachedSheet == nil
         saveButton?.isEnabled = enabled
         for button in allButtons { button.isEnabled = enabled }
         for button in selectionButtons { button.isEnabled = enabled && selectedID != nil }
@@ -201,11 +235,19 @@ import AppKit
         ControlPresentation.label(Strings.formAction("Rename", scope: value.name), control: field)
         return field
     }
+    func controlTextDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField,
+            let identifier = field.identifier?.rawValue, let id = UUID(uuidString: identifier),
+            let row = rows().first(where: { $0.id == id })
+        else { return }
+        form.window.isDocumentEdited = !row.name.utf8.elementsEqual(field.stringValue.utf8) || hasUnsavedChanges()
+    }
     func controlTextDidEndEditing(_ notification: Notification) {
         guard let field = notification.object as? NSTextField,
             let text = field.identifier?.rawValue, let id = UUID(uuidString: text)
         else { return }
         rename(id, field.stringValue)
+        form.window.isDocumentEdited = hasUnsavedChanges()
         ControlPresentation.label(Strings.formAction("Rename", scope: field.stringValue), control: field)
     }
     func tableViewSelectionDidChange(_ notification: Notification) {

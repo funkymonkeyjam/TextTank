@@ -565,6 +565,9 @@ import AppKit
             title: Strings.text("toolbar.customize", "Customize Toolbar…"),
             action: #selector(NSWindow.runToolbarCustomizationPalette(_:)))
         workspaceWindow.groupCommands.install(in: view)
+        view.addItem(
+            title: "Auto-Indent on Return", action: #selector(SettingsController.toggleAutoIndent(_:)), target: settings
+        )
         let languageRoot = NSMenuItem()
         languageRoot.title = "Language"
         languageRoot.submenu = languages.menu()

@@ -169,6 +169,52 @@ import NativeSearch
                     "rejected settings retain prior on-disk configuration")
                 conflict.version = 99
                 rejects("future settings version rejected") { try settings.save(conflict) }
+                let editURL = root.appendingPathComponent("view-preference.json")
+                let initial = SettingsStore(url: editURL)
+                try initial.updateViewPreference(.autoIndent) { $0 }
+                check(
+                    !FileManager.default.fileExists(atPath: editURL.path),
+                    "an unchanged default creates no settings file")
+                let newer = Data(
+                    #"{"version":1,"appearance":"light","shortcuts":{},"useTabs":true,"tabWidth":23,"wrap":true,"futureMember":{"value":"kept"}}"#
+                        .utf8)
+                try newer.write(to: editURL)
+                try initial.updateViewPreference(.autoIndent) { $0 }
+                check(
+                    try Data(contentsOf: editURL) == newer && initial.value.tabWidth == 23,
+                    "a no-op keeps distinct legacy bytes")
+                try initial.updateViewPreference(.autoIndent) { !$0 }
+                let edited = try Data(contentsOf: editURL)
+                let object = try JSONSerialization.jsonObject(with: edited) as? [String: Any]
+                check(
+                    (object?["futureMember"] as? [String: String])?["value"] == "kept"
+                        && !initial.value.autoIndentEnabled,
+                    "the View preference edit retains unrelated version-1 members")
+                let beforeConflict = initial.value
+                rejects("a replacement before commit preserves the independent writer") {
+                    try initial.updateViewPreference(.autoIndent) { enabled in
+                        try newer.write(to: editURL, options: .atomic)
+                        return !enabled
+                    }
+                }
+                check(
+                    try Data(contentsOf: editURL) == newer && initial.value == beforeConflict,
+                    "a rejected single-field commit preserves both newer bytes and prior visible state")
+                let lexical =
+                    #"{"version":1,"appearance":"light","shortcuts":{},"useTabs":true,"tabWidth":23,"wrap":true,"unknown":[123456789012345678901234567890123456789,"\uFEFFtext",{"autoIndent":true}],"\u0061utoIndent" : null}"#
+                try Data(lexical.utf8).write(to: editURL)
+                try initial.updateViewPreference(.autoIndent) { !$0 }
+                let expected = lexical.replacingOccurrences(of: " : null}", with: " : false}")
+                check(
+                    try Data(contentsOf: editURL) == Data(expected.utf8),
+                    "an escaped top-level preference preserves numerical spelling, Unicode, nested keys and whitespace")
+                let duplicate = Data(
+                    lexical.replacingOccurrences(of: " : null}", with: " : null, \"autoIndent\": true}").utf8)
+                try duplicate.write(to: editURL)
+                rejects("ambiguous duplicate View keys refuse the edit") {
+                    try initial.updateViewPreference(.autoIndent) { !$0 }
+                }
+                check(try Data(contentsOf: editURL) == duplicate, "ambiguous duplicate View keys leave the file intact")
                 // F199: a settings file that failed to load is never overwritten without explicit confirmation.
                 var futureSettings = configured
                 futureSettings.version = 2

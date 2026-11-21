@@ -48,6 +48,164 @@ static NSEvent *TTMouse(NSEventType type, NSView *content, NSPoint point, NSTime
     return [NSEvent mouseEventWithType:type location:[content convertPoint:point toView:nil] modifierFlags:0 timestamp:time
                           windowNumber:content.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1];
 }
+// For two large-line fixtures only, observe the bridge's reads from this editor's engine.
+// All messages, including the real mutations, still reach its original Scintilla instance.
+@interface TTReturnIndentReads : NSObject
+@property(nonatomic, strong) ScintillaView *engine;
+@property(nonatomic) NSUInteger bytesRead;
+@property(nonatomic) NSUInteger furthestByte;
+@property(nonatomic) BOOL wholeIndentQuery;
+@end
+@implementation TTReturnIndentReads
+- (id)forwardingTargetForSelector:(SEL)selector { return _engine; }
+- (sptr_t)message:(unsigned int)message wParam:(uptr_t)start lParam:(sptr_t)count {
+    if (message == SCI_GETRANGEPOINTER) {
+        _bytesRead += count;
+        _furthestByte = MAX(_furthestByte, start + count);
+    }
+    return [_engine message:message wParam:start lParam:count];
+}
+- (sptr_t)message:(unsigned int)message wParam:(uptr_t)value {
+    if (message == SCI_GETLINEINDENTPOSITION || message == SCI_GETLINEINDENTATION) _wholeIndentQuery = YES;
+    return [_engine message:message wParam:value];
+}
+@end
+
+static void pressReturn(TTEditor *editor) {
+    ScintillaView *engine = (ScintillaView *)editor.subviews.firstObject;
+    NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0
+        timestamp:0 windowNumber:0 context:nil characters:@"\r" charactersIgnoringModifiers:@"\r" isARepeat:NO keyCode:36];
+    [engine.content keyDown:event];
+}
+
+static void checkReturn(NSString *input, NSArray<TTSelectionRange *> *before, TTLineEndingMode mode,
+                        NSString *expected, NSArray<TTSelectionRange *> *after, NSUInteger readBound = NSNotFound) {
+    TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 400, 240)];
+    editor.text = input;
+    [editor configureTabWidth:4 useTabs:mode == TTLineEndingModeCRLF];
+    [editor setLineEndingMode:mode];
+    check(editor.autoIndentEnabled && [editor setSelectionRanges:before], "Return fixture has default indentation and valid selections");
+    [editor resetUndoHistory];
+    [editor setSavePoint];
+    TTEditor *clone = [[TTEditor alloc] initWithFrame:editor.frame];
+    [clone shareDocumentWith:editor];
+    [clone adoptViewStateFrom:editor];
+    __block NSUInteger edits = 0, cloneEdits = 0;
+    editor.onChange = ^{ ++edits; };
+    clone.onChange = ^{ ++cloneEdits; };
+    NSMutableArray<TTMacroAction *> *steps = [NSMutableArray new];
+    editor.onMacroStep = ^(TTMacroAction *step) { [steps addObject:step]; };
+    [editor startRecording];
+    TTReturnIndentReads *reads = nil;
+    if (readBound != NSNotFound) {
+        reads = [TTReturnIndentReads new];
+        reads.engine = (ScintillaView *)editor.subviews.firstObject;
+        [editor setValue:reads forKey:@"engine"];
+    }
+    @try {
+        pressReturn(editor);
+    } @finally {
+        if (reads) [editor setValue:reads.engine forKey:@"engine"];
+    }
+    if (reads) {
+        check(!reads.wholeIndentQuery && reads.furthestByte <= readBound && reads.bytesRead == readBound,
+            "near-start Return inspects only the bytes before its caret on a long whitespace line");
+    }
+    [editor stopRecording];
+    NSData *bytes = [expected dataUsingEncoding:NSUTF8StringEncoding];
+    check([editor.utf8Data isEqual:bytes] && [clone.utf8Data isEqual:bytes] && [editor.selectionRanges isEqual:after],
+        "native Return preserves exact indentation and moves each caret past its own prefix");
+    check(edits == 1 && cloneEdits == 1, "Return sends one change callback to each document view");
+    NSView *receiver = ((ScintillaView *)editor.subviews.firstObject).content;
+    [receiver tryToPerform:@selector(undo:) with:nil];
+    check([editor.text isEqual:input] && !editor.modified && [editor.selectionRanges isEqual:before], "one native Undo restores Return input and selections");
+    [receiver tryToPerform:@selector(redo:) with:nil];
+    check([editor.utf8Data isEqual:bytes] && [clone.utf8Data isEqual:bytes], "one native Redo restores Return bytes in both panes");
+    if (before.count == 1) {
+        [receiver tryToPerform:@selector(undo:) with:nil];
+        [editor beginUndoGroup];
+        for (TTMacroAction *step in steps) check([editor executeMacroStep:step], "single-selection Return records replayable literal steps");
+        [editor endUndoGroup];
+        check([editor.utf8Data isEqual:bytes] && [editor.selectionRanges isEqual:after], "Return recording replays exact bytes and caret without doubling indentation");
+    } else {
+        check(steps.count > 0 && steps.firstObject.kind == TTMacroActionKindUnsupported, "multi-caret Return keeps the native recording rejection");
+    }
+}
+
+static void returnIndentChecks() {
+    checkReturn(@"    alpha", @[S(9, 9)], TTLineEndingModeLF, @"    alpha\n    ", @[S(14, 14)]);
+    checkReturn(@"\tbeta", @[S(5, 5)], TTLineEndingModeCRLF, @"\tbeta\r\n\t", @[S(8, 8)]);
+    checkReturn(@" \t雪", @[S(5, 5)], TTLineEndingModeCR, @" \t雪\r \t", @[S(8, 8)]);
+    checkReturn(@"    text", @[S(2, 2)], TTLineEndingModeLF, @"  \n    text", @[S(5, 5)]);
+    checkReturn(@"  aXYz", @[S(5, 3)], TTLineEndingModeLF, @"  a\n  z", @[S(6, 6)]);
+    checkReturn(@"\ta\r\n  bc\r\n    d", @[S(2, 2), S(8, 8), S(15, 15)], TTLineEndingModeCRLF,
+                @"\ta\r\n\t\r\n  bc\r\n  \r\n    d\r\n    ", @[S(5, 5), S(15, 15), S(28, 28)]);
+    checkReturn(@"\ta\n  bc\n    d", @[S(2, 2), S(7, 7), S(13, 13)], TTLineEndingModeLF,
+                @"\ta\n\t\n  bc\n  \n    d\n    ", @[S(4, 4), S(12, 12), S(23, 23)]);
+
+    // Keep the caret near the start of a long whitespace run, including column zero.
+    NSString *longPrefix = [@"" stringByPaddingToLength:256 * 1024 withString:@" \t" startingAtIndex:0];
+    checkReturn(longPrefix, @[S(0, 0)], TTLineEndingModeLF, [@"\n" stringByAppendingString:longPrefix], @[S(1, 1)], 0);
+    NSString *splitPrefix = [longPrefix stringByReplacingCharactersInRange:NSMakeRange(2, 0) withString:@"\n \t"];
+    checkReturn(longPrefix, @[S(2, 2)], TTLineEndingModeLF, splitPrefix, @[S(5, 5)], 2);
+
+    TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 400, 240)];
+    editor.text = @"  x";
+    [editor setLineEndingMode:TTLineEndingModeLF];
+    [editor setSelectionAnchor:3 caret:3];
+    editor.readOnly = YES;
+    const NSUInteger revision = editor.revision;
+    pressReturn(editor);
+    check(editor.revision == revision && editor.selectionCaret == 3, "read-only Return preserves bytes and caret");
+    editor.readOnly = NO;
+    editor.autoIndentEnabled = NO;
+    pressReturn(editor);
+    check([editor.text isEqual:@"  x\n"] && editor.selectionCaret == 4, "turning auto-indent off preserves literal native Return");
+    [editor executeCommand:@"undo"];
+    editor.autoIndentEnabled = YES;
+    [editor executeCommand:@"newLine"];
+    check([editor.text isEqual:@"  x\n  "], "the explicit New Line editing command uses the Return behavior");
+    [editor executeCommand:@"undo"];
+    [editor executeMacroStep:[TTMacroAction command:@"newLine"]];
+    check([editor.text isEqual:@"  x\n"], "a legacy macro's New Line command keeps its literal behavior");
+    [editor executeCommand:@"undo"];
+    ScintillaView *engine = (ScintillaView *)editor.subviews.firstObject;
+    [engine insertText:@"Q\nZ"];
+    check([editor.text isEqual:@"  xQ\nZ"], "native direct text input containing a newline is literal");
+    editor.text = @"  pri";
+    [editor setSelectionAnchor:5 caret:5];
+    [editor showCompletions:@[@"print", @"printf"]];
+    check([engine message:SCI_AUTOCACTIVE], "Return fixture has an active completion list");
+    pressReturn(editor);
+    check(![engine message:SCI_AUTOCACTIVE] && [editor.text isEqual:@"  print"], "Return accepts the completion without inserting an indented line");
+
+    editor.text = @"  a\n  b";
+    [engine message:SCI_SETRECTANGULARSELECTIONANCHOR wParam:3];
+    [engine message:SCI_SETRECTANGULARSELECTIONCARET wParam:7];
+    check(editor.selectionIsRectangular && editor.selectionCount == 2, "Return fixture has a two-line rectangular selection");
+    NSInteger main = editor.selectionCaret;
+    NSString *rectExpected = [editor.text stringByReplacingCharactersInRange:NSMakeRange(main, 0) withString:@"\n  "];
+    pressReturn(editor);
+    check([editor.text isEqual:rectExpected] && editor.selectionCount == 1, "rectangular Return follows Scintilla's single main caret policy");
+
+    // Compare the active input method's actual local Return behavior with indentation on and off.
+    NSMutableArray *composition = [NSMutableArray new];
+    for (NSNumber *enabled in @[@NO, @YES]) {
+        TTEditor *marked = [[TTEditor alloc] initWithFrame:editor.frame];
+        marked.text = @"  x";
+        [marked setSelectionAnchor:3 caret:3];
+        [marked setLineEndingMode:TTLineEndingModeLF];
+        marked.autoIndentEnabled = enabled.boolValue;
+        SCIContentView *content = ((ScintillaView *)marked.subviews.firstObject).content;
+        [content setMarkedText:@"雪" selectedRange:NSMakeRange(1, 0) replacementRange:NSMakeRange(NSNotFound, 0)];
+        check(content.hasMarkedText && [marked.text isEqual:@"  x雪"], "native marked-text composition established");
+        pressReturn(marked);
+        [composition addObject:@[marked.utf8Data, marked.selectionRanges, @(content.hasMarkedText)]];
+        [content unmarkText];
+    }
+    check([composition[0] isEqual:composition[1]], "marked-text Return matches the native behavior with auto-indent disabled");
+}
+
 static void cancellationContract() {
     TTSearchCancellation *token=[TTSearchCancellation new];
     check(!token.cancelled && ![[token valueForKey:@"cancelled"] boolValue], "F316 native cancellation starts false and retains its safe KVC getter");
@@ -72,6 +230,7 @@ int main(int argc, char **argv) {
         }
         cancellationContract();
         [NSApplication sharedApplication];
+        ttchecks::section("Return indentation", returnIndentChecks);
         ttchecks::section("D1 comparison drop and gutter isolation", [&] {
             TTEditor *renderer=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,240)];
             renderer.text=@"exact snapshot\n";[renderer resetUndoHistory];[renderer setSavePoint];
@@ -778,6 +937,10 @@ int main(int argc, char **argv) {
             check([[board stringForType:NSPasteboardTypeString] isEqual:@" two"] && [ed.text isEqual:@"one"], "cut removes the selection and places it on the pasteboard");
             [ed setSelectionAnchor:0 caret:0]; [ed executeCommand:@"paste"];
             check([ed.text isEqual:@" twoone"], "paste inserts the pasteboard text at the caret");
+            ed.text = @"  x"; [ed setSelectionAnchor:3 caret:3]; [ed setLineEndingMode:TTLineEndingModeLF];
+            [board clearContents]; [board setString:@"\nY" forType:NSPasteboardTypeString];
+            [ed executeCommand:@"paste"];
+            check([ed.text isEqual:@"  x\nY"], "ordinary multiline paste leaves indentation literal");
             [board clearContents]; if (saved) [board setString:saved forType:NSPasteboardTypeString];
         } else printf("SKIP cut, copy and paste: set TEXTTANK_TEST_PASTEBOARD=1 to run them against the general pasteboard\n");
         });

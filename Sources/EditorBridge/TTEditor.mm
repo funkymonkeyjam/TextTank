@@ -127,6 +127,7 @@ static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
 // difference is reported as an unrecordable action (F59).
 struct TTInteractionState { NSUInteger revision; sptr_t selections, anchor, caret; };
 @interface TTEditor (MacroInteraction)
+- (void)performReturn:(void (NS_NOESCAPE ^)(void))nativeReturn;
 - (TTInteractionState)interactionState;
 - (void)reportMacroStep:(TTMacroAction *)step;
 - (void)noteUnrecordedInteractionSince:(TTInteractionState)before;
@@ -150,8 +151,21 @@ static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
     for (TTEditor *editor in recording) [editor noteUnrecordedInteractionSince:before[index++]];
 }
 @interface TTContentView : SCIContentView
+@property(nonatomic, weak) TTEditor *editor;
 @end
 @implementation TTContentView
+- (void)keyDown:(NSEvent *)event {
+    NSString *input = event.charactersIgnoringModifiers;
+    const unichar key = input.length == 1 ? [input characterAtIndex:0] : 0;
+    const NSEventModifierFlags shortcuts = NSEventModifierFlagCommand | NSEventModifierFlagOption | NSEventModifierFlagControl;
+    TTEditor *editor = self.editor;
+    if (editor && (key == '\r' || key == '\n' || key == NSEnterCharacter) &&
+        !(event.modifierFlags & shortcuts) && !self.hasMarkedText) {
+        [editor performReturn:^{ [super keyDown:event]; }];
+    } else {
+        [super keyDown:event];
+    }
+}
 - (NSRect)accessibilityFrame {
     if (!self.window) return NSZeroRect;
     return [self.window convertRectToScreen:[self convertRect:self.visibleRect toView:nil]];
@@ -478,6 +492,8 @@ static NSHashTable *TTDeferredEditors() {
 struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @interface TTEditor () <ScintillaNotificationProtocol> {
     TTLineNumberState _lineNumberState;
+    BOOL _indentingReturn;
+    NSString *_recordedReturnIndent;
 }
 @property(nonatomic, strong) ScintillaView *engine;
 @property(nonatomic,strong) TTEmptyLineNumbersView *emptyLineNumbers;
@@ -514,6 +530,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         NSAssert(NSThread.isMainThread, @"Editor must be created on the main thread");
         _syntaxStyles=[NSMutableDictionary dictionary];_syntaxFonts=[NSMutableDictionary dictionary];
         _engine = [[TTScintillaView alloc] initWithFrame:NSZeroRect];
+        ((TTContentView *)_engine.content).editor = self;
+        _autoIndentEnabled = YES;
         _engine.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         [self addSubview:_engine];
         _engine.delegate = self;
@@ -1178,6 +1196,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (void)adoptViewStateFrom:(TTEditor *)other {
     [self assertThread]; if (!other || other == self) return;
     [self adoptSyntaxStylesFrom:other];
+    self.autoIndentEnabled = other.autoIndentEnabled;
     [_engine message:SCI_SETZOOM wParam:(uptr_t)[other.engine message:SCI_GETZOOM]];
     [_engine message:SCI_SETWRAPMODE wParam:(uptr_t)[other.engine message:SCI_GETWRAPMODE]];
     [_engine message:SCI_SETVIEWWS wParam:(uptr_t)[other.engine message:SCI_GETVIEWWS]];
@@ -1323,7 +1342,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     }
     NSNumber *message = TTDispatchCommands()[identifier];
     if (message == nil) return NO;
-    [_engine message:message.unsignedIntValue];
+    if (message.unsignedIntValue == SCI_NEWLINE) {
+        [self performReturn:^{ [self.engine message:SCI_NEWLINE]; }];
+    } else {
+        [_engine message:message.unsignedIntValue];
+    }
     return YES;
 }
 + (NSArray<TTEditorCommandIdentifier> *)supportedCommandIdentifiers {
@@ -1732,9 +1755,64 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self noteStateChange];
     return YES;
 }
+// NewLine inserts once per caret. Changing that insertion keeps the engine in charge of selection
+// replacement, EOL mode, caret movement and Undo. Paste and macro playback never enter this scope.
+- (void)performReturn:(void (NS_NOESCAPE ^)(void))nativeReturn {
+    if (!_autoIndentEnabled || _indentingReturn || self.readOnly || [_engine message:SCI_AUTOCACTIVE]) {
+        nativeReturn();
+        return;
+    }
+    [self openUndoGroup];
+    _indentingReturn = YES;
+    @try {
+        nativeReturn();
+        // Scintilla records the original EOL, one byte at a time, after all carets have moved.
+        if (_recordedReturnIndent && _macroRecording) {
+            [self reportMacroStep:[TTMacroAction insertText:_recordedReturnIndent]];
+        }
+    } @finally {
+        _indentingReturn = NO;
+        _recordedReturnIndent = nil;
+        [self closeUndoGroup];
+    }
+}
+- (void)inheritIndentAtInsertion:(const SCNotification *)change {
+    const char *eol = change->text;
+    if (!eol || !((change->length == 1 && (eol[0] == '\r' || eol[0] == '\n')) ||
+                  (change->length == 2 && eol[0] == '\r' && eol[1] == '\n'))) return;
+    const sptr_t position = change->position;
+    const sptr_t line = [_engine message:SCI_LINEFROMPOSITION wParam:position];
+    const sptr_t start = [_engine message:SCI_POSITIONFROMLINE wParam:line];
+    // If Return splits the indentation, the original suffix already follows the new caret.
+    if (start >= position) return;
+    // Short contiguous reads also avoid moving the document's gap across a long, unindented line.
+    NSMutableData *insertion = nil;
+    for (sptr_t cursor = start; cursor < position;) {
+        const sptr_t count = MIN(position - cursor, 256);
+        const char *bytes = (const char *)[_engine message:SCI_GETRANGEPOINTER wParam:cursor lParam:count];
+        sptr_t indent = 0;
+        while (indent < count && (bytes[indent] == ' ' || bytes[indent] == '\t')) ++indent;
+        if (indent) {
+            if (!insertion) insertion = [NSMutableData dataWithBytes:eol length:change->length];
+            [insertion appendBytes:bytes length:indent];
+        }
+        if (indent < count) break;
+        cursor += count;
+    }
+    if (!insertion) return;
+    if (_macroRecording && self.selectionCount == 1 && ![_engine message:SCI_GETOVERTYPE]) {
+        const char *bytes = (const char *)insertion.bytes + change->length;
+        _recordedReturnIndent = [[NSString alloc] initWithBytes:bytes length:insertion.length-change->length
+                                                      encoding:NSASCIIStringEncoding];
+    }
+    [_engine message:SCI_CHANGEINSERTION wParam:insertion.length lParam:(sptr_t)insertion.bytes];
+}
 - (void)notification:(SCNotification *)notification {
     const unsigned int code = notification->nmhdr.code;
     const int type = notification->modificationType;
+    if (_indentingReturn && code == SCN_MODIFIED && (type & SC_MOD_INSERTCHECK)) {
+        [self inheritIndentAtInsertion:notification];
+    }
     // Scintilla notifies after every paint, which includes every caret blink. The filler line
     // numbers are compared, not redrawn, and for a modification only when its lines changed.
     if (code == SCN_PAINTED || code == SCN_UPDATEUI || code == SCN_ZOOM ||

@@ -199,6 +199,7 @@ import NativeSearch
             check(!spent.isVisible, "Escape closes the Run result panel once nothing is waiting to be applied")
             Checks.section("apply gating") { try applyGating(controller, sample, button) }
             Checks.section("library") { try libraryChecks(controller, sample) }
+            Checks.section("library manager close") { try managerCloseChecks() }
             Checks.section("explicit runs") { try explicitRunChecks(controller) }
             Checks.section("lifetime") { try lifetimeChecks(controller, sample, button) }
             Checks.summary { "PASS RunControllerChecks: \(Checks.count) assertions" }
@@ -735,6 +736,88 @@ import NativeSearch
         }
         check(saved && ids() == [sample.id.uuidString], "F137 Save in Manage Commands deletes the removed command")
         try controller.persist([sample])
+    }
+    @MainActor static func managerCloseChecks() throws {
+        let isolated = try IsolatedSupportDirectory("RunManagerCloseChecks")
+        defer { isolated.restore() }
+        let controller = RunController()
+        var entry = ConfiguredRun(name: "Original", executable: "/usr/bin/true", arguments: [])
+        try controller.persist([entry])
+        let original = try Data(contentsOf: controller.storage)
+        func manager() throws -> NSWindow {
+            let item = try requireValue(
+                controller.makeMenu().items.first { $0.title == "Manage Commands…" }, "manager command")
+            NSApp.sendAction(try requireValue(item.action, "manager action"), to: item.target, from: item)
+            return try requireValue(
+                FormPanel.visible.first { $0.window.identifier?.rawValue == "run.manager" }?.window, "manager")
+        }
+        func button(_ window: NSWindow, _ title: String) throws -> NSButton {
+            let view = try requireValue(window.contentView, "manager content")
+            return try requireValue(descendants(view).compactMap { $0 as? NSButton }.first { $0.title == title }, title)
+        }
+        func useChanges(_ name: String, in parent: NSWindow) throws {
+            try button(parent, "Advanced JSON…").performClick(nil)
+            let child = try requireValue(parent.attachedSheet, "advanced editor sheet")
+            let editor = try requireValue(
+                descendants(try requireValue(child.contentView, "child content")).compactMap { $0 as? NSTextView }
+                    .first, "editable JSON")
+            var edited = entry
+            edited.name = name
+            editor.string = String(decoding: try JSONEncoder().encode([edited]), as: UTF8.self)
+            try button(child, "Use Changes").performClick(nil)
+            spinUntil("child edit accepted") { parent.attachedSheet == nil }
+        }
+        func review(_ parent: NSWindow, choose title: String) throws {
+            parent.performClose(nil)
+            let sheet = try requireValue(parent.attachedSheet, "dirty manager close review")
+            let keep = try button(sheet, "Keep Editing"), discard = try button(sheet, "Discard Changes")
+            check(
+                keep.keyEquivalent == "\u{1b}" && discard.hasDestructiveAction && discard.keyEquivalent != "\r",
+                "Escape keeps the working copy and Return never discards it")
+            try button(sheet, title).performClick(nil)
+            spinUntil("manager close choice applied") { parent.attachedSheet == nil }
+        }
+        let clean = try manager()
+        clean.performClose(nil)
+        check(!clean.isVisible && clean.attachedSheet == nil, "an unchanged manager closes without prompting")
+        let parent = try manager()
+        try useChanges("Accepted", in: parent)
+        check(
+            try parent.isDocumentEdited && Data(contentsOf: controller.storage) == original,
+            "an accepted child edit marks the manager without writing disk")
+        try review(parent, choose: "Keep Editing")
+        check(
+            try parent.isVisible && parent.isDocumentEdited && Data(contentsOf: controller.storage) == original,
+            "Keep Editing preserves the unsaved library")
+        try review(parent, choose: "Save")
+        check(
+            try !parent.isVisible
+                && JSONDecoder().decode([ConfiguredRun].self, from: Data(contentsOf: controller.storage)).first?.name
+                    == "Accepted",
+            "close review Save persists the accepted edit")
+        let saved = try Data(contentsOf: controller.storage)
+        let discard = try manager()
+        try useChanges("Unwanted", in: discard)
+        try review(discard, choose: "Discard Changes")
+        check(
+            try !discard.isVisible && Data(contentsOf: controller.storage) == saved,
+            "discarding a working copy preserves all saved bytes")
+        let conflicted = try manager()
+        try useChanges("Working edit", in: conflicted)
+        entry.name = "Newer saved value"
+        try controller.persist([entry])
+        let newer = try Data(contentsOf: controller.storage)
+        try review(conflicted, choose: "Save")
+        check(
+            try conflicted.isVisible && conflicted.isDocumentEdited && Data(contentsOf: controller.storage) == newer,
+            "a refused stale Save retains the working copy and newer disk bytes")
+        try button(conflicted, "Cancel").performClick(nil)
+        check(
+            !conflicted.isVisible && conflicted.attachedSheet == nil,
+            "explicit manager Cancel retains its discard convention")
+        check(
+            RunController().makeMenu().items.contains { $0.title == entry.name },
+            "reopening the library retains the newer saved value")
     }
     @MainActor static func explicitRunChecks(_ controller: RunController) throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(

@@ -22,6 +22,27 @@ extension Notification.Name {
     static let textTankAutomationsDidChange = Notification.Name("TextTankAutomationsDidChange")
 }
 
+/// Remember how an unchecked optional was represented while a native checkbox is turned on.
+/// Advanced JSON owns explicit values and can replace or remove individual workflows.
+private struct AutomationCheckboxEdits {
+    private var previouslyOmitted = Set<UUID>()
+
+    mutating func value(_ enabled: Bool, replacing stored: Bool?, id: UUID) -> Bool? {
+        guard enabled != (stored == true) else { return stored }
+        if enabled {
+            if stored == nil { previouslyOmitted.insert(id) } else { previouslyOmitted.remove(id) }
+            return true
+        }
+        return previouslyOmitted.remove(id) == nil ? false : nil
+    }
+
+    mutating func remove(_ id: UUID) { previouslyOmitted.remove(id) }
+
+    mutating func reconcile(_ library: AutomationLibrary, flag: KeyPath<AutomationDefinition, Bool?>) {
+        previouslyOmitted.formIntersection(library.workflows.lazy.filter { $0[keyPath: flag] == true }.map(\.id))
+    }
+}
+
 @MainActor final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation {
     /// Independent isolated compositions must not share AppKit toolbar synchronization state.
     let toolbarFamilyIdentifier = UUID().uuidString
@@ -290,7 +311,9 @@ extension Notification.Name {
             retryInstall()
             var working = library
             let baseline = try SavedConfiguration.bytes(library)
-            let panel = LibraryManager(title: "Manage Automations", identifier: "automation.manager")
+            let panel = LibraryManager(title: "Manage Automations", identifier: "automation.manager") {
+                (try? SavedConfiguration.bytes(working)) != baseline
+            }
             manager = panel
             panel.retainController(self)
             panel.onClose = { [weak self] in
@@ -303,6 +326,8 @@ extension Notification.Name {
                 if let i = working.workflows.firstIndex(where: { $0.id == id }) { working.workflows[i].name = name }
             }
             let originalIDs = Set(library.workflows.map(\.id))
+            var favoriteEdits = AutomationCheckboxEdits()
+            var previewEdits = AutomationCheckboxEdits()
             var confirmedEmpty: Data?
             panel.save = { [weak self, weak panel] in
                 guard let self, let panel, !self.busy, !self.exportInProgress else { throw FormFailure.busy }
@@ -336,7 +361,10 @@ extension Notification.Name {
                 }
                 guard try StoreRecovery.ensureWritable(self.loadState) else { return false }
                 try SavedConfiguration.requireUnchanged(self.library, since: baseline)
-                try self.persistLibrary(working)
+                let changed = try SavedConfiguration.bytes(working) != baseline
+                if changed || self.installError != nil || !FileManager.default.fileExists(atPath: self.storage.path) {
+                    try self.persistLibrary(working)
+                }
                 return true
             }
             func settings(_ initial: AutomationDefinition, creating: Bool) {
@@ -345,15 +373,22 @@ extension Notification.Name {
                     guard let pendingBaseline else { throw FormFailure.changed }
                     try SavedConfiguration.requireUnchanged(working, since: pendingBaseline)
                     var updated = working
-                    if let index = updated.workflows.firstIndex(where: { $0.id == candidate.id }) {
+                    let index: Int
+                    if let existing = updated.workflows.firstIndex(where: { $0.id == candidate.id }) {
+                        index = existing
                         updated.workflows[index] = candidate
                     } else if creating {
+                        index = updated.workflows.count
                         updated.workflows.append(candidate)
                     } else {
                         throw FormFailure.changed
                     }
                     try updated.validate()
                     try self.checkShortcutCollisions(updated)
+                    updated.workflows[index].pinToToolbar = favoriteEdits.value(
+                        candidate.pinToToolbar == true, replacing: initial.pinToToolbar, id: initial.id)
+                    updated.workflows[index].previewBeforeApply = previewEdits.value(
+                        candidate.previewBeforeApply == true, replacing: initial.previewBeforeApply, id: initial.id)
                     working = updated
                     panel.reload(select: candidate.id)
                 }
@@ -398,14 +433,20 @@ extension Notification.Name {
                 panel.reload(select: copy.id)
             }
             panel.action("Delete…", identifier: "automation.delete", needsSelection: true) { [weak panel] in
-                panel?.confirmDelete { id in working.workflows.removeAll { $0.id == id } }
+                panel?.confirmDelete { id in
+                    working.workflows.removeAll { $0.id == id }
+                    favoriteEdits.remove(id)
+                    previewEdits.remove(id)
+                }
             }
             let favoriteButton = panel.action(
                 Strings.text("automation.favorite", "Favorite"), identifier: "automation.favorite", needsSelection: true
             ) { [weak panel] in
                 guard let panel, let id = panel.selectedID, let i = working.workflows.firstIndex(where: { $0.id == id })
                 else { return }
-                working.workflows[i].pinToToolbar = working.workflows[i].pinToToolbar != true
+                let enabled = working.workflows[i].pinToToolbar != true
+                working.workflows[i].pinToToolbar = favoriteEdits.value(
+                    enabled, replacing: working.workflows[i].pinToToolbar, id: id)
                 panel.reload(select: id)
             }
             favoriteButton.setButtonType(.switch)
@@ -443,6 +484,8 @@ extension Notification.Name {
                         save: { proposed in
                             try SavedConfiguration.requireUnchanged(self.library, since: baseline)
                             try self.checkShortcutCollisions(proposed)
+                            favoriteEdits.reconcile(proposed, flag: \.pinToToolbar)
+                            previewEdits.reconcile(proposed, flag: \.previewBeforeApply)
                             working = proposed
                             panel.reload()
                         })
@@ -504,7 +547,8 @@ extension Notification.Name {
                 candidate.shortcut = nil
                 try candidate.validate()
                 field = shortcut
-                candidate.shortcut = shortcut.stringValue.isEmpty ? nil : shortcut.stringValue
+                candidate.shortcut =
+                    shortcut.stringValue.isEmpty ? (initial.shortcut == "" ? "" : nil) : shortcut.stringValue
                 if let value = ControlPresentation.selectedID(input).flatMap(AutomationDefinition.Input.init(rawValue:))
                 {
                     candidate.input = value

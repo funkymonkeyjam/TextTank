@@ -214,6 +214,12 @@ extension DocumentChecks {
             global.tabWidth = 8
             global.useTabs = false
             global.wrap = false
+            let legacyURL = TestPaths.fixtures.appendingPathComponent("persistence/Settings.json")
+            let legacy = try JSONDecoder().decode(EditorSettings.self, from: Data(contentsOf: legacyURL))
+            check(
+                legacy.autoIndent == nil && legacy.autoIndentEnabled,
+                "version-1 settings with no auto-indent key default to on")
+            global.autoIndent = false
             try delegate.settings.save(global)
             defer { _ = try? delegate.settings.save(EditorSettings()) }
             let originalCatalog = try requireValue(delegate.languages.catalog, "fixture: language catalog")
@@ -275,6 +281,25 @@ extension DocumentChecks {
                 sci(clone, zoom) == 3 && sci(document.editor, zoom) == 3 && sci(clone, viewWhitespace) == 1
                     && clone.wrap,
                 "a new clone opens with the source view's zoom, whitespace visibility and wrap")
+            let autoIndent = NSMenuItem(
+                title: "Auto-Indent on Return", action: #selector(SettingsController.toggleAutoIndent(_:)),
+                keyEquivalent: "")
+            check(
+                !document.editor.autoIndentEnabled && !clone.autoIndentEnabled
+                    && delegate.settings.validateMenuItem(autoIndent) && autoIndent.state == .off,
+                "new document and split pane inherit the disabled Return preference")
+            let otherSettings = SettingsController(url: delegate.settings.url)
+            var independent = otherSettings.value
+            independent.appearance = independent.appearance == "light" ? "dark" : "light"
+            try otherSettings.save(independent)
+            delegate.settings.toggleAutoIndent(autoIndent)
+            let persisted = try JSONDecoder().decode(EditorSettings.self, from: Data(contentsOf: delegate.settings.url))
+            check(
+                persisted.autoIndent == true && persisted.appearance == independent.appearance
+                    && delegate.settings.value == persisted && document.editor.autoIndentEnabled
+                    && clone.autoIndentEnabled
+                    && delegate.settings.validateMenuItem(autoIndent) && autoIndent.state == .on,
+                "the View toggle persists and updates both open editors and its checkmark")
             check(palette(clone) == palette(document.editor), "a new clone shows the source view's syntax colours")
             check(
                 document.editor.revision == revision && clone.revision == revision && !document.isDocumentEdited,

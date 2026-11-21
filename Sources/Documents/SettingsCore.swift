@@ -19,6 +19,8 @@ package struct EditorSettings: Codable, Equatable {
     package var version: Int
     package var tabWidth: Int
     package var useTabs: Bool
+    package var autoIndent: Bool?
+    package var autoIndentEnabled: Bool { autoIndent ?? true }
     package var wrap: Bool
     package var appearance: String
     // Key equivalents use AppKit's uppercase convention for Shift.
@@ -158,10 +160,15 @@ package struct ShortcutLoadIssue: Equatable {
     }
 }
 package enum SettingsError: Error, LocalizedError, Equatable {
-    case invalid, conflict, unreadable, tabWidth, unknownShortcut, invalidShortcut
+    case invalid, conflict, unreadable, tabWidth, unknownShortcut, invalidShortcut, changedOnDisk,
+        ambiguousViewPreference
     case duplicateShortcut(first: String, second: String, key: String)
     package var errorDescription: String? {
         switch self {
+        case .ambiguousViewPreference:
+            return
+                "The saved View preference is ambiguous. Check Settings.json for duplicate preference keys, then try again."
+        case .changedOnDisk: return "The settings file changed before this edit finished. Try the command again."
         case .tabWidth: return "Tab width must be a whole number from 1 to 32. The settings were not changed."
         case .invalid: return "Unsupported settings version or value. Existing settings have not been replaced."
         case .conflict:
@@ -220,6 +227,97 @@ package struct SettingsShortcutDraft {
         return settings.shortcut(for: selected)
     }
 }
+package enum EditorViewPreference: String {
+    case autoIndent
+    fileprivate func enabled(in settings: EditorSettings) -> Bool {
+        switch self {
+        case .autoIndent: return settings.autoIndentEnabled
+        }
+    }
+    /// The caller has already decoded and validated the complete settings object. Locate only
+    /// this top-level member. Unrelated JSON values never pass through NSNumber or NSString.
+    fileprivate func setting(_ enabled: Bool, in data: Data) throws -> Data {
+        let bytes = Array(data)
+        guard bytes.count >= 4 else { throw SettingsError.ambiguousViewPreference }
+        // Project structural ASCII from the original JSON code units, including BOM-bearing
+        // and BOM-less UTF-16/32. Splice original byte offsets to retain exact Unicode and numbers.
+        let width: Int, lane: Int
+        if bytes.starts(with: [0xff, 0xfe, 0, 0]) || bytes[1...3].allSatisfy({ $0 == 0 }) {
+            (width, lane) = (4, 0)
+        } else if bytes.starts(with: [0, 0, 0xfe, 0xff]) || bytes[0...2].allSatisfy({ $0 == 0 }) {
+            (width, lane) = (4, 3)
+        } else if bytes.starts(with: [0xff, 0xfe]) || bytes[1] == 0 {
+            (width, lane) = (2, 0)
+        } else if bytes.starts(with: [0xfe, 0xff]) || bytes[0] == 0 {
+            (width, lane) = (2, 1)
+        } else {
+            (width, lane) = (1, 0)
+        }
+        guard bytes.count.isMultiple(of: width) else { throw SettingsError.ambiguousViewPreference }
+        let ascii =
+            width == 1
+            ? bytes
+            : stride(from: 0, to: bytes.count, by: width).map { start -> UInt8 in
+                for digit in 0..<width where digit != lane && bytes[start + digit] != 0 { return 0xff }
+                return bytes[start + lane]
+            }
+        func whitespace(_ c: UInt8) -> Bool { c == 32 || c == 9 || c == 10 || c == 13 }
+        func nextToken(_ start: Int) -> Int {
+            var i = start
+            while i < ascii.count && whitespace(ascii[i]) { i += 1 }
+            return i
+        }
+        var depth = 0, i = 0, endOfObject: Int?, valueRange: Range<Int>?
+        while i < ascii.count {
+            switch ascii[i] {
+            case 123, 91: depth += 1 // { [
+            case 125, 93: // } ]
+                if depth == 1 && ascii[i] == 125 { endOfObject = i }
+                depth -= 1
+            case 34: // A string. Escape pairs cannot close it.
+                let start = i
+                i += 1
+                while i < ascii.count, ascii[i] != 34 { i += ascii[i] == 92 ? 2 : 1 }
+                guard i < ascii.count else { throw SettingsError.ambiguousViewPreference }
+                let end = i + 1, colon = nextToken(end)
+                if depth == 1, colon < ascii.count, ascii[colon] == 58,
+                    end - start <= rawValue.utf8.count * 6 + 2,
+                    let name = try? JSONDecoder().decode(String.self, from: Data(ascii[start..<end])),
+                    name.utf8.elementsEqual(rawValue.utf8)
+                {
+                    let begin = nextToken(colon + 1)
+                    guard valueRange == nil, begin < ascii.count else { throw SettingsError.ambiguousViewPreference }
+                    let rest = ascii[begin...]
+                    guard let token = ["true", "false", "null"].first(where: { rest.starts(with: $0.utf8) }) else {
+                        throw SettingsError.ambiguousViewPreference
+                    }
+                    valueRange = begin..<(begin + token.utf8.count)
+                }
+            default: break
+            }
+            i += 1
+        }
+        guard let endOfObject else { throw SettingsError.ambiguousViewPreference }
+        let value = enabled ? "true" : "false"
+        let range = valueRange ?? endOfObject..<endOfObject
+        let text: String
+        if valueRange != nil {
+            text = value
+        } else {
+            var last = endOfObject - 1
+            while last >= 0 && whitespace(ascii[last]) { last -= 1 }
+            guard last >= 0 else { throw SettingsError.ambiguousViewPreference }
+            let comma = ascii[last] == 44 || ascii[last] == 123 ? "" : ","
+            text = comma + "\"" + rawValue + "\":" + value
+        }
+        var encoded = [UInt8](repeating: 0, count: width * text.utf8.count)
+        for (index, byte) in text.utf8.enumerated() { encoded[index * width + lane] = byte }
+        var output = data
+        output.replaceSubrange((range.lowerBound * width)..<(range.upperBound * width), with: encoded)
+        return output
+    }
+}
+
 /// Foundation-only persistence and failed-load policy. UI/application effects belong to its caller.
 final package class SettingsStore {
     private(set) package var value = EditorSettings()
@@ -254,6 +352,44 @@ final package class SettingsStore {
             loadError = error
         }
     }
+    /// A View command changes one Boolean in the latest valid v1 JSON object. Preserve other
+    /// members, including ones this build does not recognize. Recheck the source before rename.
+    package func updateViewPreference(
+        _ preference: EditorViewPreference, reservedKeys: Set<String> = EditorSettings.protectedShortcuts,
+        _ update: (Bool) throws -> Bool
+    ) throws {
+        guard loadError == nil, ignoredShortcutBindings.isEmpty else { throw SettingsError.unreadable }
+        func currentBytes() throws -> Data? {
+            do { return try WorkspaceStore.readRegularFile(url, maximumBytes: 1024 * 1024) } catch
+                where error.isFileNotFound
+            { return nil }
+        }
+        let source = try currentBytes()
+        let data = try source ?? JSONEncoder().encode(EditorSettings())
+        func validated(_ bytes: Data) throws -> EditorSettings {
+            let loaded = try EditorSettings.load(bytes, reservedKeys: reservedKeys)
+            guard loaded.issues.isEmpty else { throw SettingsError.unreadable }
+            return loaded.settings
+        }
+        let latest = try validated(data)
+        let enabled = preference.enabled(in: latest)
+        let requested = try update(enabled)
+        func requireUnchanged() throws {
+            guard try currentBytes() == source else { throw SettingsError.changedOnDisk }
+        }
+        if enabled == requested {
+            try requireUnchanged()
+            value = latest
+            return
+        }
+        let result = try preference.setting(requested, in: data)
+        let accepted = try validated(result)
+        try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
+        try PrivateFileStore.write(
+            result, to: url, maximumBytes: 1024 * 1024, temporaryPrefix: ".settings-", beforeCommit: requireUnchanged)
+        value = accepted
+    }
+
     /// What the user is told at launch when the settings file could not be read. Every load
     /// schema/security failure gets the same two facts: defaults are in use and the file has
     /// not been changed. Tolerated shortcut-only issues have a separate notice and retained values.

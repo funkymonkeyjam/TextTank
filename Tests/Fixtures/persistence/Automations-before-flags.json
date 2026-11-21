@@ -1,0 +1,21 @@
+{
+  "version" : 1,
+  "workflows" : [
+    {
+      "id" : "11111111-2222-4333-8444-555555555555",
+      "input" : "clipboard",
+      "name" : "My ingredient cleanup",
+      "output" : "newDocument",
+      "shortcut" : "",
+      "steps" : [
+        {
+          "kind" : "removeListMarkers"
+        },
+        {
+          "kind" : "removeBlankLines"
+        }
+      ],
+      "version" : 1
+    }
+  ]
+}
