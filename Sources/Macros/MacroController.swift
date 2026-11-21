@@ -293,7 +293,7 @@ import Darwin
             macro: macro, editor: editor, repeats: repeats, untilEnd: untilEnd, searchPlayback: searchPlayback)
         playing = true
         playbackCancelled = false
-        editor.beginUndoGroup()
+        editor.beginUndoGroup(named: "Play Macro")
         defer {
             editor.endUndoGroup()
             playing = false
@@ -347,7 +347,7 @@ import Darwin
         let session = try MacroPlayback(
             macro: macro, editor: editor, repeats: repeats, untilEnd: untilEnd, searchPlayback: searchPlayback)
         playing = true
-        editor.beginUndoGroup()
+        editor.beginUndoGroup(named: "Play Macro")
         defer {
             editor.endUndoGroup()
             playing = false

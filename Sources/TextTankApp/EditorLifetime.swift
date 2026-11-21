@@ -113,6 +113,8 @@ import EditorBridge
         try requireWritable()
         let editor = try resolve()
         let capture = BulkChangeCapture(editor, name: operationName)
+        let priorName = editor.exchangeNextUndoName("Run Automation")
+        defer { _ = editor.exchangeNextUndoName(priorName) }
         let applied: Bool
         if wholeDocument {
             applied = outputs.count == 1 && editor.replaceDocumentText(outputs[0], expectedRevision: revision)

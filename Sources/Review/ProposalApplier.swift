@@ -120,6 +120,8 @@ enum ReviewApplyResult: Equatable, Sendable { case applied, noChange, rejected(R
             else { throw ReviewRejection.revisionChanged }
             bridgeInvocations += 1
             let capture = BulkChangeCapture(editor, name: "Apply Selected Changes")
+            let priorName = editor.exchangeNextUndoName("Apply Selected Changes")
+            defer { _ = editor.exchangeNextUndoName(priorName) }
             guard editor.applyEdits(native, expectedRevision: target.revision, expectedLength: bytes.count) else {
                 throw ReviewRejection.revisionChanged
             }

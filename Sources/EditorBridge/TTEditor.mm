@@ -538,6 +538,10 @@ static NSHashTable *TTDeferredEditors() {
 struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @interface TTEditor () <ScintillaNotificationProtocol> {
     TTLineNumberState _lineNumberState;
+    NSMutableArray<NSString *> *_historyNames;
+    NSString *_pendingUndoName, *_nextUndoName, *_cachedRedoName;
+    NSUInteger _namedStartRevision, _cachedRedoRevision;
+    sptr_t _cachedRedoCursor, _cachedRedoActions;
     NSInteger _defaultZoomLevel;
     BOOL _followsDefaultZoom;
     BOOL _indentingReturn;
@@ -588,6 +592,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
         NSAssert(NSThread.isMainThread, @"Editor must be created on the main thread");
+        _historyNames = [NSMutableArray array];
+        _cachedRedoCursor = -1;
         _syntaxStyles=[NSMutableDictionary dictionary];_syntaxFonts=[NSMutableDictionary dictionary];
         _engine = [[TTScintillaView alloc] initWithFrame:NSZeroRect];
         ((TTContentView *)_engine.content).editor = self;
@@ -772,13 +778,40 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 /// Every undo group of the bridge goes through this pair. `revision` still advances with each
 /// modification step inside a group; only the change callback waits, for the outermost end or
 /// the next turn of the main run loop, whichever comes first.
+- (NSString *)exchangeNextUndoName:(NSString *)name {
+    [self assertThread];
+    NSString *previous = _nextUndoName;
+    _nextUndoName = [name copy];
+    return previous;
+}
 - (void)openUndoGroup {
+    if (_nextUndoName) {
+        if (!_pendingUndoName && ![self undoGroupOpen]) {
+            _pendingUndoName = _nextUndoName;
+            _namedStartRevision = self.revision;
+        }
+        _nextUndoName = nil;
+    }
     NSNumber *key = @([_engine message:SCI_GETDOCPOINTER]);
     [TTOpenGroups() setObject:@([[TTOpenGroups() objectForKey:key] integerValue] + 1) forKey:key];
     _ownGroups += 1;
     [_engine message:SCI_BEGINUNDOACTION];
 }
+// Persist the name's small index as a Scintilla container action inside the real undo group.
+static constexpr int TTNamedHistoryBase = 0x54540000;
 - (void)closeUndoGroup {
+    if (_ownGroups == 1 && _pendingUndoName) {
+        NSString *name = _pendingUndoName;
+        _pendingUndoName = nil;
+        if (self.revision != _namedStartRevision && [_engine message:SCI_GETUNDOCOLLECTION]) {
+            NSUInteger index = [_historyNames indexOfObject:name];
+            if (index == NSNotFound) {
+                index = _historyNames.count;
+                [_historyNames addObject:name];
+            }
+            [_engine message:SCI_ADDUNDOACTION wParam:TTNamedHistoryBase + index lParam:0];
+        }
+    }
     [_engine message:SCI_ENDUNDOACTION];
     if (_ownGroups <= 0) return;
     _ownGroups -= 1;
@@ -1127,6 +1160,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     const BOOL loaded = [self replaceDocumentWithEncodedUTF8:data];
     [_engine message:SCI_SETUNDOCOLLECTION wParam:1];
     [_engine message:SCI_EMPTYUNDOBUFFER];
+    [_historyNames removeAllObjects];
+    _cachedRedoCursor = -1;
     return loaded;
 }
 - (BOOL)goToLine:(NSInteger)line {
@@ -1259,7 +1294,12 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (BOOL)modified { [self assertThread]; return [_engine message:SCI_GETMODIFY] != 0; }
 - (void)setSavePoint { [self assertThread]; [_engine message:SCI_SETSAVEPOINT]; }
-- (void)resetUndoHistory { [self assertThread]; [_engine message:SCI_EMPTYUNDOBUFFER]; }
+- (void)resetUndoHistory {
+    [self assertThread];
+    [_engine message:SCI_EMPTYUNDOBUFFER];
+    [_historyNames removeAllObjects];
+    _cachedRedoCursor = -1;
+}
 - (NSString *)accessibilityDocumentName { return _engine.content.accessibilityLabel; }
 - (void)setAccessibilityDocumentName:(NSString *)name {
     [self assertThread];
@@ -1279,6 +1319,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     // Each attached Scintilla view owns a reference, so either view may close first.
     [_engine message:SCI_SETDOCPOINTER wParam:0 lParam:[other.engine message:SCI_GETDOCPOINTER]];
     self.revision = other.revision;
+    _historyNames = other->_historyNames;
+    _cachedRedoCursor = -1;
     _braceCacheValid = NO;
     [self noteStateChange];
     // The line count changed with no modification notification.
@@ -1726,6 +1768,41 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [TTRecordingEditors() removeObject:self];
     if (_macroMouseMonitor) { [NSEvent removeMonitor:_macroMouseMonitor]; _macroMouseMonitor = nil; }
     [_engine message:SCI_STOPRECORD];
+}
+- (void)beginUndoGroupNamed:(NSString *)name {
+    [self assertThread];
+    if (![self undoGroupOpen]) {
+        _pendingUndoName = [name copy];
+        _namedStartRevision = self.revision;
+    }
+    [self openUndoGroup];
+}
+- (NSString *)historyNameForRedo:(BOOL)redo {
+    [self assertThread];
+    const sptr_t current = [_engine message:SCI_GETUNDOCURRENT], actions = [_engine message:SCI_GETUNDOACTIONS];
+    if ((redo && current >= actions) || (!redo && current <= 0)) return nil;
+    if (redo && current == _cachedRedoCursor && actions == _cachedRedoActions && self.revision == _cachedRedoRevision)
+        return _cachedRedoName;
+    sptr_t end = redo ? current : current - 1;
+    // Scintilla's serialized action type uses bit 0x100 for 'coalesces with next'.
+    // This follows UndoHistory::StartRedo, including the open final action.
+    static constexpr int coalescesWithNext = 0x100, containerType = 2;
+    if (redo) {
+        while (end + 1 < actions && ([_engine message:SCI_GETUNDOACTIONTYPE wParam:end] & coalescesWithNext)) end++;
+    }
+    const NSInteger type = [_engine message:SCI_GETUNDOACTIONTYPE wParam:end] & ~coalescesWithNext;
+    NSString *name = nil;
+    if (type == containerType) {
+        const NSInteger index = [_engine message:SCI_GETUNDOACTIONPOSITION wParam:end] - TTNamedHistoryBase;
+        if (index >= 0 && static_cast<NSUInteger>(index) < _historyNames.count) name = _historyNames[index];
+    }
+    if (redo) {
+        _cachedRedoCursor = current;
+        _cachedRedoActions = actions;
+        _cachedRedoRevision = self.revision;
+        _cachedRedoName = name;
+    }
+    return name;
 }
 - (void)beginUndoGroup { [self assertThread]; [self openUndoGroup]; }
 - (void)endUndoGroup { [self assertThread]; [self closeUndoGroup]; }

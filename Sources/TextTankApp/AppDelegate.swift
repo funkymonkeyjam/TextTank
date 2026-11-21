@@ -3,7 +3,7 @@ import EditorBridge
 import NativeSearch
 import AppKit
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
     private var automaticSession: AutomaticSession?
     private weak var knownWorkspace: WorkspaceWindowController?
     lazy var workspaceWindow: WorkspaceWindowController = {
@@ -426,6 +426,22 @@ import AppKit
         reviewingTermination = false
         replyToTerminate(didReviewAll)
     }
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        Self.updateHistoryTitles(in: menu, responder: (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder)
+    }
+    static func updateHistoryTitles(in menu: NSMenu, responder: NSResponder?) {
+        var view = responder as? NSView
+        while let current = view, !(current is TTEditor) { view = current.superview }
+        let editor = view as? TTEditor
+        for item in menu.items {
+            guard let id = item.representedObject as? String, id == "undo" || id == "redo" else { continue }
+            let redo = id == "redo", base = redo ? EditorCommand.redo.title : EditorCommand.undo.title
+            if let name = editor?.historyName(redo: redo) { item.title = base + " " + name }
+            else if editor == nil, let manager = responder?.undoManager {
+                item.title = redo ? manager.redoMenuItemTitle : manager.undoMenuItemTitle
+            } else { item.title = base }
+        }
+    }
     @MainActor func buildMenus() {
         let bar = NSMenu()
         NSApp.mainMenu = bar
@@ -503,6 +519,7 @@ import AppKit
                 action: #selector(TextDocument.reloadEncoding(_:)), representedObject: value.rawValue)
         }
         let edit = menu("Edit")
+        edit.delegate = self
         // Grouped by what the command acts on. Every item keeps its command identifier as its
         // represented object, so shortcuts, macros and validation find it wherever it sits.
         @MainActor func group(_ title: String) -> NSMenu {

@@ -868,7 +868,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         let before = editor.revision
         let usesClipboard = command == .bookmarkCutLines || command == .bookmarkCopyLines
         let board = usesClipboard ? RuntimeEnvironment.current.generalPasteboard() : nil
+        let priorName = editor.exchangeNextUndoName(command.title)
         let accepted = editor.executeCommand(command.nativeIdentifier, using: board)
+        _ = editor.exchangeNextUndoName(priorName)
         finishing?(accepted && editor.revision != before)
         guard accepted else { throw EditorCommandFailure.unsupported }
     }

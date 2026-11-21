@@ -198,6 +198,12 @@ __attribute__((objc_subclassing_restricted))
 - (void)stopRecording;
 - (BOOL)executeMacroStep:(TTMacroAction *)step;
 - (void)beginUndoGroup;
+/// The outermost named group appends a native container token only after a real edit.
+- (void)beginUndoGroupNamed:(NSString *)name NS_SWIFT_NAME(beginUndoGroup(named:));
+/// Overrides the next group actually opened by a validated synchronous bridge operation.
+/// Returns the previous override so callers can restore a nesting scope.
+- (nullable NSString *)exchangeNextUndoName:(nullable NSString *)name;
+- (nullable NSString *)historyNameForRedo:(BOOL)redo NS_SWIFT_NAME(historyName(redo:));
 - (void)endUndoGroup;
 /// Inherit the current line’s leading tabs and spaces on interactive Return. Defaults to YES.
 @property(nonatomic) BOOL autoIndentEnabled;

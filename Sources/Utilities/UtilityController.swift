@@ -113,7 +113,7 @@ import AppKit
                     bytesPerLine: bytesPerLine, lineEnding: ["\n", "\r\n", "\r"][eol.indexOfSelectedItem]
                 ).encode(input)
                 onUnrecordableEdit()
-                editor.beginUndoGroup()
+                editor.beginUndoGroup(named: "Hex Encoding")
                 editor.replaceSelection(output)
                 editor.endUndoGroup()
                 return
@@ -176,7 +176,7 @@ import AppKit
                 let editor = try Self.recheck(
                     editorProvider(), captured: captured, revision: revision, selection: selection)
                 onUnrecordableEdit()
-                editor.beginUndoGroup()
+                editor.beginUndoGroup(named: "Number Conversion")
                 editor.replaceSelection(output)
                 editor.endUndoGroup()
             }
@@ -270,7 +270,7 @@ import AppKit
         if utility == .formatJSON && transformed.utf8.elementsEqual(input.utf8) { return }
         let capture = BulkChangeCapture(editor, name: utility.title)
         onUnrecordableEdit()
-        editor.beginUndoGroup()
+        editor.beginUndoGroup(named: utility.title)
         editor.replaceSelection(transformed)
         editor.endUndoGroup()
         capture?.finish()

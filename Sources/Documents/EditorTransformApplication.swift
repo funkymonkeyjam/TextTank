@@ -16,7 +16,7 @@ extension EditorTransform {
         }
         let output = transform(source)
         guard output != source else { return }
-        editor.beginUndoGroup()
+        editor.beginUndoGroup(named: title)
         defer { editor.endUndoGroup() }
         // The whole-document case replaces only the span that differs, keeping bookmarks and the caret line.
         guard selection ? editor.replaceSelection(output) : editor.replaceDocumentText(output) else {

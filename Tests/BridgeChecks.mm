@@ -809,6 +809,25 @@ int main(int argc, char **argv) {
         check([first.text isEqual:@"changed 🦋"] && first.modified && second.modified, "Clone edit updates shared bytes and dirty state");
         [first executeCommand:@"undo"];
         check([second.text isEqual:unicode], "Undo from other clone restores shared bytes");
+        {
+            TTEditor *history = [[TTEditor alloc] initWithFrame:NSZeroRect];
+            TTEditor *clone = [[TTEditor alloc] initWithFrame:NSZeroRect];
+            [clone shareDocumentWith:history];
+            [history beginUndoGroupNamed:@"Sort Lines"];
+            [clone beginUndoGroupNamed:@"Inner"];
+            [clone replaceSelection:@"a\nb"];
+            [clone endUndoGroup];
+            [history endUndoGroup];
+            check([[clone historyNameForRedo:NO] isEqual:@"Sort Lines"], "native outer group names Undo on both views");
+            [clone executeCommand:@"undo"];
+            check(history.text.length == 0 && [[history historyNameForRedo:YES] isEqual:@"Sort Lines"],
+                  "Redo reads the same native history after Undo on a clone");
+            [history executeCommand:@"redo"];
+            check([history.text isEqual:@"a\nb"], "named Redo restores the exact edit");
+            [history resetUndoHistory];
+            check(![clone historyNameForRedo:YES] && ![clone historyNameForRedo:NO],
+                  "resetting shared Undo history clears both labels");
+        }
         [second executeCommand:@"redo"];
         first = nil;
         check([second.text isEqual:@"changed 🦋"] && second.modified, "Closing original retains edited clone");
