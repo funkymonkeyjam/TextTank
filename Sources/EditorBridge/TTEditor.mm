@@ -131,6 +131,8 @@ static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
 struct TTInteractionState { NSUInteger revision; sptr_t selections, anchor, caret; };
 @interface TTEditor (MacroInteraction)
 - (void)performReturn:(void (NS_NOESCAPE ^)(void))nativeReturn;
+- (BOOL)canBeginPairing;
+- (void)performPair:(NSString *)input closer:(char)closer commit:(void (NS_NOESCAPE ^)(void))commit;
 - (TTInteractionState)interactionState;
 - (void)reportMacroStep:(TTMacroAction *)step;
 - (void)noteUnrecordedInteractionSince:(TTInteractionState)before;
@@ -153,8 +155,20 @@ static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
     NSUInteger index = 0;
     for (TTEditor *editor in recording) [editor noteUnrecordedInteractionSince:before[index++]];
 }
+static char TTPairCloser(NSString *text) {
+    if (text.length != 1) return 0;
+    switch ([text characterAtIndex:0]) {
+        case '(': return ')';
+        case '[': return ']';
+        case '{': return '}';
+        case '"': return '"';
+        case 0x27: return 0x27;
+        default: return 0;
+    }
+}
 @interface TTContentView : SCIContentView
 @property(nonatomic, weak) TTEditor *editor;
+@property(nonatomic, copy) NSString *directPairKey;
 @end
 @implementation TTContentView
 - (void)keyDown:(NSEvent *)event {
@@ -165,8 +179,23 @@ static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
     if (editor && (key == '\r' || key == '\n' || key == NSEnterCharacter) &&
         !(event.modifierFlags & shortcuts) && !self.hasMarkedText) {
         [editor performReturn:^{ [super keyDown:event]; }];
+    } else if (editor.autoPairEnabled && !self.hasMarkedText &&
+               !(event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagControl)) &&
+               TTPairCloser(event.characters) && [editor canBeginPairing]) {
+        NSString *outer = _directPairKey;
+        _directPairKey = event.characters;
+        @try { [super keyDown:event]; } @finally { _directPairKey = outer; }
     } else {
         [super keyDown:event];
+    }
+}
+- (void)insertText:(id)text replacementRange:(NSRange)replacement {
+    NSString *plain = [text isKindOfClass:NSAttributedString.class] ? [text string] : text;
+    if (_directPairKey && replacement.location == NSNotFound && !self.hasMarkedText &&
+        [_directPairKey isEqual:plain] && self.editor) {
+        [self.editor performPair:plain closer:TTPairCloser(plain) commit:^{ [super insertText:text replacementRange:replacement]; }];
+    } else {
+        [super insertText:text replacementRange:replacement];
     }
 }
 - (NSRect)accessibilityFrame {
@@ -498,6 +527,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     NSInteger _defaultZoomLevel;
     BOOL _followsDefaultZoom;
     BOOL _indentingReturn;
+    NSIndexSet *_eligiblePairPositions;
+    NSMutableIndexSet *_insertedPairPositions;
+    char _pairBytes[2];
     id _accessibilityDisplayObserver;
     BOOL _braceCacheValid;
     sptr_t _braceCaret, _braceEndStyled;
@@ -1257,6 +1289,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     _basePointSize = other.basePointSize;
     [self adoptSyntaxStylesFrom:other];
     self.autoIndentEnabled = other.autoIndentEnabled;
+    self.autoPairEnabled = other.autoPairEnabled;
     self.braceHighlightEnabled = other.braceHighlightEnabled;
     self.currentLineHighlightEnabled = other.currentLineHighlightEnabled;
     self.indentGuidesEnabled = other.indentGuidesEnabled;
@@ -1968,6 +2001,71 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self noteStateChange];
     return YES;
 }
+- (BOOL)canBeginPairing { return _autoPairEnabled && ![_engine message:SCI_AUTOCACTIVE]; }
+// Scintilla inserts at each caret from right to left. Its insert-check and actual insertion
+// notifications use the original positions; the engine tracks all final selections.
+- (BOOL)canPairAt:(sptr_t)position length:(sptr_t)length quote:(BOOL)quote {
+    if (position < length) {
+        const unsigned char next = (unsigned char)[_engine message:SCI_GETCHARAT wParam:position];
+        if (next < 0x80) {
+            if (next != ' ' && !(next >= 9 && next <= 13)) return NO;
+        } else {
+            const sptr_t end = [_engine message:SCI_POSITIONAFTER wParam:position];
+            if (end <= position || end-position > 4) return NO;
+            char bytes[4];
+            for (sptr_t i = position; i < end; ++i) bytes[i-position] = [_engine message:SCI_GETCHARAT wParam:i];
+            NSString *character = [[NSString alloc] initWithBytes:bytes length:end-position encoding:NSUTF8StringEncoding];
+            if (!character || [character rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].location == NSNotFound) return NO;
+        }
+    }
+    if (quote) {
+        sptr_t count = 0;
+        while (count < position && count < 128 && [_engine message:SCI_GETCHARAT wParam:position-count-1] == '\\') ++count;
+        if (count == 128 && count < position && [_engine message:SCI_GETCHARAT wParam:position-count-1] == '\\') return NO;
+        if (count & 1) return NO;
+    }
+    return YES;
+}
+- (void)performPair:(NSString *)input closer:(char)closer commit:(void (NS_NOESCAPE ^)(void))commit {
+    if (!closer || !_autoPairEnabled || _eligiblePairPositions || self.readOnly || [_engine message:SCI_AUTOCACTIVE] ||
+        [_engine message:SCI_GETOVERTYPE] || [_engine message:SCI_GETSELECTIONMODE] != SC_SEL_STREAM ||
+        ![_engine message:SCI_GETSELECTIONEMPTY]) { commit(); return; }
+    const sptr_t count = [_engine message:SCI_GETSELECTIONS], length = [_engine message:SCI_GETLENGTH];
+    if (count > 1 && ![_engine message:SCI_GETADDITIONALSELECTIONTYPING]) { commit(); return; }
+    NSMutableIndexSet *eligible = [NSMutableIndexSet indexSet];
+    std::vector<sptr_t> original;
+    for (sptr_t i = 0; i < count; ++i) {
+        const sptr_t position = [_engine message:SCI_GETSELECTIONNCARET wParam:i];
+        original.push_back(position);
+        if ([_engine message:SCI_GETSELECTIONNCARETVIRTUALSPACE wParam:i] ||
+            [_engine message:SCI_GETSELECTIONNANCHORVIRTUALSPACE wParam:i]) { commit(); return; }
+        if ([self canPairAt:position length:length quote:closer == '"' || closer == 0x27]) [eligible addIndex:position];
+    }
+    if (!eligible.count) { commit(); return; }
+    _eligiblePairPositions = eligible;
+    _insertedPairPositions = [NSMutableIndexSet indexSet];
+    _pairBytes[0] = (char)[input characterAtIndex:0];
+    _pairBytes[1] = closer;
+    [self openUndoGroup];
+    @try {
+        commit();
+        if (count != [_engine message:SCI_GETSELECTIONS]) return;
+        for (sptr_t i = 0; i < count; ++i) {
+            if (![_insertedPairPositions containsIndex:original[i]]) continue;
+            const sptr_t between = [_engine message:SCI_GETSELECTIONNCARET wParam:i]-1;
+            [_engine message:SCI_SETSELECTIONNCARET wParam:i lParam:between];
+            [_engine message:SCI_SETSELECTIONNANCHOR wParam:i lParam:between];
+        }
+        if (_macroRecording && count == 1 && _insertedPairPositions.count) {
+            [self reportMacroStep:[TTMacroAction insertText:[[NSString alloc] initWithBytes:&closer length:1 encoding:NSASCIIStringEncoding]]];
+            [self reportMacroStep:[TTMacroAction command:@"charLeft"]];
+        }
+    } @finally {
+        _eligiblePairPositions = nil;
+        _insertedPairPositions = nil;
+        [self closeUndoGroup];
+    }
+}
 // NewLine inserts once per caret. Changing that insertion keeps the engine in charge of selection
 // replacement, EOL mode, caret movement and Undo. Paste and macro playback never enter this scope.
 - (void)performReturn:(void (NS_NOESCAPE ^)(void))nativeReturn {
@@ -2027,6 +2125,14 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         code == SCN_MODIFIED && (type & (SC_MOD_CHANGESTYLE | SC_MOD_LEXERSTATE))) {
         _braceCacheValid = NO;
         [self scheduleStateNotification];
+    }
+    if (_eligiblePairPositions && code == SCN_MODIFIED &&
+        [_eligiblePairPositions containsIndex:notification->position] && notification->text) {
+        if ((type & SC_MOD_INSERTCHECK) && notification->length == 1 && notification->text[0] == _pairBytes[0]) {
+            [_engine message:SCI_CHANGEINSERTION wParam:2 lParam:(sptr_t)_pairBytes];
+        } else if ((type & SC_MOD_INSERTTEXT) && notification->length == 2 && !memcmp(notification->text, _pairBytes, 2)) {
+            [_insertedPairPositions addIndex:notification->position];
+        }
     }
     if (_indentingReturn && code == SCN_MODIFIED && (type & SC_MOD_INSERTCHECK)) {
         [self inheritIndentAtInsertion:notification];

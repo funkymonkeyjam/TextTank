@@ -110,6 +110,7 @@ extension EditorSettings {
         editor.applyDefaultZoomLevel(value.initialZoom)
         editor.configureTabWidth(value.tabWidth, useTabs: value.useTabs)
         editor.autoIndentEnabled = value.autoIndentEnabled
+        editor.autoPairEnabled = value.autoPairEnabled
         editor.braceHighlightEnabled = value.braceHighlightEnabled
         editor.currentLineHighlightEnabled = value.currentLineHighlightEnabled
         editor.indentGuidesEnabled = value.indentGuidesEnabled
@@ -118,6 +119,8 @@ extension EditorSettings {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleAutoIndent(_:)) {
             item.state = value.autoIndentEnabled ? .on : .off
+        } else if item.action == #selector(toggleAutoPair(_:)) {
+            item.state = value.autoPairEnabled ? .on : .off
         } else if item.action == #selector(toggleBraceHighlight(_:)) {
             item.state = value.braceHighlightEnabled ? .on : .off
         } else if item.action == #selector(toggleCurrentLineHighlight(_:)) {
@@ -128,6 +131,7 @@ extension EditorSettings {
         return true
     }
     @objc func toggleAutoIndent(_ sender: Any?) { updateViewPreference(.autoIndent, sender: sender) }
+    @objc func toggleAutoPair(_ sender: Any?) { updateViewPreference(.autoPair, sender: sender) }
     @objc func toggleBraceHighlight(_ sender: Any?) { updateViewPreference(.braceHighlight, sender: sender) }
     @objc func toggleCurrentLineHighlight(_ sender: Any?) {
         updateViewPreference(.currentLineHighlight, sender: sender)

@@ -84,6 +84,7 @@ import Darwin
             let initialSettings = app.settings.value
             var disabled = initialSettings
             disabled.autoIndent = false
+            disabled.autoPair = true
             EditorSettingsApplication.apply(disabled, replacing: initialSettings)
             defer { EditorSettingsApplication.apply(initialSettings, replacing: disabled) }
             a.clone(nil)
@@ -102,12 +103,15 @@ import Darwin
                 "T3 both tab-local Clones share document")
             let panes = a.views + b.views
             check(
-                panes.count == 4 && panes.allSatisfy { !$0.autoIndentEnabled },
+                panes.count == 4 && panes.allSatisfy { !$0.autoIndentEnabled && $0.autoPairEnabled },
                 "both grouped primaries and local Clones inherit disabled auto-indent")
             var enabled = disabled
             enabled.autoIndent = true
+            enabled.autoPair = false
             EditorSettingsApplication.apply(enabled, replacing: disabled)
-            check(panes.allSatisfy(\.autoIndentEnabled), "a settings change reaches every pane in both groups")
+            check(
+                panes.allSatisfy { $0.autoIndentEnabled && !$0.autoPairEnabled },
+                "a settings change reaches every pane in both groups")
             check(a.isPresented && b.isPresented, "T3 cold release has both real group presentations mounted")
             host.closeTab(aid, sender: nil)
             check(

@@ -539,6 +539,86 @@ static void baseFontMetricsChecks() {
           ![engine message:SCI_CANUNDO] && !editor.modified, "style, zoom and clone operations preserve bytes, revision and Undo");
 }
 
+static void pressPairKey(TTEditor *editor, NSString *characters, unsigned short keyCode, NSEventModifierFlags flags = 0) {
+    ScintillaView *engine = (ScintillaView *)editor.subviews.firstObject;
+    NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:flags timestamp:0
+        windowNumber:0 context:nil characters:characters charactersIgnoringModifiers:characters isARepeat:NO keyCode:keyCode];
+    [engine.content keyDown:event];
+}
+static void autoPairChecks() {
+    TTEditor *ed = [[TTEditor alloc] initWithFrame:NSMakeRect(0,0,500,180)];
+    check(!ed.autoPairEnabled, "Auto-Pair starts off for a newly created editor");
+    pressPairKey(ed, @"(", 25, NSEventModifierFlagShift);
+    check([ed.text isEqual:@"("] && ed.selectionCaret == 1, "default native typing inserts only the opening character");
+    ed.autoPairEnabled = YES;
+    NSArray<NSString *> *opens = @[@"(", @"[", @"{", @"\"", @"'"];
+    NSArray<NSString *> *pairs = @[@"()", @"[]", @"{}", @"\"\"", @"''"];
+    unsigned short keys[] = {25,33,33,39,39};
+    for (NSUInteger i=0; i<opens.count; ++i) {
+        ed.text = @""; [ed setSelectionAnchor:0 caret:0]; [ed resetUndoHistory];
+        pressPairKey(ed, opens[i], keys[i], (i==0 || i==2 || i==3) ? NSEventModifierFlagShift:0);
+        check([ed.text isEqual:pairs[i]] && ed.selectionCaret == 1, "direct opening key inserts its matching close and leaves the caret between");
+        [ed executeCommand:@"undo"]; check(!ed.text.length, "one Undo removes both delimiters");
+        [ed executeCommand:@"redo"]; check([ed.text isEqual:pairs[i]] && ed.selectionCaret==1, "Redo restores the paired bytes");
+    }
+    ed.text = @"a\nbx\nc\t";
+    [ed setSelectionRanges:@[S(1,1), S(3,3), S(6,6)]]; [ed resetUndoHistory];
+    pressPairKey(ed, @"[", 33);
+    check([ed.text isEqual:@"a[]\nb[x\nc[]\t"] && [ed.selectionRanges isEqual:@[S(2,2), S(6,6), S(10,10)]],
+        "three real carets pair independently by EOL, ordinary text and tab");
+    [ed executeCommand:@"undo"]; check([ed.text isEqual:@"a\nbx\nc\t"], "all three insertions share one Undo");
+    check([ed.selectionRanges isEqual:@[S(1,1), S(3,3), S(6,6)]], "native Undo restores all original empty selections");
+    [ed executeCommand:@"redo"];
+    check([ed.selectionRanges isEqual:@[S(2,2), S(6,6), S(10,10)]], "native Redo restores interior and literal carets");
+    ed.text = @"x\u2003"; [ed setSelectionAnchor:1 caret:1]; pressPairKey(ed, @"{", 33, NSEventModifierFlagShift);
+    check([ed.text isEqual:@"x{}\u2003"], "one Unicode whitespace scalar is sufficient");
+    ed.text = @"ab"; [ed setSelectionAnchor:1 caret:1]; pressPairKey(ed, @"[", 33);
+    check([ed.text isEqual:@"a[b"], "typing before text keeps only the opening delimiter");
+    ed.text = @"\\"; [ed setSelectionAnchor:1 caret:1]; pressPairKey(ed, @"'", 39);
+    check([ed.text isEqual:@"\\'"], "an escaped quote remains literal");
+    ed.text = @"\\\\"; [ed setSelectionAnchor:2 caret:2]; pressPairKey(ed, @"'", 39);
+    check([ed.text isEqual:@"\\\\''"] && ed.selectionCaret==3, "an even escape run leaves the quote eligible");
+    ed.text = @"xy"; [ed setSelectionAnchor:0 caret:2]; pressPairKey(ed, @"[", 33);
+    check([ed.text isEqual:@"["], "ordinary replacement of selected text stays native");
+    ed.text = @"  "; [ed setSelectionAnchor:2 caret:2]; pressReturn(ed);
+    check([ed.text isEqual:@"  \n  "], "Return continues to inherit indentation");
+    ed.text = @""; [ed setSelectionAnchor:0 caret:0];
+    ScintillaView *engine=(ScintillaView *)ed.subviews.firstObject;
+    [engine.content insertText:@"{" replacementRange:NSMakeRange(NSNotFound,0)];
+    check([ed.text isEqual:@"{"], "standalone text insertion never implicitly pairs");
+    TTEditor *clone=[[TTEditor alloc] initWithFrame:ed.frame];
+    [clone shareDocumentWith:ed]; [clone adoptViewStateFrom:ed];
+    check(clone.autoPairEnabled, "a clone inherits the per-view option");
+    NSMutableArray *completions=[NSMutableArray array], *marked=[NSMutableArray array];
+    for (NSNumber *on in @[@NO,@YES]) {
+        TTEditor *view=[[TTEditor alloc] initWithFrame:ed.frame]; view.autoPairEnabled=on.boolValue; view.text=@"ab ";
+        [view setSelectionAnchor:2 caret:2]; ScintillaView *native=(ScintillaView *)view.subviews.firstObject;
+        [view showCompletions:@[@"abc", @"abd"]];
+        check([native message:SCI_AUTOCACTIVE], "real Scintilla completion before opening key");
+        pressPairKey(view,@"[",33); [completions addObject:@[view.utf8Data,view.selectionRanges,@([native message:SCI_AUTOCACTIVE])]];
+        [native message:SCI_AUTOCCANCEL]; view.text=@"x "; [view setSelectionAnchor:1 caret:1];
+        [native.content setMarkedText:@"雪" selectedRange:NSMakeRange(1,0) replacementRange:NSMakeRange(NSNotFound,0)];
+        check(native.content.hasMarkedText,"native marked input before opening key");
+        pressPairKey(view,@"[",33); [marked addObject:@[view.utf8Data,view.selectionRanges,@(native.content.hasMarkedText)]];
+        [native.content unmarkText];
+    }
+    check([completions[0] isEqual:completions[1]] && [marked[0] isEqual:marked[1]], "native completion and marked text preserve baseline behavior");
+    NSMutableArray *rectangles=[NSMutableArray array];
+    for (NSNumber *on in @[@NO,@YES]) {
+        TTEditor *view=[[TTEditor alloc] initWithFrame:ed.frame]; view.autoPairEnabled=on.boolValue; view.text=@"a  \nb  ";
+        ScintillaView *native=(ScintillaView *)view.subviews.firstObject;
+        [native message:SCI_SETSELECTIONMODE wParam:SC_SEL_RECTANGLE];
+        [native message:SCI_SETRECTANGULARSELECTIONANCHOR wParam:1]; [native message:SCI_SETRECTANGULARSELECTIONCARET wParam:5];
+        pressPairKey(view,@"[",33);
+        [rectangles addObject:@[view.utf8Data,view.selectionRanges,@([native message:SCI_GETSELECTIONMODE])]];
+    }
+    check([rectangles[0] isEqual:rectangles[1]], "rectangular native editing retains its original text, mode and selections");
+    ed.text=@"  "; [ed setSelectionAnchor:0 caret:0]; [ed executeCommand:@"toggleOvertype"]; pressPairKey(ed,@"[",33);
+    check([ed.text isEqual:@"[ "], "native overtype replaces one character without a closer");
+    [ed executeCommand:@"toggleOvertype"]; ed.text=@"{";
+    ed.readOnly=YES; pressPairKey(ed, @"[", 33);
+    check([ed.text isEqual:@"{"], "read-only cannot be changed by a pairing key"); ed.readOnly=NO;
+}
 static void cancellationContract() {
     TTSearchCancellation *token=[TTSearchCancellation new];
     check(!token.cancelled && ![[token valueForKey:@"cancelled"] boolValue], "F316 native cancellation starts false and retains its safe KVC getter");
@@ -563,6 +643,7 @@ int main(int argc, char **argv) {
         }
         cancellationContract();
         [NSApplication sharedApplication];
+        ttchecks::section("direct character pairing", autoPairChecks);
         ttchecks::section("Return indentation", returnIndentChecks);
         ttchecks::section("Current line and indentation guides", currentLineAndGuideChecks);
         ttchecks::section("Base font metrics", baseFontMetricsChecks);

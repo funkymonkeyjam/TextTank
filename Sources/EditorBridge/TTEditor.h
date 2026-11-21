@@ -199,6 +199,8 @@ __attribute__((objc_subclassing_restricted))
 - (void)endUndoGroup;
 /// Inherit the current line’s leading tabs and spaces on interactive Return. Defaults to YES.
 @property(nonatomic) BOOL autoIndentEnabled;
+/// Pair a typed delimiter beside whitespace or end of line. Defaults off.
+@property(nonatomic) BOOL autoPairEnabled;
 /// Show native brace feedback at the primary caret of this view. Defaults to YES.
 @property(nonatomic) BOOL braceHighlightEnabled;
 /// Frame the caret line in the focused editing view. Read-only documents can also show the frame.

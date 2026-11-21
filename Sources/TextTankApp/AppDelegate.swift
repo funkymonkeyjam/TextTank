@@ -589,6 +589,9 @@ import AppKit
             title: "Auto-Indent on Return", action: #selector(SettingsController.toggleAutoIndent(_:)), target: settings
         )
         view.addItem(
+            title: "Auto-Pair Brackets and Quotes", action: #selector(SettingsController.toggleAutoPair(_:)),
+            target: settings)
+        view.addItem(
             title: "Highlight Matching Braces", action: #selector(SettingsController.toggleBraceHighlight(_:)),
             target: settings)
         view.addItem(

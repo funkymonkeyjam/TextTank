@@ -96,8 +96,11 @@ import NativeSearch
             case 8 where row["action"] == "actualSize:": expected = composition
             case 8:
                 expected =
-                    ["toggleAutoIndent:", "toggleBraceHighlight:", "toggleCurrentLineHighlight:", "toggleIndentGuides:"]
-                        .contains(row["action"] ?? "")
+                    [
+                        "toggleAutoIndent:", "toggleAutoPair:", "toggleBraceHighlight:", "toggleCurrentLineHighlight:",
+                        "toggleIndentGuides:"
+                    ]
+                    .contains(row["action"] ?? "")
                     ? composition.settings : composition.workspaceWindow.groupCommands
             case 9: expected = composition.languages
             case 10: expected = composition.macros
