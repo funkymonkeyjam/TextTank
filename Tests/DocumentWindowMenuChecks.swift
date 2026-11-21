@@ -364,7 +364,8 @@ extension DocumentChecks {
                 "the application implements the standard items' actions")
             check(
                 bar.items.first?.submenu?.items.map(\.title) == [
-                    "About TextTank", "Settings…", "", "Services", "", "Hide TextTank", "Hide Others", "Show All", "",
+                    "About TextTank", "Settings…", "Install tt Command-Line Tool…", "", "Services", "", "Hide TextTank",
+                    "Hide Others", "Show All", "",
                     "Quit TextTank"
                 ], "the application menu is in the standard order")
             check(

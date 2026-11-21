@@ -84,6 +84,8 @@ import NativeSearch
             case 0: expected = composition.settings
             case 1: expected = composition.workspace
             case 2: expected = composition.workspaceBrowser
+            case 4 where path[1] == 6 && ["pasteAction:", "manageAction"].contains(row["action"] ?? ""):
+                expected = composition.automations
             case 5 where row["action"] == "performCompareCommand:": expected = composition
             case 5:
                 switch path[1] {

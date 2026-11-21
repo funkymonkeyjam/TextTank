@@ -65,6 +65,10 @@ import AppKit
             "cold background invocation creates no editor or visible window")
         let foreground = Notification(name: NSApplication.didBecomeActiveNotification)
         delegate.applicationDidBecomeActive(foreground)
+        let restoreDeadline = Date().addingTimeInterval(5)
+        while documents.documents.isEmpty && Date() < restoreDeadline {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
         let initial = documents.documents.first
         require(
             initial != nil && documents.documents.count == 1,
