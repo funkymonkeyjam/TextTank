@@ -23,6 +23,11 @@ private final class OffscreenFindRoutingWindow: NSWindow {
     var returned = false, observedModeless = false, inspected = false, usable = false
 }
 
+@MainActor private final class PaletteActionFixture: NSObject, NSMenuItemValidation {
+    var enabled = true, count = 0
+    @objc func selected(_ item: NSMenuItem) { count += 1 }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool { enabled }
+}
 extension DocumentChecks {
     @MainActor static func item(_ action: Selector, _ object: String? = nil) -> NSMenuItem {
         let item = NSMenuItem(title: "", action: action, keyEquivalent: "")
@@ -151,6 +156,76 @@ extension DocumentChecks {
                 "DG closing a Go to Line target never navigates a retired editor")
         }
 
+        section("offline guide and editable welcome", #line) {
+            let profile = root.appendingPathComponent("owned-help-profile")
+            check(TextTankApplication.isNewProfile(at: profile), "an absent private profile is new")
+            try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+            check(TextTankApplication.isNewProfile(at: profile), "an empty private profile is new")
+            try Data("prior".utf8).write(to: profile.appendingPathComponent("owned-entry"))
+            check(!TextTankApplication.isNewProfile(at: profile), "an existing profile is preserved")
+            let original = sessionDelegate.helpResourceDirectory
+            sessionDelegate.helpResourceDirectory = TestPaths.resources
+            defer { sessionDelegate.helpResourceDirectory = original }
+            let menu = try requireValue(NSApp.helpMenu, "actual Help menu")
+            for (action, name) in [
+                (#selector(AppDelegate.openUserGuide(_:)), "TextTank-User-Guide"),
+                (#selector(AppDelegate.openWelcome(_:)), "TextTank-Welcome")
+            ] {
+                let item = try requireValue(menu.items.first { $0.action == action }, "offline Help item")
+                let source = TestPaths.resources.appendingPathComponent(name + ".txt")
+                let bytes = try Data(contentsOf: source)
+                let previous = Set(NSDocumentController.shared.documents.map(ObjectIdentifier.init))
+                check(NSApp.sendAction(action, to: sessionDelegate, from: item), "normal Help action dispatches")
+                let doc = try requireValue(
+                    NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
+                        .first { !previous.contains(ObjectIdentifier($0)) }, "owned untitled help")
+                defer { doc.close() }
+                check(doc.fileURL == nil && doc.displayName == item.title && !doc.isDocumentEdited
+                    && !doc.editor.modified && !doc.editor.readOnly && doc.editor.checkedUTF8Data == bytes,
+                    "offline help has exact bundled text and a clean editable untitled identity")
+                doc.editor.replaceSelection("sample edit")
+                check(doc.isDocumentEdited && doc.editor.checkedUTF8Data != bytes, "typing marks the help draft edited")
+                doc.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+                check(try doc.editor.checkedUTF8Data == bytes && Data(contentsOf: source) == bytes,
+                    "one Undo restores the original text and bundled help remains untouched")
+            }
+            let sample = "- tea\n- milk"
+            check(try AutomationDefinition.example.testSample(sample) == "tea\nmilk",
+                "the welcome's worked example yields the documented result with the real built-in recipe")
+        }
+
+        section("command discovery uses ordinary menu validation", #line) {
+            let bar = try requireValue(NSApp.mainMenu, "actual menu bar")
+            let palette = sessionDelegate.commandDiscovery
+            let entries = palette.commands(in: bar)
+            let titles = entries.map { $0.row.title }
+            check(Set(entries.map { $0.row.id }).count == entries.count, "palette row identities are unique")
+            check(titles.contains("Edit › Undo") && titles.contains("Automations › Run Automation…")
+                && titles.contains(where: { $0.hasPrefix("Language › ") })
+                && titles.contains(where: { $0.hasPrefix("Macros › ") }),
+                "actual editor, language, saved automation chooser and macro menu routes are discoverable")
+            check(!titles.contains(where: { $0.contains(" › Services › ") || $0.contains(" › Reopen Recent File › ") || $0.hasSuffix(" › Command Palette…") }),
+                "system services and recursive palette invocation are omitted")
+            check(entries.contains { $0.item.action == NSSelectorFromString("runAction:") && $0.row.detail.hasPrefix("Reads ") && $0.row.detail.contains("Writes ") },
+                "saved workflows identify their actual input and output")
+            check(entries.contains {
+                $0.item.action == #selector(MacroController.playAgain) && $0.row.detail == "Reads recorded commands • Changes active editor"
+            }, "Play Again declares its recorded input and current editor destination")
+            let menu = NSMenu(), target = PaletteActionFixture(), other = PaletteActionFixture()
+            let item = NSMenuItem(title: "Owned action", action: #selector(PaletteActionFixture.selected(_:)), keyEquivalent: "")
+            item.target = target
+            menu.addItem(item)
+            let row = try requireValue(palette.commands(in: menu).first, "private menu action")
+            target.enabled = false
+            check(!palette.perform(row, in: menu) && target.count == 0, "a command disabled after discovery cannot run")
+            target.enabled = true
+            item.target = other
+            check(!palette.perform(row, in: menu) && other.count == 0, "changed responder cannot receive an earlier selection")
+            item.target = target
+            check(palette.perform(row, in: menu) && target.count == 1, "deliberate choice dispatches the actual menu action once")
+            menu.removeItem(item)
+            check(!palette.perform(row, in: menu) && target.count == 1, "a removed command remains unavailable")
+        }
         section("DG explicit filtered choice activation", #line) { try DesignSettingsChecks.choicePanelChecks() }
         section("DG Open Documents Cancel never switches documents", #line) {
             let (first, _, firstWindow) = try tab("docs-cancel-first")
@@ -317,13 +392,13 @@ extension DocumentChecks {
                 goTo?.action == #selector(EditorWindowController.goToLine(_:)) && goTo?.keyEquivalent == "l"
                     && goTo?.keyEquivalentModifierMask == [.command] && goTo?.target == nil,
                 "Search > Go to Line… is Command-L and goes to the document window")
-            let palettes = all.filter { $0.item.title == "Automation Palette…" }
+            let palettes = all.filter { $0.item.title == "Command Palette…" }
             check(
-                palettes.map(\.path) == ["Automations > Automation Palette…"]
+                palettes.map(\.path) == ["Automations > Command Palette…"]
                     && palettes.first?.item.keyEquivalent == "P"
                     && palettes.first?.item.keyEquivalentModifierMask == [.command]
                     && palettes.first?.item.target === sessionDelegate.automations,
-                "Automation Palette… is one item, in the Automations menu, with Shift-Command-P")
+                "Command Palette… is one item, in the Automations menu, with Shift-Command-P")
             check(
                 !all.contains { $0.item.title == "Choose Automation…" },
                 "the duplicate Choose Automation… item is gone")

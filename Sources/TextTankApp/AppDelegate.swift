@@ -4,6 +4,9 @@ import NativeSearch
 import AppKit
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
+    var firstLaunchProfile = false
+    var helpResourceDirectory = Bundle.main.resourceURL
+    private var defaultDocumentLaunch = false
     private var automaticSession: AutomaticSession?
     var smokeFile: URL?
     private weak var knownWorkspace: WorkspaceWindowController?
@@ -156,9 +159,13 @@ import AppKit
         return value
     }()
     @MainActor lazy var macros = MacroController(editorProvider: { [weak self] in self?.currentEditor })
+    let commandDiscovery = CommandDiscovery()
     @MainActor lazy var automations: AutomationController = {
         let controller = AutomationController(
             editorProvider: { [weak self] in self?.currentEditor }, newDocument: AppDelegate.openAutomationOutput)
+        controller.commandDiscovery = { [weak self] in
+            self?.commandDiscovery.show(editor: { [weak self] in self?.currentEditor })
+        }
         controller.onQuietExportResult = { [weak self] message in
             let window = self?.currentDocumentController
             window?.showTransientStatus(
@@ -287,6 +294,7 @@ import AppKit
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard launchInterface == .waitingForLaunch else { return }
+        defaultDocumentLaunch = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool == true
         launchInterface = .waitingForForeground
         if smokeFile != nil || NSApp.isActive { startForegroundInterfaceIfNeeded() }
     }
@@ -372,6 +380,7 @@ import AppKit
         var sessionNotices: [String] = []
         restoreLaunchDocuments(
             createUntitledIfEmpty: !CommandLine.arguments.contains("--texttank-external-request"),
+            welcomeIfEmpty: firstLaunchProfile && defaultDocumentLaunch,
             review: { originals in self.restoreRecovery(result, originals: originals) }
         ) {
             sessionNotices.append(contentsOf: $0)
@@ -390,7 +399,8 @@ import AppKit
         alert.beginSheetModal(for: window) { _ in }
     }
     func restoreLaunchDocuments(
-        createUntitledIfEmpty: Bool = true, review: ([URL: TextDocument]) -> Void, report: ([String]) -> Void
+        createUntitledIfEmpty: Bool = true, welcomeIfEmpty: Bool = false,
+        review: ([URL: TextDocument]) -> Void, report: ([String]) -> Void
     ) {
         let session = AutomaticSession()
         automaticSession = session
@@ -413,7 +423,14 @@ import AppKit
             }
         }
         review(originals)
-        if createUntitledIfEmpty && NSDocumentController.shared.documents.isEmpty { newDocument(nil) }
+        if createUntitledIfEmpty, NSDocumentController.shared.documents.isEmpty {
+            if welcomeIfEmpty {
+                do { try openHelpDocument(welcome: true) } catch {
+                    newDocument(nil)
+                    report([error.localizedDescription])
+                }
+            } else { newDocument(nil) }
+        }
         session.start { [weak self] in self?.checkpointSession() }
     }
     func checkpointSession() {
@@ -925,7 +942,9 @@ import AppKit
         // AppKit puts its search field in the Help menu; it finds any command in the menus above.
         let help = menu("Help")
         NSApp.helpMenu = help
-        help.addItem(title: "TextTank Help (Online)", action: #selector(openOnlineHelp(_:)), keyEquivalent: "?")
+        help.addItem(title: "TextTank User Guide", action: #selector(openUserGuide(_:)), keyEquivalent: "?")
+        help.addItem(title: "Welcome to TextTank", action: #selector(openWelcome(_:)))
+        help.addItem(title: "TextTank Help (Online)", action: #selector(openOnlineHelp(_:)))
         func alias(
             _ menu: NSMenu, title: String, action: Selector, key: MenuShortcut, target: AnyObject?,
             object: String? = nil
@@ -949,8 +968,24 @@ import AppKit
         settings.reconcileShortcuts(with: bar)
         EditorSettingsApplication.applyShortcuts(settings.value, to: bar)
     }
-    /// The project page, which carries the review guide and where each command lives. There is no
-    /// bundled help book yet.
+    @discardableResult func openHelpDocument(welcome: Bool) throws -> TextDocument {
+        let name = welcome ? "TextTank-Welcome" : "TextTank-User-Guide"
+        guard let url = helpResourceDirectory?.appendingPathComponent(name + ".txt") else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        let data = try Data(contentsOf: url)
+        return try DocumentFactory.makeUntitled(prepare: { document in
+            try document.read(from: data, ofType: TextDocument.plainTextType)
+            document.displayName = welcome ? "Welcome to TextTank" : "TextTank User Guide"
+        })
+    }
+    @objc func openUserGuide(_ sender: Any?) {
+        do { try openHelpDocument(welcome: false) } catch { TTAlert.present(error) }
+    }
+    @objc func openWelcome(_ sender: Any?) {
+        do { try openHelpDocument(welcome: true) } catch { TTAlert.present(error) }
+    }
+    /// The optional online project page.
     @objc func openOnlineHelp(_ sender: Any?) {
         if let url = URL(string: "https://github.com/funkymonkeyjam/TextTank#readme") { NSWorkspace.shared.open(url) }
     }

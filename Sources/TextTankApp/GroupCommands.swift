@@ -96,8 +96,8 @@ import TextTankCore
         return image
     }
     func layoutMenu(picker: Bool = false) -> NSMenu {
-        let menu = NSMenu(title: "Editor Layout")
-        if picker { menu.addItem(withTitle: "Editor Layout", action: nil, keyEquivalent: "") }
+        let menu = NSMenu(title: "Editor Group Layout")
+        if picker { menu.addItem(withTitle: "Editor Group Layout", action: nil, keyEquivalent: "") }
         for layout in LayoutKind.allCases {
             let item = make(
                 Self.title(layout), Invocation(.layout(layout), host: host, target: nil),
@@ -125,7 +125,7 @@ import TextTankCore
     private func items(target: TabID?, includeLayout: Bool, includeFocus: Bool) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         if includeLayout {
-            let item = NSMenuItem(title: "Editor Layout", action: nil, keyEquivalent: "")
+            let item = NSMenuItem(title: "Editor Group Layout", action: nil, keyEquivalent: "")
             item.submenu = layoutMenu()
             item.identifier = .init("groups.layout")
             items.append(item)
@@ -134,7 +134,7 @@ import TextTankCore
         let capture = target.flatMap { host.tabCommands.capture($0) }?.members(in: host.model) ?? []
         let moveTitle = capture.count > 1 ? String(format: "Move %ld Tabs to Group", capture.count) : "Move to Group"
         for (title, action, id) in [
-            (moveTitle, Action.move, "move"), ("Open in Another Group", Action.additional, "additional")
+            (moveTitle, Action.move, "move"), ("Show Tab in Another Group", Action.additional, "additional")
         ] {
             let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             parent.identifier = .init("groups." + id)

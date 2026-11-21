@@ -21,6 +21,16 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     var currentDocument: () -> TextDocument? = { EditorServices.current?.activePresentation?.document as? TextDocument }
     private(set) var window: NSPanel?
     let outline = NSOutlineView()
+    private let fileChooser = WorkspaceQuickOpen()
+    @objc func quickOpen(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        fileChooser.show(roots: store.state.folders, open: { [weak self] root, file in
+            guard let self, store.contains(root) else {
+                throw WorkspaceError.invalid("This workspace folder was removed. Open Quick Open again to refresh the list.")
+            }
+            return try openOfferingEncoding(file) != nil
+        })
+    }
     private enum Mode: Int { case openDocuments, folders, recentFiles }
     private var selectedMode: Mode { Mode(rawValue: mode.selectedSegment) ?? .openDocuments }
     private let mode = NSSegmentedControl(
@@ -105,6 +115,9 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         let show = NSMenuItem(title: "Show Workspace Browser", action: #selector(show(_:)), keyEquivalent: "")
         show.target = self
         menu.addItem(show)
+        let quick = NSMenuItem(title: "Quick Open…", action: #selector(quickOpen(_:)), keyEquivalent: "")
+        quick.target = self
+        menu.addItem(quick)
         let add = NSMenuItem(title: "Add Folder to Workspace…", action: #selector(addFolder(_:)), keyEquivalent: "")
         add.target = self
         menu.addItem(add)

@@ -12,6 +12,8 @@ package struct MenuShortcut: Equatable, Sendable {
     }
     package static let zoomInAlternate = Self("=")
     package static let actualSize = Self("0")
+    package static let recordMacro = Self("\u{f70c}", []) // F9
+    package static let playMacroAgain = Self("\u{f70c}", [.shift])
     package static let saveAll = Self("s", [.command, .option])
     package static let nextTabAlternate = Self("}")
     package static let previousTabAlternate = Self("{")
@@ -26,7 +28,8 @@ package enum EditorCommand: String, CaseIterable {
         bookmarkInvert, bookmarkNext, bookmarkPrevious, bookmarkToggle, cancel, charLeft, charLeftExtend,
         charRight, charRightExtend, clearAdditionalSelections, copy, cut, deleteBack, deleteForward, deleteLine,
         deleteLineLeft, deleteLineRight, deleteWordLeft, deleteWordRight, documentEnd, documentEndExtend, documentStart,
-        documentStartExtend, duplicateLine, duplicateSelection, foldAll, foldCurrent, foldLevel1, foldLevel2, foldLevel3,
+        documentStartExtend, duplicateLine, duplicateSelection, foldAll, foldCurrent, foldLevel1, foldLevel2,
+        foldLevel3,
         foldLevel4, foldLevel5, foldLevel6, foldLevel7, foldLevel8, gotoMatchingBrace, home, homeDisplay,
         homeExtend, indent, joinLines, lineCopy, lineCut, lineDown, lineDownExtend, lineEnd, lineEndDisplay,
         lineEndExtend, lineUp, lineUpExtend, lower, moveLineDown, moveLineUp, newLine, pageDown, pageDownExtend, pageUp,
@@ -53,7 +56,8 @@ package enum EditorCommand: String, CaseIterable {
     package var isViewOnly: Bool {
         switch self {
         case .foldAll, .foldCurrent, .foldLevel1, .foldLevel2, .foldLevel3, .foldLevel4, .foldLevel5, .foldLevel6,
-            .foldLevel7, .foldLevel8, .showWhitespace, .toggleEOL, .toggleLineNumbers, .unfoldAll, .zoomIn, .zoomOut: return true
+            .foldLevel7, .foldLevel8, .showWhitespace, .toggleEOL, .toggleLineNumbers, .unfoldAll, .zoomIn, .zoomOut:
+            return true
         default: return false
         }
     }

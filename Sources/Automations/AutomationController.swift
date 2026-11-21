@@ -250,8 +250,13 @@ private struct AutomationCheckboxEdits {
         manage.target = self
         menu.addItem(manage)
     }
+    var commandDiscovery: (() -> Void)?
+    func paletteWorkflow(_ item: NSMenuItem) -> AutomationDefinition? {
+        guard item.action == #selector(runAction(_:)), let id = item.representedObject as? String else { return nil }
+        return library.workflows.first { $0.id.uuidString == id }
+    }
     private var palette: ChoicePanel?
-    @MainActor func showPalette() {
+    @MainActor @objc func showPalette() {
         if let palette {
             palette.form.window.makeKeyAndOrderFront(nil)
             return
@@ -307,7 +312,7 @@ private struct AutomationCheckboxEdits {
         manage.target = self
         automationMenu.addItem(manage)
         // The one entry for the palette, with its shortcut (Shift-Command-P).
-        let palette = NSMenuItem(title: "Automation Palette…", action: #selector(paletteAction), keyEquivalent: "P")
+        let palette = NSMenuItem(title: commandDiscovery == nil ? "Automation Palette…" : "Command Palette…", action: #selector(paletteAction), keyEquivalent: "P")
         palette.target = self
         automationMenu.addItem(palette)
         let history = NSMenuItem(
@@ -318,6 +323,11 @@ private struct AutomationCheckboxEdits {
             title: "Restore Default Automations…", action: #selector(restoreDefaultsAction), keyEquivalent: "")
         restore.target = self
         automationMenu.addItem(restore)
+        if commandDiscovery != nil {
+            let workflows = NSMenuItem(title: "Run Automation…", action: #selector(showPalette), keyEquivalent: "")
+            workflows.target = self
+            automationMenu.addItem(workflows)
+        }
         if !library.workflows.isEmpty { automationMenu.addItem(.separator()) }
         for workflow in library.workflows {
             let item = NSMenuItem(
@@ -329,7 +339,9 @@ private struct AutomationCheckboxEdits {
         }
     }
     @MainActor @objc private func manageAction() { manage() }
-    @MainActor @objc private func paletteAction() { showPalette() }
+    @MainActor @objc private func paletteAction() {
+        if let commandDiscovery { commandDiscovery() } else { showPalette() }
+    }
     @objc private func restoreDefaultsAction() { restoreDefaultAutomations() }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(restoreDefaultsAction) { return !busy && !exportInProgress }

@@ -80,7 +80,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         layoutPicker.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(groupContainer)
         content.addSubview(layoutPicker)
-        layoutPicker.setAccessibilityLabel("Editor layout")
+        layoutPicker.setAccessibilityLabel("Editor group layout")
         refreshLayoutPicker()
         NSLayoutConstraint.activate([
             layoutPicker.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),

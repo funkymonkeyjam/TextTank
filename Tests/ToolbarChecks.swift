@@ -132,7 +132,7 @@ import NativeSearch
         let singleViewHelp = split.toolTip
         let revisionBeforeClone = document.editor.revision
         check(
-            split.label == "Clone" && controller.validateToolbarItem(split) && controller.validateMenuItem(splitMenu)
+            split.label == "Split Tab View" && controller.validateToolbarItem(split) && controller.validateMenuItem(splitMenu)
                 && splitMenu.state == .off && splitOverflow.state == .off,
             "DS-20/22 Clone is enabled and unchecked on the toolbar, menu and overflow before splitting")
         check(
@@ -141,7 +141,7 @@ import NativeSearch
         check(
             controller.validateToolbarItem(split) && controller.validateMenuItem(splitMenu)
                 && splitMenu.state == .on && splitOverflow.state == .on
-                && split.toolTip == "Return to a single view of the current document.",
+                && split.toolTip == "Return this tab to one view of the document.",
             "DS-20/22 Clone stays enabled with a checkmark and closing help after splitting")
         check(
             nativeTree(window).contains {

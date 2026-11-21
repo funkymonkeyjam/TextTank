@@ -45,6 +45,24 @@ import Darwin
             check(try WorkspaceBrowserStore.list(folder, limit: 1).truncated, "listing cap visible")
             rejects("FIFO cannot be listed") { _ = try WorkspaceBrowserStore.list(fifo) }
             rejects("symlink cannot be listed") { _ = try WorkspaceBrowserStore.list(symlink) }
+            let quickRoot = root.appendingPathComponent("quick-files")
+            let quickNested = quickRoot.appendingPathComponent("Sources")
+            try FileManager.default.createDirectory(at: quickNested, withIntermediateDirectories: true)
+            let quickFiles = ["QuickCapture.swift", "QuarterlyChart.txt", "Notes.md"]
+            for name in quickFiles { try Data(name.utf8).write(to: quickNested.appendingPathComponent(name)) }
+            let quick = WorkspaceFileIndex.scan([folder, quickRoot, quickNested])
+            check(quick.files.count == Set(quick.files.map { $0.url.standardizedFileURL.absoluteString }).count
+                && !quick.files.contains { $0.url == fifo || $0.url == symlink || $0.url.lastPathComponent.hasPrefix(".") },
+                "Quick Open deduplicates overlapping workspace roots and skips hidden, linked and special entries")
+            check(quick.matches("qckcp").map { $0.url.lastPathComponent } == ["QuickCapture.swift"]
+                && quick.matches("QuarterlyChart.txt").first?.url.lastPathComponent == "QuarterlyChart.txt",
+                "Quick Open fuzzy name matching and exact basename ranking")
+            check(WorkspaceFileIndex.scan([quickRoot], limit: 1).limited
+                && WorkspaceFileIndex.scan([quickRoot], directoryLimit: 1).limited
+                && WorkspaceFileIndex.scan([quickRoot], deadline: 0).limited,
+                "file, directory and elapsed scan limits are observable")
+            check(quick.matches("NoSuchOwnedName").isEmpty && WorkspaceFileIndex.scan([]).files.isEmpty,
+                "a missing match and an empty workspace do not select a file")
             // F109: the limit applies to what is shown, after sorting; skipped entries do not use it up.
             let twoShown = try WorkspaceBrowserStore.list(folder, limit: 2)
             check(
