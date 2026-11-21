@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import CryptoKit
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
@@ -146,6 +147,11 @@ package struct ConfiguredRun: Codable, Equatable, Sendable {
         try validateLibrary(commands)
         return commands
     }
+    /// The saved command template owns the approval. Document placeholders are resolved only for this invocation.
+    package func approvalDigest() throws -> Data {
+        Data(SHA256.hash(data: try Self.encodeLibrary([self], sortedKeys: true)))
+    }
+    package var menuTitle: String { name + " — " + (executable as NSString).lastPathComponent }
     /// What selecting this command executes, for the menu tooltip: the mode, the executable and
     /// the arguments as stored. Bounded, because one argument may be up to 1 MiB.
     package func summary(limit: Int = 300) -> String {
@@ -223,11 +229,12 @@ package enum RunTermination: Equatable, CaseIterable, Sendable {
     }
 }
 package struct RunResult: Sendable {
-    package init(stdout: Data, stderr: Data, status: Int32, reason: RunTermination) {
+    package init(stdout: Data, stderr: Data, status: Int32, reason: RunTermination, didLaunch: Bool = true) {
         self.stdout = stdout
         self.stderr = stderr
         self.status = status
         self.reason = reason
+        self.didLaunch = didLaunch
     }
 
     package let stdout: Data, stderr: Data
@@ -235,6 +242,7 @@ package struct RunResult: Sendable {
     /// (nothing was launched, or the exit status could not be collected).
     package let status: Int32
     package let reason: RunTermination
+    package let didLaunch: Bool
     package var statusLine: String { (status < 0 ? "No exit status" : "Exit \(status)") + " · " + reason.summary }
 }
 /// Explicit process group with bounded nonblocking pipes. Imports are inert.
@@ -284,7 +292,9 @@ final package class RunExecution: @unchecked Sendable {
             lock.unlock()
             running.leave()
         }
-        if cancelled { return RunResult(stdout: Data(), stderr: Data(), status: -1, reason: .cancelled) }
+        if cancelled {
+            return RunResult(stdout: Data(), stderr: Data(), status: -1, reason: .cancelled, didLaunch: false)
+        }
         func failure() -> POSIXError { POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         // Anonymous temporary input avoids SIGPIPE and a blocked writer when a child
         // deliberately never reads stdin. tmpfile is private and unlinked by libc.

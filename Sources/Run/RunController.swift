@@ -10,6 +10,9 @@ import AppKit
     /// Called when a configured command is actually started and again before its result is
     /// applied to the document. Neither is ever part of a macro recording.
     var onUnrecordableAction: () -> Void = {}
+    var confirmFirstRun: @MainActor (_ invocation: ConfiguredRun, _ directory: URL) -> Bool = RunController
+        .askBeforeRunning
+    private var askingBeforeRun = false
     private var commands: [ConfiguredRun] = []
     let loadState: StoreLoadState
     private var loadError: Error? {
@@ -84,7 +87,7 @@ import AppKit
         }
         menu.addItem(.separator())
         for command in commands {
-            let item = NSMenuItem(title: command.name, action: #selector(run(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: command.menuTitle, action: #selector(run(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = command.id.uuidString
             // The name is free text; the tooltip says what choosing the item executes.
@@ -345,6 +348,42 @@ import AppKit
         }
         return FileManager.default.homeDirectoryForCurrentUser
     }
+    private static func askBeforeRunning(_ command: ConfiguredRun, directory: URL) -> Bool {
+        let alert = TTAlert()
+        alert.messageText = "Run “" + command.name + "”?"
+        alert.informativeText =
+            command.shellMode
+            ? "Shell mode runs the script argument through /bin/zsh. Confirm only if you intend to run the full script shown below."
+            : "Review the executable, arguments and working directory. TextTank will remember this command after it runs."
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes, .sortedKeys]
+        struct Invocation: Encodable { let argv: [String], workingDirectory: String, mode: String }
+        let value = Invocation(
+            argv: [command.executable] + command.arguments, workingDirectory: directory.path,
+            mode: command.shellMode ? "Shell" : command.extensionMode ? "Text extension" : "Executable")
+        guard let bytes = try? encoder.encode(value) else { return false }
+        let text = NSTextView()
+        text.isEditable = false
+        text.isSelectable = true
+        text.isRichText = false
+        text.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        text.string = String(decoding: bytes, as: UTF8.self)
+        text.setAccessibilityLabel("Full command and working directory")
+        text.identifier = .init("run.approval.invocation")
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 180))
+        scroll.hasVerticalScroller = true
+        scroll.documentView = text
+        text.frame = scroll.contentView.bounds
+        text.autoresizingMask = [.width]
+        text.isVerticallyResizable = true
+        alert.accessoryView = scroll
+        let run = alert.addButton(withTitle: "Run Command")
+        run.identifier = .init("run.approval.confirm")
+        run.hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel", role: .cancel)
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     @objc private func run(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String,
             let configured = commands.first(where: { $0.id.uuidString == id })
@@ -354,12 +393,7 @@ import AppKit
     /// Starts one configured command. Throws, starting nothing, while another is running, when the
     /// configuration cannot be resolved, or when an extension has no writable single selection.
     func start(_ configured: ConfiguredRun) throws {
-        guard execution == nil else { throw RunFailure.busy }
-        pending = nil
-        applyButton?.isEnabled = false
-        resultWindow?.close()
-        resultWindow = nil
-        onUnrecordableAction()
+        guard execution == nil, !askingBeforeRun else { throw RunFailure.busy }
         let target = editor(), selected = (target?.selectionStart != target?.selectionEnd),
             revision = target?.revision ?? 0
         let anchor = target?.selectionAnchor ?? 0, caret = target?.selectionCaret ?? 0
@@ -372,18 +406,53 @@ import AppKit
             let document = file()
             let command = try configured.resolved(file: document, selection: target?.selectedText ?? "")
             let directory = Self.workingDirectory(for: document)
+            let approvalFolder = storage.deletingLastPathComponent().appendingPathComponent(
+                "RunApprovals", isDirectory: true)
+            let approvalFile = approvalFolder.appendingPathComponent(configured.id.uuidString + ".sha256")
+            let digest = try configured.approvalDigest()
+            // An unavailable approval record never authorizes a command. Explicit review still works.
+            let known = (try? PrivateFileStore.read(approvalFile, maximumBytes: 32)) == digest
+            if !known {
+                let fromLibrary = commands.contains { $0.id == configured.id }
+                askingBeforeRun = true
+                let approved = confirmFirstRun(command, directory)
+                askingBeforeRun = false
+                guard approved else { return }
+                let current = commands.first { $0.id == configured.id }
+                guard try !fromLibrary || current?.approvalDigest() == digest else {
+                    throw RunFailure.configuration(
+                        field: .identity,
+                        message: "The saved command changed while it was being reviewed. Choose it again.")
+                }
+                guard file() == document, editor() === target, target?.revision ?? 0 == revision,
+                    target?.selectionAnchor ?? 0 == anchor, target?.selectionCaret ?? 0 == caret
+                else { throw RunFailure.documentChanged }
+            }
             let input =
                 configured.extensionMode
                 ? Data((selected ? (target?.selectedText ?? "") : (target?.text ?? "")).utf8) : Data()
+            pending = nil
+            applyButton?.isEnabled = false
+            resultWindow?.close()
+            resultWindow = nil
             let run = RunExecution()
             execution = run
+            onUnrecordableAction()
             // Capture weak UI references on main; the worker holds only this delivery
             // and immutable command/input values, never strengthening an editor/controller.
             let deliver: @MainActor @Sendable (Result<RunResult, Error>) -> Void = { [weak self, weak target] outcome in
                 self?.execution = nil
+                var approvalError: Error?
+                if !known, case .success(let result) = outcome, result.didLaunch {
+                    do {
+                        try PrivateFileStore.prepareDirectory(approvalFolder)
+                        try PrivateFileStore.write(digest, to: approvalFile, maximumBytes: 32)
+                    } catch { approvalError = error }
+                }
                 self?.show(
                     outcome, command: command, target: target, revision: revision, selection: selected,
                     anchor: anchor, caret: caret)
+                if let approvalError { TTAlert.present(approvalError) }
             }
             DispatchQueue.global(qos: .userInitiated).async {
                 let outcome = Result { try run.execute(command, input: input, workingDirectory: directory) }
