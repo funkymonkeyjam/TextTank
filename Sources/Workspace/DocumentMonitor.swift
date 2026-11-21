@@ -77,23 +77,40 @@ enum DocumentMonitorStatus: Equatable, Sendable {
         /// A settled sample that a later poll may reuse, or nil.
         let sample: FileSample?
         let readFile: Bool
+        /// The observed byte digest and pathname identity, even when the metadata is too fresh for caching.
+        var digest: String? = nil
+        var identity: FileSignature? = nil
     }
     /// `known` is an earlier settled sample of the same file. While the file's metadata still
     /// equals its signature, the file holds the bytes that gave its digest and is not read.
-    nonisolated static func inspect(_ url: URL, expected: String?, known: FileSample? = nil, now: Int64? = nil)
+    nonisolated static func inspect(
+        _ url: URL, expected: String?, known: FileSample? = nil, now: Int64? = nil, contentLimit: Int = maximumBytes
+    )
         -> Inspection
     {
         do {
-            if let known, let signature = known.signature,
-                try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: maximumBytes) == signature
-            {
+            let identity = try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max)
+            if let known, known.signature == identity {
                 return Inspection(
-                    status: known.digest == expected ? .unchanged : .changed, sample: known, readFile: false)
+                    status: known.digest == expected ? .unchanged : .changed, sample: known, readFile: false,
+                    digest: known.digest, identity: identity)
             }
-            let sample = try WorkspaceStore.sample(ofRegularFileAt: url, maximumBytes: maximumBytes, now: now)
+            if identity.size > contentLimit {
+                let message =
+                    known?.signature == nil
+                    ? "File exceeds the 32 MiB monitoring limit; editor text is preserved."
+                    : "Disk metadata changed; the file exceeds the 32 MiB content check limit."
+                return Inspection(status: .unavailable(message), sample: nil, readFile: false, identity: identity)
+            }
+            let sample = try WorkspaceStore.sample(ofRegularFileAt: url, maximumBytes: contentLimit, now: now)
+            guard try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max) == identity else {
+                return Inspection(
+                    status: .unavailable("The file changed while it was being checked."), sample: nil, readFile: true)
+            }
             return Inspection(
                 status: sample.digest == expected ? .unchanged : .changed,
-                sample: sample.signature == nil ? nil : sample, readFile: true)
+                sample: sample.signature == nil ? nil : sample, readFile: true, digest: sample.digest,
+                identity: identity)
         } catch  where error.isFileNotFound {
             return Inspection(status: .missing, sample: nil, readFile: false)
         } catch WorkspaceError.fileTooLarge {

@@ -108,6 +108,24 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
     var menuProvider: ((StatusField) -> NSMenu?)?
     private let stack = NSStackView()
     private let spacer = NSView()
+    private let diskAction = NSButton(title: "Reload…", target: nil, action: nil)
+    func setExternalAction(for observer: ExternalFileObservation) {
+        if diskAction.superview == nil {
+            diskAction.controlSize = .small
+            diskAction.identifier = NSUserInterfaceItemIdentifier("status.reloadExternalFile")
+            stack.insertArrangedSubview(diskAction, at: leadingLabel == nil ? 0 : 1)
+        }
+        diskAction.target = observer
+        diskAction.action = #selector(ExternalFileObservation.reload(_:))
+        diskAction.isHidden = observer.actionTitle == nil
+        if let title = observer.actionTitle {
+            diskAction.title = title
+            diskAction.setAccessibilityLabel(
+                title == "Reload…" ? "Reload changed file from disk" : "Check file contents on disk")
+        }
+        needsLayout = true
+    }
+
     private var popups: [StatusPopup] = []
     private var values: [StatusItem] = []
     private var leadingLabel: NSTextField?
@@ -233,7 +251,10 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
                     (text as NSString).size(withAttributes: [
                         .font: label.font ?? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
                     ]).width) + 2
-            return textWidth + visible.reduce(0) { $0 + (widths[$1.field]?.constant ?? 0) }
+            let actionWidth =
+                diskAction.superview == nil || diskAction.isHidden
+                ? 0 : ceil(diskAction.intrinsicContentSize.width) + stack.spacing
+            return textWidth + actionWidth + visible.reduce(0) { $0 + (widths[$1.field]?.constant ?? 0) }
                 + CGFloat(visible.count + 1) * stack.spacing
         }
         func collapse(_ text: String) {

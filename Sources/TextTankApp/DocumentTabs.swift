@@ -276,6 +276,11 @@ final class DocumentTabStrip: NSView {
                         ? String(format: Strings.text("tabs.pinnedEdited", "%@, pinned, edited"), name)
                         : String(format: Strings.text("tabs.pinned", "%@, pinned"), name))
             }
+            if let notice = doc.externalFile.notice {
+                c.select.title += "  ◇"
+                c.select.toolTip = name + " — " + notice
+                c.select.setAccessibilityLabel((c.select.accessibilityLabel() ?? name) + ", " + notice)
+            }
             if EditorServices.current?.compare?.isMarked(doc.runtimeID) == true {
                 c.select.title += " ↔"
                 c.select.setAccessibilityLabel((c.select.accessibilityLabel() ?? name) + ", selected for comparison")

@@ -111,6 +111,29 @@ import AppKit
     private var diskSignature: FileSignature?
     /// A sample taken by a caller that read the bytes through its own descriptor.
     private var capturedSample: FileSample?
+    lazy var externalFile = ExternalFileObservation(document: self)
+    var savedDiskSample: FileSample? { diskDigest.map { FileSample(digest: $0, signature: diskSignature) } }
+    /// Used only after a renewed comparison with the visible notice's file, bytes and editor state.
+    func acceptExternalRead(_ read: CapturedFileRead, from url: URL) throws {
+        try self.read(
+            captured: read.data, sample: read.sample, from: url, ofType: fileType ?? Self.plainTextType,
+            as: revertEncoding)
+        fileModificationDate = read.modificationDate
+        updateChangeCount(.changeCleared)
+        flushRecovery()
+    }
+
+    func externalNoticeChanged() {
+        showSaveState(recoveryCopyKept: recoveryCopyKept)
+        for p in presentations { p.configureExternalReload() }
+        presentation?.host.metadataChanged()
+        if let notice = externalFile.notice, lastRecoveryError == nil, let visible = presentation,
+            visible.isActiveTab, visible.isPresented, visible.hostWindow?.isKeyWindow == true
+        {
+            Announce.say(notice, from: visible.hostWindow)
+        }
+    }
+
     /// Immutable bytes captured before a coordinated write; only data(ofType:) reads them during that write.
     private var savePayload: Data?
     /// False if edits arrived during a save, so Scintilla's save point no longer identifies the disk bytes.
@@ -176,11 +199,15 @@ import AppKit
             if Thread.isMainThread {
                 MainActor.assumeIsolated {
                     recoveryBase += 1
+                    externalFile.invalidate()
                     // Only the existing main-thread setter route clears the recovered label.
                     recoveredOrigin = nil
                 }
             } else {
-                DispatchQueue.main.async { [weak self] in self?.recoveryBase += 1 }
+                DispatchQueue.main.async { [weak self] in
+                    self?.recoveryBase += 1
+                    self?.externalFile.invalidate()
+                }
             }
         }
     }
@@ -401,7 +428,7 @@ import AppKit
         } else {
             status = "Saved"
         }
-        return status
+        return externalFile.notice.map { status + " — " + $0 } ?? status
     }
     /// Whether the last recovery write since the latest edit succeeded.
     private var recoveryCopyKept = false
@@ -504,6 +531,7 @@ import AppKit
         guard !isClosed else { return }
         presentation?.host.tabCommands.willClose(self)
         isClosed = true
+        externalFile.invalidate()
         EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was closed.")
         cancelRecoveryTimers()
         recoveryGeneration += 1
@@ -682,6 +710,7 @@ import AppKit
         revertEncoding = explicitEncoding
         diskDigest = sample.digest
         diskSignature = sample.signature
+        externalFile.invalidate()
         savepointMatchesDisk = true
         editor.setSavePoint()
         editor.readOnly = locked
@@ -848,6 +877,7 @@ import AppKit
             // another writer may already have replaced it, and only a hash can tell.
             diskDigest = WorkspaceStore.fingerprint(submitted)
             diskSignature = nil
+            externalFile.invalidate()
             // A successful conversion changes the baseline Revert will read from disk.
             if revertEncoding != nil || submittedFormat.encoding != savedFormat.encoding {
                 revertEncoding = submittedFormat.encoding

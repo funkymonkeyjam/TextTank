@@ -142,6 +142,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         window?.nextResponder = presentation
         presentation.nextResponder = NSApp
         EditorServices.current?.noteActiveController(presentation)
+        document.externalFile.check(prioritized: true)
         metadataChanged()
         validateToolbar()
         if focus { window?.makeFirstResponder(presentation.activeEditor) }
