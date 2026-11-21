@@ -258,6 +258,11 @@ import EditorBridge
     private func selectedEncoding(_ popup: NSPopUpButton) -> FileEncoding? {
         (popup.selectedItem?.representedObject as? String).flatMap(FileEncoding.init(rawValue:))
     }
+    /// This picker was initialized with the invoking saved editor, selected first in Original.
+    func beginWithSavedVersion() {
+        kind.selectItem(at: 1)
+        begin(nil)
+    }
     @objc private func begin(_ sender: Any?) {
         update()
         guard !busy, let service, start.isEnabled else { return }

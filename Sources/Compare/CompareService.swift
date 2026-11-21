@@ -257,6 +257,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     private var auxiliary: [AuxiliaryJob] = []
     private(set) var marked: CompareDocumentInput?
     private var picker: CompareSourcePicker?
+    private var savedPickers: [DocumentID: CompareSourcePicker] = [:]
     var currentEditor: () -> TTEditor? = { nil }
     var prepareSelectedChange: ReviewChangePreparation?
     var allEditors: () -> [TTEditor] = {
@@ -478,6 +479,26 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         value.showWindow(nil)
         value.window?.makeKeyAndOrderFront(nil)
     }
+    func canCompareSaved(_ document: TextDocument) -> Bool {
+        document.isOpen && document.diskURL != nil && document.editor.byteLength <= 8 * 1024 * 1024
+            && (savedPickers[document.runtimeID] != nil || windows.count + admissions < 2)
+    }
+    func compareSaved(_ document: TextDocument) {
+        guard canCompareSaved(document) else { return }
+        let id = document.runtimeID
+        if let pending = savedPickers[id] {
+            pending.showWindow(nil)
+            pending.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+        let value = CompareSourcePicker(service: self, preferred: document.activeEditor)
+        savedPickers[id] = value
+        value.onClose = { [weak self] in self?.savedPickers.removeValue(forKey: id) }
+        value.showWindow(nil)
+        value.window?.makeKeyAndOrderFront(nil)
+        value.beginWithSavedVersion()
+    }
+
     @objc func markCurrent(_ sender: Any?) {
         guard let editor = currentEditor() else { return }
         do { try mark(editor) } catch { report(error) }

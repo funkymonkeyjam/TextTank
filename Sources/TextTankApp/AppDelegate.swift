@@ -391,6 +391,7 @@ import AppKit
         automations.saveAllShortcutItem = file.addItem(
             title: "Save All", action: #selector(NSDocumentController.saveAllDocuments(_:)), fallback: .saveAll)
         file.addItem(title: "Revert to Saved…", action: #selector(NSDocument.revertToSaved(_:)))
+        file.addItem(title: "Compare with Saved Version", action: #selector(TextDocument.compareWithSavedVersion(_:)))
         file.addItem(title: "Check for External Changes", action: #selector(TextDocument.checkExternalChanges(_:)))
         file.addItem(title: "Read Only", action: #selector(TextDocument.toggleReadOnly(_:)))
         file.addItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")

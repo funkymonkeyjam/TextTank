@@ -97,18 +97,6 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
         return await FirstPartyReviewDiff().compare(a, b, policy: policy, token: token, hooks: hooks)
     }
 }
-private actor CompareFileGate {
-    var started = false
-    private var continuation: CheckedContinuation<Void, Never>?
-    func wait() async {
-        started = true
-        await withCheckedContinuation { continuation = $0 }
-    }
-    func release() {
-        continuation?.resume()
-        continuation = nil
-    }
-}
 @MainActor private final class CompareTickMeasurement {
     var latest = ProcessInfo.processInfo.systemUptime, maximum = 0.0, ticks = 0
     func tick() {
@@ -156,6 +144,7 @@ private actor CompareFileGate {
             check(
                 app.isRunning && NSDocumentController.shared === documents,
                 "D1 native checks own the real app event loop and document controller")
+            try await SavedVersionChecks.run(in: isolated.url)
             let previous = EditorServices.current, delegate = AppDelegate()
             delegate.installEditorServices()
             LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")

@@ -295,12 +295,19 @@ import AppKit
     /// Everything NSDocument validates itself (Save, Revert to Saved and the rest) is left to it.
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         guard !CompareCommandScope.blocksWorkspace else { return false }
+        if item.action == #selector(compareWithSavedVersion(_:)) {
+            return EditorServices.current?.compare?.canCompareSaved(self) == true
+        }
         if item.action == #selector(checkExternalChanges(_:)) { return fileURL != nil }
         if item.action == #selector(toggleReadOnly(_:)) {
             (item as? NSMenuItem)?.state = editor.readOnly ? .on : .off
             return true
         }
         return super.validateUserInterfaceItem(item)
+    }
+    @objc func compareWithSavedVersion(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        EditorServices.current?.compare?.compareSaved(self)
     }
     @objc func checkExternalChanges(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
