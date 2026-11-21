@@ -72,6 +72,34 @@ package enum RecoveryError: Error, LocalizedError {
     }
 }
 
+/// Only active document operations have an entry. The short registry lock is never held
+/// during a disk read, encoding, fsync or a wait for another operation on the same document.
+private final class RecoveryDocumentLocks: Sendable {
+    private struct Entry: Sendable {
+        let lock: NSLock
+        var users: Int
+    }
+    private let entries = OSAllocatedUnfairLock(initialState: [UUID: Entry]())
+    func withDocument<T>(_ id: UUID, _ operation: () throws -> T) rethrows -> T {
+        let lock = entries.withLock { table in
+            var entry = table[id] ?? Entry(lock: NSLock(), users: 0)
+            entry.users += 1
+            table[id] = entry
+            return entry.lock
+        }
+        lock.lock()
+        defer {
+            lock.unlock()
+            entries.withLock { table in
+                guard var entry = table[id] else { return }
+                entry.users -= 1
+                table[id] = entry.users == 0 ? nil : entry
+            }
+        }
+        return try operation()
+    }
+}
+
 /// flock belongs to an open file description. Keep one descriptor per actual directory in this
 /// process so separate RecoveryStore instances share the same lease, including through aliases.
 private final class RecoveryDirectoryOwnership {
@@ -85,10 +113,12 @@ private final class RecoveryDirectoryOwnership {
     private struct Handle {
         let descriptor: Int32
         var references: Int
+        let documents: RecoveryDocumentLocks
     }
     private static let handles = OSAllocatedUnfairLock(initialState: [Identity: Handle]())
     private let identity: Identity
     private let descriptor: Int32
+    let documents: RecoveryDocumentLocks
 
     init(directory: URL) throws {
         let fd = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -105,18 +135,22 @@ private final class RecoveryDirectoryOwnership {
         }
         let key = Identity(info)
         identity = key
-        descriptor = try Self.handles.withLock { handles in
-            if let handle = handles[key] {
-                handles[key] = Handle(descriptor: handle.descriptor, references: handle.references + 1)
-                return handle.descriptor
+        let acquired = try Self.handles.withLock { handles in
+            if var handle = handles[key] {
+                handle.references += 1
+                handles[key] = handle
+                return handle
             }
             guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
                 let code = errno
                 throw RecoveryError.lockFailure(code, directory: directory)
             }
-            handles[key] = Handle(descriptor: fd, references: 1)
-            return fd
+            let handle = Handle(descriptor: fd, references: 1, documents: RecoveryDocumentLocks())
+            handles[key] = handle
+            return handle
         }
+        descriptor = acquired.descriptor
+        documents = acquired.documents
         retained = descriptor == fd
     }
     func prepareForWriting(_ directory: URL) throws {
@@ -146,12 +180,8 @@ private final class RecoveryDirectoryOwnership {
     }
 }
 
-/// Inject a dedicated app-owned directory. Methods are serialized within this instance.
-/// Atomic replacement preserves the previous complete snapshot if writing fails.
-/// Does not restore to an original file: callers must present recovered text for review.
-/// Sendable boundary: immutable directory and lock; written and snapshotReadCount
-/// are accessed under lock. All private cache/read helpers are called only by the
-/// locked save/load/scan/remove operations. Path-only helpers use immutable values.
+/// The leased directory shares its document locks across RecoveryStore instances and aliases.
+/// A short per-store lock protects lease acquisition and the cache, independently of document I/O.
 final package class RecoveryStore: @unchecked Sendable {
     /// Recovery has no smaller product ceiling than an addressable Data value. Do not import
     /// the session store's 512 MiB cap: large pending documents were already recoverable.
@@ -186,17 +216,14 @@ final package class RecoveryStore: @unchecked Sendable {
     package init(directory: URL) { self.directory = directory }
 
     /// Normal launches establish exclusive recovery ownership before any document can open.
-    package func claimOwnership() throws {
+    package func claimOwnership() throws { _ = try ownedDirectory(createIfMissing: true) }
+    private func ownedDirectory(createIfMissing: Bool) throws -> RecoveryDirectoryOwnership? {
         lock.lock()
         defer { lock.unlock() }
-        _ = try requireOwnership(createIfMissing: true)
-    }
-    /// Return false only for an absent directory on a read/cleanup path.
-    private func requireOwnership(createIfMissing: Bool) throws -> Bool {
         if let ownership {
             try ownership.verify(directory)
             if createIfMissing { try ownership.prepareForWriting(directory) }
-            return true
+            return ownership
         }
         guard directory.isFileURL else { throw RecoveryError.unsafeLocation }
         try PrivateFileStore.validateLocalURL(directory.appendingPathComponent(".recovery-check"))
@@ -206,7 +233,7 @@ final package class RecoveryStore: @unchecked Sendable {
             guard code == ENOENT else {
                 throw FileOperationFailure(code, operation: "inspect recovery folder", path: directory.path)
             }
-            guard createIfMissing else { return false }
+            guard createIfMissing else { return nil }
             let parent = directory.deletingLastPathComponent()
             if !FileManager.default.fileExists(atPath: parent.path) {
                 try FileManager.default.createDirectory(
@@ -224,14 +251,24 @@ final package class RecoveryStore: @unchecked Sendable {
         try acquired.verify(directory)
         if createIfMissing { try acquired.prepareForWriting(directory) }
         ownership = acquired
-        return true
+        return acquired
     }
     /// Save a monotonically increasing document revision; corrupt/newer records are never overwritten.
     package func save(_ snapshot: RecoverySnapshot) throws {
-        lock.lock()
-        defer { lock.unlock() }
+        try save(snapshot, beforeCommit: {})
+    }
+    package func save(_ snapshot: RecoverySnapshot, beforeCommit: () throws -> Void) throws {
         try validate(snapshot)
-        _ = try requireOwnership(createIfMissing: true)
+        guard let lease = try ownedDirectory(createIfMissing: true) else { throw RecoveryError.folderChanged }
+        try lease.documents.withDocument(snapshot.id) {
+            try lease.verify(directory)
+            try saveLocked(snapshot) {
+                try beforeCommit()
+                try lease.verify(directory)
+            }
+        }
+    }
+    private func saveLocked(_ snapshot: RecoverySnapshot, beforeCommit: () throws -> Void) throws {
         let destination = url(for: snapshot.id)
         if let known = knownRevision(of: snapshot.id), known != snapshot.revision {
             guard known < snapshot.revision else { throw RecoveryError.staleRevision }
@@ -250,27 +287,26 @@ final package class RecoveryStore: @unchecked Sendable {
             }
         }
         let data = try JSONEncoder().encode(snapshot)
-        written[snapshot.id] = nil
-        try privateAtomicWrite(data, to: destination)
+        lock.withLock { written[snapshot.id] = nil }
+        try privateAtomicWrite(data, to: destination, beforeCommit: beforeCommit)
         remember(snapshot.id, revision: snapshot.revision)
     }
     /// Read exactly one identified snapshot, validating its filename identity and schema.
     package func load(id: UUID) throws -> RecoverySnapshot {
-        lock.lock()
-        defer { lock.unlock() }
-        guard try requireOwnership(createIfMissing: false) else {
+        guard let lease = try ownedDirectory(createIfMissing: false) else {
             throw FileOperationFailure(ENOENT, operation: "open recovery snapshot", path: url(for: id).path)
         }
-        return try read(url(for: id), expectedID: id)
+        return try lease.documents.withDocument(id) {
+            try lease.verify(directory)
+            return try read(url(for: id), expectedID: id)
+        }
     }
     /// Recover valid entries while keeping corrupt/unknown entries visible and untouched.
     /// Directory-level failures still throw because no reliable inventory was possible.
     /// The one thing a scan deletes is a temporary `.pending` file left by a process that died
     /// during a write: it is an unfinished private copy of a document's text that nothing reads.
     package func scan() throws -> RecoveryScan {
-        lock.lock()
-        defer { lock.unlock() }
-        guard try requireOwnership(createIfMissing: false) else {
+        guard let lease = try ownedDirectory(createIfMissing: false) else {
             return RecoveryScan(snapshots: [], issues: [])
         }
         let contents = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
@@ -285,7 +321,14 @@ final package class RecoveryStore: @unchecked Sendable {
                 guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent) else {
                     throw RecoveryError.invalidSnapshot
                 }
-                snapshots.append(try read(file, expectedID: id))
+                let snapshot = try lease.documents.withDocument(id) {
+                    try lease.verify(directory)
+                    return try read(file, expectedID: id)
+                }
+                snapshots.append(snapshot)
+            } catch  where error.posixCode == .ENOENT {
+                // A save or acknowledged close may have removed this entry since enumeration.
+                try lease.verify(directory)
             } catch { issues.append(RecoveryIssue(url: file, message: error.localizedDescription)) }
         }
         return RecoveryScan(snapshots: snapshots, issues: issues)
@@ -299,18 +342,22 @@ final package class RecoveryStore: @unchecked Sendable {
     }
     /// Remove only the revision explicitly acknowledged as saved/discarded, avoiding stale cleanup.
     package func remove(id: UUID, throughRevision: UInt64) throws {
-        lock.lock()
-        defer { lock.unlock() }
-        guard try requireOwnership(createIfMissing: false) else { return }
+        guard let lease = try ownedDirectory(createIfMissing: false) else { return }
+        try lease.documents.withDocument(id) {
+            try lease.verify(directory)
+            try removeLocked(id: id, throughRevision: throughRevision)
+        }
+    }
+    private func removeLocked(id: UUID, throughRevision: UInt64) throws {
         let file = url(for: id)
         guard FileManager.default.fileExists(atPath: file.path) else {
-            written[id] = nil
+            lock.withLock { written[id] = nil }
             return
         }
         let revision = try knownRevision(of: id) ?? read(file, expectedID: id).revision
         guard revision <= throughRevision else { throw RecoveryError.staleRevision }
         try FileManager.default.removeItem(at: file)
-        written[id] = nil
+        lock.withLock { written[id] = nil }
     }
     /// Explicit user discard of snapshots listed by an earlier scan. Each item goes through
     /// remove(id:throughRevision:), so only the listed identities at the scanned revision are
@@ -336,13 +383,14 @@ final package class RecoveryStore: @unchecked Sendable {
     }
     private func remember(_ id: UUID, revision: UInt64) {
         guard let info = identity(of: id) else { return }
-        written[id] = Written(
+        let value = Written(
             revision: revision, device: info.st_dev, inode: info.st_ino, size: info.st_size,
             modified: info.st_mtimespec, changed: info.st_ctimespec)
+        lock.withLock { written[id] = value }
     }
     /// The revision this instance wrote, only while the file on disk is still that write.
     private func knownRevision(of id: UUID) -> UInt64? {
-        guard let known = written[id], let info = identity(of: id), info.st_dev == known.device,
+        guard let known = lock.withLock({ written[id] }), let info = identity(of: id), info.st_dev == known.device,
             info.st_ino == known.inode, info.st_size == known.size,
             info.st_mtimespec.tv_sec == known.modified.tv_sec, info.st_mtimespec.tv_nsec == known.modified.tv_nsec,
             info.st_ctimespec.tv_sec == known.changed.tv_sec, info.st_ctimespec.tv_nsec == known.changed.tv_nsec
@@ -362,12 +410,12 @@ final package class RecoveryStore: @unchecked Sendable {
             if modified < Self.processStart { try? FileManager.default.removeItem(at: file) }
         }
     }
-    private func privateAtomicWrite(_ data: Data, to destination: URL) throws {
+    private func privateAtomicWrite(_ data: Data, to destination: URL, beforeCommit: () throws -> Void) throws {
         do {
             try PrivateFileStore.write(
                 data, to: destination, maximumBytes: Self.maximumSnapshotBytes,
                 temporaryPrefix: "", temporarySuffix: ".pending", synchronize: PrivateFileStore.flushToStorage,
-                synchronizeDirectory: PrivateFileStore.flushToStorage)
+                synchronizeDirectory: PrivateFileStore.flushToStorage, beforeCommit: beforeCommit)
         } catch PrivateFileError.unsafeLocation { throw RecoveryError.unsafeLocation }
     }
     private func read(_ url: URL, expectedID: UUID) throws -> RecoverySnapshot {
@@ -377,7 +425,7 @@ final package class RecoveryStore: @unchecked Sendable {
         { throw RecoveryError.unsafeLocation } catch  where error.posixCode == .ELOOP {
             throw RecoveryError.unsafeLocation
         }
-        snapshotReadCount += 1
+        lock.withLock { snapshotReadCount += 1 }
         let snapshot: RecoverySnapshot
         do {
             try PersistedFormat.check(data, context: "Recovery snapshot")

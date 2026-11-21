@@ -4,6 +4,58 @@ import Foundation
 import Darwin
 
 @main struct FileChecks {
+    private static func independentRecoveryWrites(in directory: URL) throws {
+        let store = RecoveryStore(directory: directory), second = RecoveryStore(directory: directory)
+        let a = UUID(), b = UUID(), entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        let firstDone = DispatchSemaphore(value: 0), futureResult = DispatchSemaphore(value: 0),
+            otherDone = DispatchSemaphore(value: 0)
+        let old = RecoverySnapshot(id: a, text: "old", format: FileFormat(), originalURL: nil, revision: 1)
+        let next = RecoverySnapshot(id: a, text: "new", format: FileFormat(), originalURL: nil, revision: 2)
+        let neighbour = RecoverySnapshot(id: b, text: "B", format: FileFormat(), originalURL: nil, revision: 1)
+        try store.save(old)
+        DispatchQueue.global().async {
+            do {
+                try store.save(
+                    next,
+                    beforeCommit: {
+                        entered.signal()
+                        guard release.wait(timeout: .now() + 10) == .success else {
+                            throw CocoaError(.fileWriteUnknown)
+                        }
+                    })
+                firstDone.signal()
+            } catch { Checks.fail("held snapshot could not publish: " + error.localizedDescription, file: #filePath, line: #line) }
+        }
+        guard entered.wait(timeout: .now() + 5) == .success else {
+            release.signal()
+            throw CocoaError(.fileWriteUnknown)
+        }
+        DispatchQueue.global().async {
+            do {
+                try second.save(old)
+                Checks.fail("stale same-ID publication was accepted", file: #filePath, line: #line)
+            } catch RecoveryError.staleRevision { futureResult.signal() } catch {
+                Checks.fail("unexpected same-ID recovery error: " + error.localizedDescription, file: #filePath, line: #line)
+            }
+        }
+        DispatchQueue.global().async {
+            do {
+                try store.save(neighbour)
+                try store.remove(id: b, throughRevision: 1)
+                otherDone.signal()
+            } catch { Checks.fail("independent recovery operation failed: " + error.localizedDescription, file: #filePath, line: #line) }
+        }
+        let ran = otherDone.wait(timeout: .now() + 3) == .success
+        let waiting = futureResult.wait(timeout: .now()) == .timedOut
+        release.signal()
+        check(ran && waiting, "unrelated ID publishes and removes while the same-ID writer remains serialized")
+        check(
+            firstDone.wait(timeout: .now() + 5) == .success && futureResult.wait(timeout: .now() + 5) == .success,
+            "another store sharing the directory rejects the older revision after publication")
+        check(
+            try store.load(id: a).text == "new" && !FileManager.default.fileExists(atPath: store.fileURL(for: b).path),
+            "concurrent recovery operations preserve both final document states")
+    }
     static func main() {
         Checks.run("FileChecks") {
             if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "--recovery-busy" {
@@ -409,6 +461,7 @@ import Darwin
                 history.read() == ["invalid", "valid"],
                 "failed flush retains and waits for the last valid pending draft")
 
+            try independentRecoveryWrites(in: root.appendingPathComponent("parallel-drafts"))
             // F114/F135: this store's own previous snapshot is compared by revision from memory.
             let cacheURL = root.appendingPathComponent("revision-cache"),
                 cacheStore = RecoveryStore(directory: cacheURL)
