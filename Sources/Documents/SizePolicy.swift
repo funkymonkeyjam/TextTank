@@ -12,6 +12,16 @@ package struct SizePolicy: Sendable {
     package let inlineSpan = 64 * 1024
     package let displayOutput = 64 * 1024 * 1024
 
+    package let streamedImportThreshold = 32 * 1024 * 1024
+    package let largeDocumentThreshold = 32 * 1024 * 1024
+    package let largeLineThreshold = 1024 * 1024
+    package let folderInspection = 64 * 1024 * 1024
+    package let folderPatchOutput = 32 * 1024 * 1024
+    package let folderPatchExcerpt = 64 * 1024
+    package let folderBatchManifest = 64 * 1024 * 1024
+    package let folderRetentionSettings = 4 * 1024
+    package let toolbarArrangement = 64 * 1024
+    package let automationStepPreviewSample = 64 * 1024
     package let folderInput = 32 * 1024 * 1024
     package let folderTotal = 256 * 1024 * 1024
     package let folderReplacementOutput = 64 * 1024 * 1024
@@ -41,6 +51,7 @@ package struct SizePolicy: Sendable {
     package let editorTransform = 16 * 1024 * 1024
     package let commentDocument = 16 * 1024 * 1024
     package let languageCatalog = 16 * 1024 * 1024
+    package let languageUserList = 64 * 1024
     package let languageKeywords = 1024 * 1024
     package let languageDefinition = 2 * 1024 * 1024
     package let functionNavigation = 2 * 1024 * 1024

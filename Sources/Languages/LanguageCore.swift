@@ -68,7 +68,7 @@ package struct LanguageProfile: Codable, Equatable, Identifiable {
             "numberSuffix2", "numberRange", "operators1", "foldersInCode1Open", "foldersInCode1Middle",
             "foldersInCode1Close", "delimiters"
         ].map { "userDefine." + $0 })
-    static package let userListPropertyLimit = 65536
+    static package let userListPropertyLimit = SizePolicy.standard.languageUserList
     static package func isHexColor(_ text: String) -> Bool {
         text.utf8.count == 6
             && text.utf8.allSatisfy { (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }
@@ -111,12 +111,12 @@ package struct LanguageProfile: Codable, Equatable, Identifiable {
             throw LanguageError.invalid("Language “\(languageName)” must contain at most 100 properties.")
         }
         for (key, value) in properties {
-            let validSize =
-                lexer == "user" && Self.userListProperties.contains(key)
-                ? value.utf8.count <= Self.userListPropertyLimit : value.count <= 4096
+            let userList = lexer == "user" && Self.userListProperties.contains(key)
+            let validSize = userList ? value.utf8.count <= Self.userListPropertyLimit : value.count <= 4096
             guard !key.isEmpty, !key.contains("\0"), !value.contains("\0"), validSize else {
+                let limit = userList ? SizePolicy.describe(Self.userListPropertyLimit) : "4096 characters"
                 throw LanguageError.invalid(
-                    "Property “\(String(key.prefix(60)))” of language “\(languageName)” has an empty name, a NUL character or exceeds its size limit."
+                    "Property “\(String(key.prefix(60)))” of language “\(languageName)” requires a name and a value of at most \(limit). Remove any NUL characters."
                 )
             }
         }

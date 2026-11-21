@@ -391,7 +391,7 @@ package enum FolderReplacement {
     /// Project the same completed search used by Replace, without staging source files or creating a backup batch.
     static package func preview(
         fallbackDirectory: URL, matches: [FolderSearchMatch], options: SearchOptions, excluding: Set<URL> = [],
-        cancellation: FolderSearchCancellation = .init(), maximumBytes: Int = 32 * 1024 * 1024,
+        cancellation: FolderSearchCancellation = .init(), maximumBytes: Int = SizePolicy.standard.folderPatchOutput,
         budget initialBudget: OperationBudget = .init()
     ) async throws -> PatchPreview {
         let grouped = Dictionary(grouping: matches, by: { $0.sourceRoot ?? fallbackDirectory })
@@ -401,7 +401,7 @@ package enum FolderReplacement {
         let sourcePaths = Set(matches.map { $0.url.standardizedFileURL.resolvingSymlinksInPath().path })
         var patch = Data(), identities: [FileSignature] = []
         var changed = 0, skipped = 0, conversions = 0
-        let limit = max(0, min(maximumBytes, 32 * 1024 * 1024))
+        let limit = max(0, min(maximumBytes, SizePolicy.standard.folderPatchOutput))
         var budget = initialBudget
         for (index, directory) in roots.enumerated() {
             let opened = try FolderSearch.openCanonicalDirectory(directory)

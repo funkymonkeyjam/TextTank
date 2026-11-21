@@ -57,7 +57,7 @@ package final class FolderReplacementBatch {
         path == store || path.utf8.starts(with: (store + "/").utf8)
     }
     static let manifestName = "manifest.jsonl"
-    private static let maximumManifestBytes = 64 * 1024 * 1024
+    private static let maximumManifestBytes = SizePolicy.standard.folderBatchManifest
     package let directory: URL
     package var manifest: URL { directory.appendingPathComponent(Self.manifestName) }
     private let synchronizeManifest: (Int32) -> Int32
@@ -225,7 +225,7 @@ package final class FolderReplacementBatch {
             throw FileOperationFailure(errno, operation: "inspect folder replacement manifest", path: manifest.path)
         }
         guard info.st_size >= 0, info.st_size <= Self.maximumManifestBytes - bytes.count else {
-            throw FolderSearchError.invalidRequest("The private recovery manifest exceeds its size limit.")
+            throw FolderSearchError.invalidRequest("The private recovery manifest exceeds \(SizePolicy.describe(Self.maximumManifestBytes)). Use a smaller replacement batch.")
         }
         do {
             try FolderReplacement.write(bytes, to: stream, path: manifest.path)
@@ -245,7 +245,7 @@ package final class FolderReplacementBatch {
         var published = false
         do {
             try PrivateFileStore.write(
-                original, to: backup, maximumBytes: 32 * 1024 * 1024,
+                original, to: backup, maximumBytes: SizePolicy.standard.folderInput,
                 synchronize: { fd in
                     guard fcopyfile(source, fd, nil, copyfile_flags_t(COPYFILE_XATTR)) == 0 else { return -1 }
                     return fsync(fd)

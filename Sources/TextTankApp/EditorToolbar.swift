@@ -86,7 +86,7 @@ enum EditorToolbarCommand: String, CaseIterable {
         }
     }
     static func load() -> Arrangement? {
-        guard let data = isolatedDefaults?.data(forKey: key), data.count <= 65536,
+        guard let data = isolatedDefaults?.data(forKey: key), data.count <= SizePolicy.standard.toolbarArrangement,
             let state = try? JSONDecoder().decode(Arrangement.self, from: data), state.version == 1,
             state.identifiers.count <= 256, NSToolbar.DisplayMode(rawValue: state.displayMode) != nil
         else { return nil }
@@ -94,7 +94,7 @@ enum EditorToolbarCommand: String, CaseIterable {
     }
     static func save(_ toolbar: NSToolbar) {
         guard let defaults = isolatedDefaults,
-            let data = try? JSONEncoder().encode(Arrangement.capture(toolbar)), data.count <= 65536
+            let data = try? JSONEncoder().encode(Arrangement.capture(toolbar)), data.count <= SizePolicy.standard.toolbarArrangement
         else { return }
         defaults.set(data, forKey: key)
     }

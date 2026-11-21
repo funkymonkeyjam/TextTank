@@ -765,7 +765,7 @@ import AppKit
     /// formats and all existing editing sessions retain their exact ordinary read/reload paths.
     func readInitialUTF8IfEligible(from url: URL, signature: FileSignature, ofType type: String,
                                    isCancelled: () -> Bool = { false }) throws -> Bool {
-        guard signature.size >= 32 * 1024 * 1024, signature.size <= Int32.max,
+        guard signature.size >= SizePolicy.standard.streamedImportThreshold, signature.size <= Int32.max,
               type == Self.plainTextType, openEncoding == nil || openEncoding == .utf8,
               !opened, !languageResolved, presentations.isEmpty, editor.byteLength == 0, editor.revision == 0,
               !editor.readOnly else { return false }
@@ -1063,7 +1063,8 @@ import AppKit
         languageResolved = true
         let languages = EditorServices.current?.languages
         let detected = languages?.detect(filename: fileURL?.lastPathComponent ?? "", text: content.languageSample)
-        if editor.byteLength >= 32 * 1024 * 1024 || editor.hasLineLongerThan(1024 * 1024) {
+        if editor.byteLength >= SizePolicy.standard.largeDocumentThreshold
+            || editor.hasLineLongerThan(UInt(SizePolicy.standard.largeLineThreshold)) {
             // A newly opened editor has no installed lexer. Keep the detected choice for the opt-in action.
             deferredLargeFileLanguage = detected ?? LanguageProfile.plainTextID
             editor.wrap = false

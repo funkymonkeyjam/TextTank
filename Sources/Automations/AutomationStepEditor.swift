@@ -480,9 +480,9 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         let token = preview.begin()
         // The rules alone are tested; the name field plays no part until Use These Rules.
         let input = sample.string, steps = list.steps
-        guard input.utf8.count <= 65536 else {
+        guard input.utf8.count <= SizePolicy.standard.automationStepPreviewSample else {
             _ = preview.finish(token)
-            status.stringValue = "Use a sample of at most 64 KiB."
+            status.stringValue = "Use a sample of at most \(SizePolicy.describe(SizePolicy.standard.automationStepPreviewSample))."
             return
         }
         let control = AutomationRunControl()
