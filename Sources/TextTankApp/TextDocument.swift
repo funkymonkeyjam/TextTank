@@ -7,6 +7,7 @@ import AppKit
 /// name of the Swift module.
 @objc(TextDocument) final class TextDocument: NSDocument {
     let runtimeID = DocumentID()
+    var bulkReceipt: BulkChangeReceipt?
     private(set) var loadEpoch: UInt = 0
     private(set) var isClosed = false
     private var opened = false
@@ -630,6 +631,7 @@ import AppKit
         guard !isClosed else { return }
         presentation?.host.tabCommands.willClose(self)
         isClosed = true
+        bulkReceipt = nil
         externalFile.invalidate()
         EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was closed.")
         cancelRecoveryTimers()
@@ -762,6 +764,7 @@ import AppKit
     /// boundary (as for open and revert), and the document stays edited until a real save:
     /// the engine's save point is this text, which is not a disk state.
     func loadUnsavedSnapshot(text: String, format snapshotFormat: FileFormat) {
+        bulkReceipt = nil
         loadEpoch &+= 1
         loading = true
         format = snapshotFormat
@@ -799,6 +802,7 @@ import AppKit
         return doc
     }
     private func loadDecoded(_ decoded: DecodedFile, sample: FileSample, explicitEncoding: FileEncoding?) {
+        bulkReceipt = nil
         loadEpoch &+= 1
         EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was reloaded.")
         loading = true

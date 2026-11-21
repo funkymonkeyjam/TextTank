@@ -94,6 +94,8 @@ private actor MergeStageGate {
         let cancel = try await openReview()
         cancel.close()
         check(Data(doc.editor.text.utf8) == Data(before.utf8), "closing an unapplied review preserves the editor")
+        check(doc.bulkReceipt?.before == Data(before.utf8) && doc.bulkReceipt?.after == Data(after.utf8),
+              "Applied merge retains the actual before and after snapshots on its destination")
         let stale = try await openReview()
         stale.merge.perform(.selectAllChanges)
         _ = doc.editor.setSelectionAnchor(0, caret: 0)

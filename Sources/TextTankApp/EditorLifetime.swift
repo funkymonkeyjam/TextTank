@@ -109,9 +109,10 @@ import EditorBridge
         }
         guard !editor.readOnly else { throw AutomationError.invalid("“\(name)” is read-only. Nothing was replaced.") }
     }
-    func apply(_ outputs: [String], wholeDocument: Bool) throws {
+    func apply(_ outputs: [String], wholeDocument: Bool, operationName: String = "Run Automation") throws {
         try requireWritable()
         let editor = try resolve()
+        let capture = BulkChangeCapture(editor, name: operationName)
         let applied: Bool
         if wholeDocument {
             applied = outputs.count == 1 && editor.replaceDocumentText(outputs[0], expectedRevision: revision)
@@ -133,6 +134,7 @@ import EditorBridge
                     expectedLength: text.utf8.count)
         }
         guard applied else { throw changed() }
+        capture?.finish()
     }
     func selectionTexts() throws -> [String] {
         let bytes = Data(text.utf8)
@@ -150,5 +152,46 @@ import EditorBridge
         .invalid(
             "“\(name)” changed, its selection changed, or it closed. The result was discarded. Run the automation again with the current text."
         )
+    }
+}
+
+
+/// One immutable receipt per document. Over the comparison ceiling only native counts are retained.
+struct BulkChangeReceipt: Sendable {
+    let name: String
+    let beforeBytes: Int, afterBytes: Int, beforeLines: Int, afterLines: Int
+    let before: Data?, after: Data?
+    var counts: String { "\(beforeLines) → \(afterLines) lines, \(beforeBytes) → \(afterBytes) bytes"
+    }
+    var summary: String {
+        return "\(name) · \(counts). " + (before == nil ? "Comparison exceeds the 8 MiB limit." : "Show Changes in Document status.")
+    }
+}
+@MainActor struct BulkChangeCapture {
+    private let revision: UInt, epoch: UInt
+    private let document: TextDocument
+    private let editor: TTEditor, name: String
+    private let beforeBytes: Int, beforeLines: Int, before: Data?
+    init?(_ editor: TTEditor, name: String) {
+        guard let document = EditorLifetime.document(for: editor), document.isOpen else { return nil }
+        self.document = document
+        self.editor = editor
+        self.name = name
+        epoch = document.loadEpoch
+        revision = editor.revision
+        beforeBytes = editor.byteLength
+        beforeLines = editor.lineCount
+        before = beforeBytes <= ReviewDiffPolicy.default.maximumInputBytes ? editor.utf8Data : nil
+    }
+    func finish() {
+        guard document.isOpen, document.loadEpoch == epoch, revision != editor.revision else { return }
+        let afterBytes = editor.byteLength
+        let comparable = before != nil && afterBytes <= ReviewDiffPolicy.default.maximumInputBytes
+        let after = comparable ? editor.utf8Data : nil
+        if let before, let after, before == after { return }
+        let receipt = BulkChangeReceipt(name: name, beforeBytes: beforeBytes, afterBytes: afterBytes,
+            beforeLines: beforeLines, afterLines: editor.lineCount, before: comparable ? before : nil, after: after)
+        document.bulkReceipt = receipt
+        document.presentation?.showTransientStatus(receipt.summary, compactMessage: receipt.counts)
     }
 }

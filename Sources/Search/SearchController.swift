@@ -655,8 +655,11 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     skips.stale += 1
                     continue
                 }
+                let capture = action == .replaceAll && !chosen.isEmpty ? BulkChangeCapture(editor, name: "Replace All") : nil
                 switch Self.replace(chosen, text: buffer.text, revision: buffer.revision, in: editor) {
-                case .applied(let count): changed += count
+                case .applied(let count):
+                    changed += count
+                    capture?.finish()
                 case .readOnly: skips.readOnly += 1
                 case .multipleSelections: skips.multipleSelections += 1
                 case .closed: skips.closed += 1

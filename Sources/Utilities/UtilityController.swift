@@ -268,9 +268,11 @@ import AppKit
         let input = editor.selectedText
         let transformed = try utility.apply(input)
         if utility == .formatJSON && transformed.utf8.elementsEqual(input.utf8) { return }
+        let capture = BulkChangeCapture(editor, name: utility.title)
         onUnrecordableEdit()
         editor.beginUndoGroup()
-        defer { editor.endUndoGroup() }
         editor.replaceSelection(transformed)
+        editor.endUndoGroup()
+        capture?.finish()
     }
 }

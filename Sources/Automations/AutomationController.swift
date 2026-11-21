@@ -807,7 +807,7 @@ private struct AutomationCheckboxEdits {
                 }
                 outputs.append(output)
             }
-            try target.apply(outputs, wholeDocument: false)
+            try target.apply(outputs, wholeDocument: false, operationName: workflow.name)
             return
         }
         let input: String
@@ -891,12 +891,12 @@ private struct AutomationCheckboxEdits {
             if capturedPaste != nil {
                 guard !output.isEmpty else { return }
                 let finish = try prepareTransformedPaste(target.resolve())
-                do { try target.apply([output], wholeDocument: false) }
+                do { try target.apply([output], wholeDocument: false, operationName: workflow.name) }
                 catch { finish?(false); throw error }
                 finish?(true)
                 rememberPasteChoice(workflow.id)
             } else {
-                try target.apply([output], wholeDocument: workflow.input == .document)
+                try target.apply([output], wholeDocument: workflow.input == .document, operationName: workflow.name)
             }
         case .clipboard:
             guard let board = activePasteboard else {

@@ -119,10 +119,12 @@ enum ReviewApplyResult: Equatable, Sendable { case applied, noChange, rejected(R
                 editor.revision == target.revision, editor.byteLength == bytes.count
             else { throw ReviewRejection.revisionChanged }
             bridgeInvocations += 1
+            let capture = BulkChangeCapture(editor, name: "Apply Selected Changes")
             guard editor.applyEdits(native, expectedRevision: target.revision, expectedLength: bytes.count) else {
                 throw ReviewRejection.revisionChanged
             }
             applied = true
+            capture?.finish()
             return .applied
         } catch let reason as ReviewRejection { return .rejected(reason) } catch { return .rejected(.invalidRange) }
     }

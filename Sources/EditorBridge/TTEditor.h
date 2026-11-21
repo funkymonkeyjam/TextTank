@@ -98,6 +98,7 @@ __attribute__((objc_subclassing_restricted))
 @property(nonatomic, copy) NSString *text;
 /// Length of the document in UTF-8 bytes, without copying it.
 @property(nonatomic, readonly) NSInteger byteLength;
+@property(nonatomic, readonly) NSInteger lineCount;
 /// The document's exact UTF-8 bytes as one immutable copy, safe to hand to a background queue.
 @property(nonatomic, readonly) NSData *utf8Data;
 /// Immutable editor bytes for persistence and printing. Nil means the full range could not be copied.

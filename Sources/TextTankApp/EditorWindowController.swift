@@ -493,6 +493,19 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     /// The menu a status bar field opens, for the active pane. Building it changes nothing, so
     /// its wording can be checked without showing it.
+    @objc private func showBulkChanges(_ sender: Any?) {
+        guard let receipt = (document as? TextDocument)?.bulkReceipt, let before = receipt.before,
+            let after = receipt.after, let compare = EditorServices.current?.compare else { return }
+        Task { [weak self] in
+            do {
+                let pair = try await Task.detached {
+                    try (TextSnapshot(bytes: before, source: .freeText(UUID()), label: receipt.name + " — Before"),
+                         TextSnapshot(bytes: after, source: .freeText(UUID()), label: receipt.name + " — After"))
+                }.value
+                _ = try await compare.open(original: .snapshot(pair.0), modified: .snapshot(pair.1))
+            } catch { self?.showTransientStatus(error.localizedDescription) }
+        }
+    }
     func statusOptionsMenu(_ key: String) -> NSMenu? {
         let field =
             key == "count"
@@ -600,6 +613,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 menu.addItem(item)
             }
         case .document, .readOnly:
+            if let receipt = doc.bulkReceipt {
+                heading(receipt.summary)
+                add("Show Changes", #selector(showBulkChanges(_:)), self, nil, false, receipt.before != nil)
+                menu.addItem(.separator())
+            }
             add("Save", #selector(NSDocument.save(_:)), doc)
             add("Save As…", #selector(NSDocument.saveAs(_:)), doc)
             add("Read Only", #selector(TextDocument.toggleReadOnly(_:)), doc, nil, editor.readOnly)
@@ -831,7 +849,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             try editor.requireWritable()
             EditorServices.current?.macros?.invalidateRecording(
                 reason: "This text transform is not yet recorded.")
+            let capture = BulkChangeCapture(editor, name: transform.title)
             try transform.apply(to: editor)
+            capture?.finish()
             return
         }
         guard let command = EditorCommand(rawValue: id) else { throw EditorCommandFailure.unsupported }
