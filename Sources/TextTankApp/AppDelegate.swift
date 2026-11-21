@@ -559,6 +559,13 @@ import AppKit
         comparisons.submenu = compareMenu
         search.addItem(.separator())
         search.addItem(comparisons)
+        let marked = NSMenu(title: "Bookmarked Lines")
+        for value: EditorCommand in [.bookmarkCutLines, .bookmarkCopyLines, .bookmarkDeleteLines, .bookmarkInvert, .bookmarkClearAll] {
+            command(marked, value)
+        }
+        let markedItem = NSMenuItem(title: marked.title, action: nil, keyEquivalent: "")
+        markedItem.submenu = marked
+        search.addItem(markedItem)
 
         let runRoot = NSMenuItem()
         runRoot.title = "Run"

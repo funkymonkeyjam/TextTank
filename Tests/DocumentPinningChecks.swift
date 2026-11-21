@@ -1038,9 +1038,12 @@ extension DocumentChecks {
                         contentsOf:
                             TestPaths.fixtures.appendingPathComponent("menu-tree-wave-5-d2-additions.json")))
                 as! [[String: String]]
+            let bookmarkLines =
+                try JSONSerialization.jsonObject(with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("menu-tree-bookmarked-lines.json")))
+                as! [[String: String]]
             let boundary = legacyMenu.firstIndex { $0["position"] == "6" }!
             let expectedMenu =
-                Array(legacyMenu[..<boundary]) + additions + mergeAdditions + Array(legacyMenu[boundary...])
+                Array(legacyMenu[..<boundary]) + additions + mergeAdditions + bookmarkLines + Array(legacyMenu[boundary...])
             let expectedMenuData = try JSONSerialization.data(withJSONObject: expectedMenu, options: [.sortedKeys])
             check(
                 menuSnapshotData == expectedMenuData,

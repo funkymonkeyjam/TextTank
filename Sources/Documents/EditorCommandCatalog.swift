@@ -22,7 +22,8 @@ package struct MenuShortcut: Equatable, Sendable {
 /// Stable editor identifiers are storage and bridge contracts. Menu placement remains literal;
 /// recording and shortcut assignment are explicit security/behavior subsets, never inferred from a title.
 package enum EditorCommand: String, CaseIterable {
-    case addNextOccurrence, backTab, bookmarkNext, bookmarkPrevious, bookmarkToggle, cancel, charLeft, charLeftExtend,
+    case addNextOccurrence, backTab, bookmarkClearAll, bookmarkCopyLines, bookmarkCutLines, bookmarkDeleteLines,
+        bookmarkInvert, bookmarkNext, bookmarkPrevious, bookmarkToggle, cancel, charLeft, charLeftExtend,
         charRight, charRightExtend, clearAdditionalSelections, copy, cut, deleteBack, deleteForward, deleteLine,
         deleteLineLeft, deleteLineRight, deleteWordLeft, deleteWordRight, documentEnd, documentEndExtend, documentStart,
         documentStartExtend, duplicateLine, duplicateSelection, foldAll, foldCurrent, foldLevel1, foldLevel2, foldLevel3,
@@ -76,6 +77,11 @@ package enum EditorCommand: String, CaseIterable {
         switch self {
         case .addNextOccurrence: return "Add Next Occurrence"
         case .backTab: return "Back Tab"
+        case .bookmarkClearAll: return "Clear All Bookmarks"
+        case .bookmarkCopyLines: return "Copy Bookmarked Lines"
+        case .bookmarkCutLines: return "Cut Bookmarked Lines"
+        case .bookmarkDeleteLines: return "Delete Bookmarked Lines"
+        case .bookmarkInvert: return "Invert Bookmarks"
         case .bookmarkNext: return "Next Bookmark"
         case .bookmarkPrevious: return "Previous Bookmark"
         case .bookmarkToggle: return "Toggle Bookmark"

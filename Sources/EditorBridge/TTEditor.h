@@ -174,6 +174,7 @@ __attribute__((objc_subclassing_restricted))
 @property(nonatomic, readonly) NSArray<NSNumber *> *bookmarkLines;
 /// bookmarkLines.count without building the array.
 @property(nonatomic, readonly) NSInteger bookmarkCount;
+@property(nonatomic, readonly) BOOL hasBookmarks;
 /// Validates all line numbers before replacing marker-1 bookmarks; never changes text.
 - (BOOL)setBookmarks:(NSArray<NSNumber *> *)lines;
 /// Called after the text or the save-point state changed. `revision` advances with every
@@ -228,6 +229,8 @@ __attribute__((objc_subclassing_restricted))
 - (void)retireInFavorOf:(TTEditor *)successor;
 /// NO for an unknown identifier, without changing text, selection or notifications.
 - (BOOL)executeCommand:(TTEditorCommandIdentifier)identifier;
+/// Cut/Copy Bookmarked Lines publish to the caller's clipboard; an unavailable board must never cut text.
+- (BOOL)executeCommand:(TTEditorCommandIdentifier)identifier usingPasteboard:(nullable NSPasteboard *)pasteboard;
 + (NSArray<TTEditorCommandIdentifier> *)supportedCommandIdentifiers;
 /// YES for executeCommand: identifiers that edit text, which callers guard with requireWritable:.
 + (BOOL)commandModifiesText:(TTEditorCommandIdentifier)identifier;

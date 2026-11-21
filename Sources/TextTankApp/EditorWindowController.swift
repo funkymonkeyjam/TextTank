@@ -806,8 +806,21 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
         guard let command = EditorCommand(rawValue: id) else { throw EditorCommandFailure.unsupported }
         if TTEditor.commandModifiesText(command.nativeIdentifier) { try editor.requireWritable() }
-        EditorServices.current?.macros?.willExecuteCommand(id, on: editor)
-        guard editor.executeCommand(command.nativeIdentifier) else { throw EditorCommandFailure.unsupported }
+        let recorder = EditorServices.current?.macros
+        let finishing: ((Bool) -> Void)?
+        if command == .bookmarkCutLines || command == .bookmarkDeleteLines {
+            finishing = recorder?.prepareUnrecordedChange(
+                in: editor, reason: "The command ‘\(command.title)’ cannot be recorded. No partial macro will be saved.")
+        } else {
+            recorder?.willExecuteCommand(id, on: editor)
+            finishing = nil
+        }
+        let before = editor.revision
+        let usesClipboard = command == .bookmarkCutLines || command == .bookmarkCopyLines
+        let board = usesClipboard ? RuntimeEnvironment.current.generalPasteboard() : nil
+        let accepted = editor.executeCommand(command.nativeIdentifier, using: board)
+        finishing?(accepted && editor.revision != before)
+        guard accepted else { throw EditorCommandFailure.unsupported }
     }
     deinit {
         precondition(Thread.isMainThread)
@@ -1089,6 +1102,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 return !activeEditor.readOnly
             }
             guard let command = EditorCommand(rawValue: id) else { return false }
+            switch command {
+            case .bookmarkClearAll, .bookmarkCopyLines, .bookmarkCutLines, .bookmarkDeleteLines:
+                guard activeEditor.hasBookmarks else { return false }
+            default: break
+            }
             item.state = command.isToggle && activeEditor.commandIsChecked(command.nativeIdentifier) ? .on : .off
             return !TTEditor.commandModifiesText(command.nativeIdentifier) || !activeEditor.readOnly
         case #selector(toggleWrap(_:)):

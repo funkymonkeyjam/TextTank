@@ -359,6 +359,11 @@ struct TTCommandEntry { const char *identifier; unsigned int message; bool repla
 static const TTCommandEntry TTCommandEntries[] = {
     {"addNextOccurrence", 0, false, false, false},
     {"backTab", SCI_BACKTAB, true, true, true},
+    {"bookmarkClearAll", 0, false, false, false},
+    {"bookmarkCopyLines", 0, false, false, false},
+    {"bookmarkCutLines", 0, false, false, true},
+    {"bookmarkDeleteLines", 0, false, false, true},
+    {"bookmarkInvert", 0, false, false, false},
     {"bookmarkNext", 0, false, false, false},
     {"bookmarkPrevious", 0, false, false, false},
     {"bookmarkToggle", 0, false, false, false},
@@ -1357,7 +1362,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (BOOL)executeCommand:(TTEditorCommandIdentifier)identifier {
     [self assertThread];
-    if (![self runCommand:identifier]) return NO;
+    return [self executeCommand:identifier usingPasteboard:nil];
+}
+- (BOOL)executeCommand:(TTEditorCommandIdentifier)identifier usingPasteboard:(NSPasteboard *)pasteboard {
+    [self assertThread];
+    if (![self runCommand:identifier usingPasteboard:pasteboard]) return NO;
     // Folding, the margin toggle and selection commands raise no synchronous notification.
     [self invalidateLineNumbersIfChanged];
     [self noteStateChange];
@@ -1459,7 +1468,62 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     _indentGuidesEnabled = enabled;
     [self applyIndentGuides];
 }
-- (BOOL)runCommand:(NSString *)identifier {
+- (BOOL)hasBookmarks { [self assertThread]; return [_engine message:SCI_MARKERNEXT wParam:0 lParam:TTBookmarkMask] >= 0; }
+
+- (BOOL)processBookmarkedLines:(NSString *)identifier pasteboard:(NSPasteboard *)board {
+    const bool copies = ![identifier isEqualToString:@"bookmarkDeleteLines"];
+    const bool removes = ![identifier isEqualToString:@"bookmarkCopyLines"];
+    if ((removes && self.readOnly) || (copies && !board)) return NO;
+    // A physical line owns its own terminator. The final unterminated line owns only its bytes.
+    const sptr_t count = [_engine message:SCI_GETLINECOUNT], length = [_engine message:SCI_GETLENGTH];
+    std::vector<Sci_CharacterRangeFull> spans;
+    size_t total = 0;
+    for (sptr_t line = [_engine message:SCI_MARKERNEXT wParam:0 lParam:TTBookmarkMask]; line >= 0;
+         line = [_engine message:SCI_MARKERNEXT wParam:line + 1 lParam:TTBookmarkMask]) {
+        const sptr_t start = [_engine message:SCI_POSITIONFROMLINE wParam:line];
+        const sptr_t end = line + 1 < count ? [_engine message:SCI_POSITIONFROMLINE wParam:line + 1] : length;
+        if (start < 0 || end < start || end > length) return NO;
+        if (start == end) continue;
+        if (!spans.empty() && spans.back().cpMax == start) spans.back().cpMax = end;
+        else spans.push_back({start,end});
+        total += (size_t)(end - start);
+    }
+    if (spans.empty()) return YES;
+    const NSUInteger revision = self.revision;
+    NSArray<NSNumber *> *cutMarks = copies && removes ? self.bookmarkLines : nil;
+    if (copies) {
+        NSMutableData *data = [NSMutableData dataWithLength:total + 1];
+        char *write = (char *)data.mutableBytes;
+        for (const auto &span : spans) {
+            Sci_TextRangeFull part = {span,write};
+            const sptr_t n = span.cpMax - span.cpMin;
+            if ([_engine message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&part] != n) return NO;
+            write += n;
+        }
+        data.length = total;
+        // The .string pasteboard flavor is UTF-8. Validate without re-encoding: Foundation's
+        // external string decoder can consume a legitimate leading U+FEFF from document content.
+        if (![[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]) return NO;
+        [board clearContents];
+        if (![board setData:data forType:NSPasteboardTypeString]) return NO;
+    }
+    if (removes) {
+        if (self.readOnly || self.revision != revision || (cutMarks && ![cutMarks isEqual:self.bookmarkLines])) return NO;
+        [self openUndoGroup];
+        // Remove these marks first. Scintilla otherwise transfers a removed line's markers to a neighbor.
+        for (auto it = spans.rbegin(); it != spans.rend(); ++it) {
+            const sptr_t start = [_engine message:SCI_LINEFROMPOSITION wParam:it->cpMin];
+            const sptr_t last = [_engine message:SCI_LINEFROMPOSITION wParam:it->cpMax - 1];
+            for (sptr_t line = start; line <= last; ++line)
+                [_engine message:SCI_MARKERDELETE wParam:line lParam:TTBookmarkMarker];
+            [_engine message:SCI_DELETERANGE wParam:it->cpMin lParam:it->cpMax - it->cpMin];
+        }
+        [self closeUndoGroup];
+    }
+    return YES;
+}
+
+- (BOOL)runCommand:(NSString *)identifier usingPasteboard:(NSPasteboard *)pasteboard {
     if (![identifier isKindOfClass:NSString.class]) return NO;
     // Rectangular Selection is the keyboard column mode: its sticky extend mode lets plain arrow
     // keys grow the rectangle, and choosing it again switches that off.
@@ -1560,6 +1624,22 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         return YES;
     }
     if ([identifier hasPrefix:@"bookmark"]) {
+        if ([identifier isEqualToString:@"bookmarkClearAll"]) {
+            [_engine message:SCI_MARKERDELETEALL wParam:TTBookmarkMarker];
+            return YES;
+        }
+        if ([identifier isEqualToString:@"bookmarkInvert"]) {
+            const sptr_t count = [_engine message:SCI_GETLINECOUNT];
+            for (sptr_t line = 0; line < count; ++line) {
+                const bool marked = [_engine message:SCI_MARKERGET wParam:line] & TTBookmarkMask;
+                [_engine message:marked ? SCI_MARKERDELETE : SCI_MARKERADD wParam:line lParam:TTBookmarkMarker];
+            }
+            return YES;
+        }
+        if ([identifier isEqualToString:@"bookmarkCutLines"] || [identifier isEqualToString:@"bookmarkCopyLines"] ||
+            [identifier isEqualToString:@"bookmarkDeleteLines"]) {
+            return [self processBookmarkedLines:identifier pasteboard:pasteboard];
+        }
         if (![@[@"bookmarkToggle", @"bookmarkNext", @"bookmarkPrevious"] containsObject:identifier]) return NO;
         sptr_t line = [_engine message:SCI_LINEFROMPOSITION wParam:[_engine message:SCI_GETCURRENTPOS]];
         if ([identifier isEqualToString:@"bookmarkToggle"]) {

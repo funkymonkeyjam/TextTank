@@ -31,6 +31,18 @@
 @end
 @implementation TTFakeDrop
 @end
+// The live fixture uses only named NSPasteboards. This local receiver exercises AppKit refusing the write.
+@interface TTRejectedBookmarkWrite : NSObject
+@property(nonatomic) BOOL attempted;
+@end
+@implementation TTRejectedBookmarkWrite
+- (NSInteger)clearContents { return 0; }
+- (BOOL)setData:(NSData *)data forType:(NSPasteboardType)type {
+    self.attempted = [type isEqual:NSPasteboardTypeString] && data.length != 0;
+    return NO;
+}
+@end
+
 static void immutableFields(NSObject *value, NSDictionary<NSString *, id> *attempts) {
     NSArray *keys=attempts.allKeys;
     for (NSString *key in keys) {
@@ -960,6 +972,91 @@ int main(int argc, char **argv) {
             [fold executeCommand:@"foldCurrent"];
             [fold executeCommand:@"foldLevel1"];
             check(visible(0) && visible(1) && visible(2), "Plain text with no fold headers remains visible");
+        }
+        {
+            TTEditor *book = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 480, 240)];
+            ScintillaView *sci = (ScintillaView *)book.subviews.firstObject;
+            NSPasteboard *board = [NSPasteboard pasteboardWithUniqueName];
+            NSString *original = @"first\r\n♣\nkept\rtail";
+            book.text = original;
+            [book setSavePoint]; [book resetUndoHistory];
+            [book setBookmarks:@[@1,@3]];
+            const sptr_t kept = [sci message:SCI_POSITIONFROMLINE wParam:2];
+            [sci message:SCI_SETSEL wParam:kept + 2 lParam:kept + 1];
+            [sci message:SCI_MARKERADD wParam:2 lParam:9];
+            check([book executeCommand:@"bookmarkCopyLines" usingPasteboard:board] && [[board stringForType:NSPasteboardTypeString] isEqualToString:@"♣\ntail"] && [book.text isEqual:original] && !book.modified,
+                  "Bookmarked Copy preserves physical terminators and unterminated Unicode text");
+            check(![book executeCommand:@"bookmarkCutLines" usingPasteboard:nil] && [book.text isEqual:original],
+                  "Missing clipboard leaves every byte present on Cut");
+            book.readOnly = YES;
+            check(![book executeCommand:@"bookmarkCutLines" usingPasteboard:board] && ![book executeCommand:@"bookmarkDeleteLines"] && [book.text isEqual:original],
+                  "Read-only Cut and Delete preserve marked text");
+            book.readOnly = NO;
+            check([book executeCommand:@"bookmarkCutLines" usingPasteboard:board] && [book.text isEqual:@"first\r\nkept\r"] && !book.hasBookmarks,
+                  "Cut removes exactly the two marked lines and leaves no transferred bookmarks");
+            check(book.selectionAnchor == 9 && book.selectionCaret == 8 && ([sci message:SCI_MARKERGET wParam:1] & (1 << 9)),
+                  "Reverse selection and another marker type follow their surviving Unicode-adjacent line");
+            [book executeCommand:@"undo"];
+            check([book.text isEqual:original] && !book.modified && ![sci message:SCI_CANUNDO],
+                  "One Undo restores exact Cut bytes and the original savepoint");
+            [book setBookmarks:@[@0,@1]];
+            check([book executeCommand:@"bookmarkDeleteLines"] && [book.text isEqual:@"kept\rtail"], "Adjacent bookmarked lines delete in source order without touching the clipboard");
+            [book executeCommand:@"undo"];
+            check([book.text isEqual:original] && ![sci message:SCI_CANUNDO], "One Undo restores an adjacent Delete");
+            book.text = @"A\r\n\r\nB\rC\n";
+            [book setBookmarks:@[@0,@1,@3]];
+            [book executeCommand:@"bookmarkCopyLines" usingPasteboard:board];
+            check([[board stringForType:NSPasteboardTypeString] isEqual:@"A\r\n\r\nC\n"], "Clipboard preserves adjacent empty and mixed-EOL lines");
+            [book executeCommand:@"bookmarkInvert"];
+            check([book.bookmarkLines isEqual:@[@2,@4]], "Invert includes final empty physical line and complementary marks");
+            [book executeCommand:@"bookmarkClearAll"];
+            check(!book.hasBookmarks && [book.text isEqual:@"A\r\n\r\nB\rC\n"], "Clear only changes bookmark markers");
+            [book setBookmarks:@[@4]];
+            [book setSavePoint];[book resetUndoHistory];
+            [book executeCommand:@"bookmarkCutLines" usingPasteboard:board];
+            check(!book.modified && ![sci message:SCI_CANUNDO] && [book.bookmarkLines isEqual:@[@4]]
+                  && [[board stringForType:NSPasteboardTypeString] isEqual:@"A\r\n\r\nC\n"], "Terminal empty-line Cut preserves prior clipboard, mark and clean Undo");
+            book.text = @"ab\nmarked\n0123456789\n";
+            [book setBookmarks:@[@1]];
+            [sci message:SCI_SETMULTIPLESELECTION wParam:1];
+            [sci message:SCI_SETSELECTION wParam:2 lParam:1];
+            [sci message:SCI_ADDSELECTION wParam:13 lParam:14];
+            [sci message:SCI_ADDSELECTION wParam:10 lParam:10];
+            [book executeCommand:@"bookmarkDeleteLines"];
+            check([sci message:SCI_GETSELECTIONS] == 3 && [sci message:SCI_GETSELECTIONNCARET wParam:0] == 2
+                  && [sci message:SCI_GETSELECTIONNANCHOR wParam:1] == 7 && [sci message:SCI_GETSELECTIONNCARET wParam:1] == 6
+                  && [sci message:SCI_GETSELECTIONNCARET wParam:2] == 3,
+                  "Three native carets and reverse/empty selections track their surviving byte positions");
+            [book setBookmarks:@[@0,@1]];
+            [sci message:SCI_SETSELECTION wParam:1 lParam:1]; [sci message:SCI_ADDSELECTION wParam:2 lParam:2];
+            [book executeCommand:@"bookmarkCopyLines" usingPasteboard:board];
+            check([[board stringForType:NSPasteboardTypeString] isEqual:@"ab\n0123456789\n"], "Two carets on the same marked line copy it exactly once");
+            NSString *leading = @"before\r\uFEFF雪\0A\r\nafter";
+            book.text = leading;
+            [book resetUndoHistory]; [book setSavePoint]; [book setBookmarks:@[@1]];
+            NSData *fullLine = [@"\uFEFF雪\0A\r\n" dataUsingEncoding:NSUTF8StringEncoding];
+            check([book executeCommand:@"bookmarkCopyLines" usingPasteboard:board]
+                  && [[board dataForType:NSPasteboardTypeString] isEqual:fullLine],
+                  "Copy publishes every UTF-8 byte including an initial U+FEFF and embedded NUL");
+            check([book executeCommand:@"bookmarkCutLines" usingPasteboard:board]
+                  && [[board dataForType:NSPasteboardTypeString] isEqual:fullLine] && [book.text isEqual:@"before\rafter"],
+                  "Cut publishes byte-exact clipboard content before removing that physical line");
+            [book executeCommand:@"undo"];
+            check([book.text isEqual:leading] && !book.modified && ![sci message:SCI_CANUNDO], "One Undo restores U+FEFF, NUL and CRLF");
+            [book setBookmarks:@[@1]];
+            TTRejectedBookmarkWrite *rejected = [TTRejectedBookmarkWrite new];
+            check(![book executeCommand:@"bookmarkCutLines" usingPasteboard:(NSPasteboard *)(id)rejected] && rejected.attempted
+                  && [book.text isEqual:leading] && [book.bookmarkLines isEqual:@[@1]] && !book.modified && ![sci message:SCI_CANUNDO],
+                  "Explicitly refused pasteboard write leaves Cut bytes, markers, savepoint and Undo intact");
+            const char malformed[] = {'a', (char)0xFF, 'b'};
+            [sci message:SCI_SETTARGETRANGE wParam:0 lParam:book.byteLength];
+            [sci message:SCI_REPLACETARGET wParam:sizeof(malformed) lParam:(sptr_t)malformed];
+            [book setBookmarks:@[@0]]; [book setSavePoint]; [book resetUndoHistory];
+            check(![book executeCommand:@"bookmarkCutLines" usingPasteboard:board] && !book.modified
+                  && [book.checkedUTF8Data isEqual:[NSData dataWithBytes:malformed length:sizeof(malformed)]]
+                  && [book.bookmarkLines isEqual:@[@0]] && [[board dataForType:NSPasteboardTypeString] isEqual:fullLine],
+                  "Undecodable native bytes refuse Cut before touching clipboard, text, markers or Undo");
+            [board releaseGlobally];
         }
         check([[TTEditor availableLanguages] containsObject:@"cpp"] && [[TTEditor availableLanguages] containsObject:@"python"], "Language inventory enumerates linked lexer factories");
         // F22: the built-in keyword list and palette belong to the bare cpp lexer only.
