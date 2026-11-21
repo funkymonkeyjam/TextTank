@@ -10,7 +10,8 @@ package enum AppStorage {
         case languages = "LanguageProfiles.json", commands = "RunCommands.json", workspace = "WorkspaceBrowser.json"
         case recovery = "Recovery", reminders = "ReminderExports", lastSession = "LastSession.json"
         case find = "FindPreferences.json", folderSearch = "FolderSearchPreferences.json"
-        package var isDirectory: Bool { self == .recovery || self == .reminders }
+        case folderReplacements = "FolderReplacements"
+        package var isDirectory: Bool { self == .recovery || self == .reminders || self == .folderReplacements }
     }
     static package func resolve(override: String?, fallback: URL) -> URL {
         guard let override, override.hasPrefix("/"), !override.contains("\0") else { return fallback }

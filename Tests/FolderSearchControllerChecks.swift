@@ -286,7 +286,7 @@ import NativeSearch
             let documentsBefore = NSDocumentController.shared.documents.count
             check(
                 NSApp.sendAction(NSSelectorFromString("replaceMatchedFiles:"), to: busy, from: nil)
-                    && confirmations.count == 1 && confirmations[0].contains(".texttank-backup"),
+                    && confirmations.count == 1 && confirmations[0].contains("private recovery batch in TextTank Application Support"),
                 "Replace Matched Files asks once, with the explanation, through the confirmation seam")
             await waitUntil("the replacement to reach its first commit") { gate.isHolding }
             busy.queryField.stringValue = "other"

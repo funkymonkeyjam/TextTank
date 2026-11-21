@@ -488,6 +488,11 @@ package enum FolderSearch {
             report.wasCancelled = true
             return report
         }
+        let privateStore = FolderReplacementBatch.canonicalPath(of: AppStorage.url(.folderReplacements))
+        if FolderReplacementBatch.contains(root.path, in: privateStore) {
+            report.skip(root, .recoveryArtifact, listing: listing)
+            return report
+        }
         var enumerationErrors: [FolderSearchSkipped] = []
         let keys: Set<URLResourceKey> = [
             .isSymbolicLinkKey, .isDirectoryKey, .isRegularFileKey, .isHiddenKey, .fileSizeKey
@@ -512,6 +517,11 @@ package enum FolderSearch {
                 break
             }
             report.entriesVisited += 1
+            if FolderReplacementBatch.contains(url.path, in: privateStore) {
+                iterator.skipDescendants()
+                report.skip(url, .recoveryArtifact, listing: listing)
+                continue
+            }
             let values: URLResourceValues
             do { values = try url.resourceValues(forKeys: keys) } catch {
                 report.skip(url, .unreadable(error.localizedDescription), listing: listing)

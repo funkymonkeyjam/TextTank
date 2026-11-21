@@ -432,7 +432,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             replacement.isEmpty
             ? "Delete every match of \(quoted(query))" : "Replace \(quoted(query)) with \(quoted(replacement))"
         return
-            "\(change): \(plural(matches, "match")) in \(plural(files, "file"))\(folders > 1 ? " across \(plural(folders, "folder"))" : "").\n\nThe files on disk are changed. Undo in the editor does not reverse this; each changed file gets a backup copy named .texttank-backup beside it.\n\nFiles that are open in TextTank, changed since the search, read-only or reached through a symbolic link are skipped. Files are changed one at a time, so if replacing stops part-way, the files already done stay changed. A report lists every file afterwards."
+            "\(change): \(plural(matches, "match")) in \(plural(files, "file"))\(folders > 1 ? " across \(plural(folders, "folder"))" : "").\n\nThe files on disk are changed. Undo in the editor does not reverse this; the original bytes and file metadata are kept together in a private recovery batch in TextTank Application Support.\n\nFiles that are open in TextTank, changed since the search, read-only or reached through a symbolic link are skipped. Files are changed one at a time, so if replacing stops part-way, the files already done stay changed. A report lists every file afterwards."
     }
     @objc private func replaceMatchedFiles(_ sender: Any?) {
         guard cancellation == nil, let fallbackDirectory = searchedFolder, !matches.isEmpty else { return }
@@ -463,13 +463,14 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         work = Task { @MainActor [weak self] in
             let outcomes = await Task.detached(priority: .userInitiated) {
                 var outcomes: [FolderReplacementOutcome] = []
+                let batch = FolderReplacementBatch()
                 let roots = Dictionary(grouping: snapshot, by: { $0.sourceRoot ?? fallbackDirectory })
                 for directory in roots.keys.sorted(by: { $0.path < $1.path }) {
                     let selected = roots[directory]!
                     do {
                         outcomes += try FolderReplacement.replace(
                             directory: directory, matches: selected, options: options, excluding: excluded,
-                            cancellation: flag, beforeCommit: beforeCommit)
+                            cancellation: flag, batch: batch, beforeCommit: beforeCommit)
                     } catch {
                         outcomes += Set(selected.map(\.url)).map {
                             FolderReplacementOutcome(
@@ -513,7 +514,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         details.string = lastReplacementOutcomes.map {
             "\($0.url.path): \($0.status.displayName) — \($0.message)"
                 + ($0.backup.map { "\nRecovery copy: \($0.path)" } ?? "")
-                + ($0.recoveryReport.map { "\nDurable recovery report: \($0.path)" } ?? "")
+                + ($0.recoveryReport.map { "\nPrivate batch manifest: \($0.path)" } ?? "")
         }.joined(separator: "\n")
     }
     private func finish() {

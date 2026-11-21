@@ -3,7 +3,36 @@ import Foundation
 import Darwin
 @main struct SearchReplacementChecks {
     static func main() async {
+        if CommandLine.arguments.count == 3 {
+            let argument = URL(fileURLWithPath: CommandLine.arguments[2])
+            do {
+                switch CommandLine.arguments[1] {
+                case "--interrupt-replacement":
+                    let request = FolderSearchRequest(directory: argument, query: "restart-original")
+                    let matches = try await FolderSearch.search(request).matches
+                    var options = SearchOptions()
+                    options.query = request.query
+                    options.replacement = "restart-replaced"
+                    _ = try FolderReplacement.replace(
+                        directory: argument, matches: matches, options: options,
+                        beforeCommit: { _ in _exit(23) })
+                case "--inspect-replacement":
+                    let entries = try FolderReplacementBatch.read(argument).entries
+                    guard entries.count == 1, entries[0].1 == .prepared else { exit(2) }
+                    let backup = argument.deletingLastPathComponent().appendingPathComponent(entries[0].0.backupName)
+                    let bytes = try Data(contentsOf: backup)
+                    guard bytes == Data("restart-original".utf8),
+                        entries[0].0.originalSHA256 == FolderSearch.sha256Hex(bytes)
+                    else { exit(2) }
+                    exit(0)
+                default: break
+                }
+            } catch { print(error) }
+            exit(1)
+        }
         await Checks.run("SearchReplacementChecks") {
+            let isolated = try IsolatedSupportDirectory("TextTankReplacementSupport")
+            defer { isolated.restore() }
             setbuf(stdout, nil)
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(
                 "TextTankReplacement-" + UUID().uuidString)
@@ -70,11 +99,39 @@ import Darwin
                 "UTF16 BOM Unicode and CRLF preserved")
             let aResult = result.first { $0.url.lastPathComponent == "a.txt" }!
             check(try Data(contentsOf: aResult.backup!) == original, "byte-exact original backup retained")
-            let journal = try JSONDecoder().decode(
-                [String: String].self, from: Data(contentsOf: aResult.backup!.appendingPathExtension("json")))
+            let journal = try FolderReplacementBatch.read(try requireValue(aResult.recoveryReport, "batch manifest"))
+            let item = try requireValue(journal.entries.first { $0.0.path == aResult.url.path }, "record for a.txt")
+            let store = AppStorage.url(.folderReplacements).resolvingSymlinksInPath().standardizedFileURL
             check(
-                journal["file"] == "a.txt" && journal["state"] == "replaced" && journal["originalSHA256"] != nil,
-                "durable recovery report identifies committed file and original hash")
+                try journal.entries.count == 2 && item.1 == .replaced
+                    && item.0.originalSHA256 == FolderSearch.sha256Hex(original)
+                    && item.0.replacementSHA256 == FolderSearch.sha256Hex(Data(contentsOf: a))
+                    && item.0.originalMode == 0o640 && aResult.backup!.lastPathComponent == item.0.backupName
+                    && aResult.backup!.deletingLastPathComponent().deletingLastPathComponent().resolvingSymlinksInPath()
+                        .standardizedFileURL.path == store.path
+                    && Set(result.compactMap(\.recoveryReport)).count == 1,
+                "one private batch records original bytes, mode and both content fingerprints for both files")
+            var backupInfo = stat(), batchInfo = stat(), manifestInfo = stat()
+            var privateAttribute = [UInt8](repeating: 0, count: 100)
+            let attributeSize = getxattr(
+                aResult.backup!.path, "app.texttank.test", &privateAttribute, privateAttribute.count, 0, 0)
+            check(
+                stat(aResult.backup!.path, &backupInfo) == 0 && backupInfo.st_mode & 0o777 == 0o600
+                    && stat(aResult.recoveryReport!.path, &manifestInfo) == 0 && manifestInfo.st_mode & 0o777 == 0o600
+                    && stat(aResult.backup!.deletingLastPathComponent().path, &batchInfo) == 0
+                    && batchInfo.st_mode & 0o777 == 0o700
+                    && attributeSize == attribute.count && Data(privateAttribute.prefix(attribute.count)) == attribute,
+                "private original preserves file attributes with owner-only access")
+            var containing = FolderSearchRequest(directory: store.deletingLastPathComponent(), query: "key")
+            containing.includeHidden = true
+            let containingReport = try await FolderSearch.search(containing)
+            check(
+                containingReport.matches.isEmpty && containingReport.excludedCounts[.recoveryArtifact] == 1,
+                "a search above the private store skips its entire subtree")
+            let privateSearch = try await FolderSearch.search(FolderSearchRequest(directory: store, query: "key"))
+            check(
+                privateSearch.matches.isEmpty && privateSearch.excludedCounts[.recoveryArtifact] == 1,
+                "a directly selected private recovery store is excluded from search")
             var info = stat()
             stat(a.path, &info)
             check(info.st_mode & 0o777 == 0o640, "original permission mode retained")
@@ -127,8 +184,9 @@ import Darwin
                 "a conflicting file reports no recovery copy")
             check(
                 try changed.filter { $0.status == .replaced }.count == 2
-                    && artifacts().count == artifactsBeforeConflict.count + 4,
-                "only the two replaced files add a recovery copy and a journal each")
+                    && artifacts().isEmpty && artifactsBeforeConflict.isEmpty
+                    && FolderReplacementBatch.read(changed.compactMap(\.recoveryReport)[0]).entries.count == 2,
+                "only the two replaced files have private recovery entries and the working tree stays clean")
             let bBytes = try Data(contentsOf: b), cBytes = try Data(contentsOf: c),
                 artifactsBeforeCancel = try artifacts()
             var later = FolderSearchRequest(directory: root, query: "next=(\\d+)")
@@ -140,6 +198,7 @@ import Darwin
                 "fixture: two files match before the cancelled run")
             options.query = later.query
             options.replacement = "last=$1"
+            let batchesBeforeCancel = try Set(FileManager.default.contentsOfDirectory(atPath: store.path))
             let stopping = FolderSearchCancellation()
             let stopped = try FolderReplacement.replace(
                 directory: root, matches: beforeCancel.matches, options: options, cancellation: stopping,
@@ -157,10 +216,18 @@ import Darwin
             }
             check(
                 try artifacts() == artifactsBeforeCancel && Data(contentsOf: b) == bBytes
-                    && Data(contentsOf: c) == cBytes,
+                    && Data(contentsOf: c) == cBytes
+                    && Set(FileManager.default.contentsOfDirectory(atPath: store.path)) == batchesBeforeCancel,
                 "cancelling before the commit leaves no recovery copy or journal and the files unchanged")
             // F39: recovery copies are never search results, even with hidden files included,
             // and never replacement targets.
+            // Explicit fixtures from previous TextTank releases remain excluded.
+            let legacyA = root.appendingPathComponent(".texttank-backup-a")
+            let legacyB = root.appendingPathComponent(".texttank-backup-b")
+            try original.write(to: legacyA)
+            try Data("key=34".utf8).write(to: legacyB)
+            let legacyFingerprint = ["originalSHA256": FolderSearch.sha256Hex(Data("key=34".utf8))]
+            try JSONEncoder().encode(legacyFingerprint).write(to: legacyB.appendingPathExtension("json"))
             var hiddenToo = FolderSearchRequest(directory: root, query: "key=")
             hiddenToo.includeHidden = true
             let withHidden = try await FolderSearch.search(hiddenToo)
@@ -265,6 +332,55 @@ import Darwin
                 try Data(contentsOf: deniedFile) == Data("old".utf8),
                 "F206 a denied replacement preserves original bytes")
             chmod(unwritable.path, 0o700)
+            let shared = FolderReplacementBatch()
+            var mixedOptions = SearchOptions()
+            mixedOptions.query = "cross-root"
+            mixedOptions.replacement = "changed"
+            for leaf in ["first-root", "second-root"] {
+                let directory = root.appendingPathComponent(leaf)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+                let file = directory.appendingPathComponent("document.txt")
+                try Data("cross-root".utf8).write(to: file)
+                let report = try await FolderSearch.search(
+                    FolderSearchRequest(directory: directory, query: mixedOptions.query))
+                let replaced = try FolderReplacement.replace(
+                    directory: directory, matches: report.matches,
+                    options: mixedOptions, batch: shared)
+                check(
+                    replaced.first?.status == .replaced && replaced.first?.recoveryReport == shared.manifest,
+                    "workspace folder uses the same private batch: " + leaf)
+            }
+            let sharedItems = try FolderReplacementBatch.read(shared.manifest).entries
+            check(
+                sharedItems.count == 2 && Set(sharedItems.map { $0.0.root }).count == 2
+                    && sharedItems.allSatisfy { $0.1 == .replaced },
+                "one reopened workspace batch identifies both source roots")
+            let interruptedRoot = root.appendingPathComponent("interrupted")
+            try FileManager.default.createDirectory(at: interruptedRoot, withIntermediateDirectories: false)
+            let interruptedFile = interruptedRoot.appendingPathComponent("document.txt")
+            let initialBytes = Data("restart-original".utf8)
+            try initialBytes.write(to: interruptedFile)
+            func child(_ mode: String, _ path: URL) throws -> Int32 {
+                let process = Process()
+                process.executableURL = Checks.executable
+                process.arguments = [mode, path.path]
+                try process.run()
+                process.waitUntilExit()
+                return process.terminationStatus
+            }
+            let existing = Set(try FileManager.default.contentsOfDirectory(atPath: store.path))
+            check(
+                try child("--interrupt-replacement", interruptedRoot) == 23,
+                "original batch writer terminated after persisting prepared state")
+            let after = Set(try FileManager.default.contentsOfDirectory(atPath: store.path))
+            let interruptedBatch = try requireValue(after.subtracting(existing).first, "interrupted private batch")
+            let interruptedManifest = store.appendingPathComponent(interruptedBatch).appendingPathComponent(
+                "manifest.jsonl")
+            check(
+                try child("--inspect-replacement", interruptedManifest) == 0
+                    && Data(contentsOf: interruptedFile) == initialBytes
+                    && FileManager.default.contentsOfDirectory(atPath: interruptedRoot.path) == ["document.txt"],
+                "a fresh process reads interrupted private originals and the user directory remains intact")
             Checks.summary { "PASS SearchReplacementChecks: \(Checks.count) assertions" }
         }
     }

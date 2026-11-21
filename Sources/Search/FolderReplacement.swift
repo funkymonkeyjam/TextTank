@@ -46,11 +46,13 @@ package enum FolderReplacement {
     }
     static package func replace(
         directory: URL, matches: [FolderSearchMatch], options: SearchOptions, excluding: Set<URL> = [],
-        cancellation: FolderSearchCancellation = FolderSearchCancellation(), beforeCommit: ((URL) -> Void)? = nil
+        cancellation: FolderSearchCancellation = FolderSearchCancellation(),
+        batch: FolderReplacementBatch = FolderReplacementBatch(), beforeCommit: ((URL) -> Void)? = nil
     ) throws -> [FolderReplacementOutcome] {
         guard let opened = try? FolderSearch.openCanonicalDirectory(directory) else { throw Failure.unsafe }
         let root = opened.fd, rootPath = opened.path, prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
         defer { close(root) }
+        let privateRoot = FolderReplacementBatch.canonicalPath(of: batch.directory.deletingLastPathComponent())
         let excluded = Set(excluding.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
         let grouped = Dictionary(grouping: matches, by: { $0.url })
         var results: [FolderReplacementOutcome] = []
@@ -81,7 +83,8 @@ package enum FolderReplacement {
                 // The matches are the caller's, so this is the guard that keeps a recovery copy,
                 // journal or temporary file from ever being rewritten.
                 guard let parts = FolderSearch.relativeComponents(of: url.path, under: prefix),
-                    !FolderSearch.isRecoveryArtifact(parts[parts.count - 1])
+                    !FolderSearch.isRecoveryArtifact(parts[parts.count - 1]),
+                    !FolderReplacementBatch.contains(url.path, in: privateRoot)
                 else { throw Failure.unsafe }
                 var parent = dup(root)
                 guard parent >= 0 else { throw Failure.unsafe }
@@ -122,14 +125,24 @@ package enum FolderReplacement {
                     continue
                 }
                 guard encoded.count <= 64 * 1024 * 1024 else { throw Failure.large }
-                let tempName = ".texttank-replacement-" + UUID().uuidString
-                let temp = openat(parent, tempName, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
+                // The system replacement directory is on the destination volume. Interrupted
+                // runs leave their transient replacement outside the user's working tree.
+                guard faccessat(parent, ".", W_OK, 0) == 0 else {
+                    throw FileOperationFailure(errno, operation: "create replacement in", path: url.path)
+                }
+                let staging = try FileManager.default.url(
+                    for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: url, create: true)
+                defer { _ = rmdir(staging.path) }
+                let tempName = "replacement"
+                let tempFolder = try PrivateFileStore.directoryDescriptor(for: staging.appendingPathComponent(tempName))
+                defer { close(tempFolder) }
+                let temp = openat(tempFolder, tempName, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0o600)
                 guard temp >= 0 else {
-                    throw FileOperationFailure(errno, operation: "create replacement beside", path: url.path)
+                    throw FileOperationFailure(errno, operation: "create replacement for", path: url.path)
                 }
                 defer {
                     close(temp)
-                    unlinkat(parent, tempName, 0)
+                    unlinkat(tempFolder, tempName, 0)
                 }
                 try write(encoded, to: temp, path: url.path)
                 // Copy permissions, ownership, ACLs, extended attributes and flags
@@ -143,40 +156,13 @@ package enum FolderReplacement {
                     throw FileOperationFailure(
                         errno, operation: "update file metadata or replacement beside", path: url.path)
                 }
-                let backupName = ".texttank-backup-" + UUID().uuidString
-                let copy = openat(parent, backupName, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-                guard copy >= 0 else {
-                    throw FileOperationFailure(errno, operation: "create recovery copy beside", path: url.path)
-                }
-                do {
-                    try write(original, to: copy, path: url.path)
-                    guard fsync(copy) == 0 else {
-                        throw FileOperationFailure(errno, operation: "sync recovery copy beside", path: url.path)
-                    }
-                    close(copy)
-                } catch {
-                    close(copy)
-                    unlinkat(parent, backupName, 0)
-                    throw error
-                }
-                backup = url.deletingLastPathComponent().appendingPathComponent(backupName)
-                let reportName = backupName + ".json"
-                let journal: [String: String] = [
-                    "version": "1", "state": "prepared", "file": name, "backup": backupName, "originalSHA256": expected,
-                    "replacementSHA256": sha(encoded),
-                    "note": "Prepared does not prove whether rename committed. Compare file hashes before restoring."
-                ]
-                // Until the rename is attempted the file is certainly unchanged, so a failure,
-                // a conflict or a cancellation here leaves no recovery copy and no "prepared"
-                // journal behind. Once the rename has been attempted both are kept, whatever it
-                // returned: its result can be ambiguous on a network volume.
+                let entry = FolderReplacementBatch.Entry(
+                    id: UUID(), root: rootPath, path: url.path, originalSHA256: expected,
+                    replacementSHA256: sha(encoded), originalMode: UInt16(initial.st_mode & 0o7777))
+                backup = try batch.prepare(source: source, original: original, entry: entry)
+                reportURL = batch.manifest
                 var renameAttempted = false
                 do {
-                    guard fsync(parent) == 0 else {
-                        throw FileOperationFailure(errno, operation: "sync directory beside", path: url.path)
-                    }
-                    try persistReport(journal, name: reportName, parent: parent, path: url.path)
-                    reportURL = url.deletingLastPathComponent().appendingPathComponent(reportName)
                     beforeCommit?(url)
                     if cancellation.isCancelled { throw Failure.cancelled }
                     let current = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
@@ -195,15 +181,13 @@ package enum FolderReplacement {
                             == original
                     else { throw Failure.changed }
                     renameAttempted = true
-                    guard renameat(parent, tempName, parent, name) == 0 else {
+                    guard renameat(tempFolder, tempName, parent, name) == 0 else {
                         throw FileOperationFailure(
                             errno, operation: "update file metadata or replacement beside", path: url.path)
                     }
                 } catch {
                     if !renameAttempted {
-                        unlinkat(parent, backupName, 0)
-                        unlinkat(parent, reportName, 0)
-                        _ = fsync(parent)
+                        try batch.mark(entry, .abandoned)
                         backup = nil
                         reportURL = nil
                     }
@@ -211,10 +195,8 @@ package enum FolderReplacement {
                 }
                 // Once renamed the file is changed even if directory durability fails.
                 let durable = fsync(parent) == 0
-                var committed = journal
-                committed["state"] = "replaced"
                 var journalConfirmed = true
-                do { try persistReport(committed, name: reportName, parent: parent, path: url.path) } catch {
+                do { try batch.mark(entry, .replaced) } catch {
                     journalConfirmed = false
                 }
                 results.append(
@@ -244,19 +226,6 @@ package enum FolderReplacement {
         }
         return results
     }
-    private static func persistReport(_ report: [String: String], name: String, parent: Int32, path: String) throws {
-        let temporary = ".texttank-report-" + UUID().uuidString
-        let fd = openat(parent, temporary, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-        guard fd >= 0 else { throw FileOperationFailure(errno, operation: "create recovery report beside", path: path) }
-        defer {
-            close(fd)
-            unlinkat(parent, temporary, 0)
-        }
-        try write(JSONEncoder().encode(report), to: fd, path: path)
-        guard fsync(fd) == 0, renameat(parent, temporary, parent, name) == 0, fsync(parent) == 0 else {
-            throw FileOperationFailure(errno, operation: "commit recovery report beside", path: path)
-        }
-    }
     private static func sha(_ data: Data) -> String { FolderSearch.sha256Hex(data) }
     private static func read(_ fd: Int32, size: Int, cancellation: FolderSearchCancellation, path: String) throws
         -> Data
@@ -272,7 +241,7 @@ package enum FolderReplacement {
         }
         return output
     }
-    private static func write(_ data: Data, to fd: Int32, path: String) throws {
+    static func write(_ data: Data, to fd: Int32, path: String) throws {
         try data.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {
