@@ -4,16 +4,54 @@ import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
+extension MenuShortcut {
+    var appKitModifiers: NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers.contains(.command) { flags.insert(.command) }
+        if modifiers.contains(.option) { flags.insert(.option) }
+        if modifiers.contains(.control) { flags.insert(.control) }
+        if modifiers.contains(.shift) { flags.insert(.shift) }
+        return flags
+    }
+    /// Settings v1 stores editable Command equivalents as single printable ASCII characters.
+    var settingsKey: String? {
+        modifiers == [.command] ? key : nil
+    }
+}
+
+final class DefaultShortcutItem: NSMenuItem {
+    let shortcut: MenuShortcut
+    init(_ title: String, action: Selector?, shortcut: MenuShortcut) {
+        self.shortcut = shortcut
+        super.init(title: title, action: action, keyEquivalent: shortcut.key)
+        keyEquivalentModifierMask = shortcut.appKitModifiers
+    }
+    required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func applyEditorOverrides(_ settings: EditorSettings) {
+        if let id = representedObject as? String, let custom = settings.shortcuts[id] {
+            keyEquivalent = custom
+            keyEquivalentModifierMask = .command
+        } else {
+            keyEquivalent = shortcut.settingsKey.map(settings.shortcuts.values.contains) == true ? "" : shortcut.key
+            keyEquivalentModifierMask = shortcut.appKitModifiers
+        }
+    }
+}
 extension NSMenu {
     /// Adds one item without hiding its dispatch, shortcut or validation metadata in positional
     /// arguments. Defaults match NSMenuItem; explicit targets stay explicit and nil uses the responder chain.
     @discardableResult func addItem(
         title: String, action: Selector?, keyEquivalent: String = "",
-        modifiers: NSEvent.ModifierFlags = [.command], target: AnyObject? = nil,
+        modifiers: NSEvent.ModifierFlags = [.command], fallback: MenuShortcut? = nil, target: AnyObject? = nil,
         representedObject: Any? = nil, isEnabled: Bool = true, state: NSControl.StateValue = .off
     ) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
-        item.keyEquivalentModifierMask = modifiers
+        let item: NSMenuItem
+        if let fallback {
+            item = DefaultShortcutItem(title, action: action, shortcut: fallback)
+        } else {
+            item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+            item.keyEquivalentModifierMask = modifiers
+        }
         item.target = target
         item.representedObject = representedObject
         item.isEnabled = isEnabled

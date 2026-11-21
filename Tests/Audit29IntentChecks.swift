@@ -83,6 +83,7 @@ import NativeSearch
             case 0: expected = composition.settings
             case 1: expected = composition.workspace
             case 2: expected = composition.workspaceBrowser
+            case 5 where row["action"] == "performCompareCommand:": expected = composition
             case 5:
                 switch path[1] {
                 case 1: expected = composition.searchController
@@ -92,6 +93,7 @@ import NativeSearch
                 }
             case 6: expected = composition.runner
             case 7: expected = composition.utilities
+            case 8 where row["action"] == "actualSize:": expected = composition
             case 8:
                 expected =
                     ["toggleAutoIndent:", "toggleBraceHighlight:", "toggleCurrentLineHighlight:", "toggleIndentGuides:"]

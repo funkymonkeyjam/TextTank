@@ -52,6 +52,11 @@ private struct AutomationCheckboxEdits {
     private let newDocument: @MainActor (String) -> Void
     private let storage: URL
     private var library = AutomationLibrary(workflows: [])
+    weak var saveAllShortcutItem: NSMenuItem? { didSet { updateSaveAllShortcut() } }
+    private func updateSaveAllShortcut() {
+        let key = MenuShortcut.saveAll.key
+        saveAllShortcutItem?.keyEquivalent = library.workflows.contains { $0.shortcut == key } ? "" : key
+    }
     /// An existing library that could not be read. It is never overwritten; see `persistLibrary`.
     let loadState: StoreLoadState
     private var loadError: Error? {
@@ -256,6 +261,7 @@ private struct AutomationCheckboxEdits {
         panel.show()
     }
     private func rebuild() {
+        updateSaveAllShortcut()
         automationMenu.removeAllItems()
         let manage = NSMenuItem(title: "Manage Automations…", action: #selector(manageAction), keyEquivalent: "")
         manage.target = self
@@ -630,6 +636,10 @@ private struct AutomationCheckboxEdits {
     /// Shared private persistence for edited workflows and explicitly selected destinations.
     func persistLibrary(_ proposed: AutomationLibrary) throws {
         try loadState.requireWritable() // Never overwrite an unreadable existing library.
+        let assigned = Set(library.workflows.compactMap(\.shortcut))
+        if proposed.workflows.contains(where: { $0.shortcut.map { !assigned.contains($0) } ?? false }) {
+            try checkShortcutCollisions(proposed)
+        }
         let data = try proposed.encoded()
         let directory = storage.deletingLastPathComponent()
         if FileManager.default.fileExists(atPath: directory.path) {
@@ -662,6 +672,7 @@ private struct AutomationCheckboxEdits {
             if menu === automationMenu { return [] }
             var keys = Set<String>()
             for item in menu.items {
+                if item === saveAllShortcutItem { continue }
                 if item.keyEquivalentModifierMask.intersection([.command, .option, .control, .shift]) == [
                     .command, .option
                 ] {

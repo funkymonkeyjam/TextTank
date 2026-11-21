@@ -35,6 +35,13 @@ import EditorBridge
         case .copyPatch: return "Copy Patch"
         }
     }
+    var defaultMenuShortcut: MenuShortcut? {
+        switch self {
+        case .next: return .init("\u{f70a}", [])
+        case .previous: return .init("\u{f70a}", [.shift])
+        default: return nil
+        }
+    }
     var symbol: String {
         switch self {
         case .previous: return "chevron.up"
@@ -1067,7 +1074,23 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         default: return false
         }
     }
+    /// The same responder-chain items reach the snapshot window when it is key.
+    @objc func command(_ item: NSMenuItem) {
+        guard Self.key === self, let raw = item.representedObject as? String,
+            raw == EditorCommand.zoomIn.rawValue || raw == EditorCommand.zoomOut.rawValue
+        else { return }
+        left.editor.executeCommand(TTEditorCommandIdentifier(rawValue: raw))
+    }
+    func resetComparisonZoom() {
+        guard Self.key === self else { return }
+        localFontOffset = 0
+        applyFontSettings(EditorServices.current?.settings?.value ?? EditorSettings())
+    }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(command(_:)) {
+            let raw = item.representedObject as? String
+            return Self.key === self && (raw == EditorCommand.zoomIn.rawValue || raw == EditorCommand.zoomOut.rawValue)
+        }
         guard let raw = item.representedObject as? String, let command = CompareCommand(rawValue: raw) else {
             return false
         }

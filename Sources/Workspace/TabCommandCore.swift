@@ -3,6 +3,7 @@ import Foundation
 package enum TabCommand: String, CaseIterable, Sendable {
     case newToRight, reopen, close, closeOthers, closeLeft, closeRight, closeGroup, closeSaved, pin, moveLeft,
         moveRight, reveal, copyPath
+    package var defaultMenuShortcut: MenuShortcut? { self == .reopen ? MenuShortcut("T") : nil }
     package var title: String {
         switch self {
         case .newToRight: return "New Tab to Right"

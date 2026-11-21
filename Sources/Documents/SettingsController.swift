@@ -157,7 +157,7 @@ extension EditorSettings {
             for item in menu.items {
                 let modifiers = item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
                 let assignable = (item.representedObject as? String).map(EditorSettings.commands.contains) ?? false
-                if !assignable && !item.keyEquivalent.isEmpty
+                if !assignable && !(item is DefaultShortcutItem) && !item.keyEquivalent.isEmpty
                     && (modifiers == .command || modifiers == [.command, .shift])
                 {
                     keys.insert(modifiers.contains(.shift) ? item.keyEquivalent.uppercased() : item.keyEquivalent)
