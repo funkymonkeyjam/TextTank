@@ -237,8 +237,37 @@ import AppKit
     }
     func apply(_ utility: TextUtility) throws {
         precondition(Thread.isMainThread)
+        if utility == .inspectUnicode || utility == .validateJSON {
+            guard let editor = editorProvider(), EditorLifetime.isOpen(editor), let parent = editor.window else {
+                throw UtilityFailure.noDocument
+            }
+            guard editor.selectionCount == 1 else { throw UtilityFailure.multipleSelections }
+            guard editor.selectionStart != editor.selectionEnd else { throw UtilityFailure.selectionRequired }
+            guard editor.selectionEnd - editor.selectionStart <= 16 * 1024 * 1024 else { throw UtilityFailure.tooLarge }
+            let report = TTAlert()
+            report.messageText = utility.title
+            let result = try utility.apply(editor.selectedText)
+            if utility == .inspectUnicode {
+                let scroll = NSTextView.scrollableTextView()
+                scroll.frame = NSRect(x: 0, y: 0, width: 480, height: 230)
+                if let text = scroll.documentView as? NSTextView {
+                    text.string = result
+                    text.isEditable = false
+                    text.setAccessibilityLabel("Unicode scalars and UTF-8 offsets")
+                }
+                report.accessoryView = scroll
+            } else {
+                report.informativeText = result
+            }
+            report.addButton(withTitle: "Done")
+            report.beginSheetModal(for: parent)
+            return
+        }
         let editor = try editableEditor(requireNonEmpty: true)
-        let transformed = try utility.apply(editor.selectedText)
+        guard editor.selectionEnd - editor.selectionStart <= 16 * 1024 * 1024 else { throw UtilityFailure.tooLarge }
+        let input = editor.selectedText
+        let transformed = try utility.apply(input)
+        if utility == .formatJSON && transformed.utf8.elementsEqual(input.utf8) { return }
         onUnrecordableEdit()
         editor.beginUndoGroup()
         defer { editor.endUndoGroup() }

@@ -11,6 +11,7 @@ package enum TextUtility: String, CaseIterable {
     case urlEncode, urlEncodeExtended, urlEncodeFull, urlEncodeLines, urlEncodeExtendedLines, urlEncodeFullLines,
         urlDecode
     case hexEncode, hexDecode
+    case inspectUnicode, validateJSON, formatJSON
     package var title: String {
         switch self {
         case .base64EncodeLines: return "Base64 Encode by Line"
@@ -30,6 +31,9 @@ package enum TextUtility: String, CaseIterable {
         case .urlEncodeFull: return "URL Encode (Full)"
         case .urlEncodeLines: return "URL Encode (RFC1738) by Line"
         case .urlDecode: return "URL Decode"
+        case .inspectUnicode: return "Inspect Unicode Selection"
+        case .validateJSON: return "Validate JSON"
+        case .formatJSON: return "Format JSON"
         case .hexEncode: return "UTF-8 to Hex"
         case .hexDecode: return "Hex to UTF-8"
         }
@@ -37,6 +41,28 @@ package enum TextUtility: String, CaseIterable {
     package func apply(_ input: String) throws -> String {
         guard input.utf8.count <= 16 * 1024 * 1024 else { throw UtilityFailure.tooLarge }
         switch self {
+        case .validateJSON, .formatJSON:
+            var json = JSONSelection(input, format: self == .formatJSON)
+            return try json.run()
+        case .inspectUnicode:
+            var lines: [String] = [], offset = 0
+            for scalar in input.unicodeScalars {
+                guard lines.count < 512 else {
+                    lines.append("Showing the first 512 Unicode scalars. Select a smaller range to inspect the rest.")
+                    break
+                }
+                let name: String
+                switch scalar.value {
+                case 0: name = "NULL"
+                case 9: name = "CHARACTER TABULATION"
+                case 10: name = "LINE FEED"
+                case 13: name = "CARRIAGE RETURN"
+                default: name = scalar.properties.name ?? String(describing: scalar.properties.generalCategory)
+                }
+                lines.append(String(format: "Byte %d   U+%04X   %@", offset, scalar.value, name))
+                offset += scalar.utf8.count
+            }
+            return lines.joined(separator: "\n")
         case .base64EncodeLines:
             var output = ""
             var line = Data()
@@ -305,9 +331,13 @@ package enum TextUtility: String, CaseIterable {
     }
 }
 package enum UtilityFailure: LocalizedError, Equatable {
+    case invalidJSON(Int), jsonOutputLimit, jsonDepthLimit
     case malformed(String), binaryResult, tooLarge, selectionRequired, multipleSelections, documentChanged, noDocument
     package var errorDescription: String? {
         switch self {
+        case .invalidJSON(let byte): return "Invalid JSON at UTF-8 byte \(byte). The selection was preserved."
+        case .jsonOutputLimit: return "Formatted JSON exceeds 16 MiB. Select a smaller value."
+        case .jsonDepthLimit: return "This tool supports up to 128 nested arrays and objects."
         case .malformed(let format): return "Invalid \(format) input. The selection was not changed."
         case .binaryResult: return "The decoded bytes are not valid UTF-8 text. The selection was not changed."
         case .tooLarge: return "Select at most 16 MiB for this utility. The selection was not changed."
@@ -368,5 +398,127 @@ package struct HexEncodingOptions {
             }
         }
         return String(decoding: output, as: UTF8.self)
+    }
+}
+
+/// Reads strict JSON from UTF-8. Formatting copies complete lexical tokens, including
+/// exponent spelling, duplicate member names and escapes. Only JSON whitespace is rewritten.
+private struct JSONSelection {
+    private let bytes: [UInt8]
+    private let formatting: Bool
+    private var cursor = 0
+    private var output: [UInt8] = []
+    private let limit = 16 * 1024 * 1024
+    init(_ text: String, format: Bool) {
+        bytes = Array(text.utf8)
+        formatting = format
+    }
+    mutating func run() throws -> String {
+        try value(depth: 0)
+        skipWhitespace()
+        guard cursor == bytes.count else { throw invalid }
+        return formatting ? String(decoding: output, as: UTF8.self) : "Valid JSON."
+    }
+    private var invalid: UtilityFailure { .invalidJSON(cursor + 1) }
+    private var peek: UInt8? { cursor < bytes.count ? bytes[cursor] : nil }
+    private mutating func skipWhitespace() {
+        while let b = peek, b == 9 || b == 10 || b == 13 || b == 32 { cursor += 1 }
+    }
+    private mutating func emit<C: Collection>(_ piece: C) throws where C.Element == UInt8 {
+        guard formatting else { return }
+        guard piece.count <= limit - output.count else { throw UtilityFailure.jsonOutputLimit }
+        output.append(contentsOf: piece)
+    }
+    private mutating func punctuation(_ b: UInt8) throws {
+        guard peek == b else { throw invalid }
+        cursor += 1
+        try emit(CollectionOfOne(b))
+    }
+    private mutating func indent(_ depth: Int) throws {
+        guard formatting else { return }
+        try emit(CollectionOfOne(10))
+        try emit(repeatElement(32, count: depth * 2))
+    }
+    private mutating func value(depth: Int) throws {
+        skipWhitespace()
+        guard let b = peek else { throw invalid }
+        switch b {
+        case 123, 91:
+            guard depth < 128 else { throw UtilityFailure.jsonDepthLimit }
+            let object = b == 123, end: UInt8 = object ? 125 : 93
+            try punctuation(b)
+            skipWhitespace()
+            if peek == end { try punctuation(end); return }
+            while true {
+                try indent(depth + 1)
+                if object {
+                    try string()
+                    skipWhitespace()
+                    try punctuation(58)
+                    try emit(CollectionOfOne(32))
+                }
+                try value(depth: depth + 1)
+                skipWhitespace()
+                if peek == end { break }
+                try punctuation(44)
+                skipWhitespace()
+            }
+            try indent(depth)
+            try punctuation(end)
+        case 34: try string()
+        case 116: try literal("true")
+        case 102: try literal("false")
+        case 110: try literal("null")
+        case 45, 48...57: try number()
+        default: throw invalid
+        }
+    }
+    private mutating func literal(_ word: String) throws {
+        for b in word.utf8 {
+            guard peek == b else { throw invalid }
+            cursor += 1
+        }
+        try emit(word.utf8)
+    }
+    private mutating func string() throws {
+        let start = cursor
+        guard peek == 34 else { throw invalid }
+        cursor += 1
+        while let b = peek {
+            guard b >= 32 else { throw invalid }
+            cursor += 1
+            if b == 34 { try emit(bytes[start..<cursor]); return }
+            if b == 92 {
+                guard let escape = peek else { throw invalid }
+                cursor += 1
+                switch escape {
+                case 34, 47, 92, 98, 102, 110, 114, 116: break
+                case 117:
+                    for _ in 0..<4 {
+                        guard let h = peek, (48...57).contains(h) || (65...70).contains(h) || (97...102).contains(h)
+                        else { throw invalid }
+                        cursor += 1
+                    }
+                default: cursor -= 1; throw invalid
+                }
+            }
+        }
+        throw invalid
+    }
+    private mutating func digits() throws {
+        guard let b = peek, (48...57).contains(b) else { throw invalid }
+        repeat { cursor += 1 } while peek.map { (48...57).contains($0) } == true
+    }
+    private mutating func number() throws {
+        let start = cursor
+        if peek == 45 { cursor += 1 }
+        if peek == 48 { cursor += 1 } else { try digits() }
+        if peek == 46 { cursor += 1; try digits() }
+        if peek == 101 || peek == 69 {
+            cursor += 1
+            if peek == 45 || peek == 43 { cursor += 1 }
+            try digits()
+        }
+        try emit(bytes[start..<cursor])
     }
 }
