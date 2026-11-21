@@ -745,12 +745,8 @@ extension DocumentChecks {
             check(
                 layoutSession.documents.count == 2 && layoutSession.layoutState?.groups.count == 4,
                 "golden multi-group shared pinned session decodes through production file reader")
-            let snapshotBytes = try golden("RecoverySnapshot.json") {
-                let store = RecoveryStore(
-                    directory: scratch.appendingPathComponent("write-recovery", isDirectory: true))
-                try store.save(snapshot)
-                return try Data(contentsOf: store.fileURL(for: idA))
-            }
+            // This fixture records the v1 whole-text wire format; the current store writes a v2 pair.
+            let snapshotBytes = try golden("RecoverySnapshot.json") { try JSONEncoder().encode(snapshot) }
             let recoveryReader = RecoveryStore(
                 directory: scratch.appendingPathComponent("read-recovery", isDirectory: true))
             try FileManager.default.createDirectory(

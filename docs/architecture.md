@@ -282,7 +282,7 @@ Each entry of `documents` (`SessionDocument`):
 | `language` | string | no | Language profile identifier; an unknown one falls back to plain text with a notice. |
 | `originalSHA256` | string | no | Lower-case hex SHA-256 of the original file's bytes at capture, not of `text`. Requires `originalURL`. |
 
-Recovery snapshot (`RecoverySnapshot`, one `<id>.json` per unsaved document in the app's private `Recovery` folder, mode 0600):
+Legacy recovery snapshot v1, stored as `<id>.json` in the private Recovery folder:
 
 | Key | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -293,6 +293,12 @@ Recovery snapshot (`RecoverySnapshot`, one `<id>.json` per unsaved document in t
 | `originalURL` | file URL string | no | The file the draft belongs to, absent for an untitled one. Note that this is a string here and a URL in a session document; both hold the same absolute `file://` form. Shown in the recovery prompt and recovered window. If that original has already reopened, recovery associates the reviewed draft with its group. Recovery never opens or writes that path. |
 | `revision` | integer | yes | Monotonic per `id`, at most 2^63 - 1. A snapshot is never replaced by a lower revision, and never by an equal revision with different content. |
 | `savedAt` | date | yes | When the snapshot was written. Shown in the recovery prompt and the recovered window's status line. |
+
+Current recovery writes publish a private `<id>.<generation>.utf8` containing exact UTF-8 editor bytes, followed by a small `<id>.json` commit record. The header uses schemaVersion 2 and minimumReaderVersion 2. It carries the same id, format, originalURL, revision and savedAt, plus the generation UUID, UTF-8 byteCount, lowercase SHA-256 and optional previousGeneration. Raw content can include U+FEFF, NULs or characters that the selected disk encoding cannot represent. Both files have mode 0600.
+
+The writer confirms the new body before atomically replacing the header, then retires the previous payload after the header's file and directory barriers. A visible-but-unconfirmed replacement retains its predecessor. An equal-revision retry validates and confirms both files. Removing the header confirms its directory before deleting the referenced body. A detached body is retained and reported in recovery review. Saving or discarding a damaged pair is refused.
+
+Launch enumerates on a utility queue. For v2 it inspects header metadata and the body descriptor's type and exact length. Recover verifies the selected generation, digest and UTF-8 when reading text. Discard also validates the listed generation and existing bytes. Old v1 files still need one full JSON read at inventory, and convert when a later revision is saved. A version 1 reader refuses a version 2 record. Exact size validation does not detect same-length damage during the initial header-only scan.
 
 The Recovery folder may also hold `<UUID>.pending` files: the temporary file of a write in progress. One left by a process that died during a write is deleted by the next launch's scan. A `.json` entry is never deleted except by saving, closing or explicitly discarding the document it belongs to.
 

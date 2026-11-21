@@ -4,6 +4,99 @@ import Foundation
 import Darwin
 
 @main struct FileChecks {
+    private static func pairedRecovery(in directory: URL) throws {
+        let store = RecoveryStore(directory: directory), id = UUID()
+        func draft(_ revision: UInt64, _ text: String) -> RecoverySnapshot {
+            .init(
+                id: id, text: text, format: .init(encoding: .utf16LE, bom: true),
+                originalURL: "file:///never-open-this.txt", revision: revision)
+        }
+        let a = draft(1, "\u{feff}a\0😀\r\n"), b = draft(2, "b\u{301}\0"), c = draft(3, "latest")
+        let url = store.fileURL(for: id)
+        try store.save(a)
+        let original = try Data(contentsOf: url)
+        let object = try requireValue(
+            try JSONSerialization.jsonObject(with: original) as? [String: Any], "v2 header object")
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        let body = try requireValue(files.first { $0.pathExtension == "utf8" }, "first raw sidecar")
+        check(
+            object["schemaVersion"] as? Int == 2 && object["minimumReaderVersion"] as? Int == 2 && object["text"] == nil
+                && object["byteCount"] as? Int == a.text.utf8.count,
+            "v2 header contains exact size and requires a v2 reader")
+        check(
+            try Data(contentsOf: body) == Data(a.text.utf8),
+            "published payload is raw UTF-8 with BOM, NUL and CRLF intact")
+        rejects("historical minimum-reader gate refuses the v2 header") {
+            try PersistedFormat.check(original, context: "Recovery snapshot")
+        }
+        let fresh = RecoveryStore(directory: directory)
+        let inventory = try fresh.scanHeaders()
+        let listed = try requireValue(inventory.headers.first, "header-only inventory")
+        check(fresh.snapshotReads == 0 && inventory.issues.isEmpty, "launch inventory does not materialize v2 payloads")
+        check(
+            try fresh.load(listed: listed) == a && fresh.snapshotReads == 1,
+            "Recover materializes the exact listed revision")
+        rejects("fault before header switch refuses new revision") {
+            try store.save(b, beforeCommit: { throw CocoaError(.fileWriteUnknown) })
+        }
+        check(
+            try Data(contentsOf: url) == original && fresh.load(id: id) == a,
+            "failed header switch retains complete last good pair")
+        rejects("fault after header switch cannot confirm new revision") {
+            try store.save(
+                b,
+                synchronizeHeaderDirectory: { _ in
+                    errno = EIO
+                    return -1
+                }, beforeCommit: {})
+        }
+        check(
+            try fresh.load(id: id) == b && FileManager.default.fileExists(atPath: body.path),
+            "visible published generation is complete and old body retained after directory uncertainty")
+        try fresh.save(b)
+        check(
+            !FileManager.default.fileExists(atPath: body.path),
+            "cold equal-revision confirmation retires superseded body")
+        rejects("old listed generation cannot open an advanced draft", expecting: RecoveryError.staleRevision) {
+            _ = try fresh.load(listed: listed)
+        }
+        check(fresh.discard(listed: [listed]).count == 1, "stale recovery review cannot discard a newer pair")
+        let surviving = try requireValue(
+            try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                .first { $0.pathExtension == "utf8" }, "new raw body")
+        let goodBytes = try Data(contentsOf: surviving), goodHeader = try Data(contentsOf: url)
+        try Data(repeating: 65, count: goodBytes.count).write(to: surviving)
+        rejects("same-length damage is detected on Recover", expecting: RecoveryError.invalidSnapshot) {
+            _ = try fresh.load(id: id)
+        }
+        rejects("same-length damage prevents cached overwrite", expecting: RecoveryError.invalidSnapshot) {
+            try fresh.save(c)
+        }
+        rejects("same-length damage prevents cleanup", expecting: RecoveryError.invalidSnapshot) {
+            try fresh.remove(id: id, throughRevision: 3)
+        }
+        try FileManager.default.removeItem(at: surviving)
+        let damaged = try fresh.scanHeaders()
+        check(
+            try damaged.headers.isEmpty && damaged.issues.count == 1 && Data(contentsOf: url) == goodHeader,
+            "missing sidecar is an issue and its header stays byte-identical")
+        try goodBytes.write(to: surviving)
+        try fresh.remove(id: id, throughRevision: 2)
+        check(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty,
+            "acknowledged removal cleans up header and raw payload together")
+        var historical = try JSONEncoder().encode(a)
+        try require(historical.first == 0x7b, "historical v1 fixture starts with an object")
+        // Keep the legacy text’s leading U+FEFF and original timestamp token when adding unknown fields.
+        historical.insert(contentsOf: #""generation":"legacy unknown","byteCount":["ignored"],"#.utf8, at: 1)
+        try historical.write(to: url)
+        let legacy = try fresh.scanHeaders()
+        check(
+            try legacy.headers.count == 1 && fresh.load(listed: legacy.headers[0]) == a,
+            "genuine v1 payload stays readable through header review")
+        try fresh.save(c)
+        check(try fresh.load(id: id) == c, "advance after historical v1 publishes a complete new pair")
+    }
     private static func independentRecoveryWrites(in directory: URL) throws {
         let store = RecoveryStore(directory: directory), second = RecoveryStore(directory: directory)
         let a = UUID(), b = UUID(), entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
@@ -24,7 +117,10 @@ import Darwin
                         }
                     })
                 firstDone.signal()
-            } catch { Checks.fail("held snapshot could not publish: " + error.localizedDescription, file: #filePath, line: #line) }
+            } catch {
+                Checks.fail(
+                    "held snapshot could not publish: " + error.localizedDescription, file: #filePath, line: #line)
+            }
         }
         guard entered.wait(timeout: .now() + 5) == .success else {
             release.signal()
@@ -35,7 +131,8 @@ import Darwin
                 try second.save(old)
                 Checks.fail("stale same-ID publication was accepted", file: #filePath, line: #line)
             } catch RecoveryError.staleRevision { futureResult.signal() } catch {
-                Checks.fail("unexpected same-ID recovery error: " + error.localizedDescription, file: #filePath, line: #line)
+                Checks.fail(
+                    "unexpected same-ID recovery error: " + error.localizedDescription, file: #filePath, line: #line)
             }
         }
         DispatchQueue.global().async {
@@ -43,7 +140,11 @@ import Darwin
                 try store.save(neighbour)
                 try store.remove(id: b, throughRevision: 1)
                 otherDone.signal()
-            } catch { Checks.fail("independent recovery operation failed: " + error.localizedDescription, file: #filePath, line: #line) }
+            } catch {
+                Checks.fail(
+                    "independent recovery operation failed: " + error.localizedDescription, file: #filePath, line: #line
+                )
+            }
         }
         let ran = otherDone.wait(timeout: .now() + 3) == .success
         let waiting = futureResult.wait(timeout: .now()) == .timedOut
@@ -255,6 +356,7 @@ import Darwin
                 try store.save(wrongEqual)
             }
             let path = storeURL.appendingPathComponent(id.uuidString + ".json")
+            let healthyHeader = try Data(contentsOf: path)
             let corrupt = Data("{partial write".utf8)
             try corrupt.write(to: path)
             rejects("corrupt read", expecting: RecoveryError.invalidSnapshot) { _ = try store.load(id: id) }
@@ -263,7 +365,11 @@ import Darwin
             }
             check(try Data(contentsOf: path) == corrupt, "corrupt remains inspectable")
             check(try Data(contentsOf: original) == originalBytes, "original never changed")
-            try FileManager.default.removeItem(at: path)
+            check(
+                try store.scanHeaders().issues.contains { $0.url.pathExtension == "utf8" },
+                "corrupt header reports its retained raw text for inspection")
+            try healthyHeader.write(to: path)
+            try store.remove(id: id, throughRevision: second.revision)
             let overflow = RecoverySnapshot(
                 id: UUID(), text: "preserve", format: FileFormat(), originalURL: nil, revision: UInt64.max)
             rejects("unbounded revision rejected before restore arithmetic", expecting: RecoveryError.invalidSnapshot) {
@@ -461,6 +567,7 @@ import Darwin
                 history.read() == ["invalid", "valid"],
                 "failed flush retains and waits for the last valid pending draft")
 
+            try pairedRecovery(in: root.appendingPathComponent("paired-drafts"))
             try independentRecoveryWrites(in: root.appendingPathComponent("parallel-drafts"))
             // F114/F135: this store's own previous snapshot is compared by revision from memory.
             let cacheURL = root.appendingPathComponent("revision-cache"),
@@ -518,7 +625,8 @@ import Darwin
                 expecting: RecoveryError.invalidSnapshot
             ) { try cacheStore.remove(id: cacheID, throughRevision: 11) }
             check(try Data(contentsOf: cacheFile) == cacheCorrupt, "the corrupted snapshot stays byte-identical")
-            try FileManager.default.removeItem(at: cacheFile)
+            try cacheWritten.write(to: cacheFile)
+            try cacheStore.remove(id: cacheID, throughRevision: 10)
             try cacheStore.save(cached(1, "fresh"))
             try cacheStore.remove(id: cacheID, throughRevision: 1)
             check(

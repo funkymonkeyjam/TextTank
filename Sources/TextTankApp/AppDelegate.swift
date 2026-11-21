@@ -265,8 +265,23 @@ import AppKit
             _ = alert.runModal()
         }
         NSApp.activate()
+        TextDocument.recovery.scanForLaunch { [weak self] result in
+            self?.launchInventory = result
+            self?.deliverLaunchInventory()
+        }
+    }
+    private var launchInventory: Result<RecoveryInventory, Error>?
+    private var launchReviewSuspended = false
+    private func deliverLaunchInventory() {
+        guard !launchReviewSuspended, !reviewingTermination,
+            (NSDocumentController.shared as? TextDocumentController)?.isReviewingOpenDocuments != true,
+            let result = launchInventory
+        else { return }
+        launchInventory = nil
         var sessionNotices: [String] = []
-        restoreLaunchDocuments(review: restoreRecovery) { sessionNotices.append(contentsOf: $0) }
+        restoreLaunchDocuments(review: { originals in self.restoreRecovery(result, originals: originals) }) {
+            sessionNotices.append(contentsOf: $0)
+        }
         showSessionNotices(sessionNotices)
     }
     /// Restore and recovery review finish before reporting skipped paths in their workspace.
@@ -333,6 +348,7 @@ import AppKit
             }
             controller.didReviewOpenDocuments = { [weak self] accepted in
                 self?.automaticSession?.nativeReviewEnded(accepted: accepted)
+                DispatchQueue.main.async { [weak self] in self?.deliverLaunchInventory() }
             }
             controller.didRegisterDocument = { [weak self] in self?.automaticSession?.documentOpened() }
         }
@@ -387,6 +403,7 @@ import AppKit
         for document in documents { document.close() }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        launchReviewSuspended = true
         if NSDocumentController.shared.documents.allSatisfy({ !$0.isDocumentEdited }) {
             commitSession()
             closeAllForTermination()
@@ -420,6 +437,10 @@ import AppKit
         }
         reviewingTermination = false
         replyToTerminate(didReviewAll)
+        if !didReviewAll {
+            launchReviewSuspended = false
+            DispatchQueue.main.async { [weak self] in self?.deliverLaunchInventory() }
+        }
     }
     @MainActor func buildMenus() {
         let bar = NSMenu()
@@ -659,7 +680,9 @@ import AppKit
         search.addItem(.separator())
         search.addItem(comparisons)
         let marked = NSMenu(title: "Bookmarked Lines")
-        for value: EditorCommand in [.bookmarkCutLines, .bookmarkCopyLines, .bookmarkDeleteLines, .bookmarkInvert, .bookmarkClearAll] {
+        for value: EditorCommand in [
+            .bookmarkCutLines, .bookmarkCopyLines, .bookmarkDeleteLines, .bookmarkInvert, .bookmarkClearAll
+        ] {
             command(marked, value)
         }
         let markedItem = NSMenuItem(title: marked.title, action: nil, keyEquivalent: "")
@@ -862,9 +885,18 @@ import AppKit
     /// person can tell the drafts apart before recovering or discarding them. Display only.
     nonisolated static func recoveryPromptText(_ snapshots: [RecoverySnapshot], limit: Int = 12) -> String {
         let listed = snapshots.prefix(limit).map { "• " + SnapshotLabel.line(for: $0) }
-        let more = snapshots.count > limit ? ["…and \(snapshots.count - limit) more"] : []
+        return recoveryPromptText(count: snapshots.count, listed: listed)
+    }
+    nonisolated static func recoveryPromptText(headers: [RecoveryHeader], limit: Int = 12) -> String {
+        let listed = headers.prefix(limit).map { header in
+            "• " + SnapshotLabel.line(originalURL: header.originalURL, saved: header.savedAt)
+        }
+        return recoveryPromptText(count: headers.count, listed: listed)
+    }
+    nonisolated private static func recoveryPromptText(count: Int, listed: [String]) -> String {
+        let more = count > listed.count ? ["…and \(count - listed.count) more"] : []
         return
-            "Found \(snapshots.count) recovery snapshot\(snapshots.count == 1 ? "" : "s"). Recovered content opens as new unsaved documents; original files are not changed. Later keeps the snapshots and asks again at the next launch.\n\n"
+            "Found \(count) recovery snapshot\(count == 1 ? "" : "s"). Recovered content opens as new unsaved documents; original files are not changed. Later keeps the snapshots and asks again at the next launch.\n\n"
             + (listed + more).joined(separator: "\n")
     }
     /// The Recover branch of the launch prompt. Documents are opened one at a time, so the
@@ -886,10 +918,11 @@ import AppKit
         }
         return opened
     }
-    private func restoreRecovery(_ originals: [URL: TextDocument]) {
+    private func restoreRecovery(_ result: Result<RecoveryInventory, Error>, originals: [URL: TextDocument]) {
         do {
-            let scan = try TextDocument.recovery.scan()
-            let snapshots = scan.snapshots
+            let scan = try result.get()
+            let live = Set(NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.recoveryID })
+            let headers = scan.headers.filter { !live.contains($0.id) }
             if !scan.issues.isEmpty {
                 let warning = TTAlert()
                 warning.messageText = "Some recovery files need review"
@@ -900,20 +933,22 @@ import AppKit
                     NSWorkspace.shared.activateFileViewerSelecting(scan.issues.map(\.url))
                 }
             }
-            guard !snapshots.isEmpty else { return }
+            guard !headers.isEmpty else { return }
             let alert = TTAlert()
             alert.messageText = "Recover unsaved documents?"
-            alert.informativeText = Self.recoveryPromptText(snapshots)
+            alert.informativeText = Self.recoveryPromptText(headers: headers)
             alert.addButton(withTitle: "Recover")
             alert.addButton(withTitle: "Later")
             alert.addButton(withTitle: "Discard…")
             switch alert.runModal() {
             case .alertFirstButtonReturn:
-                try openRecovered(snapshots, originals: originals)
+                for header in headers {
+                    try openRecovered([TextDocument.recovery.load(listed: header)], originals: originals)
+                }
             case .alertThirdButtonReturn:
                 let confirm = TTAlert()
                 confirm.alertStyle = .warning
-                confirm.messageText = "Discard \(snapshots.count) recovery snapshots?"
+                confirm.messageText = "Discard \(headers.count) recovery snapshots?"
                 confirm.informativeText =
                     "The unsaved text in these snapshots will be permanently deleted. Original files are not changed. This cannot be undone."
                 confirm.addButton(withTitle: "Cancel", role: .cancel)
@@ -921,7 +956,7 @@ import AppKit
                 confirm.buttons.last?.hasDestructiveAction = true
                 guard confirm.runModal() == .alertSecondButtonReturn else { return }
                 // Only the snapshots listed above, at the revision that was scanned.
-                let kept = TextDocument.recovery.discard(snapshots)
+                let kept = TextDocument.recovery.discard(listed: headers)
                 if !kept.isEmpty {
                     let summary = TTAlert()
                     summary.messageText = "\(kept.count) recovery snapshots were not discarded"
