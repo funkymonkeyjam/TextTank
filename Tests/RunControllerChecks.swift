@@ -224,35 +224,29 @@ import NativeSearch
                 c.makeMenu().items.first { ($0.representedObject as? String) == command.id.uuidString },
                 "owned command menu")
             var argv: [String] = [], directory = "", shellWarning = false
-            let timeout = Date().addingTimeInterval(5)
-            let timer = Timer(timeInterval: 0.03, repeats: true) { _ in
-                MainActor.assumeIsolated {
-                    guard let view = NSApp.modalWindow?.contentView else { return }
-                    let views = descendants(view)
-                    guard
-                        let text = views.compactMap({ $0 as? NSTextView }).first(where: {
-                            $0.identifier?.rawValue == "run.approval.invocation"
-                        }),
-                        let json = try? JSONSerialization.jsonObject(with: Data(text.string.utf8)) as? [String: Any],
-                        let args = json["argv"] as? [String], let cwd = json["workingDirectory"] as? String,
-                        let button = views.compactMap({ $0 as? NSButton }).first(where: {
-                            run ? $0.identifier?.rawValue == "run.approval.confirm" : $0.title == "Cancel"
-                        })
-                    else {
-                        if Date() > timeout { NSApp.abortModal() }
-                        return
-                    }
-                    argv = args
-                    directory = cwd
-                    shellWarning = views.compactMap { $0 as? NSTextField }.contains {
-                        $0.stringValue.contains("Shell mode runs")
-                    }
-                    button.performClick(nil)
-                }
-            }
-            RunLoop.current.add(timer, forMode: .modalPanel)
-            defer { timer.invalidate() }
-            try require(NSApp.sendAction(item.action!, to: item.target, from: item), "normal saved command dispatch")
+            check(
+                NSApp.sendAction(item.action!, to: item.target, from: item), "saved Run dispatches its actual menu item"
+            )
+            let form = try requireValue(
+                FormPanel.visible.first { $0.window.identifier?.rawValue == "run.approval" }, "owned Run confirmation")
+            let views = descendants(form.window.contentView!)
+            let text = try requireValue(
+                views.compactMap { $0 as? NSTextView }.first { $0.identifier?.rawValue == "run.approval.invocation" },
+                "complete invocation text")
+            let json = try requireValue(
+                try JSONSerialization.jsonObject(with: Data(text.string.utf8)) as? [String: Any],
+                "resolved invocation JSON")
+            argv = try requireValue(json["argv"] as? [String], "resolved argv")
+            directory = try requireValue(json["workingDirectory"] as? String, "resolved working directory")
+            shellWarning = views.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("Shell mode") }
+            let action = try requireValue(
+                views.compactMap { $0 as? NSButton }.first {
+                    run ? $0.identifier?.rawValue == "run.approval.confirm" : $0.title == "Cancel"
+                }, "explicit decision")
+            check(
+                NSApp.modalWindow == nil && action.isEnabled,
+                "Run review leaves AppKit’s application-modal session unused")
+            action.performClick(nil)
             return (argv, directory, shellWarning)
         }
         let previous = ConfiguredRun(name: "Earlier owned result", executable: "/usr/bin/printf", arguments: ["older"])
@@ -327,6 +321,49 @@ import NativeSearch
             reviewed.0 == ["/bin/zsh", "-c", "printf '%s' 'owned shell text'"] && reviewed.2
                 && resultText(shell.name)?.contains("owned shell text") == true,
             "shell review includes its exact script and explicit shell warning")
+        for becomesReadOnly in [true, false] {
+            let target = TTEditor(frame: NSRect(x: 0, y: 0, width: 320, height: 100))
+            target.text = "one two"
+            _ = target.setSelectionAnchor(0, caret: 3)
+            let window = NSWindow(
+                contentRect: target.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = target
+            let owner = RunController()
+            owner.editor = { target }
+            var starts = 0
+            owner.onUnrecordableAction = { starts += 1 }
+            let process = ConfiguredRun(
+                name: "Owned harmless extension", executable: "/usr/bin/printf", arguments: ["owned"],
+                extensionMode: true)
+            let receipt = owner.storage.deletingLastPathComponent().appendingPathComponent("RunApprovals")
+                .appendingPathComponent(process.id.uuidString + ".sha256")
+            try owner.start(process)
+            let sheet = try requireValue(
+                FormPanel.visible.first { $0.window.identifier?.rawValue == "run.approval" }, "active extension review")
+            check(sheet.window.sheetParent === window, "extension review is attached to the captured editor window")
+            if becomesReadOnly {
+                target.readOnly = true
+            } else {
+                _ = target.setSelectionRanges([
+                    TTSelectionRange(anchor: 0, caret: 3), TTSelectionRange(anchor: 4, caret: 7)
+                ])
+            }
+            let confirm = try requireValue(
+                descendants(sheet.window.contentView!).compactMap { $0 as? NSButton }.first {
+                    $0.identifier?.rawValue == "run.approval.confirm"
+                }, "review confirmation")
+            confirm.performClick(nil)
+            check(
+                !owner.isRunning && starts == 0 && !FileManager.default.fileExists(atPath: receipt.path)
+                    && !sheet.validation.stringValue.isEmpty,
+                "a changed selection count or new read-only state preserves editor, process and approval")
+            window.close()
+            check(!sheet.acceptsActions && !owner.isRunning, "closing the original window cancels the pending review")
+            owner.confirmFirstRun = { _, _ in false }
+            try owner.start(ConfiguredRun(name: "Later", executable: "/usr/bin/printf", arguments: ["later"]))
+            check(starts == 0, "closing the owner releases the pending confirmation gate")
+        }
         NSApp.windows.filter { [command.name, previous.name, shell.name].contains($0.title) }.forEach { $0.close() }
     }
 
