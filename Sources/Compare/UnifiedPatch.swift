@@ -6,7 +6,7 @@ package enum UnifiedPatch {
         original: TextSnapshot, modified: TextSnapshot, changes: ReviewChangeSet,
         strategy: ReviewDiffStrategy = .myers, policy: ReviewDiffPolicy = CompareTimeAllowance.standard.patchPolicy,
         token: ReviewCancellation = ReviewCancellation(), hooks: ReviewDiffHooks = .init(), raw: Bool = true,
-        relativeComponents: [String]? = nil
+        relativeComponents: [String]? = nil, maximumPatchBytes: Int = .max
     ) async throws -> Data {
         guard raw else { throw MergeFailure(.incomplete) }
         return try await withTaskCancellationHandler {
@@ -15,7 +15,9 @@ package enum UnifiedPatch {
             let validation = try await Task.detached { () -> ReviewDiffMetrics in
                 let meter = ReviewMeter(policy, token: token, hooks: hooks)
                 do { try MergeCore.validatePair(original, modified, changes, meter: meter) } catch ReviewHalt.cancelled
-                { throw MergeFailure(.cancelled) } catch ReviewHalt.budget(let reason) { throw MergeFailure(budget: reason) }
+                { throw MergeFailure(.cancelled) } catch ReviewHalt.budget(let reason) {
+                    throw MergeFailure(budget: reason)
+                }
                 return meter.metrics
             }.value
             var remaining = policy
@@ -50,6 +52,7 @@ package enum UnifiedPatch {
                 do {
                     return try serialize(
                         original, modified, lf, relativeComponents: relativeComponents,
+                        maximumPatchBytes: maximumPatchBytes,
                         meter: ReviewMeter(finalPolicy, token: token, hooks: hooks))
                 } catch ReviewHalt.cancelled { throw MergeFailure(.cancelled) } catch ReviewHalt.budget(let reason) {
                     throw MergeFailure(budget: reason)
@@ -62,6 +65,7 @@ package enum UnifiedPatch {
     private struct Hunk { var a: Int, endA: Int, b: Int, endB: Int }
     private static func serialize(
         _ a: TextSnapshot, _ b: TextSnapshot, _ changes: ReviewChangeSet, relativeComponents: [String]?,
+        maximumPatchBytes: Int,
         meter: ReviewMeter
     )
         throws -> Data
@@ -96,10 +100,10 @@ package enum UnifiedPatch {
                 hunks.append(h)
             }
         }
-        let cap = min(SizePolicy.standard.reviewOutput, meter.policy.maximumOutputBytes)
+        let cap = max(0, min(maximumPatchBytes, SizePolicy.standard.reviewOutput, meter.policy.maximumOutputBytes))
         var output = Data(), labels = 0
         func append(_ bytes: Data) throws {
-            guard bytes.count <= cap - output.count else { throw MergeFailure(.budgetExceeded) }
+            guard bytes.count <= cap - output.count else { throw MergeFailure(budget: .output) }
             try MergeCore.charge(bytes.count, meter: meter)
             output.append(bytes)
         }
@@ -159,7 +163,7 @@ package enum UnifiedPatch {
         try append(Data(headers.utf8))
         func row(_ prefix: UInt8, _ snapshot: TextSnapshot, _ line: ReviewLine) throws {
             let n = line.upper - line.lower
-            guard n + 1 <= cap - output.count else { throw MergeFailure(.budgetExceeded) }
+            guard n + 1 <= cap - output.count else { throw MergeFailure(budget: .output) }
             try MergeCore.charge(n, meter: meter)
             output.append(prefix)
             snapshot.bytes.withUnsafeBytes { output.append(contentsOf: $0[line.lower..<line.upper]) }

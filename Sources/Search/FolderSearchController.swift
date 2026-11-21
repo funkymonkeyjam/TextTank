@@ -489,23 +489,9 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         lastOutcome = nil
         work = Task { @MainActor [weak self] in
             let outcomes = await Task.detached(priority: .userInitiated) {
-                var outcomes: [FolderReplacementOutcome] = []
-                let batch = FolderReplacementBatch()
-                let roots = Dictionary(grouping: snapshot, by: { $0.sourceRoot ?? fallbackDirectory })
-                for directory in roots.keys.sorted(by: { $0.path < $1.path }) {
-                    let selected = roots[directory]!
-                    do {
-                        outcomes += try FolderReplacement.replace(
-                            directory: directory, matches: selected, options: options, excluding: excluded,
-                            cancellation: flag, batch: batch, beforeCommit: beforeCommit)
-                    } catch {
-                        outcomes += Set(selected.map(\.url)).map {
-                            FolderReplacementOutcome(
-                                url: $0, status: .failed, message: error.localizedDescription, backup: nil)
-                        }
-                    }
-                }
-                return outcomes
+                FolderReplacement.replaceSelected(
+                    fallbackDirectory: fallbackDirectory, matches: snapshot, options: options, excluding: excluded,
+                    cancellation: flag, beforeCommit: beforeCommit)
             }.value
             guard let self else { return }
             self.retainReplacementOutcomes(outcomes)
@@ -729,6 +715,9 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                         "%@ files replaced · %@ unchanged/skipped/failed. Recovery copies retained."),
                 Strings.number(lastReplacementOutcomes.filter { $0.status == .replaced }.count),
                 Strings.number(lastReplacementOutcomes.filter { $0.status != .replaced }.count))
+        if let stopped = lastReplacementOutcomes.first(where: { $0.status == .stopped }) {
+            status.stringValue += " Stopped early. " + stopped.message
+        }
         lastOutcome = .replaced(
             replaced: lastReplacementOutcomes.filter { $0.status == .replaced }.count,
             notReplaced: lastReplacementOutcomes.filter { $0.status != .replaced }.count)
