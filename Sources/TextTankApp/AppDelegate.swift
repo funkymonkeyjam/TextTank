@@ -5,6 +5,7 @@ import AppKit
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var automaticSession: AutomaticSession?
+    var smokeFile: URL?
     private weak var knownWorkspace: WorkspaceWindowController?
     lazy var workspaceWindow: WorkspaceWindowController = {
         let host = WorkspaceWindowController()
@@ -264,6 +265,10 @@ import AppKit
             alert.informativeText = message
             _ = alert.runModal()
         }
+        if let smokeFile {
+            openSmokeDocument(smokeFile)
+            return
+        }
         NSApp.activate()
         TextDocument.recovery.scanForLaunch { [weak self] result in
             self?.launchInventory = result
@@ -336,6 +341,33 @@ import AppKit
             alert.informativeText = error.localizedDescription
             alert.addButton(withTitle: "OK")
             _ = alert.runModal()
+        }
+    }
+    /// Exercise the production document controller and create the document's real window offscreen.
+    private func openSmokeDocument(_ file: URL) {
+        let controller = NSDocumentController.shared
+        controller.openDocument(withContentsOf: file, display: false) { document, _, error in
+            guard let document = document as? TextDocument, let opened = document.fileURL,
+                opened.standardizedFileURL.resolvingSymlinksInPath() == file.resolvingSymlinksInPath(),
+                controller.documents.contains(document),
+                let presentation = document.presentation, presentation.hostWindow != nil
+            else {
+                TextTankApplication.smokeFailure(error?.localizedDescription ?? "No file-backed editor window.",
+                                                 cleanup: AppStorage.supportDirectory)
+            }
+            struct Status: Encodable { let file: String; let editorBytes: Int; let windowCreated: Bool }
+            do {
+                let status = Status(file: opened.path, editorBytes: Int(document.editor.byteLength), windowCreated: true)
+                var data = try JSONEncoder().encode(status)
+                data.append(0x0A)
+                try FileHandle.standardOutput.write(contentsOf: data)
+            } catch { TextTankApplication.smokeFailure(error.localizedDescription, cleanup: AppStorage.supportDirectory) }
+            document.close()
+            NSApp.stop(nil)
+            // Wake AppKit if this completion arrived from a dispatched callback.
+            if let event = NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [],
+                                              timestamp: 0, windowNumber: 0, context: nil, subtype: 0,
+                                              data1: 0, data2: 0) { NSApp.postEvent(event, atStart: false) }
         }
     }
     /// Installation is explicit and follows TextDocumentController construction in main.

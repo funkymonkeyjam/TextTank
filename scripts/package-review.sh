@@ -15,6 +15,7 @@ if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
 fi
 candidate_sha="$(git rev-parse HEAD)"
 ./scripts/build.sh
+./scripts/test-bundle.sh
 if [[ "$(git rev-parse HEAD)" != "$candidate_sha" || -n "$(git status --porcelain --untracked-files=normal)" ]]; then
   echo 'Source changed during build. Packaging stopped.' >&2
   exit 1
