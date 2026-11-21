@@ -199,6 +199,7 @@ extension EditorSettings {
     private let tabs = NSButton(checkboxWithTitle: "Indent with tabs", target: nil, action: nil)
     private let wrap = NSButton(checkboxWithTitle: "Wrap lines", target: nil, action: nil)
     private let appearance = NSPopUpButton()
+    private let diskChanges = NSPopUpButton()
     private let face = NSTextField(labelWithString: "")
     private let fontButton = NSButton(title: "Font…", target: nil, action: nil)
     private let shortcuts: SettingsShortcutEditor
@@ -270,6 +271,16 @@ extension EditorSettings {
         appearance.target = self
         appearance.action = #selector(selectAppearance(_:))
         form.add(row("Appearance", appearance, "settings.appearance"))
+        ControlPresentation.populate(
+            diskChanges,
+            choices: [
+                (ExternalChangePolicy.ask.rawValue, "Ask"),
+                (ExternalChangePolicy.reloadIfUnmodified.rawValue, "Reload if unmodified"),
+                (ExternalChangePolicy.ignore.rawValue, "Ignore")
+            ], selected: displayed.diskChangeBehavior.rawValue)
+        diskChanges.target = self
+        diskChanges.action = #selector(selectDiskChangePolicy(_:))
+        form.add(row("External file changes", diskChanges, "settings.externalChanges"))
         fontButton.target = self
         fontButton.action = #selector(openFontPanel(_:))
         fontButton.identifier = .init("settings.font.choose")
@@ -315,6 +326,9 @@ extension EditorSettings {
         tabs.state = latest.useTabs ? .on : .off
         wrap.state = latest.wrap ? .on : .off
         appearance.select(appearance.itemArray.first { ($0.representedObject as? String) == latest.appearance })
+        diskChanges.select(
+            diskChanges.itemArray.first { ($0.representedObject as? String) == latest.diskChangeBehavior.rawValue })
+        displayed.externalChangePolicy = latest.externalChangePolicy
         face.stringValue =
             latest.unavailableFontNotice ?? (latest.resolvedBaseFont.displayName ?? latest.resolvedBaseFont.fontName)
         if shortcuts.key.currentEditor() == nil,
@@ -411,6 +425,23 @@ extension EditorSettings {
     }
     @objc private func selectAppearance(_ sender: NSPopUpButton) {
         do { try write { $0.appearance = ControlPresentation.selectedID(sender) ?? "system" } } catch {
+            valuesChanged()
+            showError(error, field: sender)
+        }
+    }
+    @objc private func selectDiskChangePolicy(_ sender: NSPopUpButton) {
+        guard form.acceptsActions, let key = ControlPresentation.selectedID(sender),
+            let policy = ExternalChangePolicy(rawValue: key)
+        else { return }
+        let previous = owner.value
+        do {
+            try owner.store.updateExternalChangePolicy(
+                from: displayed.diskChangeBehavior, to: policy,
+                reservedKeys: SettingsController.reservedShortcuts(in: NSApp.mainMenu))
+            owner.apply(replacing: previous)
+            valuesChanged()
+            form.clearValidation()
+        } catch {
             valuesChanged()
             showError(error, field: sender)
         }

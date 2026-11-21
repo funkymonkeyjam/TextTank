@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
+package enum ExternalChangePolicy: String, Codable, Sendable, CaseIterable {
+    case ask, reloadIfUnmodified, ignore
+}
+
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
 package struct EditorSettings: Codable, Equatable {
@@ -36,6 +40,8 @@ package struct EditorSettings: Codable, Equatable {
     package var autoIndentEnabled: Bool { autoIndent ?? true }
     package var wrap: Bool
     package var appearance: String
+    package var externalChangePolicy: ExternalChangePolicy?
+    package var diskChangeBehavior: ExternalChangePolicy { externalChangePolicy ?? .ask }
     // Key equivalents use AppKit's uppercase convention for Shift.
     package var shortcuts: [String: String]
     static package let commands = EditorCommand.shortcutIdentifiers
@@ -259,9 +265,11 @@ package enum EditorViewPreference: String {
         case .indentGuides: return settings.indentGuidesEnabled
         }
     }
+}
+private enum SettingsMember {
     /// The caller has already decoded and validated the complete settings object. Locate only
     /// this top-level member. Unrelated JSON values never pass through NSNumber or NSString.
-    fileprivate func setting(_ enabled: Bool, in data: Data) throws -> Data {
+    static func setting(_ value: String, key: String, in data: Data) throws -> Data {
         let bytes = Array(data)
         guard bytes.count >= 4 else { throw SettingsError.ambiguousViewPreference }
         // Project structural ASCII from the original JSON code units, including BOM-bearing
@@ -306,24 +314,30 @@ package enum EditorViewPreference: String {
                 guard i < ascii.count else { throw SettingsError.ambiguousViewPreference }
                 let end = i + 1, colon = nextToken(end)
                 if depth == 1, colon < ascii.count, ascii[colon] == 58,
-                    end - start <= rawValue.utf8.count * 6 + 2,
+                    end - start <= key.utf8.count * 6 + 2,
                     let name = try? JSONDecoder().decode(String.self, from: Data(ascii[start..<end])),
-                    name.utf8.elementsEqual(rawValue.utf8)
+                    name.utf8.elementsEqual(key.utf8)
                 {
                     let begin = nextToken(colon + 1)
                     guard valueRange == nil, begin < ascii.count else { throw SettingsError.ambiguousViewPreference }
-                    let rest = ascii[begin...]
-                    guard let token = ["true", "false", "null"].first(where: { rest.starts(with: $0.utf8) }) else {
-                        throw SettingsError.ambiguousViewPreference
+                    if ascii[begin] == 34 {
+                        var finish = begin + 1
+                        while finish < ascii.count, ascii[finish] != 34 { finish += ascii[finish] == 92 ? 2 : 1 }
+                        guard finish < ascii.count else { throw SettingsError.ambiguousViewPreference }
+                        valueRange = begin..<(finish + 1)
+                    } else {
+                        let rest = ascii[begin...]
+                        guard let token = ["true", "false", "null"].first(where: { rest.starts(with: $0.utf8) }) else {
+                            throw SettingsError.ambiguousViewPreference
+                        }
+                        valueRange = begin..<(begin + token.utf8.count)
                     }
-                    valueRange = begin..<(begin + token.utf8.count)
                 }
             default: break
             }
             i += 1
         }
         guard let endOfObject else { throw SettingsError.ambiguousViewPreference }
-        let value = enabled ? "true" : "false"
         let range = valueRange ?? endOfObject..<endOfObject
         let text: String
         if valueRange != nil {
@@ -333,7 +347,7 @@ package enum EditorViewPreference: String {
             while last >= 0 && whitespace(ascii[last]) { last -= 1 }
             guard last >= 0 else { throw SettingsError.ambiguousViewPreference }
             let comma = ascii[last] == 44 || ascii[last] == 123 ? "" : ","
-            text = comma + "\"" + rawValue + "\":" + value
+            text = comma + "\"" + key + "\":" + value
         }
         var encoded = [UInt8](repeating: 0, count: width * text.utf8.count)
         for (index, byte) in text.utf8.enumerated() { encoded[index * width + lane] = byte }
@@ -399,6 +413,26 @@ final package class SettingsStore {
         _ preference: EditorViewPreference, reservedKeys: Set<String> = EditorSettings.protectedShortcuts,
         _ update: (Bool) throws -> Bool
     ) throws {
+        try updateMember(preference.rawValue, reservedKeys: reservedKeys) { latest in
+            let current = preference.enabled(in: latest)
+            let requested = try update(current)
+            return current == requested ? nil : (requested ? "true" : "false")
+        }
+    }
+    package func updateExternalChangePolicy(
+        from displayed: ExternalChangePolicy, to requested: ExternalChangePolicy,
+        reservedKeys: Set<String> = EditorSettings.protectedShortcuts
+    ) throws {
+        try updateMember("externalChangePolicy", reservedKeys: reservedKeys) { latest in
+            guard latest.diskChangeBehavior == displayed || latest.diskChangeBehavior == requested else {
+                throw SettingsError.changedOnDisk
+            }
+            return latest.diskChangeBehavior == requested ? nil : "\"" + requested.rawValue + "\""
+        }
+    }
+    private func updateMember(
+        _ key: String, reservedKeys: Set<String>, edit: (EditorSettings) throws -> String?
+    ) throws {
         guard loadError == nil, ignoredShortcutBindings.isEmpty else { throw SettingsError.unreadable }
         func currentBytes() throws -> Data? {
             do { return try WorkspaceStore.readRegularFile(url, maximumBytes: 1024 * 1024) } catch
@@ -413,18 +447,16 @@ final package class SettingsStore {
             return loaded.settings
         }
         let latest = try validated(data)
-        let enabled = preference.enabled(in: latest)
-        let requested = try update(enabled)
         func requireUnchanged() throws {
             guard try currentBytes() == source else { throw SettingsError.changedOnDisk }
         }
-        if enabled == requested {
+        guard let requested = try edit(latest) else {
             try requireUnchanged()
             diskBytes = source
             value = latest
             return
         }
-        let result = try preference.setting(requested, in: data)
+        let result = try SettingsMember.setting(requested, key: key, in: data)
         let accepted = try validated(result)
         try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
         try PrivateFileStore.write(

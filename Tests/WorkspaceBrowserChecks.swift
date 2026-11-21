@@ -625,6 +625,7 @@ import Darwin
             controller.window?.close()
             check(listed() == 0, "a closed panel holds no documents")
             try ExternalFileObservationChecks.run(in: root)
+            try ExternalFilePolicyChecks.run(in: root)
             Checks.summary { "WorkspaceBrowserChecks: \(Checks.count) assertions passed" }
         }
     }

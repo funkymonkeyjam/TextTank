@@ -172,7 +172,7 @@ The user's `LanguageProfiles.json` is the one store that is not a whole value: i
 ## Library codecs and advanced JSON editing
 
 Settings uses an owned, resizable `FormPanel`, opened by Command-comma and titled
-“Settings”. Committed controls validate and persist their own fields before applying them. A pending text draft retains its original field value for conflict detection, while unrelated preferences merge from the current store. A changed file on disk requires reopening Settings. Close and Escape end the session. Accepted changes persist across close. The Reset Defaults and Repair Settings actions each require confirmation.
+“Settings”. Committed controls validate and persist their own fields before applying them. A pending text draft retains its original field value for conflict detection, while unrelated preferences merge from the current store. A changed file on disk requires reopening Settings. External file changes defaults to Ask. Reload if unmodified refreshes a clean document after verifying its disk contents. Ignore suppresses notices while in-place saves still check for conflicting bytes. Close and Escape end the session. Accepted changes persist across close. The Reset Defaults and Repair Settings actions each require confirmation.
 
 The Font button owns a session on the shared AppKit Font panel. A fixed-pitch descriptor collection is visible only in this process. The modern panel opens this collection through its native collection picker. Older layouts use the panel's family filter. The user can choose all fonts. Closing the session releases its collection and restores the prior panel target, delegate, selection and accessory.
 Frames use the existing `WindowFrames` policy, including isolated test defaults.

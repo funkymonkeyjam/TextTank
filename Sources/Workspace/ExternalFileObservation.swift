@@ -16,7 +16,7 @@ import TextTankCore
         let state: State
         let identity: FileSignature
     }
-    private struct Candidate {
+    private struct Candidate: Equatable {
         let state: State
         let digest: String
         let identity: FileSignature
@@ -37,6 +37,8 @@ import TextTankCore
     private var largeFile: ContentCheck?
     private var known: FileSample?
     private var candidate: Candidate?
+    private var attemptedAutomatic: Candidate?
+    private var policy: ExternalChangePolicy
     private(set) var notice: String?
     var actionTitle: String? {
         if candidate != nil { return "Reload…" }
@@ -46,14 +48,24 @@ import TextTankCore
     var readCandidate: Reader = { try WorkspaceStore.captureRegularFile($0, maximumBytes: $1) }
     typealias Inspector = @Sendable (URL, String, FileSample?) -> DocumentMonitor.Inspection
     var inspect: Inspector = { DocumentMonitor.inspect($0, expected: $1, known: $2) }
-    init(document: TextDocument) { self.document = document }
+    init(document: TextDocument) {
+        self.document = document
+        policy = EditorServices.current?.settings?.value.diskChangeBehavior ?? .ask
+    }
+    func setPolicy(_ next: ExternalChangePolicy) {
+        guard policy != next else { return }
+        policy = next
+        invalidate()
+        check(prioritized: document?.presentation?.isActiveTab == true)
+    }
 
     private var state: State? {
         guard let document, document.isOpen, let url = document.diskURL, let baseline = document.originalDiskFingerprint
         else { return nil }
         return State(
             url: url, baseline: baseline, revision: document.editor.revision, format: document.format,
-            dirty: document.isDocumentEdited, generation: generation)
+            dirty: document.isDocumentEdited || document.editor.modified || document.format != document.savedFormat,
+            generation: generation)
     }
     func invalidate() {
         generation &+= 1
@@ -67,13 +79,14 @@ import TextTankCore
         pendingContentCheck = nil
         largeFile = nil
         candidate = nil
+        attemptedAutomatic = nil
         if notice != nil {
             notice = nil
             document?.externalNoticeChanged()
         }
     }
     func check(prioritized: Bool = false) {
-        guard let expected = state else { return }
+        guard policy != .ignore, let expected = state else { return }
         frontmost = frontmost || prioritized
         guard !checking else {
             if prioritized { inspectionOperation?.queuePriority = .veryHigh }
@@ -118,6 +131,12 @@ import TextTankCore
             if self.notice != message || self.actionTitle != previousAction {
                 self.notice = message
                 self.document?.externalNoticeChanged()
+            }
+            if self.policy == .reloadIfUnmodified, !expected.dirty, contentCheck == nil, let offered = self.candidate,
+                offered.identity.size <= DocumentMonitor.maximumBytes, offered != self.attemptedAutomatic
+            {
+                self.attemptedAutomatic = offered
+                self.read(offered)
             }
         }
         let op = BlockOperation {
