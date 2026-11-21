@@ -6,6 +6,29 @@ import Darwin
 @main struct FileChecks {
     static func main() {
         Checks.run("FileChecks") {
+            if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "--recovery-busy" {
+                let store = RecoveryStore(directory: URL(fileURLWithPath: CommandLine.arguments[2]))
+                let id = UUID(uuidString: CommandLine.arguments[3])!
+                let draft = RecoverySnapshot(
+                    id: id, text: "foreign", format: FileFormat(), originalURL: nil, revision: 2)
+                rejects("second process cannot edit with this recovery root", expecting: RecoveryError.inUse) {
+                    try store.claimOwnership()
+                }
+                rejects("second process cannot scan live drafts", expecting: RecoveryError.inUse) {
+                    _ = try store.scan()
+                }
+                rejects("second process cannot load live draft", expecting: RecoveryError.inUse) {
+                    _ = try store.load(id: id)
+                }
+                rejects("second process cannot overwrite live draft", expecting: RecoveryError.inUse) {
+                    try store.save(draft)
+                }
+                rejects("second process cannot remove live draft", expecting: RecoveryError.inUse) {
+                    try store.remove(id: id, throughRevision: 2)
+                }
+                check(store.discard([draft]).count == 1, "second process reports failed discard")
+                return
+            }
             if CommandLine.arguments.count == 5 && CommandLine.arguments[1] == "--crash-write" {
                 let directory = URL(fileURLWithPath: CommandLine.arguments[2])
                 let original = URL(fileURLWithPath: CommandLine.arguments[3])
@@ -116,6 +139,15 @@ import Darwin
                 privateDirectoryMode == 0o700 && privateFileMode == 0o600, "recovery directory and initial file private"
             )
             check(try store.load(id: id) == first, "exact snapshot reload")
+            let other = Process()
+            other.executableURL = Checks.executable
+            other.arguments = ["--recovery-busy", storeURL.path, id.uuidString]
+            try other.run()
+            other.waitUntilExit()
+            check(
+                other.terminationReason == .exit && other.terminationStatus == 0,
+                "concurrent process refuses recovery ownership")
+            check(try store.load(id: id) == first, "concurrent refusal retains original live snapshot")
             // Reinstantiate to demonstrate persistence independent of live store instance.
             check(try RecoveryStore(directory: storeURL).load(id: id) == first, "restart reload")
             let second = RecoverySnapshot(

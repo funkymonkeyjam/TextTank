@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import Darwin
+import os
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
@@ -48,13 +49,99 @@ package struct RecoveryScan {
 }
 
 package enum RecoveryError: Error, LocalizedError {
-    case invalidSnapshot, staleRevision, unsafeLocation
+    case invalidSnapshot, staleRevision, unsafeLocation, inUse, lockUnsupported, folderChanged
+    static func lockFailure(_ code: Int32, directory: URL) -> Error {
+        if code == EWOULDBLOCK || code == EAGAIN { return RecoveryError.inUse }
+        if code == ENOTSUP || code == EOPNOTSUPP || code == ENOSYS { return RecoveryError.lockUnsupported }
+        return FileOperationFailure(code, operation: "lock recovery folder", path: directory.path)
+    }
     package var errorDescription: String? {
         switch self {
         case .invalidSnapshot:
             return "The recovery snapshot is invalid or uses an unsupported version. It has been left untouched."
+        case .inUse:
+            return
+                "Another copy of TextTank is using this recovery folder. Continue in the running copy, or quit it and try again."
+        case .lockUnsupported:
+            return "This volume cannot lock the recovery folder. Use a local support folder that supports file locking."
+        case .folderChanged:
+            return "The recovery folder changed while TextTank was open. Restore the original folder and try again."
         case .staleRevision: return "A newer recovery snapshot already exists. It has been left untouched."
         case .unsafeLocation: return "The recovery location is not a regular local storage location."
+        }
+    }
+}
+
+/// flock belongs to an open file description. Keep one descriptor per actual directory in this
+/// process so separate RecoveryStore instances share the same lease, including through aliases.
+private final class RecoveryDirectoryOwnership {
+    private struct Identity: Hashable {
+        let device: dev_t, inode: ino_t
+        init(_ info: stat) {
+            device = info.st_dev
+            inode = info.st_ino
+        }
+    }
+    private struct Handle {
+        let descriptor: Int32
+        var references: Int
+    }
+    private static let handles = OSAllocatedUnfairLock(initialState: [Identity: Handle]())
+    private let identity: Identity
+    private let descriptor: Int32
+
+    init(directory: URL) throws {
+        let fd = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else {
+            let code = errno
+            if code == ENOTDIR || code == ELOOP { throw RecoveryError.unsafeLocation }
+            throw FileOperationFailure(code, operation: "open recovery folder", path: directory.path)
+        }
+        var retained = false
+        defer { if !retained { close(fd) } }
+        var info = stat()
+        guard fstat(fd, &info) == 0 else {
+            throw FileOperationFailure(errno, operation: "identify recovery folder", path: directory.path)
+        }
+        let key = Identity(info)
+        identity = key
+        descriptor = try Self.handles.withLock { handles in
+            if let handle = handles[key] {
+                handles[key] = Handle(descriptor: handle.descriptor, references: handle.references + 1)
+                return handle.descriptor
+            }
+            guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+                let code = errno
+                throw RecoveryError.lockFailure(code, directory: directory)
+            }
+            handles[key] = Handle(descriptor: fd, references: 1)
+            return fd
+        }
+        retained = descriptor == fd
+    }
+    func prepareForWriting(_ directory: URL) throws {
+        guard fchmod(descriptor, 0o700) == 0 else {
+            throw FileOperationFailure(errno, operation: "protect recovery folder", path: directory.path)
+        }
+    }
+    func verify(_ directory: URL) throws {
+        var info = stat()
+        guard lstat(directory.path, &info) == 0 else {
+            throw FileOperationFailure(errno, operation: "recheck recovery folder", path: directory.path)
+        }
+        guard info.st_mode & S_IFMT == S_IFDIR, Identity(info) == identity else { throw RecoveryError.folderChanged }
+    }
+    deinit {
+        let key = identity
+        Self.handles.withLock { handles in
+            guard var handle = handles[key] else { return }
+            handle.references -= 1
+            if handle.references == 0 {
+                handles.removeValue(forKey: key)
+                close(handle.descriptor)
+            } else {
+                handles[key] = handle
+            }
         }
     }
 }
@@ -71,6 +158,7 @@ final package class RecoveryStore: @unchecked Sendable {
     static package let maximumSnapshotBytes = Int.max
     package let directory: URL
     private let lock = NSLock()
+    private var ownership: RecoveryDirectoryOwnership?
     /// What this instance last wrote for each id, with the identity of the file it left on disk.
     /// While the file still has that identity, save and remove compare revisions from memory
     /// instead of reading and decoding the whole previous snapshot. Any difference (another
@@ -97,12 +185,53 @@ final package class RecoveryStore: @unchecked Sendable {
     }()
     package init(directory: URL) { self.directory = directory }
 
+    /// Normal launches establish exclusive recovery ownership before any document can open.
+    package func claimOwnership() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        _ = try requireOwnership(createIfMissing: true)
+    }
+    /// Return false only for an absent directory on a read/cleanup path.
+    private func requireOwnership(createIfMissing: Bool) throws -> Bool {
+        if let ownership {
+            try ownership.verify(directory)
+            if createIfMissing { try ownership.prepareForWriting(directory) }
+            return true
+        }
+        guard directory.isFileURL else { throw RecoveryError.unsafeLocation }
+        try PrivateFileStore.validateLocalURL(directory.appendingPathComponent(".recovery-check"))
+        var info = stat()
+        if lstat(directory.path, &info) != 0 {
+            let code = errno
+            guard code == ENOENT else {
+                throw FileOperationFailure(code, operation: "inspect recovery folder", path: directory.path)
+            }
+            guard createIfMissing else { return false }
+            let parent = directory.deletingLastPathComponent()
+            if !FileManager.default.fileExists(atPath: parent.path) {
+                try FileManager.default.createDirectory(
+                    at: parent, withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700])
+            }
+            if mkdir(directory.path, 0o700) != 0 {
+                let failure = errno
+                guard failure == EEXIST else {
+                    throw FileOperationFailure(failure, operation: "create recovery folder", path: directory.path)
+                }
+            }
+        }
+        let acquired = try RecoveryDirectoryOwnership(directory: directory)
+        try acquired.verify(directory)
+        if createIfMissing { try acquired.prepareForWriting(directory) }
+        ownership = acquired
+        return true
+    }
     /// Save a monotonically increasing document revision; corrupt/newer records are never overwritten.
     package func save(_ snapshot: RecoverySnapshot) throws {
         lock.lock()
         defer { lock.unlock() }
         try validate(snapshot)
-        try prepareDirectory()
+        _ = try requireOwnership(createIfMissing: true)
         let destination = url(for: snapshot.id)
         if let known = knownRevision(of: snapshot.id), known != snapshot.revision {
             guard known < snapshot.revision else { throw RecoveryError.staleRevision }
@@ -126,7 +255,9 @@ final package class RecoveryStore: @unchecked Sendable {
     package func load(id: UUID) throws -> RecoverySnapshot {
         lock.lock()
         defer { lock.unlock() }
-        try checkDirectoryIfPresent()
+        guard try requireOwnership(createIfMissing: false) else {
+            throw FileOperationFailure(ENOENT, operation: "open recovery snapshot", path: url(for: id).path)
+        }
         return try read(url(for: id), expectedID: id)
     }
     /// Recover valid entries while keeping corrupt/unknown entries visible and untouched.
@@ -136,8 +267,7 @@ final package class RecoveryStore: @unchecked Sendable {
     package func scan() throws -> RecoveryScan {
         lock.lock()
         defer { lock.unlock() }
-        try checkDirectoryIfPresent()
-        guard FileManager.default.fileExists(atPath: directory.path) else {
+        guard try requireOwnership(createIfMissing: false) else {
             return RecoveryScan(snapshots: [], issues: [])
         }
         let contents = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
@@ -168,7 +298,7 @@ final package class RecoveryStore: @unchecked Sendable {
     package func remove(id: UUID, throughRevision: UInt64) throws {
         lock.lock()
         defer { lock.unlock() }
-        try checkDirectoryIfPresent()
+        guard try requireOwnership(createIfMissing: false) else { return }
         let file = url(for: id)
         guard FileManager.default.fileExists(atPath: file.path) else {
             written[id] = nil
@@ -229,29 +359,12 @@ final package class RecoveryStore: @unchecked Sendable {
             if modified < Self.processStart { try? FileManager.default.removeItem(at: file) }
         }
     }
-    private func prepareDirectory() throws {
-        try checkDirectoryIfPresent()
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try checkDirectoryIfPresent()
-        // The injected directory is dedicated to recovery. Never change parent permissions.
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-    }
     private func privateAtomicWrite(_ data: Data, to destination: URL) throws {
         do {
             try PrivateFileStore.write(
                 data, to: destination, maximumBytes: Self.maximumSnapshotBytes,
                 temporaryPrefix: "", temporarySuffix: ".pending")
         } catch PrivateFileError.unsafeLocation { throw RecoveryError.unsafeLocation }
-    }
-    private func checkDirectoryIfPresent() throws {
-        guard directory.isFileURL else { throw RecoveryError.unsafeLocation }
-        if FileManager.default.fileExists(atPath: directory.path) {
-            let properties = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            guard properties.isDirectory == true, properties.isSymbolicLink != true else {
-                throw RecoveryError.unsafeLocation
-            }
-        }
     }
     private func read(_ url: URL, expectedID: UUID) throws -> RecoverySnapshot {
         let data: Data
