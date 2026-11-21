@@ -321,11 +321,14 @@ import NativeSearch
             let started = pressReturn(), restarted = pressReturn()
             check(started && restarted && busy.isSearching, "Return while a search is running starts the search again")
             await waitUntil("the restarted search to finish") { !busy.isSearching }
+            let privateManifest = try requireValue(busy.lastReplacementOutcomes.first?.recoveryReport, "private batch location")
             check(
-                busy.lastOutcome
-                    == .searched(matches: 3, filesSearched: 3, skipped: 10, cancelled: false, limitReached: false)
-                    && busy.numberOfRows(in: busy.table) == 3,
-                "the restarted search completes; recovery copies are excluded, not searched")
+                try busy.lastOutcome
+                    == .searched(matches: 3, filesSearched: 3, skipped: 4, cancelled: false, limitReached: false)
+                    && busy.numberOfRows(in: busy.table) == 3
+                    && FolderReplacementBatch.read(privateManifest).entries.count == 3
+                    && !FileManager.default.contentsOfDirectory(atPath: busyRoot.path).contains { $0.hasPrefix(".texttank-") },
+                "the restarted search sees only four fixture exclusions and all three backups are private")
             busy.activateResult(row: 2)
             check(
                 openedResults.map(\.lastPathComponent) == ["a.txt", "c.txt"],
