@@ -98,10 +98,12 @@ import AppKit
             showSettings(sender)
             return
         }
-        var updated = value
-        updated.autoIndent = !value.autoIndentEnabled
+        let previous = value
         do {
-            try save(updated)
+            try store.updateViewPreference(.autoIndent, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu)) {
+                !$0
+            }
+            apply(replacing: previous)
         } catch {
             TTAlert.present(error)
         }

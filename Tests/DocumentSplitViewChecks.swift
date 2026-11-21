@@ -288,10 +288,16 @@ extension DocumentChecks {
                 !document.editor.autoIndentEnabled && !clone.autoIndentEnabled
                     && delegate.settings.validateMenuItem(autoIndent) && autoIndent.state == .off,
                 "new document and split pane inherit the disabled Return preference")
+            let otherSettings = SettingsController(url: delegate.settings.url)
+            var independent = otherSettings.value
+            independent.appearance = independent.appearance == "light" ? "dark" : "light"
+            try otherSettings.save(independent)
             delegate.settings.toggleAutoIndent(autoIndent)
             let persisted = try JSONDecoder().decode(EditorSettings.self, from: Data(contentsOf: delegate.settings.url))
             check(
-                persisted.autoIndent == true && document.editor.autoIndentEnabled && clone.autoIndentEnabled
+                persisted.autoIndent == true && persisted.appearance == independent.appearance
+                    && delegate.settings.value == persisted && document.editor.autoIndentEnabled
+                    && clone.autoIndentEnabled
                     && delegate.settings.validateMenuItem(autoIndent) && autoIndent.state == .on,
                 "the View toggle persists and updates both open editors and its checkmark")
             check(palette(clone) == palette(document.editor), "a new clone shows the source view's syntax colours")
