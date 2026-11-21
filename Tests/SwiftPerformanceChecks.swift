@@ -1,0 +1,173 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import AppKit
+import Darwin
+import EditorBridge
+@testable import TextTankCore
+@testable import TextTankRuntime
+
+/// The full tier runs each scenario in a fresh process so peak RSS can be attributed to that scenario.
+/// Timings and high-water marks are observational. Correctness and successful publication are checked.
+@main enum SwiftPerformanceChecks {
+    private static let mib = 1_048_576
+    private static func now() -> Double { ProcessInfo.processInfo.systemUptime }
+    private static func peak() throws -> Int {
+        var sample = rusage()
+        try require(getrusage(RUSAGE_SELF, &sample) == 0, "read process high-water RSS")
+        return sample.ru_maxrss // Darwin reports bytes.
+    }
+    private static func metric(_ name: String, since start: Double, initialPeak: Int) throws {
+        let end = now(), high = try peak()
+        print(String(format: "SWIFT_PERF %@ elapsed_s=%.6f peak_rss_bytes=%ld peak_growth_bytes=%ld",
+                     name, end - start, high, high - initialPeak))
+        fflush(stdout)
+    }
+    private static let chunk = Data(String(repeating: "let value = 42 // " + String(repeating: "a", count: 109) + "\n",
+                                           count: 512).utf8)
+    private static func fixture(_ file: URL, bytes: Int) throws {
+        try require(chunk.count == 65536 && bytes.isMultiple(of: chunk.count), "exact streaming fixture geometry")
+        try Data().write(to: file)
+        let handle = try FileHandle(forWritingTo: file)
+        defer { try? handle.close() }
+        for _ in 0..<(bytes / chunk.count) { try handle.write(contentsOf: chunk) }
+    }
+    @MainActor private static func wait(_ label: String, until predicate: () -> Bool) throws -> Double {
+        let deadline = now() + 120
+        var last = now(), longest = 0.0
+        repeat {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.002))
+            let tick = now()
+            longest = max(longest, tick - last)
+            last = tick
+        } while !predicate() && now() < deadline
+        try require(predicate(), label)
+        return longest
+    }
+    @MainActor private static func documentCase(_ mode: String, in root: URL) throws {
+        let size = (mode == "recovery64" ? 64 : 32) * mib
+        let url = root.appendingPathComponent("owned.swift")
+        try fixture(url, bytes: size)
+        let beforeOpen = try peak(), t0 = now()
+        let doc = TextDocument()
+        doc.fileURL = url
+        doc.fileType = TextDocument.plainTextType
+        try doc.read(from: url, ofType: TextDocument.plainTextType)
+        NSDocumentController.shared.addDocument(doc)
+        doc.makeWindowControllers()
+        defer { doc.close() }
+        if mode == "open32" {
+            try metric("open32", since: t0, initialPeak: beforeOpen)
+            let view = doc.editor
+            doc.presentation?.hostWindow?.contentView?.layoutSubtreeIfNeeded()
+            let bitmap = try requireValue(view.bitmapImageRepForCachingDisplay(in: view.bounds), "offscreen editor bitmap")
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try metric("open32_through_offscreen_paint", since: t0, initialPeak: beforeOpen)
+            var colors = Set<NSColor>()
+            for x in stride(from: 160, to: min(bitmap.pixelsWide, 600), by: 3) {
+                for y in stride(from: max(0, bitmap.pixelsHigh - 110), to: bitmap.pixelsHigh - 15, by: 3) {
+                    if let color = bitmap.colorAt(x: x, y: y), color.alphaComponent > 0 { colors.insert(color) }
+                }
+            }
+            check(colors.count > 3 && view.byteLength == size && !doc.isDocumentEdited,
+                  "normal document open populates and renders the full UTF-8 fixture")
+            print("SWIFT_PERF open_language=\(doc.languageIdentifier) bytes=\(view.byteLength) bitmap=\(bitmap.pixelsWide)x\(bitmap.pixelsHigh)")
+            return
+        }
+        try require(doc.editor.setSelectionAnchor(size, caret: size), "valid end-of-document caret")
+        let initialPeak = try peak(), editStart = now()
+        try require(doc.editor.replaceSelection("!"), "one genuine native edit")
+        if mode == "save32" {
+            let start = now()
+            var complete = false, failure: Error?
+            doc.save(to: url, ofType: TextDocument.plainTextType, for: .saveOperation) { error in
+                failure = error
+                complete = true
+            }
+            let tick = try wait("ordinary safe save completed") { complete }
+            if let failure { throw failure }
+            try metric("save32", since: start, initialPeak: initialPeak)
+            print(String(format: "SWIFT_PERF save32 max_main_tick_s=%.6f",tick))
+            let saved = try Data(contentsOf: url, options: .mappedIfSafe)
+            let originalIntact = saved.count == size + 1 && saved.withUnsafeBytes { buffer in
+                chunk.withUnsafeBytes { expected in
+                    stride(from: 0, to: size, by: chunk.count).allSatisfy { offset in
+                        memcmp(buffer.baseAddress!.advanced(by: offset), expected.baseAddress!, chunk.count) == 0
+                    }
+                }
+            }
+            check(originalIntact && saved.last == 33 && !doc.isDocumentEdited,
+                  "safe save publishes the edited fixture and clears the dirty state")
+            return
+        }
+        if mode == "recovery64" {
+            // Fire the exact one-shot installed by the ordinary edit. This isolates the
+            // synchronous capture/enqueue call from the idle interval and the background writer.
+            let timer = try requireValue(Mirror(reflecting: doc).children.first { $0.label == "recoveryTimer" }?.value as? Timer,
+                                         "edit installed the production idle recovery timer")
+            let start = now()
+            timer.fire()
+            try metric("recovery64_main_capture_and_enqueue", since: start, initialPeak: initialPeak)
+        }
+        let tick = try wait("automatic recovery reached confirmed save state") {
+            doc.currentSaveStateStatus.contains("recovery copy kept")
+        }
+        try metric(mode, since: editStart, initialPeak: initialPeak)
+        print(String(format: "SWIFT_PERF %@ max_main_tick_s=%.6f",mode,tick))
+        let recovered = try TextDocument.recovery.load(id: doc.recoveryID)
+        let disk = try Data(contentsOf: url, options: .mappedIfSafe)
+        let utf8 = recovered.text.utf8
+        check(utf8.count == size + 1 && utf8.last == 33 && utf8.dropLast().elementsEqual(disk)
+              && doc.isDocumentEdited, "confirmed recovery retains every edited byte and preserves the original file")
+    }
+    @MainActor private static func replaceAll(using service: AppDelegate) throws {
+        let document = DocumentFactory.makeUntitled(display: false)
+        defer { document.close() }
+        let source = String(repeating: "x\n", count: 100_000)
+        _ = document.editor.loadDocumentText(source)
+        let presentation = try requireValue(document.presentation, "owned document presentation")
+        service.noteActive(presentation)
+        let search = service.searchController
+        search.queryField.stringValue = "x"
+        search.replacementField.stringValue = "y"
+        let before = try peak(), start = now()
+        search.replaceAll(nil)
+        let tick = try wait("actual Find and Replace action completed") { !search.isSearching }
+        try metric("replace100k", since: start, initialPeak: before)
+        print(String(format: "SWIFT_PERF replace100k max_main_tick_s=%.6f",tick))
+        check(search.lastOutcome == .replaced(changed: 100_000, stale: 0)
+              && document.editor.text == String(repeating: "y\n", count: 100_000),
+              "current-document Replace All changes precisely 100,000 matches")
+        document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        check(document.editor.text == source, "one native Undo restores all 100,000 matches")
+        let overLimit = source + "x\n"
+        _ = document.editor.loadDocumentText(overLimit)
+        let revision = document.editor.revision
+        search.replaceAll(nil)
+        _ = try wait("over-limit comparison completed") { !search.isSearching }
+        check(search.lastOutcome == .limitReached && document.editor.revision == revision && document.editor.text == overLimit,
+              "100,001 matches preserve all bytes and the existing search cap")
+    }
+    @MainActor static func main() {
+        Checks.run("SwiftPerformanceChecks") {
+            let mode = try requireValue(CommandLine.arguments.dropFirst().first, "selected performance workload")
+            try require(["open32", "save32", "recovery32", "recovery64", "replace100k"].contains(mode), "known workload")
+            let support = try IsolatedSupportDirectory("SwiftPerformance")
+            defer { support.restore() }
+            let app = NSApplication.shared
+            var effects = RuntimeDependencies()
+            effects.readFindText = { "" }
+            effects.writeFindText = { _ in }
+            effects.generalPasteboard = { nil }
+            effects.announce = { _, _ in }
+            RuntimeEnvironment.dependencies = effects
+            WindowFrames.defaults = UserDefaults(suiteName: "SwiftPerformance-" + UUID().uuidString)!
+            LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")
+            app.finishLaunching()
+            let documents = TextDocumentController(), delegate = AppDelegate()
+            delegate.installEditorServices()
+            if mode == "replace100k" { try replaceAll(using: delegate) }
+            else { try documentCase(mode, in: support.url) }
+            withExtendedLifetime(documents) {}
+            withExtendedLifetime(delegate) {}
+        }
+    }
+}
