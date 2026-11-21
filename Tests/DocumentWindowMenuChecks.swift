@@ -1234,7 +1234,9 @@ extension DocumentChecks {
             }
             let replaceMatchButton = try requireValue(
                 barButtons.first { $0.title == "Replace Selection" }, "fixture: Replace Selection button")
-            let nextMatchButton = try requireValue(barButtons.first { $0.title == "Next" }, "fixture: Next button")
+            let nextMatchButton = try requireValue(descendants(try requireValue(controller.findBar, "fixture: Find bar"))
+                .compactMap { $0 as? NSSegmentedControl }.first { $0.segmentCount == 2 && $0.label(forSegment: 1) == "Next" },
+                "fixture: Previous and Next segmented control")
             controller.controlTextDidChange(
                 Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
             check(
@@ -1369,6 +1371,25 @@ extension DocumentChecks {
             sessionDelegate.noteActive(controller)
             // Passive typing may select a result. Escape restores the exact opening direction.
             let priorQuery = controller.findField.stringValue
+            controller.showFind(nil)
+            let previousWord = controller.wordBox.state
+            controller.wordBox.performClick(nil)
+            check(sessionDelegate.searchController.wordButton.state == controller.wordBox.state
+                    && controller.wordBox.state != previousWord,
+                  "a whole-word change uses the same option in the bar and Find window")
+            controller.wordBox.performClick(nil)
+            let priorMode = sessionDelegate.searchController.mode.indexOfSelectedItem
+            if controller.regexBox.state != .on { controller.regexBox.performClick(nil) }
+            controller.findField.stringValue = "["
+            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            spinUntil("inline regex error") { !controller.findCount.stringValue.isEmpty }
+            check(controller.regexBox.state == .on && controller.findCount.stringValue != "No matches"
+                    && !controller.findCount.stringValue.contains(" of ") && NSApp.modalWindow == nil,
+                  "a malformed bar regex reports its error in the Find bar")
+            sessionDelegate.searchController.mode.selectItem(at: priorMode)
+            _ = NSApp.sendAction(sessionDelegate.searchController.mode.action!, to: sessionDelegate.searchController,
+                                 from: sessionDelegate.searchController.mode)
+            controller.hideFind(nil)
             _ = document.editor.setSelectionAnchor(3, caret: 1)
             controller.showFind(nil)
             controller.findField.stringValue = "alpha"

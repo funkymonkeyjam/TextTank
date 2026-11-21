@@ -39,6 +39,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     var openEditors: () -> [TTEditor] = { [] }
     var onCommand: ((SearchOptions, String, TTEditor) -> Void)?
     var readFindText: () -> String? = { nil }
+    var sharedFlagsChanged: (() -> Void)?
     var writeFindText: (String) -> Void = { _ in }
     var onUnrecordableCommand: ((String) -> Void)?
     private enum Scope: Int, CaseIterable {
@@ -190,6 +191,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         wordButton.state = options.wholeWord ? .on : .off
         dotButton.state = options.dotMatchesNewline ? .on : .off
         wrapButton.state = options.wrap ? .on : .off
+        for control in [mode as NSControl, caseButton, wordButton, dotButton, wrapButton] {
+            control.target = self
+            control.action = #selector(advancedFlagsChanged(_:))
+        }
         let actions: [(String, Selector)] = [
             ("Previous", #selector(previous(_:))), ("Next", #selector(next(_:))),
             ("Find All / Count", #selector(findAll(_:))), ("Replace", #selector(replaceOne(_:))),
@@ -261,17 +266,33 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     }
     @objc func showSearch(_ sender: Any?) {
         if let shared = readFindText(), !shared.isEmpty { queryField.stringValue = shared }
+        showPanel(sender)
+    }
+    func showFromInline(query: String, replacement: String, sender: Any?) {
+        window?.makeFirstResponder(nil)
+        queryField.stringValue = query
+        replacementField.stringValue = replacement
+        showPanel(sender)
+    }
+    private func showPanel(_ sender: Any?) {
         showWindow(sender)
         window?.makeKeyAndOrderFront(sender)
         window?.makeFirstResponder(queryField)
     }
-    private func readOptions() -> SearchOptions {
-        // NSTextFields share the window field editor. Commit it before reading
-        // distinct controls, otherwise the focused replacement can become query.
-        window?.makeFirstResponder(nil)
-        var o = SearchOptions()
-        o.query = queryField.stringValue
-        o.replacement = replacementField.stringValue
+    @objc private func advancedFlagsChanged(_ sender: NSControl) { sharedFlagsChanged?() }
+    enum InlineFlag { case matchCase, wholeWord, regex }
+    func setInlineFlag(_ flag: InlineFlag, enabled: Bool) {
+        switch flag {
+        case .matchCase: caseButton.state = enabled ? .on : .off
+        case .wholeWord: wordButton.state = enabled ? .on : .off
+        case .regex:
+            let desired: SearchOptions.Mode = enabled ? .regularExpression : .normal
+            mode.selectItem(at: mode.indexOfItem(withRepresentedObject: String(desired.rawValue)))
+        }
+        sharedFlagsChanged?()
+    }
+    func sharedOptions(query: String, replacement: String) -> SearchOptions {
+        var o = SearchOptions(query: query, replacement: replacement)
         o.mode =
             ControlPresentation.selectedID(mode).flatMap(Int.init).flatMap(SearchOptions.Mode.init(rawValue:))
             ?? .normal
@@ -279,6 +300,12 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         o.wholeWord = wordButton.state == .on
         o.dotMatchesNewline = dotButton.state == .on
         o.wrap = wrapButton.state == .on
+        return o
+    }
+    private func readOptions() -> SearchOptions {
+        // Commit the shared field editor before reading distinct window fields.
+        window?.makeFirstResponder(nil)
+        let o = sharedOptions(query: queryField.stringValue, replacement: replacementField.stringValue)
         do {
             try preferences.save(FindPreferences(options: o))
             preferenceNotice.isHidden = true
@@ -306,6 +333,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             wordButton.state = options.wholeWord ? .on : .off
             dotButton.state = options.dotMatchesNewline ? .on : .off
             wrapButton.state = options.wrap ? .on : .off
+            sharedFlagsChanged?()
             preferenceNotice.isHidden = true
             status.stringValue = "Saved search settings were reset. Documents were not changed."
         } catch { showPreferenceFailure(error) }

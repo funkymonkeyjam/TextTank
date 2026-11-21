@@ -12,7 +12,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     private var findPreview: InlineFindPreview?
     let replaceField = NSTextField()
     let caseBox = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
-    let findNextButton = NSButton(title: "Next", target: nil, action: nil)
+    let wordBox = NSButton(checkboxWithTitle: "Whole word", target: nil, action: nil)
+    let regexBox = NSButton(checkboxWithTitle: "Regex", target: nil, action: nil)
+    let findNavigation = NSSegmentedControl(labels: ["Previous", "Next"], trackingMode: .momentary, target: nil, action: nil)
     let replaceMatchButton = NSButton(title: "Replace Selection", target: nil, action: nil)
     private(set) var findBar: NSView?
     private var splitBelowFindBar: NSLayoutConstraint?
@@ -214,23 +216,29 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         findCount.setAccessibilityLabel("Find matches in document")
         findCount.lineBreakMode = .byTruncatingTail
         replaceField.placeholderString = "Replace with"
-        findNextButton.target = self
-        findNextButton.action = #selector(findNext(_:))
-        findNextButton.setAccessibilityLabel("Find next match in document")
+        findNavigation.target = self
+        findNavigation.action = #selector(navigateFromBar(_:))
+        findNavigation.setAccessibilityLabel("Navigate matches in document")
         replaceMatchButton.target = self
         replaceMatchButton.action = #selector(replaceSelection(_:))
         replaceMatchButton.setAccessibilityLabel("Replace selected match in document")
         let doneButton = NSButton(title: "Done", target: self, action: #selector(hideFind(_:)))
         doneButton.setAccessibilityLabel("Close Find in document")
         caseBox.setAccessibilityLabel("Match case in document search")
-        let search = EditorFindBar(controls: [
-            findField, replaceField, caseBox, findNextButton, replaceMatchButton, doneButton, findCount
-        ])
+        wordBox.setAccessibilityLabel("Match whole words in document")
+        regexBox.setAccessibilityLabel("Use regular expressions in document")
+        let more = NSButton(title: "More…", target: self, action: #selector(showMoreFindOptions(_:)))
+        more.setAccessibilityLabel("Open Find and Replace with these options")
+        let search = EditorFindBar(find: findField, replace: replaceField, navigation: findNavigation,
+                                   count: findCount, flags: [caseBox, wordBox, regexBox],
+                                   replaceActions: [replaceMatchButton], more: more, done: doneButton)
         // Return in the field finds the next match, Shift-Return the previous one, Escape closes.
         findField.delegate = self
         replaceField.delegate = self
-        caseBox.target = self
-        caseBox.action = #selector(inlineFindOptionsChanged(_:))
+        for option in [caseBox, wordBox, regexBox] {
+            option.target = self
+            option.action = #selector(inlineFindOptionsChanged(_:))
+        }
         findField.target = self
         findField.action = #selector(findFieldAction(_:))
         findField.sendsWholeSearchString = true
@@ -872,7 +880,27 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         findCount.setAccessibilityHelp(nil)
     }
     func resumeVisibleFindPreview() {
-        if findBarVisible && findPreview?.editor !== activeEditor { scheduleFindPreview() }
+        if findBarVisible && findPreview?.editor !== activeEditor {
+            syncFindFlags()
+            scheduleFindPreview()
+        }
+    }
+    private func syncFindFlags() {
+        guard let search = EditorServices.current?.searchController else { return }
+        let flags = search.sharedOptions(query: "", replacement: "")
+        caseBox.state = flags.matchCase ? .on : .off
+        wordBox.state = flags.wholeWord ? .on : .off
+        regexBox.state = flags.mode == .regularExpression ? .on : .off
+    }
+    func acceptSharedFindFlags() {
+        guard findBarVisible || inlineSearchPending else { return }
+        syncFindFlags()
+        cancelInlineSearch()
+        if findBarVisible && isActiveTab { scheduleFindPreview() }
+    }
+    private func inlineOptions(replacement: String = "") -> SearchOptions {
+        EditorServices.current?.searchController?.sharedOptions(query: findField.stringValue, replacement: replacement)
+            ?? SearchOptions(query: findField.stringValue, replacement: replacement)
     }
     private func scheduleFindPreview() {
         guard findBarVisible, isActiveTab, !statusClosed, let document = document as? TextDocument, document.isOpen else {
@@ -884,15 +912,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             endFindPreview()
             findPreview = InlineFindPreview(editor)
         }
-        let query = findField.stringValue, matchCase = caseBox.state == .on
+        let options = inlineOptions()
         findCount.stringValue = ""
         findCount.toolTip = nil
         findCount.setAccessibilityHelp(nil)
-        findPreview?.search(options: SearchOptions(query:query, matchCase:matchCase), isCurrent: { [weak self, weak editor] in
+        findPreview?.search(options: options, isCurrent: { [weak self, weak editor] in
             guard let self, let editor else { return false }
             return self.findBarVisible && self.isActiveTab && self.activeEditor === editor
-                && !self.statusClosed && self.findField.stringValue.utf8.elementsEqual(query.utf8)
-                && (self.caseBox.state == .on) == matchCase
+                && !self.statusClosed && self.findField.stringValue.utf8.elementsEqual(options.query.utf8)
+                && self.inlineOptions() == options
         }, publish: { [weak self] message, detail in
             self?.findCount.stringValue = message
             self?.findCount.toolTip = detail ?? message
@@ -906,6 +934,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         // Remember the pane the find bar acts on before focus leaves it.
         lastEditor = activeEditor
         setFindBar(visible: true)
+        syncFindFlags()
         endFindPreview()
         findPreview = InlineFindPreview(activeEditor)
         if findField.stringValue.isEmpty { findField.stringValue = Self.findPasteboardText }
@@ -963,9 +992,20 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
     }
     @objc private func inlineFindOptionsChanged(_ sender: Any?) {
-        guard focusPresentationChrome() else { return }
-        cancelInlineSearch()
-        scheduleFindPreview()
+        guard let button = sender as? NSButton else { return }
+        let enabled = button.state == .on
+        guard focusPresentationChrome(), let search = EditorServices.current?.searchController else { return }
+        let flag: SearchController.InlineFlag = button === regexBox ? .regex : (button === wordBox ? .wholeWord : .matchCase)
+        search.setInlineFlag(flag, enabled: enabled)
+    }
+    @objc private func navigateFromBar(_ sender: NSSegmentedControl) {
+        guard sender.selectedSegment >= 0 else { return }
+        performFind(backwards: sender.selectedSegment == 0)
+    }
+    @objc private func showMoreFindOptions(_ sender: Any?) {
+        guard focusPresentationChrome(), let search = EditorServices.current?.searchController else { return }
+        hideFind(nil)
+        search.showFromInline(query: findField.stringValue, replacement: replaceField.stringValue, sender: sender)
     }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         guard control === findField else { return false }
@@ -1005,7 +1045,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         let query = findField.stringValue
         let ready =
             !statusClosed && !inlineSearchPending && !query.isEmpty && query.utf16.prefix(65_537).count <= 65_536
-        findNextButton.isEnabled = ready
+        findNavigation.isEnabled = ready
         replaceMatchButton.isEnabled =
             ready && !editor.readOnly && editor.selectionCount == 1
             && editor.selectionStart < editor.selectionEnd
@@ -1025,11 +1065,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         // Menu/button actions commit the field editor and restore typing to the document. Return
         // keeps the field editor, so repeated Return and Shift-Return continue to work (DS-35).
         if focusEditor { hostWindow?.makeFirstResponder(editor) }
-        var captured = SearchOptions()
-        captured.query = findField.stringValue
-        captured.replacement = action == "replaceOne" ? replaceField.stringValue : ""
-        captured.matchCase = caseBox.state == .on
-        let options = captured
+        let options = inlineOptions(replacement: action == "replaceOne" ? replaceField.stringValue : "")
         cancelInlineSearch()
         guard !options.query.isEmpty, let delegate = EditorServices.current,
             let search = delegate.searchController, let capturedWindow = hostWindow
@@ -1050,7 +1086,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 guard let self, let editor, let capturedWindow else { return false }
                 return !self.statusClosed && self.inlineSearchGeneration == token && self.hostWindow === capturedWindow
                     && self.activeEditor === editor && self.findField.stringValue.utf8.elementsEqual(options.query.utf8)
-                    && (self.caseBox.state == .on) == options.matchCase
+                    && self.inlineOptions(replacement: options.replacement) == options
                     && (action != "replaceOne"
                         || self.replaceField.stringValue.utf8.elementsEqual(options.replacement.utf8))
             },

@@ -5,15 +5,24 @@ import TextTankCore
 
 /// All native Find actions remain visible at a group's 320-point minimum (DS-35,70-74).
 final class EditorFindBar: NSView {
-    private let controls: [NSView]
-    init(controls: [NSView]) {
-        self.controls = controls
+    private let find: NSView, replace: NSView, navigation: NSView, count: NSView, more: NSView, done: NSView
+    private let flags: [NSButton], replaceActions: [NSButton]
+    init(find: NSView, replace: NSView, navigation: NSView, count: NSView, flags: [NSButton],
+         replaceActions: [NSButton], more: NSView, done: NSView) {
+        self.find = find
+        self.replace = replace
+        self.navigation = navigation
+        self.count = count
+        self.flags = flags
+        self.replaceActions = replaceActions
+        self.more = more
+        self.done = done
         super.init(frame: .zero)
-        controls.forEach { addSubview($0) }
+        ([find, navigation, count, more, done, replace] + replaceActions + flags).forEach { addSubview($0) }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
-    private var compact: Bool { bounds.width < 852 }
-    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: compact ? 74 : 24) }
+    private var compact: Bool { bounds.width < 700 }
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: compact ? 100 : 50) }
     override func setFrameSize(_ newSize: NSSize) {
         let wasCompact = compact
         super.setFrameSize(newSize)
@@ -22,23 +31,37 @@ final class EditorFindBar: NSView {
     }
     override func layout() {
         super.layout()
-        guard controls.count == 7 else { return }
-        let w = bounds.width
-        if compact {
-            controls[0].frame = NSRect(x: 0, y: 52, width: max(0, w - 54), height: 22)
-            controls[5].frame = NSRect(x: max(0, w - 50), y: 52, width: 50, height: 22)
-            controls[1].frame = NSRect(x: 0, y: 26, width: max(0, w - 136), height: 22)
-            controls[4].frame = NSRect(x: max(0, w - 132), y: 26, width: 132, height: 22)
-            controls[2].frame = NSRect(x: 0, y: 0, width: 110, height: 22)
-            controls[3].frame = NSRect(x: 114, y: 0, width: 60, height: 22)
-            controls[6].frame = NSRect(x: 180, y: 0, width: max(0, w - 180), height: 22)
-        } else {
-            let widths: [CGFloat] = [max(160, w - 678), 150, 100, 58, 126, 48, 120]
+        // Each row has at most one flexible field or label. Native control fitting sizes
+        // preserve the labels across system font sizes and appearances.
+        func row(_ views: [NSView], flexible: NSView?, y: CGFloat) {
+            let gap: CGFloat = 4
+            let fixed = views.filter { $0 !== flexible }.reduce(CGFloat.zero) { $0 + ceil($1.fittingSize.width) }
+            let remaining = max(0, bounds.width - fixed - gap * CGFloat(views.count - 1))
             var x: CGFloat = 0
-            for (control, width) in zip(controls, widths) {
-                control.frame = NSRect(x: x, y: 0, width: width, height: 24)
-                x += width + 8
+            for view in views {
+                let width = view === flexible ? remaining : ceil(view.fittingSize.width)
+                view.frame = NSRect(x: x, y: y, width: width, height: 24)
+                x += width + gap
             }
+        }
+        if compact {
+            row([find, done], flexible: find, y: 76)
+            row([replace] + replaceActions, flexible: replace, y: 51)
+            row([navigation, count, more], flexible: count, y: 26)
+            row(flags, flexible: nil, y: 0)
+        } else {
+            // Keep the empty count label's slot stable while the next query is pending.
+            let controls: [NSView] = [navigation, more, done]
+            var x = bounds.width
+            for control in controls.reversed() {
+                let width = ceil(control.fittingSize.width)
+                x -= width
+                control.frame = NSRect(x: x, y: 26, width: width, height: 24)
+                x -= 4
+            }
+            count.frame = NSRect(x: x - 124, y: 26, width: 124, height: 24)
+            find.frame = NSRect(x: 0, y: 26, width: max(0, count.frame.minX - 4), height: 24)
+            row([replace] + replaceActions + flags, flexible: replace, y: 0)
         }
     }
 }

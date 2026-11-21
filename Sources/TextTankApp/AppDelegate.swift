@@ -122,6 +122,11 @@ import AppKit
     @MainActor lazy var searchController: SearchController = {
         let controller = SearchController()
         controller.readFindText = { EditorWindowController.findPasteboardText }
+        controller.sharedFlagsChanged = {
+            for case let document as TextDocument in NSDocumentController.shared.documents {
+                document.presentations.forEach { $0.acceptSharedFindFlags() }
+            }
+        }
         controller.writeFindText = { [weak self] text in
             EditorWindowController.findPasteboardText = text
             self?.currentDocumentController?.acceptSharedFindText(text)
