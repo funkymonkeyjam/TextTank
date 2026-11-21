@@ -15,6 +15,7 @@ import AppKit
     let filter = NSTextField(string: "")
     let table = ActivatingTableView()
     var rows: () -> [Row] = { [] }
+    var filteredRows: ((String) -> [Row])?
     var onClose: (() -> Void)?
     private var controllerOwner: AnyObject?
     func retainController(_ owner: AnyObject) { controllerOwner = owner }
@@ -22,6 +23,7 @@ import AppKit
         let callback = onClose
         onClose = nil
         rows = { [] }
+        filteredRows = nil
         choose = { _ in false }
         canChoose = { false }
         callback?()
@@ -75,7 +77,7 @@ import AppKit
     func refresh() {
         let selected = displayed.indices.contains(table.selectedRow) ? displayed[table.selectedRow].id : nil
         let query = filter.stringValue
-        displayed = rows().filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }
+        displayed = filteredRows?(query) ?? rows().filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }
         table.rowHeight = displayed.contains { !$0.detail.isEmpty } ? 46 : 30
         table.reloadData()
         if let index = displayed.firstIndex(where: { $0.id == selected }) {
