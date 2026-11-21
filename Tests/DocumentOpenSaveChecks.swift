@@ -31,6 +31,11 @@ extension DocumentChecks {
             document.editor.replaceSelection(text)
         }
 
+        section("explicit local text URL", #line) {
+            let folder = area.appendingPathComponent("explicit-url", isDirectory: true)
+            try files.createDirectory(at: folder, withIntermediateDirectories: true)
+            try checkTextURL(in: folder, delegate: AppDelegate())
+        }
         section("invalid editor bytes preserve saved files and recovery", #line) {
             let source = area.appendingPathComponent("checked-capture.txt"), disk = Data("saved file".utf8)
             let doc = try loaded(source, disk)
@@ -813,6 +818,78 @@ extension DocumentChecks {
             check(try WorkspaceStore.load(from: renamed) == session, "a snapshot saved under any name still loads")
         }
     }
+    @MainActor static func checkTextURL(in root: URL, delegate: AppDelegate) throws {
+        let name = "space # +&% and 雪.txt", file = root.appendingPathComponent(name)
+        let disk = Data("first\r\n甲\t🍋é\r\nlast".utf8)
+        try disk.write(to: file)
+        func address(_ url: URL, _ line: String?, _ column: String?) -> String {
+            var request = URLComponents()
+            request.scheme = "texttank"
+            request.host = "open"
+            request.queryItems = [.init(name: "path", value: url.path)]
+            if let line { request.queryItems?.append(.init(name: "line", value: line)) }
+            if let column { request.queryItems?.append(.init(name: "column", value: column)) }
+            return request.string!
+        }
+        func event(_ url: String) -> NSAppleEventDescriptor {
+            let input = NSAppleEventDescriptor(
+                eventClass: AEEventClass(kInternetEventClass), eventID: AEEventID(kAEGetURL),
+                targetDescriptor: .currentProcess(), returnID: AEReturnID(kAutoGenerateReturnID),
+                transactionID: AETransactionID(kAnyTransactionID))
+            input.setParam(NSAppleEventDescriptor(string: url), forKeyword: keyDirectObject)
+            return input
+        }
+        let docs = NSDocumentController.shared
+        let count = docs.documents.count
+        let raw = address(file, "2", "6")
+        let reply = NSAppleEventDescriptor.list()
+        delegate.handleOpenTextURL(event(raw), reply: reply)
+        let doc = try requireValue(
+            docs.document(for: file) as? TextDocument, "URL opens exactly the encoded local path")
+        defer { doc.close() }
+        doc.editor.configureTabWidth(4, useTabs: false)
+        let again = try TextOpenRequest(raw).open()
+        check(
+            again === doc && docs.documents.count == count + 1 && !doc.isDocumentEdited
+                && doc.editor.statusInfo.line == 2 && doc.editor.statusInfo.column == 6,
+            "one-based line and tab-expanded column reuse the same native document")
+        let end = try TextOpenRequest(address(file, "1000", "99999")).open()
+        check(end === doc && doc.editor.selectionCaret == disk.count, "coordinates past EOF clamp to last line end")
+        doc.editor.replaceSelection(" unsaved")
+        let changed = doc.editor.checkedUTF8Data
+        _ = try TextOpenRequest(address(file, "1", "1")).open()
+        check(
+            try doc.editor.checkedUTF8Data == changed && doc.isDocumentEdited && doc.editor.selectionCaret == 0
+                && Data(contentsOf: file) == disk,
+            "reopening navigates without reloading or saving an existing dirty original")
+        let retained = docs.documents.count
+        for invalid in [
+            "texttank://run?path=/owned", "texttank://open?path=relative", "texttank://open?path=/a&path=/b",
+            "texttank://open?path=//server/share", "texttank://open?path=/a&command=no",
+            "texttank://open?path=/a&line=-1", "texttank://open?path=/a&column=0", "texttank://open?path=/a#x",
+            "texttank://user@open?path=/a", "texttank://open?path=%00", "https://open?path=/a"
+        ] {
+            rejects("invalid open request is refused") { _ = try TextOpenRequest(invalid) }
+        }
+        let bin = root.appendingPathComponent("binary.txt")
+        try Data([0, 1, 2, 3]).write(to: bin)
+        let alias = root.appendingPathComponent("link.txt")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: file)
+        for invalid in [root, bin, alias, root.appendingPathComponent("missing.txt")] {
+            rejects("nonregular, missing or binary URL cannot register a document") {
+                _ = try TextOpenRequest(address(invalid, nil, nil)).open()
+            }
+        }
+        check(
+            docs.documents.count == retained && doc.editor.checkedUTF8Data == changed,
+            "rejections preserve the document registry and dirty text")
+        let valid16 = root.appendingPathComponent("utf16.txt")
+        try FileCodec.encode("wide雪", format: FileFormat(encoding: .utf16LE, bom: true)).write(to: valid16)
+        let utf16 = try TextOpenRequest(address(valid16, nil, nil)).open()
+        defer { utf16.close() }
+        check(utf16.editor.text == "wide雪", "BOM-marked UTF-16 remains eligible text")
+    }
+
 }
 
 /// Only the worker's opened URL crosses this test's file-presenter wait. No UI or callback

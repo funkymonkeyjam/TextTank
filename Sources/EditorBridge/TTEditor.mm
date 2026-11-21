@@ -1140,6 +1140,15 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self noteStateChange];
     return YES;
 }
+- (void)showLine:(NSInteger)line column:(NSInteger)column {
+    [self assertThread];
+    if (line < 1 || column < 1) return;
+    const sptr_t row = std::min<sptr_t>(line, [_engine message:SCI_GETLINECOUNT]) - 1;
+    const sptr_t offset = [_engine message:SCI_FINDCOLUMN wParam:row lParam:std::min<sptr_t>(column - 1, INT_MAX)];
+    [_engine message:SCI_ENSUREVISIBLE wParam:row];
+    [self setSelectionAnchor:offset caret:offset];
+    [self scrollCaretIntoView];
+}
 - (void)scrollCaretIntoView { [self assertThread]; [_engine message:SCI_SCROLLCARET]; }
 - (NSInteger)firstVisibleLine { [self assertThread]; return [_engine message:SCI_GETFIRSTVISIBLELINE]; }
 - (void)restoreClosedTabViewWithAnchor:(NSInteger)anchor caret:(NSInteger)caret firstVisibleLine:(NSInteger)line {

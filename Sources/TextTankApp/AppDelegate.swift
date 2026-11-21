@@ -208,6 +208,23 @@ import AppKit
         }
     }
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(
+            self, andSelector: #selector(handleOpenTextURL(_:reply:)), forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL))
+    }
+    @objc func handleOpenTextURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        do {
+            guard let raw = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue else {
+                throw TextOpenRequest.invalidURL
+            }
+            _ = try TextOpenRequest(raw).open()
+        } catch {
+            reply.setParam(NSAppleEventDescriptor(int32: Int32(paramErr)), forKeyword: keyErrorNumber)
+            reply.setParam(NSAppleEventDescriptor(string: error.localizedDescription), forKeyword: keyErrorString)
+            knownWorkspace?.showTabMessage(error.localizedDescription)
+        }
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenus()
         settings.apply()
@@ -659,7 +676,9 @@ import AppKit
         search.addItem(.separator())
         search.addItem(comparisons)
         let marked = NSMenu(title: "Bookmarked Lines")
-        for value: EditorCommand in [.bookmarkCutLines, .bookmarkCopyLines, .bookmarkDeleteLines, .bookmarkInvert, .bookmarkClearAll] {
+        for value: EditorCommand in [
+            .bookmarkCutLines, .bookmarkCopyLines, .bookmarkDeleteLines, .bookmarkInvert, .bookmarkClearAll
+        ] {
             command(marked, value)
         }
         let markedItem = NSMenuItem(title: marked.title, action: nil, keyEquivalent: "")
