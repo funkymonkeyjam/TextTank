@@ -145,8 +145,10 @@ import AppKit
     private(set) var recoveredOrigin: String?
     /// Suppresses ordinary edit/recovery callbacks while a read or restore establishes its checkpoints.
     private var loading = false
-    /// Set only while an explicit open-with-encoding is reading the file.
+    /// A transient decoder override for one read; nil keeps automatic detection.
     private var openEncoding: FileEncoding?
+    /// Explicit interpretation of the last successful disk baseline, independent of unsaved conversion.
+    private var revertEncoding: FileEncoding?
     private var readingURL: URL?
     /// A snapshot records the file it belongs to. A moved or renamed file is new snapshot
     /// metadata at the same text revision, so it needs a later recovery revision.
@@ -287,7 +289,7 @@ import AppKit
     }
     /// Explicit reinterpretation is a reload, not encoding conversion. Unsaved edits
     /// require a native confirmation before this method is called with discard=true.
-    func reload(using encoding: FileEncoding, discard: Bool = false) throws {
+    func reload(using encoding: FileEncoding, discard: Bool = false, rememberEncoding: Bool = true) throws {
         guard fileURL != nil else {
             throw DocumentActionError.notSaved
         }
@@ -296,7 +298,7 @@ import AppKit
         }
         let (bytes, sample) = try onDiskFile { try WorkspaceStore.readRegularFileSample($0, maximumBytes: Int.max) }
         let decoded = try FileCodec.decode(bytes, encoding: encoding)
-        loadDecoded(decoded, sample: sample)
+        loadDecoded(decoded, sample: sample, explicitEncoding: rememberEncoding ? encoding : revertEncoding)
         updateChangeCount(.changeCleared)
         flushRecovery()
     }
@@ -590,13 +592,15 @@ import AppKit
             }
         }
         loadDecoded(
-            decoded, sample: capturedSample ?? FileSample(digest: WorkspaceStore.fingerprint(data), signature: nil))
+            decoded, sample: capturedSample ?? FileSample(digest: WorkspaceStore.fingerprint(data), signature: nil),
+            explicitEncoding: openEncoding)
     }
     /// The same strict decode with an encoding the person chose, for callers that already hold
     /// the bytes. A failure throws the codec's error and loads nothing.
     func read(from data: Data, ofType typeName: String, as encoding: FileEncoding) throws {
+        let previous = openEncoding
         openEncoding = encoding
-        defer { openEncoding = nil }
+        defer { openEncoding = previous }
         try read(from: data, ofType: typeName)
     }
     /// Explicit open-with-encoding. An already open document is reloaded from disk instead;
@@ -618,6 +622,9 @@ import AppKit
     /// suppresses change handling. Remove the discarded draft's snapshot now. If the revert
     /// throws, the buffer is still dirty and its snapshot must survive.
     override func revert(toContentsOf url: URL, ofType typeName: String) throws {
+        let previous = openEncoding
+        openEncoding = revertEncoding
+        defer { openEncoding = previous }
         try super.revert(toContentsOf: url, ofType: typeName)
         flushRecovery()
     }
@@ -656,7 +663,7 @@ import AppKit
         doc.flushRecovery()
         return doc
     }
-    private func loadDecoded(_ decoded: DecodedFile, sample: FileSample) {
+    private func loadDecoded(_ decoded: DecodedFile, sample: FileSample, explicitEncoding: FileEncoding?) {
         loadEpoch &+= 1
         EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was reloaded.")
         loading = true
@@ -670,6 +677,7 @@ import AppKit
         editor.resetUndoHistory()
         format = decoded.format
         savedFormat = format
+        revertEncoding = explicitEncoding
         diskDigest = sample.digest
         diskSignature = sample.signature
         savepointMatchesDisk = true
@@ -838,6 +846,10 @@ import AppKit
             // another writer may already have replaced it, and only a hash can tell.
             diskDigest = WorkspaceStore.fingerprint(submitted)
             diskSignature = nil
+            // A successful conversion changes the baseline Revert will read from disk.
+            if revertEncoding != nil || submittedFormat.encoding != savedFormat.encoding {
+                revertEncoding = submittedFormat.encoding
+            }
             savedFormat = submittedFormat
             if editor.revision == submittedRevision && format == submittedFormat {
                 savepointMatchesDisk = true

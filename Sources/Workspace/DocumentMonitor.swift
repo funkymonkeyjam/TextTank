@@ -151,7 +151,7 @@ enum DocumentMonitorStatus: Equatable, Sendable {
         else {
             throw WorkspaceError.invalid("The monitored document changed or has unsaved edits. Its text was preserved.")
         }
-        try document.reload(using: document.format.encoding)
+        try document.reload(using: document.format.encoding, rememberEncoding: false)
         publish(.unchanged)
         poll()
     }

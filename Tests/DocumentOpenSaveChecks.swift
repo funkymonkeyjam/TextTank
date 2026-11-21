@@ -284,6 +284,19 @@ extension DocumentChecks {
             check(
                 asked.isEmpty && answered?.0 === viaOpen && answered?.1 == true && answered?.2 == nil,
                 "a successful open is passed through untouched")
+            edit(viaOpen, "private draft")
+            _ = viaOpen.editor.setSelectionAnchor(0, caret: 7)
+            rejects("failed reinterpretation retains the prior decoder") {
+                try viaOpen.reload(using: .utf8, discard: true)
+            }
+            check(
+                viaOpen.editor.selectedText == "private" && viaOpen.isDocumentEdited
+                    && viaOpen.format.encoding == .latin1,
+                "failed reinterpretation keeps the dirty selection and its previously selected encoding")
+            try viaOpen.revert(toContentsOf: latinURL, ofType: TextDocument.plainTextType)
+            check(
+                viaOpen.editor.text == "café" && viaOpen.format.encoding == .latin1 && !viaOpen.isDocumentEdited,
+                "Revert preserves the legacy encoding selected through the actual open completion")
             viaOpen.close()
             answers = [nil]
             asked = []
@@ -317,12 +330,33 @@ extension DocumentChecks {
             check(
                 wide.editor.text == "héllo wörld" && wide.format == wideFormat && !wide.isDocumentEdited,
                 "BOM-less UTF-16 opens with its text and stays BOM-less")
+            edit(wide, "private draft")
+            try wide.revert(toContentsOf: wideURL, ofType: TextDocument.plainTextType)
+            check(
+                wide.editor.text == "héllo wörld" && wide.format == wideFormat && !wide.isDocumentEdited,
+                "Revert keeps the chosen BOM-less UTF-16 interpretation and clears the discarded draft")
             edit(wide, "héllo")
             try wide.writeSafely(to: wideURL, ofType: "Plain Text", for: .saveOperation)
             check(
                 try Data(contentsOf: wideURL) == (try FileCodec.encode("héllo", format: wideFormat)),
                 "a BOM-less UTF-16 file opened by choice saves back without a BOM")
             wide.close()
+
+            let autoURL = area.appendingPathComponent("monitored-auto-encoding.txt")
+            try Data("plain".utf8).write(to: autoURL)
+            let autoDocument = try DocumentFactory.openCaptured(
+                WorkspaceStore.captureRegularFile(autoURL), from: autoURL, display: false)
+            let autoMonitor = DocumentMonitor()
+            try autoMonitor.start(autoDocument)
+            try autoMonitor.reload(expectedRevision: autoDocument.editor.revision)
+            autoMonitor.stop()
+            let marked = FileFormat(encoding: .utf16BE, bom: true)
+            try FileCodec.encode("new representation", format: marked).write(to: autoURL)
+            try autoDocument.revert(toContentsOf: autoURL, ofType: TextDocument.plainTextType)
+            check(
+                autoDocument.format == marked && autoDocument.editor.text == "new representation",
+                "monitor reload of an automatically decoded document keeps Revert's encoding detection")
+            autoDocument.close()
 
             // The workspace browser: only row activation asks; open(_:) itself never does.
             let browser = WorkspaceBrowserController(
