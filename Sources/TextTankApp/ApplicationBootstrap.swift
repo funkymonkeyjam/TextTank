@@ -1,4 +1,5 @@
 import AppKit
+import TextTankCore
 
 package enum TextTankApplication {
     @MainActor package static func run() {
@@ -13,6 +14,7 @@ package enum TextTankApplication {
         }
     }
     @MainActor static func run(onRecoveryFailure: (Error) -> Void) {
+        let freshProfile = isNewProfile(at: AppStorage.supportDirectory)
         do {
             try TextDocument.recovery.claimOwnership()
         } catch {
@@ -24,6 +26,7 @@ package enum TextTankApplication {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let delegate = AppDelegate()
+        delegate.firstLaunchProfile = freshProfile
         app.delegate = delegate
         delegate.installEditorServices()
         if NSDocumentController.shared !== documents {
@@ -31,5 +34,13 @@ package enum TextTankApplication {
         }
         app.run()
         withExtendedLifetime(delegate) {}
+    }
+
+    static func isNewProfile(at directory: URL) -> Bool {
+        do {
+            return try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty
+        } catch let error as CocoaError {
+            return error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile
+        } catch { return false }
     }
 }

@@ -156,6 +156,44 @@ extension DocumentChecks {
                 "DG closing a Go to Line target never navigates a retired editor")
         }
 
+        section("offline guide and editable welcome", #line) {
+            let profile = root.appendingPathComponent("owned-help-profile")
+            check(TextTankApplication.isNewProfile(at: profile), "an absent private profile is new")
+            try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+            check(TextTankApplication.isNewProfile(at: profile), "an empty private profile is new")
+            try Data("prior".utf8).write(to: profile.appendingPathComponent("owned-entry"))
+            check(!TextTankApplication.isNewProfile(at: profile), "an existing profile is preserved")
+            let original = sessionDelegate.helpResourceDirectory
+            sessionDelegate.helpResourceDirectory = TestPaths.resources
+            defer { sessionDelegate.helpResourceDirectory = original }
+            let menu = try requireValue(NSApp.helpMenu, "actual Help menu")
+            for (action, name) in [
+                (#selector(AppDelegate.openUserGuide(_:)), "TextTank-User-Guide"),
+                (#selector(AppDelegate.openWelcome(_:)), "TextTank-Welcome")
+            ] {
+                let item = try requireValue(menu.items.first { $0.action == action }, "offline Help item")
+                let source = TestPaths.resources.appendingPathComponent(name + ".txt")
+                let bytes = try Data(contentsOf: source)
+                let previous = Set(NSDocumentController.shared.documents.map(ObjectIdentifier.init))
+                check(NSApp.sendAction(action, to: sessionDelegate, from: item), "normal Help action dispatches")
+                let doc = try requireValue(
+                    NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
+                        .first { !previous.contains(ObjectIdentifier($0)) }, "owned untitled help")
+                defer { doc.close() }
+                check(doc.fileURL == nil && doc.displayName == item.title && !doc.isDocumentEdited
+                    && !doc.editor.modified && !doc.editor.readOnly && doc.editor.checkedUTF8Data == bytes,
+                    "offline help has exact bundled text and a clean editable untitled identity")
+                doc.editor.replaceSelection("sample edit")
+                check(doc.isDocumentEdited && doc.editor.checkedUTF8Data != bytes, "typing marks the help draft edited")
+                doc.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+                check(try doc.editor.checkedUTF8Data == bytes && Data(contentsOf: source) == bytes,
+                    "one Undo restores the original text and bundled help remains untouched")
+            }
+            let sample = "- tea\n- milk"
+            check(try AutomationDefinition.example.testSample(sample) == "tea\nmilk",
+                "the welcome's worked example yields the documented result with the real built-in recipe")
+        }
+
         section("command discovery uses ordinary menu validation", #line) {
             let bar = try requireValue(NSApp.mainMenu, "actual menu bar")
             let palette = sessionDelegate.commandDiscovery

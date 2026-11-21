@@ -157,6 +157,7 @@ import EditorBridge
         case "undo:", "redo:": return ("Reads edit history • Changes active text", nil)
         case "saveDocument:", "saveDocumentAs:", "saveAllDocuments:", "saveCopy:":
             return ("Reads document text • Writes files to disk", nil)
+        case "openUserGuide:", "openWelcome:": return ("Reads bundled help • Opens an editable untitled tab", nil)
         case "openOnlineHelp:":
             return (
                 "Opens the TextTank help site in your browser", "Open TextTank’s online help in the default browser?"
