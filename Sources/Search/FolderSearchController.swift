@@ -417,6 +417,8 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                 let state: String
                 if report.wasCancelled {
                     state = Strings.text("folder.cancelled", "Cancelled; partial results")
+                } else if let limit = report.reachedLimit, limit == .elapsed || limit == .consecutiveTimeouts {
+                    state = "Stopped early: " + limit.displayName + "; partial results"
                 } else if let limit = report.reachedLimit {
                     state = String(
                         format: Strings.text("folder.limited", "Limit reached: %@; partial results"), limit.displayName)

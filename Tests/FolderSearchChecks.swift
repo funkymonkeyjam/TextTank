@@ -52,6 +52,39 @@ import Darwin
             utf16.matches.count == 1 && utf16.bytesRead == wide.count && utf16.inspectionBytes == 0,
             "UTF-16 marker retains text, including NUL and a surrogate pair")
     }
+    static func operationLimits(in root: URL) async throws {
+        let fm = FileManager.default, scope = root.appendingPathComponent("time-bounds")
+        defer { try? fm.removeItem(at: scope) }
+        let roots = ["a", "b", "c", "d", "e", "f"].map { scope.appendingPathComponent($0) }
+        let little = Data("needle".utf8), large = Data(repeating: 65, count: 1024 * 1024)
+        for (i, dir) in roots.enumerated() {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try (i == 5 ? little : large).write(to: dir.appendingPathComponent("ordinary.txt"))
+        }
+        var q = FolderSearchRequest(directory: roots[0], query: "needle", mode: .regularExpression)
+        q.perFileTimeLimit = 0.002
+        let stopped = try await FolderSearch.searchAcross(q, directories: roots)
+        check(
+            stopped.reachedLimit == .consecutiveTimeouts && stopped.notSearched.count == 3 && stopped.matches.isEmpty
+                && !stopped.wasCancelled && !stopped.isComplete,
+            "three genuine native timeouts across roots stop with explicit partial coverage")
+        try little.write(to: roots[2].appendingPathComponent("ordinary.txt"))
+        let continued = try await FolderSearch.searchAcross(q, directories: roots)
+        check(
+            continued.reachedLimit == nil && continued.matches.count == 2 && continued.notSearched.count == 4,
+            "a small successful search resets the prior timeout streak and later matches remain visible")
+        q.maximumDuration = 0.000001
+        let elapsed = try await FolderSearch.searchAcross(q, directories: roots)
+        check(
+            elapsed.reachedLimit == .elapsed && !elapsed.wasCancelled,
+            "one operation deadline bounds the complete workspace search")
+        let cancel = FolderSearchCancellation()
+        cancel.cancel()
+        let cancelled = try await FolderSearch.searchAcross(q, directories: roots, cancellation: cancel)
+        check(
+            cancelled.wasCancelled && cancelled.reachedLimit == nil,
+            "explicit cancellation stays distinct from elapsed time")
+    }
     static func main() async {
         await Checks.run("FolderSearchChecks") {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -65,6 +98,7 @@ import Darwin
                 try? FileManager.default.removeItem(at: outside)
             }
             try await inspectBeforeBudget(in: root)
+            try await operationLimits(in: root)
             let displayRoot = root.appendingPathComponent("display-columns")
             try FileManager.default.createDirectory(at: displayRoot, withIntermediateDirectories: true)
             try Data("\t😀e\u{301}x\r\n".utf8).write(to: displayRoot.appendingPathComponent("columns.txt"))

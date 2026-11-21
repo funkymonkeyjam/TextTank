@@ -29,6 +29,8 @@ __attribute__((objc_subclassing_restricted))
 @end
 /// Pure snapshot search; never accesses editor/AppKit. Ranges are UTF-16.
 @interface TTSearchEngine : NSObject
+/// Distinguishes a deadline from ordinary search errors without interpreting display text.
++ (BOOL)isTimeLimitError:(NSError *)error NS_SWIFT_NAME(timedOut(_:));
 /// Searches `range` of `text`. Matches lie inside the range and are reported at their offsets in
 /// `text`; whole-word tests, ^, \b, \A and lookbehind see the text around the range, and $ at
 /// the range end matches only at a real line end. Regular expressions run over code points.
