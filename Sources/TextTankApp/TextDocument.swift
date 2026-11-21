@@ -94,8 +94,57 @@ import AppKit
     func requestTabClose(_ sender: Any?) {
         guard isOpen, !tabClosePending else { return }
         tabClosePending = true
+        if isDocumentEdited, let url = diskURL, let window = windowForSheet, window.attachedSheet == nil,
+            EditorServices.current?.compare?.canCompareSaved(self) == true
+        {
+            let decision = SavedVersionDecision(self, at: url)
+            if decision.allowsComparison {
+                reviewSingleTabClose(decision, in: window)
+                return
+            }
+        }
         canClose(
             withDelegate: self, shouldClose: #selector(tabCloseReviewed(_:shouldClose:contextInfo:)), contextInfo: nil)
+    }
+    /// Only the last view of one explicitly closed tab uses this review. AppKit owns
+    /// application quit; the existing bulk tab command collects its own separate decisions.
+    private func reviewSingleTabClose(_ decision: SavedVersionDecision, in window: NSWindow) {
+        let alert = TTAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(format: "Save changes to “%@” before closing?", displayName)
+        alert.informativeText = "Review Changes keeps this document open and compares your edits with the saved file."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don’t Save").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel", role: .cancel)
+        alert.addButton(withTitle: "Review Changes…")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            self.tabClosePending = false
+            guard decision.isCurrent, EditorServices.current?.reviewingTermination() != true else { return }
+            switch TTAlert.Result(response) {
+            case .button(0):
+                self.tabClosePending = true
+                TabSaveReply.save(self) { [weak self] error in
+                    guard let self else { return }
+                    self.tabClosePending = false
+                    if error == nil, decision.sameEditorState, !self.isDocumentEdited, !self.hasUnsavedState,
+                        EditorServices.current?.reviewingTermination() != true
+                    {
+                        self.close()
+                    }
+                }
+            case .button(1):
+                if decision.diskStillMatches {
+                    self.close()
+                } else {
+                    self.presentation?.showTransientStatus(
+                        "The saved file changed during review. The document remains open.")
+                }
+            case .button(3):
+                decision.compareAfterDismissal()
+            default: break
+            }
+        }
     }
     @objc private func tabCloseReviewed(
         _ document: NSDocument, shouldClose: Bool, contextInfo: UnsafeMutableRawPointer?
@@ -999,11 +1048,16 @@ enum EditorCaptureError: LocalizedError, Equatable {
             ?? (try? WorkspaceStore.signature(
                 ofRegularFileAt: url, maximumBytes: ReviewDiffPolicy.default.maximumInputBytes))
     }
-    var isCurrent: Bool {
+    var sameEditorState: Bool {
         guard let document else { return false }
         return document.isOpen && document.diskURL == url && document.loadEpoch == epoch
             && document.editor.revision == revision && document.format == format
-            && document.originalDiskFingerprint == baseline
+    }
+    var isCurrent: Bool { sameEditorState && document?.originalDiskFingerprint == baseline }
+    var diskStillMatches: Bool {
+        guard let identity else { return false }
+        return (try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int(clamping: identity.size)))
+            == identity
     }
     var allowsComparison: Bool {
         guard identity != nil, isCurrent, let document, document.presentation?.host.tabCommands.isBusy != true

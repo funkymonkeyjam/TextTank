@@ -18,7 +18,7 @@ import EditorBridge
         self.scope = scope
     }
 }
-@MainActor private final class TabSaveReply: NSObject {
+@MainActor final class TabSaveReply: NSObject {
     private static var pending: [UUID: TabSaveReply] = [:]
     let id = UUID()
     let completion: @MainActor (Error?) -> Void

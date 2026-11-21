@@ -180,6 +180,8 @@ actor CompareFileGate {
             "uncontested Save writes normally without a comparison")
         safe.close()
         view.host.activate(view, focus: false)
+        try await closeReviews(in: root, service: service)
+        view.host.activate(view, focus: false)
         let read = service.fileSnapshot
         let gate = CompareFileGate()
         service.fileSnapshot = { url, encoding in
@@ -239,5 +241,59 @@ actor CompareFileGate {
         check(
             service.windows.isEmpty && doc.isDocumentEdited && doc.isOpen && doc.validateUserInterfaceItem(action)
                 && replies == [false], "cancelling quit keeps the source and suppresses the pre-quit comparison")
+    }
+
+    private static func closeReviews(in root: URL, service: CompareService) async throws {
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        for choice in ["Cancel", "Review Changes…", "Save", "Don’t Save", "stale discard", "replaced disk"] {
+            let url = root.appendingPathComponent("close-" + choice + ".txt")
+            try Data("initial".utf8).write(to: url)
+            let doc = try DocumentFactory.openCaptured(
+                WorkspaceStore.captureRegularFile(url), from: url, display: false)
+            defer { doc.close() }
+            let view = try requireValue(doc.presentation, "single-close presentation")
+            let host = try requireValue(doc.windowForSheet, "single-close sheet parent")
+            view.host.activate(view, focus: false)
+            doc.editor.text = "original pending"
+            _ = doc.editor.setSelectionAnchor(7, caret: 2)
+            let close = try requireValue(
+                descendants(view.host.tabStrip).compactMap { $0 as? NSButton }.first {
+                    $0.toolTip == "Close " + url.lastPathComponent
+                }, "built tab close control")
+            close.performClick(nil)
+            _ = await waitUntil("single close opens native choice sheet") { host.attachedSheet != nil }
+            let buttons = host.attachedSheet?.contentView.map(descendants)?.compactMap { $0 as? NSButton } ?? []
+            check(
+                Set(buttons.map(\.title)).isSuperset(of: ["Save", "Don’t Save", "Cancel", "Review Changes…"]),
+                "saved dirty close offers all four explicit choices")
+            if choice == "stale discard" { doc.editor.text = "newer pending" }
+            if choice == "replaced disk" { try Data("new external".utf8).write(to: url, options: .atomic) }
+            let title = ["stale discard", "replaced disk"].contains(choice) ? "Don’t Save" : choice
+            try requireValue(buttons.first { $0.title == title }, "single-close choice").performClick(nil)
+            _ = await waitUntil("single close decision dismisses its sheet") { host.attachedSheet == nil }
+            switch choice {
+            case "Save", "Don’t Save":
+                _ = await waitUntil("explicit save/discard closes owned tab") { doc.isClosed }
+                let expected = choice == "Save" ? "original pending" : "initial"
+                check(doc.isClosed && (try? Data(contentsOf: url)) == Data(expected.utf8), "explicit close " + choice)
+            case "Review Changes…":
+                _ = await waitUntil("cancel-close opens comparison") { service.windows.count == 1 }
+                let result = try requireValue(service.windows.first, "close review comparison")
+                check(
+                    doc.isOpen && doc.isDocumentEdited && doc.fileURL == url && doc.editor.selectionAnchor == 7
+                        && doc.editor.selectionCaret == 2
+                        && result.original?.snapshot.bytes == Data("original pending".utf8)
+                        && result.modified?.snapshot.bytes == Data("initial".utf8)
+                        && (try? Data(contentsOf: url)) == Data("initial".utf8),
+                    "Review Changes cancels close and preserves the edited selection and disk")
+                result.window?.close()
+            default:
+                let expected = choice == "stale discard" ? "newer pending" : "original pending"
+                let disk = choice == "replaced disk" ? "new external" : "initial"
+                check(
+                    doc.isOpen && doc.isDocumentEdited && doc.editor.text == expected && service.windows.isEmpty
+                        && (try? Data(contentsOf: url)) == Data(disk.utf8), "safe single-close outcome " + choice)
+            }
+        }
     }
 }
