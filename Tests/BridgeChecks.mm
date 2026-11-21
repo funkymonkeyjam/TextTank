@@ -898,6 +898,69 @@ int main(int argc, char **argv) {
         check([native message:SCI_GETLINEVISIBLE wParam:1] == 0, "Fold all hides actual lexer-derived body lines");
         [second executeCommand:@"unfoldAll"];
         check([native message:SCI_GETLINEVISIBLE wParam:1] == 1, "Unfold all restores body visibility");
+        {
+            TTEditor *fold = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 480, 240)];
+            TTEditor *neighbor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 480, 240)];
+            NSString *original = @"void f() {\n  if (a) {\n    if (b) {\n      work();\n    }\n  }\n  if (c) {\n    other();\n  }\n}\nvoid g() {\n  last();\n}\n";
+            fold.text = original;
+            [fold setLanguage:@"cpp"];
+            [neighbor shareDocumentWith:fold];
+            ScintillaView *engine = (ScintillaView *)fold.subviews.firstObject;
+            ScintillaView *peer = (ScintillaView *)neighbor.subviews.firstObject;
+            auto visible = [&](NSInteger line) { return [engine message:SCI_GETLINEVISIBLE wParam:line] != 0; };
+            [engine message:SCI_EMPTYUNDOBUFFER];
+            [fold setSavePoint];
+            const NSUInteger revision = fold.revision;
+            [fold goToLine:4]; // inside the deepest block
+            const NSInteger caret = fold.selectionCaret;
+            check([fold executeCommand:@"foldCurrent"] && !visible(3) && visible(2) && visible(7),
+                  "Fold Current at a body line contracts the nearest real header only");
+            check(fold.selectionCaret == caret && [peer message:SCI_GETLINEVISIBLE wParam:3],
+                  "Fold Current preserves the caret byte position and the other view");
+            check([fold goToLine:4] && visible(3), "Explicit Go To Line reveals the target after folding");
+            [fold goToLine:1];
+            [fold executeCommand:@"foldLevel2"];
+            check(visible(1) && !visible(2) && visible(6) && !visible(7) && visible(11),
+                  "Fold Level 2 collapses both sibling headers and leaves root peers expanded");
+            [fold executeCommand:@"foldLevel1"];
+            check(!visible(1) && visible(10) && !visible(11), "Fold Level 1 contracts both top-level C++ functions");
+            [fold executeCommand:@"unfoldAll"];
+            [fold goToLine:3];
+            [fold executeCommand:@"foldCurrent"];
+            [fold executeCommand:@"foldCurrent"];
+            check(visible(2) && !visible(3) && visible(7), "Fold Current at a header is idempotent");
+            check([fold.text isEqualToString:original] && fold.revision == revision && !fold.modified
+                  && ![engine message:SCI_CANUNDO], "Folding leaves text, revision, savepoint and Undo untouched");
+            [fold executeCommand:@"unfoldAll"];
+            [fold executeCommand:@"foldLevel8"];
+            check(visible(3) && visible(7), "An absent fold level has no effect");
+            fold.text = @"def f():\n    if yes:\n        thing()\n    more()\nend()\n";
+            [fold setLanguage:@"python"];
+            [fold executeCommand:@"foldLevel2"];
+            check(visible(1) && !visible(2) && visible(3), "Python indentation columns map to structural depth");
+            NSMutableString *deep = [NSMutableString string];
+            for (NSInteger i = 0; i < 9; ++i) [deep appendString:@"if (v) {\n"];
+            [deep appendString:@"leaf();\n"];
+            for (NSInteger i = 0; i < 9; ++i) [deep appendString:@"}\n"];
+            fold.text = deep;
+            [fold setLanguage:@"cpp"];
+            fold.readOnly = YES;
+            for (NSInteger depth = 1; depth <= 8; ++depth) {
+                [fold executeCommand:@"unfoldAll"];
+                NSString *name = [NSString stringWithFormat:@"foldLevel%ld", (long)depth];
+                check([fold executeCommand:name] && visible(depth - 1) && !visible(depth)
+                      && [peer message:SCI_GETLINEVISIBLE wParam:depth],
+                      [NSString stringWithFormat:@"Read-only Fold Level %ld targets its exact header and one view", (long)depth].UTF8String);
+            }
+            [fold executeCommand:@"unfoldAll"];
+            fold.readOnly = NO;
+            fold.text = @"alpha\nbeta\ngamma";
+            [fold setLanguage:@"null"];
+            [fold goToLine:2];
+            [fold executeCommand:@"foldCurrent"];
+            [fold executeCommand:@"foldLevel1"];
+            check(visible(0) && visible(1) && visible(2), "Plain text with no fold headers remains visible");
+        }
         check([[TTEditor availableLanguages] containsObject:@"cpp"] && [[TTEditor availableLanguages] containsObject:@"python"], "Language inventory enumerates linked lexer factories");
         // F22: the built-in keyword list and palette belong to the bare cpp lexer only.
         check([native message:SCI_STYLEGETFORE wParam:5] != [native message:SCI_STYLEGETFORE wParam:STYLE_DEFAULT], "Bare cpp lexer keeps its built-in keyword colour");

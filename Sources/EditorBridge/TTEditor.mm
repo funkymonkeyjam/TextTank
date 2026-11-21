@@ -384,6 +384,15 @@ static const TTCommandEntry TTCommandEntries[] = {
     {"duplicateLine", SCI_LINEDUPLICATE, true, true, true},
     {"duplicateSelection", SCI_SELECTIONDUPLICATE, true, true, true},
     {"foldAll", 0, false, false, false},
+    {"foldCurrent", 0, false, false, false},
+    {"foldLevel1", 0, false, false, false},
+    {"foldLevel2", 0, false, false, false},
+    {"foldLevel3", 0, false, false, false},
+    {"foldLevel4", 0, false, false, false},
+    {"foldLevel5", 0, false, false, false},
+    {"foldLevel6", 0, false, false, false},
+    {"foldLevel7", 0, false, false, false},
+    {"foldLevel8", 0, false, false, false},
     {"gotoMatchingBrace", 0, false, false, false},
     {"home", SCI_HOME, true, true, false},
     {"homeDisplay", SCI_HOMEDISPLAY, true, true, false},
@@ -1468,6 +1477,37 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     }
     if ([identifier isEqualToString:@"addNextOccurrence"] || [identifier isEqualToString:@"selectAllOccurrences"]) {
         [_engine message:[identifier isEqualToString:@"addNextOccurrence"] ? SCI_MULTIPLESELECTADDNEXT : SCI_MULTIPLESELECTADDEACH]; return YES;
+    }
+    if ([identifier isEqualToString:@"foldCurrent"]) {
+        const sptr_t caret = [_engine message:SCI_GETCURRENTPOS];
+        sptr_t line = [_engine message:SCI_LINEFROMPOSITION wParam:caret];
+        [_engine message:SCI_COLOURISE wParam:0 lParam:[_engine message:SCI_POSITIONFROMLINE wParam:line + 1]];
+        if (!([_engine message:SCI_GETFOLDLEVEL wParam:line] & SC_FOLDLEVELHEADERFLAG)) {
+            line = [_engine message:SCI_GETFOLDPARENT wParam:line];
+        }
+        if (line >= 0) [_engine message:SCI_FOLDLINE wParam:line lParam:SC_FOLDACTION_CONTRACT];
+        return YES;
+    }
+    if ([identifier hasPrefix:@"foldLevel"] && identifier.length == 10) {
+        const NSInteger depth = [identifier characterAtIndex:9] - '0';
+        if (depth < 1 || depth > 8) return NO;
+        // Nesting is the parent chain. Indentation lexers can advance several numeric levels per header.
+        [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
+        const sptr_t count = [_engine message:SCI_GETLINECOUNT];
+        sptr_t lastChild[8];
+        NSInteger parents = 0;
+        for (sptr_t line = 0; line < count; ++line) {
+            while (parents > 0 && line > lastChild[parents - 1]) --parents;
+            if (!([_engine message:SCI_GETFOLDLEVEL wParam:line] & SC_FOLDLEVELHEADERFLAG)) continue;
+            const sptr_t end = [_engine message:SCI_GETLASTCHILD wParam:line lParam:-1];
+            if (parents + 1 == depth) {
+                [_engine message:SCI_FOLDLINE wParam:line lParam:SC_FOLDACTION_CONTRACT];
+                line = end;
+            } else {
+                lastChild[parents++] = end;
+            }
+        }
+        return YES;
     }
     if ([identifier isEqualToString:@"foldAll"] || [identifier isEqualToString:@"unfoldAll"]) {
         [_engine message:SCI_COLOURISE wParam:0 lParam:-1];

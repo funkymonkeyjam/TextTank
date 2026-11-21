@@ -575,7 +575,15 @@ import AppKit
         command(view, .zoomIn)
         command(view, .zoomOut)
         view.addItem(title: "Actual Size", action: #selector(actualSize(_:)), fallback: .actualSize, target: self)
-        for value: EditorCommand in [.foldAll, .unfoldAll, .showWhitespace, .toggleEOL, .toggleLineNumbers] {
+        let folding = NSMenu(title: "Folding")
+        let foldingItem = NSMenuItem(title: folding.title, action: nil, keyEquivalent: "")
+        foldingItem.submenu = folding
+        view.addItem(foldingItem)
+        for value: EditorCommand in [
+            .foldCurrent, .foldAll, .unfoldAll, .foldLevel1, .foldLevel2, .foldLevel3, .foldLevel4,
+            .foldLevel5, .foldLevel6, .foldLevel7, .foldLevel8
+        ] { command(folding, value) }
+        for value: EditorCommand in [.showWhitespace, .toggleEOL, .toggleLineNumbers] {
             command(view, value)
         }
         view.addItem(.separator())
