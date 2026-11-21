@@ -178,7 +178,8 @@ package struct ShortcutLoadIssue: Equatable {
     }
 }
 package enum SettingsError: Error, LocalizedError, Equatable {
-    case invalid, invalidFont, conflict, unreadable, tabWidth, unknownShortcut, invalidShortcut, changedOnDisk, ambiguousViewPreference
+    case invalid, invalidFont, conflict, unreadable, tabWidth, unknownShortcut, invalidShortcut, changedOnDisk,
+        ambiguousViewPreference
     case duplicateShortcut(first: String, second: String, key: String)
     package var errorDescription: String? {
         switch self {
@@ -342,6 +343,20 @@ package enum EditorViewPreference: String {
 /// Foundation-only persistence and failed-load policy. UI/application effects belong to its caller.
 final package class SettingsStore {
     private(set) package var value = EditorSettings()
+    private var diskBytes: Data?
+    private var unreadableIdentity: FileSignature?
+    /// Compare exactly the bytes last read or written, including an absent preferences file.
+    package func fileIsCurrent() throws -> Bool {
+        if diskBytes == nil, loadError != nil {
+            var info = stat()
+            if lstat(url.path, &info) == 0 { return FileSignature(info) == unreadableIdentity }
+            guard errno == ENOENT else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            return unreadableIdentity == nil
+        }
+        do { return try WorkspaceStore.readRegularFile(url, maximumBytes: 1024 * 1024) == diskBytes } catch
+            where error.isFileNotFound
+        { return diskBytes == nil }
+    }
     private(set) package var ignoredShortcutBindings: [ShortcutLoadIssue] = []
     package var shortcutLoadNotice: String? {
         ignoredShortcutBindings.isEmpty ? nil : ignoredShortcutBindings.map(\.message).joined(separator: "\n\n")
@@ -364,12 +379,14 @@ final package class SettingsStore {
         self.url = url ?? AppStorage.url(.settings)
         loadState = StoreLoadState(url: self.url, displayName: "Editor settings")
         do {
-            let loaded = try EditorSettings.load(
-                WorkspaceStore.readRegularFile(self.url, maximumBytes: 1024 * 1024),
-                reservedKeys: reservedKeys)
+            let data = try WorkspaceStore.readRegularFile(self.url, maximumBytes: 1024 * 1024)
+            diskBytes = data
+            let loaded = try EditorSettings.load(data, reservedKeys: reservedKeys)
             value = loaded.settings
             ignoredShortcutBindings = loaded.issues
         } catch  where error.isFileNotFound {} catch {
+            var info = stat()
+            if lstat(self.url.path, &info) == 0 { unreadableIdentity = FileSignature(info) }
             loadError = error
         }
     }
@@ -400,6 +417,7 @@ final package class SettingsStore {
         }
         if enabled == requested {
             try requireUnchanged()
+            diskBytes = source
             value = latest
             return
         }
@@ -408,6 +426,7 @@ final package class SettingsStore {
         try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
         try PrivateFileStore.write(
             result, to: url, maximumBytes: 1024 * 1024, temporaryPrefix: ".settings-", beforeCommit: requireUnchanged)
+        diskBytes = result
         value = accepted
     }
 
@@ -447,6 +466,8 @@ final package class SettingsStore {
             loadError = priorError
             throw error
         }
+        diskBytes = data
+        unreadableIdentity = nil
         value = settings
         loadError = nil
         ignoredShortcutBindings = []

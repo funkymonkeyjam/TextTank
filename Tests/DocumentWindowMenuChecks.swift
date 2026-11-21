@@ -82,7 +82,7 @@ extension DocumentChecks {
                         item(#selector(EditorWindowController.perform(_:)), "upper"))
                 observation.inspected = true
                 DesignSettingsChecks.checkNativeButtons(window)
-                descendants(content).compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(
+                descendants(content).compactMap { $0 as? NSButton }.first { $0.title == "Close" }?.performClick(
                     nil)
             }
             let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
@@ -118,22 +118,23 @@ extension DocumentChecks {
             field.stringValue = "7"
             var intervening = settings.value
             intervening.wrap = true
+            intervening.tabWidth = 6
             try settings.save(intervening)
             let bytes = try Data(contentsOf: settings.url)
-            views.compactMap { $0 as? NSButton }.first { $0.title == "Save" }?.performClick(nil)
+            _ = NSApp.sendAction(field.action!, to: field.target, from: field)
             check(
                 window.isVisible && field.stringValue == "7" && field.window != nil,
                 "DG stale Settings keeps the pending native fields open")
             let after = try Data(contentsOf: settings.url)
             check(
-                settings.value.wrap && settings.value.tabWidth == 4 && after == bytes,
+                settings.value.wrap && settings.value.tabWidth == 6 && after == bytes,
                 "DG stale Settings never overwrites an intervening real controller save")
             check(
                 views.compactMap { $0 as? NSTextField }.contains {
                     $0.stringValue.contains("changed while this window was open")
                 },
                 "DG stale Settings explains the conflict beside the retained fields")
-            views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
+            views.compactMap { $0 as? NSButton }.first { $0.title == "Close" }?.performClick(nil)
         }
 
         section("DG Go to Line owns its captured document lifetime", #line) {
@@ -525,7 +526,7 @@ extension DocumentChecks {
                     if let action = popup.action { _ = NSApp.sendAction(action, to: popup.target, from: popup) }
                     current = key.stringValue == "d"
                 }
-                views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
+                views.compactMap { $0 as? NSButton }.first { $0.title == "Close" }?.performClick(nil)
             }
             let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                 MainActor.assumeIsolated { timerAction() }
@@ -586,7 +587,7 @@ extension DocumentChecks {
                     let clear = views.compactMap({ $0 as? NSButton }).first(where: {
                         $0.identifier?.rawValue == "settings.shortcut.clear"
                     }),
-                    let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save" })
+                    let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Apply Shortcuts" })
                 else { return }
                 @MainActor func select(_ id: String) {
                     guard let entry = popup.itemArray.first(where: { $0.representedObject as? String == id }) else {
@@ -612,6 +613,8 @@ extension DocumentChecks {
                 defaultRestored = key.stringValue == "d"
                 acted = true
                 save.performClick(nil)
+                views.compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "settings.close" }?
+                    .performClick(nil)
             }
             let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                 MainActor.assumeIsolated { timerAction() }
@@ -736,7 +739,7 @@ extension DocumentChecks {
                     return
                 }
                 guard let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
-                    let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save" })
+                    let action = field.action
                 else {
                     views.compactMap { $0 as? NSButton }.first?.performClick(nil)
                     return
@@ -744,7 +747,7 @@ extension DocumentChecks {
                 if stage == 0 {
                     field.stringValue = "invalid width"
                     stage = 1
-                    save.performClick(nil)
+                    _ = NSApp.sendAction(action, to: field.target, from: field)
                 } else if stage == 1 {
                     keptDraft =
                         field.stringValue == "invalid width"
@@ -754,7 +757,9 @@ extension DocumentChecks {
                         })
                     field.stringValue = "8 "
                     stage = 2
-                    save.performClick(nil)
+                    _ = NSApp.sendAction(action, to: field.target, from: field)
+                    views.compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "settings.close" }?
+                        .performClick(nil)
                 }
             }
             let retry = Timer(timeInterval: 0.02, repeats: true) { _ in

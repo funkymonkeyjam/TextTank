@@ -20,7 +20,8 @@ import NativeSearch
             return
         }
         let ids: Set<String> = [
-            "settings.save", "settings.cancel", "settings.reset", "automation.create", "automation.edit",
+            "settings.shortcuts.apply", "settings.close", "settings.reset", "settings.font.choose", "automation.create",
+            "automation.edit",
             "automation.rules", "automation.duplicate", "automation.delete", "automation.favorite", "automation.json"
         ]
         for button in descendants(content).compactMap({ $0 as? NSButton }).filter({
@@ -173,6 +174,34 @@ import NativeSearch
             !reopened.window.isVisible && !FileManager.default.fileExists(atPath: controller.url.path),
             "DG Escape closes actual Settings without saving pending changes")
         if reopened.window.isVisible { reopened.close() }
+        controller.showSettings(nil)
+        let live = try requireValue(FormPanel.visible.last, "fixture: live Settings")
+        let size = try field("settings.font.size", live.window), font = try button("settings.font.choose", live.window)
+        check(
+            font.acceptsFirstResponder && font.accessibilityLabel()?.contains("Settings") == true,
+            "the native editor font button exposes a scoped name and accepts keyboard focus")
+        size.stringValue = "18.75"
+        _ = NSApp.sendAction(size.action!, to: size.target, from: size)
+        let savedBytes = try Data(contentsOf: controller.url)
+        let decoded = try EditorSettings.decode(savedBytes)
+        check(
+            live.window.isVisible && controller.value.fontSize == 18.75 && decoded.fontSize == 18.75,
+            "committing fractional size persists it without closing modeless Settings")
+        size.stringValue = "73"
+        _ = NSApp.sendAction(size.action!, to: size.target, from: size)
+        let unchanged = try Data(contentsOf: controller.url)
+        check(
+            size.stringValue == "73" && live.window.isVisible && unchanged == savedBytes,
+            "invalid font size keeps the draft and previous settings bytes")
+        font.performClick(nil)
+        size.stringValue = "31.75"
+        _ = NSApp.sendAction(size.action!, to: size.target, from: size)
+        font.performClick(nil)
+        check(
+            NSFontManager.shared.selectedFont?.pointSize == 31.75 && controller.value.fontSize == 31.75,
+            "reopening the native Font panel retains the live field's latest fractional size")
+        NSFontManager.shared.fontPanel(false)?.performClose(nil)
+        live.close()
     }
     static func managerChecks() throws {
         let isolated = try IsolatedSupportDirectory("DesignSettingsManagers")
