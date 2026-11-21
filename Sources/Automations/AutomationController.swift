@@ -862,7 +862,7 @@ private struct AutomationCheckboxEdits {
                 alert.informativeText = String(format: format, workflow.input.displayName)
                 if reviewChanges {
                     let scope = workflow.input == .document ? "the entire captured document" : "the captured selection"
-                    alert.informativeText = "Preview as Changes supports up to 8 MiB per side. Edit this output before applying it to "
+                    alert.informativeText = "Preview as Changes supports up to \(SizePolicy.describe(SizePolicy.standard.reviewText)) per side. Edit this output before applying it to "
                         + scope + ", or cancel to keep the document unchanged."
                 }
             } else {

@@ -336,7 +336,7 @@ package enum UtilityFailure: LocalizedError, Equatable {
     package var errorDescription: String? {
         switch self {
         case .invalidJSON(let byte): return "Invalid JSON at UTF-8 byte \(byte). The selection was preserved."
-        case .jsonOutputLimit: return "Formatted JSON exceeds 16 MiB. Select a smaller value."
+        case .jsonOutputLimit: return "Formatted JSON exceeds \(SizePolicy.describe(SizePolicy.standard.formattedJSONOutput)). Select a smaller value."
         case .jsonDepthLimit: return "This tool supports up to 128 nested arrays and objects."
         case .malformed(let format): return "Invalid \(format) input. The selection was not changed."
         case .binaryResult: return "The decoded bytes are not valid UTF-8 text. The selection was not changed."
@@ -408,7 +408,7 @@ private struct JSONSelection {
     private let formatting: Bool
     private var cursor = 0
     private var output: [UInt8] = []
-    private let limit = 16 * 1024 * 1024
+    private let limit = SizePolicy.standard.formattedJSONOutput
     init(_ text: String, format: Bool) {
         bytes = Array(text.utf8)
         formatting = format

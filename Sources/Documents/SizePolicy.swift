@@ -47,6 +47,7 @@ package struct SizePolicy: Sendable {
     package let runArgument = 1024 * 1024
     package let runLibrary = 1024 * 1024
     package let runIO = 4 * 1024 * 1024
+    package let formattedJSONOutput = 16 * 1024 * 1024
     package let utilitySelection = 16 * 1024 * 1024
     package let editorTransform = 16 * 1024 * 1024
     package let commentDocument = 16 * 1024 * 1024
