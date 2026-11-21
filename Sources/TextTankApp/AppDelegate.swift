@@ -154,9 +154,13 @@ import AppKit
         return value
     }()
     @MainActor lazy var macros = MacroController(editorProvider: { [weak self] in self?.currentEditor })
+    let commandDiscovery = CommandDiscovery()
     @MainActor lazy var automations: AutomationController = {
         let controller = AutomationController(
             editorProvider: { [weak self] in self?.currentEditor }, newDocument: AppDelegate.openAutomationOutput)
+        controller.commandDiscovery = { [weak self] in
+            self?.commandDiscovery.show(editor: { [weak self] in self?.currentEditor })
+        }
         controller.onQuietExportResult = { [weak self] message in
             let window = self?.currentDocumentController
             window?.showTransientStatus(

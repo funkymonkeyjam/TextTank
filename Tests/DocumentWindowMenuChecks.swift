@@ -23,6 +23,11 @@ private final class OffscreenFindRoutingWindow: NSWindow {
     var returned = false, observedModeless = false, inspected = false, usable = false
 }
 
+@MainActor private final class PaletteActionFixture: NSObject, NSMenuItemValidation {
+    var enabled = true, count = 0
+    @objc func selected(_ item: NSMenuItem) { count += 1 }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool { enabled }
+}
 extension DocumentChecks {
     @MainActor static func item(_ action: Selector, _ object: String? = nil) -> NSMenuItem {
         let item = NSMenuItem(title: "", action: action, keyEquivalent: "")
@@ -151,6 +156,35 @@ extension DocumentChecks {
                 "DG closing a Go to Line target never navigates a retired editor")
         }
 
+        section("command discovery uses ordinary menu validation", #line) {
+            let bar = try requireValue(NSApp.mainMenu, "actual menu bar")
+            let palette = sessionDelegate.commandDiscovery
+            let entries = palette.commands(in: bar)
+            let titles = entries.map { $0.row.title }
+            check(Set(entries.map { $0.row.id }).count == entries.count, "palette row identities are unique")
+            check(titles.contains("Edit › Undo") && titles.contains("Automations › Run Automation…")
+                && titles.contains(where: { $0.hasPrefix("Language › ") })
+                && titles.contains(where: { $0.hasPrefix("Macros › ") }),
+                "actual editor, language, saved automation chooser and macro menu routes are discoverable")
+            check(!titles.contains(where: { $0.contains(" › Services › ") || $0.hasSuffix(" › Command Palette…") }),
+                "system services and recursive palette invocation are omitted")
+            check(entries.contains { $0.item.action == NSSelectorFromString("runAction:") && $0.row.detail.hasPrefix("Reads ") && $0.row.detail.contains("Writes ") },
+                "saved workflows identify their actual input and output")
+            let menu = NSMenu(), target = PaletteActionFixture(), other = PaletteActionFixture()
+            let item = NSMenuItem(title: "Owned action", action: #selector(PaletteActionFixture.selected(_:)), keyEquivalent: "")
+            item.target = target
+            menu.addItem(item)
+            let row = try requireValue(palette.commands(in: menu).first, "private menu action")
+            target.enabled = false
+            check(!palette.perform(row, in: menu) && target.count == 0, "a command disabled after discovery cannot run")
+            target.enabled = true
+            item.target = other
+            check(!palette.perform(row, in: menu) && other.count == 0, "changed responder cannot receive an earlier selection")
+            item.target = target
+            check(palette.perform(row, in: menu) && target.count == 1, "deliberate choice dispatches the actual menu action once")
+            menu.removeItem(item)
+            check(!palette.perform(row, in: menu) && target.count == 1, "a removed command remains unavailable")
+        }
         section("DG explicit filtered choice activation", #line) { try DesignSettingsChecks.choicePanelChecks() }
         section("DG Open Documents Cancel never switches documents", #line) {
             let (first, _, firstWindow) = try tab("docs-cancel-first")
@@ -317,13 +351,13 @@ extension DocumentChecks {
                 goTo?.action == #selector(EditorWindowController.goToLine(_:)) && goTo?.keyEquivalent == "l"
                     && goTo?.keyEquivalentModifierMask == [.command] && goTo?.target == nil,
                 "Search > Go to Line… is Command-L and goes to the document window")
-            let palettes = all.filter { $0.item.title == "Automation Palette…" }
+            let palettes = all.filter { $0.item.title == "Command Palette…" }
             check(
-                palettes.map(\.path) == ["Automations > Automation Palette…"]
+                palettes.map(\.path) == ["Automations > Command Palette…"]
                     && palettes.first?.item.keyEquivalent == "P"
                     && palettes.first?.item.keyEquivalentModifierMask == [.command]
                     && palettes.first?.item.target === sessionDelegate.automations,
-                "Automation Palette… is one item, in the Automations menu, with Shift-Command-P")
+                "Command Palette… is one item, in the Automations menu, with Shift-Command-P")
             check(
                 !all.contains { $0.item.title == "Choose Automation…" },
                 "the duplicate Choose Automation… item is gone")
