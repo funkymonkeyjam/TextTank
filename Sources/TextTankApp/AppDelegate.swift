@@ -135,6 +135,11 @@ import AppKit
     }()
     @MainActor lazy var compare: CompareService = {
         let value = CompareService()
+        value.prepareSelectedChange = { [weak self] destination in
+            self?.macros.prepareUnrecordedChange(
+                in: destination,
+                reason: "Applying selected comparison changes cannot be recorded. No partial macro will be saved.")
+        }
         value.currentEditor = { [weak self] in self?.currentEditor }
         return value
     }()

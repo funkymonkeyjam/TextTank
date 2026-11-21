@@ -54,12 +54,18 @@ import EditorBridge
                 proposal: .init(target: target, snapshot: capture.snapshot.id, edits: edits)))
     }
 }
+/// A caller may provisionally mark the resolved destination before a meaningful edit.
+/// The returned completion receives the actual outcome after the final native guards.
+typealias ReviewChangePreparation = (TTEditor) -> ((Bool) -> Void)?
+
 enum ReviewApplyResult: Equatable, Sendable { case applied, noChange, rejected(ReviewRejection) }
 @MainActor struct ReviewApplyHandle {
     fileprivate let ticket: ReviewApplyTicket
     var proposalID: UUID { ticket.id }
     var bridgeInvocations: Int { ticket.bridgeInvocations }
-    func apply() -> ReviewApplyResult { ticket.apply() }
+    func apply(preparingChange: ReviewChangePreparation? = nil) -> ReviewApplyResult {
+        ticket.apply(preparingChange: preparingChange)
+    }
 }
 @MainActor fileprivate final class ReviewApplyTicket {
     let id: UUID
@@ -72,7 +78,7 @@ enum ReviewApplyResult: Equatable, Sendable { case applied, noChange, rejected(R
         self.id = id
         self.proposal = proposal
     }
-    func apply() -> ReviewApplyResult {
+    func apply(preparingChange: ReviewChangePreparation?) -> ReviewApplyResult {
         // Terminal before validation or synchronous Scintilla onChange delivery; copies share this bit.
         guard !consumed else { return .rejected(.alreadyUsed) }
         consumed = true
@@ -104,14 +110,19 @@ enum ReviewApplyResult: Equatable, Sendable { case applied, noChange, rejected(R
                         range: TTByteRange(location: edit.range.lower, length: edit.range.upper - edit.range.lower),
                         text: text))
             }
-            // No await, callbacks, selection staging or focus changes between preflight and bridge.
-            guard document.isOpen, document.loadEpoch == target.loadEpoch, !editor.readOnly,
+            let finishChange = preparingChange?(editor)
+            var applied = false
+            defer { finishChange?(applied) }
+            // Keep the captured document and native target authoritative after preparation.
+            guard !request.invalidated else { throw ReviewRejection.cancelled }
+            guard document.isOpen, document.editor === editor, document.loadEpoch == target.loadEpoch, !editor.readOnly,
                 editor.revision == target.revision, editor.byteLength == bytes.count
             else { throw ReviewRejection.revisionChanged }
             bridgeInvocations += 1
             guard editor.applyEdits(native, expectedRevision: target.revision, expectedLength: bytes.count) else {
                 throw ReviewRejection.revisionChanged
             }
+            applied = true
             return .applied
         } catch let reason as ReviewRejection { return .rejected(reason) } catch { return .rejected(.invalidRange) }
     }

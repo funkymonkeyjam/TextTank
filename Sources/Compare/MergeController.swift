@@ -278,7 +278,7 @@ import EditorBridge
                         }
                         // Same actor turn: no await, prompt, selection or focus between guards and apply.
                         self.isCommitting = true
-                        let result = handle.apply()
+                        let result = handle.apply(preparingChange: service.prepareSelectedChange)
                         if result == .applied {
                             self.appliedAwaitingComparison = true
                             self.lastOutcome = .applied

@@ -258,6 +258,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     private(set) var marked: CompareDocumentInput?
     private var picker: CompareSourcePicker?
     var currentEditor: () -> TTEditor? = { nil }
+    var prepareSelectedChange: ReviewChangePreparation?
     var allEditors: () -> [TTEditor] = {
         NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.activeEditor }
     }
