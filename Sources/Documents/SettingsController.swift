@@ -198,6 +198,7 @@ extension EditorSettings {
     private let face = NSTextField(labelWithString: "")
     private let fontButton = NSButton(title: "Font…", target: nil, action: nil)
     private let shortcuts: SettingsShortcutEditor
+    private var maintenancePending = false
     private var presentingError = false
     private var displayed: EditorSettings
     private var panel: NSFontPanel?
@@ -279,11 +280,13 @@ extension EditorSettings {
         ControlPresentation.label("Clear the selected command's custom shortcut", control: clear)
         form.add(clear)
         if owner.loadError != nil || !owner.ignoredShortcutBindings.isEmpty {
-            form.button("Repair Settings…", identifier: "settings.repair") { [weak self] in self?.repair() }
+            form.button("Repair Settings…", identifier: "settings.repair") { [weak self] in
+                self?.confirmMaintenance(.repair)
+            }
         }
         form.button("Apply Shortcuts", identifier: "settings.shortcuts.apply") { [weak self] in self?.commitShortcuts()
         }
-        form.button("Reset Defaults…", identifier: "settings.reset") { [weak self] in self?.reset() }
+        form.button("Reset Defaults…", identifier: "settings.reset") { [weak self] in self?.confirmMaintenance(.reset) }
         form.button("Close", identifier: "settings.close", cancel: true) { [weak self] in self?.form.close() }
         form.window.initialFirstResponder = width
         form.window.contentMinSize = NSSize(width: 560, height: max(490, form.body.fittingSize.height + 140))
@@ -381,7 +384,8 @@ extension EditorSettings {
         } catch { showError(error, field: field) }
     }
     func controlTextDidEndEditing(_ notification: Notification) {
-        guard form.acceptsActions, !presentingError, let field = notification.object as? NSTextField,
+        guard form.acceptsActions, !maintenancePending, !presentingError,
+            let field = notification.object as? NSTextField,
             notification.userInfo?["NSTextMovement"] as? Int != NSTextMovement.cancel.rawValue
         else { return }
         if field === shortcuts.key { commitShortcuts(reveal: false) } else { commitField(field) }
@@ -435,44 +439,59 @@ extension EditorSettings {
             showError(failure, field: reveal ? shortcuts.revealValidation(failure) : nil)
         } catch { showError(error, field: shortcuts.key) }
     }
-    private func repair() {
+    private enum Maintenance { case repair, reset }
+    private func confirmMaintenance(_ action: Maintenance) {
+        guard form.acceptsActions, !maintenancePending, form.window.attachedSheet == nil else { return }
         let prior = owner.value
-        let alert = TTAlert()
-        alert.messageText = "Repair saved editor settings?"
-        alert.informativeText =
-            "A backup keeps the original file. The usable settings become the current saved settings."
-        alert.addButton(withTitle: "Cancel", role: .cancel)
-        alert.addButton(withTitle: "Back Up and Repair").hasDestructiveAction = true
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        // Keep the original file identity even if a View command refreshes the live store
+        // while this non-modal confirmation is open.
+        let confirmedFile = SettingsStore(
+            url: owner.url, reservedKeys: SettingsController.reservedShortcuts(in: NSApp?.mainMenu))
         do {
-            guard prior == owner.value else { throw LiveError.changed }
             guard try owner.store.fileIsCurrent() else { throw LiveError.changed }
-            if let backup = try owner.save(prior, replacingUnreadable: true) {
-                let message = "Settings repaired. The original file is saved as “\(backup.lastPathComponent)”."
-                owner.onStatus(message)
-                Announce.say(message)
-            }
-            form.close()
-            owner.showSettings(nil)
-        } catch { showError(error) }
-    }
-    private func reset() {
-        let prior = owner.value
+        } catch {
+            showError(error)
+            return
+        }
         let alert = TTAlert()
-        alert.messageText = "Reset all editor settings to their defaults?"
-        alert.informativeText =
-            "This resets font, zoom, indentation, view preferences, appearance and assigned shortcuts."
+        let title: String
+        switch action {
+        case .repair:
+            alert.messageText = "Repair saved editor settings?"
+            alert.informativeText =
+                "A backup keeps the original file. The usable settings become the current saved settings."
+            title = "Back Up and Repair"
+        case .reset:
+            alert.messageText = "Reset all editor settings to their defaults?"
+            alert.informativeText =
+                "This resets font, zoom, indentation, view preferences, appearance and assigned shortcuts."
+            title = "Reset Defaults"
+        }
         alert.addButton(withTitle: "Cancel", role: .cancel)
-        alert.addButton(withTitle: "Reset Defaults").hasDestructiveAction = true
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
-        do {
-            try write {
-                guard prior == $0 else { throw LiveError.changed }
-                $0 = EditorSettings()
-            }
-            form.close()
-            owner.showSettings(nil)
-        } catch { showError(error) }
+        alert.addButton(withTitle: title).hasDestructiveAction = true
+        maintenancePending = true
+        alert.beginSheetModal(for: form.window) { [weak self] response in
+            guard let self else { return }
+            defer { self.maintenancePending = false }
+            guard self.form.acceptsActions, response == .alertSecondButtonReturn else { return }
+            do {
+                guard self.owner.value == prior, try confirmedFile.fileIsCurrent(), try self.owner.store.fileIsCurrent()
+                else { throw LiveError.changed }
+                switch action {
+                case .repair:
+                    if let backup = try self.owner.save(prior, replacingUnreadable: true) {
+                        let message = "Settings repaired. The original file is saved as “\(backup.lastPathComponent)”."
+                        self.owner.onStatus(message)
+                        Announce.say(message)
+                    }
+                case .reset:
+                    try self.write { $0 = EditorSettings() }
+                }
+                guard self.form.acceptsActions else { return }
+                self.form.close()
+                self.owner.showSettings(nil)
+            } catch { self.showError(error) }
+        }
     }
     @objc private func openFontPanel(_ sender: Any?) {
         let manager = NSFontManager.shared
