@@ -5,8 +5,15 @@ package struct MergeFailure: Error, Sendable {
     package let reason: ReviewRejection
     /// Zero-based captured change ordinal; nil means the entire destination is invalid.
     package let block: Int?
+    package let budget: ReviewBudgetReason?
+    package init(budget: ReviewBudgetReason) {
+        self.reason = .budgetExceeded
+        self.budget = budget
+        self.block = nil
+    }
     package init(_ reason: ReviewRejection, block: Int? = nil) {
         self.reason = reason
+        self.budget = nil
         self.block = block
     }
 }

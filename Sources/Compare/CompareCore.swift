@@ -5,6 +5,17 @@ package enum CompareSide: Sendable { case original, modified }
 package enum CompareFailure: Error, Equatable, Sendable {
     case invalid, incomplete, cancelled, budget(ReviewBudgetReason)
 }
+/// Diff and row projection previously allowed two seconds each. A single operation now
+/// shares that total, including all validation and serialization for a unified patch.
+package enum CompareTimeAllowance: Sendable {
+    case standard, extended
+    package var seconds: Double { self == .standard ? 4 : 16 }
+    package var patchPolicy: ReviewDiffPolicy {
+        var policy = MergeCore.policy
+        policy.seconds = seconds
+        return policy
+    }
+}
 package struct ComparePolicy: Sendable {
     package var maximumWork = 32_000_000
     package var seconds = 2.0

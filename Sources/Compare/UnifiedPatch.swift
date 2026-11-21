@@ -4,7 +4,7 @@ import Foundation
 package enum UnifiedPatch {
     package static func write(
         original: TextSnapshot, modified: TextSnapshot, changes: ReviewChangeSet,
-        strategy: ReviewDiffStrategy = .myers, policy: ReviewDiffPolicy = MergeCore.policy,
+        strategy: ReviewDiffStrategy = .myers, policy: ReviewDiffPolicy = CompareTimeAllowance.standard.patchPolicy,
         token: ReviewCancellation = ReviewCancellation(), hooks: ReviewDiffHooks = .init(), raw: Bool = true
     ) async throws -> Data {
         guard raw else { throw MergeFailure(.incomplete) }
@@ -14,28 +14,34 @@ package enum UnifiedPatch {
             let validation = try await Task.detached { () -> ReviewDiffMetrics in
                 let meter = ReviewMeter(policy, token: token, hooks: hooks)
                 do { try MergeCore.validatePair(original, modified, changes, meter: meter) } catch ReviewHalt.cancelled
-                { throw MergeFailure(.cancelled) } catch is ReviewHalt { throw MergeFailure(.budgetExceeded) }
+                { throw MergeFailure(.cancelled) } catch ReviewHalt.budget(let reason) { throw MergeFailure(budget: reason) }
                 return meter.metrics
             }.value
             var remaining = policy
             remaining.maximumWork -= validation.work
             remaining.seconds -= hooks.clock() - started
-            guard remaining.maximumWork >= 0, remaining.seconds > 0 else { throw MergeFailure(.budgetExceeded) }
+            guard !token.isCancelled else { throw MergeFailure(.cancelled) }
+            guard remaining.maximumWork >= 0 else { throw MergeFailure(budget: .work) }
+            guard remaining.seconds > 0 else { throw MergeFailure(budget: .time) }
             let lf = await ReviewDiffEngine.compareLF(
                 original, modified, strategy: strategy, policy: remaining, token: token, hooks: hooks)
-            guard lf.completeness == .complete else {
-                throw MergeFailure(lf.completeness == .cancelled ? .cancelled : .budgetExceeded)
+            switch lf.completeness {
+            case .complete: break
+            case .cancelled: throw MergeFailure(.cancelled)
+            case .budgetStopped(let reason): throw MergeFailure(budget: reason)
             }
             remaining.maximumWork -= lf.metrics.work
             remaining.seconds = policy.seconds - (hooks.clock() - started)
-            guard remaining.maximumWork >= 0, remaining.seconds > 0 else { throw MergeFailure(.budgetExceeded) }
+            guard !token.isCancelled else { throw MergeFailure(.cancelled) }
+            guard remaining.maximumWork >= 0 else { throw MergeFailure(budget: .work) }
+            guard remaining.seconds > 0 else { throw MergeFailure(budget: .time) }
             let finalPolicy = remaining
             return try await Task.detached {
                 do {
                     return try serialize(
                         original, modified, lf, meter: ReviewMeter(finalPolicy, token: token, hooks: hooks))
-                } catch ReviewHalt.cancelled { throw MergeFailure(.cancelled) } catch is ReviewHalt {
-                    throw MergeFailure(.budgetExceeded)
+                } catch ReviewHalt.cancelled { throw MergeFailure(.cancelled) } catch ReviewHalt.budget(let reason) {
+                    throw MergeFailure(budget: reason)
                 }
             }.value
         } onCancel: {

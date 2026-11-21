@@ -25,6 +25,16 @@ private actor MergeStageGate {
         continuation = nil
     }
 }
+/// The first worker checkpoint consumes six simulated seconds of the current operation.
+private final class PatchDeadlineClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var elapsed = 0.0
+    var hooks: ReviewDiffHooks {
+        .init(checkpoint: { _, _ in self.lock.withLock { self.elapsed = 6 } },
+              clock: { self.lock.withLock { self.elapsed } })
+    }
+}
+
 @main struct MergeControllerChecks {
     struct Pair: Decodable { let name: String, before: String, after: String }
     @MainActor static func main() {
@@ -565,6 +575,16 @@ private actor MergeStageGate {
             check(
                 copies == 1 && Data((board.string(forType: .string) ?? "").utf8) == expectedPatch,
                 "D2 explicit private clipboard exact patch")
+            copy.merge.workHooks = PatchDeadlineClock().hooks
+            copy.merge.copyPatch()
+            try await ready(copy)
+            check(!copy.retryButton.isHidden && copies == 1, "a timed-out patch leaves the previous clipboard intact")
+            copy.merge.workHooks = PatchDeadlineClock().hooks
+            copy.retryButton.performClick(nil)
+            try await ready(copy)
+            check(copy.retryButton.isHidden && copies == 2 && Data((board.string(forType: .string) ?? "").utf8) == expectedPatch,
+                  "explicit longer retry publishes exactly one complete patch")
+            copy.merge.workHooks = ReviewDiffHooks()
             let special = try await comparison(value("\u{feff}a\0\n"), value("\u{feff}b\0\n"))
             special.merge.publishClipboard = { text in
                 board.clearContents()
