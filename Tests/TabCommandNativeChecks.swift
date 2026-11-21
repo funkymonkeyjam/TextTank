@@ -638,8 +638,28 @@ extension TabDiskIO {
         for command in TabCommand.allCases {
             let x = try item(windowMenu, command)
             check(!x.isEnabled && !(x.toolTip ?? "").isEmpty, "T1 empty main menu disabled reason " + command.rawValue)
-            check(x.keyEquivalent.isEmpty, "T1 main menu adds no key equivalent " + command.rawValue)
+            let expectedKey = command == .reopen ? "T" : ""
+            check(
+                x.keyEquivalent == expectedKey
+                    && (expectedKey.isEmpty || x.keyEquivalentModifierMask == .command),
+                "T1 only Reopen Closed Tab has Command-Shift-T " + command.rawValue)
         }
-        check(windowMenu.items.filter { !$0.isSeparatorItem }.count <= 20, "T1 Window menu has at most20 commands")
+        let visibleCommands = windowMenu.items.filter { !$0.isSeparatorItem && !$0.isHidden }
+        check(visibleCommands.count <= 20, "T1 Window menu has at most 20 visible commands")
+        let hiddenAliases = windowMenu.items.filter { $0.isHidden && $0.allowsKeyEquivalentWhenHidden }
+        let aliases: [(String, NSEvent.ModifierFlags, Selector)] = [
+            ("}", .command, #selector(AppDelegate.nextDocumentTab(_:))),
+            ("{", .command, #selector(AppDelegate.previousDocumentTab(_:))),
+            ("\u{19}", [.control, .shift], #selector(AppDelegate.previousDocumentTab(_:)))
+        ]
+        check(
+            hiddenAliases.count == aliases.count
+                && aliases.allSatisfy { key, modifiers, action in
+                    hiddenAliases.contains {
+                        $0.keyEquivalent == key && $0.keyEquivalentModifierMask == modifiers
+                            && $0.action == action && $0.target === app
+                    }
+                },
+            "T1 Window has exactly the three hidden alternate tab chords with their original action targets")
     }
 }

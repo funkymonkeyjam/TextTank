@@ -1006,6 +1006,22 @@ extension DocumentChecks {
                 }
             }
             let menuSnapshot = snapshot(bar)
+            var chords = Set<String>(), conflicts: [String] = []
+            for (path, item) in walk(bar, "") where !item.keyEquivalent.isEmpty {
+                var key = item.keyEquivalent, flags = item.keyEquivalentModifierMask
+                if key.count == 1 && key != key.lowercased() {
+                    key = key.lowercased()
+                    flags.insert(.shift)
+                }
+                if key == "{" || key == "}" {
+                    key = key == "{" ? "[" : "]"
+                    flags.insert(.shift)
+                }
+                if !chords.insert("\(flags.rawValue)/\(key)").inserted { conflicts.append(path) }
+            }
+            check(
+                conflicts.isEmpty,
+                "assigned menu keys, including hidden aliases and automations, are unique: \(conflicts)")
             let menuSnapshotData = try JSONSerialization.data(withJSONObject: menuSnapshot, options: [.sortedKeys])
             let legacyMenu =
                 try JSONSerialization.jsonObject(

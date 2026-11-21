@@ -217,9 +217,27 @@ extension DocumentChecks {
             let legacyURL = TestPaths.fixtures.appendingPathComponent("persistence/Settings.json")
             let legacy = try JSONDecoder().decode(EditorSettings.self, from: Data(contentsOf: legacyURL))
             check(
-                legacy.autoIndent == nil && legacy.autoIndentEnabled,
-                "version-1 settings with no auto-indent key default to on")
+                legacy.autoIndent == nil && legacy.autoIndentEnabled && legacy.braceHighlight == nil
+                    && legacy.braceHighlightEnabled,
+                "missing version-1 Return and brace preferences default to on")
             global.autoIndent = false
+            check(
+                legacy.currentLineHighlight == nil && legacy.currentLineHighlightEnabled
+                    && legacy.indentGuides == nil && legacy.indentGuidesEnabled,
+                "legacy line and guide options default to on")
+            check(
+                legacy.fontName == nil && legacy.fontSize == nil && legacy.defaultZoom == nil
+                    && legacy.resolvedBaseFont.fontName == NSFont(name: "Menlo", size: 14)?.fontName
+                    && legacy.basePointSize == 14 && legacy.initialZoom == 0,
+                "legacy settings keep Menlo at 14 points and zero zoom")
+            var malformed = legacy
+            for size in [Double.nan, .infinity, 5.99, 72.01] {
+                malformed.fontSize = size
+                check((try? malformed.validate()) == nil, "reject unsafe base size without applying it")
+            }
+            global.currentLineHighlight = false
+            global.indentGuides = false
+            global.braceHighlight = false
             try delegate.settings.save(global)
             defer { _ = try? delegate.settings.save(EditorSettings()) }
             let originalCatalog = try requireValue(delegate.languages.catalog, "fixture: language catalog")
@@ -300,6 +318,42 @@ extension DocumentChecks {
                     && clone.autoIndentEnabled
                     && delegate.settings.validateMenuItem(autoIndent) && autoIndent.state == .on,
                 "the View toggle persists and updates both open editors and its checkmark")
+            let braces = NSMenuItem(
+                title: "Highlight Matching Braces", action: #selector(SettingsController.toggleBraceHighlight(_:)),
+                keyEquivalent: "")
+            check(
+                !document.editor.braceHighlightEnabled && !clone.braceHighlightEnabled
+                    && delegate.settings.validateMenuItem(braces) && braces.state == .off,
+                "new document and split inherit the disabled brace preference")
+            delegate.settings.toggleBraceHighlight(braces)
+            let braceSettings = try JSONDecoder().decode(
+                EditorSettings.self, from: Data(contentsOf: delegate.settings.url))
+            check(
+                braceSettings.braceHighlight == true && document.editor.braceHighlightEnabled
+                    && clone.braceHighlightEnabled
+                    && delegate.settings.validateMenuItem(braces) && braces.state == .on,
+                "brace toggle persists and updates both open editors and its checkmark")
+            check(
+                !clone.currentLineHighlightEnabled && !clone.indentGuidesEnabled
+                    && !document.editor.currentLineHighlightEnabled && !document.editor.indentGuidesEnabled,
+                "old preferences independently apply to new and split editors")
+            for (title, action) in [
+                ("Highlight Current Line", #selector(SettingsController.toggleCurrentLineHighlight(_:))),
+                ("Show Indentation Guides", #selector(SettingsController.toggleIndentGuides(_:)))
+            ] {
+                let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+                try require(delegate.settings.validateMenuItem(item) && item.state == .off, "view option starts off")
+                try require(NSApp.sendAction(action, to: delegate.settings, from: item), "view option dispatch")
+                let saved = try JSONDecoder().decode(EditorSettings.self, from: Data(contentsOf: delegate.settings.url))
+                let guides = action == #selector(SettingsController.toggleIndentGuides(_:))
+                check(
+                    saved.currentLineHighlightEnabled && saved.indentGuidesEnabled == guides
+                        && [clone, document.editor].allSatisfy {
+                            $0.currentLineHighlightEnabled && $0.indentGuidesEnabled == guides
+                        }
+                        && delegate.settings.validateMenuItem(item) && item.state == .on,
+                    "independent line and guide settings persist and update each open pane")
+            }
             check(palette(clone) == palette(document.editor), "a new clone shows the source view's syntax colours")
             check(
                 document.editor.revision == revision && clone.revision == revision && !document.isDocumentEdited,

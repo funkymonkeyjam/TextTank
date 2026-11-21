@@ -40,6 +40,190 @@ private actor MergeStageGate {
         } catch { Checks.fail("Merge process setup: \(error)", file: #filePath, line: #line) }
         Checks.finish("MergeControllerChecks")
     }
+    @MainActor static func mergeRecordingChecks(_ delegate: AppDelegate) async throws {
+        enum Scenario: CaseIterable {
+            case apply, clone, unrelated, cancel, stale, readOnly, noChange, rejected, reentrant
+        }
+        let service = delegate.compare, recorder = delegate.macros
+        let prepare = service.prepareSelectedChange, previousVisibility = service.showWindows
+        let previousInvalidation = recorder.onInvalidated
+        service.showWindows = false
+        defer {
+            service.showWindows = previousVisibility
+            service.prepareSelectedChange = prepare
+            recorder.onInvalidated = previousInvalidation
+        }
+        let stored = RecordedMacro(id: UUID(), name: "Existing macro", steps: [.insertText("keep")])
+        try recorder.persist(MacroLibrary(macros: [stored]))
+        let storage = AppStorage.url(.macros)
+        @MainActor func newDocument() -> TextDocument {
+            DocumentFactory.makeUntitled(display: false, populate: { _ = $0.editor.loadDocumentText("old\nkeep") })
+        }
+        @MainActor func insertReturn(in editor: TTEditor) throws {
+            try require(
+                editor.setSelectionAnchor(editor.byteLength, caret: editor.byteLength)
+                    && editor.setLineEndingMode(.lf) && editor.executeCommand(.init(rawValue: "newLine")),
+                "Record actual Return")
+        }
+        @MainActor func settle(_ comparison: CompareController) async throws {
+            let ready = await waitUntil("comparison merge and rendering") {
+                !comparison.isBusy && !comparison.hasPendingGeometry && !comparison.merge.isBusy
+            }
+            try require(ready, "Merge ready")
+        }
+        @MainActor func requireDiscard(_ recorder: MacroController) {
+            do {
+                _ = try recorder.finishRecording()
+                check(false, "Applied merge cannot finish as a partial macro")
+            } catch {
+                check(
+                    error.localizedDescription.contains("Applying selected comparison changes"),
+                    "Finish explains the discarded merge recording")
+            }
+        }
+        @MainActor func saveButton(_ view: NSView) -> NSButton? {
+            if let button = view as? NSButton, button.identifier?.rawValue == "macro.save.confirm" { return button }
+            for child in view.subviews { if let button = saveButton(child) { return button } }
+            return nil
+        }
+        for scenario in Scenario.allCases {
+            var notices: [String] = []
+            recorder.onInvalidated = { notices.append($0) }
+            let destination = newDocument()
+            let recordingDocument = scenario == .unrelated ? newDocument() : destination
+            let presentation = try requireValue(recordingDocument.presentation, "Recording document presentation")
+            delegate.workspaceWindow.activate(presentation, focus: false)
+            if scenario == .clone { presentation.clone(nil) }
+            let recordingView =
+                scenario == .clone
+                ? try requireValue(presentation.secondary, "Recording clone") : recordingDocument.editor
+            try require(delegate.currentEditor === recordingView, "Recording starts in intended document and view")
+            let target = destination.editor
+            let prior: RecordedMacro?
+            if scenario == .apply {
+                recorder.startRecording()
+                try insertReturn(in: recordingView)
+                prior = try requireValue(recorder.finishRecording(), "Prior complete recording")
+                _ = recordingView.executeCommand(.init(rawValue: "undo"))
+            } else {
+                prior = nil
+            }
+            let disk = try Data(contentsOf: storage)
+            recorder.startRecording()
+            try insertReturn(in: recordingView)
+            let previousText = target.text, desired = previousText.replacingOccurrences(of: "old", with: "NEW")
+            if scenario == .noChange {
+                let request = ReviewRequest(capture: try ReviewSnapshotCapture.document(target))
+                let handle = try requireValue(request.issue(edits: []), "Empty proposal")
+                var prepared = false
+                let outcome = handle.apply { editor in
+                    prepared = true; return prepare?(editor)
+                }
+                check(
+                    outcome == .noChange && !prepared && handle.bridgeInvocations == 0
+                        && handle.apply() == .rejected(.alreadyUsed),
+                    "No-change ticket consumed without touching recorder or bridge")
+            } else {
+                let opposite = try TextSnapshot(bytes: Data(desired.utf8), source: .freeText(UUID()), label: "Source")
+                let comparison = try await service.open(
+                    original: .document(try CompareDocumentInput(target)), modified: .snapshot(opposite))
+                defer { comparison.window?.close() }
+                try await settle(comparison)
+                try require(
+                    comparison.merge.chooseDestination(.original) && comparison.merge.setSelection([0]),
+                    "Selected captured destination and block")
+                let toolbar = try requireValue(comparison.window?.toolbar, "Compare toolbar")
+                let item = try requireValue(
+                    comparison.toolbar(
+                        toolbar, itemForItemIdentifier: .init(CompareCommand.applySelected.rawValue),
+                        willBeInsertedIntoToolbar: false), "Apply Selected toolbar command")
+                let action = try requireValue(item.action, "Apply Selected action")
+                let previousChange = target.onChange
+                var reentered = false, provisionallyMarked = false
+                defer {
+                    target.onChange = previousChange; target.readOnly = false; service.prepareSelectedChange = prepare
+                }
+                if scenario == .reentrant {
+                    target.onChange = {
+                        previousChange?()
+                        guard !reentered, target.text == desired else { return }
+                        reentered = true
+                        requireDiscard(recorder)
+                        recorder.startRecording()
+                    }
+                }
+                if scenario == .rejected {
+                    service.prepareSelectedChange = { editor in
+                        let finish = prepare?(editor)
+                        provisionallyMarked = recorder.discardReason != nil
+                        editor.readOnly = true
+                        return finish
+                    }
+                }
+                if scenario == .stale { try insertReturn(in: recordingView); comparison.pollSources() }
+                if scenario == .readOnly { target.readOnly = true; comparison.pollSources() }
+                check(
+                    comparison.validateToolbarItem(item) == (scenario != .readOnly && scenario != .stale),
+                    "Apply Selected validation \(scenario)")
+                try require(NSApp.sendAction(action, to: item.target, from: item), "Native Apply Selected dispatch")
+                if scenario == .cancel { comparison.perform(.cancel) }
+                try await settle(comparison)
+                switch scenario {
+                case .cancel, .readOnly, .rejected, .stale:
+                    let keptText = scenario == .stale ? previousText + "\n" : previousText
+                    check(
+                        target.text == keptText && comparison.merge.lastOutcome != .applied,
+                        "Rejected or cancelled merge preserves destination \(scenario)")
+                    if scenario == .rejected {
+                        check(
+                            provisionallyMarked && comparison.merge.lastOutcome == .failed,
+                            "Final rejection rolls back only the provisional recorder failure")
+                    }
+                default:
+                    check(
+                        comparison.merge.lastOutcome == .applied && target.text == desired,
+                        "Selected merge applied to captured destination \(scenario)")
+                }
+                if scenario == .reentrant {
+                    try require(reentered, "Native onChange reentered recorder before dispatch returned")
+                    try insertReturn(in: recordingView)
+                }
+            }
+            check(try Data(contentsOf: storage) == disk, "Merge leaves saved macros unchanged \(scenario)")
+            if scenario == .apply || scenario == .clone {
+                check(
+                    notices.count == 1 && notices.first == recorder.discardReason,
+                    "Announce the committed discard once \(scenario)")
+                check(
+                    recorder.discardReason != nil, "Committed merge invalidates the destination recording \(scenario)")
+                requireDiscard(recorder)
+                _ = target.executeCommand(.init(rawValue: "undo"))
+                check(
+                    target.text == previousText && recordingView.text == previousText,
+                    "One Undo restores exact destination across views \(scenario)")
+            } else {
+                let expected = Array(repeating: RecordedMacro.Step.insertText("\n"), count: scenario == .stale ? 2 : 1)
+                check(notices.isEmpty, "No spurious discard notice \(scenario)")
+                check(
+                    try recorder.finishRecording()?.steps == expected,
+                    "Valid independent or unaffected recording retains actual Return \(scenario)")
+            }
+            if let prior {
+                let item = try requireValue(
+                    recorder.menu().item(withTitle: "Save Last Recording…"), "Save prior recording")
+                let save = try requireValue(item.action, "Save last recording action")
+                try require(
+                    item.isEnabled && NSApp.sendAction(save, to: item.target, from: item), "Open saved recording form")
+                let form = try requireValue(
+                    FormPanel.visible.first { $0.window.identifier?.rawValue == "macro.save" }, "Macro Save form")
+                let button = try requireValue(form.window.contentView.flatMap(saveButton), "Macro Save action")
+                button.performClick(nil)
+                check(
+                    try MacroLibrary.decode(Data(contentsOf: storage)).macros == [stored, prior],
+                    "Saving last recording preserves its ID and steps plus preexisting disk macro")
+            }
+        }
+    }
     @MainActor static func runChecks(
         _ isolated: IsolatedSupportDirectory, _ documents: TextDocumentController, _ app: NSApplication
     ) async {
@@ -62,6 +246,7 @@ private actor MergeStageGate {
             check(
                 app.isRunning && NSDocumentController.shared === documents,
                 "D2 owned native event loop/document controller")
+            try await mergeRecordingChecks(delegate)
             let pairs = try JSONDecoder().decode(
                 [Pair].self, from: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("review/corpus.json")))
             for pair in pairs {

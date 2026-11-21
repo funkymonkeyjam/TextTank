@@ -350,6 +350,34 @@ private actor CompareFileGate {
                 title: "Refresh", action: #selector(CompareController.performCompareCommand(_:)), keyEquivalent: "")
             r.representedObject = CompareCommand.refresh.rawValue
             check(!x.validateMenuItem(r), "D1 immutable-only comparison offers no invented refresh")
+            var metrics = EditorSettings()
+            metrics.fontName = "Monaco"
+            metrics.fontSize = 18.75
+            metrics.defaultZoom = 2
+            x.applyFontSettings(metrics)
+            try await settled(x)
+            check(
+                x.left.editor.comparisonFont == x.right.editor.comparisonFont
+                    && x.left.editor.comparisonFont.fontName == "Monaco"
+                    && x.left.editor.comparisonFont.pointSize == 20.75
+                    && x.left.editor.comparisonLineHeight == x.right.editor.comparisonLineHeight,
+                "a displayed immutable comparison updates both native row metrics together")
+            x.left.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "zoomIn"))
+            await waitUntil("the local comparison zoom to reach the other pane") {
+                x.right.editor.comparisonFont.pointSize == 21.75
+            }
+            var bounded = metrics
+            bounded.fontSize = 72
+            bounded.defaultZoom = 40
+            x.applyFontSettings(bounded)
+            try await settled(x)
+            check(x.left.editor.comparisonFont.pointSize == 96, "comparison display clamps large effective fonts")
+            x.applyFontSettings(metrics)
+            try await settled(x)
+            check(
+                x.left.editor.comparisonFont.pointSize == 21.75
+                    && x.left.editor.comparisonFont == x.right.editor.comparisonFont,
+                "a global round trip through the display limit preserves the independent comparison zoom")
             x.window?.close()
             let files = service(), folder = isolated.url.appendingPathComponent("compare-files", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

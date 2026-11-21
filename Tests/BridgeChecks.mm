@@ -206,6 +206,322 @@ static void returnIndentChecks() {
     check([composition[0] isEqual:composition[1]], "marked-text Return matches the native behavior with auto-indent disabled");
 }
 
+static double colourContrast(sptr_t one, sptr_t two) {
+    auto luminance = [](sptr_t colour) {
+        double sum = 0; const double weight[3] = {0.2126, 0.7152, 0.0722};
+        for (int channel = 0; channel < 3; ++channel) {
+            const double c = ((colour >> (8 * channel)) & 0xFF) / 255.0;
+            sum += weight[channel] * (c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4));
+        }
+        return sum;
+    };
+    const double a = luminance(one), b = luminance(two);
+    return (MAX(a, b) + 0.05) / (MIN(a, b) + 0.05);
+}
+@interface TTEditor (BraceNotificationFixture)
+- (void)notification:(SCNotification *)notification;
+@end
+@interface TTBraceProbe : NSObject
+@property(nonatomic, strong) ScintillaView *engine;
+@property(nonatomic) NSInteger first, second;
+@property(nonatomic) NSUInteger scans, windowBytes;
+@property(nonatomic) NSTimeInterval scanSeconds;
+@end
+@implementation TTBraceProbe
+- (id)forwardingTargetForSelector:(SEL)selector { return _engine; }
+- (sptr_t)message:(unsigned int)message wParam:(uptr_t)first lParam:(sptr_t)second {
+    if (message == SCI_GETSTYLEDTEXTFULL) {
+        const auto &range = ((Sci_TextRangeFull *)second)->chrg;
+        _windowBytes += range.cpMax - range.cpMin;
+    }
+    if (message == SCI_BRACEMATCH) {
+        ++_scans;
+        const NSTimeInterval start = NSProcessInfo.processInfo.systemUptime;
+        const sptr_t partner = [_engine message:message wParam:first lParam:second];
+        _scanSeconds += NSProcessInfo.processInfo.systemUptime - start;
+        return partner;
+    }
+    if (message == SCI_BRACEHIGHLIGHT) { _first = (NSInteger)first; _second = second; }
+    return [_engine message:message wParam:first lParam:second];
+}
+- (sptr_t)message:(unsigned int)message wParam:(uptr_t)first {
+    if (message == SCI_BRACEBADLIGHT) { _first = (NSInteger)first; _second = -1; }
+    return [_engine message:message wParam:first];
+}
+@end
+static TTBraceProbe *observeBraces(TTEditor *editor) {
+    TTBraceProbe *probe = [TTBraceProbe new];
+    probe.engine = (ScintillaView *)editor.subviews.firstObject;
+    probe.first = probe.second = -2;
+    [editor setValue:probe forKey:@"engine"];
+    return probe;
+}
+// Wait for the existing coalesced main-queue turn. Hidden views do not receive paint events.
+static void flushBraceUpdates() {
+    __block BOOL delivered = NO;
+    dispatch_async(dispatch_get_main_queue(), ^{ delivered = YES; });
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:2];
+    while (!delivered && deadline.timeIntervalSinceNow > 0)
+        [[NSRunLoop mainRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.005]];
+    if (!delivered) require(false, "coalesced editor turn completed");
+}
+static void braceHighlightChecks() {
+    TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,240)];
+    TTEditor *clone = [[TTEditor alloc] initWithFrame:editor.frame];
+    TTBraceProbe *cue = observeBraces(editor), *other = observeBraces(clone);
+    auto at = [&](NSInteger caret, NSInteger first, NSInteger second) {
+        const BOOL accepted = [editor setSelectionAnchor:caret caret:caret]; flushBraceUpdates();
+        return accepted && cue.first == first && cue.second == second;
+    };
+    @try {
+        editor.text = @"雪([x])!"; [editor resetUndoHistory]; [editor setSavePoint];
+        const NSUInteger revision = editor.revision;
+        __block NSUInteger edits = 0, steps = 0;
+        editor.onChange = ^{ ++edits; }; editor.onMacroStep = ^(TTMacroAction *step){ ++steps; };
+        [editor startRecording];
+        check(editor.braceHighlightEnabled && at(3,3,7) && at(4,4,6) && at(5,4,6) && at(7,7,3),
+              "nested live pairs use UTF-8 byte offsets and prefer the current brace");
+        const NSUInteger scans = cue.scans;
+        check(at(9,-1,-1) && cue.scans == scans, "ordinary caret clears feedback without a brace scan");
+        [editor stopRecording];
+        check(!steps && !edits && editor.revision == revision && !editor.modified && ![cue.engine message:SCI_CANUNDO],
+              "feedback preserves bytes, undo history, macro recording, callbacks and save point");
+        [clone shareDocumentWith:editor]; [clone adoptViewStateFrom:editor]; [clone setSelectionAnchor:4 caret:4];
+        check(at(7,7,3) && other.first == 4 && other.second == 6, "shared document displays each view's own pair");
+        clone.braceHighlightEnabled = NO; flushBraceUpdates();
+        check(other.first == -1 && other.second == -1 && cue.first == 7, "disabling one clone clears only its cue");
+        TTEditor *sourceA = [[TTEditor alloc] initWithFrame:editor.frame], *sourceB = [[TTEditor alloc] initWithFrame:editor.frame];
+        sourceA.text = @"(a)"; sourceB.text = @"[ab]";
+        clone.braceHighlightEnabled = YES; [clone shareDocumentWith:sourceA]; [clone setSelectionAnchor:0 caret:0]; flushBraceUpdates();
+        check(other.first == 0 && other.second == 2 && sourceA.revision == sourceB.revision, "first document has a pair and the replacement has the same revision");
+        [clone shareDocumentWith:sourceB]; [clone setSelectionAnchor:0 caret:0]; flushBraceUpdates();
+        check(other.first == 0 && other.second == 3, "reattaching the same view to another document invalidates the old pair");
+        editor.text = @"[]("; check(at(2,1,0), "matched previous brace wins when the current brace has no partner");
+        check([editor executeCommand:@"selectMatchingBrace"] && editor.selectionAnchor == 0 && editor.selectionCaret == 2
+              && [editor executeCommand:@"gotoMatchingBrace"] && editor.selectionCaret == 0, "Go and Select retain their neighboring-pair precedence");
+        editor.text = @"<x>"; check(at(3,2,0), "closing angle bracket matches from EOF");
+        editor.text = @"("; [editor resetUndoHistory]; editor.readOnly = YES;
+        check(at(0,0,-1) && ![editor replaceSelection:@")"], "read-only text still shows its unmatched brace");
+        editor.readOnly = NO; [editor setSelectionAnchor:1 caret:1];
+        check([editor replaceSelection:@")"] && at(0,0,1) && [editor executeCommand:@"undo"]
+              && [editor.text isEqual:@"("] && at(0,0,-1), "editing and Undo recompute feedback at a stationary caret");
+        editor.text = @"( /* ) */ )"; [editor setLanguage:@"null"]; check(at(0,0,5), "plain text matches the literal closer");
+        [clone shareDocumentWith:editor]; [clone setSelectionAnchor:0 caret:0]; flushBraceUpdates();
+        [editor setLanguage:@"cpp"]; flushBraceUpdates();
+        check(other.first == 0 && other.second == 10, "a shared clone refreshes after another view changes the lexer");
+        check(cue.first == 0 && cue.second == 10, "changing lexer at the same caret ignores the commented closer");
+        [editor setLanguage:@"null"]; flushBraceUpdates();
+        check(cue.second == 5, "switching the document back to plain text restores the first closer");
+        [editor setComparisonPresentation:YES]; flushBraceUpdates();
+        check(cue.first == -1 && cue.second == -1, "comparison pane clears the editing cue");
+        [editor setComparisonPresentation:NO]; flushBraceUpdates();
+        check(cue.first == 0 && cue.second == 5, "leaving comparison recomputes the caret cue");
+        for (NSString *name in @[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]) {
+            editor.appearance = [NSAppearance appearanceNamed:name]; [editor viewDidChangeEffectiveAppearance];
+            auto native = [&](unsigned int message, uptr_t id) { return [cue.engine message:message wParam:id]; };
+            const sptr_t bg = native(SCI_STYLEGETBACK,STYLE_DEFAULT), fg = native(SCI_STYLEGETFORE,STYLE_DEFAULT);
+            const sptr_t match = native(SCI_INDICGETFORE,23), bad = native(SCI_INDICGETFORE,24);
+            printf("brace appearance %s BGR background=%06lx ink=%06lx matched=%06lx unmatched=%06lx contrast %.2f/%.2f/%.2f\n",
+                   name.UTF8String,(long)bg,(long)fg,(long)match,(long)bad,colourContrast(fg,bg),colourContrast(match,bg),colourContrast(bad,bg));
+            check(native(SCI_INDICGETSTYLE,23) == INDIC_STRAIGHTBOX && native(SCI_INDICGETSTYLE,24) == INDIC_SQUIGGLE
+                  && native(SCI_INDICGETALPHA,23) == 0 && native(SCI_INDICGETOUTLINEALPHA,23) == 255
+                  && colourContrast(match,bg) >= 3 && colourContrast(bad,bg) >= 3 && colourContrast(fg,bg) >= 4.5,
+                  "native palette supplies distinguishable transparent cues and contrasting glyphs in this appearance");
+            check([editor setSyntaxStyle:STYLE_BRACELIGHT foreground:NSColor.redColor background:nil bold:NO italic:NO]
+                  && [editor setSyntaxStyle:STYLE_BRACEBAD foreground:NSColor.blueColor background:nil bold:NO italic:NO]
+                  && native(SCI_STYLEGETFORE,STYLE_BRACELIGHT) == 0x0000ff && native(SCI_STYLEGETFORE,STYLE_BRACEBAD) == 0xff0000
+                  && native(SCI_INDICGETFORE,23) == match && native(SCI_INDICGETFORE,24) == bad, "imported style slots and visual cues remain independent");
+        }
+        NSString *padding = [@"" stringByPaddingToLength:32768 withString:@"xxxxxxx\n" startingAtIndex:0];
+        editor.text = [@"(((((((((" stringByAppendingString:padding];
+        const NSUInteger before = cue.scans, startBytes = cue.windowBytes;
+        BOOL bounded = YES;
+        for (NSInteger i = 0; i < 5; ++i) bounded &= at(i,-1,-1);
+        check(bounded && cue.scans == before && cue.windowBytes - startBytes == 5 * 4096,
+              "each fresh adjacent unmatched caret in a large document reads one bounded window and clears the cue");
+        const NSUInteger cached = cue.windowBytes;
+        for (NSUInteger i = 0; i < 20; ++i) { [editor setSelectionAnchor:4 caret:4]; flushBraceUpdates(); }
+        SCNotification note = {};
+        note.nmhdr.code = SCN_PAINTED; [editor notification:&note];
+        note.nmhdr.code = SCN_UPDATEUI; note.updated = SC_UPDATE_H_SCROLL | SC_UPDATE_V_SCROLL; [editor notification:&note];
+        [editor executeCommand:@"zoomIn"]; flushBraceUpdates();
+        check(cue.scans == before && cue.windowBytes == cached, "unchanged caret, paint, scroll and zoom read no more brace data");
+        editor.text = [@"( /* ) */ )" stringByAppendingString:padding]; [editor setLanguage:@"cpp"];
+        check(at(0,0,10), "nearby styled pair in a large document uses the native match and ignores a commented closer");
+        editor.text = [@"( /* ) */ " stringByAppendingString:padding]; [editor setLanguage:@"cpp"];
+        const NSUInteger beforeComment = cue.scans;
+        check(at(0,-1,-1) && cue.scans == beforeComment, "a wrong-style closer cannot authorize an unbounded native search");
+        editor.text = [@"())" stringByAppendingString:padding]; [editor setLanguage:@"null"];
+        [editor setSelectionAnchor:0 caret:0]; flushBraceUpdates();
+        [cue.engine message:SCI_STARTSTYLING wParam:0]; [cue.engine message:SCI_SETSTYLING wParam:1 lParam:201];
+        const sptr_t mark = [cue.engine message:SCI_GETENDSTYLED], style = [cue.engine message:SCI_GETSTYLEINDEXAT wParam:0];
+        const sptr_t raw = [cue.engine message:SCI_BRACEMATCH wParam:0 lParam:0];
+        flushBraceUpdates(); const BOOL agrees = cue.first == 0 && cue.second == 2;
+        printf("style boundary=%ld style=%ld raw=%ld live=%ld,%ld end=%ld\n",(long)mark,(long)style,(long)raw,(long)cue.first,(long)cue.second,(long)[cue.engine message:SCI_GETENDSTYLED]);
+        check(mark == 1 && style == 201 && raw == 2 && agrees,
+              "bounded native search respects an unsigned style and a closer strictly beyond the end of styling");
+        [cue.engine message:SCI_STARTSTYLING wParam:20];
+        note.nmhdr.code = SCN_UPDATEUI; note.updated = SC_UPDATE_CONTENT; [editor notification:&note]; flushBraceUpdates();
+        check(cue.first == -1 && cue.second == -1, "advancing the style boundary alone retires a now-ineligible nearby pair");
+        editor.text = [[@"(" stringByAppendingString:padding] stringByAppendingString:@")"];
+        [editor setLanguage:@"null"]; const NSInteger last = editor.byteLength - 1;
+        check(at(0,-1,-1) && at(last,-1,-1), "far pair is indeterminate in both directions and never shown as a mismatch");
+        check([editor executeCommand:@"gotoMatchingBrace"] && editor.selectionCaret == 0
+              && [editor executeCommand:@"selectMatchingBrace"] && editor.selectionAnchor == 0 && editor.selectionCaret == last + 1,
+              "explicit Go and Select still find the far pair in both directions");
+        editor.text = [padding stringByAppendingString:@"{x}"];
+        check(at(editor.byteLength - 1,editor.byteLength - 1,editor.byteLength - 3), "nearby backwards match is retained in a large document");
+        editor.text = [padding stringByAppendingString:@"("];
+        check(at(editor.byteLength - 1,editor.byteLength - 1,-1), "true short-direction mismatch at the end of a large file retains its squiggle");
+    } @finally {
+        [editor setValue:cue.engine forKey:@"engine"]; [clone setValue:other.engine forKey:@"engine"];
+    }
+}
+
+@interface TTEditor (CurrentLinePaletteFixture)
+- (void)applyCurrentLineFrameWithHighContrast:(BOOL)high;
+@end
+static void currentLineAndGuideChecks() {
+    TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0,0,500,300)];
+    ScintillaView *native = (ScintillaView *)editor.subviews.firstObject;
+    TTEditor *clone = [[TTEditor alloc] initWithFrame:editor.frame];
+    ScintillaView *other = (ScintillaView *)clone.subviews.firstObject;
+    [editor loadDocumentText:@"one\n\t\tleft\n\n        right\n"];
+    [editor setSelectionAnchor:7 caret:10];
+    [editor setSearchHighlights:@[R(NSMakeRange(6,3))]];
+    [editor setBookmarks:@[@1]];
+    [clone shareDocumentWith:editor]; [clone adoptViewStateFrom:editor]; [clone setSelectionAnchor:0 caret:0];
+    editor.readOnly = YES;
+    const NSUInteger revision = editor.revision;
+    NSData *bytes = editor.utf8Data; NSArray *selection = editor.selectionRanges;
+    __block NSUInteger edits = 0;
+    editor.onChange = ^{ ++edits; };
+    auto guide = [](ScintillaView *v) { return [v message:SCI_GETINDENTATIONGUIDES]; };
+    auto frame = [](ScintillaView *v) { return [v message:SCI_GETELEMENTISSET wParam:SC_ELEMENT_CARET_LINE_BACK]; };
+    check(guide(native)==SC_IV_LOOKBOTH && guide(other)==SC_IV_LOOKBOTH && frame(native) && frame(other)
+        && ![native message:SCI_GETCARETLINEVISIBLEALWAYS], "both new panes have native look-both guides and a focus-only current line");
+    editor.indentGuidesEnabled=NO; clone.currentLineHighlightEnabled=NO;
+    check(!guide(native) && guide(other)==SC_IV_LOOKBOTH && frame(native) && !frame(other),
+        "guides and current line can differ between two clones without modifying the shared document");
+    editor.indentGuidesEnabled=YES; clone.currentLineHighlightEnabled=YES;
+    for (NSString *name in @[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]) {
+        editor.appearance = [NSAppearance appearanceNamed:name];
+        [editor viewDidChangeEffectiveAppearance];
+        for (const BOOL high : {NO, YES}) {
+            [editor applyCurrentLineFrameWithHighContrast:high];
+            const sptr_t canvas = [native message:SCI_STYLEGETBACK wParam:STYLE_DEFAULT];
+            const sptr_t ink = [native message:SCI_STYLEGETFORE wParam:STYLE_DEFAULT];
+            const sptr_t cue = [native message:SCI_GETELEMENTCOLOUR wParam:SC_ELEMENT_CARET_LINE_BACK];
+            const sptr_t guideInk = [native message:SCI_STYLEGETFORE wParam:STYLE_INDENTGUIDE];
+            check(colourContrast(cue,canvas)>=3 && colourContrast(guideInk,canvas)>=3 && colourContrast(ink,canvas)>=4.5
+                && [native message:SCI_GETCARETLINEFRAME]==(high?2:1), "palette supplies legible frame, guide and glyphs plus increased-contrast frame width");
+        }
+    }
+    // The observer uses the actual workspace contrast setting even if the editor's appearance
+    // did not change. The test temporarily sets the opposite per-view frame, not the OS preference.
+    const BOOL systemHigh = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
+    [editor applyCurrentLineFrameWithHighContrast:!systemHigh];
+    [NSWorkspace.sharedWorkspace.notificationCenter postNotificationName:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification object:nil];
+    check([native message:SCI_GETCARETLINEFRAME] == (systemHigh?2:1), "live display-options notification restores the workspace contrast setting");
+    [editor setLanguage:@"cpp"];
+    check(frame(native) && guide(native)==SC_IV_LOOKBOTH, "lexer and palette rebuild preserve both visual settings");
+    check([editor setSyntaxStyle:STYLE_INDENTGUIDE foreground:NSColor.blueColor background:NSColor.whiteColor bold:YES italic:NO],
+          "an imported syntax style may use the native guide slot");
+    [editor viewDidChangeEffectiveAppearance]; [clone adoptSyntaxStylesFrom:editor];
+    for (ScintillaView *pane in @[native,other]) {
+        check([pane message:SCI_STYLEGETFORE wParam:STYLE_INDENTGUIDE]==0xff0000
+            && [pane message:SCI_STYLEGETBACK wParam:STYLE_INDENTGUIDE]==0xffffff
+            && [pane message:SCI_STYLEGETBOLD wParam:STYLE_INDENTGUIDE], "profile guide-slot ink, paper and bold survive palette and clone adoption");
+    }
+    [editor setComparisonPresentation:YES];
+    check(!frame(native) && guide(native)==SC_IV_NONE && frame(other) && guide(other)==SC_IV_LOOKBOTH,
+          "comparison suppression never alters its sibling editing pane");
+    [editor setComparisonPresentation:NO];
+    check(frame(native) && guide(native)==SC_IV_LOOKBOTH, "leaving comparison restores editing options");
+    check(!edits && editor.revision==revision && clone.revision==revision && [editor.utf8Data isEqual:bytes] && !editor.modified
+        && ![native message:SCI_CANUNDO] && [editor.selectionRanges isEqual:selection] && !clone.selectionCaret
+        && [editor.bookmarkLines isEqual:@[@1]] && [native message:SCI_INDICATORVALUEAT wParam:20 lParam:6],
+        "view changes preserve read-only text, caret, selection, Undo, search decoration and bookmark");
+}
+
+static void baseFontMetricsChecks() {
+    TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 550, 300)];
+    ScintillaView *engine = (ScintillaView *)editor.subviews.firstObject;
+    auto metrics = [](ScintillaView *view, int style, NSString *face, int hundredths) {
+        char name[512] = {};
+        [view message:SCI_STYLEGETFONT wParam:style lParam:(sptr_t)name];
+        return [face isEqualToString:@(name)] && [view message:SCI_STYLEGETSIZEFRACTIONAL wParam:style] == hundredths;
+    };
+    check(metrics(engine, 255, @"Menlo", 1400) && editor.zoomLevel == 0, "legacy global metrics reach style 255");
+    [editor loadDocumentText:[@"abc\n" stringByPaddingToLength:40000 withString:@"abc\n" startingAtIndex:0]];
+    NSData *bytes = editor.utf8Data;
+    NSInteger revision = editor.revision;
+    const sptr_t originalWidth = [engine message:SCI_GETMARGINWIDTHN wParam:0];
+    [editor setSyntaxFont:1 faceOverride:@"Courier" sizeOverride:nil];
+    [editor setSyntaxFont:2 faceOverride:nil sizeOverride:@12.25];
+    [editor setSyntaxFont:3 name:@"Courier" size:18.5];
+    [editor setSyntaxStyle:3 foreground:NSColor.systemRedColor background:nil bold:YES italic:YES];
+    const sptr_t colour = [engine message:SCI_STYLEGETFORE wParam:3];
+    check([editor setBaseFontName:@"Monaco" size:31.75], "base setter accepts installed face and fractional points");
+    check(metrics(engine, 1, @"Courier", 3175) && metrics(engine, 2, @"Monaco", 1225) &&
+          metrics(engine, 3, @"Courier", 1850) && metrics(engine, 255, @"Monaco", 3175),
+          "face-only, size-only, paired and inherited native styles resolve independently");
+    check([engine message:SCI_STYLEGETBOLD wParam:3] && [engine message:SCI_STYLEGETITALIC wParam:3] &&
+          [engine message:SCI_STYLEGETFORE wParam:3] == colour, "base change preserves profile traits and foreground");
+    const sptr_t newWidth = [engine message:SCI_GETMARGINWIDTHN wParam:0];
+    const sptr_t figures = [engine message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER lParam:(sptr_t)"99999"];
+    printf("native gutter before=%ld after=%ld figures=%ld\n", (long)originalWidth, (long)newWidth, (long)figures);
+    check(newWidth > originalWidth && newWidth == figures + 5 && metrics(engine, STYLE_LINENUMBER, @"Monaco", 3175),
+          "five actual gutter figures fit native margin after base change");
+    [editor setBaseFontName:@"Georgia" size:39];
+    const sptr_t zeros = [engine message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER lParam:(sptr_t)"00000"];
+    const sptr_t nines = [engine message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER lParam:(sptr_t)"99999"];
+    printf("proportional gutter actual=%ld zeros=%ld nines=%ld\n", (long)[engine message:SCI_GETMARGINWIDTHN wParam:0], (long)zeros, (long)nines);
+    check(zeros > nines && [engine message:SCI_GETMARGINWIDTHN wParam:0] >= zeros + 5,
+          "proportional numerals wider than nine fit the real line-number gutter");
+    [editor setBaseFontName:@"Monaco" size:31.75];
+    editor.zoomLevel = 3;
+    check(editor.statusInfo.fontSize == 34.75, "status reports effective fractional points after local zoom");
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:editor.frame styleMask:NSWindowStyleMaskBorderless
+        backing:NSBackingStoreBuffered defer:NO];
+    window.contentView = editor;
+    [engine message:SCI_GOTOLINE wParam:10000];
+    [editor layoutSubtreeIfNeeded];
+    NSBitmapImageRep *sample = [editor bitmapImageRepForCachingDisplayInRect:editor.bounds];
+    [editor cacheDisplayInRect:editor.bounds toBitmapImageRep:sample];
+    NSView *filler = [editor valueForKey:@"emptyLineNumbers"];
+    [filler cacheDisplayInRect:filler.bounds toBitmapImageRep:[filler bitmapImageRepForCachingDisplayInRect:filler.bounds]];
+    NSFont *fillerFont = [[filler valueForKey:@"attributes"] objectForKey:NSFontAttributeName];
+    check([fillerFont.fontName isEqualToString:@"Monaco"] && fillerFont.pointSize == 34.75,
+          "beyond-EOF drawing uses the zoomed native gutter face and fractional size");
+    TTEditor *clone = [[TTEditor alloc] initWithFrame:editor.frame];
+    [clone shareDocumentWith:editor]; [clone adoptViewStateFrom:editor];
+    ScintillaView *other = (ScintillaView *)clone.subviews.firstObject;
+    check(metrics(other, 255, @"Monaco", 3175) && metrics(other, 2, @"Monaco", 1225) &&
+          clone.zoomLevel == 3, "full clone adoption copies base, overrides and zoom");
+    [clone applyDefaultZoomLevel:3];
+    [clone applyDefaultZoomLevel:2];
+    check(clone.zoomLevel == 3, "new global default passing through local zoom preserves local ownership");
+    [clone executeCommand:@"zoomOut"];
+    [clone applyDefaultZoomLevel:4];
+    check(clone.zoomLevel == 4, "manual return to current default resumes following it");
+    clone.zoomLevel = 4;
+    [clone setBaseFontName:@"Menlo" size:21.5]; [clone adoptSyntaxStylesFrom:editor];
+    check(metrics(other, 1, @"Courier", 2150) && metrics(other, 2, @"Menlo", 1225) && clone.zoomLevel == 4 &&
+          editor.zoomLevel == 3, "syntax-only propagation preserves independent view base and zoom");
+    [editor setSyntaxFont:STYLE_DEFAULT name:@"Courier" size:19];
+    [editor setLanguage:@"null"];
+    check(metrics(engine, STYLE_DEFAULT, @"Monaco", 3175) && metrics(engine, 3, @"Monaco", 3175) &&
+          ![engine message:SCI_STYLEGETBOLD wParam:3], "profile removal restores even an overridden style default");
+    check(![editor setBaseFontName:@"TextTank-Missing-Font-240" size:12] &&
+          ![editor setBaseFontName:@"Courier" size:NAN] && ![editor setBaseFontName:@"Courier" size:73] &&
+          metrics(engine, 255, @"Monaco", 3175), "invalid base changes leave every metric in place");
+    [editor setBaseFontName:@"Menlo" size:6]; editor.zoomLevel = -10;
+    check(editor.statusInfo.fontSize == 1, "minimum effective points match the native renderer");
+    check(editor.utf8Data.length == bytes.length && [editor.utf8Data isEqual:bytes] && editor.revision == revision &&
+          ![engine message:SCI_CANUNDO] && !editor.modified, "style, zoom and clone operations preserve bytes, revision and Undo");
+}
+
 static void cancellationContract() {
     TTSearchCancellation *token=[TTSearchCancellation new];
     check(!token.cancelled && ![[token valueForKey:@"cancelled"] boolValue], "F316 native cancellation starts false and retains its safe KVC getter");
@@ -231,6 +547,9 @@ int main(int argc, char **argv) {
         cancellationContract();
         [NSApplication sharedApplication];
         ttchecks::section("Return indentation", returnIndentChecks);
+        ttchecks::section("Current line and indentation guides", currentLineAndGuideChecks);
+        ttchecks::section("Base font metrics", baseFontMetricsChecks);
+        ttchecks::section("Live brace feedback", braceHighlightChecks);
         ttchecks::section("D1 comparison drop and gutter isolation", [&] {
             TTEditor *renderer=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,240)];
             renderer.text=@"exact snapshot\n";[renderer resetUndoHistory];[renderer setSavePoint];
@@ -517,22 +836,11 @@ int main(int argc, char **argv) {
         check([rightNative message:SCI_STYLEGETBACK wParam:STYLE_DEFAULT] == 0x171810 && [right.text isEqual:left.text], "Dark palette updates native editor without changing text");
         // Design review N3: search marks and the bookmark dot are at least 3:1 against the surface
         // they are drawn on, in both appearances. Colours are 0xBBGGRR.
-        auto contrast = [](sptr_t one, sptr_t two) {
-            auto luminance = [](sptr_t colour) {
-                double sum = 0; const double weight[3] = {0.2126, 0.7152, 0.0722};
-                for (int channel = 0; channel < 3; ++channel) {
-                    const double c = ((colour >> (8 * channel)) & 0xFF) / 255.0;
-                    sum += weight[channel] * (c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4));
-                }
-                return sum;
-            };
-            const double a = luminance(one), b = luminance(two);
-            return (MAX(a, b) + 0.05) / (MIN(a, b) + 0.05);
-        };
+
         auto marksAreVisible = [&](ScintillaView *engine, TTEditor *editor) {
             return [engine message:SCI_INDICGETOUTLINEALPHA wParam:20] == 255
-                && contrast([engine message:SCI_INDICGETFORE wParam:20], [engine message:SCI_STYLEGETBACK wParam:STYLE_DEFAULT]) >= 3.0
-                && contrast(editor.bookmarkColour, [engine message:SCI_STYLEGETBACK wParam:STYLE_LINENUMBER]) >= 3.0;
+                && colourContrast([engine message:SCI_INDICGETFORE wParam:20], [engine message:SCI_STYLEGETBACK wParam:STYLE_DEFAULT]) >= 3.0
+                && colourContrast(editor.bookmarkColour, [engine message:SCI_STYLEGETBACK wParam:STYLE_LINENUMBER]) >= 3.0;
         };
         check(marksAreVisible(rightNative, right), "Dark palette: search mark outline and bookmark dot are at least 3:1");
         check([right setSearchHighlights:@[]] && marksAreVisible(rightNative, right), "Dark palette: applying search marks keeps the visible mark style");
@@ -702,6 +1010,52 @@ int main(int argc, char **argv) {
         eol.text=@"ab";[eol setLineEndingMode:TTE(@"LF")];[eol setSelectionAnchor:2 caret:2];[eol executeCommand:@"newLine"];
         check([eol.text isEqual:@"ab\n"] && eol.statusInfo.eol==TTLineEndingModeLF, "Return in LF mode inserts LF");
         });
+        ttchecks::section("Replace All coalesces document callbacks", [&] {
+            TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 400, 300)];
+            TTEditor *clone = [[TTEditor alloc] initWithFrame:editor.frame];
+            ScintillaView *native = (ScintillaView *)editor.subviews.firstObject;
+            const NSUInteger count = 1000;
+            NSString *input = [@"" stringByPaddingToLength:count * 2 withString:@"a|" startingAtIndex:0];
+            NSString *expected = [@"" stringByPaddingToLength:count * 2 withString:@"é|" startingAtIndex:0];
+            editor.text = input;
+            [clone shareDocumentWith:editor];
+            [editor setSelectionAnchor:3 caret:7];
+            [editor resetUndoHistory];
+            [editor setSavePoint];
+            const NSUInteger originalRevision = editor.revision, cloneRevision = clone.revision;
+            __block NSUInteger changes = 0, cloneChanges = 0;
+            editor.onChange = ^{ ++changes; };
+            clone.onChange = ^{ ++cloneChanges; };
+            NSMutableArray<TTByteRange *> *ranges = [NSMutableArray arrayWithCapacity:count];
+            NSMutableArray<NSString *> *replacements = [NSMutableArray arrayWithCapacity:count];
+            for (NSUInteger i = 0; i < count; ++i) {
+                [ranges addObject:R(NSMakeRange(i * 2, 1))];
+                [replacements addObject:@"é"];
+            }
+            NSArray *before = editor.selectionRanges;
+            check(![editor replaceRanges:@[ranges[0], R(NSMakeRange(editor.byteLength, 1))]
+                               withTexts:@[@"x", @"y"] expectedRevision:originalRevision], "invalid final range rejects the whole batch");
+            check(![editor replaceRanges:ranges withTexts:replacements expectedRevision:originalRevision + 1], "stale batch is refused");
+            editor.readOnly = YES;
+            check(![editor replaceRanges:ranges withTexts:replacements expectedRevision:originalRevision], "read-only batch is refused");
+            editor.readOnly = NO;
+            check(changes == 0 && cloneChanges == 0 && editor.revision == originalRevision && clone.revision == cloneRevision &&
+                  [editor.text isEqual:input] && [editor.selectionRanges isEqual:before] && ![native message:SCI_CANUNDO],
+                  "refused batches leave shared bytes, selections, history, revisions and callbacks untouched");
+
+            check([editor replaceRanges:ranges withTexts:replacements expectedRevision:originalRevision], "1000 disjoint byte replacements apply");
+            NSData *bytes = [expected dataUsingEncoding:NSUTF8StringEncoding];
+            check(changes == 1 && cloneChanges == 1 && [editor.utf8Data isEqual:bytes] && [clone.utf8Data isEqual:bytes],
+                  "1000 replacements publish one change to each view with exact UTF-8 bytes");
+            check(editor.revision == originalRevision + 2 * count && clone.revision == cloneRevision + 2 * count &&
+                  editor.selectionCaret == 2, "revision advances for each native delete and insert and the first replacement sets the caret");
+            [editor executeCommand:@"undo"];
+            check([editor.text isEqual:input] && [clone.text isEqual:input] && !editor.modified && ![native message:SCI_CANUNDO],
+                  "one Undo restores every original byte, the save point and the empty history");
+            [editor executeCommand:@"redo"];
+            check([editor.utf8Data isEqual:bytes] && [clone.utf8Data isEqual:bytes] && ![native message:SCI_CANREDO],
+                  "one Redo restores the entire UTF-8 batch in both views");
+        });
         ttchecks::section("batch range replacement and revision authority", [&] {
         // F44, F224: one bridge call replaces many ranges under one undo action, all-or-nothing.
         TTEditor *batch=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,300)];
@@ -732,7 +1086,7 @@ int main(int argc, char **argv) {
         batch.onChange=nil;
         check([batch.text isEqual:@"é uno:1 é 🥑  end"] && batch.modified, "Batch replacement writes exact bytes at both ranges");
         check(batch.selectionCount==1 && batch.selectionAnchor==11 && batch.selectionCaret==11, "Batch replacement leaves one caret after the first replacement");
-        check(batch.revision>batchRevision && batchChanges>=3 && batchChanges<=5, "Batch replacement bumps the revision and reports only its own inserts and deletes");
+        check(batch.revision==batchRevision+3 && batchChanges==1, "Batch replacement reports one change while revision advances for all three native edits");
         [batch executeCommand:@"undo"];
         check([batch.text isEqual:batchText] && !batch.modified && ![batchNative message:SCI_CANUNDO], "Batch replacement is one undo step back to the save point");
         batch.text=@"ab";[batch resetUndoHistory];batchRevision=batch.revision;

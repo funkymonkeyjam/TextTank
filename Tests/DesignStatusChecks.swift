@@ -255,17 +255,25 @@ enum DesignStatusChecks {
             NSApp.sendAction(menuItem.action!, to: menuItem.target, from: menuItem)
                 && document.languageIdentifier == targetID,
             "DB-R8 real Language menu invocation applies the intended profile")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.25))
-        let afterEvent = languagePopup.title
-        controller.statusTimerTick()
-        let afterTick = languagePopup.title
-        print(
-            "DB_TIMER_LANGUAGE", "before=", beforeLanguage, "afterEvents=", afterEvent, "afterTick=", afterTick,
-            "expected=", targetTitle)
-        check(afterTick == targetTitle, "DB-R8 actual polling tick presents the Language menu profile")
+        let eventUpdated = spinUntil(timeout: 1, "the Language status to reflect the lexer change event") {
+            languagePopup.title == targetTitle
+        }
         check(
-            afterEvent != targetTitle,
-            "DB-R8 real Language action has no status event on this native fixture before polling")
+            beforeLanguage != targetTitle && !controller.statusTimerActive && eventUpdated,
+            "DB-R8 the coalesced lexer event updates Language with automatic polling disabled")
+        let nextItem = try requireValue(
+            composition.languages.languageMenuItems().first {
+                ($0.representedObject as? String) != targetID && $0.action != nil
+            }, "fixture: a second Language menu action")
+        let nextID = try requireValue(nextItem.representedObject as? String, "fixture: second Language identifier")
+        let nextTitle = try requireValue(
+            composition.languages.profile(identifier: nextID)?.title, "fixture: second Language title")
+        check(
+            NSApp.sendAction(nextItem.action!, to: nextItem.target, from: nextItem)
+                && document.languageIdentifier == nextID && languagePopup.title == targetTitle,
+            "DB-R8 a second real Language action changes the document before its queued event")
+        controller.statusTimerTick()
+        check(languagePopup.title == nextTitle, "DB-R8 an immediate polling tick presents the second Language profile")
         _ = document.editor.setSelectionAnchor(0, caret: 0)
         document.fileURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]!)
             .appendingPathComponent("owned-positive-result.txt")

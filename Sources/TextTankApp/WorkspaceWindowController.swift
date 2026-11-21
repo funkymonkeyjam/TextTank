@@ -386,6 +386,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             groupContainer.configure(model.layout, surfaces: model.groups.compactMap { groupSurfaces[$0.slot] })
         }
         isMutatingGroups = false
+        if changedLayout { groupCommands.refreshViewMenu() }
         if let active {
             activate(active, focus: false, explicit: false, preserveSelection: true)
             if active === originalActive, let responder = originalResponder {

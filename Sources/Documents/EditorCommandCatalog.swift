@@ -1,6 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
+/// A menu equivalent in its stored character form. AppKit interprets uppercase letters as Shift.
+package struct MenuShortcut: Equatable, Sendable {
+    package enum Modifier: Hashable, Sendable { case command, control, option, shift }
+    package let key: String
+    package let modifiers: Set<Modifier>
+    package init(_ key: String, _ modifiers: Set<Modifier> = [.command]) {
+        self.key = key
+        self.modifiers = modifiers
+    }
+    package static let zoomInAlternate = Self("=")
+    package static let actualSize = Self("0")
+    package static let saveAll = Self("s", [.command, .option])
+    package static let nextTabAlternate = Self("}")
+    package static let previousTabAlternate = Self("{")
+    package static let previousTabBacktab = Self("\u{19}", [.control, .shift])
+    package static func focusGroup(_ slot: GroupSlot) -> Self { Self(String(slot.rawValue), [.command, .control]) }
+}
+
 /// Stable editor identifiers are storage and bridge contracts. Menu placement remains literal;
 /// recording and shortcut assignment are explicit security/behavior subsets, never inferred from a title.
 package enum EditorCommand: String, CaseIterable {
@@ -145,8 +163,21 @@ package enum EditorCommand: String, CaseIterable {
     static package let shortcutIdentifiers = Set(allCases.filter(\.isShortcutAssignable).map(\.rawValue))
     static package let defaultShortcuts: [String: String] = [EditorCommand.duplicateLine.rawValue: "d"]
     package var defaultShortcut: String { Self.defaultShortcuts[rawValue] ?? "" }
+    /// The original single-character editor override remains a plain Command equivalent.
+    package var extendedMenuShortcut: MenuShortcut? {
+        switch self {
+        case .moveLineUp: return .init("\u{f700}", [.control, .command])
+        case .moveLineDown: return .init("\u{f701}", [.control, .command])
+        case .deleteLine: return .init("K", [.control])
+        case .bookmarkToggle: return .init("\u{f705}", [.command])
+        case .bookmarkNext: return .init("\u{f705}", [])
+        case .bookmarkPrevious: return .init("\u{f705}", [.shift])
+        default: return nil
+        }
+    }
     /// Fixed system/editor menu keys remain distinct from assignable override defaults.
     package var defaultMenuShortcut: String {
+        if let extendedMenuShortcut { return extendedMenuShortcut.key }
         switch self {
         case .undo: return "z"
         case .redo: return "Z"

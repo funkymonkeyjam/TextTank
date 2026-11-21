@@ -91,6 +91,9 @@ static BOOL TTValidatedByteRange(id candidate, NSUInteger documentLength, NSRang
 static const int TTBookmarkMarker = 1;
 static const int TTBookmarkMask = 1 << TTBookmarkMarker;
 static const int TTSearchIndicator = 20;
+// The native brace overlays are per view. They never fill a shared document indicator range.
+static const int TTMatchedBraceIndicator = 23, TTUnmatchedBraceIndicator = 24;
+struct TTBracePair { sptr_t position, match; };
 static NSColor *TTColorFromScintilla(sptr_t color) {
     return [NSColor colorWithSRGBRed:(color & 255)/255.0 green:((color >> 8)&255)/255.0 blue:((color >> 16)&255)/255.0 alpha:1];
 }
@@ -300,7 +303,7 @@ static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
     if (y < 0) { NSInteger skip = (NSInteger)floor(-y / height); y += skip * height; number += skip; }
     std::vector<char> face((size_t)[engine message:SCI_STYLEGETFONT wParam:STYLE_LINENUMBER lParam:0] + 1);
     [engine message:SCI_STYLEGETFONT wParam:STYLE_LINENUMBER lParam:(sptr_t)face.data()];
-    CGFloat size = [engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_LINENUMBER] / 100.0 + [engine message:SCI_GETZOOM];
+    CGFloat size = MAX(1, [engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_LINENUMBER] / 100.0 + [engine message:SCI_GETZOOM]);
     NSInteger rgb = [engine message:SCI_STYLEGETFORE wParam:STYLE_LINENUMBER];
     NSString *faceName = [NSString stringWithUTF8String:face.data()] ?: @"";
     NSString *key = [NSString stringWithFormat:@"%@|%.2f|%ld", faceName, size, (long)rgb];
@@ -492,7 +495,13 @@ static NSHashTable *TTDeferredEditors() {
 struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @interface TTEditor () <ScintillaNotificationProtocol> {
     TTLineNumberState _lineNumberState;
+    NSInteger _defaultZoomLevel;
+    BOOL _followsDefaultZoom;
     BOOL _indentingReturn;
+    id _accessibilityDisplayObserver;
+    BOOL _braceCacheValid;
+    sptr_t _braceCaret, _braceEndStyled;
+    NSUInteger _braceRevision;
     NSString *_recordedReturnIndent;
 }
 @property(nonatomic, strong) ScintillaView *engine;
@@ -506,6 +515,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @property(nonatomic) TTInteractionState pendingInteraction;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxStyles;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxFonts;
+@property(nonatomic, copy) NSString *baseFontName;
+@property(nonatomic) double basePointSize;
 /// Digit count the line-number margin was last sized for; see -updateLineNumberMargin:.
 @property(nonatomic) int marginDigits;
 @property(nonatomic, readwrite) NSUInteger selectionGeneration;
@@ -525,6 +536,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @end
 @implementation TTEditor
 @synthesize comparisonPresentation = _comparisonPresentation;
+@synthesize braceHighlightEnabled = _braceHighlightEnabled;
+@synthesize currentLineHighlightEnabled = _currentLineHighlightEnabled;
+@synthesize indentGuidesEnabled = _indentGuidesEnabled;
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
         NSAssert(NSThread.isMainThread, @"Editor must be created on the main thread");
@@ -532,11 +546,20 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         _engine = [[TTScintillaView alloc] initWithFrame:NSZeroRect];
         ((TTContentView *)_engine.content).editor = self;
         _autoIndentEnabled = YES;
+        _braceHighlightEnabled = YES;
+        _currentLineHighlightEnabled = YES;
+        _indentGuidesEnabled = YES;
         _engine.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         [self addSubview:_engine];
         _engine.delegate = self;
         [_engine message:SCI_SETCODEPAGE wParam:SC_CP_UTF8];
-        [_engine setFontName:@"Menlo" size:14 bold:NO italic:NO];
+        __weak TTEditor *weakEditor = self;
+        _accessibilityDisplayObserver = [NSWorkspace.sharedWorkspace.notificationCenter
+            addObserverForName:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification object:nil
+            queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) { [weakEditor applyPalette]; }];
+        _followsDefaultZoom = YES;
+        _baseFontName = @"Menlo";
+        _basePointSize = 14;
         [self applyPalette];
         self.accessibilityDocumentName = nil;
         [_engine message:SCI_SETMARGINTYPEN wParam:0 lParam:SC_MARGIN_NUMBER];
@@ -596,9 +619,14 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     const sptr_t current = [_engine message:SCI_GETMARGINWIDTHN wParam:0];
     if (!show && current == 0) return;
     _marginDigits = [self lineNumberDigits];
-    const std::string widest((size_t)_marginDigits, '9');
+    // Some user font faces have proportional figures. Measure every figure at the actual gutter style and zoom.
+    sptr_t widest = 0;
+    for (char figure = '0'; figure <= '9'; ++figure) {
+        const std::string sample((size_t)_marginDigits, figure);
+        widest = MAX(widest, [_engine message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER lParam:(sptr_t)sample.c_str()]);
+    }
     // 3 is Scintilla's own padding right of the number; 2 keeps the first digit off the edge.
-    const sptr_t width = MAX((sptr_t)48, [_engine message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER lParam:(sptr_t)widest.c_str()] + 3 + 2);
+    const sptr_t width = MAX((sptr_t)48, widest + 3 + 2);
     if (width != current) [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:width];
 }
 - (void)viewDidChangeEffectiveAppearance {
@@ -624,6 +652,10 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     const BOOL dark = [self usesDarkPalette], highContrast = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
     const sptr_t foreground = dark ? 0xF0F6F4 : 0x1F2015;
     const sptr_t background = dark ? 0x171810 : 0xF0F6F4;
+    [_engine message:SCI_STYLESETFONT wParam:STYLE_DEFAULT lParam:(sptr_t)_baseFontName.UTF8String];
+    [_engine message:SCI_STYLESETSIZEFRACTIONAL wParam:STYLE_DEFAULT lParam:lround(_basePointSize * 100)];
+    [_engine message:SCI_STYLESETBOLD wParam:STYLE_DEFAULT lParam:0];
+    [_engine message:SCI_STYLESETITALIC wParam:STYLE_DEFAULT lParam:0];
     [_engine message:SCI_STYLESETFORE wParam:STYLE_DEFAULT lParam:foreground];
     [_engine message:SCI_STYLESETBACK wParam:STYLE_DEFAULT lParam:background];
     [_engine message:SCI_STYLECLEARALL];
@@ -632,6 +664,18 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [_engine message:SCI_SETFOLDMARGINCOLOUR wParam:1 lParam:background];[_engine message:SCI_SETFOLDMARGINHICOLOUR wParam:1 lParam:background];
     for(int marker=SC_MARKNUM_FOLDEREND;marker<=SC_MARKNUM_FOLDEROPEN;++marker){[_engine message:SCI_MARKERSETFORE wParam:marker lParam:background];[_engine message:SCI_MARKERSETBACK wParam:marker lParam:foreground];}
     [self applySearchIndicatorStyle];
+    // Transparent outline for a pair and a squiggle for a mismatch. Native indicator drawing
+    // preserves lexer glyph styles, including imported styles that use slots 34 and 35.
+    [_engine message:SCI_INDICSETSTYLE wParam:TTMatchedBraceIndicator lParam:INDIC_STRAIGHTBOX];
+    [_engine message:SCI_INDICSETFORE wParam:TTMatchedBraceIndicator lParam:dark ? 0xC4E29D : 0x3A5122];
+    [_engine message:SCI_INDICSETALPHA wParam:TTMatchedBraceIndicator lParam:0];
+    [_engine message:SCI_INDICSETOUTLINEALPHA wParam:TTMatchedBraceIndicator lParam:255];
+    [_engine message:SCI_INDICSETSTYLE wParam:TTUnmatchedBraceIndicator lParam:INDIC_SQUIGGLE];
+    [_engine message:SCI_INDICSETFORE wParam:TTUnmatchedBraceIndicator lParam:dark ? 0x98A3FF : 0x272F97];
+    [_engine message:SCI_BRACEHIGHLIGHTINDICATOR wParam:1 lParam:TTMatchedBraceIndicator];
+    [_engine message:SCI_BRACEBADLIGHTINDICATOR wParam:1 lParam:TTUnmatchedBraceIndicator];
+    [self applyCurrentLineFrameWithHighContrast:highContrast];
+    [self applyIndentGuides];
     if (_comparisonPresentation) [self applyComparisonStyle];
     // The bookmark dot: brand green on the light margin, citrus on the dark one, each at least 3:1.
     _bookmarkColour = dark ? 0x5BF4C7 : (highContrast ? 0x002E1C : 0x005B3A);
@@ -658,13 +702,17 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     }
     NSDictionary *styles=[_syntaxStyles copy];
     for(NSNumber *index in styles) {NSDictionary *s=styles[index];[self setSyntaxStyle:index.integerValue foreground:s[@"foreground"] background:s[@"background"] bold:[s[@"bold"] boolValue] italic:[s[@"italic"] boolValue]];}
-    NSDictionary *fonts=[_syntaxFonts copy];for(NSNumber *index in fonts){NSDictionary *f=fonts[index];[self setSyntaxFont:index.integerValue name:f[@"name"] size:[f[@"size"] doubleValue]];}
+    for (NSNumber *index in _syntaxFonts) {
+        NSDictionary *override = _syntaxFonts[index];
+        [self applyFontToStyle:index.integerValue name:override[@"name"] size:override[@"size"]];
+    }
     // STYLECLEARALL put the line-number style back on the default font.
     [self updateLineNumberMargin:NO];
     _engine.needsDisplay = YES;
     _emptyLineNumbers.needsDisplay = YES;
 }
 - (void)dealloc {
+    if (_accessibilityDisplayObserver) [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:_accessibilityDisplayObserver];
     if (_ownGroups > 0) {
         NSNumber *key = @([_engine message:SCI_GETDOCPOINTER]);
         const NSInteger open = [[TTOpenGroups() objectForKey:key] integerValue] - _ownGroups;
@@ -734,6 +782,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     dispatch_async(dispatch_get_main_queue(), ^{
         TTEditor *editor = weakSelf; if (!editor) return;
         editor.stateNotificationScheduled = NO;
+        [editor refreshBraceHighlight];
         [NSNotificationCenter.defaultCenter postNotificationName:TTEditorStateDidChangeNotification object:editor];
     });
 }
@@ -1071,16 +1120,16 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         [encoded addObject:bytes];
     }
     // Last range first, so the offsets of the ranges still to be replaced stay valid.
-    [_engine message:SCI_BEGINUNDOACTION];
+    [self openUndoGroup];
     for (NSUInteger i=ranges.count;i-->0;) {
         const NSRange range=NSMakeRange((NSUInteger)ranges[i].location,(NSUInteger)ranges[i].length);
         [_engine message:SCI_SETTARGETRANGE wParam:range.location lParam:NSMaxRange(range)];
         [_engine message:SCI_REPLACETARGET wParam:encoded[i].length lParam:(sptr_t)encoded[i].bytes];
     }
-    [_engine message:SCI_ENDUNDOACTION];
     const sptr_t caret=(sptr_t)((NSUInteger)ranges[0].location+encoded[0].length);
     [_engine message:SCI_SETSEL wParam:caret lParam:caret];
     [_engine message:SCI_SCROLLCARET];
+    [self closeUndoGroup];
     return YES;
 }
 - (NSInteger)selectionCount { [self assertThread]; return [_engine message:SCI_GETSELECTIONS]; }
@@ -1103,7 +1152,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     return [[TTEditorStatus alloc] initWithLine:[_engine message:SCI_LINEFROMPOSITION wParam:caret]+1
         column:[_engine message:SCI_GETCOLUMN wParam:caret]+1+[_engine message:SCI_GETSELECTIONNCARETVIRTUALSPACE wParam:[_engine message:SCI_GETMAINSELECTION]]
         lines:[_engine message:SCI_GETLINECOUNT] tabWidth:[_engine message:SCI_GETTABWIDTH]
-        useTabs:[_engine message:SCI_GETUSETABS] fontSize:[_engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_DEFAULT]/100.0+[_engine message:SCI_GETZOOM]
+        useTabs:[_engine message:SCI_GETUSETABS] fontSize:MAX(1, [_engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_DEFAULT]/100.0+[_engine message:SCI_GETZOOM])
         eol:[_engine message:SCI_GETEOLMODE]];
 }
 - (NSInteger)selectionCaret { [self assertThread]; return [_engine message:SCI_GETCURRENTPOS]; }
@@ -1173,6 +1222,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     // Each attached Scintilla view owns a reference, so either view may close first.
     [_engine message:SCI_SETDOCPOINTER wParam:0 lParam:[other.engine message:SCI_GETDOCPOINTER]];
     self.revision = other.revision;
+    _braceCacheValid = NO;
     [self noteStateChange];
     // The line count changed with no modification notification.
     [self updateLineNumberMargin:NO];
@@ -1195,9 +1245,16 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (void)adoptViewStateFrom:(TTEditor *)other {
     [self assertThread]; if (!other || other == self) return;
+    _baseFontName = other.baseFontName;
+    _basePointSize = other.basePointSize;
     [self adoptSyntaxStylesFrom:other];
     self.autoIndentEnabled = other.autoIndentEnabled;
+    self.braceHighlightEnabled = other.braceHighlightEnabled;
+    self.currentLineHighlightEnabled = other.currentLineHighlightEnabled;
+    self.indentGuidesEnabled = other.indentGuidesEnabled;
+    _defaultZoomLevel = other->_defaultZoomLevel;
     [_engine message:SCI_SETZOOM wParam:(uptr_t)[other.engine message:SCI_GETZOOM]];
+    _followsDefaultZoom = other->_followsDefaultZoom;
     [_engine message:SCI_SETWRAPMODE wParam:(uptr_t)[other.engine message:SCI_GETWRAPMODE]];
     [_engine message:SCI_SETVIEWWS wParam:(uptr_t)[other.engine message:SCI_GETVIEWWS]];
     [_engine message:SCI_SETVIEWEOL wParam:(uptr_t)[other.engine message:SCI_GETVIEWEOL]];
@@ -1255,6 +1312,102 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self invalidateLineNumbersIfChanged];
     [self noteStateChange];
     return YES;
+}
+// The pinned Scintilla matcher ignores maxReStyle and may scan to EOF. For a live cue,
+// call it only if the boundary is close or a partner is proved within this byte budget.
+// Native text is UTF-8; ASCII delimiters never occur inside a multibyte character.
+- (BOOL)canResolveLiveBraceAt:(sptr_t)position brace:(char)brace opposite:(char)opposite forward:(BOOL)forward {
+    constexpr sptr_t budget = 4096;
+    const sptr_t available = forward ? [_engine message:SCI_GETLENGTH] - position - 1 : position;
+    if (available <= budget) return YES;
+    const sptr_t start = forward ? position + 1 : position - budget;
+    const sptr_t end = start + budget;
+    // GETSTYLEDTEXTFULL returns interleaved bytes and unsigned style indices plus two NULs.
+    // Match Document::BraceMatch's exact style rule, including its strict endStyled boundary.
+    char cells[2 * budget + 2];
+    Sci_TextRangeFull range = {{start,end},cells};
+    if ([_engine message:SCI_GETSTYLEDTEXTFULL wParam:0 lParam:(sptr_t)&range] != 2 * budget) return NO;
+    const sptr_t style = [_engine message:SCI_GETSTYLEINDEXAT wParam:position];
+    const sptr_t endStyled = [_engine message:SCI_GETENDSTYLED];
+    int depth = 1;
+    for (sptr_t i = 0; i < budget; ++i) {
+        const sptr_t offset = forward ? i : budget - 1 - i;
+        const char byte = cells[2 * offset];
+        if (byte != brace && byte != opposite) continue;
+        if (start + offset <= endStyled && (unsigned char)cells[2 * offset + 1] != style) continue;
+        depth += byte == brace ? 1 : -1;
+        if (!depth) return YES;
+    }
+    return NO;
+}
+// The current brace takes precedence; when definitely unmatched, try the preceding byte.
+// If the live search is indeterminate, clear the cue. Explicit Go and Select always resolve fully.
+- (TTBracePair)bracePairAtCaret:(sptr_t)caret live:(BOOL)live {
+    TTBracePair result = {-1, -1};
+    constexpr char delimiters[] = "()[]{}<>";
+    for (const sptr_t position : {caret, caret - 1}) {
+        if (position < 0) continue;
+        const int byte = (int)[_engine message:SCI_GETCHARAT wParam:position];
+        const char *found = byte > 0 ? std::strchr(delimiters, byte) : nullptr;
+        if (!found) continue;
+        const auto index = found - delimiters;
+        if (live && ![self canResolveLiveBraceAt:position brace:*found opposite:delimiters[index ^ 1] forward:(index % 2 == 0)]) {
+            return {-1, -1};
+        }
+        const sptr_t match = [_engine message:SCI_BRACEMATCH wParam:position lParam:0];
+        if (match >= 0) return {position, match};
+        if (result.position < 0) result.position = position;
+    }
+    return result;
+}
+- (void)refreshBraceHighlight {
+    if (!_braceHighlightEnabled || _comparisonPresentation) return;
+    const sptr_t caret = [_engine message:SCI_GETCURRENTPOS];
+    const sptr_t endStyled = [_engine message:SCI_GETENDSTYLED];
+    if (_braceCacheValid && _braceRevision == _revision && _braceCaret == caret && _braceEndStyled == endStyled) return;
+    _braceCacheValid = YES;
+    _braceRevision = _revision;
+    _braceEndStyled = endStyled;
+    _braceCaret = caret;
+    const TTBracePair pair = [self bracePairAtCaret:caret live:YES];
+    if (pair.position >= 0 && pair.match < 0) {
+        [_engine message:SCI_BRACEBADLIGHT wParam:pair.position];
+    } else {
+        [_engine message:SCI_BRACEHIGHLIGHT wParam:pair.position lParam:pair.match];
+    }
+}
+- (void)setBraceHighlightEnabled:(BOOL)enabled {
+    [self assertThread];
+    if (_braceHighlightEnabled == enabled) return;
+    _braceHighlightEnabled = enabled;
+    _braceCacheValid = NO;
+    if (!enabled) [_engine message:SCI_BRACEHIGHLIGHT wParam:(uptr_t)-1 lParam:-1];
+    else [self scheduleStateNotification];
+}
+- (void)applyCurrentLineFrameWithHighContrast:(BOOL)high {
+    if (!_currentLineHighlightEnabled || _comparisonPresentation) {
+        [_engine message:SCI_RESETELEMENTCOLOUR wParam:SC_ELEMENT_CARET_LINE_BACK];
+        return;
+    }
+    const BOOL dark = [self usesDarkPalette];
+    const sptr_t colour = dark ? (high ? 0xBCDFC5 : 0xA9C7B1) : (high ? 0x344D39 : 0x576B5C);
+    [_engine message:SCI_SETCARETLINEFRAME wParam:high ? 2 : 1];
+    [_engine message:SCI_SETELEMENTCOLOUR wParam:SC_ELEMENT_CARET_LINE_BACK lParam:0xFF000000 | colour];
+}
+- (void)setCurrentLineHighlightEnabled:(BOOL)enabled {
+    [self assertThread]; if (_currentLineHighlightEnabled == enabled) return;
+    _currentLineHighlightEnabled = enabled;
+    [self applyCurrentLineFrameWithHighContrast:NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast];
+}
+- (void)applyIndentGuides {
+    // The native dotted guides take their ink from style 37. Imported lexers may also
+    // use that style for real text, so keep its configured foreground and background.
+    [_engine message:SCI_SETINDENTATIONGUIDES wParam:(_indentGuidesEnabled && !_comparisonPresentation) ? SC_IV_LOOKBOTH : SC_IV_NONE];
+}
+- (void)setIndentGuidesEnabled:(BOOL)enabled {
+    [self assertThread]; if (_indentGuidesEnabled == enabled) return;
+    _indentGuidesEnabled = enabled;
+    [self applyIndentGuides];
 }
 - (BOOL)runCommand:(NSString *)identifier {
     if (![identifier isKindOfClass:NSString.class]) return NO;
@@ -1317,12 +1470,10 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         [self closeUndoGroup]; return YES;
     }
     if ([identifier isEqualToString:@"gotoMatchingBrace"] || [identifier isEqualToString:@"selectMatchingBrace"]) {
-        sptr_t position = [_engine message:SCI_GETCURRENTPOS];
-        sptr_t match = [_engine message:SCI_BRACEMATCH wParam:position lParam:0];
-        if (match < 0 && position > 0) { --position; match = [_engine message:SCI_BRACEMATCH wParam:position lParam:0]; }
-        if (match >= 0) {
-            if ([identifier isEqualToString:@"selectMatchingBrace"]) [_engine message:SCI_SETSEL wParam:MIN(position,match) lParam:MAX(position,match)+1];
-            else [_engine message:SCI_GOTOPOS wParam:match];
+        const TTBracePair pair = [self bracePairAtCaret:[_engine message:SCI_GETCURRENTPOS] live:NO];
+        if (pair.match >= 0) {
+            if ([identifier isEqualToString:@"selectMatchingBrace"]) [_engine message:SCI_SETSEL wParam:MIN(pair.position,pair.match) lParam:MAX(pair.position,pair.match)+1];
+            else [_engine message:SCI_GOTOPOS wParam:pair.match];
             [_engine message:SCI_SCROLLCARET];
         }
         return YES;
@@ -1454,6 +1605,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 /// Installs the lexer and its defaults without lexing; every caller colourises exactly once afterwards.
 - (void)installLexer:(NSString *)language {
+    _braceCacheValid = NO;
+    [self scheduleStateNotification];
     [_syntaxStyles removeAllObjects];[_syntaxFonts removeAllObjects];
     auto lexer = [language isEqualToString:@"user"] ? TextTankCreateUserLexer() : CreateLexer(language.UTF8String);
     if (!lexer) lexer = CreateLexer("null");
@@ -1572,6 +1725,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (void)setComparisonPresentation:(BOOL)value {
     [self assertThread]; _comparisonPresentation=value;
+    _braceCacheValid = NO;
+    if (value) [_engine message:SCI_BRACEHIGHLIGHT wParam:(uptr_t)-1 lParam:-1];
+    else [self scheduleStateNotification];
+    [self applyCurrentLineFrameWithHighContrast:NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast];
+    [self applyIndentGuides];
     _emptyLineNumbers.hidden=value;
     [_engine message:SCI_SETVSCROLLBAR wParam:!value];
     [_engine message:SCI_SETENDATLASTLINE wParam:!value];
@@ -1705,13 +1863,60 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         [_engine message:SCI_INDICATORFILLRANGE wParam:range.location lParam:range.length];
     return YES;
 }
+- (BOOL)setBaseFontName:(NSString *)name size:(double)size {
+    [self assertThread];
+    if (!std::isfinite(size) || size < 6 || size > 72 || ![name isKindOfClass:NSString.class] ||
+        !name.length || name.length > 200 || [name rangeOfString:@"\0"].location != NSNotFound ||
+        ![NSFont fontWithName:name size:size]) return NO;
+    const double points = lround(size * 100) / 100.0;
+    if ([_baseFontName isEqualToString:name] && _basePointSize == points) return YES;
+    _baseFontName = [name copy];
+    _basePointSize = points;
+    [self applyPalette];
+    _emptyLineNumbers.needsDisplay = YES;
+    [self scheduleStateNotification];
+    return YES;
+}
+- (NSInteger)zoomLevel { [self assertThread]; return [_engine message:SCI_GETZOOM]; }
+- (void)setZoomLevel:(NSInteger)level {
+    [self assertThread];
+    if (level >= -10 && level <= 60 && level != self.zoomLevel) [_engine message:SCI_SETZOOM wParam:level];
+}
+- (void)applyDefaultZoomLevel:(NSInteger)level {
+    [self assertThread];
+    if (level < -10 || level > 60) return;
+    _defaultZoomLevel = level;
+    if (_followsDefaultZoom) self.zoomLevel = level;
+}
+- (void)applyFontToStyle:(NSInteger)index name:(NSString *)name size:(NSNumber *)size {
+    NSString *face = name ?: _baseFontName;
+    double points = size ? size.doubleValue : _basePointSize;
+    [_engine message:SCI_STYLESETFONT wParam:index lParam:(sptr_t)face.UTF8String];
+    [_engine message:SCI_STYLESETSIZEFRACTIONAL wParam:index lParam:lround(points * 100)];
+}
 - (BOOL)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size {
     [self assertThread];
-    if(index<0 || index>255 || !std::isfinite(size) || size<6 || size>96 || ![name isKindOfClass:NSString.class] || name.length>200 || [name rangeOfString:@"\0"].location!=NSNotFound)return NO;
-    NSFont *font=[NSFont fontWithName:name size:size];if(font==nil)return NO;
-    _syntaxFonts[@(index)]=@{@"name":name,@"size":@(size)};
-    [_engine message:SCI_STYLESETFONT wParam:index lParam:(sptr_t)name.UTF8String];[_engine message:SCI_STYLESETSIZEFRACTIONAL wParam:index lParam:(sptr_t)lround(size*100)];
-    if (index == STYLE_LINENUMBER || index == STYLE_DEFAULT) { [self updateLineNumberMargin:NO]; _emptyLineNumbers.needsDisplay = YES; }
+    if (![name isKindOfClass:NSString.class] || !name.length) return NO;
+    return [self setSyntaxFont:index faceOverride:name sizeOverride:@(size)];
+}
+- (BOOL)setSyntaxFont:(NSInteger)index faceOverride:(NSString *)name sizeOverride:(NSNumber *)size {
+    [self assertThread];
+    if (index < 0 || index > 255) return NO;
+    if (size && (![size isKindOfClass:NSNumber.class] || !std::isfinite(size.doubleValue) ||
+                 size.doubleValue < 6 || size.doubleValue > 96)) return NO;
+    if (name && (![name isKindOfClass:NSString.class] || !name.length || name.length > 200 ||
+                 [name rangeOfString:@"\0"].location != NSNotFound ||
+                 ![NSFont fontWithName:name size:_basePointSize])) return NO;
+    NSMutableDictionary *override = [NSMutableDictionary dictionary];
+    if (name) override[@"name"] = name;
+    if (size) override[@"size"] = size;
+    if (override.count) _syntaxFonts[@(index)] = override;
+    else [_syntaxFonts removeObjectForKey:@(index)];
+    [self applyFontToStyle:index name:name size:size];
+    if (index == STYLE_LINENUMBER || index == STYLE_DEFAULT) {
+        [self updateLineNumberMargin:NO];
+        _emptyLineNumbers.needsDisplay = YES;
+    }
     return YES;
 }
 - (BOOL)showCallTip:(NSString *)text {
@@ -1810,6 +2015,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (void)notification:(SCNotification *)notification {
     const unsigned int code = notification->nmhdr.code;
     const int type = notification->modificationType;
+    if (_braceCacheValid && _braceHighlightEnabled && !_comparisonPresentation &&
+        code == SCN_MODIFIED && (type & (SC_MOD_CHANGESTYLE | SC_MOD_LEXERSTATE))) {
+        _braceCacheValid = NO;
+        [self scheduleStateNotification];
+    }
     if (_indentingReturn && code == SCN_MODIFIED && (type & SC_MOD_INSERTCHECK)) {
         [self inheritIndentAtInsertion:notification];
     }
@@ -1847,7 +2057,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     // Keep the line-number margin wide enough: zoom rescales its font, and added or removed lines
     // change the digit count. A margin width is view state, so setting it here edits nothing.
     // The filler numbers are drawn at the zoomed size, which the compared values need not show.
-    if (code == SCN_ZOOM) { [self updateLineNumberMargin:NO]; _emptyLineNumbers.needsDisplay = YES; [self scheduleStateNotification]; }
+    if (code == SCN_ZOOM) { _followsDefaultZoom = self.zoomLevel == _defaultZoomLevel; [self updateLineNumberMargin:NO]; _emptyLineNumbers.needsDisplay = YES; [self scheduleStateNotification]; }
     else if (code == SCN_MODIFIED && notification->linesAdded != 0 && [self lineNumberDigits] != _marginDigits) [self updateLineNumberMargin:NO];
     if (code == SCN_ZOOM || (code == SCN_UPDATEUI && (notification->updated & (SC_UPDATE_V_SCROLL | SC_UPDATE_H_SCROLL)))) [self comparisonViewportChanged];
     if (code == SCN_UPDATEUI) {

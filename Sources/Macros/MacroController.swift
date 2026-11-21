@@ -83,7 +83,9 @@ import Darwin
         captureError = nil
         // The previous recording stays playable and saveable until a new one finishes (F67).
         editor.onMacroStep = { [weak self, weak editor] raw in
-            guard let self, let editor, self.recordingEditor === editor, !self.playing else { return }
+            guard let self, let editor, self.recordingEditor === editor, self.captureError == nil, !self.playing else {
+                return
+            }
             do {
                 let step: RecordedMacro.Step
                 switch raw.kind {
@@ -120,10 +122,27 @@ import Darwin
         guard let editor = recordingEditor, !playing else { return }
         discard(MacroError.invalid(reason), editor: editor)
     }
+    /// A synchronous edit can call back into Stop Recording before the bridge returns.
+    /// Reserve the failure before applying; stop and announce only if the native edit succeeds.
+    func prepareUnrecordedChange(in destination: TTEditor, reason: String) -> ((Bool) -> Void)? {
+        guard let editor = recordingEditor, !playing, captureError == nil,
+            editor.sharesDocument(with: destination)
+        else { return nil }
+        let failure = MacroError.invalid(reason) as NSError
+        captureError = failure
+        return { [weak self] applied in
+            // An onChange callback can finish this recording and start another on the same view.
+            guard let self, self.recordingEditor === editor, (self.captureError as NSError?) === failure else { return }
+            if applied { self.stopInvalidCapture(failure, editor: editor) } else { self.captureError = nil }
+        }
+    }
     /// The first reason wins and is reported at once; capture stops so nothing more is collected.
     private func discard(_ error: Error, editor: TTEditor) {
         guard captureError == nil else { return }
         captureError = error
+        stopInvalidCapture(error, editor: editor)
+    }
+    private func stopInvalidCapture(_ error: Error, editor: TTEditor) {
         // Stopping settles a pending margin click, which can report again; the guard above ends that.
         editor.stopRecording()
         editor.onMacroStep = nil

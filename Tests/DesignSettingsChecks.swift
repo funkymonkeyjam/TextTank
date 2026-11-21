@@ -20,7 +20,8 @@ import NativeSearch
             return
         }
         let ids: Set<String> = [
-            "settings.save", "settings.cancel", "settings.reset", "automation.create", "automation.edit",
+            "settings.shortcuts.apply", "settings.close", "settings.reset", "settings.font.choose", "automation.create",
+            "automation.edit",
             "automation.rules", "automation.duplicate", "automation.delete", "automation.favorite", "automation.json"
         ]
         for button in descendants(content).compactMap({ $0 as? NSButton }).filter({
@@ -119,6 +120,7 @@ import NativeSearch
             WindowFrames.defaults = previous
             defaults.removePersistentDomain(forName: suite)
         }
+        try maintenanceSheetChecks(root: root)
         let controller = SettingsController(url: root.appendingPathComponent("design-settings-frames.json"))
         controller.showSettings(nil)
         let form = try requireValue(FormPanel.visible.last, "DG fixture: Settings frame")
@@ -173,6 +175,152 @@ import NativeSearch
             !reopened.window.isVisible && !FileManager.default.fileExists(atPath: controller.url.path),
             "DG Escape closes actual Settings without saving pending changes")
         if reopened.window.isVisible { reopened.close() }
+        controller.showSettings(nil)
+        let live = try requireValue(FormPanel.visible.last, "fixture: live Settings")
+        let size = try field("settings.font.size", live.window), font = try button("settings.font.choose", live.window)
+        check(
+            font.acceptsFirstResponder && font.accessibilityLabel()?.contains("Settings") == true,
+            "the native editor font button exposes a scoped name and accepts keyboard focus")
+        size.stringValue = "18.75"
+        _ = NSApp.sendAction(size.action!, to: size.target, from: size)
+        let savedBytes = try Data(contentsOf: controller.url)
+        let decoded = try EditorSettings.decode(savedBytes)
+        check(
+            live.window.isVisible && controller.value.fontSize == 18.75 && decoded.fontSize == 18.75,
+            "committing fractional size persists it without closing modeless Settings")
+        size.stringValue = "73"
+        _ = NSApp.sendAction(size.action!, to: size.target, from: size)
+        let unchanged = try Data(contentsOf: controller.url)
+        check(
+            size.stringValue == "73" && live.window.isVisible && unchanged == savedBytes,
+            "invalid font size keeps the draft and previous settings bytes")
+        font.performClick(nil)
+        size.stringValue = "31.75"
+        _ = NSApp.sendAction(size.action!, to: size.target, from: size)
+        font.performClick(nil)
+        check(
+            NSFontManager.shared.selectedFont?.pointSize == 31.75 && controller.value.fontSize == 31.75,
+            "reopening the native Font panel retains the live field's latest fractional size")
+        NSFontManager.shared.fontPanel(false)?.performClose(nil)
+        live.close()
+    }
+    static func maintenanceSheetChecks(root: URL) throws {
+        let url = root.appendingPathComponent("maintenance-settings.json")
+        let controller = SettingsController(url: url)
+        var initial = EditorSettings()
+        initial.tabWidth = 13
+        try controller.save(initial)
+        let initialBytes = try Data(contentsOf: url)
+        let existing = Set(FormPanel.visible.map(ObjectIdentifier.init))
+        defer { for f in FormPanel.visible where !existing.contains(ObjectIdentifier(f)) { f.close() } }
+        controller.showSettings(nil)
+        let form = try requireValue(FormPanel.visible.last, "Settings maintenance fixture")
+        let width = try field("settings.width", form.window)
+        width.stringValue = "999"
+        let reset = try button("settings.reset", form.window)
+        func sheet(_ parent: FormPanel, action: NSButton) throws -> NSWindow {
+            action.performClick(nil)
+            let result = try requireValue(parent.window.attachedSheet, "owned Settings maintenance sheet")
+            check(
+                result.sheetParent === parent.window && NSApp.modalWindow == nil,
+                "only Settings is blocked by maintenance confirmation")
+            return result
+        }
+        func choose(_ title: String, in sheet: NSWindow) throws {
+            let item = try requireValue(
+                descendants(sheet.contentView!).compactMap { $0 as? NSButton }.first { $0.title == title },
+                "Settings maintenance choice")
+            check(item.hasDestructiveAction == (title != "Cancel"), "Settings marks the deliberate destructive button")
+            item.performClick(nil)
+            _ = spinUntil("Settings maintenance sheet finished") { sheet.sheetParent == nil && !sheet.isVisible }
+        }
+        let first = try sheet(form, action: reset)
+        reset.performClick(nil)
+        check(
+            form.window.sheets.count == 1 && form.window.attachedSheet === first,
+            "duplicate Reset cannot enqueue another confirmation")
+        try choose("Cancel", in: first)
+        check(
+            try Data(contentsOf: url) == initialBytes && width.stringValue == "999" && form.acceptsActions,
+            "Cancel preserves exact saved settings and invalid draft")
+        // Setting the user-immutable flag on this owned regular file allows reading the
+        // original bytes but makes the atomic replacement fail at the actual save boundary.
+        do {
+            try require(chflags(url.path, UInt32(UF_IMMUTABLE)) == 0, "owned immutable settings fixture")
+            defer { _ = chflags(url.path, 0) }
+            try choose("Reset Defaults", in: sheet(form, action: reset))
+            check(
+                try Data(contentsOf: url) == initialBytes && width.stringValue == "999" && controller.value == initial
+                    && !form.validation.isHidden,
+                "failed confirmed Reset retains original bytes, applied values and unfinished draft")
+        }
+        let stale = try sheet(form, action: reset)
+        var changed = initial
+        changed.tabWidth = 23
+        try SettingsController(url: url).save(changed)
+        let changedBytes = try Data(contentsOf: url)
+        try choose("Reset Defaults", in: stale)
+        check(
+            try Data(contentsOf: url) == changedBytes && width.stringValue == "999" && !form.validation.isHidden,
+            "stale sheet cannot overwrite a different controller's settings or discard the draft")
+        form.close()
+        controller.showSettings(nil)
+        let reopened = try requireValue(FormPanel.visible.last, "reopened Settings maintenance fixture")
+        let secondReset = try button("settings.reset", reopened.window)
+        let closing = try sheet(reopened, action: secondReset)
+        reopened.close()
+        _ = spinUntil("parent closed Settings maintenance sheet") { !closing.isVisible }
+        check(
+            try Data(contentsOf: url) == changedBytes && !reopened.window.isVisible,
+            "closing the parent cancels its pending destructive action")
+        controller.showSettings(nil)
+        let third = try requireValue(FormPanel.visible.last, "fresh Settings reset fixture")
+        // Change only optional/unknown representation, then let two menu commands bring the
+        // effective setting back to its original value and refresh the live store baseline.
+        var normalized = controller.value
+        normalized.autoIndent = true
+        try controller.save(normalized)
+        let staleMetadata = try sheet(third, action: button("settings.reset", third.window))
+        var metadata = try requireValue(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any], "owned extended settings")
+        metadata["unrecognizedMetadata"] = "retained"
+        try JSONSerialization.data(withJSONObject: metadata).write(to: url)
+        controller.toggleAutoIndent(nil)
+        controller.toggleAutoIndent(nil)
+        let metadataBytes = try Data(contentsOf: url)
+        try choose("Reset Defaults", in: staleMetadata)
+        check(
+            try Data(contentsOf: url) == metadataBytes && controller.value == normalized && !third.validation.isHidden,
+            "sheet retains original disk baseline when menu round trip refreshes current store")
+
+        try choose("Reset Defaults", in: sheet(third, action: button("settings.reset", third.window)))
+        check(
+            SettingsStore(url: url).value == EditorSettings() && !third.window.isVisible,
+            "confirmed Reset saves defaults and refreshes Settings")
+        FormPanel.visible.last?.close()
+        let damaged = Data("damaged settings".utf8)
+        try damaged.write(to: url)
+        controller.showSettings(nil)
+        let repair = try requireValue(FormPanel.visible.last, "damaged Settings fixture")
+        let repairButton = try button("settings.repair", repair.window)
+        let repairDraft = try field("settings.width", repair.window)
+        repairDraft.stringValue = "unfinished"
+        let cancelRepair = try sheet(repair, action: repairButton)
+        try button("settings.reset", repair.window).performClick(nil)
+        check(
+            repair.window.sheets.count == 1 && repair.window.attachedSheet === cancelRepair,
+            "repair cannot queue an incompatible reset")
+        try choose("Cancel", in: cancelRepair)
+        check(
+            try Data(contentsOf: url) == damaged && repairDraft.stringValue == "unfinished",
+            "cancelled Repair keeps original damaged bytes and draft")
+        try choose("Back Up and Repair", in: sheet(repair, action: repairButton))
+        let backups = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil).filter {
+            $0.lastPathComponent.contains("unreadable") && (try? Data(contentsOf: $0)) == damaged
+        }
+        check(
+            backups.count == 1 && SettingsStore(url: url).loadError == nil,
+            "confirmed Repair creates exactly one intact backup and readable settings")
     }
     static func managerChecks() throws {
         let isolated = try IsolatedSupportDirectory("DesignSettingsManagers")

@@ -54,6 +54,7 @@ import AppKit
         switch item.action {
         case #selector(CompareController.performCompareCommand(_:)):
             return CompareController.key?.validateMenuItem(item) ?? false
+        case #selector(actualSize(_:)): return CompareController.key != nil || currentEditor != nil
         case #selector(newDocument(_:)): return !CompareCommandScope.blocksWorkspace
         case #selector(performTabCommand(_:)):
             guard let raw = item.representedObject as? String, let command = TabCommand(rawValue: raw) else {
@@ -135,6 +136,11 @@ import AppKit
     }()
     @MainActor lazy var compare: CompareService = {
         let value = CompareService()
+        value.prepareSelectedChange = { [weak self] destination in
+            self?.macros.prepareUnrecordedChange(
+                in: destination,
+                reason: "Applying selected comparison changes cannot be recorded. No partial macro will be saved.")
+        }
         value.currentEditor = { [weak self] in self?.currentEditor }
         return value
     }()
@@ -215,6 +221,10 @@ import AppKit
             alert.messageText = "Settings could not be read"
             alert.informativeText = message
             _ = alert.runModal()
+        }
+        if let message = settings.value.unavailableFontNotice {
+            Announce.say(message)
+            lastDocumentController?.showTransientStatus(message, seconds: 8, announce: false)
         }
         if settings.shortcutLoadNotice != nil {
             let message =
@@ -357,7 +367,8 @@ import AppKit
             title: EditorToolbarCommand.save.title, action: EditorToolbarCommand.save.action, keyEquivalent: "s")
         file.addItem(title: "Save As…", action: #selector(NSDocument.saveAs(_:)), keyEquivalent: "S")
         file.addItem(title: "Save Copy…", action: #selector(TextDocument.saveCopy(_:)))
-        file.addItem(title: "Save All", action: #selector(NSDocumentController.saveAllDocuments(_:)))
+        automations.saveAllShortcutItem = file.addItem(
+            title: "Save All", action: #selector(NSDocumentController.saveAllDocuments(_:)), fallback: .saveAll)
         file.addItem(title: "Revert to Saved…", action: #selector(NSDocument.revertToSaved(_:)))
         file.addItem(title: "Check for External Changes", action: #selector(TextDocument.checkExternalChanges(_:)))
         file.addItem(title: "Read Only", action: #selector(TextDocument.toggleReadOnly(_:)))
@@ -403,7 +414,13 @@ import AppKit
                 representedObject: id)
         }
         @MainActor func command(_ menu: NSMenu, _ value: EditorCommand, _ key: String? = nil) {
-            command(menu, value.title, value.rawValue, key ?? value.defaultMenuShortcut)
+            if let fallback = value.extendedMenuShortcut, key == nil {
+                menu.addItem(
+                    title: value.title, action: #selector(EditorWindowController.command(_:)),
+                    fallback: fallback, representedObject: value.rawValue)
+            } else {
+                command(menu, value.title, value.rawValue, key ?? value.defaultMenuShortcut)
+            }
         }
         @MainActor func transform(_ m: NSMenu, _ value: EditorTransform) {
             command(m, value.title, "transform." + value.rawValue)
@@ -463,6 +480,7 @@ import AppKit
         for comment in CommentCommand.allCases {
             comments.addItem(
                 title: comment.title, action: #selector(EditorWindowController.comment(_:)),
+                fallback: comment.defaultMenuShortcut,
                 representedObject: comment.rawValue)
         }
         let selection = group("Selection")
@@ -520,7 +538,8 @@ import AppKit
         compareMenu.addItem(.separator())
         for command in CompareCommand.allCases where !command.isMergeCommand {
             compareMenu.addItem(
-                title: command.title, action: #selector(CompareController.performCompareCommand(_:)), target: nil,
+                title: command.title, action: #selector(CompareController.performCompareCommand(_:)),
+                fallback: command.defaultMenuShortcut, target: command.defaultMenuShortcut == nil ? nil : self,
                 representedObject: command.rawValue)
         }
         compareMenu.addItem(.separator())
@@ -555,6 +574,7 @@ import AppKit
         view.addItem(title: "Wrap Lines", action: #selector(EditorWindowController.toggleWrap(_:)))
         command(view, .zoomIn)
         command(view, .zoomOut)
+        view.addItem(title: "Actual Size", action: #selector(actualSize(_:)), fallback: .actualSize, target: self)
         for value: EditorCommand in [.foldAll, .unfoldAll, .showWhitespace, .toggleEOL, .toggleLineNumbers] {
             command(view, value)
         }
@@ -568,6 +588,15 @@ import AppKit
         view.addItem(
             title: "Auto-Indent on Return", action: #selector(SettingsController.toggleAutoIndent(_:)), target: settings
         )
+        view.addItem(
+            title: "Highlight Matching Braces", action: #selector(SettingsController.toggleBraceHighlight(_:)),
+            target: settings)
+        view.addItem(
+            title: "Highlight Current Line", action: #selector(SettingsController.toggleCurrentLineHighlight(_:)),
+            target: settings)
+        view.addItem(
+            title: "Show Indentation Guides", action: #selector(SettingsController.toggleIndentGuides(_:)),
+            target: settings)
         let languageRoot = NSMenuItem()
         languageRoot.title = "Language"
         languageRoot.submenu = languages.menu()
@@ -594,7 +623,8 @@ import AppKit
             window.addItem(.separator())
             for command in section {
                 let item = window.addItem(
-                    title: command.title, action: #selector(performTabCommand(_:)), target: self,
+                    title: command.title, action: #selector(performTabCommand(_:)),
+                    fallback: command.defaultMenuShortcut, target: self,
                     representedObject: command.rawValue)
                 item.identifier = NSUserInterfaceItemIdentifier("tabs.command." + command.rawValue)
             }
@@ -608,7 +638,28 @@ import AppKit
         let help = menu("Help")
         NSApp.helpMenu = help
         help.addItem(title: "TextTank Help (Online)", action: #selector(openOnlineHelp(_:)), keyEquivalent: "?")
+        func alias(
+            _ menu: NSMenu, title: String, action: Selector, key: MenuShortcut, target: AnyObject?,
+            object: String? = nil
+        ) {
+            let item = menu.addItem(
+                title: title, action: action, fallback: key, target: target, representedObject: object)
+            item.isHidden = true
+            item.allowsKeyEquivalentWhenHidden = true
+        }
+        alias(
+            view, title: EditorCommand.zoomIn.title, action: #selector(EditorWindowController.command(_:)),
+            key: .zoomInAlternate, target: nil, object: EditorCommand.zoomIn.rawValue)
+        alias(window, title: "Next Tab", action: #selector(nextDocumentTab(_:)), key: .nextTabAlternate, target: self)
+        alias(
+            window, title: "Previous Tab", action: #selector(previousDocumentTab(_:)), key: .previousTabAlternate,
+            target: self)
+        // AppKit can translate Control-Shift-Tab to backtab on the active keyboard layout.
+        alias(
+            window, title: "Previous Tab", action: #selector(previousDocumentTab(_:)), key: .previousTabBacktab,
+            target: self)
         settings.reconcileShortcuts(with: bar)
+        EditorSettingsApplication.applyShortcuts(settings.value, to: bar)
     }
     /// The project page, which carries the review guide and where each command lives. There is no
     /// bundled help book yet.
@@ -632,9 +683,19 @@ import AppKit
         guard let raw = sender.representedObject as? String, let command = TabCommand(rawValue: raw) else { return }
         knownWorkspace?.tabCommands.performSelection(command, sender: sender)
     }
+    @objc func actualSize(_ sender: Any?) {
+        if let comparison = CompareController.key {
+            comparison.resetComparisonZoom()
+        } else {
+            currentEditor?.zoomLevel = 0
+        }
+    }
     @objc func nextDocumentTab(_ sender: Any?) { cycleDocumentTab(1) }
     @objc func previousDocumentTab(_ sender: Any?) { cycleDocumentTab(-1) }
-    private func cycleDocumentTab(_ direction: Int) { WorkspaceWindowController.current.cycle(direction) }
+    private func cycleDocumentTab(_ direction: Int) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        WorkspaceWindowController.current.cycle(direction)
+    }
     private var documentsPanel: ChoicePanel?
     @MainActor @objc func showDocumentTabs(_ sender: Any?) {
         guard knownWorkspace?.isMutatingGroups != true else { return }

@@ -1636,6 +1636,7 @@ private final class SelectionReadCounterEditor: TTEditor {
                     && controller.status.stringValue.contains("1 with multiple selections") && unedited(),
                 "Replace All with multiple selections says so and edits nothing")
             _ = editor.setSelectionAnchor(8, caret: 8)
+            let revisionBeforeReplacements = editor.revision
             var changeCallbacks = 0
             editor.onChange = { changeCallbacks += 1 }
             await replaceAll()
@@ -1648,8 +1649,8 @@ private final class SelectionReadCounterEditor: TTEditor {
                         == "Replaced 2 matches; 0 changed documents skipped. Undo is per document.",
                 "Replace All replaces every match, records once and keeps the caret at the text it was on (G374)")
             check(
-                changeCallbacks >= 2 && changeCallbacks <= 5,
-                "Replace All of two matches reports only its own inserts and deletes (\(changeCallbacks) callbacks)")
+                changeCallbacks == 1 && editor.revision == revisionBeforeReplacements + 4,
+                "Replace All coalesces two insert/delete pairs into one callback and records all four revisions")
             editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(unedited(), "Replace All is one Undo back to the save point")
 

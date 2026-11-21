@@ -57,18 +57,18 @@
     "position": "5.13.4",
     "title": "Previous Change",
     "action": "performCompareCommand:",
-    "key": "",
-    "modifiers": "1048576",
-    "target": "responder",
+    "key": "",
+    "modifiers": "131072",
+    "target": "explicit",
     "object": "previous"
   },
   {
     "position": "5.13.5",
     "title": "Next Change",
     "action": "performCompareCommand:",
-    "key": "",
-    "modifiers": "1048576",
-    "target": "responder",
+    "key": "",
+    "modifiers": "0",
+    "target": "explicit",
     "object": "next"
   },
   {

@@ -13,6 +13,7 @@ package struct EditorSelection: Equatable, Sendable {
 
 package enum CommentCommand: String, CaseIterable {
     case toggleLine, lineComment, lineUncomment, blockComment, blockUncomment
+    package var defaultMenuShortcut: MenuShortcut? { self == .toggleLine ? MenuShortcut("/") : nil }
     package var title: String {
         switch self {
         case .toggleLine: return "Toggle Line Comment"

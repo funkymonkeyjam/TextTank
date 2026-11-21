@@ -19,6 +19,17 @@ package struct EditorSettings: Codable, Equatable {
     package var version: Int
     package var tabWidth: Int
     package var useTabs: Bool
+    package var fontName: String?
+    package var fontSize: Double?
+    package var defaultZoom: Int?
+    package var basePointSize: Double { fontSize ?? 14 }
+    package var initialZoom: Int { defaultZoom ?? 0 }
+    package var currentLineHighlight: Bool?
+    package var currentLineHighlightEnabled: Bool { currentLineHighlight ?? true }
+    package var indentGuides: Bool?
+    package var indentGuidesEnabled: Bool { indentGuides ?? true }
+    package var braceHighlight: Bool?
+    package var braceHighlightEnabled: Bool { braceHighlight ?? true }
     package var autoIndent: Bool?
     package var autoIndentEnabled: Bool { autoIndent ?? true }
     package var wrap: Bool
@@ -48,6 +59,13 @@ package struct EditorSettings: Codable, Equatable {
         guard version == 1, (1...32).contains(tabWidth), ["system", "light", "dark"].contains(appearance) else {
             throw SettingsError.invalid
         }
+        if let fontName {
+            guard !fontName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, fontName.utf8.count <= 200,
+                fontName.rangeOfCharacter(from: .controlCharacters) == nil
+            else { throw SettingsError.invalidFont }
+        }
+        guard basePointSize.isFinite, (6...72).contains(basePointSize), (-10...60).contains(initialZoom)
+        else { throw SettingsError.invalidFont }
         if let failure = shortcutValidationFailure(reservedKeys: reservedKeys) { throw failure.error }
     }
     /// The same deterministic validation supplies identity to editors and errors to strict saves.
@@ -160,7 +178,7 @@ package struct ShortcutLoadIssue: Equatable {
     }
 }
 package enum SettingsError: Error, LocalizedError, Equatable {
-    case invalid, conflict, unreadable, tabWidth, unknownShortcut, invalidShortcut, changedOnDisk,
+    case invalid, invalidFont, conflict, unreadable, tabWidth, unknownShortcut, invalidShortcut, changedOnDisk,
         ambiguousViewPreference
     case duplicateShortcut(first: String, second: String, key: String)
     package var errorDescription: String? {
@@ -170,6 +188,7 @@ package enum SettingsError: Error, LocalizedError, Equatable {
                 "The saved View preference is ambiguous. Check Settings.json for duplicate preference keys, then try again."
         case .changedOnDisk: return "The settings file changed before this edit finished. Try the command again."
         case .tabWidth: return "Tab width must be a whole number from 1 to 32. The settings were not changed."
+        case .invalidFont: return "Choose a font name, a size from 6 to 72 points and a default zoom from −10 to 60."
         case .invalid: return "Unsupported settings version or value. Existing settings have not been replaced."
         case .conflict:
             return
@@ -228,10 +247,13 @@ package struct SettingsShortcutDraft {
     }
 }
 package enum EditorViewPreference: String {
-    case autoIndent
+    case autoIndent, braceHighlight, currentLineHighlight, indentGuides
     fileprivate func enabled(in settings: EditorSettings) -> Bool {
         switch self {
         case .autoIndent: return settings.autoIndentEnabled
+        case .braceHighlight: return settings.braceHighlightEnabled
+        case .currentLineHighlight: return settings.currentLineHighlightEnabled
+        case .indentGuides: return settings.indentGuidesEnabled
         }
     }
     /// The caller has already decoded and validated the complete settings object. Locate only
@@ -321,6 +343,20 @@ package enum EditorViewPreference: String {
 /// Foundation-only persistence and failed-load policy. UI/application effects belong to its caller.
 final package class SettingsStore {
     private(set) package var value = EditorSettings()
+    private var diskBytes: Data?
+    private var unreadableIdentity: FileSignature?
+    /// Compare exactly the bytes last read or written, including an absent preferences file.
+    package func fileIsCurrent() throws -> Bool {
+        if diskBytes == nil, loadError != nil {
+            var info = stat()
+            if lstat(url.path, &info) == 0 { return FileSignature(info) == unreadableIdentity }
+            guard errno == ENOENT else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            return unreadableIdentity == nil
+        }
+        do { return try WorkspaceStore.readRegularFile(url, maximumBytes: 1024 * 1024) == diskBytes } catch
+            where error.isFileNotFound
+        { return diskBytes == nil }
+    }
     private(set) package var ignoredShortcutBindings: [ShortcutLoadIssue] = []
     package var shortcutLoadNotice: String? {
         ignoredShortcutBindings.isEmpty ? nil : ignoredShortcutBindings.map(\.message).joined(separator: "\n\n")
@@ -343,12 +379,14 @@ final package class SettingsStore {
         self.url = url ?? AppStorage.url(.settings)
         loadState = StoreLoadState(url: self.url, displayName: "Editor settings")
         do {
-            let loaded = try EditorSettings.load(
-                WorkspaceStore.readRegularFile(self.url, maximumBytes: 1024 * 1024),
-                reservedKeys: reservedKeys)
+            let data = try WorkspaceStore.readRegularFile(self.url, maximumBytes: 1024 * 1024)
+            diskBytes = data
+            let loaded = try EditorSettings.load(data, reservedKeys: reservedKeys)
             value = loaded.settings
             ignoredShortcutBindings = loaded.issues
         } catch  where error.isFileNotFound {} catch {
+            var info = stat()
+            if lstat(self.url.path, &info) == 0 { unreadableIdentity = FileSignature(info) }
             loadError = error
         }
     }
@@ -379,6 +417,7 @@ final package class SettingsStore {
         }
         if enabled == requested {
             try requireUnchanged()
+            diskBytes = source
             value = latest
             return
         }
@@ -387,6 +426,7 @@ final package class SettingsStore {
         try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
         try PrivateFileStore.write(
             result, to: url, maximumBytes: 1024 * 1024, temporaryPrefix: ".settings-", beforeCommit: requireUnchanged)
+        diskBytes = result
         value = accepted
     }
 
@@ -426,6 +466,8 @@ final package class SettingsStore {
             loadError = priorError
             throw error
         }
+        diskBytes = data
+        unreadableIdentity = nil
         value = settings
         loadError = nil
         ignoredShortcutBindings = []

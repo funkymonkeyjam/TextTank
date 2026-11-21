@@ -52,7 +52,7 @@ import TextTankCore
             for item in menu.items { item.isEnabled = validateMenuItem(item) }
         }
     }
-    private func refreshViewMenu() {
+    func refreshViewMenu() {
         guard let menu = viewMenu else { return }
         for item in menu.items where item.identifier?.rawValue.hasPrefix("groups.") == true { menu.removeItem(item) }
         let separator = NSMenuItem.separator()
@@ -111,6 +111,11 @@ import TextTankCore
     }
     private func make(_ title: String, _ call: Invocation, id: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: #selector(invoke(_:)), keyEquivalent: "")
+        if case .focus = call.action, let slot = call.destination {
+            let key = MenuShortcut.focusGroup(slot)
+            item.keyEquivalent = key.key
+            item.keyEquivalentModifierMask = key.appKitModifiers
+        }
         item.target = self
         item.representedObject = call
         item.identifier = .init("groups." + id)

@@ -35,6 +35,13 @@ import EditorBridge
         case .copyPatch: return "Copy Patch"
         }
     }
+    var defaultMenuShortcut: MenuShortcut? {
+        switch self {
+        case .next: return .init("\u{f70a}", [])
+        case .previous: return .init("\u{f70a}", [.shift])
+        default: return nil
+        }
+    }
     var symbol: String {
         switch self {
         case .previous: return "chevron.up"
@@ -125,7 +132,9 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     private var presentationComplete = false
     private struct PreviousPresentation {
         let original: CompareSource, modified: CompareSource, projection: CompareProjection
-        let navigation: CompareNavigation, font: NSFont, expanded: Set<Int>
+        let navigation: CompareNavigation, expanded: Set<Int>
+        var font: NSFont
+        let localFontOffset: CGFloat
     }
     private var rollback: PreviousPresentation?
     private var rowTops: [Int] = []
@@ -137,6 +146,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     private var wheelMonitor: Any?
     private var arranging = false
     private var geometryRequested = false
+    private var localFontOffset: CGFloat = 0
     private var commonFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
     var unifiedTableView: NSTableView { table }
     var currentChange: Int? { navigation.current }
@@ -230,6 +240,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             pane.onResize = { [weak self] in self?.requestGeometry() }
             pane.onFontChange = { [weak self] font in
                 guard let self, self.commonFont != font else { return }
+                self.localFontOffset += font.pointSize - self.commonFont.pointSize
                 self.commonFont = font
                 self.left.editor.comparisonFont = font
                 self.right.editor.comparisonFont = font
@@ -286,15 +297,37 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         _ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int
     ) -> CGFloat { max(splitView.bounds.width / 2, splitView.bounds.width - 240 - splitView.dividerThickness) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    private func sourceFont(_ original: CompareSource?, settings: EditorSettings) -> NSFont {
+        if case .document(let input) = original?.input, let (_, view) = try? input.capture.resolve() {
+            return view.comparisonFont
+        }
+        let base = settings.resolvedBaseFont
+        return NSFontManager.shared.convert(
+            base, toSize: min(96, max(6, base.pointSize + CGFloat(settings.initialZoom))))
+    }
+    private func displayFont(for original: CompareSource?, settings: EditorSettings, offset: CGFloat) -> NSFont {
+        let base = sourceFont(original, settings: settings)
+        return NSFontManager.shared.convert(base, toSize: min(96, max(6, base.pointSize + offset)))
+    }
+    /// Keep the user's adjustment even while a bounded renderer cannot show all of it.
+    func applyFontSettings(_ settings: EditorSettings) {
+        if var previous = rollback {
+            previous.font = displayFont(for: previous.original, settings: settings, offset: previous.localFontOffset)
+            rollback = previous
+        }
+        let font = displayFont(for: original, settings: settings, offset: localFontOffset)
+        guard font != commonFont else { return }
+        commonFont = font
+        left.editor.comparisonFont = font
+        right.editor.comparisonFont = font
+        requestGeometry()
+    }
     private func loadSources(_ a: CompareSource, _ b: CompareSource) {
         original = a
         modified = b
         merge.resultReplaced()
-        if case .document(let input) = a.input, let (_, view) = try? input.capture.resolve() {
-            commonFont = view.comparisonFont
-        } else {
-            commonFont = left.editor.comparisonFont
-        }
+        commonFont = displayFont(
+            for: a, settings: EditorServices.current?.settings?.value ?? EditorSettings(), offset: localFontOffset)
         left.editor.comparisonFont = commonFont
         right.editor.comparisonFont = commonFont
         for (source, pane) in [(a, left), (b, right)] {
@@ -371,7 +404,8 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                     {
                         self.rollback = PreviousPresentation(
                             original: original, modified: modified, projection: old, navigation: self.navigation,
-                            font: self.commonFont, expanded: self.expanded)
+                            expanded: self.expanded, font: self.commonFont,
+                            localFontOffset: self.localFontOffset)
                     }
                     self.unifiedRows = []
                     self.changeTops = [:]
@@ -494,6 +528,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             projection = previous.projection
             navigation = previous.navigation
             expanded = previous.expanded
+            localFontOffset = previous.localFontOffset
             commonFont = previous.font
             left.editor.comparisonFont = commonFont
             right.editor.comparisonFont = commonFont
@@ -548,6 +583,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 if let previous = self.rollback {
                     self.rollback = nil
                     self.loadSources(previous.original, previous.modified)
+                    self.localFontOffset = previous.localFontOffset
                     self.commonFont = previous.font
                     self.left.editor.comparisonFont = previous.font
                     self.right.editor.comparisonFont = previous.font
@@ -1038,7 +1074,23 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         default: return false
         }
     }
+    /// The same responder-chain items reach the snapshot window when it is key.
+    @objc func command(_ item: NSMenuItem) {
+        guard Self.key === self, let raw = item.representedObject as? String,
+            raw == EditorCommand.zoomIn.rawValue || raw == EditorCommand.zoomOut.rawValue
+        else { return }
+        left.editor.executeCommand(TTEditorCommandIdentifier(rawValue: raw))
+    }
+    func resetComparisonZoom() {
+        guard Self.key === self else { return }
+        localFontOffset = 0
+        applyFontSettings(EditorServices.current?.settings?.value ?? EditorSettings())
+    }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(command(_:)) {
+            let raw = item.representedObject as? String
+            return Self.key === self && (raw == EditorCommand.zoomIn.rawValue || raw == EditorCommand.zoomOut.rawValue)
+        }
         guard let raw = item.representedObject as? String, let command = CompareCommand(rawValue: raw) else {
             return false
         }

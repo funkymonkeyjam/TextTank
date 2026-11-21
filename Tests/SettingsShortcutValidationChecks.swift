@@ -78,7 +78,8 @@ enum SettingsShortcutValidationChecks {
                             select(scenario.second)
                             key.stringValue = scenario.secondKey
                             stage = 1
-                            views.compactMap { $0 as? NSButton }.first { $0.title == "Save" }?.performClick(nil)
+                            views.compactMap { $0 as? NSButton }.first { $0.title == "Apply Shortcuts" }?.performClick(
+                                nil)
                         } else if stage == 1
                             && views.contains(where: {
                                 $0.accessibilityLabel()?.hasPrefix("Input needs correction") == true
@@ -96,7 +97,7 @@ enum SettingsShortcutValidationChecks {
                                 ? EditorCommand.defaultShortcuts[scenario.first] ?? "" : scenario.key
                             keptDrafts = keptDrafts && key.stringValue == firstValue
                             stage = 2
-                            views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
+                            views.compactMap { $0 as? NSButton }.first { $0.title == "Close" }?.performClick(nil)
                         }
                     }
                 }
@@ -112,7 +113,7 @@ enum SettingsShortcutValidationChecks {
                     "DS45 " + scenario.name + " validation retains every popup draft and restored default")
                 check(
                     try Data(contentsOf: url) == original && controller.value == scenario.initial,
-                    "DS45 " + scenario.name + " rejection and Cancel preserve original settings bytes/model")
+                    "DS45 " + scenario.name + " rejection and Close preserve original settings bytes/model")
             }
         }
     }
