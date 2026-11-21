@@ -140,6 +140,15 @@ private actor CompareFileGate {
         } catch { Checks.fail("Comparison process setup: \(error)", file: #filePath, line: #line) }
         Checks.finish("CompareControllerChecks")
     }
+    @MainActor static func measuredOutcomeIsExpected(_ result: CompareController) -> Bool {
+        if let projection = result.projection {
+            return result.readyForMerge && projection.changes.completeness == .complete
+        }
+        // Both phases have a deadline. Diffing returns an incomplete change set; building
+        // a projection throws a typed time limit. Neither can publish a partial comparison.
+        let timedOut = "The comparison time limit was reached. No document was changed."
+        return result.statusText == timedOut || result.statusText == "Incomplete comparison. " + timedOut
+    }
     @MainActor static func runChecks(
         _ isolated: IsolatedSupportDirectory, _ documents: TextDocumentController, _ app: NSApplication
     ) async {
@@ -552,6 +561,7 @@ private actor CompareFileGate {
                 let start = ProcessInfo.processInfo.systemUptime, measured = service(),
                     result = try await measured.open(original: first, modified: second)
                 try await settled(result)
+                let receivedTimerTick = measure.ticks > 0
                 measure.tick()
                 timer.invalidate()
                 var usage = rusage()
@@ -560,8 +570,14 @@ private actor CompareFileGate {
                     "D1_MEASURE workload=\(workload) inputBytes=\(text.utf8.count) seconds=\(ProcessInfo.processInfo.systemUptime-start) maxMainTickSeconds=\(measure.maximum) ticks=\(measure.ticks) processHighWaterBytes=\(usage.ru_maxrss) complete=\(result.projection != nil) status=\(result.statusText)"
                 )
                 check(
-                    measure.ticks > 0 && (result.projection != nil || result.statusText.contains("Incomplete")),
+                    receivedTimerTick && measuredOutcomeIsExpected(result),
                     "D1 default-policy large/long workload remains cancellable with explicit result")
+                check(
+                    result.left.editor.readOnly && result.right.editor.readOnly
+                        && result.left.editor.comparisonPresentation && result.right.editor.comparisonPresentation
+                        && result.left.editor.utf8Data == Data(text.utf8)
+                        && result.right.editor.utf8Data == Data((text + "changed").utf8),
+                    "D1 bounded workload preserves both original source texts and comparison-only panes")
                 result.window?.close()
             }
             @MainActor func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
