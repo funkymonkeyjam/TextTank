@@ -1018,7 +1018,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         // Undo returns to the selection the command began with.
         let anchor = editor.selectionAnchor, caret = editor.selectionCaret
         guard let ranges = SearchCore.byteRanges(hits.map(\.range), in: text),
-            editor.replaceRanges(
+            editor.replaceSearchRanges(
                 ranges.map { TTByteRange(location: $0.location, length: $0.length) },
                 withTexts: hits.map(\.replacement), expectedRevision: revision)
         else { return .stale }

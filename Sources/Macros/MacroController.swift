@@ -246,6 +246,12 @@ import Darwin
         do { _ = try finishRecording() } catch { TTAlert.present(error) }
     }
     func recordSearch(_ search: RecordedMacro.Search, editor: TTEditor) {
+        if search.action == "replaceOne" || search.action == "replaceAll" {
+            // A Stop/restart inside the native edit cannot donate an older search step to the new recording.
+            guard recordingEditor === editor, captureError == nil, editor.confirmRecordedSearchReplacement() else {
+                return
+            }
+        }
         append(.search(search), editor: editor)
     }
     private func append(_ step: RecordedMacro.Step, editor: TTEditor) {
