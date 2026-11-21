@@ -31,6 +31,45 @@ extension DocumentChecks {
             document.editor.replaceSelection(text)
         }
 
+        section("size-scaled automatic recovery", #line) {
+            let mib = 1024 * 1024
+            let scales: [(Int, Double?)] = [
+                (0, 1), (8 * mib, 1), (8 * mib + 1, 2), (32 * mib, 2),
+                (32 * mib + 1, 4), (64 * mib, 4), (128 * mib, 4), (128 * mib + 1, 8), (256 * mib, 8),
+                (256 * mib + 1, nil)
+            ]
+            check(
+                scales.allSatisfy { TextDocument.automaticRecoveryScale(byteCount: $0.0) == $0.1 },
+                "actual UTF-8 byte boundaries retain small timings and pause only above 256 MiB")
+            let writer = RecoveryWriter(), entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+            let valid = DispatchSemaphore(value: 0), invalid = DispatchSemaphore(value: 0),
+                wrote = DispatchSemaphore(value: 0)
+            writer.submit {
+                entered.signal()
+                _ = release.wait(timeout: .now() + 3)
+            }
+            guard entered.wait(timeout: .now() + 2) == .success else { throw CocoaError(.fileWriteUnknown) }
+            writer.submitPrepared({ { wrote.signal() } }, didPrepare: { valid.signal() }, completion: { _ in })
+            writer.submitPrepared(
+                { throw EditorCaptureError.invalidUTF8 }, didPrepare: { invalid.signal() }, completion: { _ in })
+            guard valid.wait(timeout: .now() + 2) == .success, invalid.wait(timeout: .now() + 2) == .success else {
+                release.signal()
+                throw CocoaError(.fileWriteUnknown)
+            }
+            let waiter = DispatchSemaphore(value: 0), completed = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async {
+                waiter.signal()
+                writer.waitForPendingWrites()
+                completed.signal()
+            }
+            _ = waiter.wait(timeout: .now() + 2)
+            check(completed.wait(timeout: .now()) == .timedOut, "oversized flush waits for its eligible predecessor")
+            release.signal()
+            check(
+                completed.wait(timeout: .now() + 2) == .success && wrote.wait(timeout: .now()) == .success,
+                "an invalid newer capture cannot displace the last valid queued draft at the cutoff")
+
+        }
         section("invalid editor bytes preserve saved files and recovery", #line) {
             let source = area.appendingPathComponent("checked-capture.txt"), disk = Data("saved file".utf8)
             let doc = try loaded(source, disk)

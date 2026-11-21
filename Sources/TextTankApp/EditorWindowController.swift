@@ -280,8 +280,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         statusLabel.lineBreakMode = .byClipping
         applyStatusMessage(
             document.currentSaveStateStatus,
-            compactMessage: document.recoveredOrigin == nil
-                ? document.currentSaveStateStatus : "Recovered copy — Save As to keep")
+            compactMessage: document.compactPausedRecoveryStatus
+                ?? (document.recoveredOrigin == nil
+                    ? document.currentSaveStateStatus : "Recovered copy — Save As to keep"))
         configureExternalReload()
         statusDetails.menuProvider = { [weak self] field in
             guard let self, self.focusPresentationChrome(explicit: false) else { return nil }
@@ -392,7 +393,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         transientStatus = nil
         recoveryStatusFailed = failed
         if failed, fullStatusText != message { Announce.say(message, from: hostWindow) }
-        let compact = (document as? TextDocument)?.recoveredOrigin == nil ? message : "Recovered copy — Save As to keep"
+        let doc = document as? TextDocument
+        let compact =
+            doc?.compactPausedRecoveryStatus
+            ?? (doc?.recoveredOrigin == nil ? message : "Recovered copy — Save As to keep")
         applyStatusMessage(message, compactMessage: failed ? failureSummary : compact)
         // The failure is carried by the words and the symbol; full-strength label colour keeps it
         // readable in both appearances, where small red text was not.

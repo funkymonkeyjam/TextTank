@@ -180,8 +180,24 @@ import AppKit
     /// Terminal once close starts: no timer or late completion may enqueue another copy.
     private var recoveryClosed = false
     var dependencies: DocumentDependencies
-    private var automaticRecoveryDelay: TimeInterval { dependencies.automaticRecoveryDelay }
-    private var maximumRecoveryDelay: TimeInterval { dependencies.maximumRecoveryDelay }
+    private var recoveryBurstStart: TimeInterval?
+    private var scheduledDeadline: TimeInterval?
+    static func automaticRecoveryScale(byteCount: Int) -> Double? {
+        let mib = 1024 * 1024
+        switch byteCount {
+        case ...(8 * mib): return 1
+        case ...(32 * mib): return 2
+        case ...(128 * mib): return 4
+        case ...(256 * mib): return 8
+        default: return nil
+        }
+    }
+    var automaticRecoveryPaused: Bool { Self.automaticRecoveryScale(byteCount: editor.byteLength) == nil }
+    var compactPausedRecoveryStatus: String? {
+        guard automaticRecoveryPaused else { return nil }
+        return shouldKeepRecoveryCopy
+            ? "Recovery paused · Save" : (fileURL == nil ? "Recovery paused" : "Saved · Recovery paused")
+    }
     private(set) var editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
     /// Encoding/BOM checkpoint paired with the save point from the latest completed read or save.
     private(set) var savedFormat = FileFormat(encoding: .utf8, bom: false)
@@ -459,12 +475,29 @@ import AppKit
             guard let self, !self.loading else { return }
             self.updateChangeCount(self.hasUnsavedState ? .changeDone : .changeCleared)
             self.showSaveState(recoveryCopyKept: false)
-            self.recoveryTimer?.invalidate()
-            self.recoveryGeneration += 1
-            self.recoveryTimer = self.scheduleRecoveryTimer(after: self.automaticRecoveryDelay)
-            if self.recoveryDeadlineTimer == nil {
-                self.recoveryDeadlineTimer = self.scheduleRecoveryTimer(after: self.maximumRecoveryDelay)
-            }
+            self.rescheduleRecovery()
+        }
+    }
+    private func rescheduleRecovery() {
+        recoveryGeneration += 1
+        let scale = Self.automaticRecoveryScale(byteCount: editor.byteLength)
+        guard scale != nil || !shouldKeepRecoveryCopy else {
+            cancelRecoveryTimers()
+            deferredRecoveryCapture = false
+            return
+        }
+        // Undo back to a saved state still removes its obsolete draft, regardless of size.
+        let multiplier = scale ?? 1
+        let now = ProcessInfo.processInfo.systemUptime
+        let start = recoveryBurstStart ?? now
+        recoveryBurstStart = start
+        recoveryTimer?.invalidate()
+        recoveryTimer = scheduleRecoveryTimer(after: dependencies.automaticRecoveryDelay * multiplier)
+        let deadline = dependencies.maximumRecoveryDelay * multiplier
+        if scheduledDeadline != deadline || recoveryDeadlineTimer == nil {
+            recoveryDeadlineTimer?.invalidate()
+            scheduledDeadline = deadline
+            recoveryDeadlineTimer = scheduleRecoveryTimer(after: max(0, deadline - (now - start)))
         }
     }
     func promoteEditor(from retired: EditorWindowController, to survivor: EditorWindowController) {
@@ -490,6 +523,8 @@ import AppKit
         recoveryTimer = nil
         recoveryDeadlineTimer?.invalidate()
         recoveryDeadlineTimer = nil
+        recoveryBurstStart = nil
+        scheduledDeadline = nil
     }
     /// Editor bytes are content. A leading U+FEFF is text even when the eventual file has a BOM.
     private nonisolated static func capturedText(from bytes: Data?) throws -> String {
@@ -518,14 +553,19 @@ import AppKit
     /// "Edited" from the moment of the change, and says so about the recovery copy only once that
     /// copy has been written.
     func saveStateStatus(recoveryCopyKept: Bool) -> String {
-        if let recoveredOrigin { return recoveredOrigin }
-        let status: String
-        if isDocumentEdited {
+        var status: String
+        if let recoveredOrigin {
+            status = recoveredOrigin
+        } else if isDocumentEdited {
             status = recoveryCopyKept ? "Edited — recovery copy kept" : "Edited"
         } else if fileURL == nil {
             status = "Ready"
         } else {
             status = "Saved"
+        }
+        if automaticRecoveryPaused {
+            status += " · Automatic recovery paused above 256 MiB."
+                + (shouldKeepRecoveryCopy ? " Save to keep changes." : "")
         }
         return externalFile.notice.map { status + " — " + $0 } ?? status
     }
@@ -545,15 +585,27 @@ import AppKit
     /// Shows the save state now. A recovery failure stays on screen until a later write succeeds.
     private func showSaveState(recoveryCopyKept: Bool) {
         self.recoveryCopyKept = recoveryCopyKept
-        guard lastRecoveryError == nil else { return }
+        if let error = lastRecoveryError {
+            showRecoveryFailure(error)
+            return
+        }
         let message = saveStateStatus(recoveryCopyKept: recoveryCopyKept)
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach {
             $0.showRecoveryStatus(message, failed: false)
         }
     }
+    private func showRecoveryFailure(_ error: Error) {
+        let summary = error is PublishedFileSyncFailure ? "⚠︎ Recovery copy unconfirmed" : "⚠︎ Recovery copy not written"
+        let paused = automaticRecoveryPaused
+        let message =
+            (paused ? "Automatic recovery paused above 256 MiB. Save to keep changes. " : "")
+            + summary + ": " + error.localizedDescription
+        windowControllers.compactMap { $0 as? EditorWindowController }.forEach {
+            $0.showRecoveryStatus(message, failed: true, failureSummary: paused ? "Recovery paused · Save" : summary)
+        }
+    }
     private func reportRecovery(_ error: Error?) {
         lastRecoveryError = error
-        let controllers = windowControllers.compactMap { $0 as? EditorWindowController }
         guard let error else {
             recoveryFailures.recordSuccess()
             showSaveState(recoveryCopyKept: true)
@@ -561,10 +613,7 @@ import AppKit
         }
         // The status line stays in its failure state until a later recovery write succeeds.
         recoveryCopyKept = false
-        let summary = error is PublishedFileSyncFailure ? "⚠︎ Recovery copy unconfirmed" : "⚠︎ Recovery copy not written"
-        controllers.forEach {
-            $0.showRecoveryStatus("\(summary): \(error.localizedDescription)", failed: true, failureSummary: summary)
-        }
+        showRecoveryFailure(error)
         let escalate = recoveryFailures.recordFailure(sessionAlreadyNotified: Self.recoveryFailureNoticeShown)
         if recoveryFailures.consecutiveFailures == 1 {
             NSLog(
@@ -592,6 +641,10 @@ import AppKit
     private func enqueueRecovery() {
         guard !recoveryClosed else { return }
         cancelRecoveryTimers()
+        guard !automaticRecoveryPaused || !shouldKeepRecoveryCopy else {
+            deferredRecoveryCapture = false
+            return
+        }
         guard preparingRecoveryGeneration == nil else {
             deferredRecoveryCapture = true
             return
@@ -618,6 +671,11 @@ import AppKit
         recoveryGeneration += 1
         preparingRecoveryGeneration = nil
         deferredRecoveryCapture = false
+        if automaticRecoveryPaused && shouldKeepRecoveryCopy {
+            recoveryWriter.waitForPendingWrites()
+            showSaveState(recoveryCopyKept: false)
+            return
+        }
         do {
             try recoveryWriter.finishPrepared {
                 let prepare = recoveryPreparation()

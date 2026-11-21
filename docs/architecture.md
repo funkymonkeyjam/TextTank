@@ -134,6 +134,10 @@ Consolidation deliberately applies the existing engine limits to inline and lega
 - Folder replacement's own files (`.texttank-backup-`, `.texttank-replacement-`, `.texttank-report-`) are never search results or replacement targets. A file that was not changed (conflict, cancellation, or a failure before the rename is attempted) keeps no recovery copy and no journal. While a replacement runs, the window refuses a new search and refuses to open a result.
 - Find Next and Find Previous call `onFailureSignal` (the system alert sound) whenever they select nothing, since both work from the menu while the window and its status line are closed.
 
+### Automatic recovery timing
+
+The recovery timer scales with the Scintilla document's UTF-8 byte count. Up to 8 MiB its idle and continuous-typing deadlines are 0.5 and 5 seconds. Above 8, 32 and 128 MiB the respective delays are multiplied by 2, 4 and 8. An uninterrupted burst retains its original start time when it crosses bands. Above 256 MiB automatic recovery pauses and the status line identifies the cutoff. Save remains available, and a previously protected draft stays on disk until save or close. Reducing the text to 256 MiB or less resumes automatic capture.
+
 ## Persisted formats
 
 Find and Find in Folder now save versioned JSON files under `AppStorage.supportDirectory` on action or close. They import a legacy preference only when their private file is absent; legacy values are never written or removed. An absolute support override suppresses implicit legacy access entirely, including obtaining `UserDefaults.standard`. Window frames retain bundled-application-only production behavior and explicit fixture overrides, but suppress implicit shared preferences under that isolation override. Native checks use a protected test-owned provider and sentinel; they never inspect the owner's preferences. The prior source path had an isolation gap; which defaults domain earlier command-line runs actually accessed was not established, and no owner-domain cleanup or inference is made.

@@ -81,6 +81,12 @@ final package class RecoveryWriter: @unchecked Sendable {
         }
         try finishPending(write)
     }
+    /// An oversized dirty document admits no new capture. A flush still waits for its last
+    /// eligible capture to validate and publish, keeping that draft until explicit save or close.
+    package func waitForPendingWrites() {
+        preparationQueue.sync {}
+        queue.sync {}
+    }
     private func finishPending(_ operation: @Sendable () throws -> Void) rethrows {
         dispatchPrecondition(condition: .notOnQueue(queue))
         lock.lock()
