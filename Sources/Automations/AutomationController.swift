@@ -114,21 +114,15 @@ private struct AutomationCheckboxEdits {
         storage = AppStorage.url(.automations)
         loadState = StoreLoadState(url: storage, displayName: "Saved automations")
         super.init()
-        var storageInfo = stat()
-        if lstat(storage.path, &storageInfo) == 0 {
-            do {
-                library = try AutomationLibrary.decode(
-                    AutomationFileInput.readData(storage, limit: AutomationLibrary.maximumBytes, parent: .strict))
-            } catch { loadError = error }
-        } else if errno != ENOENT {
-            loadError = FileOperationFailure(errno, operation: "inspect saved automations", path: storage.path)
-        } else {
-            // Presets are ordinary editable definitions, installed only for a new configuration.
-            // There is no library to protect here, so a failed first write does not block the
-            // session: the presets stay in memory and the next save writes them.
-            library = AutomationLibrary(workflows: AutomationDefinition.firstRunPresets)
-            do { try persistLibrary(library) } catch { installError = error }
-        }
+        do {
+            if let existing = try AutomationLibrary.readIfPresent(at: storage) {
+                library = existing
+            } else {
+                // Only the interactive manager installs the editable first-run presets.
+                library = AutomationLibrary(workflows: AutomationDefinition.firstRunPresets)
+                do { try persistLibrary(library) } catch { installError = error }
+            }
+        } catch { loadError = error }
     }
     /// The first write of the starting automations failed. Tries again; if it still fails, says so
     /// once and lets the session carry on with the automations held in memory.

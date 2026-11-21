@@ -4,6 +4,51 @@ import Foundation
 import Darwin
 
 @main struct AutomationChecks {
+    static func suppliedTextReader() throws {
+        let privateArea = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: privateArea, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: privateArea) }
+        let url = privateArea.appendingPathComponent("Automations.json")
+        check(
+            try AutomationLibrary.readIfPresent(at: url) == nil
+                && AutomationLibrary.forSuppliedText(at: url).workflows.count
+                    == AutomationDefinition.firstRunPresets.count
+                && !FileManager.default.fileExists(atPath: url.path),
+            "fresh read-only library offers defaults without writing")
+        let wf = AutomationDefinition(
+            id: UUID(), name: "Clean", input: .selection, steps: [.init(kind: .removeBlankLines)], output: .editor)
+        let data = try AutomationLibrary(workflows: [wf]).encoded()
+        var json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        json["newerMetadata"] = ["opaque": 42]
+        let stored = try JSONSerialization.data(withJSONObject: json)
+        try stored.write(to: url)
+        let value = try AutomationLibrary.forSuppliedText(at: url)
+        check(
+            try value.namedForSuppliedText("Clean").id == wf.id && Data(contentsOf: url) == stored,
+            "known workflows load without rewriting unknown fields")
+        var other = wf
+        other.id = UUID()
+        rejects("duplicate automation names do not select an arbitrary workflow") {
+            _ = try AutomationLibrary(workflows: [wf, other]).namedForSuppliedText("Clean")
+        }
+        for output in [AutomationDefinition.Output.clipboard, .file, .reminders, .newDocument] {
+            other.output = output
+            rejects("headless read refuses interactive and external outputs") { try other.requireSuppliedText() }
+        }
+        other = wf
+        other.previewBeforeApply = true
+        rejects("headless read preserves explicit preview requirement") { try other.requireSuppliedText() }
+        other = wf
+        other.steps = [.init(kind: .replaceLiteral, find: "x", replacement: "y", askForFind: true)]
+        rejects("headless read refuses configured prompts") { try other.requireSuppliedText() }
+        try Data("invalid".utf8).write(to: url)
+        rejects("unreadable existing library does not fall back to presets") {
+            _ = try AutomationLibrary.forSuppliedText(at: url)
+        }
+        check(try Data(contentsOf: url) == Data("invalid".utf8), "failed read preserves stored bytes")
+    }
     static func progressReentry(_ mode: String) throws {
         DispatchQueue.global().asyncAfter(deadline: .now() + 3) { exit(70) }
         let control = AutomationRunControl(), done = DispatchSemaphore(value: 0)
@@ -39,6 +84,7 @@ import Darwin
             }
         }
         Checks.run("AutomationChecks") {
+            try suppliedTextReader()
             for mode in ["release", "invoke"] {
                 let child = Process(), output = Pipe()
                 child.executableURL = Checks.executable
@@ -566,7 +612,8 @@ import Darwin
             let manyLines = String(repeating: "2 cups flour, sifted\n", count: lineCount)
             check(
                 try rule.transform(manyLines).utf8.elementsEqual(manyLines.utf8),
-                "F55 two heading patterns leave \(lineCount) short non-matching lines unchanged without a false time limit")
+                "F55 two heading patterns leave \(lineCount) short non-matching lines unchanged without a false time limit"
+            )
             rule.steps = [.init(kind: .clearLinesMatching, find: "(a+)+$")]
             let slowLines = String(repeating: "aaaaaaaaaaaaaaaaaaaaaaaa!\n", count: 5000)
             let slowLinesStarted = ProcessInfo.processInfo.systemUptime
