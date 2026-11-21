@@ -21,6 +21,7 @@ import AppKit
     func retainPresentationOwner(_ owner: AnyObject) { presentationOwner = owner }
     private weak var markedField: NSView?
     var onClose: (() -> Void)?
+    var shouldCloseWindow: (() -> Bool)?
     init(title: String, identifier: String, size: NSSize = NSSize(width: 600, height: 440), layoutContent: Bool = true)
     {
         window = ToolPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .resizable])
@@ -153,7 +154,7 @@ import AppKit
         presentationOwner = nil
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        close()
+        if shouldCloseWindow?() != false { close() }
         return false
     }
 }

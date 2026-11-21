@@ -1312,6 +1312,144 @@ final class Audit24RecoverySpy: NSObject {
                 "horizontal dialog preserves accessory on presentation \(index)")
         }
     }
+    static func legacyManagerCloseChecks() throws {
+        let support = try IsolatedSupportDirectory("LegacyAutomationCloseChecks")
+        defer { support.restore() }
+        let url = support.url.appendingPathComponent("Automations.json")
+        // Produced by the actual pre-flag encoder at 24edd12, including its legal empty shortcut.
+        let legacy = try Data(
+            contentsOf: TestPaths.fixtures.appendingPathComponent("persistence/Automations-before-flags.json"))
+        try legacy.write(to: url)
+        let controller = AutomationController(editorProvider: { nil }, newDocument: { _ in })
+        func manager() throws -> NSWindow {
+            controller.manage()
+            return try requireValue(FormPanel.frontWindow, "automation manager")
+        }
+        func action(_ id: String, _ window: NSWindow) throws -> NSButton {
+            let views = descendants(try requireValue(window.contentView, "form content"))
+            return try requireValue(button(id, in: views), id)
+        }
+        func inode() throws -> UInt64 {
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            return try requireValue(attrs[.systemFileNumber] as? NSNumber, "file number").uint64Value
+        }
+        func changePreview(in manager: NSWindow) throws {
+            try action("automation.edit", manager).performClick(nil)
+            let sheet = try requireValue(manager.attachedSheet, "workflow settings")
+            let views = descendants(try requireValue(sheet.contentView, "workflow settings fields"))
+            let preview = try requireValue(
+                views.compactMap { $0 as? NSButton }.first {
+                    $0.accessibilityLabel() == "Preview this automation before applying"
+                }, "preview checkbox")
+            preview.performClick(nil)
+            try action("automation.settings.save", sheet).performClick(nil)
+            spinUntil("preview edit accepted") { manager.attachedSheet == nil }
+        }
+        func advanced(in manager: NSWindow, change: (inout AutomationLibrary) -> Void) throws {
+            try action("automation.json", manager).performClick(nil)
+            let sheet = try requireValue(manager.attachedSheet, "structured JSON editor")
+            let views = descendants(try requireValue(sheet.contentView, "JSON editor controls"))
+            let editor = try requireValue(textView("Automation library JSON", in: views), "editable JSON")
+            var working = try AutomationLibrary.decode(Data(editor.string.utf8))
+            change(&working)
+            editor.string = String(decoding: try working.encoded(), as: UTF8.self)
+            try action("automation.json.save", sheet).performClick(nil)
+            spinUntil("advanced edit accepted") { manager.attachedSheet == nil }
+        }
+        let originalInode = try inode()
+        let clean = try manager()
+        try action("automation.edit", clean).performClick(nil)
+        let settings = try requireValue(clean.attachedSheet, "legacy automation settings")
+        try action("automation.settings.save", settings).performClick(nil)
+        spinUntil("unchanged settings accepted") { clean.attachedSheet == nil }
+        check(!clean.isDocumentEdited, "unchanged settings retain omitted flags and an empty shortcut")
+        let favorite = try action("automation.favorite", clean)
+        favorite.performClick(nil)
+        check(clean.isDocumentEdited, "favoriting an older automation marks the edit")
+        favorite.performClick(nil)
+        check(!clean.isDocumentEdited, "restoring Favorite restores the original omitted key")
+        clean.performClose(nil)
+        check(!clean.isVisible && clean.attachedSheet == nil, "restored legacy settings close without review")
+        let reopened = try manager()
+        try action("automation.manager.save", reopened).performClick(nil)
+        check(
+            try !reopened.isVisible && Data(contentsOf: url) == legacy && inode() == originalInode,
+            "a clean legacy Save preserves original stored bytes and file identity")
+
+        let preview = try manager()
+        try changePreview(in: preview)
+        check(preview.isDocumentEdited, "first preview checkbox edit enters the working copy")
+        try changePreview(in: preview)
+        preview.performClose(nil)
+        check(
+            try !preview.isVisible && preview.attachedSheet == nil && Data(contentsOf: url) == legacy
+                && inode() == originalInode,
+            "restoring Preview in a second settings sheet closes cleanly with original bytes")
+
+        let edited = try manager()
+        try action("automation.favorite", edited).performClick(nil)
+        edited.performClose(nil)
+        let review = try requireValue(edited.attachedSheet, "dirty automation review")
+        let buttons = descendants(try requireValue(review.contentView, "review controls")).compactMap {
+            $0 as? NSButton
+        }
+        let save = try requireValue(buttons.first { $0.title == "Save" }, "review Save")
+        check(save.isEnabled, "review Save starts enabled for an editable manager")
+        controller.exportInProgress = true
+        check(
+            try !save.isEnabled && edited.isDocumentEdited && Data(contentsOf: url) == legacy,
+            "review Save disables when a running export takes ownership")
+        controller.exportInProgress = false
+        check(save.isEnabled, "review Save re-enables when the export ends")
+        save.performClick(nil)
+        spinUntil("review Save committed") { !edited.isVisible }
+        let stored = try AutomationLibrary.decode(Data(contentsOf: url)).workflows[0]
+        check(
+            stored.pinToToolbar == true && stored.previewBeforeApply == nil && stored.shortcut == "",
+            "saving a changed legacy workflow preserves unrelated optional fields")
+
+        let restored = try AutomationLibrary.decode(legacy)
+        try controller.persistLibrary(restored)
+        let mixed = try manager()
+        try advanced(in: mixed) { $0.workflows[0].pinToToolbar = false }
+        let nativeFavorite = try action("automation.favorite", mixed)
+        nativeFavorite.performClick(nil)
+        nativeFavorite.performClick(nil)
+        check(mixed.isDocumentEdited, "two Favorite edits retain an explicit false accepted in Advanced JSON")
+        try changePreview(in: mixed)
+        try advanced(in: mixed) { $0.workflows[0].name = "Unrelated accepted JSON edit" }
+        try changePreview(in: mixed)
+        mixed.performClose(nil)
+        let mixedReview = try requireValue(mixed.attachedSheet, "review accepted Advanced JSON")
+        let mixedControls = descendants(try requireValue(mixedReview.contentView, "mixed review controls"))
+        try requireValue(mixedControls.compactMap { $0 as? NSButton }.first { $0.title == "Save" }, "review Save")
+            .performClick(nil)
+        spinUntil("mixed changes saved") { !mixed.isVisible }
+        let committed = try AutomationLibrary.decode(Data(contentsOf: url)).workflows[0]
+        check(
+            committed.pinToToolbar == false && committed.previewBeforeApply == nil
+                && committed.name == "Unrelated accepted JSON edit" && committed.shortcut == "",
+            "Save preserves explicit false and unrelated JSON while restoring the omitted preview field")
+
+        var explicit = stored
+        explicit.pinToToolbar = false
+        explicit.previewBeforeApply = false
+        try controller.persistLibrary(AutomationLibrary(workflows: [explicit]))
+        let explicitBytes = try Data(contentsOf: url)
+        let current = try manager()
+        try action("automation.edit", current).performClick(nil)
+        let currentSettings = try requireValue(current.attachedSheet, "explicit false settings")
+        try action("automation.settings.save", currentSettings).performClick(nil)
+        spinUntil("explicit false settings accepted") { current.attachedSheet == nil }
+        let currentFavorite = try action("automation.favorite", current)
+        currentFavorite.performClick(nil)
+        currentFavorite.performClick(nil)
+        current.performClose(nil)
+        check(
+            try !current.isVisible && current.attachedSheet == nil && Data(contentsOf: url) == explicitBytes,
+            "an explicit false remains explicit through settings and two Favorite changes")
+    }
+
     static func staleModelessJSONCheck() throws {
         let isolated = try IsolatedSupportDirectory("ModelessUnicodeConfiguration")
         defer { isolated.restore() }
@@ -1361,6 +1499,7 @@ final class Audit24RecoverySpy: NSObject {
             defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
             Checks.section("horizontal dialog actions") { try horizontalDialogChecks() }
+            Checks.section("legacy automation close review") { try legacyManagerCloseChecks() }
             Checks.section("modeless Unicode controller conflict") { try staleModelessJSONCheck() }
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 800, height: 500), styleMask: [.titled], backing: .buffered,

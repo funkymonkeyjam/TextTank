@@ -137,7 +137,9 @@ import AppKit
             guard try StoreRecovery.ensureWritable(loadState) else { return }
             var working = commands
             let baseline = try SavedConfiguration.bytes(commands)
-            let panel = LibraryManager(title: "Run Commands", identifier: "run.manager")
+            let panel = LibraryManager(title: "Run Commands", identifier: "run.manager") {
+                (try? SavedConfiguration.bytes(working)) != baseline
+            }
             manager = panel
             panel.retainController(self)
             panel.onClose = { [weak self] in self?.manager = nil }

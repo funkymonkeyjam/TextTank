@@ -392,7 +392,9 @@ import Darwin
             guard try StoreRecovery.ensureWritable(loadState) else { return }
             var working = library
             let baseline = try SavedConfiguration.bytes(library)
-            let panel = LibraryManager(title: "Saved Macros", identifier: "macro.manager")
+            let panel = LibraryManager(title: "Saved Macros", identifier: "macro.manager") {
+                (try? SavedConfiguration.bytes(working)) != baseline
+            }
             manager = panel
             panel.retainController(self)
             panel.onClose = { [weak self] in self?.manager = nil }

@@ -187,7 +187,11 @@ rename, Add, Duplicate and confirmed Delete. Automation Favorite shows its pendi
 checked state. Automation settings and Rules open as owned sheets; the Rules editor and its
 rule configuration use completion callbacks, without application-modal manager loops.
 Children use “Use Changes” to update the manager's working copy. Only the outer
-Save persists it. New macros contain a validated nonempty Insert Text action.
+Save persists it. Closing an edited manager offers Save, Keep Editing and Discard Changes.
+An unchanged manager closes immediately, and explicit Cancel discards its working copy.
+A failed Save keeps the manager open. These rules apply to Automation, Macro and Run
+library windows (DS-40 through DS-45). Application termination follows its existing lifecycle.
+New macros contain a validated nonempty Insert Text action.
 Management never starts a macro, process, automation or external export. Busy state
 follows actual execution or recording, not the lifetime of an open manager.
 
