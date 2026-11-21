@@ -15,7 +15,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     let wordBox = NSButton(checkboxWithTitle: "Whole word", target: nil, action: nil)
     let regexBox = NSButton(checkboxWithTitle: "Regex", target: nil, action: nil)
     let findNavigation = NSSegmentedControl(labels: ["Previous", "Next"], trackingMode: .momentary, target: nil, action: nil)
-    let replaceMatchButton = NSButton(title: "Replace Selection", target: nil, action: nil)
+    let replaceMatchButton = NSButton(title: "Replace", target: nil, action: nil)
+    let replaceAllButton = NSButton(title: "Replace All", target: nil, action: nil)
     private(set) var findBar: NSView?
     private var splitBelowFindBar: NSLayoutConstraint?
     private var splitBelowTabs: NSLayoutConstraint?
@@ -221,7 +222,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         findNavigation.setAccessibilityLabel("Navigate matches in document")
         replaceMatchButton.target = self
         replaceMatchButton.action = #selector(replaceSelection(_:))
-        replaceMatchButton.setAccessibilityLabel("Replace selected match in document")
+        replaceMatchButton.setAccessibilityLabel("Replace selected match and find next")
+        replaceAllButton.target = self
+        replaceAllButton.action = #selector(replaceAllFromBar(_:))
+        replaceAllButton.setAccessibilityLabel("Replace all matches in current document")
         let doneButton = NSButton(title: "Done", target: self, action: #selector(hideFind(_:)))
         doneButton.setAccessibilityLabel("Close Find in document")
         caseBox.setAccessibilityLabel("Match case in document search")
@@ -231,7 +235,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         more.setAccessibilityLabel("Open Find and Replace with these options")
         let search = EditorFindBar(find: findField, replace: replaceField, navigation: findNavigation,
                                    count: findCount, flags: [caseBox, wordBox, regexBox],
-                                   replaceActions: [replaceMatchButton], more: more, done: doneButton)
+                                   replaceActions: [replaceMatchButton, replaceAllButton], more: more, done: doneButton)
         // Return in the field finds the next match, Shift-Return the previous one, Escape closes.
         findField.delegate = self
         replaceField.delegate = self
@@ -1026,6 +1030,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     @objc func replaceSelection(_ sender: Any?) {
         do { try replaceSelectionFromBar() } catch { TTAlert.explain(error) }
     }
+    @objc func replaceAllFromBar(_ sender: Any?) {
+        guard focusPresentationChrome() else { return }
+        let editor = activeEditor
+        guard !editor.readOnly else { (document as? TextDocument)?.noteReadOnlyAttempt(); return }
+        guard editor.selectionCount == 1 else {
+            showTransientStatus("Use a single selection before replacing all matches.")
+            return
+        }
+        beginInlineSearch(action: "replaceAll", focusEditor: true)
+    }
     /// Replacing is strict: a caret, several selections or text that is not a match is never inserted into.
     func replaceSelectionFromBar() throws {
         guard focusPresentationChrome() else { return }
@@ -1046,10 +1060,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         let ready =
             !statusClosed && !inlineSearchPending && !query.isEmpty && query.utf16.prefix(65_537).count <= 65_536
         findNavigation.isEnabled = ready
-        replaceMatchButton.isEnabled =
-            ready && !editor.readOnly && editor.selectionCount == 1
-            && editor.selectionStart < editor.selectionEnd
+        let canReplace = ready && !editor.readOnly && editor.selectionCount == 1
             && replaceField.stringValue.utf16.prefix(1_048_577).count <= 1_048_576
+        replaceMatchButton.isEnabled = canReplace && editor.selectionStart < editor.selectionEnd
+        replaceAllButton.isEnabled = canReplace
     }
     private func cancelInlineSearch() {
         inlineCancellation?.cancel()
@@ -1059,13 +1073,14 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         updateInlineFindValidation()
     }
     /// Only scheduling and feedback belong to the bar. SearchController owns engine, navigation and replacement.
-    private func beginInlineSearch(action: String, focusEditor: Bool) {
+    private func beginInlineSearch(action: String, focusEditor: Bool, afterReplacement: Bool = false) {
         guard focusPresentationChrome() else { return }
         let editor = activeEditor
         // Menu/button actions commit the field editor and restore typing to the document. Return
         // keeps the field editor, so repeated Return and Shift-Return continue to work (DS-35).
         if focusEditor { hostWindow?.makeFirstResponder(editor) }
-        let options = inlineOptions(replacement: action == "replaceOne" ? replaceField.stringValue : "")
+        let replacing = action == "replaceOne" || action == "replaceAll"
+        let options = inlineOptions(replacement: replacing ? replaceField.stringValue : "")
         cancelInlineSearch()
         guard !options.query.isEmpty, let delegate = EditorServices.current,
             let search = delegate.searchController, let capturedWindow = hostWindow
@@ -1074,8 +1089,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
         findPreview?.cancel(restore: false)
         findCount.stringValue = ""
-        Self.findPasteboardText = options.query
-        search.queryField.stringValue = options.query
+        if !afterReplacement {
+            Self.findPasteboardText = options.query
+            search.queryField.stringValue = options.query
+        }
         let token = inlineSearchGeneration, flag = TTSearchCancellation()
         inlineCancellation = flag
         inlineSearchPending = true
@@ -1084,10 +1101,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             options: options, action: action, on: editor, cancellation: flag,
             isCurrent: { [weak self, weak editor, weak capturedWindow] in
                 guard let self, let editor, let capturedWindow else { return false }
-                return !self.statusClosed && self.inlineSearchGeneration == token && self.hostWindow === capturedWindow
+                return !self.statusClosed && self.isActiveTab && self.inlineSearchGeneration == token && self.hostWindow === capturedWindow
                     && self.activeEditor === editor && self.findField.stringValue.utf8.elementsEqual(options.query.utf8)
                     && self.inlineOptions(replacement: options.replacement) == options
-                    && (action != "replaceOne"
+                    && (!replacing
                         || self.replaceField.stringValue.utf8.elementsEqual(options.replacement.utf8))
             },
             completion: { [weak self, weak editor] result in
@@ -1096,27 +1113,44 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 self.inlineCancellation = nil
                 self.updateInlineFindValidation()
                 switch result {
-                case .applied:
+                case .applied, .replacedAll:
                     self.endFindPreview(restore: false)
                     if self.findBarVisible { self.findPreview = InlineFindPreview(self.activeEditor) }
                     guard let editor else { return }
                     delegate.macros?.recordSearch(.init(options: options, action: action), editor: editor)
-                    if action == "replaceOne" {
+                    if case .replacedAll(let count) = result {
+                        self.showTransientStatus(count == 1 ? "Replaced 1 match. Undo restores it." : "Replaced \(count) matches. Undo restores them.")
+                    } else if action == "replaceOne" {
+                        // Record the accepted edit now. Cancellation or a stale next result may
+                        // leave just this legacy step in the macro, as in the advanced window.
                         self.showTransientStatus("Replaced the selected match. Undo restores it.")
+                        self.beginInlineSearch(action: "next", focusEditor: false, afterReplacement: true)
+                    } else if afterReplacement {
+                        self.showTransientStatus("Replaced the selected match and selected the next match.")
                     }
                 case .noMatch:
-                    NSSound.beep()
-                    if action == "replaceOne" {
+                    if afterReplacement {
+                        self.showTransientStatus("Replaced the selected match. No further match.")
+                    } else if action == "replaceAll" {
+                        self.showTransientStatus("Replaced 0 matches.")
+                    } else if action == "replaceOne" {
+                        NSSound.beep()
                         self.showTransientStatus("Select one match of the Find text before replacing it.")
                     } else {
+                        NSSound.beep()
                         let query = options.query
                         self.showTransientStatus(
                             "No matches for “\(query.count > 60 ? String(query.prefix(60)) + "…" : query)”.")
                     }
                 case .stale:
-                    self.showTransientStatus("The document, selection or Find text changed. Search again.")
+                    self.showTransientStatus(afterReplacement
+                        ? "Replaced the selected match. The document, selection or Find text changed before the next match."
+                        : "The document, selection or Find text changed. Search again.")
                 case .cancelled: break
-                case .failed(let error): self.showSearchFailure(error)
+                case .failed(let error):
+                    if afterReplacement {
+                        self.showTransientStatus("Replaced the selected match. Find Next failed. " + error.localizedDescription)
+                    } else { self.showSearchFailure(error) }
                 }
             })
     }

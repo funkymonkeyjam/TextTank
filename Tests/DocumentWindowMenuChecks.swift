@@ -1233,7 +1233,7 @@ extension DocumentChecks {
                 $0 as? NSButton
             }
             let replaceMatchButton = try requireValue(
-                barButtons.first { $0.title == "Replace Selection" }, "fixture: Replace Selection button")
+                barButtons.first { $0.title == "Replace" }, "fixture: Replace button")
             let nextMatchButton = try requireValue(descendants(try requireValue(controller.findBar, "fixture: Find bar"))
                 .compactMap { $0 as? NSSegmentedControl }.first { $0.segmentCount == 2 && $0.label(forSegment: 1) == "Next" },
                 "fixture: Previous and Next segmented control")
@@ -1412,10 +1412,11 @@ extension DocumentChecks {
             spinUntil("recorded bar replacement to finish") { !controller.inlineSearchPending }
             let capturedBar = try sessionDelegate.macros.finishRecording()
             check(
-                capturedBar?.steps.map(\.kind) == [.search, .search]
-                    && capturedBar?.steps.compactMap(\.search).map(\.action) == ["next", "replaceOne"],
+                capturedBar?.steps.map(\.kind) == [.search, .search, .search]
+                    && capturedBar?.steps.compactMap(\.search).map(\.action) == ["next", "replaceOne", "next"],
                 "the actual bar captures search steps for navigation and strict replacement")
             let replayedText = document.editor.text
+            let replayedAnchor = document.editor.selectionAnchor, replayedCaret = document.editor.selectionCaret
             // Native control: the original literal primitive plus its first edit. Scintilla Undo
             // remembers the first edit's selection; the preceding pure navigation is not an edit.
             document.editor.text = beforeBarRecording
@@ -1457,13 +1458,31 @@ extension DocumentChecks {
             try sessionDelegate.macros.play(
                 try requireValue(capturedBar, "fixture: captured inline macro"), on: document.editor)
             check(
-                document.editor.text.utf8.elementsEqual(replayedText.utf8),
-                "captured bar search steps replay to the exact same document bytes")
+                document.editor.text.utf8.elementsEqual(replayedText.utf8)
+                    && document.editor.selectionAnchor == replayedAnchor && document.editor.selectionCaret == replayedCaret,
+                "captured bar search steps replay the exact document bytes and final selection")
             document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 document.editor.text == beforeBarRecording && document.editor.selectionAnchor == firstEditAnchor
                     && document.editor.selectionCaret == firstEditCaret,
                 "one Undo of the replay restores the same text and first-edit selection as the native control")
+            let allDocument = DocumentFactory.makeUntitled(display: false)
+            let allController = try requireValue(allDocument.presentation, "fixture: current-document Replace All")
+            _ = allDocument.editor.loadDocumentText("x x x")
+            allController.showFind(nil)
+            allController.findField.stringValue = "x"
+            allController.replaceField.stringValue = "yy"
+            allController.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: allController.findField))
+            allController.replaceAllButton.performClick(nil)
+            spinUntil("bar Replace All to finish") { !allController.inlineSearchPending }
+            check(allDocument.editor.text == "yy yy yy" && allController.statusText.contains("Replaced 3 matches")
+                    && document.editor.text == beforeBarRecording,
+                  "bar Replace All counts changed matches and leaves the other open document alone")
+            allDocument.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            check(allDocument.editor.text == "x x x", "one Undo restores every inline Replace All edit")
+            allDocument.close()
+            controller.host.activate(controller, focus: false)
+            sessionDelegate.noteActive(controller)
             // The previously accepted oversized query is explicitly refused by the bounded shared path.
             sessionDelegate.macros.startRecording()
             document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))

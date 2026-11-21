@@ -26,7 +26,7 @@ enum SearchOutcome: Equatable {
 /// What a replacement did to one document; nothing is changed unless it is `applied`.
 enum ReplaceOutcome: Equatable { case applied(Int), readOnly, multipleSelections, closed, stale }
 /// A bar request has its own cancellation token; it never replaces the Find window's held results.
-enum InlineSearchOutcome { case applied, noMatch, stale, cancelled, failed(Error) }
+enum InlineSearchOutcome { case applied, replacedAll(Int), noMatch, stale, cancelled, failed(Error) }
 /// Documents the last Replace or Replace All left untouched, by reason.
 struct ReplaceSkips: Equatable {
     var readOnly = 0, multipleSelections = 0, closed = 0, stale = 0
@@ -851,7 +851,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 }
                 let matched = try self.applySingleReport(
                     report, text: text, revision: revision, options: options, action: action, in: editor)
-                completion(matched ? .applied : .noMatch)
+                if matched && action == "replaceAll" { completion(.replacedAll(report.hits.count)) }
+                else { completion(matched ? .applied : .noMatch) }
             } catch {
                 guard !cancellation.cancelled else {
                     completion(.cancelled)
