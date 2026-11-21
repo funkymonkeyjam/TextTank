@@ -158,6 +158,7 @@ import Darwin
             try Data("extra".utf8).write(to: extra)
             let listedBefore = listed()
             weak var closedDocument: TextDocument?
+            let drained = DispatchGroup()
             try autoreleasepool {
                 let opened = try controller.open(extra)
                 closedDocument = opened
@@ -170,16 +171,40 @@ import Darwin
                 check(controller.statusText == statusBeforeOpen, "the quiet reload leaves the status line alone")
                 let presenterQueue = opened.presentedItemOperationQueue
                 opened.close()
-                // A file presenter callback can still own the closed document after its row goes
-                // away. Drain prior callbacks and their main-queue deliveries inside this pool.
-                let drained = DispatchGroup()
                 drained.enter()
                 presenterQueue.addBarrierBlock { DispatchQueue.main.async { drained.leave() } }
-                spinUntil("the closed document to leave the list and its presenter callbacks to drain") {
-                    listed() == listedBefore && drained.wait(timeout: .now()) == .success
+            }
+            // AppKit can release its last temporary owner after the presenter's barrier has run.
+            // Give the run loop the existing ten-second budget to observe every close postcondition.
+            let closeDeadline = Date().addingTimeInterval(10)
+            while Date() < closeDeadline {
+                let settled = autoreleasepool {
+                    listed() == listedBefore && drained.wait(timeout: .now()) == .success && closedDocument == nil
+                }
+                if settled { break }
+                autoreleasepool {
+                    RunLoop.current.run(until: min(closeDeadline, Date().addingTimeInterval(0.01)))
                 }
             }
-            check(listed() == listedBefore, "a closed document leaves the list without Refresh")
+            let rowRemoved = listed() == listedBefore, presenterDrained = drained.wait(timeout: .now()) == .success
+            if let held = closedDocument {
+                let managed = NSDocumentController.shared.documents.contains { $0 === held }
+                let registered = NSFileCoordinator.filePresenters.contains { $0 as AnyObject === held }
+                let dataSourceRow = (0..<listed()).contains {
+                    controller.outlineView(controller.outline, child: $0, ofItem: nil) as? TextDocument === held
+                }
+                let outlineRow = (0..<controller.outline.numberOfRows).contains {
+                    controller.outline.item(atRow: $0) as? TextDocument === held
+                }
+                print(
+                    "Closed fixture retained: rowRemoved=\(rowRemoved) barrier=\(presenterDrained) "
+                        + "managed=\(managed) presenter=\(registered) dataSourceRow=\(dataSourceRow) outlineRow=\(outlineRow) "
+                        + "isClosed=\(held.isClosed) windowControllers=\(held.windowControllers.count) "
+                        + "editorHasWindow=\(held.editor.window != nil) presenterOperations=\(held.presentedItemOperationQueue.operationCount)"
+                )
+            }
+            if !presenterDrained { check(false, "the closed document's presenter callbacks drain") }
+            check(rowRemoved, "a closed document leaves the list without Refresh")
             check(closedDocument == nil, "the list does not keep a closed document alive")
             // Refresh rebuilds the folder nodes, which is what re-reads the disk; expansion survives it.
             controller.select(mode: 1)
