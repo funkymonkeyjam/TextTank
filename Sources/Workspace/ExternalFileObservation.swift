@@ -134,7 +134,7 @@ import TextTankCore
             case .missing: message = "File missing on disk"
             case .unavailable(let reason): message = "Could not verify disk file: " + reason
             }
-            let previousAction = self.actionTitle
+            let previousAction = self.actionTitle, previouslyComparable = self.offersComparison
             self.largeFile = result.identity.flatMap {
                 result.digest == nil && $0.size > DocumentMonitor.maximumBytes
                     ? ContentCheck(state: expected, identity: $0) : nil
@@ -143,7 +143,7 @@ import TextTankCore
             if case .changed = result.status, let digest = result.digest, let identity = result.identity {
                 self.candidate = Candidate(state: expected, digest: digest, identity: identity)
             }
-            if self.notice != message || self.actionTitle != previousAction {
+            if self.notice != message || self.actionTitle != previousAction || self.offersComparison != previouslyComparable {
                 self.notice = message
                 self.document?.externalNoticeChanged()
             }
@@ -167,6 +167,21 @@ import TextTankCore
         op.queuePriority = highPriority ? .veryHigh : .normal
         inspectionOperation = op
         Self.workers.addOperation(op)
+    }
+
+    var offersComparison: Bool {
+        guard let candidate, let document,
+            candidate.identity.size <= ReviewDiffPolicy.default.maximumInputBytes
+        else { return false }
+        return EditorServices.current?.compare?.hasSavedSource(document) == true
+    }
+    @objc func compare(_ sender: Any?) {
+        guard !reloading, offersComparison, !CompareCommandScope.blocksWorkspace, let candidate, let document else { return }
+        guard state == candidate.state else {
+            check(prioritized: true)
+            return
+        }
+        EditorServices.current?.compare?.compareSaved(document, expecting: candidate.identity)
     }
 
     @objc func reload(_ sender: Any?) {

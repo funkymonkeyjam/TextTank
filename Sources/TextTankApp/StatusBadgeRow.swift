@@ -109,12 +109,20 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
     private let stack = NSStackView()
     private let spacer = NSView()
     private let diskAction = NSButton(title: "Reload…", target: nil, action: nil)
+    private let diskCompare = NSButton(title: "Compare…", target: nil, action: nil)
     func setExternalAction(for observer: ExternalFileObservation) {
         if diskAction.superview == nil {
             diskAction.controlSize = .small
             diskAction.identifier = NSUserInterfaceItemIdentifier("status.reloadExternalFile")
             stack.insertArrangedSubview(diskAction, at: leadingLabel == nil ? 0 : 1)
+            diskCompare.controlSize = .small
+            diskCompare.identifier = NSUserInterfaceItemIdentifier("status.compareExternalFile")
+            diskCompare.setAccessibilityLabel("Compare editor and changed file on disk")
+            stack.insertArrangedSubview(diskCompare, at: leadingLabel == nil ? 1 : 2)
         }
+        diskCompare.target = observer
+        diskCompare.action = #selector(ExternalFileObservation.compare(_:))
+        diskCompare.isHidden = !observer.offersComparison
         diskAction.target = observer
         diskAction.action = #selector(ExternalFileObservation.reload(_:))
         diskAction.isHidden = observer.actionTitle == nil
@@ -251,9 +259,11 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
                     (text as NSString).size(withAttributes: [
                         .font: label.font ?? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
                     ]).width) + 2
-            let actionWidth =
-                diskAction.superview == nil || diskAction.isHidden
-                ? 0 : ceil(diskAction.intrinsicContentSize.width) + stack.spacing
+            let actionWidth = [diskAction, diskCompare].filter { $0.superview != nil && !$0.isHidden }.reduce(
+                CGFloat(0)
+            ) {
+                $0 + ceil($1.intrinsicContentSize.width) + stack.spacing
+            }
             return textWidth + actionWidth + visible.reduce(0) { $0 + (widths[$1.field]?.constant ?? 0) }
                 + CGFloat(visible.count + 1) * stack.spacing
         }

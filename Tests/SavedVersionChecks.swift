@@ -63,6 +63,53 @@ actor CompareFileGate {
                 && doc.editor.selectionCaret == info.3 && unchangedDisk == Data([0x80, 0x32]),
             "opening comparison preserves dirty state, document, selections and external file")
         comparison.window?.close()
+        view.host.activate(view, focus: false)
+        _ = await waitUntil("external change notice on edited source") { doc.externalFile.actionTitle == "Reload…" }
+        func findCompareButton() -> NSButton? {
+            descendants(view.presentationRoot).compactMap { $0 as? NSButton }.first {
+                $0.identifier?.rawValue == "status.compareExternalFile" && !$0.isHidden
+            }
+        }
+        let noticeButton = try requireValue(findCompareButton(), "nonmodal change notice Compare action")
+        check(
+            noticeButton.accessibilityLabel() == "Compare editor and changed file on disk",
+            "notice Compare action has a distinct accessible name")
+        noticeButton.performClick(nil)
+        _ = await waitUntil("direct comparison from disk-change notice") { service.windows.count == 1 }
+        let noticeComparison = try requireValue(service.windows.first, "notice-owned comparison")
+        check(
+            noticeComparison.original?.snapshot.bytes == Data(info.0.utf8)
+                && noticeComparison.modified?.snapshot.bytes == Data("€2".utf8)
+                && doc.isDocumentEdited && doc.editor.text == info.0,
+            "notice Compare preserves dirty bytes and binds the observed file")
+        noticeComparison.window?.close()
+        try Data([0x80, 0x33]).write(to: url, options: .atomic)
+        noticeButton.performClick(nil)
+        _ = await waitUntil("changed inode after notice produces source error") {
+            NSApp.windows.compactMap { $0.windowController as? CompareSourcePicker }
+                .filter { $0.window?.isVisible == true }.flatMap { descendants($0.window!.contentView!) }
+                .compactMap { $0 as? NSTextField }.contains {
+                    $0.stringValue == CompareService.message(ReviewRejection.bytesChanged)
+                }
+        }
+        check(
+            service.windows.isEmpty && doc.editor.text == info.0 && doc.isDocumentEdited,
+            "an unreviewed replacement cannot enter the prior notice comparison")
+        NSApp.windows.compactMap { $0.windowController as? CompareSourcePicker }.forEach { $0.window?.close() }
+        try Data(repeating: 65, count: ReviewDiffPolicy.default.maximumInputBytes + 1).write(to: url, options: .atomic)
+        doc.externalFile.check()
+        _ = await waitUntil("same change notice updates when disk exceeds comparison limit") {
+            !doc.externalFile.checking && findCompareButton() == nil
+        }
+        check(
+            doc.externalFile.actionTitle == "Reload…" && findCompareButton() == nil,
+            "an oversized changed file retains Reload and hides Compare")
+        try Data([0x80, 0x33]).write(to: url, options: .atomic)
+        doc.externalFile.check()
+        _ = await waitUntil("same change notice restores comparison after disk shrinks") {
+            !doc.externalFile.checking && findCompareButton() != nil
+        }
+        check(findCompareButton() != nil, "Compare returns on the same notice after the file fits")
         let read = service.fileSnapshot
         let gate = CompareFileGate()
         service.fileSnapshot = { url, encoding in
