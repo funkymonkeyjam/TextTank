@@ -5,7 +5,15 @@ import EditorBridge
 import NativeSearch
 @main struct FolderSearchControllerChecks {
     @MainActor static func everyView(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { everyView($0) } }
-    @MainActor static func main() async {
+    @MainActor static func main() {
+        // An async CLI main can exit when AppKit's nested modal run loop stops, before
+        // replacement continuations resume. Own the outer AppKit loop until Checks finishes.
+        Task { await runChecks() }
+        NSApplication.shared.run()
+        check(false, "the AppKit test host returned before the native suite completed")
+        Checks.finish("FolderSearchControllerChecks")
+    }
+    @MainActor static func runChecks() async {
         await Checks.run("FolderSearchControllerChecks") {
             let isolatedSupport = try IsolatedSupportDirectory("TextTankFolderUIChecks"), support = isolatedSupport.url
             defer { isolatedSupport.restore() }
@@ -351,8 +359,6 @@ import NativeSearch
             let searchedAgain = pressReturn()
             check(searchedAgain && busy.isSearching, "searching works again once the interrupted replacement ended")
             await waitUntil("the search after the interrupted replacement to finish") { !busy.isSearching }
-            // Keep the confirmation-alert flow below last. Once its modal session has ended, the next
-            // wait of a second or so ends the process with status 0 and no summary line.
             // F253: Replace Matched Files through the controller, which is the only place that works
             // out which result files are open. One result is open with unsaved edits.
             let replaceRoot = support.appendingPathComponent("replace-flow")
@@ -439,10 +445,7 @@ import NativeSearch
                     "Return in the query field still starts the search, once: there is no default button beside it")
                 check(
                     flow.table.accessibilityLabel() == "Folder search results", "the result list has a VoiceOver label")
-                // Opening a result from the keyboard, and Escape, are checked in document-checks
-                // (DocumentWindowMenuChecks.swift): they wait for asynchronous work, and waiting on
-                // the top-level run loop of this asynchronous main after the confirmation above is
-                // not safe (see the note left for later units in the package 21 result).
+                // DocumentWindowMenuChecks also covers opening a result from the keyboard and Escape.
             }
             Checks.summary { "PASS FolderSearchControllerChecks: \(Checks.count) assertions" }
         }
