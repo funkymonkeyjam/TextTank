@@ -140,7 +140,7 @@ package enum FolderSearchSkipReason: Hashable, Sendable {
         case .duplicateScope: return "already searched under another folder"
         case .notRegularFile: return "not a regular file"
         case .recoveryArtifact: return "TextTank recovery copy"
-        case .binaryFormat: return "binary image or archive"
+        case .binaryFormat: return "binary file"
         case .fileTooLarge: return "larger than the per-file limit"
         case .invalidEncoding(let detail): return "not valid text: \(detail)"
         case .unreadable(let detail): return detail
@@ -788,8 +788,8 @@ package enum FolderSearch {
         var result = try handle.read(upToCount: sampleSize) ?? Data()
         guard result.count == sampleSize else { throw ReadFailure.changed }
         onBytes(result.count)
-        if hasBinarySignature(result) { throw ReadFailure.binary }
         let utf16 = result.starts(with: [0xFF, 0xFE]) || result.starts(with: [0xFE, 0xFF])
+        if !utf16 && looksBinary(result) { throw ReadFailure.binary }
         if !utf16 && result.count < info.st_size {
             // Up to three trailing bytes may be the beginning of the next UTF-8 scalar.
             let validPrefix = (0...min(3, result.count)).contains { count in
@@ -816,10 +816,18 @@ package enum FolderSearch {
         else { throw ReadFailure.changed }
         return result
     }
-    private static func hasBinarySignature(_ bytes: Data) -> Bool {
-        bytes.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) || bytes.starts(with: [255, 216, 255])
+    private static func looksBinary(_ bytes: Data) -> Bool {
+        if bytes.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) || bytes.starts(with: [255, 216, 255])
             || bytes.starts(with: "GIF87a".utf8) || bytes.starts(with: "GIF89a".utf8)
             || bytes.starts(with: [80, 75, 3, 4]) || bytes.starts(with: [80, 75, 5, 6])
+        {
+            return true
+        }
+        // Preserve ordinary tabs, line endings and occasional embedded NULs in text.
+        let controls = bytes.reduce(0) { count, byte in
+            count + ((byte < 9 || (14...31).contains(byte) || byte == 127) ? 1 : 0)
+        }
+        return controls >= 8 && controls * 8 >= bytes.count
     }
     private static func preview(_ text: NSString, match: NSRange, maximum: Int) -> (
         text: String, range: SearchSpan, truncated: Bool

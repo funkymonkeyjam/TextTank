@@ -28,6 +28,11 @@ import Darwin
             result.excludedCounts[.binaryFormat] == 1 && result.inspectionBytes == 1027
                 && result.notSearched.count == 1,
             "bounded image sample and invalid bytes are accounted across roots with distinct coverage outcomes")
+        try Data(repeating: 0, count: 4096).write(to: image)
+        let dense = try await FolderSearch.searchAcross(small, directories: roots)
+        check(
+            dense.matches.count == 1 && dense.excludedCounts[.binaryFormat] == 1 && dense.inspectionBytes == 1027,
+            "unmarked control-dense binary data is excluded before it claims searchable bytes")
         let late = Data(repeating: 65, count: 1200) + Data([0xFF])
         try late.write(to: broken)
         let invalidLater = try await FolderSearch.searchAcross(small, directories: roots)
