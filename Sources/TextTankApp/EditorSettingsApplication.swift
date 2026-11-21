@@ -13,6 +13,8 @@ import AppKit
             for editor in views.isEmpty ? [doc.editor] : views {
                 editor.autoIndentEnabled = value.autoIndentEnabled
                 editor.braceHighlightEnabled = value.braceHighlightEnabled
+                editor.currentLineHighlightEnabled = value.currentLineHighlightEnabled
+                editor.indentGuidesEnabled = value.indentGuidesEnabled
                 if let previous {
                     let info = editor.statusInfo
                     if previous.tabWidth != value.tabWidth || previous.useTabs != value.useTabs,

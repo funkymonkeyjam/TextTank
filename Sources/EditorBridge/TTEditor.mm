@@ -496,6 +496,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @interface TTEditor () <ScintillaNotificationProtocol> {
     TTLineNumberState _lineNumberState;
     BOOL _indentingReturn;
+    id _accessibilityDisplayObserver;
     BOOL _braceCacheValid;
     sptr_t _braceCaret, _braceEndStyled;
     NSUInteger _braceRevision;
@@ -532,6 +533,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @implementation TTEditor
 @synthesize comparisonPresentation = _comparisonPresentation;
 @synthesize braceHighlightEnabled = _braceHighlightEnabled;
+@synthesize currentLineHighlightEnabled = _currentLineHighlightEnabled;
+@synthesize indentGuidesEnabled = _indentGuidesEnabled;
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
         NSAssert(NSThread.isMainThread, @"Editor must be created on the main thread");
@@ -540,10 +543,16 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         ((TTContentView *)_engine.content).editor = self;
         _autoIndentEnabled = YES;
         _braceHighlightEnabled = YES;
+        _currentLineHighlightEnabled = YES;
+        _indentGuidesEnabled = YES;
         _engine.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         [self addSubview:_engine];
         _engine.delegate = self;
         [_engine message:SCI_SETCODEPAGE wParam:SC_CP_UTF8];
+        __weak TTEditor *weakEditor = self;
+        _accessibilityDisplayObserver = [NSWorkspace.sharedWorkspace.notificationCenter
+            addObserverForName:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification object:nil
+            queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) { [weakEditor applyPalette]; }];
         [_engine setFontName:@"Menlo" size:14 bold:NO italic:NO];
         [self applyPalette];
         self.accessibilityDocumentName = nil;
@@ -650,6 +659,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [_engine message:SCI_INDICSETFORE wParam:TTUnmatchedBraceIndicator lParam:dark ? 0x98A3FF : 0x272F97];
     [_engine message:SCI_BRACEHIGHLIGHTINDICATOR wParam:1 lParam:TTMatchedBraceIndicator];
     [_engine message:SCI_BRACEBADLIGHTINDICATOR wParam:1 lParam:TTUnmatchedBraceIndicator];
+    [self applyCurrentLineFrameWithHighContrast:highContrast];
+    [self applyIndentGuides];
     if (_comparisonPresentation) [self applyComparisonStyle];
     // The bookmark dot: brand green on the light margin, citrus on the dark one, each at least 3:1.
     _bookmarkColour = dark ? 0x5BF4C7 : (highContrast ? 0x002E1C : 0x005B3A);
@@ -683,6 +694,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     _emptyLineNumbers.needsDisplay = YES;
 }
 - (void)dealloc {
+    if (_accessibilityDisplayObserver) [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:_accessibilityDisplayObserver];
     if (_ownGroups > 0) {
         NSNumber *key = @([_engine message:SCI_GETDOCPOINTER]);
         const NSInteger open = [[TTOpenGroups() objectForKey:key] integerValue] - _ownGroups;
@@ -1218,6 +1230,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self adoptSyntaxStylesFrom:other];
     self.autoIndentEnabled = other.autoIndentEnabled;
     self.braceHighlightEnabled = other.braceHighlightEnabled;
+    self.currentLineHighlightEnabled = other.currentLineHighlightEnabled;
+    self.indentGuidesEnabled = other.indentGuidesEnabled;
     [_engine message:SCI_SETZOOM wParam:(uptr_t)[other.engine message:SCI_GETZOOM]];
     [_engine message:SCI_SETWRAPMODE wParam:(uptr_t)[other.engine message:SCI_GETWRAPMODE]];
     [_engine message:SCI_SETVIEWWS wParam:(uptr_t)[other.engine message:SCI_GETVIEWWS]];
@@ -1347,6 +1361,31 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     _braceCacheValid = NO;
     if (!enabled) [_engine message:SCI_BRACEHIGHLIGHT wParam:(uptr_t)-1 lParam:-1];
     else [self scheduleStateNotification];
+}
+- (void)applyCurrentLineFrameWithHighContrast:(BOOL)high {
+    if (!_currentLineHighlightEnabled || _comparisonPresentation) {
+        [_engine message:SCI_RESETELEMENTCOLOUR wParam:SC_ELEMENT_CARET_LINE_BACK];
+        return;
+    }
+    const BOOL dark = [self usesDarkPalette];
+    const sptr_t colour = dark ? (high ? 0xBCDFC5 : 0xA9C7B1) : (high ? 0x344D39 : 0x576B5C);
+    [_engine message:SCI_SETCARETLINEFRAME wParam:high ? 2 : 1];
+    [_engine message:SCI_SETELEMENTCOLOUR wParam:SC_ELEMENT_CARET_LINE_BACK lParam:0xFF000000 | colour];
+}
+- (void)setCurrentLineHighlightEnabled:(BOOL)enabled {
+    [self assertThread]; if (_currentLineHighlightEnabled == enabled) return;
+    _currentLineHighlightEnabled = enabled;
+    [self applyCurrentLineFrameWithHighContrast:NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast];
+}
+- (void)applyIndentGuides {
+    // The native dotted guides take their ink from style 37. Imported lexers may also
+    // use that style for real text, so keep its configured foreground and background.
+    [_engine message:SCI_SETINDENTATIONGUIDES wParam:(_indentGuidesEnabled && !_comparisonPresentation) ? SC_IV_LOOKBOTH : SC_IV_NONE];
+}
+- (void)setIndentGuidesEnabled:(BOOL)enabled {
+    [self assertThread]; if (_indentGuidesEnabled == enabled) return;
+    _indentGuidesEnabled = enabled;
+    [self applyIndentGuides];
 }
 - (BOOL)runCommand:(NSString *)identifier {
     if (![identifier isKindOfClass:NSString.class]) return NO;
@@ -1667,6 +1706,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     _braceCacheValid = NO;
     if (value) [_engine message:SCI_BRACEHIGHLIGHT wParam:(uptr_t)-1 lParam:-1];
     else [self scheduleStateNotification];
+    [self applyCurrentLineFrameWithHighContrast:NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast];
+    [self applyIndentGuides];
     _emptyLineNumbers.hidden=value;
     [_engine message:SCI_SETVSCROLLBAR wParam:!value];
     [_engine message:SCI_SETENDATLASTLINE wParam:!value];

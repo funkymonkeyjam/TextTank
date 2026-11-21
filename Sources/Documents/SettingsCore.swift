@@ -19,6 +19,10 @@ package struct EditorSettings: Codable, Equatable {
     package var version: Int
     package var tabWidth: Int
     package var useTabs: Bool
+    package var currentLineHighlight: Bool?
+    package var currentLineHighlightEnabled: Bool { currentLineHighlight ?? true }
+    package var indentGuides: Bool?
+    package var indentGuidesEnabled: Bool { indentGuides ?? true }
     package var braceHighlight: Bool?
     package var braceHighlightEnabled: Bool { braceHighlight ?? true }
     package var autoIndent: Bool?
@@ -230,11 +234,13 @@ package struct SettingsShortcutDraft {
     }
 }
 package enum EditorViewPreference: String {
-    case autoIndent, braceHighlight
+    case autoIndent, braceHighlight, currentLineHighlight, indentGuides
     fileprivate func enabled(in settings: EditorSettings) -> Bool {
         switch self {
         case .autoIndent: return settings.autoIndentEnabled
         case .braceHighlight: return settings.braceHighlightEnabled
+        case .currentLineHighlight: return settings.currentLineHighlightEnabled
+        case .indentGuides: return settings.indentGuidesEnabled
         }
     }
     /// The caller has already decoded and validated the complete settings object. Locate only

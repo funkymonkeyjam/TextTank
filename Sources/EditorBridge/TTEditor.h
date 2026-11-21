@@ -89,7 +89,7 @@ __attribute__((objc_subclassing_restricted))
 /// - Document: text, readOnly, tab width and tabs-or-spaces (configureTabWidth:useTabs:), the
 ///   line-ending mode, the lexer with its keyword lists and properties (setLanguage:),
 ///   bookmarks, search highlights, the undo history and the save point (modified).
-/// - View: automatic indentation on Return, live brace feedback, wrap, zoom, selection and scroll position, syntax styles and fonts (setSyntaxStyle:,
+/// - View: automatic indentation on Return, live brace feedback, current-line framing, indentation guides, wrap, zoom, selection and scroll position, syntax styles and fonts (setSyntaxStyle:,
 ///   setSyntaxFont:), margins, whitespace and line-ending visibility, and overtype.
 /// revision is counted per view, but views of one document always report the same value.
 @interface TTEditor : NSView
@@ -198,6 +198,10 @@ __attribute__((objc_subclassing_restricted))
 @property(nonatomic) BOOL autoIndentEnabled;
 /// Show native brace feedback at the primary caret of this view. Defaults to YES.
 @property(nonatomic) BOOL braceHighlightEnabled;
+/// Frame the caret line in the focused editing view. Read-only documents can also show the frame.
+@property(nonatomic) BOOL currentLineHighlightEnabled;
+/// Show Scintilla's indentation guides, including continuation across a blank line.
+@property(nonatomic) BOOL indentGuidesEnabled;
 @property(nonatomic) BOOL wrap;
 /// The bookmark dot's colour for the current appearance, as 0xBBGGRR. The engine has no query for it.
 @property(nonatomic, readonly) NSInteger bookmarkColour;
@@ -210,7 +214,7 @@ __attribute__((objc_subclassing_restricted))
 /// View scope only: replaces this view's syntax styles and fonts with the other view's and
 /// redraws. Never touches the lexer, keyword lists, properties, text, undo or the revision.
 - (void)adoptSyntaxStylesFrom:(TTEditor *)other;
-/// View scope only: adoptSyntaxStylesFrom: plus automatic indentation, live brace feedback, zoom, wrap, whitespace and line-ending
+/// View scope only: adoptSyntaxStylesFrom: plus automatic indentation, live brace feedback, current-line framing, indentation guides, zoom, wrap, whitespace and line-ending
 /// visibility and margin widths. Selection and scroll position are not copied.
 - (void)adoptViewStateFrom:(TTEditor *)other;
 /// Announces that this view is leaving its window while `successor` keeps showing the same

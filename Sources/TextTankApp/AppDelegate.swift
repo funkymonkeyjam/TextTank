@@ -571,6 +571,12 @@ import AppKit
         view.addItem(
             title: "Highlight Matching Braces", action: #selector(SettingsController.toggleBraceHighlight(_:)),
             target: settings)
+        view.addItem(
+            title: "Highlight Current Line", action: #selector(SettingsController.toggleCurrentLineHighlight(_:)),
+            target: settings)
+        view.addItem(
+            title: "Show Indentation Guides", action: #selector(SettingsController.toggleIndentGuides(_:)),
+            target: settings)
         let languageRoot = NSMenuItem()
         languageRoot.title = "Language"
         languageRoot.submenu = languages.menu()

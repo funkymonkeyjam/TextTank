@@ -221,6 +221,12 @@ extension DocumentChecks {
                     && legacy.braceHighlightEnabled,
                 "missing version-1 Return and brace preferences default to on")
             global.autoIndent = false
+            check(
+                legacy.currentLineHighlight == nil && legacy.currentLineHighlightEnabled
+                    && legacy.indentGuides == nil && legacy.indentGuidesEnabled,
+                "legacy line and guide options default to on")
+            global.currentLineHighlight = false
+            global.indentGuides = false
             global.braceHighlight = false
             try delegate.settings.save(global)
             defer { _ = try? delegate.settings.save(EditorSettings()) }
@@ -317,6 +323,27 @@ extension DocumentChecks {
                     && clone.braceHighlightEnabled
                     && delegate.settings.validateMenuItem(braces) && braces.state == .on,
                 "brace toggle persists and updates both open editors and its checkmark")
+            check(
+                !clone.currentLineHighlightEnabled && !clone.indentGuidesEnabled
+                    && !document.editor.currentLineHighlightEnabled && !document.editor.indentGuidesEnabled,
+                "old preferences independently apply to new and split editors")
+            for (title, action) in [
+                ("Highlight Current Line", #selector(SettingsController.toggleCurrentLineHighlight(_:))),
+                ("Show Indentation Guides", #selector(SettingsController.toggleIndentGuides(_:)))
+            ] {
+                let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+                try require(delegate.settings.validateMenuItem(item) && item.state == .off, "view option starts off")
+                try require(NSApp.sendAction(action, to: delegate.settings, from: item), "view option dispatch")
+                let saved = try JSONDecoder().decode(EditorSettings.self, from: Data(contentsOf: delegate.settings.url))
+                let guides = action == #selector(SettingsController.toggleIndentGuides(_:))
+                check(
+                    saved.currentLineHighlightEnabled && saved.indentGuidesEnabled == guides
+                        && [clone, document.editor].allSatisfy {
+                            $0.currentLineHighlightEnabled && $0.indentGuidesEnabled == guides
+                        }
+                        && delegate.settings.validateMenuItem(item) && item.state == .on,
+                    "independent line and guide settings persist and update each open pane")
+            }
             check(palette(clone) == palette(document.editor), "a new clone shows the source view's syntax colours")
             check(
                 document.editor.revision == revision && clone.revision == revision && !document.isDocumentEdited,

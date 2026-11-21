@@ -86,6 +86,8 @@ import AppKit
         editor.configureTabWidth(value.tabWidth, useTabs: value.useTabs)
         editor.autoIndentEnabled = value.autoIndentEnabled
         editor.braceHighlightEnabled = value.braceHighlightEnabled
+        editor.currentLineHighlightEnabled = value.currentLineHighlightEnabled
+        editor.indentGuidesEnabled = value.indentGuidesEnabled
         editor.wrap = value.wrap
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
@@ -93,11 +95,19 @@ import AppKit
             item.state = value.autoIndentEnabled ? .on : .off
         } else if item.action == #selector(toggleBraceHighlight(_:)) {
             item.state = value.braceHighlightEnabled ? .on : .off
+        } else if item.action == #selector(toggleCurrentLineHighlight(_:)) {
+            item.state = value.currentLineHighlightEnabled ? .on : .off
+        } else if item.action == #selector(toggleIndentGuides(_:)) {
+            item.state = value.indentGuidesEnabled ? .on : .off
         }
         return true
     }
     @objc func toggleAutoIndent(_ sender: Any?) { updateViewPreference(.autoIndent, sender: sender) }
     @objc func toggleBraceHighlight(_ sender: Any?) { updateViewPreference(.braceHighlight, sender: sender) }
+    @objc func toggleCurrentLineHighlight(_ sender: Any?) {
+        updateViewPreference(.currentLineHighlight, sender: sender)
+    }
+    @objc func toggleIndentGuides(_ sender: Any?) { updateViewPreference(.indentGuides, sender: sender) }
     private func updateViewPreference(_ preference: EditorViewPreference, sender: Any?) {
         guard loadError == nil, ignoredShortcutBindings.isEmpty else {
             showSettings(sender)
@@ -205,7 +215,7 @@ import AppKit
                     let confirm = TTAlert()
                     confirm.messageText = "Reset all editor settings to their defaults?"
                     confirm.informativeText =
-                        "Tab width, indentation, brace highlighting, wrapping, appearance and every assigned shortcut return to their defaults. Documents are not changed."
+                        "Tab width, indentation, brace and current-line highlighting, indentation guides, wrapping, appearance and every assigned shortcut return to their defaults. Documents are not changed."
                     confirm.addButton(withTitle: "Cancel", role: .cancel)
                     confirm.addButton(withTitle: "Reset Defaults").hasDestructiveAction = true
                     guard confirm.runModal() == .alertSecondButtonReturn else { return }

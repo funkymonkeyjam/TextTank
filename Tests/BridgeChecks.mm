@@ -378,6 +378,72 @@ static void braceHighlightChecks() {
     }
 }
 
+@interface TTEditor (CurrentLinePaletteFixture)
+- (void)applyCurrentLineFrameWithHighContrast:(BOOL)high;
+@end
+static void currentLineAndGuideChecks() {
+    TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0,0,500,300)];
+    ScintillaView *native = (ScintillaView *)editor.subviews.firstObject;
+    TTEditor *clone = [[TTEditor alloc] initWithFrame:editor.frame];
+    ScintillaView *other = (ScintillaView *)clone.subviews.firstObject;
+    [editor loadDocumentText:@"one\n\t\tleft\n\n        right\n"];
+    [editor setSelectionAnchor:7 caret:10];
+    [editor setSearchHighlights:@[R(NSMakeRange(6,3))]];
+    [editor setBookmarks:@[@1]];
+    [clone shareDocumentWith:editor]; [clone adoptViewStateFrom:editor]; [clone setSelectionAnchor:0 caret:0];
+    editor.readOnly = YES;
+    const NSUInteger revision = editor.revision;
+    NSData *bytes = editor.utf8Data; NSArray *selection = editor.selectionRanges;
+    __block NSUInteger edits = 0;
+    editor.onChange = ^{ ++edits; };
+    auto guide = [](ScintillaView *v) { return [v message:SCI_GETINDENTATIONGUIDES]; };
+    auto frame = [](ScintillaView *v) { return [v message:SCI_GETELEMENTISSET wParam:SC_ELEMENT_CARET_LINE_BACK]; };
+    check(guide(native)==SC_IV_LOOKBOTH && guide(other)==SC_IV_LOOKBOTH && frame(native) && frame(other)
+        && ![native message:SCI_GETCARETLINEVISIBLEALWAYS], "both new panes have native look-both guides and a focus-only current line");
+    editor.indentGuidesEnabled=NO; clone.currentLineHighlightEnabled=NO;
+    check(!guide(native) && guide(other)==SC_IV_LOOKBOTH && frame(native) && !frame(other),
+        "guides and current line can differ between two clones without modifying the shared document");
+    editor.indentGuidesEnabled=YES; clone.currentLineHighlightEnabled=YES;
+    for (NSString *name in @[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]) {
+        editor.appearance = [NSAppearance appearanceNamed:name];
+        [editor viewDidChangeEffectiveAppearance];
+        for (const BOOL high : {NO, YES}) {
+            [editor applyCurrentLineFrameWithHighContrast:high];
+            const sptr_t canvas = [native message:SCI_STYLEGETBACK wParam:STYLE_DEFAULT];
+            const sptr_t ink = [native message:SCI_STYLEGETFORE wParam:STYLE_DEFAULT];
+            const sptr_t cue = [native message:SCI_GETELEMENTCOLOUR wParam:SC_ELEMENT_CARET_LINE_BACK];
+            const sptr_t guideInk = [native message:SCI_STYLEGETFORE wParam:STYLE_INDENTGUIDE];
+            check(colourContrast(cue,canvas)>=3 && colourContrast(guideInk,canvas)>=3 && colourContrast(ink,canvas)>=4.5
+                && [native message:SCI_GETCARETLINEFRAME]==(high?2:1), "palette supplies legible frame, guide and glyphs plus increased-contrast frame width");
+        }
+    }
+    // The observer uses the actual workspace contrast setting even if the editor's appearance
+    // did not change. The test temporarily sets the opposite per-view frame, not the OS preference.
+    const BOOL systemHigh = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
+    [editor applyCurrentLineFrameWithHighContrast:!systemHigh];
+    [NSWorkspace.sharedWorkspace.notificationCenter postNotificationName:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification object:nil];
+    check([native message:SCI_GETCARETLINEFRAME] == (systemHigh?2:1), "live display-options notification restores the workspace contrast setting");
+    [editor setLanguage:@"cpp"];
+    check(frame(native) && guide(native)==SC_IV_LOOKBOTH, "lexer and palette rebuild preserve both visual settings");
+    check([editor setSyntaxStyle:STYLE_INDENTGUIDE foreground:NSColor.blueColor background:NSColor.whiteColor bold:YES italic:NO],
+          "an imported syntax style may use the native guide slot");
+    [editor viewDidChangeEffectiveAppearance]; [clone adoptSyntaxStylesFrom:editor];
+    for (ScintillaView *pane in @[native,other]) {
+        check([pane message:SCI_STYLEGETFORE wParam:STYLE_INDENTGUIDE]==0xff0000
+            && [pane message:SCI_STYLEGETBACK wParam:STYLE_INDENTGUIDE]==0xffffff
+            && [pane message:SCI_STYLEGETBOLD wParam:STYLE_INDENTGUIDE], "profile guide-slot ink, paper and bold survive palette and clone adoption");
+    }
+    [editor setComparisonPresentation:YES];
+    check(!frame(native) && guide(native)==SC_IV_NONE && frame(other) && guide(other)==SC_IV_LOOKBOTH,
+          "comparison suppression never alters its sibling editing pane");
+    [editor setComparisonPresentation:NO];
+    check(frame(native) && guide(native)==SC_IV_LOOKBOTH, "leaving comparison restores editing options");
+    check(!edits && editor.revision==revision && clone.revision==revision && [editor.utf8Data isEqual:bytes] && !editor.modified
+        && ![native message:SCI_CANUNDO] && [editor.selectionRanges isEqual:selection] && !clone.selectionCaret
+        && [editor.bookmarkLines isEqual:@[@1]] && [native message:SCI_INDICATORVALUEAT wParam:20 lParam:6],
+        "view changes preserve read-only text, caret, selection, Undo, search decoration and bookmark");
+}
+
 static void cancellationContract() {
     TTSearchCancellation *token=[TTSearchCancellation new];
     check(!token.cancelled && ![[token valueForKey:@"cancelled"] boolValue], "F316 native cancellation starts false and retains its safe KVC getter");
@@ -403,6 +469,7 @@ int main(int argc, char **argv) {
         cancellationContract();
         [NSApplication sharedApplication];
         ttchecks::section("Return indentation", returnIndentChecks);
+        ttchecks::section("Current line and indentation guides", currentLineAndGuideChecks);
         ttchecks::section("Live brace feedback", braceHighlightChecks);
         ttchecks::section("D1 comparison drop and gutter isolation", [&] {
             TTEditor *renderer=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,240)];
