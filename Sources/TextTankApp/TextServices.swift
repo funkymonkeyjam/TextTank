@@ -14,21 +14,31 @@ import TextTankCore
         self.choose = choose ?? Self.chooseAutomation
     }
 
-    private static func chooseAutomation(_ choices: [AutomationDefinition]) -> AutomationDefinition? {
-        let popup = NSPopUpButton(frame: .init(x: 0, y: 0, width: 320, height: 28))
-        for choice in choices { popup.menu?.addItem(NSMenuItem(title: choice.name, action: nil, keyEquivalent: "")) }
-        popup.selectItem(at: 0)
-        popup.setAccessibilityLabel("Saved automation")
-        let alert = TTAlert()
-        alert.messageText = "Run a TextTank automation on the selected text"
-        alert.informativeText = "The result is returned to the app that supplied the selection."
-        alert.accessoryView = popup
-        alert.addButton(withTitle: "Run")
-        alert.addButton(withTitle: "Cancel", role: .cancel)
-        guard alert.runModal() == .alertFirstButtonReturn, choices.indices.contains(popup.indexOfSelectedItem) else {
-            return nil
+    private final class Choice: NSObject {
+        var selectedID: UUID?
+
+        @objc func selectItem(_ sender: NSMenuItem) {
+            selectedID = sender.representedObject as? UUID
         }
-        return choices[popup.indexOfSelectedItem]
+    }
+
+    private static func chooseAutomation(_ choices: [AutomationDefinition]) -> AutomationDefinition? {
+        let selection = Choice()
+        let menu = NSMenu(title: "Run TextTank Automation")
+        menu.addItem(.sectionHeader(title: "Run on Selected Text"))
+        for workflow in choices {
+            let item = menu.addItem(
+                withTitle: "Run “\(workflow.name)”", action: #selector(Choice.selectItem(_:)), keyEquivalent: "")
+            item.target = selection
+            item.representedObject = workflow.id
+        }
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Cancel", action: #selector(Choice.selectItem(_:)), keyEquivalent: "").target =
+            selection
+        // Services needs its pasteboard reply before returning. Native menu tracking waits for
+        // this invocation's explicit choice while allowing Escape or a click outside to cancel.
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        return choices.first { $0.id == selection.selectedID }
     }
 
     private func selection(_ board: NSPasteboard) throws -> String {
@@ -59,8 +69,16 @@ import TextTankCore
                     "No saved automation accepts supplied text without a prompt or external output.")
             }
             guard let chosen = choose(options) else { return }
-            try chosen.requireSuppliedText()
-            let result = try chosen.transform(input)
+            let latest = try AutomationLibrary.forSuppliedText()
+            guard let workflow = latest.workflows.first(where: { $0.id == chosen.id }),
+                try AutomationLibrary(workflows: [workflow]).encoded()
+                    == AutomationLibrary(workflows: [chosen]).encoded()
+            else {
+                throw AutomationError.invalid(
+                    "The saved automation changed while you were choosing it. Try the service again.")
+            }
+            try workflow.requireSuppliedText()
+            let result = try workflow.transform(input)
             guard board.changeCount == generation, let current = board.string(forType: .string),
                 current.utf8.elementsEqual(input.utf8)
             else {

@@ -8,6 +8,32 @@ import AppKit
 import EditorBridge
 import NativeSearch
 
+/// Exercise the real menu during its own native tracking loop, without global input.
+@MainActor private final class ServiceMenuSelection: NSObject {
+    let title: String
+    var tracked: NSMenu?
+    var selected = false
+
+    init(title: String) { self.title = title }
+
+    @objc func beganTracking(_ notification: Notification) {
+        guard let menu = notification.object as? NSMenu, menu.title == "Run TextTank Automation" else { return }
+        tracked = menu
+        let timer = Timer(timeInterval: 0.02, repeats: false) { [self] _ in
+            MainActor.assumeIsolated {
+                guard let menu = tracked else { return }
+                let index = menu.indexOfItem(withTitle: title)
+                if index >= 0 {
+                    selected = true
+                    menu.performActionForItem(at: index)
+                }
+                menu.cancelTrackingWithoutAnimation()
+            }
+        }
+        for mode: RunLoop.Mode in [.eventTracking, .common, .modalPanel] { RunLoop.main.add(timer, forMode: mode) }
+    }
+}
+
 extension DocumentChecks {
     @MainActor static func openSaveRecovery(root: URL, documents: TextDocumentController, section: SectionRunner) {
         let files = FileManager.default
@@ -141,6 +167,41 @@ extension DocumentChecks {
                 try failure == nil && board.string(forType: .string) == "a\nb"
                     && documents.documents.count == before + 1 && Data(contentsOf: libraryURL) == lib,
                 "Services returns transformed selection through only the supplied pasteboard")
+            // A workflow called Cancel must remain distinguishable from the actual cancellation command.
+            var namedCancel = good
+            namedCancel.id = UUID()
+            namedCancel.name = "Cancel"
+            namedCancel.steps = [.init(kind: .sortLines)]
+            try AutomationLibrary(workflows: [good, namedCancel, bad]).encoded().write(to: libraryURL, options: .atomic)
+            for (title, expected) in [("Run “Cancel”", "a\na\nb"), ("Cancel", "b\na\na")] {
+                let selection = ServiceMenuSelection(title: title)
+                NotificationCenter.default.addObserver(
+                    selection, selector: #selector(ServiceMenuSelection.beganTracking(_:)),
+                    name: NSMenu.didBeginTrackingNotification, object: nil)
+                defer { NotificationCenter.default.removeObserver(selection) }
+                _ = board.setString("b\na\na", forType: .string)
+                failure = nil
+                provider.runTextTankAutomation(board, userData: nil, error: &failure)
+                check(
+                    failure == nil && selection.selected && board.string(forType: .string) == expected,
+                    "actual Services tracking dispatches \(title) synchronously to the invocation pasteboard")
+            }
+            try lib.write(to: libraryURL, options: .atomic)
+            let staleWorkflow = TextServices(
+                newDocument: { _ in },
+                choose: { options in
+                    do {
+                        try AutomationLibrary(workflows: [bad]).encoded().write(to: libraryURL, options: .atomic)
+                    } catch { check(false, "owned automation change failed") }
+                    return options.first
+                })
+            _ = board.setString("a\na\nb", forType: .string)
+            staleWorkflow.runTextTankAutomation(board, userData: nil, error: &failure)
+            check(
+                failure?.contains("saved automation changed") == true && board.string(forType: .string) == "a\na\nb",
+                "removal of the selected workflow while choosing leaves supplied bytes intact")
+            try lib.write(to: libraryURL, options: .atomic)
+            failure = nil
             let cancel = TextServices(newDocument: { _ in }, choose: { _ in nil })
             let gen = board.changeCount
             cancel.runTextTankAutomation(board, userData: nil, error: &failure)
