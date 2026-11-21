@@ -29,6 +29,24 @@ package struct SizePolicy: Sendable {
     package let automaticRecovery = 256 * 1024 * 1024
     package let findHighlightLine = 1024 * 1024
 
+    package let automationText = 32 * 1024 * 1024
+    package let automationLibrary = 32 * 1024 * 1024
+    package let automationRule = 1024 * 1024
+    package let automationSample = 1024 * 1024
+    package let macroLibrary = 32 * 1024 * 1024
+    package let runArgument = 1024 * 1024
+    package let runLibrary = 1024 * 1024
+    package let runIO = 4 * 1024 * 1024
+    package let utilitySelection = 16 * 1024 * 1024
+    package let editorTransform = 16 * 1024 * 1024
+    package let commentDocument = 16 * 1024 * 1024
+    package let languageCatalog = 16 * 1024 * 1024
+    package let languageKeywords = 1024 * 1024
+    package let languageDefinition = 2 * 1024 * 1024
+    package let functionNavigation = 2 * 1024 * 1024
+    package let reminderItem = 1024 * 1024
+    package let reminderJournal = 32 * 1024 * 1024
+
     package static func describe(_ bytes: Int) -> String {
         if bytes >= 1_048_576, bytes.isMultiple(of: 1_048_576) { return "\(bytes / 1_048_576) MiB" }
         if bytes >= 1024, bytes.isMultiple(of: 1024) { return "\(bytes / 1024) KiB" }

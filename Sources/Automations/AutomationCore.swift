@@ -167,7 +167,7 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
         try validate(requiringValues: true)
         try control?.checkCancellation()
         guard input.utf8.count <= Self.maximumTransformBytes else {
-            throw AutomationError.invalid("Automation input exceeds 32 MiB. Nothing was changed.")
+            throw AutomationError.invalid("Automation input exceeds \(SizePolicy.describe(SizePolicy.standard.automationText)). Use a smaller document or selection.")
         }
         var result = input
         var regexTimeRemaining = Self.regexBudget
@@ -342,11 +342,11 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
             result = body.joined(separator: parts.eol) + (parts.trailing && !body.isEmpty ? parts.eol : "")
         }
         guard result.utf8.count <= maximumTransformBytes else {
-            throw AutomationError.invalid("Automation result exceeds 32 MiB. Nothing was changed.")
+            throw AutomationError.invalid("Automation result exceeds \(SizePolicy.describe(SizePolicy.standard.automationText)). Use a smaller input or shorten the replacement.")
         }
         return result
     }
-    static package let maximumTransformBytes = 32 * 1024 * 1024
+    static package let maximumTransformBytes = SizePolicy.standard.automationText
     private static func boundedReplacement(
         _ input: String, find: String, replacement: String, control: AutomationRunControl?
     ) throws -> String {
@@ -356,7 +356,7 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
             try control?.checkCancellation()
             let count = part.utf8.count
             guard count <= maximumTransformBytes - bytes else {
-                throw AutomationError.invalid("Automation result exceeds 32 MiB. Nothing was changed.")
+                throw AutomationError.invalid("Automation result exceeds \(SizePolicy.describe(SizePolicy.standard.automationText)). Use a smaller input or shorten the replacement.")
             }
             bytes += count
             output.append(contentsOf: part)
@@ -390,16 +390,16 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
             if step.kind == .replaceLiteral, let find = step.find, let replacement = step.replacement {
                 // Conservative bound before allocating expanded replacement text.
                 let possibleMatches = text.utf8.count / max(1, find.utf8.count)
-                guard replacement.utf8.count <= 1_048_576,
-                    possibleMatches <= (1_048_576 - min(text.utf8.count, 1_048_576)) / max(1, replacement.utf8.count)
+                guard replacement.utf8.count <= SizePolicy.standard.automationSample,
+                    possibleMatches <= (SizePolicy.standard.automationSample - min(text.utf8.count, SizePolicy.standard.automationSample)) / max(1, replacement.utf8.count)
                 else {
                     throw AutomationError.invalid(
-                        "This replacement could exceed the 1 MiB sample-result limit. Use a smaller sample or replacement."
+                        "This replacement could exceed the \(SizePolicy.describe(SizePolicy.standard.automationSample)) sample-result limit. Use a smaller sample or replacement."
                     )
                 }
             }
             text = try Self.apply(step, to: text, regexTimeRemaining: &regexTimeRemaining, control: control)
-            guard text.utf8.count <= 1_048_576 else { throw AutomationError.invalid("Sample result exceeds 1 MiB.") }
+            guard text.utf8.count <= SizePolicy.standard.automationSample else { throw AutomationError.invalid("Sample result exceeds \(SizePolicy.describe(SizePolicy.standard.automationSample)). Use a smaller sample or shorten the replacement.") }
         }
         try control?.checkpoint(completed: steps.count, total: steps.count)
         try control?.checkCancellation()
@@ -836,8 +836,8 @@ package struct AutomationLibrary: VersionedLibrary, Equatable {
     }
 
     static package let libraryContext = "Automations"
-    static package var librarySizeError: Error { AutomationError.invalid("Automation configuration exceeds 32 MiB.") }
-    static package let maximumBytes = 32 * 1024 * 1024
+    static package var librarySizeError: Error { AutomationError.invalid("Automation configuration exceeds \(SizePolicy.describe(SizePolicy.standard.automationLibrary)). Shorten a workflow or remove unwanted workflows.") }
+    static package let maximumBytes = SizePolicy.standard.automationLibrary
     package var version: Int
     package var workflows: [AutomationDefinition]
     package func validate() throws {
@@ -900,7 +900,7 @@ final package class AutomationRunControl: @unchecked Sendable {
 
 /// Explicit file inputs are bounded regular UTF-8 files, never pipes/devices or followed symlinks.
 package enum AutomationFileInput {
-    static package func read(_ url: URL, limit: Int = 32 * 1024 * 1024) throws -> String {
+    static package func read(_ url: URL, limit: Int = SizePolicy.standard.automationText) throws -> String {
         let data = try readData(url, limit: limit)
         guard let text = String(data: data, encoding: .utf8) else {
             throw AutomationError.invalid(
@@ -910,9 +910,7 @@ package enum AutomationFileInput {
     }
     /// A byte limit as a person reads it: "32 MiB", "64 KiB" or "2 bytes".
     static package func describe(limit: Int) -> String {
-        if limit >= 1_048_576, limit % 1_048_576 == 0 { return "\(limit / 1_048_576) MiB" }
-        if limit >= 1024, limit % 1024 == 0 { return "\(limit / 1024) KiB" }
-        return "\(limit) bytes"
+        SizePolicy.describe(limit)
     }
     static package func readData(_ url: URL, limit: Int, parent: PrivateFileStore.ParentPolicy = .selectedInput) throws
         -> Data
@@ -924,7 +922,7 @@ package enum AutomationFileInput {
             throw AutomationError.invalid("Automation input must be a regular file, not a folder, pipe or device.")
         } catch PrivateFileError.tooLarge {
             throw AutomationError.invalid(
-                "This file is larger than the \(describe(limit: limit)) limit for this input.")
+                "This file is larger than the \(describe(limit: limit)) limit for this input. Choose a smaller file.")
         }
     }
 }
@@ -938,8 +936,8 @@ package struct AutomationRuleSet: VersionedLibrary {
     }
 
     static package let libraryContext = "Rules"
-    static package var librarySizeError: Error { AutomationError.invalid("Rule files must be at most 1 MiB.") }
-    static package let maximumBytes = 1_048_576
+    static package var librarySizeError: Error { AutomationError.invalid("Rule files must be at most \(SizePolicy.describe(SizePolicy.standard.automationRule)). Shorten the rules or split them into separate files.") }
+    static package let maximumBytes = SizePolicy.standard.automationRule
     static package let libraryEncodingOptions: JSONEncoder.OutputFormatting = [.prettyPrinted, .sortedKeys]
     package var version: Int
     package var name: String
@@ -956,7 +954,7 @@ package struct AutomationRuleSet: VersionedLibrary {
 package enum AutomationRuleImport {
     static package let fallbackName = "Imported rules"
     static package func ruleSets(from data: Data) throws -> (sets: [AutomationRuleSet], fromLibrary: Bool) {
-        guard data.count <= 1_048_576 else { throw AutomationError.invalid("Rule files must be at most 1 MiB.") }
+        guard data.count <= SizePolicy.standard.automationRule else { throw AutomationError.invalid("Rule files must be at most \(SizePolicy.describe(SizePolicy.standard.automationRule)). Shorten the rules or split them into separate files.") }
         let decoder = JSONDecoder()
         let ruleSet: AutomationRuleSet
         do { ruleSet = try decoder.decode(AutomationRuleSet.self, from: data) } catch is DecodingError {
@@ -994,7 +992,7 @@ package enum AutomationTemplates {
             ?? URL(fileURLWithPath: "Resources/AutomationTemplates/\(name).rules.json")
     }
     static package func load(_ name: String) throws -> AutomationRuleSet {
-        try AutomationRuleSet.decode(AutomationFileInput.readData(url(name), limit: 1_048_576))
+        try AutomationRuleSet.decode(AutomationFileInput.readData(url(name), limit: SizePolicy.standard.automationRule))
     }
     /// Every template that loads, and one line for each that does not, so a damaged resource is
     /// reported instead of silently missing from the list.

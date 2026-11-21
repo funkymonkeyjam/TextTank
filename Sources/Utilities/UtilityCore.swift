@@ -35,7 +35,7 @@ package enum TextUtility: String, CaseIterable {
         }
     }
     package func apply(_ input: String) throws -> String {
-        guard input.utf8.count <= 16 * 1024 * 1024 else { throw UtilityFailure.tooLarge }
+        guard input.utf8.count <= SizePolicy.standard.utilitySelection else { throw UtilityFailure.tooLarge }
         switch self {
         case .base64EncodeLines:
             var output = ""
@@ -110,7 +110,7 @@ package enum TextUtility: String, CaseIterable {
             // Direct XML first: nothing accepted before this rule is decoded differently, and a
             // deflate stream would have to be valid UTF-8 text starting with "<" to be mistaken.
             if Self.looksLikeXML(data), let direct = try? Self.text(data) { return direct }
-            let inflated = try Self.inflateRaw(data, limit: 16 * 1024 * 1024)
+            let inflated = try Self.inflateRaw(data, limit: SizePolicy.standard.utilitySelection)
             guard Self.looksLikeXML(inflated) else { throw UtilityFailure.malformed("SAML XML") }
             return try Self.text(inflated)
         case .base64Encode: return Data(input.utf8).base64EncodedString().replacingOccurrences(of: "=", with: "")
@@ -310,7 +310,7 @@ package enum UtilityFailure: LocalizedError, Equatable {
         switch self {
         case .malformed(let format): return "Invalid \(format) input. The selection was not changed."
         case .binaryResult: return "The decoded bytes are not valid UTF-8 text. The selection was not changed."
-        case .tooLarge: return "Select at most 16 MiB for this utility. The selection was not changed."
+        case .tooLarge: return "Select at most \(SizePolicy.describe(SizePolicy.standard.utilitySelection)) for this utility. The selection was not changed."
         case .selectionRequired: return "Select one nonempty text range before running a utility."
         case .multipleSelections:
             return "This command works on a single selection. Collapse multiple selections and try again."
@@ -351,7 +351,7 @@ package struct HexEncodingOptions {
     package var lineEnding: String
     package func encode(_ text: String) throws -> String {
         guard (0...65536).contains(bytesPerLine), ["\n", "\r", "\r\n"].contains(lineEnding),
-            text.utf8.count <= 16 * 1024 * 1024
+            text.utf8.count <= SizePolicy.standard.utilitySelection
         else { throw UtilityFailure.malformed("hex options or input size") }
         let digits = uppercase ? TextUtility.upperHexDigits : TextUtility.lowerHexDigits
         let ending = Array(lineEnding.utf8), count = text.utf8.count

@@ -178,10 +178,10 @@ package struct MacroLibrary: VersionedLibrary, Equatable {
 
     static package let libraryContext = "Saved macros"
     static package var librarySizeError: Error {
-        MacroError.invalid("Saved macros exceed the 32 MiB limit. The file was not changed.")
+        MacroError.invalid("Saved macros exceed the \(SizePolicy.describe(SizePolicy.standard.macroLibrary)) limit. Shorten a recording or remove unused macros.")
     }
     /// Same 32 MiB resource envelope as saved automations; bound both import and persistence.
-    static package let maximumBytes = 32 * 1024 * 1024
+    static package let maximumBytes = SizePolicy.standard.macroLibrary
     package var version: Int
     package var macros: [RecordedMacro]
     package func validate() throws {
@@ -193,7 +193,7 @@ package struct MacroLibrary: VersionedLibrary, Equatable {
             guard let text else { return }
             let count = text.utf8.count
             guard count <= remaining else {
-                throw MacroError.invalid("Saved macros exceed the 32 MiB limit. The file was not changed.")
+                throw MacroError.invalid("Saved macros exceed the \(SizePolicy.describe(SizePolicy.standard.macroLibrary)) limit. Shorten a recording or remove unused macros.")
             }
             remaining -= count
         }

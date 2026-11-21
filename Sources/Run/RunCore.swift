@@ -50,11 +50,11 @@ package struct ConfiguredRun: Codable, Equatable, Sendable {
                     "Run command “\(title)” must contain at most 256 arguments. The saved commands were not changed.")
         }
         for (index, argument) in arguments.enumerated() {
-            guard !argument.contains("\0"), argument.utf8.count <= 1024 * 1024 else {
+            guard !argument.contains("\0"), argument.utf8.count <= SizePolicy.standard.runArgument else {
                 throw RunFailure.configuration(
                     field: .argument(index + 1),
                     message:
-                        "Argument \(index + 1) of Run command “\(title)” must contain no NUL character and be at most 1 MiB. The saved commands were not changed."
+                        "Argument \(index + 1) of Run command “\(title)” must contain no NUL character and be at most \(SizePolicy.describe(SizePolicy.standard.runArgument)). Shorten the argument before saving."
                 )
             }
         }
@@ -91,7 +91,7 @@ package struct ConfiguredRun: Codable, Equatable, Sendable {
                 if arg == "{selection}" {
                     // Checked here, not left to validate(), so the error names the selection and not
                     // the saved command. The limits are the ones validate() applies to an argument.
-                    guard !selection.contains("\0"), selection.utf8.count <= 1024 * 1024 else {
+                    guard !selection.contains("\0"), selection.utf8.count <= SizePolicy.standard.runArgument else {
                         throw RunFailure.selectionUnsuitable
                     }
                     return selection
@@ -120,7 +120,7 @@ package struct ConfiguredRun: Codable, Equatable, Sendable {
         }
     }
     /// One shared byte ceiling for persistence and restart, including JSON escaping.
-    static package let maximumLibraryBytes = 1024 * 1024
+    static package let maximumLibraryBytes = SizePolicy.standard.runLibrary
     static package func encodeLibrary(_ commands: [Self], sortedKeys: Bool = false) throws -> Data {
         try validateLibrary(commands)
         // Reject obviously oversized inputs before JSONEncoder allocates an expanded
@@ -190,11 +190,11 @@ package enum RunFailure: Error, LocalizedError, Equatable {
         case .documentClosed: return "The document this command ran on is closed. The result was not applied."
         case .configurationTooLarge:
             return
-                "Saved Run commands exceed the 1 MiB configuration limit. Shorten arguments or remove commands; the existing configuration was preserved."
-        case .tooLarge: return "Process input or output exceeds the 4 MiB limit."
+                "Saved Run commands exceed the \(SizePolicy.describe(SizePolicy.standard.runLibrary)) configuration limit. Shorten arguments or remove commands; the existing configuration was preserved."
+        case .tooLarge: return "Process input or output exceeds the \(SizePolicy.describe(SizePolicy.standard.runIO)) limit. Use a smaller input or reduce command output."
         case .selectionUnsuitable:
             return
-                "The selection cannot be passed as an argument: it contains a NUL character or exceeds 1 MiB. Shorten the selection, or use a text extension, which receives the selection on standard input."
+                "The selection cannot be passed as an argument: it contains a NUL character or exceeds \(SizePolicy.describe(SizePolicy.standard.runArgument)). Shorten the selection, or use a text extension, which receives the selection on standard input."
         }
     }
 }
@@ -206,7 +206,7 @@ package enum RunTermination: Equatable, CaseIterable, Sendable {
     case cancelled
     /// It was still running at the time limit.
     case timedOut
-    /// It wrote more than the 4 MiB output limit.
+    /// The process produced more output than its input/output allowance.
     case outputLimit
     /// It exited, but a process it started still held its output open and was stopped.
     case lingeringDescendants
@@ -215,7 +215,7 @@ package enum RunTermination: Equatable, CaseIterable, Sendable {
         case .finished: return "finished"
         case .cancelled: return "cancelled"
         case .timedOut: return "stopped at the time limit"
-        case .outputLimit: return "stopped at the 4 MiB output limit; output is incomplete"
+        case .outputLimit: return "stopped at the \(SizePolicy.describe(SizePolicy.standard.runIO)) output limit; output is incomplete"
         case .lingeringDescendants:
             return
                 "finished, but a background process it started kept the output open and was stopped; output may be incomplete"
@@ -269,7 +269,7 @@ final package class RunExecution: @unchecked Sendable {
         workingDirectory: URL? = nil
     ) throws -> RunResult {
         try command.validate()
-        guard input.count <= 4 * 1024 * 1024 else { throw RunFailure.tooLarge }
+        guard input.count <= SizePolicy.standard.runIO else { throw RunFailure.tooLarge }
         lock.lock()
         guard !active else {
             lock.unlock()
@@ -358,7 +358,7 @@ final package class RunExecution: @unchecked Sendable {
                     if errno != EAGAIN && errno != EINTR { ended = true }
                     break
                 }
-                let remaining = max(0, 4 * 1024 * 1024 - output.count - errors.count - destination.count)
+                let remaining = max(0, SizePolicy.standard.runIO - output.count - errors.count - destination.count)
                 destination.append(contentsOf: bytes.prefix(min(n, remaining)))
                 if n > remaining {
                     limited = true

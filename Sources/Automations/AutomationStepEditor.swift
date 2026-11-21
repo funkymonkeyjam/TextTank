@@ -411,7 +411,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
                 panel.allowedContentTypes = [.json]
                 guard panel.runModal() == .OK, let url = panel.url else { return }
                 let imported = try AutomationRuleImport.ruleSets(
-                    from: AutomationFileInput.readData(url, limit: 1_048_576))
+                    from: AutomationFileInput.readData(url, limit: SizePolicy.standard.automationRule))
                 guard let chosen = imported.fromLibrary ? Self.chooseFromLibrary(imported.sets) : imported.sets.first
                 else { return }
                 selected = chosen
