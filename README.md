@@ -24,6 +24,8 @@ From a source checkout (or extracted project source archive):
 
 Build first: standalone suites need the native framework and library outputs. `scripts/test.sh` runs every suite, requires native completion markers and records exact-source/log evidence; a source archive can run checks but cannot claim a Git tree it does not own. `scripts/test-performance.sh` adds the full synthetic performance tier. The static capability inventory is not an acceptance suite.
 
+With a Debug build, run `python3 scripts/test-recovery-crash.py` to check recovery across an unexpected editing-process exit. This opt-in check uses temporary documents, a private support directory and nonactivating child processes.
+
 Debug is the default. Set `CONFIGURATION=Release` separately for each build/test/package command. Architecture and minimum OS come from `Dependencies.lock.json`; `scripts/env.sh` supplies shared build paths. [BUILDING](docs/BUILDING.md) explains configuration isolation, evidence and packaging. Review bundles are ad-hoc signed, not notarized public releases; signing is checked at build/package time, not assumed durable after other tools touch the bundle.
 
 ## Regenerate the project
