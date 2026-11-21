@@ -307,9 +307,22 @@ import CryptoKit
             check(
                 ReviewPreflight.validate(tooMany, current: many.bytes, target: manyTarget) == .failure(.budgetExceeded),
                 "F0 count10001 rejects before payload")
+            let hard = SizePolicy.standard.reviewText
+            check(try ReviewApplyPolicy(maximumExpectedBytes: hard).maximumExpectedBytes == hard,
+                  "the exact review ceiling can be requested explicitly")
+            for invalid in [-1, hard + 1, Int.max] {
+                rejects("invalid expected-byte policy is rejected at construction", where: { $0 is ReviewPolicyError }) {
+                    _ = try ReviewApplyPolicy(maximumExpectedBytes: invalid)
+                }
+                rejects("invalid replacement-byte policy is rejected at construction", where: { $0 is ReviewPolicyError }) {
+                    _ = try ReviewApplyPolicy(maximumReplacementBytes: invalid)
+                }
+                rejects("invalid result-byte policy is rejected at construction", where: { $0 is ReviewPolicyError }) {
+                    _ = try ReviewApplyPolicy(maximumResultBytes: invalid)
+                }
+            }
             for maximum in [4, 5, 6] {
-                var policy = ReviewApplyPolicy.default
-                policy.maximumExpectedBytes = maximum
+                let policy = try ReviewApplyPolicy(maximumExpectedBytes: maximum)
                 let proposal = EditProposal(target: target, snapshot: a.id, edits: [edit(0, 6, a.bytes, Data())])
                 let result = ReviewPreflight.validate(proposal, current: a.bytes, target: target, policy: policy)
                 check(

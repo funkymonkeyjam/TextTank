@@ -23,12 +23,34 @@ package struct EditProposal: Sendable {
 }
 package struct ReviewApplyPolicy: Sendable {
     package var maximumEdits = 10_000
-    package var maximumExpectedBytes = SizePolicy.standard.reviewText
-    package var maximumReplacementBytes = SizePolicy.standard.reviewText
-    package var maximumResultBytes = SizePolicy.standard.reviewText
+    package let maximumExpectedBytes: Int
+    package let maximumReplacementBytes: Int
+    package let maximumResultBytes: Int
     package var maximumWork = 64_000_000
-    package init() {}
+
+    package init() {
+        maximumExpectedBytes = SizePolicy.standard.reviewText
+        maximumReplacementBytes = SizePolicy.standard.reviewText
+        maximumResultBytes = SizePolicy.standard.reviewText
+    }
+    package init(maximumExpectedBytes: Int = SizePolicy.standard.reviewText,
+                 maximumReplacementBytes: Int = SizePolicy.standard.reviewText,
+                 maximumResultBytes: Int = SizePolicy.standard.reviewText) throws {
+        let allowed = 0...SizePolicy.standard.reviewText
+        guard allowed.contains(maximumExpectedBytes), allowed.contains(maximumReplacementBytes),
+            allowed.contains(maximumResultBytes)
+        else { throw ReviewPolicyError.invalidByteLimit }
+        self.maximumExpectedBytes = maximumExpectedBytes
+        self.maximumReplacementBytes = maximumReplacementBytes
+        self.maximumResultBytes = maximumResultBytes
+    }
     package static let `default` = ReviewApplyPolicy()
+}
+package enum ReviewPolicyError: LocalizedError {
+    case invalidByteLimit
+    package var errorDescription: String? {
+        "Choose an expected, replacement and result byte limit between zero and \(SizePolicy.describe(SizePolicy.standard.reviewText))."
+    }
 }
 package enum ReviewPreflight {
     package static func validate(
@@ -56,16 +78,16 @@ package enum ReviewPreflight {
         // Admission before payload inspection, copies, String conversion or no-op filtering.
         for edit in proposal.edits {
             try add(1, to: &work, limit: policy.maximumWork)
-            try add(edit.expected.count, to: &expected, limit: min(SizePolicy.standard.reviewText, policy.maximumExpectedBytes))
+            try add(edit.expected.count, to: &expected, limit: policy.maximumExpectedBytes)
             try add(
-                edit.replacement.count, to: &replacements, limit: min(SizePolicy.standard.reviewText, policy.maximumReplacementBytes))
+                edit.replacement.count, to: &replacements, limit: policy.maximumReplacementBytes)
             guard edit.range.lower >= 0, edit.range.upper >= edit.range.lower,
                 edit.range.upper <= currentByteLength
             else { throw ReviewRejection.invalidRange }
             try add(edit.range.upper - edit.range.lower, to: &removed, limit: currentByteLength)
         }
         let projected = (currentByteLength - removed).addingReportingOverflow(replacements)
-        guard !projected.overflow, projected.partialValue <= min(SizePolicy.standard.reviewText, policy.maximumResultBytes) else {
+        guard !projected.overflow, projected.partialValue <= policy.maximumResultBytes else {
             throw ReviewRejection.budgetExceeded
         }
         try add(currentByteLength, to: &work, limit: policy.maximumWork)
