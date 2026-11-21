@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
@@ -7,10 +10,7 @@ import AppKit
 /// Only interactive opens ask. `TextDocument.read(from:ofType:)` and every caller that
 /// opens without a person watching still get the error and never a modal.
 enum EncodingChoice {
-    static let titles: [(FileEncoding, String)] = [
-        (.utf8, "UTF-8"), (.utf16LE, "UTF-16 LE"), (.utf16BE, "UTF-16 BE"), (.windows1252, "Windows-1252"),
-        (.latin1, "ISO-8859-1")
-    ]
+    static let titles: [(FileEncoding, String)] = FileEncoding.allCases.map { ($0, $0.displayName) }
     /// The decode failure inside `error`, if that is what it is. AppKit may hand back the
     /// thrown error wrapped, so the underlying errors are searched as well.
     static func codecError(in error: Error) -> FileCodecError? {
@@ -20,7 +20,7 @@ enum EncodingChoice {
             if let failure = candidate as? FileCodecError {
                 switch failure {
                 case .invalidBytes, .unsupportedUTF32: return failure
-                case .unrepresentable, .unsupportedBOM: return nil
+                case .unrepresentable, .unsupportedBOM, .invalidConversionTarget: return nil
                 }
             }
             current = (candidate as NSError).userInfo[NSUnderlyingErrorKey] as? Error
@@ -41,7 +41,7 @@ enum EncodingChoice {
         if failed == preferred { preferred = .latin1 }
         return (encodings, preferred)
     }
-    static func popUp(after error: Error) -> NSPopUpButton {
+    @MainActor static func popUp(after error: Error) -> NSPopUpButton {
         let choice = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 260, height: 28))
         let offer = offered(after: error)
         for (encoding, title) in titles where offer.encodings.contains(encoding) {
@@ -53,11 +53,11 @@ enum EncodingChoice {
         choice.identifier = .init("open.encoding")
         return choice
     }
-    static func selection(of choice: NSPopUpButton) -> FileEncoding? {
+    @MainActor static func selection(of choice: NSPopUpButton) -> FileEncoding? {
         (choice.selectedItem?.representedObject as? String).flatMap(FileEncoding.init(rawValue:))
     }
     /// The chooser itself. Returns nil when the person cancels.
-    static func present(_ url: URL, _ failure: Error) -> FileEncoding? {
+    @MainActor static func present(_ url: URL, _ failure: Error) -> FileEncoding? {
         let alert = TTAlert()
         alert.messageText = "Choose an encoding for “\(url.lastPathComponent)”"
         alert.informativeText =
@@ -66,13 +66,13 @@ enum EncodingChoice {
         let choice = popUp(after: failure)
         alert.accessoryView = choice
         alert.addButton(withTitle: "Open")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         return selection(of: choice)
     }
     /// Asks until an encoding decodes the file or the person cancels (nil). An error that is
     /// not a decode failure is thrown as it is, without asking.
-    static func retry(
+    @MainActor static func retry(
         _ url: URL, after failure: Error, choose: (URL, Error) -> FileEncoding?,
         open: (FileEncoding) throws -> TextDocument
     ) throws -> TextDocument? {
@@ -90,9 +90,34 @@ enum EncodingChoice {
 /// the stock controller cannot do there. Create it before anything touches
 /// `NSDocumentController.shared`.
 final class TextDocumentController: NSDocumentController {
-    var chooseEncoding: (URL, Error) -> FileEncoding? = EncodingChoice.present
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if CompareCommandScope.blocksWorkspace,
+            [#selector(openDocument(_:)), #selector(newDocument(_:)), #selector(saveAllDocuments(_:))].contains(
+                item.action)
+        {
+            return false
+        }
+        return super.validateUserInterfaceItem(item)
+    }
+    override func openDocument(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        super.openDocument(sender)
+    }
+    override func newDocument(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        super.newDocument(sender)
+    }
+    override func saveAllDocuments(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        super.saveAllDocuments(sender)
+    }
+    override func addDocument(_ document: NSDocument) {
+        super.addDocument(document)
+        (document as? TextDocument)?.makeWindowControllers()
+    }
+    var chooseEncoding: @MainActor (URL, Error) -> FileEncoding? = EncodingChoice.present
     /// A session snapshot is restored through its own review prompt, never opened as editable JSON.
-    var openSessionFile: (URL) -> Void = { url in (NSApp.delegate as? AppDelegate)?.workspace.openSession(at: url) }
+    var openSessionFile: (URL) -> Void = { url in EditorServices.current?.openSessionFile(url) }
     override func openDocument(
         withContentsOf url: URL, display displayDocument: Bool,
         completionHandler: @escaping (NSDocument?, Bool, Error?) -> Void
@@ -103,16 +128,41 @@ final class TextDocumentController: NSDocumentController {
             completionHandler(nil, false, CocoaError(.userCancelled))
             return
         }
-        super.openDocument(withContentsOf: url, display: displayDocument) { [weak self] document, alreadyOpen, error in
-            guard let self else {
-                completionHandler(document, alreadyOpen, error)
+        let delivery = OpenDelivery(self, url: url, display: displayDocument, completion: completionHandler)
+        super.openDocument(withContentsOf: url, display: displayDocument) { document, alreadyOpen, error in
+            delivery.receive(document, alreadyOpen, error)
+        }
+    }
+    /// The framework completion transports this actor-owned callback; it never weak-loads the
+    /// UI controller on a worker. Alive owners retain the original main-direct/Dispatch.main
+    /// ordering. Released owners also deliver on main so caller UI captures stay actor-owned.
+    @MainActor final class OpenDelivery {
+        private weak var controller: TextDocumentController?
+        private let url: URL, display: Bool
+        private let completion: (NSDocument?, Bool, Error?) -> Void
+        init(
+            _ controller: TextDocumentController?, url: URL, display: Bool,
+            completion: @escaping (NSDocument?, Bool, Error?) -> Void
+        ) {
+            self.controller = controller
+            self.url = url
+            self.display = display
+            self.completion = completion
+        }
+        nonisolated func receive(_ document: NSDocument?, _ alreadyOpen: Bool, _ error: Error?) {
+            let finish: @MainActor @Sendable () -> Void = { self.finish(document, alreadyOpen, error) }
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { finish() }
+            } else {
+                DispatchQueue.main.async(execute: finish)
+            }
+        }
+        private func finish(_ document: NSDocument?, _ alreadyOpen: Bool, _ error: Error?) {
+            guard let controller else {
+                completion(document, alreadyOpen, error)
                 return
             }
-            let finish = {
-                self.finishOpen(
-                    url, display: displayDocument, document, alreadyOpen, error, completionHandler: completionHandler)
-            }
-            if Thread.isMainThread { finish() } else { DispatchQueue.main.async(execute: finish) }
+            controller.finishOpen(url, display: display, document, alreadyOpen, error, completionHandler: completion)
         }
     }
     /// What happens to the stock open's answer. Only a displayed open that failed to decode is

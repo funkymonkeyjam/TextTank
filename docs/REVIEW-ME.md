@@ -4,19 +4,21 @@ Native Swift/AppKit, Scintilla Cocoa and Lexilla editor with Carbon Caret brandi
 
 Repository: https://github.com/funkymonkeyjam/TextTank
 
-Unmerged PR: https://github.com/funkymonkeyjam/TextTank/pull/1
+Identify the candidate by its source commit/tree and validation record, rather than by a branch or an older review. A work-branch checkout may include changes not yet merged to `main`.
+
+Interface rules: [DESIGN-STANDARDS.md](DESIGN-STANDARDS.md).
 
 ## Run
 
-From the repository root:
+First create a clean, committed review package with `scripts/build.sh`, `scripts/test.sh` and `scripts/package-review.sh` (the commands below). Then, from the repository root:
 
 ```sh
 ./scripts/launch-review.sh
 ```
 
-This launches `output/review/TextTank-review.zip` after extraction to a temporary directory outside synced storage. The package also contains `Launch-TextTank.command`, the application, source/dependency archives, licenses and hashes. `output/review/manifest.json` identifies the packaged commit/tree and archive; `validation.json` records observed tests and exact remote CI. Read those candidate-specific records instead of inferring results from an older run.
+This verifies the archive against `SHA256SUMS`, then launches `output/review/TextTank-review.zip` after extraction to a temporary directory outside synced storage. The launch command waits for the application to exit and removes that temporary copy afterward; if its wait is interrupted, it keeps the potentially running copy and prints its location. The package also contains `Launch-TextTank.command`, the application, source/dependency archives, licenses and hashes. `output/review/manifest.json` identifies the packaged commit/tree and archive; `validation.json` records observed tests and labels any manually supplied CI metadata as self-reported; it never treats that metadata as verified remote CI. Read those candidate-specific records instead of inferring results from an older run.
 
-Rebuild and test on an arm64 Mac with Xcode:
+From an arm64 source checkout with Xcode and Python 3.9 or newer, build before running native suites:
 
 ```sh
 ./scripts/build.sh
@@ -37,6 +39,8 @@ To package a committed clean source tree:
 (cd output/review && shasum -a 256 -c SHA256SUMS)
 ```
 
+Build identity is shared by `scripts/env.sh`, the dependency lock and the generator. `CONFIGURATION=Debug` is the default; set `CONFIGURATION=Release` for **each** build, test, performance and package command to exercise the independent optimized engine/app outputs. Only arm64 is supported by this build workflow. Debug and Release Lexilla sources/objects and Scintilla outputs are isolated under `build/vendor/<configuration>/`; changing the configuration cannot reuse the other configuration's objects.
+
 The minimum deployment target remains macOS 14. Local testing used the current arm64 host; a deployment target is not macOS 14 runtime evidence. Ad-hoc signing is for local review and is not notarized public distribution. Initial pinned dependency downloads need network access; ordinary editing and deterministic automations do not need an account or paid service.
 
 ## Low-code automation rules
@@ -51,10 +55,10 @@ Use synthetic scratch files, not personal documents.
 2. **Search:** use Search → Find and Replace. Select Normal, Extended or Regular expression (Boost); test `([a-z]+)=(\d+)` → `$1:$2`, count/results, selection/current/all-open scopes and Undo. Folder search supports explicit saved workspace roots, include/exclude filters and skipped/partial outcomes. Disk replacement is separately confirmed, skips open documents, makes private recovery copies/reports, and reports each file; it is not atomic across files.
 3. **Languages:** choose Python, paste a class with a function, open Function List and double-click the symbol. Try keyword completion, syntax font/color settings and synthetic UDL XML import/edit/export. A real ported LexUser handles tested keyword/comment/delimiter cases; complete language/UDL/API semantics are still open.
 4. **Workspace:** open the document/folder/recent browser, save/reopen a session snapshot, and explicitly enable Monitor Current File. Monitoring reports changes without replacing editor text. Reload remains explicit and protects dirty buffers. Printing uses a detached representation rather than a second editable model.
-5. **Macros and automations:** record a named editing/search macro, play it and Undo. Test repeat/Stop. Create or rename a workflow, edit/reorder processing steps, choose runtime parameters, and verify labels follow its saved name. Import/open/restore never executes a shell command or connector output.
-6. **Recipe:** paste the complete ingredient section. Click the existing named cleanup button: it transforms the same editor and one Undo restores the original. The separate Add to Reminders action still requires choosing/reviewing a destination and explicit Send. **The user confirmed a successful live ingredient transfer.** Additional tests in this run use injected stores; they do not establish live revocation/deleted-list/partial-write behavior. Do not use a personal list for fault tests.
+5. **Macros and automations:** record a named editing/search macro, play it and Undo. Test repeat/Stop. Create or rename an automation, edit/reorder its rules, choose runtime parameters, and verify labels follow its saved name. Import/open/restore never executes a shell command or connector output.
+6. **Recipe:** paste the complete ingredient section. Choose the saved cleanup automation from the Automations menu or toolbar dropdown: editor output transforms the same document and one Undo restores the original. The toolbar has one Automations drop-down, without individual automation buttons. Favorites are ordered first in that drop-down and editor context menu; the menu bar uses stored order. Customize the standard toolbar from View; New, Open, Save, Find and Clone use the same actions as their menu commands. Click Clone again to return from the split view to one pane. The separate Add to Reminders action still requires choosing/reviewing a destination and explicit Send. **The user confirmed a successful live ingredient transfer.** Additional tests in this run use injected stores; they do not establish live revocation/deleted-list/partial-write behavior. Do not use a personal list for fault tests.
 7. **Utilities and Run:** try Base64/URL/quoted-printable/hex/number conversions and styled HTML/RTF export. Add the sample text extension under Run, invoke it on synthetic text, inspect the preview and explicitly Apply. Argv stays separate unless intentional shell mode is configured. Run cancellation/output limits and stale preview guards have focused tests; see `EXTENSIONS-AND-RUN.md`.
-8. **Settings and closing:** change a nonconflicting shortcut/font setting, restart and check persistence. Exercise dirty close and Quit Save/Discard/Cancel with scratch documents. Earlier Quit-crash repairs and detached-controller regression tests remain in place; the complete physical dialog matrix is not certified by automated tests alone.
+8. **Settings and closing:** change a nonconflicting shortcut or indentation setting in Settings, restart and check persistence. The shortcut picker shows the selected command’s current key, keeps edits when switching commands, and Clear Custom Shortcut removes that override. Clearing Duplicate Line restores Command-D; Reset Defaults resets all settings. Invalid saved shortcut entries are listed separately while other settings remain usable; only an explicit Save repairs them and retains the original settings file beside the repaired one. Per-language font name/size are edited in Language Profiles. Status-bar text size is per-view zoom and is not persisted. Exercise dirty close and Quit Save/Discard/Cancel with scratch documents. Earlier Quit-crash repairs and detached-controller regression tests remain in place; the complete physical dialog matrix is not certified by automated tests alone.
 
 ## Where things are
 
@@ -80,7 +84,9 @@ A short inventory of features that the walkthrough above does not name, and of w
 
 ## Evidence and repaired findings
 
-The detailed records are in `harness/reviews/` and `docs/parity/implementation-evidence.json`. Observed suite results are bound to source hashes in ignored logs and the delivered validation record. The native walkthrough observed Unicode save, actual Boost replacement, Python rendering, symbol navigation and native step-editor controls.
+Use the exact candidate's `validation.json` and `Evidence/full-acceptance.log` when reviewing a package. In a source checkout the current local records are ignored under `harness/logs/`. Clean start/end source trees and the acceptance-log SHA-256 bind the record; native exit-zero runs without their completion summary are failures. Exported diagnostics normalize known local paths while retaining original/public log hashes. Packaging refuses dirty, mismatched or unrooted source evidence and invalid signed artifacts. A successful build's signature check is immediate; later file-provider metadata or analysis tools can change the on-disk bundle, so package-time verification is required.
+
+The [compact requirement matrix and dated source/check mappings](parity/README.md) replace the stale incremental evidence ledger. [Historical provenance](research/README.md) distinguishes source observations, earlier user-reported runtime observations and current candidate acceptance. Earlier walkthroughs do not certify this candidate's GUI behavior.
 
 Independent reviews found and repaired default shortcut collisions, canonical-Unicode duplicate-line loss, invalid-surrogate regex replacement, shared AppKit field-editor confusion, detached/stale extension application, an old preview applying a newer result, leading-FEFF output loss, corrupt workspace settings overwrite, and discarded folder-replacement outcomes. Additional scope/indicator changes require their own final results rather than inheriting those passes.
 
@@ -91,9 +97,9 @@ Synthetic native performance checks covered 1/10/100 MiB loading, literal find, 
 - Reference normalization retains every seed plus discovered dialog/language surfaces, but is not a fully verified behavioral denominator. Official release metadata/hash is recorded; downloaded binary bytes and source/release differences remain unresolved. The same version label covers different source commits.
 - Complete encoding/code-page choices, coordinated save fault/race coverage, metadata/recovery/dirty-clone lifetime combinations, monitoring/tail-follow and every tab/window/session variant remain open.
 - Search still needs full Windows reference differential tests, uncommon wildcard/locale/word-boundary behavior, true project-file membership, every history/mark/dialog option and broad pathological/performance coverage. A noncooperating external writer can race a final per-file compare/rename; recovery reports do not constitute an automatic recovery UI.
-- Advanced editor command variants, full macro command coverage, document-map behavior, all preference/shortcut/context/toolbar customization and localization remain incomplete.
+- Advanced editor command variants, full macro command coverage, document-map behavior, all preference/shortcut/context customization, reference toolbar variants and localization remain incomplete. Native toolbar arrangement customization is implemented; running-app customization and VoiceOver tasks remain unverified.
 - Imported language configurations are not full semantic tests. Objective-C and internal SearchResult-specific patched lexer factories are not supplied by stock Lexilla. Complex embedded/substyle/UDL nesting/folding/number/lifetime behavior, API-signature completion/call tips and upstream function-list XML semantics remain incomplete or unverified.
-- The version 1 text-extension interface is a tested Mac equivalent for explicit text transforms, not the entire Notepad++ plugin event/message ecosystem. Utility reference malformed/binary/options semantics have documented differences in `docs/research/utility-audit.md`.
+- The version 1 text-extension interface is a tested Mac equivalent for explicit text transforms, not the entire Notepad++ plugin event/message ecosystem. Utility reference malformed/binary/options semantics have documented differences in [the utility notes](research/utility-audit.md).
 - Live connector failure/retry verification needs a designated scratch Reminders list. User-confirmed success closes only that observed happy path. IME/dead keys, VoiceOver, complete keyboard/light/dark/high-contrast checks and actual macOS 14/Intel runtimes remain unverified.
 
-No merge, tagged release, public-release certification or full-parity claim is implied.
+This walkthrough and local checks do not imply a merge, tagged release, public-release certification or full-parity claim. Running-app GUI, VoiceOver and real connector failure scenarios still need explicitly authorized observation.

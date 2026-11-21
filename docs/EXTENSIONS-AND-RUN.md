@@ -14,7 +14,7 @@ Version 1 text extensions receive UTF-8 selected text, or the document when no s
 
 The included sample uses the system `/usr/bin/tr a-z A-Z` to uppercase ASCII. It is an actual process/stdio integration, not a Unicode case-conversion promise. The user can save the sample from Run and invoke it on synthetic text. Windows DLL binary compatibility and the complete Notepad++ plugin message/event API are not implemented by this limited interface.
 
-Runs use an isolated process group, 4 MiB input/output bounds and a 30-second default timeout. Cancel signals that group, escalates termination, closes bounded nonblocking pipe readers and leaves document contents unchanged. Descendants are cleaned up when the scoped run finishes, including those that redirect output; daemonization is not a supported run mode. Cleanup is by process group: a descendant that leaves the group with `setsid()` or `setpgid()` is not reached and keeps running.
+Runs use an isolated process group, 4 MiB input/output bounds and a fixed 30-second timeout. Cancel signals that group, escalates termination, closes bounded nonblocking pipe readers and leaves document contents unchanged. Descendants are cleaned up when the scoped run finishes, including those that redirect output; daemonization is not a supported run mode. Cleanup is by process group: a descendant that leaves the group with `setsid()` or `setpgid()` is not reached and keeps running.
 
 Quitting TextTank stops a command that is still running: once the quit is committed (after any unsaved-documents review), the group is signalled as for Cancel and TextTank waits up to one second for it to go. A crash or a forced quit cannot do this.
 

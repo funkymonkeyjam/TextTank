@@ -10,4 +10,4 @@ TextTank project code is GPL-3.0-or-later. LICENSE retains the upstream Notepad+
 - Apple system zlib: used through the platform SDK for bounded raw-deflate SAML decoding; no zlib binary is redistributed.
 - Carbon Caret wordmark uses outlined Space Grotesk; font notices are retained under Resources/Brand.
 
-Dependency source URLs, versions and archive SHA-256 values are in Dependencies.lock.json. The local review package includes exact dependency source archives and a corresponding project source archive. No Apple frameworks are redistributed outside the platform-provided runtime.
+Dependency archive URLs/versions/SHA-256 values and the in-tree Boost/LexUser provenance registry are in Dependencies.lock.json; their per-file source/port hashes remain in the cited PROVENANCE.json files. The local review package includes exact dependency source archives and a corresponding project source archive. No Apple frameworks are redistributed outside the platform-provided runtime.

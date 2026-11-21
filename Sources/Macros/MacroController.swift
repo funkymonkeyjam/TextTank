@@ -1,17 +1,30 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import Darwin
 
-final class MacroController: NSObject, NSMenuDelegate {
+@MainActor final class MacroController: NSObject, NSMenuDelegate {
     private let editorProvider: () -> TTEditor?
     private var library = MacroLibrary(macros: [])
     private let storage: URL
-    private var loadingError: Error?
-    private var recordingEditor: TTEditor?
+    let loadState: StoreLoadState
+    private(set) var loadingError: Error? {
+        get { loadState.error }
+        set { loadState.error = newValue }
+    }
+    private var recordingEditor: TTEditor? {
+        didSet {
+            manager?.refresh()
+            namePanel?.setActionEnabled("macro.save.confirm", recordingEditor == nil)
+        }
+    }
     private var recorded: [RecordedMacro.Step] = []
     private var lastRecording: RecordedMacro?
     private var captureError: Error?
-    private var playing = false
+    private var playing = false { didSet { manager?.refresh() } }
+    private var playbackCancelled = false
     /// Called once, at the moment a recording becomes unsaveable, with the reason (F67).
     var onInvalidated: ((String) -> Void)?
     /// Why the recording in progress can no longer be saved; nil while it is still good.
@@ -20,18 +33,13 @@ final class MacroController: NSObject, NSMenuDelegate {
     private lazy var macroMenu = NSMenu(title: "Macros")
     init(editorProvider: @escaping () -> TTEditor?) {
         self.editorProvider = editorProvider
-        let base =
-            ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"].map {
-                URL(fileURLWithPath: $0, isDirectory: true)
-            }
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TextTank", isDirectory: true)
-        storage = base.appendingPathComponent("Macros.json")
+        storage = AppStorage.url(.macros)
+        loadState = StoreLoadState(url: storage, displayName: "Saved macros")
         super.init()
         macroMenu.delegate = self
-        if FileManager.default.fileExists(atPath: storage.path) {
-            do { library = try MacroLibrary.decode(Data(contentsOf: storage)) } catch { loadingError = error }
-        }
+        do {
+            library = try MacroLibrary.decode(PrivateFileStore.read(storage, maximumBytes: MacroLibrary.maximumBytes))
+        } catch  where error.isFileNotFound {} catch { loadingError = error }
     }
     func menu() -> NSMenu {
         rebuild()
@@ -46,23 +54,26 @@ final class MacroController: NSObject, NSMenuDelegate {
     private func rebuild() {
         macroMenu.removeAllItems()
         macroMenu.autoenablesItems = false
-        func item(_ title: String, _ action: Selector, _ enabled: Bool = true, _ id: String? = nil) {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            item.isEnabled = enabled
-            item.representedObject = id
-            macroMenu.addItem(item)
-        }
-        item("Start Recording", #selector(startRecording), recordingEditor == nil && !playing)
-        item(
-            discardReason == nil ? "Stop Recording" : "Stop Recording (Already Discarded)", #selector(stopRecording),
-            recordingEditor != nil)
-        item("Play Last Recording…", #selector(playLast), lastRecording != nil && recordingEditor == nil && !playing)
-        item("Save Last Recording…", #selector(saveLast), lastRecording != nil && recordingEditor == nil)
-        item("Manage Saved Macros…", #selector(manage), recordingEditor == nil && !playing)
+        macroMenu.addItem(
+            title: "Start Recording", action: #selector(startRecording), target: self,
+            isEnabled: recordingEditor == nil && !playing)
+        macroMenu.addItem(
+            title: discardReason == nil ? "Stop Recording" : "Stop Recording (Already Discarded)",
+            action: #selector(stopRecording), target: self, isEnabled: recordingEditor != nil)
+        macroMenu.addItem(
+            title: "Play Last Recording…", action: #selector(playLast), target: self,
+            isEnabled: lastRecording != nil && recordingEditor == nil && !playing)
+        macroMenu.addItem(
+            title: "Save Last Recording…", action: #selector(saveLast), target: self,
+            isEnabled: lastRecording != nil && recordingEditor == nil)
+        macroMenu.addItem(
+            title: "Manage Saved Macros…", action: #selector(manage), target: self,
+            isEnabled: recordingEditor == nil && !playing)
         if !library.macros.isEmpty { macroMenu.addItem(.separator()) }
         for macro in library.macros {
-            item(macro.name, #selector(playSaved(_:)), recordingEditor == nil && !playing, macro.id.uuidString)
+            macroMenu.addItem(
+                title: macro.name, action: #selector(playSaved(_:)), target: self,
+                representedObject: macro.id.uuidString, isEnabled: recordingEditor == nil && !playing)
         }
     }
     @objc func startRecording() {
@@ -74,17 +85,28 @@ final class MacroController: NSObject, NSMenuDelegate {
         editor.onMacroStep = { [weak self, weak editor] raw in
             guard let self, let editor, self.recordingEditor === editor, !self.playing else { return }
             do {
-                // The bridge reports what it cannot replay; the name is for the person. This kind is
-                // never a Step.Kind, so it cannot arrive through an imported file.
-                if raw["kind"] as? String == "unsupported" {
-                    let name =
-                        raw["name"] as? String ?? "An editing action (Scintilla message \(raw["message"] ?? "unknown"))"
+                let step: RecordedMacro.Step
+                switch raw.kind {
+                case .unsupported:
+                    let name = raw.name ?? "An editing action (Scintilla message \(raw.message))"
                     throw MacroError.invalid("\(name) is not recordable yet. No partial macro will be saved.")
+                case .insertText:
+                    guard let text = raw.text else {
+                        throw MacroError.invalid("Text macro step has invalid parameters.")
+                    }
+                    step = .insertText(text)
+                case .command:
+                    guard let command = raw.command else {
+                        throw MacroError.invalid("Unrecognized or unsafe macro command.")
+                    }
+                    step = .command(command.rawValue)
+                @unknown default: throw MacroError.invalid("Unrecognized captured editing action.")
                 }
-                let data = try JSONSerialization.data(withJSONObject: raw)
-                let step = try JSONDecoder().decode(RecordedMacro.Step.self, from: data)
                 try step.validate()
-                guard self.recorded.count < 10000 else { throw MacroError.invalid("Recording exceeded 10000 steps.") }
+                guard self.recorded.count < MacroLimits.recordedActions else {
+                    throw MacroError.invalid(
+                        "Recording exceeded \(Strings.number(MacroLimits.recordedActions)) actions.")
+                }
                 self.recorded.append(step)
             } catch {
                 self.discard(error, editor: editor)
@@ -130,18 +152,20 @@ final class MacroController: NSObject, NSMenuDelegate {
     /// `editor` is any view of the document being reloaded or closed. The recording may have been
     /// started in another view of that document, so this compares documents, unlike the focus
     /// rule in editorDidFocus, which is deliberately per view.
+    func editorWillRetire(_ editor: TTEditor) {
+        if recordingEditor === editor { invalidateRecording(reason: "The recording view was closed.") }
+    }
     func editorWillReset(_ editor: TTEditor, reason: String) {
         if let recordingEditor, recordingEditor.sharesDocument(with: editor) { invalidateRecording(reason: reason) }
     }
     func willExecuteCommand(_ command: String, on editor: TTEditor) {
         guard recordingEditor != nil else { return }
         editorDidFocus(editor)
-        let viewOnly: Set<String> = [
-            "zoomIn", "zoomOut", "foldAll", "unfoldAll", "showWhitespace", "toggleEOL", "toggleLineNumbers"
-        ]
+        let viewOnly = EditorCommand.viewOnlyIdentifiers
         if !RecordedMacro.Step.commands.contains(command) && !viewOnly.contains(command) {
+            let title = EditorCommand(rawValue: command)?.title ?? "Unavailable command"
             invalidateRecording(
-                reason: "The command ‘\(command)’ is not recordable yet. No partial macro will be saved.")
+                reason: "The command ‘\(title)’ is not recordable yet. No partial macro will be saved.")
         }
     }
     /// Testable finish path used by the Stop menu. Invalidations are errors, never partial success.
@@ -160,20 +184,10 @@ final class MacroController: NSObject, NSMenuDelegate {
         return macro
     }
     @objc func stopRecording() {
-        do { _ = try finishRecording() } catch { showError(error) }
-    }
-    /// Root calls only after application-layer literal find; parameters are captured, not read at playback.
-    /// A find that did not match changed nothing and would stop playback, so it is left out (F68).
-    func recordFind(text: String, matchCase: Bool, backwards: Bool, matched: Bool, editor: TTEditor) {
-        guard matched else { return }
-        append(.init(kind: .findLiteral, text: text, matchCase: matchCase, backwards: backwards), editor: editor)
+        do { _ = try finishRecording() } catch { TTAlert.present(error) }
     }
     func recordSearch(_ search: RecordedMacro.Search, editor: TTEditor) {
-        append(.init(kind: .search, search: search), editor: editor)
-    }
-    /// The bridge's target-based replaceSelection is not SCN_MACRORECORD text input.
-    func recordReplace(text: String, editor: TTEditor) {
-        append(.init(kind: .replaceSelection, text: text), editor: editor)
+        append(.search(search), editor: editor)
     }
     private func append(_ step: RecordedMacro.Step, editor: TTEditor) {
         guard recordingEditor != nil, !playing, captureError == nil else { return }
@@ -185,7 +199,9 @@ final class MacroController: NSObject, NSMenuDelegate {
         }
         do {
             try step.validate()
-            guard recorded.count < 10000 else { throw MacroError.invalid("Recording exceeded 10000 steps.") }
+            guard recorded.count < MacroLimits.recordedActions else {
+                throw MacroError.invalid("Recording exceeded \(Strings.number(MacroLimits.recordedActions)) actions.")
+            }
             recorded.append(step)
         } catch {
             discard(error, editor: editor)
@@ -212,7 +228,7 @@ final class MacroController: NSObject, NSMenuDelegate {
             guard let target = try playbackEditor() else { return }
             editor = target
         } catch {
-            showError(error)
+            TTAlert.present(error)
             return
         }
         let revision = editor.revision
@@ -221,10 +237,13 @@ final class MacroController: NSObject, NSMenuDelegate {
         let alert = TTAlert()
         alert.messageText = "Play \(macro.name)"
         alert.informativeText =
-            "Repeat count (1–10000). Playback changes the captured editor as one Undo group. Find steps (literal find and Find-window Next or Previous) stop the macro on no match; earlier edits remain undoable. Replace All with no matches is skipped. Clipboard commands operate on the current clipboard. No shell or external workflow runs."
+            "Repeat count (1–\(Strings.number(MacroLimits.repeatCount))). Playback changes the captured editor as one Undo group. Find steps (literal find and Find-window Next or Previous) stop the macro on no match; earlier edits remain undoable. Replace All with no matches is skipped. Clipboard commands operate on the current clipboard. No shell command or automation runs."
         alert.addButton(withTitle: "Play").identifier = NSUserInterfaceItemIdentifier("macro.play.confirm")
-        alert.addButton(withTitle: "Cancel").identifier = NSUserInterfaceItemIdentifier("macro.play.cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel).identifier = NSUserInterfaceItemIdentifier(
+            "macro.play.cancel")
         let count = NSTextField(string: "1")
+        count.setAccessibilityLabel("Macro repeat count")
+        NumericInput.configure(count)
         count.frame = NSRect(x: 0, y: 0, width: 200, height: 24)
         count.identifier = NSUserInterfaceItemIdentifier("macro.play.count")
         let untilEnd = NSButton(checkboxWithTitle: "Repeat until end of document", target: nil, action: nil)
@@ -237,13 +256,16 @@ final class MacroController: NSObject, NSMenuDelegate {
             guard editor.revision == revision, editor.selectionStart == selectionStart,
                 editor.selectionEnd == selectionEnd
             else { throw MacroError.invalid("The editor changed while choosing playback. Run the macro again.") }
-            guard let repeats = Int(count.stringValue), repeats > 0, repeats <= 10000,
-                macro.steps.count <= 100000 / repeats
-            else { throw MacroError.invalid("Choose a valid count; at most 100000 total steps per invocation.") }
+            guard let repeats = NumericInput.integer(count), repeats > 0, repeats <= MacroLimits.repeatCount,
+                macro.steps.count <= MacroLimits.playbackActions / repeats
+            else {
+                throw MacroError.invalid(
+                    "Choose a valid count; at most \(Strings.number(MacroLimits.playbackActions)) total actions per invocation."
+                )
+            }
             try playInteractively(macro, on: editor, repeats: repeats, untilEnd: untilEnd.state == .on)
-        } catch { showError(error) }
+        } catch { TTAlert.present(error) }
     }
-    private var playbackCancelled = false
     @objc private func cancelPlayback() { playbackCancelled = true }
     private func playInteractively(_ macro: RecordedMacro, on editor: TTEditor, repeats: Int, untilEnd: Bool) throws {
         guard !playing, recordingEditor == nil else { throw MacroError.invalid("Macro playback is unavailable.") }
@@ -269,24 +291,25 @@ final class MacroController: NSObject, NSMenuDelegate {
         stop.frame = NSRect(x: 310, y: 20, width: 110, height: 30)
         panel.contentView?.addSubview(status)
         panel.contentView?.addSubview(stop)
-        var failure: Error?
+        let outcome = MacroPlaybackOutcome()
         let timer = Timer(timeInterval: 0.005, repeats: true) { [weak self] timer in
-            guard let self else {
-                timer.invalidate()
-                NSApp.stopModal()
-                return
-            }
-            do {
-                let finished = try session.advance(budget: 50, shouldCancel: { self.playbackCancelled })
-                status.stringValue = "Played \(session.performed) steps. Stop preserves one Undo."
-                if finished {
-                    timer.invalidate()
-                    NSApp.stopModal()
+            precondition(Thread.isMainThread)
+            let shouldStop = MainActor.assumeIsolated {
+                guard let self else { return true }
+                do {
+                    let finished = try session.advance(budget: 50, shouldCancel: { self.playbackCancelled })
+                    status.stringValue = "Played \(session.performed) steps. Stop preserves one Undo."
+                    return finished
+                } catch {
+                    outcome.failure = error
+                    return true
                 }
-            } catch {
-                failure = error
+            }
+            if shouldStop {
+                // Foundation's callback timer stays on this synchronous main entry. Publish
+                // outcome first, then invalidate before stopModal in this same timer turn.
                 timer.invalidate()
-                NSApp.stopModal()
+                MainActor.assumeIsolated { NSApp.stopModal() }
             }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
@@ -294,7 +317,7 @@ final class MacroController: NSObject, NSMenuDelegate {
         NSApp.runModal(for: panel)
         timer.invalidate()
         panel.orderOut(nil)
-        if let failure { throw failure }
+        if let failure = outcome.failure { throw failure }
     }
     func play(
         _ macro: RecordedMacro, on editor: TTEditor, repeats: Int = 1, untilEnd: Bool = false,
@@ -312,122 +335,173 @@ final class MacroController: NSObject, NSMenuDelegate {
         }
         while try !session.advance(budget: 100, shouldCancel: shouldCancel) {}
     }
+    private var namePanel: FormPanel?
     @objc private func saveLast() {
-        guard var macro = lastRecording, loadingError == nil else {
-            if let loadingError { showError(loadingError) }
+        if let namePanel {
+            namePanel.window.makeKeyAndOrderFront(nil)
             return
         }
-        let alert = TTAlert()
-        alert.messageText = "Name Recorded Macro"
-        alert.addButton(withTitle: "Save").identifier = NSUserInterfaceItemIdentifier("macro.save.confirm")
-        alert.addButton(withTitle: "Cancel").identifier = NSUserInterfaceItemIdentifier("macro.save.cancel")
-        let name = NSTextField(string: macro.name)
-        name.frame = NSRect(x: 0, y: 0, width: 400, height: 24)
-        name.identifier = NSUserInterfaceItemIdentifier("macro.save.name")
-        alert.accessoryView = name
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard let recorded = lastRecording, recordingEditor == nil else { return }
         do {
-            macro.name = name.stringValue
-            var proposed = library
-            if let i = proposed.macros.firstIndex(where: { $0.id == macro.id }) {
-                proposed.macros[i] = macro
-            } else {
-                proposed.macros.append(macro)
-            }
-            try persist(proposed)
-            lastRecording = macro
-        } catch { showError(error) }
+            guard try StoreRecovery.ensureWritable(loadState) else { return }
+            let baseline = try SavedConfiguration.bytes(library)
+            let recordingBaseline = try SavedConfiguration.bytes(lastRecording)
+            let form = FormPanel(
+                title: "Name Recorded Macro", identifier: "macro.save", size: NSSize(width: 540, height: 300))
+            namePanel = form
+            form.retainPresentationOwner(self)
+            form.onClose = { [weak self] in self?.namePanel = nil }
+            let name = form.field("Macro name", value: recorded.name, identifier: "macro.save.name")
+            form.button("Save", identifier: "macro.save.confirm") { [weak self] in
+                guard let self, form.commitEditing() else { return }
+                do {
+                    guard self.recordingEditor == nil else { throw FormFailure.busy }
+                    var macro = recorded
+                    macro.name = name.stringValue
+                    var proposed = self.library
+                    if let i = proposed.macros.firstIndex(where: { $0.id == macro.id }) {
+                        proposed.macros[i] = macro
+                    } else {
+                        proposed.macros.append(macro)
+                    }
+                    try proposed.validate()
+                    try SavedConfiguration.requireUnchanged(self.library, since: baseline)
+                    try SavedConfiguration.requireUnchanged(self.lastRecording, since: recordingBaseline)
+                    guard try StoreRecovery.ensureWritable(self.loadState) else { return }
+                    try SavedConfiguration.requireUnchanged(self.library, since: baseline)
+                    try SavedConfiguration.requireUnchanged(self.lastRecording, since: recordingBaseline)
+                    try self.persist(proposed)
+                    self.lastRecording = macro
+                    form.close()
+                } catch { form.showValidation(error, field: name) }
+            }.keyEquivalent = "\r"
+            form.button("Cancel", identifier: "macro.save.cancel", cancel: true) { form.close() }
+            form.window.initialFirstResponder = name
+            form.show()
+        } catch { TTAlert.present(error) }
     }
+    var jsonFilePanels = JSONLibraryEditor.FilePanels.standard
+    private var manager: LibraryManager?
     @objc private func manage() {
-        guard !playing, recordingEditor == nil else { return }
-        if let loadingError {
-            showError(
-                MacroError.invalid(
-                    "Saved macros could not be loaded and are preserved: \(loadingError.localizedDescription)"))
+        if let manager {
+            manager.form.window.makeKeyAndOrderFront(nil)
             return
         }
-        let alert = TTAlert()
-        alert.messageText = "Manage Saved Macros"
-        alert.informativeText =
-            "Edit names or steps, or remove entries. Preserve id to rename. Only validated text, editor commands and literal find/replace steps are accepted. Saving never executes macros."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Import…")
-        alert.addButton(withTitle: "Export…")
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 650, height: 400))
-        scroll.hasVerticalScroller = true
-        let text = NSTextView(frame: scroll.bounds)
-        text.isRichText = false
-        text.isAutomaticQuoteSubstitutionEnabled = false
-        text.isAutomaticDashSubstitutionEnabled = false
-        text.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        text.autoresizingMask = [.width]
-        text.isVerticallyResizable = true
-        text.textContainer?.widthTracksTextView = true
-        scroll.documentView = text
-        text.string = String(data: (try? library.encoded()) ?? Data(), encoding: .utf8) ?? ""
-        alert.accessoryView = scroll
-        while true {
-            let response = alert.runModal()
-            if response == .alertSecondButtonReturn { return }
-            do {
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
-                    let panel = NSOpenPanel()
-                    panel.allowsMultipleSelection = false
-                    panel.canChooseDirectories = false
-                    if panel.runModal() == .OK, let url = panel.url {
-                        text.string = String(
-                            data: try MacroLibrary.decode(Data(contentsOf: url)).encoded(), encoding: .utf8)!
-                    }
-                    continue
-                }
-                let proposed = try MacroLibrary.decode(Data(text.string.utf8))
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
-                    let panel = NSSavePanel()
-                    panel.nameFieldStringValue = "TextTank-Macros.json"
-                    if panel.runModal() == .OK, let url = panel.url {
-                        try proposed.encoded().write(to: url, options: .atomic)
-                    }
-                    continue
-                }
-                try persist(proposed)
-                return
-            } catch { showError(error) }
-        }
-    }
-    private func persist(_ proposed: MacroLibrary) throws {
-        let data = try proposed.encoded()
-        let directory = storage.deletingLastPathComponent()
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        if FileManager.default.fileExists(atPath: storage.path) {
-            let values = try storage.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
-            guard values.isSymbolicLink != true, values.isRegularFile == true else {
-                throw MacroError.invalid("Macro storage must be a regular file.")
+        guard !playing, recordingEditor == nil else { return }
+        do {
+            guard try StoreRecovery.ensureWritable(loadState) else { return }
+            var working = library
+            let baseline = try SavedConfiguration.bytes(library)
+            let panel = LibraryManager(title: "Saved Macros", identifier: "macro.manager")
+            manager = panel
+            panel.retainController(self)
+            panel.onClose = { [weak self] in self?.manager = nil }
+            panel.rows = { working.macros.map { .init(id: $0.id, name: $0.name) } }
+            panel.canEdit = { [weak self] in self.map { !$0.playing && $0.recordingEditor == nil } ?? false }
+            panel.rename = { id, name in
+                if let index = working.macros.firstIndex(where: { $0.id == id }) { working.macros[index].name = name }
             }
-        }
-        let temporary = directory.appendingPathComponent(".macros-" + UUID().uuidString)
-        let descriptor = open(temporary.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer {
-            try? handle.close()
-            try? FileManager.default.removeItem(at: temporary)
-        }
-        try handle.write(contentsOf: data)
-        try handle.synchronize()
-        try handle.close()
-        guard rename(temporary.path, storage.path) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
+            panel.save = { [weak self, weak panel] in
+                guard let self, !self.playing, self.recordingEditor == nil else { throw FormFailure.busy }
+                for macro in working.macros {
+                    do { try macro.validate() } catch {
+                        panel?.reveal(macro.id)
+                        throw error
+                    }
+                }
+                try working.validate()
+                try SavedConfiguration.requireUnchanged(self.library, since: baseline)
+                guard try StoreRecovery.ensureWritable(self.loadState) else { return false }
+                try SavedConfiguration.requireUnchanged(self.library, since: baseline)
+                try self.persist(working)
+                return true
+            }
+            panel.action("Add…", identifier: "macro.manager.add") { [weak panel] in
+                guard let panel else { return }
+                let form = FormPanel(title: "New Macro", identifier: "macro.new", size: NSSize(width: 620, height: 430))
+                form.note(
+                    "Create a macro that inserts this text. Saving a macro never runs it. Record editing actions from the Macros menu to capture more complex macros."
+                )
+                let name = form.field("Name", value: "My Macro", identifier: "macro.new.name")
+                let text = JSONLibraryEditor.makeTextView(size: NSSize(width: 560, height: 180))
+                ControlPresentation.label("Text inserted by the new macro", control: text.editor)
+                text.editor.identifier = NSUserInterfaceItemIdentifier("macro.new.text")
+                form.add(text.scroll)
+                text.scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
+                form.button("Add Macro", identifier: "macro.new.save") {
+                    guard form.commitEditing() else { return }
+                    do {
+                        guard !text.editor.string.isEmpty else {
+                            throw MacroError.invalid("Enter the text this macro will insert. Nothing has been saved.")
+                        }
+                        let macro = RecordedMacro(
+                            id: UUID(), name: name.stringValue, steps: [.insertText(text.editor.string)])
+                        try macro.validate()
+                        working.macros.append(macro)
+                        form.close()
+                        panel.reload(select: macro.id)
+                    } catch { form.showValidation(error, field: name.stringValue.isEmpty ? name : text.editor) }
+                }
+                form.button("Cancel", identifier: "macro.new.cancel", cancel: true) {
+                    form.close()
+                    panel.refresh()
+                }
+                form.show(parent: panel.form.window)
+            }
+            panel.action("Duplicate", identifier: "macro.manager.duplicate", needsSelection: true) { [weak panel] in
+                guard let panel, let id = panel.selectedID, var copy = working.macros.first(where: { $0.id == id })
+                else { return }
+                copy.id = UUID()
+                working.macros.append(copy)
+                panel.reload(select: copy.id)
+            }
+            panel.action("Delete…", identifier: "macro.manager.delete", needsSelection: true) { [weak panel] in
+                panel?.confirmDelete { id in working.macros.removeAll { $0.id == id } }
+            }
+            panel.secondaryAction("Advanced JSON…", identifier: "macro.manager.advanced") { [weak self, weak panel] in
+                guard let self, let panel, panel.canEdit() else { return }
+                do {
+                    try JSONLibraryEditor.edit(
+                        working,
+                        configuration: .init(
+                            title: "Advanced Macro Configuration",
+                            information:
+                                "Changes return to the macro manager. Choose Save in the manager to save the library. Saving never runs macros.",
+                            accessibilityLabel: "Macro library JSON", exportName: "TextTank-Macros.json",
+                            identifier: "macro.json", size: NSSize(width: 650, height: 400), saveTitle: "Use Changes"),
+                        panels: self.jsonFilePanels, parent: panel.form.window, current: { working },
+                        read: {
+                            try PrivateFileStore.read(
+                                $0, maximumBytes: MacroLibrary.maximumBytes, parent: .selectedInput)
+                        },
+                        save: { proposed in
+                            working = proposed
+                            panel.reload()
+                        })
+                    panel.refresh()
+                } catch { panel.form.showValidation(error) }
+            }
+            panel.show()
+        } catch { TTAlert.present(error) }
+    }
+    /// One guarded save boundary for the manager, recording commands and native checks.
+    func persist(_ proposed: MacroLibrary) throws {
+        try loadState.requireWritable()
+        let data = try proposed.encoded()
+        try PrivateFileStore.prepareDirectory(storage.deletingLastPathComponent())
+        try PrivateFileStore.write(
+            data, to: storage, maximumBytes: MacroLibrary.maximumBytes, temporaryPrefix: ".macros-")
         library = proposed
         rebuild()
     }
-    private func showError(_ error: Error) { NSAlert(error: error).runModal() }
+
 }
 
+/// Result shared only by the synchronous main-run-loop timer and its modal caller.
+@MainActor private final class MacroPlaybackOutcome { var failure: Error? }
+
 /// Bounded incremental playback shared by native progress UI and deterministic tests.
-private final class MacroPlayback {
+@MainActor private final class MacroPlayback {
     let macro: RecordedMacro, editor: TTEditor
     let repeats: Int, untilEnd: Bool
     let searchPlayback: ((RecordedMacro.Search, TTEditor) throws -> Void)?
@@ -440,8 +514,9 @@ private final class MacroPlayback {
     ) throws {
         try macro.validate()
         try editor.requireWritable()
-        guard editor.window != nil, editor.selectionCount == 1, repeats > 0, repeats <= 10000,
-            macro.steps.count <= 100000 / repeats
+        guard EditorLifetime.isOpen(editor), editor.selectionCount == 1, repeats > 0,
+            repeats <= MacroLimits.repeatCount,
+            macro.steps.count <= MacroLimits.playbackActions / repeats
         else { throw MacroError.invalid("Macro playback is unavailable for this editor or repeat count.") }
         self.macro = macro
         self.editor = editor
@@ -456,33 +531,41 @@ private final class MacroPlayback {
         for offset in 0..<budget {
             if offset > 0 && ProcessInfo.processInfo.systemUptime - started >= 0.02 { return false }
             if shouldCancel() { throw MacroError.invalid("Macro stopped. Prior edits remain in one Undo group.") }
-            guard editor.window != nil, !editor.readOnly, editor.selectionCount == 1 else {
+            guard EditorLifetime.isOpen(editor), !editor.readOnly, editor.selectionCount == 1 else {
                 throw MacroError.invalid(
                     "The macro editor closed, became read-only or changed selection mode. Prior edits remain undoable.")
             }
             if index == 0 && untilEnd && editor.selectionCaret >= editor.byteLength { return true }
-            guard performed < 100000 else {
-                throw MacroError.invalid("Macro stopped at the 100000-step limit. Prior edits remain undoable.")
+            guard performed < MacroLimits.playbackActions else {
+                throw MacroError.invalid(
+                    "Macro stopped at the \(Strings.number(MacroLimits.playbackActions))-action limit. Prior edits remain undoable."
+                )
             }
             let step = macro.steps[index]
-            switch step.kind {
-            case .search:
+            switch step {
+            case .search(let search):
                 guard let searchPlayback else {
                     throw MacroError.invalid("Search playback is not available. Prior edits remain undoable.")
                 }
-                try searchPlayback(step.search!, editor)
-            case .findLiteral:
-                guard editor.find(step.text!, matchCase: step.matchCase!, backwards: step.backwards!) else {
+                try searchPlayback(search, editor)
+            case .findLiteral(let text, let matchCase, let backwards):
+                guard
+                    try SearchController.playLegacyFind(
+                        text: text, matchCase: matchCase, backwards: backwards, in: editor)
+                else {
                     throw MacroError.invalid("Macro stopped: literal find did not match. Prior edits remain undoable.")
                 }
-            case .replaceSelection:
-                guard editor.replaceSelection(step.text!) else {
+            case .replaceSelection(let text):
+                guard editor.replaceSelection(text) else {
                     throw MacroError.invalid("The editor rejected a macro step. Prior edits remain undoable.")
                 }
-            case .insertText, .command:
-                let data = try JSONEncoder().encode(step)
-                let dictionary = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-                guard editor.executeMacroStep(dictionary) else {
+            case .insertText(let text):
+                guard editor.executeMacroStep(TTMacroAction.insertText(text)) else {
+                    throw MacroError.invalid("The editor rejected a macro step. Prior edits remain undoable.")
+                }
+            case .command(let command):
+                guard editor.executeMacroStep(TTMacroAction.command(TTEditorCommandIdentifier(rawValue: command)))
+                else {
                     throw MacroError.invalid("The editor rejected a macro step. Prior edits remain undoable.")
                 }
             }
@@ -501,5 +584,15 @@ private final class MacroPlayback {
             }
         }
         return false
+    }
+}
+
+/// Capture immutable options once for both the bar and the advanced Find window.
+extension RecordedMacro.Search {
+    init(options: SearchOptions, action: String) {
+        self.init(
+            query: options.query, replacement: options.replacement, mode: options.mode.rawValue,
+            matchCase: options.matchCase, wholeWord: options.wholeWord,
+            dotMatchesNewline: options.dotMatchesNewline, wrap: options.wrap, action: action)
     }
 }

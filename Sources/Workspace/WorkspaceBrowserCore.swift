@@ -4,11 +4,17 @@ import Darwin
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct WorkspaceBrowserState: Codable, Equatable {
-    var version = 1
-    var folders: [URL] = []
-    var recent: [URL] = []
-    func validate() throws {
+package struct WorkspaceBrowserState: Codable, Equatable {
+    package init(version: Int = 1, folders: [URL] = [], recent: [URL] = []) {
+        self.version = version
+        self.folders = folders
+        self.recent = recent
+    }
+
+    package var version: Int
+    package var folders: [URL]
+    package var recent: [URL]
+    package func validate() throws {
         guard version == 1, folders.count <= 100, recent.count <= 100 else {
             throw WorkspaceError.invalid("Unsupported workspace browser data.")
         }
@@ -23,48 +29,64 @@ struct WorkspaceBrowserState: Codable, Equatable {
 extension WorkspaceBrowserState {
     /// The one rule for "the same folder or file": the standardized path. A trailing slash
     /// or a `localhost` host is a different URL but not a different entry.
-    static func identity(_ url: URL) -> String { url.standardizedFileURL.path }
+    static package func identity(_ url: URL) -> String { url.standardizedFileURL.path }
 }
-struct WorkspaceBrowserEntry: Equatable {
-    let url: URL
-    let directory: Bool
+package struct WorkspaceBrowserEntry: Equatable {
+    package init(url: URL, directory: Bool) {
+        self.url = url
+        self.directory = directory
+    }
+
+    package let url: URL
+    package let directory: Bool
 }
-struct WorkspaceDirectoryListing {
-    var entries: [WorkspaceBrowserEntry] = []
-    var skipped = 0
-    var truncated = false
+package struct WorkspaceDirectoryListing {
+    package init(entries: [WorkspaceBrowserEntry] = [], skipped: Int = 0, truncated: Bool = false) {
+        self.entries = entries
+        self.skipped = skipped
+        self.truncated = truncated
+    }
+
+    package var entries: [WorkspaceBrowserEntry]
+    package var skipped: Int
+    package var truncated: Bool
 }
 
 /// Persistent folder and recent-file identities only; loading never opens files,
 /// interprets document content or executes extensions/processes.
-final class WorkspaceBrowserStore {
-    private(set) var state = WorkspaceBrowserState()
-    private(set) var loadError: Error?
-    let url: URL
-    init(url: URL) {
+final package class WorkspaceBrowserStore {
+    private(set) package var state = WorkspaceBrowserState()
+    package let loadState: StoreLoadState
+    private(set) package var loadError: Error? {
+        get { loadState.error }
+        set { loadState.error = newValue }
+    }
+    package let url: URL
+    package init(url: URL) {
         self.url = url
+        loadState = StoreLoadState(url: url, displayName: "Saved workspace")
         do {
             let data = try WorkspaceStore.readRegularFile(url, maximumBytes: 1024 * 1024)
+            try PersistedFormat.check(data, context: "Saved workspace")
             let decoded = try JSONDecoder().decode(WorkspaceBrowserState.self, from: data)
             try decoded.validate()
             state = decoded
-        } catch let error as POSIXError where error.code == .ENOENT {} catch { loadError = error }
+        } catch  where error.isFileNotFound {} catch { loadError = error }
     }
-    func save(_ value: WorkspaceBrowserState) throws {
+    package func save(_ value: WorkspaceBrowserState) throws {
         guard loadError == nil else {
             throw WorkspaceError.invalid(
                 "The saved workspace could not be read. Its original bytes are preserved; repair or move that configuration before saving workspace changes."
             )
         }
         try value.validate()
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700])
-        try WorkspaceStore.writePrivate(JSONEncoder().encode(value), to: url)
+        try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
+        try PrivateFileStore.write(
+            JSONEncoder().encode(value), to: url, maximumBytes: 1024 * 1024, temporaryPrefix: ".workspace-")
         state = value
         loadError = nil
     }
-    func addFolder(_ folder: URL) throws {
+    package func addFolder(_ folder: URL) throws {
         try WorkspaceStore.validateLocalURL(folder)
         // Only checks that the folder can be listed; nothing is enumerated.
         closedir(try Self.openDirectory(folder).stream)
@@ -75,15 +97,15 @@ final class WorkspaceBrowserStore {
         try save(next)
     }
     /// Whether `folder` is one of the saved roots, by path.
-    func contains(_ folder: URL) -> Bool {
+    package func contains(_ folder: URL) -> Bool {
         state.folders.contains { WorkspaceBrowserState.identity($0) == WorkspaceBrowserState.identity(folder) }
     }
-    func removeFolder(_ folder: URL) throws {
+    package func removeFolder(_ folder: URL) throws {
         var next = state
         next.folders.removeAll { WorkspaceBrowserState.identity($0) == WorkspaceBrowserState.identity(folder) }
         try save(next)
     }
-    func noteRecent(_ file: URL) throws {
+    package func noteRecent(_ file: URL) throws {
         try WorkspaceStore.validateLocalURL(file)
         var next = state
         let file = file.standardizedFileURL
@@ -94,7 +116,8 @@ final class WorkspaceBrowserStore {
     }
     /// Entries read from one directory before the scan stops. Sorting needs every name, so
     /// this, not the display limit, bounds the work.
-    static let maximumScannedEntries = 20000
+    static package let maximumScannedEntries = 20000
+    static package let defaultListingLimit = 2000
     /// Opens the folder itself, never through a symbolic link. The stream owns the descriptor.
     fileprivate static func openDirectory(_ folder: URL) throws -> (
         stream: UnsafeMutablePointer<DIR>, descriptor: Int32
@@ -124,7 +147,9 @@ final class WorkspaceBrowserStore {
     /// applies, so the entries shown do not depend on the order the filesystem returns them.
     /// `skipped` counts every hidden, symbolic-link or special entry that was read; those
     /// never count toward the limit.
-    static func list(_ folder: URL, limit: Int = 2000, showHidden: Bool = false) throws -> WorkspaceDirectoryListing {
+    static package func list(_ folder: URL, limit: Int = defaultListingLimit, showHidden: Bool = false) throws
+        -> WorkspaceDirectoryListing
+    {
         try WorkspaceStore.validateLocalURL(folder)
         guard limit > 0 && limit <= 10000 else { throw WorkspaceError.invalid("Invalid directory listing limit.") }
         let (dir, fd) = try openDirectory(folder)

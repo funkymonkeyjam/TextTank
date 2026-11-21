@@ -1,10 +1,36 @@
+@testable import TextTankCore
 import AppKit
+@testable import TextTankRuntime
+import EditorBridge
+import NativeSearch
 @main struct FolderSearchControllerChecks {
+    @MainActor static func everyView(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { everyView($0) } }
     @MainActor static func main() async {
         await Checks.run("FolderSearchControllerChecks") {
             let isolatedSupport = try IsolatedSupportDirectory("TextTankFolderUIChecks"), support = isolatedSupport.url
             defer { isolatedSupport.restore() }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
+            let protectedSuite = "TextTankFolderProtected-" + UUID().uuidString
+            let protected = try requireValue(UserDefaults(suiteName: protectedSuite), "fixture: protected defaults")
+            protected.set(Data("sentinel".utf8), forKey: "TextTank.FolderSearch.v1")
+            var providerCalls = 0
+            let provider = RuntimeEnvironment.dependencies
+            var effects = RuntimeEnvironment.current
+            effects.sharedDefaultsProvider = {
+                providerCalls += 1
+                return protected
+            }
+            RuntimeEnvironment.dependencies = effects
+            defer {
+                RuntimeEnvironment.dependencies = provider
+                protected.removePersistentDomain(forName: protectedSuite)
+            }
+            let implicit = FolderSearchController()
+            check(
+                implicit.queryField.stringValue.isEmpty && providerCalls == 0,
+                "an absolute override skips even obtaining shared folder legacy defaults")
             let url = URL(fileURLWithPath: "/tmp/isolated-folder-result.txt")
             let match = FolderSearchMatch(
                 url: url, line: 1, columnUTF16: 4, utf16Range: .init(location: 3, length: 4),
@@ -81,7 +107,8 @@ import AppKit
             defer { isolated.removePersistentDomain(forName: suite) }
             let controller = FolderSearchController(defaults: isolated)
             check(
-                controller.window?.title == "Find in Folder" && controller.status.stringValue.contains("Boost regex"),
+                controller.window?.title == "Find in Folder"
+                    && controller.status.stringValue.contains("Regular expression (Boost)"),
                 "native title and status expose search modes")
             check(
                 controller.table.tableColumns.count == 3 && controller.details.isSelectable,
@@ -145,11 +172,18 @@ import AppKit
                 "native saved workspace roots search respects filename filters")
             let corrupt = Data("invalid settings".utf8)
             isolated.set(corrupt, forKey: "TextTank.FolderSearch.v1")
-            let invalid = FolderSearchController(defaults: isolated)
+            let invalidURL = support.appendingPathComponent("invalid-preferences.json")
+            let invalid = FolderSearchController(defaults: isolated, preferencesURL: invalidURL)
             invalid.queryField.stringValue = "new"
-            try invalid.saveSettings()
+            do {
+                try invalid.saveSettings()
+                check(false, "corrupt legacy settings latch blocks save")
+            } catch { check(true, "corrupt legacy settings latch blocks save") }
             check(
-                isolated.data(forKey: "TextTank.FolderSearch.v1") == corrupt,
+                isolated.data(forKey: "TextTank.FolderSearch.v1") == corrupt
+                    && !FileManager.default.fileExists(atPath: invalidURL.path)
+                    && providerCalls == 0
+                    && protected.data(forKey: "TextTank.FolderSearch.v1") == Data("sentinel".utf8),
                 "native corrupt settings stay preserved after attempted save")
             // F111 and G370: while a replacement runs, Return in the query field must not cancel it
             // and a result must not be opened. The first commit is held open to make the window.
@@ -181,7 +215,8 @@ import AppKit
             let busySuite = "TextTankFolderBusy-" + UUID().uuidString
             let busyDefaults = try requireValue(UserDefaults(suiteName: busySuite), "fixture: isolated defaults suite")
             defer { busyDefaults.removePersistentDomain(forName: busySuite) }
-            let busy = FolderSearchController(defaults: busyDefaults)
+            let busy = FolderSearchController(
+                defaults: busyDefaults, preferencesURL: support.appendingPathComponent("busy-preferences.json"))
             busy.workspaceRoots = { [busyRoot] }
             busy.scope.selectItem(at: 1)
             busy.mode.selectItem(at: 0)
@@ -212,7 +247,7 @@ import AppKit
             // F42: what the filters left out is counted; only the file that could not be read is listed.
             check(
                 busy.status.stringValue
-                    == "3 matches · 3 files searched · 1 not searched (errors) · 3 excluded by filters or settings",
+                    == "3 matches in 3 files searched. Not searched: 1. Excluded: 3. Status: Complete.",
                 "the status separates files that could not be searched from files the filters left out")
             check(
                 busy.details.string.contains("Not searched (1):")
@@ -253,7 +288,9 @@ import AppKit
                     && busy.numberOfRows(in: busy.table) == 3,
                 "Return during a replacement is refused and the results stay")
             check(
-                try FolderSearchSettings.load(busyDefaults).options.query == "needle",
+                try FolderSearchSettings.decode(
+                    Data(contentsOf: support.appendingPathComponent("busy-preferences.json"))
+                ).options.query == "needle",
                 "a refused Return saves nothing")
             busy.activateResult(row: 1)
             check(
@@ -270,7 +307,7 @@ import AppKit
             check(
                 busy.lastOutcome == .replaced(replaced: 3, notReplaced: 0)
                     && busy.status.stringValue.hasPrefix("3 files replaced")
-                    && busy.details.string.contains("a.txt: replaced"),
+                    && busy.details.string.contains("a.txt: Replaced"),
                 "the replacement report is shown when the held replacement ends")
             busy.queryField.stringValue = "pin"
             let started = pressReturn(), restarted = pressReturn()
@@ -333,7 +370,8 @@ import AppKit
             let flowSuite = "TextTankFolderReplaceFlow-" + UUID().uuidString
             let flowDefaults = try requireValue(UserDefaults(suiteName: flowSuite), "fixture: isolated defaults suite")
             defer { flowDefaults.removePersistentDomain(forName: flowSuite) }
-            let flow = FolderSearchController(defaults: flowDefaults)
+            let flow = FolderSearchController(
+                defaults: flowDefaults, preferencesURL: support.appendingPathComponent("flow-preferences.json"))
             flow.workspaceRoots = { [replaceRoot] }
             flow.scope.selectItem(at: 1)
             flow.mode.selectItem(at: 0)
@@ -345,7 +383,6 @@ import AppKit
                 "fixture: replace-flow search dispatched")
             await waitUntil("the replace-flow search to finish") { !flow.isSearching }
             try require(flow.numberOfRows(in: flow.table) == 2, "fixture: both files matched on disk")
-            @MainActor func everyView(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { everyView($0) } }
             var confirmed = false
             let giveUp = Date().addingTimeInterval(10)
             let confirm = Timer(timeInterval: 0.05, repeats: true) { _ in

@@ -1,4 +1,8 @@
+@testable import TextTankCore
 import AppKit
+@testable import TextTankRuntime
+import EditorBridge
+import NativeSearch
 /// Find-window navigation fronts the document window; checks must never put one on screen.
 /// `shown` stands for being the visible tab: fronting sets it, and a check clears it by hand
 /// where the application would have ordered the other document windows out.
@@ -14,16 +18,64 @@ final class CountingWindow: NSWindow {
     override var isVisible: Bool { showing }
     override func makeKeyAndOrderFront(_ sender: Any?) { fronted += 1 }
 }
+/// A real native editor counts only the getters that must not run after an early rejection.
+private final class SelectionReadCounterEditor: TTEditor {
+    var selectionReads = 0
+    override var selectionStart: Int {
+        selectionReads += 1
+        return super.selectionStart
+    }
+    override var selectionEnd: Int {
+        selectionReads += 1
+        return super.selectionEnd
+    }
+}
 @main struct SearchControllerChecks {
     @MainActor static func main() async {
         await Checks.run("SearchControllerChecks") {
+            let support = try IsolatedSupportDirectory("TextTankSearchControllerChecks")
+            defer { support.restore() }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
+            let closedEditor = SelectionReadCounterEditor(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+            closedEditor.text = "alpha"
+            closedEditor.selectionReads = 0
+            rejects("F285 a legacy search rejects a closed native editor") {
+                _ = try SearchController.playLegacyFind(
+                    text: "alpha", matchCase: true, backwards: false, in: closedEditor)
+            }
+            check(
+                closedEditor.selectionReads == 0,
+                "F285 a closed search is rejected before reading or converting editor selections")
+
             // F255: the controller under test keeps its options in a suite of its own, never in the
             // real defaults domain, so nothing is inherited from an earlier run or left behind.
             let suite = "TextTankSearchControllerChecks-" + UUID().uuidString
             let isolated = try requireValue(UserDefaults(suiteName: suite), "fixture: isolated defaults suite")
             defer { isolated.removePersistentDomain(forName: suite) }
-            let standardBefore = UserDefaults.standard.data(forKey: "TextTank.Search.v1")
+            let protectedSuite = "TextTankProtectedLegacy-" + UUID().uuidString
+            let protected = try requireValue(UserDefaults(suiteName: protectedSuite), "fixture: protected defaults")
+            protected.set(Data("sentinel".utf8), forKey: "TextTank.Search.v1")
+            var providerCalls = 0
+            let originalProvider = RuntimeEnvironment.dependencies
+            var effects = RuntimeEnvironment.current
+            effects.sharedDefaultsProvider = {
+                providerCalls += 1
+                return protected
+            }
+            RuntimeEnvironment.dependencies = effects
+            defer {
+                RuntimeEnvironment.dependencies = originalProvider
+                protected.removePersistentDomain(forName: protectedSuite)
+            }
+            let implicit = SearchController()
+            check(
+                implicit.queryField.stringValue.isEmpty && providerCalls == 0,
+                "an absolute support override skips even obtaining shared legacy defaults")
+            check(
+                WindowFrames.defaults == nil && providerCalls == 0,
+                "implicit frame storage does not obtain shared defaults in an isolated check")
             let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 600, height: 400)),
                 window = NSWindow(
                     contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: .titled, backing: .buffered,
@@ -36,7 +88,214 @@ final class CountingWindow: NSWindow {
             var signals = 0
             controller.onFailureSignal = { signals += 1 }
             @MainActor func finished() async { await waitUntil("the search to finish") { !controller.isSearching } }
+            // Audit27: Boost distinguishes canonically equivalent patterns by scalar sequence.
+            editor.text = "é e\u{301}"
+            controller.mode.selectItem(at: SearchOptions.Mode.regularExpression.rawValue)
+            controller.caseButton.state = .on
+            controller.queryField.stringValue = "é"
+            controller.next(nil)
+            await finished()
+            check(editor.selectionStart == 0 && editor.selectionEnd == 2, "NFC regex selects NFC bytes")
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            let beforeUnicodeReuse = controller.reusedResults
+            controller.queryField.stringValue = "e\u{301}"
+            controller.next(nil)
+            await finished()
+            check(
+                editor.selectionStart == 3 && editor.selectionEnd == 6
+                    && controller.reusedResults == beforeUnicodeReuse,
+                "NFD regex gets its own scalar-exact results rather than reusing NFC hits")
+            controller.mode.selectItem(at: 0)
+            controller.caseButton.state = .off
+            controller.queryField.stringValue = ""
+            // Navigation reports are distinct from nonoverlapping Find All/Replace All reports.
+            editor.text = "aaa"
+            controller.queryField.stringValue = "aa"
+            controller.replacementField.stringValue = "X"
+            controller.caseButton.state = .on
+            controller.findAll(nil)
+            await finished()
+            check(
+                controller.lastOutcome == .found(matches: 1, documents: 1, truncated: false),
+                "Find All keeps the nonoverlapping literal report")
+            let beforePurposeReuse = controller.reusedResults
+            _ = editor.setSelectionAnchor(1, caret: 1)
+            controller.next(nil)
+            await finished()
+            check(
+                editor.selectionStart == 1 && editor.selectionEnd == 3 && controller.reusedResults == beforePurposeReuse
+                    && controller.lastOutcome == .found(matches: 2, documents: 1, truncated: false),
+                "advanced Next requests overlapping navigation instead of reusing Find All rows")
+            _ = editor.setSelectionAnchor(3, caret: 3)
+            controller.previous(nil)
+            check(
+                !controller.isSearching && editor.selectionStart == 1 && editor.selectionEnd == 3
+                    && controller.reusedResults == beforePurposeReuse + 1,
+                "advanced Previous reuses the overlapping navigation report")
+            controller.replaceAll(nil)
+            await finished()
+            check(editor.text == "Xa", "Replace All never applies overlapping navigation rows")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            check(editor.text == "aaa", "nonoverlapping Replace All remains one Undo")
+            _ = editor.setSelectionAnchor(3, caret: 1)
+            controller.replaceOne(nil)
+            await finished()
+            check(editor.text == "aX", "strict single Replace accepts an overlapping selected match")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            check(
+                editor.text == "aaa" && editor.selectionAnchor == 3 && editor.selectionCaret == 1,
+                "Undo of overlapping single Replace restores its reversed match selection")
+            editor.text = "ab"
+            _ = editor.setSelectionAnchor(1, caret: 1)
+            controller.queryField.stringValue = "ab"
+            controller.next(nil)
+            await finished()
+            check(
+                editor.selectionCaret == 1 && controller.lastOutcome == .noFurtherMatches,
+                "advanced literal wrap never crosses its original interior caret boundary")
+            controller.previous(nil)
+            check(
+                editor.selectionCaret == 1 && controller.lastOutcome == .noFurtherMatches,
+                "backwards literal wrap also excludes the cross-boundary match")
+            controller.queryField.stringValue = ""
+            controller.replacementField.stringValue = ""
+            controller.caseButton.state = .off
+            // Audit27: inline scheduling is separate from the Find window's cache/scopes, but
+            // applies the same report with exact capture/revalidation and cooperative cancellation.
+            var inlineOptions = SearchOptions()
+            inlineOptions.query = "alpha"
+            inlineOptions.replacement = "X"
+            var inlineResult: InlineSearchOutcome?
+            @MainActor func inlineFinished() async {
+                await waitUntil("the inline search completion") { inlineResult != nil }
+            }
+            editor.text = "alpha beta"
+            _ = editor.setSelectionAnchor(0, caret: 5)
+            let capturedInline = editor.revision
+            controller.performInline(
+                options: inlineOptions, action: "replaceOne", on: editor,
+                cancellation: TTSearchCancellation(), isCurrent: { true }, completion: { inlineResult = $0 })
+            _ = editor.setSelectionAnchor(6, caret: 10)
+            await inlineFinished()
+            if case .stale = inlineResult {
+                check(true, "selection changes discard pending inline replacement")
+            } else {
+                check(false, "selection changes discard pending inline replacement")
+            }
+            check(
+                editor.text == "alpha beta" && editor.revision == capturedInline && editor.selectionStart == 6,
+                "stale inline replacement preserves bytes, revision and the new selection")
+            inlineResult = nil
+            _ = editor.setSelectionAnchor(0, caret: 5)
+            let cancelInline = TTSearchCancellation()
+            controller.performInline(
+                options: inlineOptions, action: "replaceOne", on: editor,
+                cancellation: cancelInline, isCurrent: { true }, completion: { inlineResult = $0 })
+            cancelInline.cancel()
+            await inlineFinished()
+            if case .cancelled = inlineResult {
+                check(true, "inline cancellation reports normal completion without replacement")
+            } else {
+                check(false, "inline cancellation reports normal completion without replacement")
+            }
+            check(
+                editor.text == "alpha beta" && editor.revision == capturedInline,
+                "cancelled inline replacement preserves text and revision")
+            inlineResult = nil
+            controller.performInline(
+                options: inlineOptions, action: "next", on: editor,
+                cancellation: TTSearchCancellation(), isCurrent: { false }, completion: { inlineResult = $0 })
+            await inlineFinished()
+            if case .stale = inlineResult {
+                check(true, "caller query-generation guard blocks pending selection")
+            } else {
+                check(false, "caller query-generation guard blocks pending selection")
+            }
+            inlineResult = nil
+            controller.performInline(
+                options: inlineOptions, action: "replaceOne", on: editor,
+                cancellation: TTSearchCancellation(), isCurrent: { true }, completion: { inlineResult = $0 })
+            editor.text = "edited while searching"
+            let editedInlineRevision = editor.revision
+            await inlineFinished()
+            if case .stale = inlineResult {
+                check(true, "document revision changes discard inline replacement")
+            } else {
+                check(false, "document revision changes discard inline replacement")
+            }
+            check(
+                editor.text == "edited while searching" && editor.revision == editedInlineRevision,
+                "stale inline completion never overwrites a concurrent edit")
+            inlineResult = nil
+            editor.text = "alpha beta"
+            _ = editor.setSelectionAnchor(0, caret: 5)
+            controller.performInline(
+                options: inlineOptions, action: "replaceOne", on: editor,
+                cancellation: TTSearchCancellation(), isCurrent: { true }, completion: { inlineResult = $0 })
+            window.contentView = nil
+            await inlineFinished()
+            if case .stale = inlineResult {
+                check(true, "a detached editor cannot receive inline replacement")
+            } else {
+                check(false, "a detached editor cannot receive inline replacement")
+            }
+            window.contentView = editor
+            inlineResult = nil
+            editor.text = String(repeating: "a", count: 100_001)
+            _ = editor.setSelectionAnchor(0, caret: 0)
+            var frequent = SearchOptions()
+            frequent.query = "a"
+            let frequentRevision = editor.revision
+            controller.performInline(
+                options: frequent, action: "next", on: editor,
+                cancellation: TTSearchCancellation(), isCurrent: { true }, completion: { inlineResult = $0 })
+            await inlineFinished()
+            if case .failed(let error) = inlineResult {
+                check(
+                    error as? SearchFailure == .inlineResultLimit,
+                    "inline navigation reports the shared 100,000-result limit")
+            } else {
+                check(false, "inline navigation reports the shared 100,000-result limit")
+            }
+            check(
+                editor.revision == frequentRevision && editor.selectionCaret == 0,
+                "truncated shared results never move the inline selection")
+            editor.text = "one needle"
+            let damagedURL = support.url.appendingPathComponent("damaged-find.json"),
+                damagedBytes = Data("keep unreadable settings".utf8)
+            try damagedBytes.write(to: damagedURL)
+            let degraded = SearchController(preferencesURL: damagedURL)
+            degraded.currentEditor = { editor }
+            degraded.openEditors = { [editor] }
+            degraded.queryField.stringValue = "needle"
+            degraded.findAll(nil)
+            await waitUntil("search with unreadable preferences to finish") { !degraded.isSearching }
+            check(
+                degraded.lastOutcome == .found(matches: 1, documents: 1, truncated: false)
+                    && degraded.preferenceNotice.isHidden == false
+                    && degraded.resetPreferencesButton.isHidden == false,
+                "F212 unreadable preferences leave search functional with persistent recovery controls")
+            check(
+                try Data(contentsOf: damagedURL) == damagedBytes,
+                "F212 searching never overwrites unreadable saved preferences")
+            let obstructed = support.url.appendingPathComponent("blocked-preference-parent")
+            let transient = SearchController(preferencesURL: obstructed.appendingPathComponent("find.json"))
+            transient.currentEditor = { editor }
+            transient.openEditors = { [editor] }
+            try Data("fixture obstruction".utf8).write(to: obstructed)
+            transient.queryField.stringValue = "needle"
+            transient.findAll(nil)
+            await waitUntil("search with a failed preference save to finish") { !transient.isSearching }
+            check(
+                transient.lastOutcome == .found(matches: 1, documents: 1, truncated: false)
+                    && transient.preferenceNotice.isHidden == false,
+                "F212 preference write failure is reported without aborting the requested search")
             let fresh0 = SearchOptions()
+            check(
+                !controller.resetPreferencesButton.isHidden
+                    && controller.resetPreferencesButton.superview?.isHidden == false
+                    && controller.preferenceNotice.isHidden,
+                "F212 healthy saved settings retain a discoverable explicit Reset action")
             check(
                 controller.queryField.stringValue == fresh0.query
                     && controller.caseButton.state == (fresh0.matchCase ? .on : .off)
@@ -58,7 +317,7 @@ final class CountingWindow: NSWindow {
                 SearchController.apply(report.hits, text: original, revision: revision, to: editor),
                 "regex replacement applied in native editor")
             check(editor.text == "🥑 one:12 two:34" && editor.modified, "exact captures and dirty state")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == original && !editor.modified, "one Undo restores full original and save point")
             // G374: the matches are replaced without using the selection as the edit cursor.
             editor.text = "a1 b22 c333"
@@ -75,7 +334,7 @@ final class CountingWindow: NSWindow {
                 SearchController.apply(digitHits, text: numbered, revision: numberedRevision, to: editor)
                     && editor.text == "a# b# c#" && editor.selectionAnchor == 8 && editor.selectionCaret == 3,
                 "replace all keeps the reversed selection around the text it covered")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 editor.text == numbered && !editor.modified && editor.selectionAnchor == 11
                     && editor.selectionCaret == 3, "one Undo of replace all restores the text and the selection")
@@ -84,7 +343,7 @@ final class CountingWindow: NSWindow {
                 SearchController.apply(digitHits, text: numbered, revision: editor.revision, to: editor)
                     && editor.selectionAnchor == 7 && editor.selectionCaret == 7,
                 "a caret inside a replaced match moves to the start of its replacement")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 editor.text == numbered && editor.selectionAnchor == 9 && editor.selectionCaret == 9,
                 "Undo returns the caret to where it was inside the match")
@@ -93,7 +352,7 @@ final class CountingWindow: NSWindow {
                 SearchController.apply([digitHits[1]], text: numbered, revision: editor.revision, to: editor)
                     && editor.text == "a1 b# c333" && editor.selectionAnchor == 4 && editor.selectionCaret == 5,
                 "replacing the selected match leaves its replacement selected")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 editor.text == numbered && editor.selectionAnchor == 4 && editor.selectionCaret == 6,
                 "Undo of a single replacement reselects the match")
@@ -130,7 +389,7 @@ final class CountingWindow: NSWindow {
             check(editor.selectedText == "one=12", "recorded regex find selects UTF8 mapped match")
             try controller.playRecorded(options: o, action: "replaceOne", on: editor)
             check(editor.text == "🥑 one:12 two=34", "recorded regex selected replacement")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == original, "recorded replacement one Undo")
             editor.text = "ab"
             o.query = "(?=.)|$"
@@ -162,22 +421,21 @@ final class CountingWindow: NSWindow {
             check(
                 editor.text == "one:12 two:34" && controller.queryField.stringValue == "([a-z]+)=(\\d+)",
                 "active shared field editor commits only replacement and preserves regex query")
-            let persisted = isolated.data(forKey: "TextTank.Search.v1").flatMap {
-                try? JSONDecoder().decode(SearchOptions.self, from: $0)
-            }
+            let persisted = try FindPreferences.decode(Data(contentsOf: AppStorage.url(.find))).options
             check(
-                persisted?.query == "([a-z]+)=(\\d+)" && persisted?.replacement == "$1:$2"
-                    && persisted?.mode == .regularExpression,
-                "a Find-window action saves its options in the injected defaults")
+                persisted.query == "([a-z]+)=(\\d+)" && persisted.replacement == "$1:$2"
+                    && persisted.mode == .regularExpression,
+                "a Find-window action saves its options in the isolated private file")
             check(
-                UserDefaults.standard.data(forKey: "TextTank.Search.v1") == standardBefore,
-                "a Find-window action leaves the standard defaults domain untouched")
+                providerCalls == 0 && protected.data(forKey: "TextTank.Search.v1") == Data("sentinel".utf8)
+                    && isolated.data(forKey: "TextTank.Search.v1") == nil,
+                "private saves never obtain shared legacy defaults or write either protected legacy fixture")
             let reopened = SearchController(defaults: isolated)
             check(
                 reopened.queryField.stringValue == "([a-z]+)=(\\d+)" && reopened.replacementField.stringValue == "$1:$2"
                     && reopened.mode.indexOfSelectedItem == 2,
                 "a second controller on the same defaults restores the saved options")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "one=12 two=34", "native focused-field replace all one Undo")
             editor.setSavePoint()
             editor.readOnly = true
@@ -436,7 +694,7 @@ final class CountingWindow: NSWindow {
                 replaceElapsed < 10,
                 "single Replace on a \(hitCount)-hit buffer stays within its time bound (\(String(format:"%.2f",replaceElapsed)) s)"
             )
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == big && !editor.modified, "many-hit single Replace is one Undo back to the save point")
             _ = editor.setSelectionAnchor(chosenHit * hitBytes + 3, caret: chosenHit * hitBytes + 8)
             recorded = []
@@ -466,7 +724,7 @@ final class CountingWindow: NSWindow {
             await finished()
             check(
                 controller.lastOutcome == .found(matches: 2, documents: 1, truncated: false)
-                    && controller.status.stringValue == "2 matches in 1 document(s)",
+                    && controller.status.stringValue == "2 matches in 1 document.",
                 "a finished Find All reports its match and document counts")
             controller.queryField.stringValue = "("
             controller.mode.selectItem(at: 2)
@@ -516,7 +774,7 @@ final class CountingWindow: NSWindow {
                 check(
                     split.lastOutcome == .replaced(changed: 1, stale: 0) && primary.text == "one DONE two TODO three",
                     "Replace acts on the match selected in the focused pane, once")
-                pane.executeCommand("undo")
+                pane.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(primary.text == "one TODO two TODO three" && !primary.modified, "that replacement is one Undo")
                 split.scope.selectItem(at: 0)
                 split.findAll(nil)
@@ -530,7 +788,7 @@ final class CountingWindow: NSWindow {
                     split.activateResult(at: 1) && split.lastOutcome != .staleResult && primary.selectionStart == 13
                         && primary.selectedText == "TODO",
                     "a result listed through a closed pane still selects its match in the remaining view")
-                primary.executeCommand("selectAll")
+                primary.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 primary.replaceSelection("edited since")
                 check(
                     !split.activateResult(at: 0) && split.lastOutcome == .staleResult,
@@ -656,7 +914,7 @@ final class CountingWindow: NSWindow {
             check(
                 editor.text == "foobar X" && controller.lastOutcome == .replaced(changed: 1, stale: 0),
                 "Selection scope Whole word replaces the selected whole word in place")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "foobar foo" && !editor.modified, "Selection scope replace all is one Undo")
             // "🥑é " is 7 bytes and 4 UTF-16 units: a double-applied or byte offset would miss.
             await selectionReplaceAll(
@@ -671,7 +929,7 @@ final class CountingWindow: NSWindow {
             await selectionReplaceAll("ab ab", select: NSRange(location: 4, length: 1), query: "(?<=a)b", regex: true)
             check(editor.text == "ab aX", "Selection scope lookbehind sees the character before the selection")
             await selectionReplaceAll("l1\nl2 foo\nl3 foo\n", select: NSRange(location: 11, length: 6), query: "foo")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             _ = editor.setBookmarks([])
             _ = editor.setSelectionAnchor(11, caret: 17)
             controller.bookmark(nil)
@@ -790,7 +1048,7 @@ final class CountingWindow: NSWindow {
                 editor.text == "xb a a ax" && controller.lastOutcome == .replaced(changed: 1, stale: 0)
                     && recorded.isEmpty,
                 "Selection scope Replace right after a Selection scope Next replaces the selected match")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "xa a a ax" && !editor.modified, "that Selection scope Replace is one Undo")
             literal("a", "b", scope: 0, wrap: false)
             _ = editor.setSelectionAnchor(0, caret: 0)
@@ -829,17 +1087,17 @@ final class CountingWindow: NSWindow {
                 "All open documents Replace leaves a background document with a selected match untouched")
             check(
                 second.text == "y=1 x=2" && controller.lastOutcome == .replaced(changed: 1, stale: 0)
-                    && controller.status.stringValue.hasPrefix("Replaced 1 matches") && recorded.isEmpty,
+                    && controller.status.stringValue.hasPrefix("Replaced 1 match") && recorded.isEmpty,
                 "All open documents Replace replaces the selected match of the current document")
-            second.executeCommand("undo")
+            second.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(second.text == "x=1 x=2" && !second.modified, "that Replace is one Undo in the current document")
             await replaceAll()
             check(
                 editor.text == "y=1 y=2" && second.text == "y=1 y=2"
                     && controller.lastOutcome == .replaced(changed: 4, stale: 0),
                 "All open documents Replace All still replaces in every open document")
-            editor.executeCommand("undo")
-            second.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            second.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 editor.text == "x=1 x=2" && second.text == "x=1 x=2" && !editor.modified && !second.modified,
                 "All open documents Replace All is one Undo in each document")
@@ -950,9 +1208,9 @@ final class CountingWindow: NSWindow {
                 "Replace after a cross-document Next leaves the document left behind untouched")
             check(
                 second.text == "b a" && controller.lastOutcome == .replaced(changed: 1, stale: 0)
-                    && controller.status.stringValue.hasPrefix("Replaced 1 matches") && recorded.isEmpty,
+                    && controller.status.stringValue.hasPrefix("Replaced 1 match") && recorded.isEmpty,
                 "Replace after a cross-document Next replaces the match that Next selected")
-            second.executeCommand("undo")
+            second.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(second.text == "a a" && !second.modified, "that Replace is one Undo in the document navigated to")
             load(editor, "none")
             load(second, "a a")
@@ -1096,7 +1354,7 @@ final class CountingWindow: NSWindow {
             check(
                 editor.text == "one:12 two=34" && editor.selectedText == "two=34"
                     && controller.lastOutcome == .replaced(changed: 1, stale: 0)
-                    && controller.status.stringValue.hasPrefix("Replaced 1 matches")
+                    && controller.status.stringValue.hasPrefix("Replaced 1 match")
                     && controller.status.stringValue.hasSuffix("Selected the next match.")
                     && recorded == ["next", "replaceOne", "next"],
                 "Replace on a selected match replaces it, selects the following match and records both steps")
@@ -1110,9 +1368,9 @@ final class CountingWindow: NSWindow {
                     && replay.selectionEnd == editor.selectionEnd,
                 "the steps recorded by Replace play back to the same text and selection")
             _ = replayWindow
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "one=12 two=34" && !editor.modified, "a Replace that moved on is one Undo")
-            editor.executeCommand("redo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "redo"))
             _ = editor.setSelectionAnchor(7, caret: 13)
             recorded = []
             await replaceOne()
@@ -1144,7 +1402,7 @@ final class CountingWindow: NSWindow {
             await finished()
             check(
                 editor.text == "changed meanwhile" && controller.lastOutcome == .replaced(changed: 0, stale: 1)
-                    && controller.status.stringValue.contains("1 changed documents skipped") && recorded.isEmpty,
+                    && controller.status.stringValue.contains("1 changed document skipped") && recorded.isEmpty,
                 "Replace on a document edited during the search preserves it and reports the skip")
             // F45 with G374: a caret at a zero-width match ends after the text inserted there, as
             // typing would leave it, so the next Replace moves on instead of inserting there again.
@@ -1191,12 +1449,12 @@ final class CountingWindow: NSWindow {
                 "fixture: the search was cancelled after the replacement and before the next match was selected")
             check(
                 controller.lastOutcome == .replaced(changed: 1, stale: 0)
-                    && controller.status.stringValue.hasPrefix("Replaced 1 matches")
+                    && controller.status.stringValue.hasPrefix("Replaced 1 match")
                     && controller.status.stringValue.hasSuffix("Cancelled before the next match was selected.")
                     && !controller.status.stringValue.contains("no pending replacements applied")
                     && !controller.isSearching && recorded == ["replaceOne"],
                 "Cancel during the search that follows a Replace still reports the replacement")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "a a" && !editor.modified, "that cancelled Replace is one Undo")
             controller.replaceAll(nil)
             controller.cancel(nil)
@@ -1297,7 +1555,8 @@ final class CountingWindow: NSWindow {
             check(
                 SearchController.replace(typedHits, text: typedText, revision: typedRevision + 1, in: editor) == .stale
                     && untouched(), "a document at another revision is reported as changed and not edited")
-            _ = editor.setSelectionRanges([["anchor": 0, "caret": 0], ["anchor": 3, "caret": 3]])
+            _ = editor.setSelectionRanges([TTSelectionRange(anchor: 0, caret: 0), TTSelectionRange(anchor: 3, caret: 3)]
+            )
             check(
                 SearchController.replace(typedHits, text: typedText, revision: typedRevision, in: editor)
                     == .multipleSelections && untouched() && editor.selectionCount == 2,
@@ -1318,7 +1577,7 @@ final class CountingWindow: NSWindow {
                     && editor.text == "c bb c" && editor.selectionCount == 1 && editor.selectionAnchor == 3
                     && editor.selectionCaret == 3,
                 "a batch replacement reports its count and keeps the caret at the text it was on (G374)")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(unedited(), "a batch replacement is one Undo back to the save point")
             literal("aa", "c", scope: 0, wrap: false)
             editor.readOnly = true
@@ -1330,7 +1589,8 @@ final class CountingWindow: NSWindow {
                     && controller.status.stringValue.contains("1 read-only") && unedited() && recorded.isEmpty,
                 "Replace All on a read-only document says read-only, not changed")
             editor.readOnly = false
-            _ = editor.setSelectionRanges([["anchor": 0, "caret": 0], ["anchor": 3, "caret": 3]])
+            _ = editor.setSelectionRanges([TTSelectionRange(anchor: 0, caret: 0), TTSelectionRange(anchor: 3, caret: 3)]
+            )
             await replaceAll()
             check(
                 controller.lastOutcome == .replaced(changed: 0, stale: 1)
@@ -1352,7 +1612,7 @@ final class CountingWindow: NSWindow {
             check(
                 changeCallbacks >= 2 && changeCallbacks <= 5,
                 "Replace All of two matches reports only its own inserts and deletes (\(changeCallbacks) callbacks)")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(unedited(), "Replace All is one Undo back to the save point")
 
             // F223: unchanged editors, revisions and options reuse the held results; revision
@@ -1416,7 +1676,8 @@ final class CountingWindow: NSWindow {
                         && controller.numberOfRows(in: controller.table) == 5,
                     "fixture: All open documents results include the document that will close")
                 let lastRow = controller.tableView(controller.table, objectValueFor: nil, row: 4) as? String
-                check(lastRow?.hasSuffix(" · 0 · aa") == true, "a result row shows its document, offset and match")
+                check(
+                    lastRow?.hasSuffix(" · 1:1 · aa") == true, "a result row shows its document, line/column and match")
                 open = [editor]
                 extraWindow.contentView = nil
             }
@@ -1425,7 +1686,7 @@ final class CountingWindow: NSWindow {
             check(
                 controller.numberOfRows(in: controller.table) == 5
                     && controller.tableView(controller.table, objectValueFor: nil, row: 4) as? String
-                        == "Document · 0 · aa",
+                        == "Document · 1:1 · aa",
                 "rows of a closed document stay listed from the one retained snapshot")
             controller.window?.close()
             check(
@@ -1438,6 +1699,31 @@ final class CountingWindow: NSWindow {
                 "Find Next still works after the Find window was closed")
             controller.wordButton.state = .off
             controller.caseButton.state = .off
+            editor.text = "\t😀e\u{301}x\r\n"
+            editor.configureTabWidth(8, useTabs: true)
+            controller.currentEditor = { editor }
+            controller.openEditors = { [editor] }
+            controller.queryField.stringValue = "x"
+            controller.mode.selectItem(at: 0)
+            controller.scope.selectItem(at: 0)
+            controller.findAll(nil)
+            await finished()
+            check(
+                (controller.tableView(controller.table, objectValueFor: nil, row: 0) as? String)?.contains(
+                    " · 1:12 · x") == true,
+                "G346 actual Find row uses captured native-style Unicode/tab-stop position")
+            // Reorder presentation choices; persisted raw mode 0 remains Normal independently of index.
+            let normalItem = controller.mode.item(at: 0)!
+            controller.mode.menu?.removeItem(normalItem)
+            controller.mode.menu?.addItem(normalItem)
+            controller.mode.select(normalItem)
+            editor.text = "x.x"
+            controller.queryField.stringValue = "."
+            controller.findAll(nil)
+            await finished()
+            check(
+                controller.lastOutcome == .found(matches: 1, documents: 1, truncated: false),
+                "F182 reordered mode display retains represented search identity")
             Checks.summary { "PASS SearchControllerChecks: \(Checks.count) assertions" }
         }
     }

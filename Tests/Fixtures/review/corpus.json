@@ -1,0 +1,11 @@
+[
+ {"name":"empty","before":"","after":""},
+ {"name":"all-added","before":"","after":"alpha\r\nbeta\n"},
+ {"name":"all-deleted","before":"alpha\rbeta","after":""},
+ {"name":"repeated","before":"a\nb\na\nb\na\n","after":"b\na\nb\na\nb\n"},
+ {"name":"mixed-endings","before":"a\r\nb\rc\nd","after":"a\nb\r\nc\rd\n"},
+ {"name":"no-final-newline","before":"a\nb\n","after":"a\nb"},
+ {"name":"graphemes","before":"👩🏽‍💻é\r\n🇺🇸\n","after":"👨‍👩‍👧é\r\n🇨🇦\n"},
+ {"name":"exact-special","before":"﻿a\u0000\n","after":"﻿b\u0000\n"},
+ {"name":"canonical-distinct","before":"é\n","after":"é\n"}
+]

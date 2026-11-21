@@ -9,7 +9,8 @@
   "limitations": [
     "Imported data and lexer mapping are source evidence, not full language verification.",
     "Complex embedded lexer properties, substyles and reference function-list XML semantics remain unverified.",
-    "LexUser UDL requires the Notepad++ engine delta; generic profiles are not UDL compatibility."
+    "LexUser UDL requires the Notepad++ engine delta; generic profiles are not UDL compatibility.",
+    "The 96 Notepad++ source definitions retain the reference pin and hashes above. Markdown is an additional TextTank-authored profile using the pinned Lexilla Markdown style IDs; fenced blocks are styled as code without embedded-language highlighting."
   ],
   "profiles": [
     {
@@ -14837,6 +14838,181 @@
         "line": null,
         "blockOpen": null,
         "blockClose": null
+      }
+    },
+    {
+      "id": "markdown",
+      "title": "Markdown",
+      "lexer": "markdown",
+      "extensions": [
+        "md",
+        "markdown",
+        "mdown",
+        "mkd",
+        "mkdn"
+      ],
+      "keywordLists": {},
+      "referenceKeywordClasses": {},
+      "properties": {
+        "lexer.markdown.header.eolfill": "1"
+      },
+      "styles": [
+        {
+          "id": 0,
+          "name": "DEFAULT",
+          "foreground": "000000",
+          "fontStyle": 0
+        },
+        {
+          "id": 1,
+          "name": "LINE BEGIN",
+          "foreground": "000000",
+          "fontStyle": 0
+        },
+        {
+          "id": 2,
+          "name": "STRONG",
+          "foreground": "00676B",
+          "fontStyle": 1
+        },
+        {
+          "id": 3,
+          "name": "STRONG 2",
+          "foreground": "00676B",
+          "fontStyle": 1
+        },
+        {
+          "id": 4,
+          "name": "EMPHASIS",
+          "foreground": "AD235F",
+          "fontStyle": 2
+        },
+        {
+          "id": 5,
+          "name": "EMPHASIS 2",
+          "foreground": "AD235F",
+          "fontStyle": 2
+        },
+        {
+          "id": 6,
+          "name": "HEADER 1",
+          "foreground": "6037C9",
+          "fontStyle": 1
+        },
+        {
+          "id": 7,
+          "name": "HEADER 2",
+          "foreground": "6037C9",
+          "fontStyle": 1
+        },
+        {
+          "id": 8,
+          "name": "HEADER 3",
+          "foreground": "6037C9",
+          "fontStyle": 1
+        },
+        {
+          "id": 9,
+          "name": "HEADER 4",
+          "foreground": "6037C9",
+          "fontStyle": 1
+        },
+        {
+          "id": 10,
+          "name": "HEADER 5",
+          "foreground": "6037C9",
+          "fontStyle": 1
+        },
+        {
+          "id": 11,
+          "name": "HEADER 6",
+          "foreground": "6037C9",
+          "fontStyle": 1
+        },
+        {
+          "id": 12,
+          "name": "PRECHAR",
+          "foreground": "000000",
+          "fontStyle": 0
+        },
+        {
+          "id": 13,
+          "name": "UNORDERED LIST ITEM",
+          "foreground": "075DB4",
+          "fontStyle": 1
+        },
+        {
+          "id": 14,
+          "name": "ORDERED LIST ITEM",
+          "foreground": "075DB4",
+          "fontStyle": 1
+        },
+        {
+          "id": 15,
+          "name": "BLOCKQUOTE",
+          "foreground": "426B38",
+          "fontStyle": 2
+        },
+        {
+          "id": 16,
+          "name": "STRIKEOUT",
+          "foreground": "426B38",
+          "fontStyle": 0
+        },
+        {
+          "id": 17,
+          "name": "HRULE",
+          "foreground": "48545D",
+          "fontStyle": 0
+        },
+        {
+          "id": 18,
+          "name": "LINK",
+          "foreground": "075DB4",
+          "fontStyle": 0
+        },
+        {
+          "id": 19,
+          "name": "INLINE CODE",
+          "foreground": "A33A00",
+          "fontStyle": 0
+        },
+        {
+          "id": 20,
+          "name": "INLINE CODE 2",
+          "foreground": "A33A00",
+          "fontStyle": 0
+        },
+        {
+          "id": 21,
+          "name": "CODE BLOCK",
+          "foreground": "A33A00",
+          "fontStyle": 0
+        },
+        {
+          "id": 22,
+          "name": "FRONT MATTER MARKER",
+          "foreground": "48545D",
+          "fontStyle": 0
+        },
+        {
+          "id": 23,
+          "name": "FRONT MATTER",
+          "foreground": "A33A00",
+          "fontStyle": 0
+        },
+        {
+          "id": 24,
+          "name": "FRONT MATTER KEY",
+          "foreground": "075DB4",
+          "fontStyle": 0
+        }
+      ],
+      "functionPattern": null,
+      "comments": {
+        "line": null,
+        "blockOpen": "<!--",
+        "blockClose": "-->"
       }
     }
   ]

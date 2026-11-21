@@ -1,9 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import AppKit
+import Foundation
 
-enum CommentCommand: String, CaseIterable {
+package struct EditorSelection: Equatable, Sendable {
+    package init(anchor: Int, caret: Int) {
+        self.anchor = anchor
+        self.caret = caret
+    }
+
+    package let anchor: Int
+    package let caret: Int
+}
+
+package enum CommentCommand: String, CaseIterable {
     case toggleLine, lineComment, lineUncomment, blockComment, blockUncomment
-    var title: String {
+    package var title: String {
         switch self {
         case .toggleLine: return "Toggle Line Comment"
         case .lineComment: return "Comment Selected Lines"
@@ -12,10 +22,24 @@ enum CommentCommand: String, CaseIterable {
         case .blockUncomment: return "Remove Block Comment"
         }
     }
-    struct Edit: Hashable { var start: Int, end: Int, text: String }
+    package struct Edit: Hashable {
+        package init(start: Int, end: Int, text: String) {
+            self.start = start
+            self.end = end
+            self.text = text
+        }
+        package var start: Int, end: Int, text: String
+    }
     /// `edits` are ascending, non-overlapping byte ranges of the input; applying them yields `text`.
-    struct Plan { let text: String, selections: [[String: NSNumber]], edits: [Edit] }
-    func plan(text: String, selections: [[String: NSNumber]], profile: LanguageProfile) throws -> Plan {
+    package struct Plan {
+        package init(text: String, selections: [EditorSelection], edits: [Edit]) {
+            self.text = text
+            self.selections = selections
+            self.edits = edits
+        }
+        package let text: String, selections: [EditorSelection], edits: [Edit]
+    }
+    package func plan(text: String, selections: [EditorSelection], profile: LanguageProfile) throws -> Plan {
         guard text.utf8.count <= 16 * 1024 * 1024 else {
             throw LanguageError.invalid("Comment commands currently accept documents up to 16 MiB.")
         }
@@ -38,18 +62,19 @@ enum CommentCommand: String, CaseIterable {
             }
             return nil
         }
-        var ranges: [(Int, Int)] = []
+        var ranges: [(lower: Int, upper: Int)] = []
         for selection in selections {
-            guard let a = selection["anchor"]?.intValue, let c = selection["caret"]?.intValue, boundary(a), boundary(c)
+            let anchor = selection.anchor, caret = selection.caret
+            guard boundary(anchor), boundary(caret)
             else { throw LanguageError.invalid("Invalid Unicode selection boundary.") }
-            ranges.append((min(a, c), max(a, c)))
+            ranges.append((lower: min(anchor, caret), upper: max(anchor, caret)))
         }
         guard !ranges.isEmpty else { throw LanguageError.invalid("No editor selection.") }
         var edits: [Edit] = []
         if self == .blockComment || self == .blockUncomment {
-            let ordered = ranges.sorted { $0.0 < $1.0 }
+            let ordered = ranges.sorted { $0.lower < $1.lower }
             for index in 1..<max(1, ordered.count) {
-                guard ordered[index].0 >= ordered[index - 1].1 else {
+                guard ordered[index].lower >= ordered[index - 1].upper else {
                     throw LanguageError.invalid("Overlapping block selections were not changed.")
                 }
             }
@@ -109,10 +134,10 @@ enum CommentCommand: String, CaseIterable {
             for line in lines {
                 // Only the unterminated final line has end==next; a caret at its end is still on it.
                 guard
-                    ranges.contains(where: { a, b in
-                        a == b
-                            ? a >= line.start && (a < line.next || line.end == line.next)
-                            : a < line.next && b > line.start
+                    ranges.contains(where: { range in
+                        range.lower == range.upper
+                            ? range.lower >= line.start && (range.lower < line.next || line.end == line.next)
+                            : range.lower < line.next && range.upper > line.start
                     })
                 else { continue }
                 var indent = line.start
@@ -185,38 +210,8 @@ enum CommentCommand: String, CaseIterable {
             return position + delta
         }
         let restored = selections.map {
-            [
-                "anchor": NSNumber(value: mapped($0["anchor"]!.intValue)),
-                "caret": NSNumber(value: mapped($0["caret"]!.intValue))
-            ]
+            EditorSelection(anchor: mapped($0.anchor), caret: mapped($0.caret))
         }
         return Plan(text: String(decoding: result, as: UTF8.self), selections: restored, edits: edits)
-    }
-    func apply(to editor: TTEditor, profile: LanguageProfile) throws {
-        guard editor.window != nil else {
-            throw LanguageError.invalid("The comment command requires an open document.")
-        }
-        try editor.requireWritable()
-        let original = editor.text, revision = editor.revision, selections = editor.selectionRanges
-        let proposed = try plan(text: original, selections: selections, profile: profile)
-        guard proposed.text != original else { return }
-        guard editor.revision == revision, editor.selectionRanges == selections else {
-            throw LanguageError.invalid("The document changed; comments were not applied.")
-        }
-        // Only the changed byte ranges are replaced, so bookmarks, folds and the viewport survive.
-        // The bridge rechecks revision and length and validates every offset before the first edit.
-        let edits = proposed.edits.map {
-            ["start": NSNumber(value: $0.start), "end": NSNumber(value: $0.end), "text": $0.text] as [String: Any]
-        }
-        guard editor.applyEdits(edits, expectedRevision: revision, expectedLength: original.utf8.count) else {
-            throw LanguageError.invalid("The document changed; comments were not applied.")
-        }
-        // Selections that the edit collapsed onto one position cannot be restored as planned; the
-        // selections Scintilla carried through the edits are then already in place.
-        if !editor.setSelectionRanges(proposed.selections) {
-            let caret = editor.selectionCaret
-            _ = editor.setSelectionAnchor(caret, caret: caret)
-        }
-        editor.scrollCaretIntoView()
     }
 }

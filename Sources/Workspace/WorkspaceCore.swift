@@ -3,26 +3,46 @@ import Foundation
 import CryptoKit
 import Darwin
 
-struct SessionSelection: Codable, Equatable {
-    var anchorByte: Int
-    var caretByte: Int
+package struct SessionSelection: Codable, Equatable, Sendable {
+    package init(anchorByte: Int, caretByte: Int) {
+        self.anchorByte = anchorByte
+        self.caretByte = caretByte
+    }
+
+    package var anchorByte: Int
+    package var caretByte: Int
 }
 
 /// A retained snapshot, not an instruction to replace the referenced file.
 /// Restore as an unsaved document unless the UI independently verifies disk identity.
-struct SessionDocument: Codable, Equatable, Identifiable {
-    var id: UUID
-    var originalURL: URL?
-    var text: String
-    var format: FileFormat
-    var isDirty: Bool
-    var selection: SessionSelection
-    var bookmarks: [Int] = []
-    var language: String?
-    /// Hash of the original disk bytes at capture, not of unsaved editor text.
-    var originalSHA256: String?
+package struct SessionDocument: Codable, Equatable, Identifiable, Sendable {
+    package init(
+        id: UUID, originalURL: URL? = nil, text: String, format: FileFormat, isDirty: Bool, selection: SessionSelection,
+        bookmarks: [Int] = [], language: String? = nil, originalSHA256: String? = nil
+    ) {
+        self.id = id
+        self.originalURL = originalURL
+        self.text = text
+        self.format = format
+        self.isDirty = isDirty
+        self.selection = selection
+        self.bookmarks = bookmarks
+        self.language = language
+        self.originalSHA256 = originalSHA256
+    }
 
-    func validate() throws {
+    package var id: UUID
+    package var originalURL: URL?
+    package var text: String
+    package var format: FileFormat
+    package var isDirty: Bool
+    package var selection: SessionSelection
+    package var bookmarks: [Int]
+    package var language: String?
+    /// Hash of the original disk bytes at capture, not of unsaved editor text.
+    package var originalSHA256: String?
+
+    package func validate() throws {
         if let originalURL { try WorkspaceStore.validateLocalURL(originalURL) }
         if let hash = originalSHA256 {
             guard originalURL != nil, hash.count == 64,
@@ -59,15 +79,44 @@ struct SessionDocument: Codable, Equatable, Identifiable {
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct WorkspaceSession: Codable, Equatable, Identifiable {
-    var schemaVersion: Int = 1
-    var id: UUID
-    var name: String
-    var documents: [SessionDocument]
-    var activeDocumentID: UUID?
-    var savedAt: Date = Date()
+package struct WorkspaceSession: Codable, Equatable, Identifiable, Sendable {
+    package init(
+        schemaVersion: Int = 1, id: UUID, name: String, documents: [SessionDocument], activeDocumentID: UUID? = nil,
+        savedAt: Date = Date(), layoutState: WorkspaceLayoutState? = nil
+    ) {
+        self.schemaVersion = schemaVersion
+        self.id = id
+        self.name = name
+        self.documents = documents
+        self.activeDocumentID = activeDocumentID
+        self.savedAt = savedAt
+        self.layoutState = layoutState
+    }
 
-    func validate() throws {
+    package var schemaVersion: Int
+    package var id: UUID
+    package var name: String
+    package var documents: [SessionDocument]
+    package var activeDocumentID: UUID?
+    package var savedAt: Date
+    package var layoutState: WorkspaceLayoutState?
+    private var layoutDecodingFailed = false
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, id, name, documents, activeDocumentID, savedAt, layoutState
+    }
+    package enum LayoutStatus: Equatable, Sendable { case absent, valid(WorkspaceLayoutState), invalid }
+    package var layoutStatus: LayoutStatus {
+        guard !layoutDecodingFailed else { return .invalid }
+        guard let layoutState else { return .absent }
+        do {
+            try layoutState.validate()
+            let referenced = Set(layoutState.groups.flatMap(\.tabs).map(\.documentID))
+            guard referenced == Set(documents.map { DocumentID($0.id) }) else { return .invalid }
+            return .valid(layoutState)
+        } catch { return .invalid }
+    }
+
+    package func validate() throws {
         guard schemaVersion == 1 else {
             throw WorkspaceError.invalid("Unsupported session schema version. The session has not been changed.")
         }
@@ -84,15 +133,19 @@ struct WorkspaceSession: Codable, Equatable, Identifiable {
         }
         for document in documents { try document.validate() }
     }
-    func encoded() throws -> Data {
+    package func encoded() throws -> Data {
         try validate()
+        guard layoutStatus != .invalid else { throw WorkspaceError.invalid("The saved session layout is invalid.") }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(self)
     }
-    static func decode(_ data: Data) throws -> Self {
+    static package func decode(_ data: Data) throws -> Self {
         let result: Self
-        do { result = try JSONDecoder().decode(Self.self, from: data) } catch {
+        do {
+            try PersistedFormat.check(data, context: "Session snapshot")
+            result = try JSONDecoder().decode(Self.self, from: data)
+        } catch {
             throw WorkspaceError.invalid(
                 "The session is not valid TextTank session data: \(error.localizedDescription)")
         }
@@ -105,7 +158,7 @@ struct WorkspaceSession: Codable, Equatable, Identifiable {
     /// Each original is hashed in 64 KiB steps through the no-follow regular-file open, so no
     /// file is held in memory. `isCancelled` is asked between files and between steps; once it
     /// answers true the remaining documents are reported as not inspected.
-    func inspectReferencedFiles(isCancelled: () -> Bool = { false }) -> [SessionFileInspection] {
+    package func inspectReferencedFiles(isCancelled: () -> Bool = { false }) -> [SessionFileInspection] {
         documents.map { document in
             guard let url = document.originalURL else {
                 return SessionFileInspection(documentID: document.id, status: .untitled)
@@ -118,7 +171,7 @@ struct WorkspaceSession: Codable, Equatable, Identifiable {
                 }
                 return SessionFileInspection(
                     documentID: document.id, status: fingerprint == expected ? .unchanged : .changed)
-            } catch let error as POSIXError where error.code == .ENOENT {
+            } catch  where error.isFileNotFound {
                 return SessionFileInspection(documentID: document.id, status: .missing)
             } catch is CancellationError {
                 return SessionFileInspection(documentID: document.id, status: .unreadable("the check was cancelled"))
@@ -131,7 +184,7 @@ struct WorkspaceSession: Codable, Equatable, Identifiable {
     /// `inspections` it names the documents, and with them it adds each original's status.
     /// `savedLabel` (when the snapshot was saved, already formatted) and `showsDirtyState` (whether
     /// each document had unsaved edits when captured) add what the session itself records.
-    func restorePrompt(
+    package func restorePrompt(
         inspections: [SessionFileInspection]? = nil, savedLabel: String? = nil, showsDirtyState: Bool = false
     ) -> (message: String, detail: String) {
         let names = documents.map { $0.originalURL?.lastPathComponent ?? "Untitled" }
@@ -145,7 +198,11 @@ struct WorkspaceSession: Codable, Equatable, Identifiable {
             lines = zip(lines, documents).map { $0.0 + ($0.1.isDirty ? " · had unsaved edits" : " · no unsaved edits") }
         }
         return (
-            "Restore \(documents.count) Documents from \(name)?",
+            String(
+                format: documents.count == 1
+                    ? Strings.text("session.restore.one", "Restore %@ Document from %@?")
+                    : Strings.text("session.restore.other", "Restore %@ Documents from %@?"),
+                Strings.number(documents.count), name),
             (savedLabel.map { "Saved \($0). " } ?? "")
                 + "Snapshots open as new unsaved documents. Existing tabs and original files are kept."
                 + (inspections == nil
@@ -155,9 +212,25 @@ struct WorkspaceSession: Codable, Equatable, Identifiable {
     }
 }
 
-enum SessionFileStatus: Equatable {
+extension WorkspaceSession {
+    package init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        documents = try c.decode([SessionDocument].self, forKey: .documents)
+        activeDocumentID = try c.decodeIfPresent(UUID.self, forKey: .activeDocumentID)
+        savedAt = try c.decode(Date.self, forKey: .savedAt)
+        do { layoutState = try c.decodeIfPresent(WorkspaceLayoutState.self, forKey: .layoutState) } catch {
+            layoutState = nil
+            layoutDecodingFailed = true
+        }
+    }
+}
+
+package enum SessionFileStatus: Equatable, Sendable {
     case untitled, unchanged, changed, missing, unverified, unreadable(String)
-    var description: String {
+    package var description: String {
         switch self {
         case .untitled: return "Untitled snapshot"
         case .unchanged: return "Original file matches its saved fingerprint"
@@ -168,21 +241,26 @@ enum SessionFileStatus: Equatable {
         }
     }
 }
-struct SessionFileInspection: Equatable {
-    let documentID: UUID
-    let status: SessionFileStatus
+package struct SessionFileInspection: Equatable, Sendable {
+    package init(documentID: UUID, status: SessionFileStatus) {
+        self.documentID = documentID
+        self.status = status
+    }
+
+    package let documentID: UUID
+    package let status: SessionFileStatus
 }
 /// What `fstat` says about one state of a regular file. Two equal signatures name the same
 /// bytes only when the earlier one was settled; see `isSettled`.
-struct FileSignature: Equatable {
-    var device: Int64
-    var inode: UInt64
-    var size: Int64
-    var modifiedSeconds: Int64
-    var modifiedNanoseconds: Int64
-    var changedSeconds: Int64
-    var changedNanoseconds: Int64
-    init(_ info: stat) {
+package struct FileSignature: Equatable, Sendable {
+    package var device: Int64
+    package var inode: UInt64
+    package var size: Int64
+    package var modifiedSeconds: Int64
+    package var modifiedNanoseconds: Int64
+    package var changedSeconds: Int64
+    package var changedNanoseconds: Int64
+    package init(_ info: stat) {
         device = Int64(info.st_dev)
         inode = UInt64(info.st_ino)
         size = Int64(info.st_size)
@@ -194,24 +272,46 @@ struct FileSignature: Equatable {
     /// Timestamps can be as coarse as two seconds. A write that lands in the same tick as the
     /// recorded times could leave them unchanged, so a signature only stands for the bytes
     /// once both times are older than that at the moment it was taken.
-    static let settleSeconds: Int64 = 2
-    func isSettled(at now: Int64) -> Bool {
+    static package let settleSeconds: Int64 = 2
+    package func isSettled(at now: Int64) -> Bool {
         now - max(modifiedSeconds, changedSeconds) > Self.settleSeconds
     }
 }
 /// A streamed SHA-256 of a file. `signature` is present only when the metadata was the same
 /// before and after the read and was settled, so it can stand in for the digest later.
-struct FileSample: Equatable {
-    let digest: String
-    let signature: FileSignature?
+package struct FileSample: Equatable, Sendable {
+    package init(digest: String, signature: FileSignature?) {
+        self.digest = digest
+        self.signature = signature
+    }
+
+    package let digest: String
+    package let signature: FileSignature?
 }
-enum WorkspaceError: LocalizedError {
+/// Descriptor-derived read metadata. A modification date is presentation metadata, not a
+/// settled signature that allows skipping the next fingerprint check.
+package struct CapturedFileRead {
+    package init(data: Data, sample: FileSample, modificationDate: Date?) {
+        self.data = data
+        self.sample = sample
+        self.modificationDate = modificationDate
+    }
+
+    package let data: Data
+    package let sample: FileSample
+    package let modificationDate: Date?
+}
+package enum WorkspaceError: LocalizedError {
     case invalid(String), unsafeLocation, tooLarge
-    var errorDescription: String? {
+    case fileTooLarge(limit: Int, url: URL)
+    package var errorDescription: String? {
         switch self {
         case .invalid(let reason): return reason
         case .unsafeLocation:
-            return "Session storage requires a regular local file in a real directory, not a symbolic link."
+            return "This action requires a regular local file in a real directory, not a symbolic link."
+        case .fileTooLarge(let limit, let url):
+            return
+                "“\(url.lastPathComponent)” exceeds this action’s limit of \(limit) bytes. Its bytes have not been changed."
         case .tooLarge:
             return
                 "The session or referenced file exceeds the 512 MiB inspection limit. Its bytes have not been changed."
@@ -222,12 +322,12 @@ enum WorkspaceError: LocalizedError {
 /// Explicit file-panel URL in/out. No shell, plugin, workflow, or source-file writes.
 /// Same-directory rename is atomic; bytes are fsynced before replacement. This is
 /// not a claim of power-loss durability for the containing filesystem/directory.
-enum WorkspaceStore {
-    static let maximumSessionBytes = 512 * 1024 * 1024
+package enum WorkspaceStore {
+    static package let maximumSessionBytes = 512 * 1024 * 1024
     /// The one extension TextTank proposes for session snapshots and declares in Info.plist as
     /// `app.texttank.session`. Reading never depends on it: a snapshot loads under any name.
-    static let sessionFileExtension = "texttanksession"
-    static func fingerprint(_ bytes: Data) -> String { hex(SHA256.hash(data: bytes)) }
+    static package let sessionFileExtension = "texttanksession"
+    static package func fingerprint(_ bytes: Data) -> String { hex(SHA256.hash(data: bytes)) }
     private static let hexDigits = Array("0123456789abcdef".utf8)
     private static func hex(_ digest: SHA256.Digest) -> String {
         var text = [UInt8]()
@@ -239,52 +339,39 @@ enum WorkspaceStore {
         return String(decoding: text, as: UTF8.self)
     }
     /// Wall-clock seconds, the clock file timestamps use.
-    static func currentSecond() -> Int64 {
+    static package func currentSecond() -> Int64 {
         var now = timespec()
         clock_gettime(CLOCK_REALTIME, &now)
         return Int64(now.tv_sec)
     }
-    static func validateLocalURL(_ url: URL) throws {
-        guard url.isFileURL, (url.host ?? "").isEmpty || url.host == "localhost",
-            url.query == nil, url.fragment == nil, url.path.hasPrefix("/"), !url.path.contains("\0"),
-            !url.pathComponents.contains(".."), !url.lastPathComponent.isEmpty
-        else { throw WorkspaceError.unsafeLocation }
+    private static func mappedFileError(_ error: Error) -> Error {
+        switch error {
+        case PrivateFileError.unsafeLocation: return WorkspaceError.unsafeLocation
+        case PrivateFileError.tooLarge(let limit, let url): return WorkspaceError.fileTooLarge(limit: limit, url: url)
+        case let failure as FileOperationFailure:
+            return POSIXError(POSIXErrorCode(rawValue: failure.errorNumber) ?? .EIO)
+        default: return error
+        }
     }
-    private static func directoryDescriptor(for url: URL) throws -> Int32 {
-        try validateLocalURL(url)
-        let directory = url.deletingLastPathComponent()
-        let fd = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
-        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        return fd
+    static package func validateLocalURL(_ url: URL) throws {
+        do { try PrivateFileStore.validateLocalURL(url) } catch { throw mappedFileError(error) }
     }
-    /// The one way a document or session file is opened for reading: its directory and the
-    /// file itself without following a link, without blocking on a FIFO, a regular file only,
-    /// and within the size limit. The caller closes the descriptor.
     private static func openRegularFile(_ url: URL, maximumBytes: Int) throws -> (descriptor: Int32, info: stat) {
-        let dir = try directoryDescriptor(for: url)
-        defer { close(dir) }
-        let descriptor = openat(dir, url.lastPathComponent, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        do {
-            var info = stat()
-            guard fstat(descriptor, &info) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-            guard (info.st_mode & S_IFMT) == S_IFREG else { throw WorkspaceError.unsafeLocation }
-            guard info.st_size >= 0, info.st_size <= maximumBytes else { throw WorkspaceError.tooLarge }
-            return (descriptor, info)
-        } catch {
-            close(descriptor)
-            throw error
+        do { return try PrivateFileStore.openRegularFile(url, maximumBytes: maximumBytes) } catch {
+            throw mappedFileError(error)
         }
     }
     /// Metadata only: opens, checks and closes the file, and reads none of it.
-    static func signature(ofRegularFileAt url: URL, maximumBytes: Int = maximumSessionBytes) throws -> FileSignature {
+    static package func signature(ofRegularFileAt url: URL, maximumBytes: Int = maximumSessionBytes) throws
+        -> FileSignature
+    {
         let opened = try openRegularFile(url, maximumBytes: maximumBytes)
         close(opened.descriptor)
         return FileSignature(opened.info)
     }
     /// Hashes the file in 64 KiB steps without holding it in memory. `now` is the wall-clock
     /// second the signature is judged settled against; it is taken before the file is opened.
-    static func sample(
+    static package func sample(
         ofRegularFileAt url: URL, maximumBytes: Int = maximumSessionBytes, now: Int64? = nil,
         isCancelled: () -> Bool = { false }
     ) throws -> FileSample {
@@ -303,7 +390,7 @@ enum WorkspaceStore {
             }
             if count == 0 { break }
             total += count
-            guard total <= maximumBytes else { throw WorkspaceError.tooLarge }
+            guard total <= maximumBytes else { throw WorkspaceError.fileTooLarge(limit: maximumBytes, url: url) }
             buffer.withUnsafeBytes { hasher.update(bufferPointer: UnsafeRawBufferPointer(rebasing: $0[0..<count])) }
         }
         var after = stat()
@@ -313,77 +400,74 @@ enum WorkspaceStore {
         return FileSample(
             digest: hex(hasher.finalize()), signature: stable && signature.isSettled(at: now) ? signature : nil)
     }
-    static func fingerprint(
+    static package func fingerprint(
         ofRegularFileAt url: URL, maximumBytes: Int = maximumSessionBytes, isCancelled: () -> Bool = { false }
     ) throws -> String {
         try sample(ofRegularFileAt: url, maximumBytes: maximumBytes, isCancelled: isCancelled).digest
     }
     /// The bytes together with their sample, for a caller that needs both from one descriptor.
-    static func readRegularFileSample(_ url: URL, maximumBytes: Int = maximumSessionBytes, now: Int64? = nil) throws
+    static package func readRegularFileSample(_ url: URL, maximumBytes: Int = maximumSessionBytes, now: Int64? = nil)
+        throws
         -> (data: Data, sample: FileSample)
     {
-        let now = now ?? currentSecond()
-        var signature: FileSignature?
-        let data = try readRegularFile(url, maximumBytes: maximumBytes, signature: &signature)
-        return (
-            data,
-            FileSample(digest: fingerprint(data), signature: signature.flatMap { $0.isSettled(at: now) ? $0 : nil })
-        )
+        let read = try captureRegularFile(url, maximumBytes: maximumBytes, now: now)
+        return (read.data, read.sample)
     }
-    static func readRegularFile(_ url: URL, maximumBytes: Int = maximumSessionBytes) throws -> Data {
+    /// One bounded no-follow descriptor read, retaining its stable modification date even
+    /// while its metadata is too recent to stand in for a fingerprint.
+    static package func captureRegularFile(_ url: URL, maximumBytes: Int = maximumSessionBytes, now: Int64? = nil)
+        throws
+        -> CapturedFileRead
+    {
+        do {
+            let now = now ?? currentSecond()
+            let read = try PrivateFileStore.readSample(url, maximumBytes: maximumBytes)
+            let stable = read.after.flatMap { after -> FileSignature? in
+                let signature = FileSignature(after)
+                return signature == FileSignature(read.before) && signature.size == Int64(read.data.count)
+                    ? signature : nil
+            }
+            let date = stable.map {
+                // Add fractional seconds in Foundation's reference epoch. Adding them in the
+                // larger Unix epoch first can round again during Date's epoch conversion and
+                // trigger a false NSDocument external-change review for unchanged file bytes.
+                Date(
+                    timeIntervalSinceReferenceDate: Double($0.modifiedSeconds)
+                        - Date.timeIntervalBetween1970AndReferenceDate + Double($0.modifiedNanoseconds) / 1_000_000_000)
+            }
+            return CapturedFileRead(
+                data: read.data,
+                sample: FileSample(
+                    digest: fingerprint(read.data), signature: stable.flatMap { $0.isSettled(at: now) ? $0 : nil }),
+                modificationDate: date)
+        } catch { throw mappedFileError(error) }
+    }
+    static package func readRegularFile(_ url: URL, maximumBytes: Int = maximumSessionBytes) throws -> Data {
         var signature: FileSignature?
         return try readRegularFile(url, maximumBytes: maximumBytes, signature: &signature)
     }
     /// `signature` is set only when the metadata was the same before and after the read.
     private static func readRegularFile(_ url: URL, maximumBytes: Int, signature: inout FileSignature?) throws -> Data {
-        let (descriptor, info) = try openRegularFile(url, maximumBytes: maximumBytes)
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer { try? handle.close() }
-        var data = Data()
-        while true {
-            let chunk =
-                try handle.read(
-                    upToCount: min(64 * 1024, maximumBytes - data.count)
-                        + (maximumBytes - data.count < 64 * 1024 ? 1 : 0)) ?? Data()
-            if chunk.isEmpty { break }
-            data.append(chunk)
-            guard data.count <= maximumBytes else { throw WorkspaceError.tooLarge }
-        }
-        var after = stat()
-        if fstat(descriptor, &after) == 0, FileSignature(after) == FileSignature(info), Int(after.st_size) == data.count
-        {
-            signature = FileSignature(after)
-        }
-        return data
+        do {
+            let read = try PrivateFileStore.readSample(url, maximumBytes: maximumBytes)
+            if let after = read.after, FileSignature(after) == FileSignature(read.before),
+                Int(after.st_size) == read.data.count
+            {
+                signature = FileSignature(after)
+            }
+            return read.data
+        } catch { throw mappedFileError(error) }
     }
-    static func load(from url: URL) throws -> WorkspaceSession { try WorkspaceSession.decode(readRegularFile(url)) }
-    static func save(_ session: WorkspaceSession, to url: URL) throws {
+    static package func load(from url: URL) throws -> WorkspaceSession {
+        try WorkspaceSession.decode(readRegularFile(url))
+    }
+    static package func save(_ session: WorkspaceSession, to url: URL) throws {
         try writePrivate(try session.encoded(), to: url)
     }
-    static func writePrivate(_ data: Data, to url: URL) throws {
-        guard data.count <= maximumSessionBytes else { throw WorkspaceError.tooLarge }
-        let dir = try directoryDescriptor(for: url)
-        defer { close(dir) }
-        let destination = url.lastPathComponent
-        var existing = stat()
-        if fstatat(dir, destination, &existing, AT_SYMLINK_NOFOLLOW) == 0 {
-            guard (existing.st_mode & S_IFMT) == S_IFREG else { throw WorkspaceError.unsafeLocation }
-        } else if errno != ENOENT {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        let temporary = ".texttank-session-" + UUID().uuidString
-        let descriptor = openat(dir, temporary, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer {
-            try? handle.close()
-            unlinkat(dir, temporary, 0)
-        }
-        try handle.write(contentsOf: data)
-        try handle.synchronize()
-        try handle.close()
-        guard renameat(dir, temporary, dir, destination) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
+    static package func writePrivate(_ data: Data, to url: URL) throws {
+        do {
+            try PrivateFileStore.write(
+                data, to: url, maximumBytes: maximumSessionBytes, temporaryPrefix: ".texttank-session-")
+        } catch { throw mappedFileError(error) }
     }
 }

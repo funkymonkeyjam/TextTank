@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import UniformTypeIdentifiers
@@ -52,6 +55,7 @@ extension AutomationDefinition.Step.Kind {
 }
 
 /// A draft-only native rule builder. Testing never invokes inputs, outputs or connectors.
+@MainActor
 final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate,
     NSTextViewDelegate
 {
@@ -62,12 +66,15 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
     private var list: RuleListDraft
     private let savedWorkflows: [AutomationDefinition]
     private let nameField = NSTextField()
-    private var accepted = false
     private var preview = RulePreviewState()
     private var previewControl: AutomationRunControl?
-    private let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 940, height: 700), styleMask: [.titled, .closable, .resizable],
-        backing: .buffered, defer: false)
+    private let form = FormPanel(
+        title: "Edit Rules", identifier: "TextTank.Rules", size: NSSize(width: 940, height: 700), layoutContent: false)
+    private var window: NSWindow { form.window }
+    private static var active: [AutomationStepEditor] = []
+    private var completion: ((AutomationDefinition?) -> Void)?
+    private var finished = false
+    private var editGeneration = 0
     private let table = NSTableView()
     private let sample = NSTextView(), result = NSTextView()
     private let status = AnnouncingLabel(wrappingLabelWithString: AutomationStepEditor.openingInstruction)
@@ -86,18 +93,33 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         self.savedWorkflows = savedWorkflows
         super.init()
     }
-    static func edit(_ original: AutomationDefinition, savedWorkflows: [AutomationDefinition] = [])
-        -> AutomationDefinition?
-    {
+    @discardableResult static func present(
+        _ original: AutomationDefinition, savedWorkflows: [AutomationDefinition] = [], parent: NSWindow? = nil,
+        completion: @escaping (AutomationDefinition?) -> Void
+    ) -> AutomationStepEditor {
         let editor = AutomationStepEditor(original, savedWorkflows: savedWorkflows)
+        editor.completion = completion
+        editor.form.onClose = { [weak editor] in editor?.finish(nil) }
+        active.append(editor)
         editor.build()
-        NSApp.runModal(for: editor.window)
-        editor.window.orderOut(nil)
-        return editor.accepted ? editor.draft : nil
+        editor.form.show(parent: parent)
+        return editor
+    }
+    private func finish(_ value: AutomationDefinition?) {
+        guard !finished else { return }
+        finished = true
+        cancelPreview()
+        form.close()
+        let callback = completion
+        completion = nil
+        Self.active.removeAll { $0 === self }
+        callback?(value)
     }
     private func button(_ title: String, _ action: Selector, _ name: String) -> NSButton {
         let b = NSButton(title: title, target: self, action: action)
         b.bezelStyle = .rounded
+        b.setAccessibilityLabel(Strings.formAction(title, scope: "Edit Rules"))
+        b.cell?.setAccessibilityLabel(Strings.formAction(title, scope: "Edit Rules"))
         b.identifier = NSUserInterfaceItemIdentifier("rules." + name)
         b.setContentHuggingPriority(.required, for: .horizontal)
         return b
@@ -140,7 +162,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         nameField.isEditable = true
         nameField.isSelectable = true
         nameField.isBezeled = true
-        nameField.setAccessibilityLabel("Automation name")
+        ControlPresentation.label("Automation name", control: nameField)
         nameField.setContentHuggingPriority(.init(1), for: .horizontal)
         let note = NSTextField(
             labelWithString:
@@ -244,12 +266,10 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
             if let clip = text.enclosingScrollView?.contentView { text.frame = clip.bounds }
         }
         table.sizeLastColumnToFit()
-        window.center()
         // The controls are placed by frame. With an initial first responder set, AppKit does not
         // work out the Tab order by itself, so ask for it: every control is then reachable.
         window.recalculateKeyViewLoop()
         window.initialFirstResponder = nameField
-        window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(nameField)
         nameField.selectText(nil)
     }
@@ -312,16 +332,26 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         updateButtons()
     }
     private func rulesChanged() {
+        editGeneration += 1
         syncTable()
         markStale()
     }
     @objc private func addRule() {
-        guard list.canAdd, let step = Self.editStep(.init(kind: .removeBlankLines)) else { return }
-        if list.add(step) { rulesChanged() }
+        guard list.canAdd, window.attachedSheet == nil else { return }
+        let generation = editGeneration
+        Self.presentStep(.init(kind: .removeBlankLines), parent: window) { [weak self] step in
+            guard let self, !self.finished, self.editGeneration == generation, let step else { return }
+            if self.list.add(step) { self.rulesChanged() }
+        }
     }
     @objc private func editRule() {
-        guard let selected = list.selected, let step = Self.editStep(list.steps[selected]) else { return }
-        if list.replaceSelected(with: step) { rulesChanged() }
+        guard let selected = list.selected, window.attachedSheet == nil else { return }
+        let generation = editGeneration
+        Self.presentStep(list.steps[selected], parent: window) { [weak self] step in
+            guard let self, !self.finished, self.editGeneration == generation, self.list.selected == selected, let step
+            else { return }
+            if self.list.replaceSelected(with: step) { self.rulesChanged() }
+        }
     }
     @objc private func duplicateRule() { if list.duplicateSelected() { rulesChanged() } }
     @objc private func removeRule() { if list.removeSelected() { rulesChanged() } }
@@ -342,7 +372,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
             item.tag = index
             choices.menu?.addItem(item)
         }
-        choices.setAccessibilityLabel("Rules to load")
+        ControlPresentation.label("Rules to load", control: choices)
         return choices
     }
     /// The rule set the picker's selected item stands for.
@@ -358,21 +388,22 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         let picker = TTAlert()
         picker.messageText = "Load Rules"
         picker.informativeText =
-            "Copy rules from any saved automation or template, or import a rule file. Only this draft’s processing steps are replaced; its name, input, output and shortcuts stay unchanged."
+            "Copy rules from any saved automation or template, or import a rule file. Only this draft’s rules are replaced; its name, input, output and shortcuts stay unchanged."
         if !templates.problems.isEmpty {
             picker.informativeText +=
                 " Some built-in templates could not be read and are not listed: "
                 + templates.problems.joined(separator: "; ")
         }
         picker.addButton(withTitle: "Load Selected").identifier = NSUserInterfaceItemIdentifier("rules.load.selected")
-        picker.addButton(withTitle: "Cancel")
+        picker.addButton(withTitle: "Cancel", role: .cancel)
         picker.addButton(withTitle: "Import File…")
         let choices = Self.ruleSetPopup(saved: saved, templates: templates.sets)
         picker.accessoryView = choices
-        let response = picker.runModal()
+        enum LoadChoice { case load, cancel, importFile }
+        guard let response = picker.choice([LoadChoice.load, .cancel, .importFile]), response != .cancel else { return }
         do {
             let selected: AutomationRuleSet
-            if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
+            if response == .importFile {
                 let panel = NSOpenPanel()
                 panel.title = "Import Processing Rules"
                 panel.canChooseDirectories = false
@@ -384,7 +415,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
                 guard let chosen = imported.fromLibrary ? Self.chooseFromLibrary(imported.sets) : imported.sets.first
                 else { return }
                 selected = chosen
-            } else if response == .alertFirstButtonReturn,
+            } else if response == .load,
                 let chosen = Self.selectedRuleSet(in: choices, from: saved + templates.sets)
             {
                 selected = chosen
@@ -395,15 +426,23 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
             let confirm = TTAlert()
             confirm.messageText = "Replace this draft’s rules?"
             confirm.informativeText =
-                "Load \(selected.steps.count) processing steps from ‘\(selected.name)’. Canceling the builder will still preserve the saved automation."
+                String(
+                    format: selected.steps.count == 1
+                        ? Strings.text(
+                            "rules.load.one",
+                            "Load %@ rule from ‘%@’. Canceling the builder will still preserve the saved automation.")
+                        : Strings.text(
+                            "rules.load.other",
+                            "Load %@ rules from ‘%@’. Canceling the builder will still preserve the saved automation."),
+                    Strings.number(selected.steps.count), selected.name)
             confirm.addButton(withTitle: "Replace Rules").identifier = NSUserInterfaceItemIdentifier(
                 "rules.load.replace")
-            confirm.addButton(withTitle: "Cancel")
+            confirm.addButton(withTitle: "Cancel", role: .cancel)
             if confirm.runModal() == .alertFirstButtonReturn {
                 list.replaceAll(with: selected.steps)
                 rulesChanged()
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     /// The chosen file is a whole automation library, not a rule file. Its automations are offered
     /// by name; only the chosen one's rules are taken.
@@ -413,7 +452,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         picker.informativeText =
             "It holds \(sets.count == 1 ? "one automation" : "\(sets.count) automations") rather than a single rule set. Choose the automation whose rules to copy. Its name, input, output, shortcut and destination are not imported."
         picker.addButton(withTitle: "Use Its Rules")
-        picker.addButton(withTitle: "Cancel")
+        picker.addButton(withTitle: "Cancel", role: .cancel)
         let choices = ruleSetPopup(saved: sets, templates: [], savedPrefix: "Automation: ")
         picker.accessoryView = choices
         guard picker.runModal() == .alertFirstButtonReturn else { return nil }
@@ -429,7 +468,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
             panel.allowedContentTypes = [.json]
             guard panel.runModal() == .OK, let url = panel.url else { return }
             try data.write(to: url, options: .atomic)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func testRules() {
         window.makeFirstResponder(nil)
@@ -447,23 +486,24 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         let control = AutomationRunControl()
         previewControl = control
         status.stringValue = "Testing rules using saved parameter defaults…"
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        let deliver: @MainActor @Sendable (Result<String, Error>) -> Void = { [weak self] outcome in
+            guard let self, self.preview.finish(token) else { return }
+            self.previewControl = nil
+            switch outcome {
+            case .success(let text):
+                self.result.string = text
+                self.status.stringValue =
+                    "Test passed using saved parameter defaults. No document or external output was changed."
+            case .failure(let error): self.status.stringValue = error.localizedDescription
+            }
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
             let outcome: Result<String, Error> = Result {
                 try AutomationDefinition.testRules(steps, sample: input, control: control)
             }
             // Delivered through the run loop, so the result also arrives while a modal started from a
             // main-queue block is open.
-            MainRunLoop.perform { [weak self] in
-                guard let self, self.preview.finish(token) else { return }
-                self.previewControl = nil
-                switch outcome {
-                case .success(let text):
-                    self.result.string = text
-                    self.status.stringValue =
-                        "Test passed using saved parameter defaults. No document or external output was changed."
-                case .failure(let error): self.status.stringValue = error.localizedDescription
-                }
-            }
+            MainRunLoop.perform { deliver(outcome) }
         }
     }
     @objc private func save() {
@@ -474,28 +514,36 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         do {
             try candidate.validate()
             draft = candidate
-            accepted = true
             cancelPreview()
-            NSApp.stopModal()
-        } catch { NSAlert(error: error).runModal() }
+            finish(candidate)
+        } catch {
+            status.stringValue = error.localizedDescription
+            nameField.setAccessibilityHelp(error.localizedDescription)
+            window.makeFirstResponder(nameField)
+        }
     }
     @objc private func cancel() {
-        cancelPreview()
-        NSApp.stopModal()
+        finish(nil)
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         cancel()
         return false
     }
-    static func editStep(_ initial: AutomationDefinition.Step) -> AutomationDefinition.Step? {
+    static func presentStep(
+        _ initial: AutomationDefinition.Step, parent: NSWindow? = nil,
+        completion: @escaping (AutomationDefinition.Step?) -> Void
+    ) {
         let fields = RuleFields(initial)
-        return withExtendedLifetime(fields) { fields.run() }
+        fields.present(parent: parent, completion: completion)
     }
+
 }
 
-private final class RuleFields: NSObject {
+@MainActor private final class RuleFields: NSObject {
     private let initial: AutomationDefinition.Step
-    private let alert = TTAlert(), kind = NSPopUpButton(), find = NSTextField(), replacement = NSTextField()
+    private let form = FormPanel(title: "Configure Rule", identifier: "rule", size: NSSize(width: 650, height: 460))
+    private let kind = NSPopUpButton(), find = NSTextField(), replacement = NSTextField()
+    private var accepted = false
     private let findTitle = NSTextField(labelWithString: "Text to match")
     private let guidance = NSTextField(wrappingLabelWithString: "")
     private let askFind = NSButton(checkboxWithTitle: "Ask for this text when running", target: nil, action: nil)
@@ -508,10 +556,8 @@ private final class RuleFields: NSObject {
     private var selected: AutomationDefinition.Step.Kind {
         AutomationDefinition.Step.Kind.allCases[kind.indexOfSelectedItem]
     }
-    func run() -> AutomationDefinition.Step? {
-        alert.messageText = "Configure Rule"
-        alert.addButton(withTitle: "Save Rule").identifier = NSUserInterfaceItemIdentifier("rule.save")
-        alert.addButton(withTitle: "Cancel")
+    func present(parent: NSWindow?, completion: @escaping (AutomationDefinition.Step?) -> Void) {
+        form.retainPresentationOwner(self)
         // One menu item for every kind, in `allCases` order, so the selected index is the kind.
         for value in AutomationDefinition.Step.Kind.allCases {
             kind.menu?.addItem(NSMenuItem(title: value.label, action: nil, keyEquivalent: ""))
@@ -519,10 +565,12 @@ private final class RuleFields: NSObject {
         kind.selectItem(at: AutomationDefinition.Step.Kind.allCases.firstIndex(of: initial.kind)!)
         kind.target = self
         kind.action = #selector(changed)
-        kind.setAccessibilityLabel("Rule")
+        ControlPresentation.label("Rule", control: kind)
         find.stringValue = initial.find ?? ""
         replacement.stringValue = initial.replacement ?? ""
-        replacement.setAccessibilityLabel(AutomationDefinition.Step.Kind.replacementTitle)
+        ControlPresentation.label(AutomationDefinition.Step.Kind.replacementTitle, control: replacement)
+        ControlPresentation.label("Ask for match text when running this rule", control: askFind)
+        ControlPresentation.label("Ask for replacement when running this rule", control: askReplacement)
         askFind.state = initial.askForFind == true ? .on : .off
         askReplacement.state = initial.askForReplacement == true ? .on : .off
         let stack = NSStackView()
@@ -533,6 +581,8 @@ private final class RuleFields: NSObject {
             (NSTextField(labelWithString: "Rule"), kind as NSView), (findTitle, find),
             (NSTextField(labelWithString: AutomationDefinition.Step.Kind.replacementTitle), replacement)
         ] {
+            ControlPresentation.label(
+                control.accessibilityLabel() ?? title.stringValue, control: control, caption: title)
             title.widthAnchor.constraint(equalToConstant: 100).isActive = true
             control.widthAnchor.constraint(equalToConstant: 420).isActive = true
             stack.addArrangedSubview(NSStackView(views: [title, control]))
@@ -542,19 +592,25 @@ private final class RuleFields: NSObject {
         stack.addArrangedSubview(askReplacement)
         stack.addArrangedSubview(guidance)
         stack.frame = NSRect(x: 0, y: 0, width: 550, height: 260)
-        alert.accessoryView = stack
+        form.add(stack)
         changed()
-        while alert.runModal() == .alertFirstButtonReturn {
-            alert.window.makeFirstResponder(nil)
+        form.onClose = { [weak self] in if self?.accepted == false { completion(nil) } }
+        form.button("Save Rule", identifier: "rule.save") {
+            guard self.form.commitEditing() else { return }
             let step = AutomationDefinition.Step.configured(
-                kind: selected, find: find.stringValue, replacement: replacement.stringValue,
-                askForFind: askFind.state == .on, askForReplacement: askReplacement.state == .on, from: initial)
+                kind: self.selected, find: self.find.stringValue,
+                replacement: self.replacement.stringValue, askForFind: self.askFind.state == .on,
+                askForReplacement: self.askReplacement.state == .on, from: self.initial)
             do {
                 try step.validate()
-                return step
-            } catch { NSAlert(error: error).runModal() }
-        }
-        return nil
+                self.accepted = true
+                self.form.close()
+                completion(step)
+            } catch { self.form.showValidation(error, field: self.find) }
+        }.keyEquivalent = "\r"
+        form.button("Cancel", identifier: "rule.cancel", cancel: true) { self.form.close() }
+        form.window.initialFirstResponder = kind
+        form.show(parent: parent)
     }
     @objc private func changed() {
         let selected = selected
@@ -563,7 +619,7 @@ private final class RuleFields: NSObject {
         replacement.isEnabled = selected.acceptsReplacement
         askReplacement.isEnabled = selected.acceptsReplacement
         findTitle.stringValue = selected.findTitle
-        find.setAccessibilityLabel(selected.findTitle)
+        ControlPresentation.label(selected.findTitle, control: find)
         guidance.stringValue = selected.guidance
     }
 }

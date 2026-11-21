@@ -1,12 +1,441 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+@testable import TextTankRuntime
+import EditorBridge
+import NativeSearch
 /// Function-list navigation fronts the document window; these checks never put one on screen.
 final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sender: Any?) {} }
+@MainActor private final class LanguageDialogState { var acted = false, timedOut = false }
+
 @main struct LanguageControllerChecks {
-    static func main() {
+    /// Read actual Scintilla colors, lexer categories and fonts, rather than palette metadata.
+    @MainActor static func syntaxAppearanceChecks(_ controller: LanguageController) throws {
+        let host = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 500), styleMask: [.titled], backing: .buffered,
+            defer: false)
+        let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 700, height: 500))
+        host.contentView = editor
+        func rgb(_ color: NSColor) -> [Double] {
+            let c = color.usingColorSpace(.sRGB)!
+            return [Double(c.redComponent), Double(c.greenComponent), Double(c.blueComponent)]
+        }
+        func luminance(_ color: NSColor) -> Double {
+            zip(rgb(color), [0.2126, 0.7152, 0.0722]).reduce(0) { sum, pair in
+                let (c, weight) = pair
+                return sum + weight * (c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4))
+            }
+        }
+        func contrast(_ a: NSColor, _ b: NSColor) -> Double {
+            let x = luminance(a), y = luminance(b)
+            return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+        }
+        func distance(_ a: NSColor, _ b: NSColor) -> Double {
+            sqrt(zip(rgb(a), rgb(b)).reduce(0) { $0 + pow($1.0 - $1.1, 2) })
+        }
+        @MainActor func attribute(_ key: NSAttributedString.Key, _ token: String) -> Any {
+            let offset = (editor.text as NSString).range(of: token).location
+            return editor.attributedText(forSelection: false).attribute(key, at: offset, effectiveRange: nil)!
+        }
+        var lightColors: [NSColor] = []
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            editor.appearance = NSAppearance(named: appearance)
+            editor.viewDidChangeEffectiveAppearance()
+            let mode = appearance.rawValue
+            editor.text =
+                "@decorator\nclass Example:\n    def render(self):\n        return len(\"hello\") + 42 # comment\n"
+            editor.resetUndoHistory()
+            editor.setSavePoint()
+            let revision = editor.revision
+            check(controller.apply(identifier: "python", to: editor), "syntax fixture: Python applies in \(mode)")
+            let tokens = ["class", "Example", "render", "\"hello\"", "42", "# comment", "@decorator"]
+            let colors = tokens.map { attribute(.foregroundColor, $0) as! NSColor }
+            for (token, color) in zip(tokens, colors) {
+                let back = attribute(.backgroundColor, token) as! NSColor
+                check(contrast(color, back) >= 4.5, "\(mode): actual Python \(token) text contrast is at least 4.5:1")
+            }
+            for a in colors.indices {
+                for b in colors.indices where a < b {
+                    check(
+                        distance(colors[a], colors[b]) >= 0.18,
+                        "\(mode): Python \(tokens[a]) and \(tokens[b]) have visibly separated RGB colors")
+                }
+            }
+            check(
+                editor.revision == revision && !editor.modified,
+                "\(mode): changing syntax colors preserves document revision and save point")
+            if appearance == .aqua {
+                lightColors = colors
+            } else {
+                check(
+                    zip(lightColors, colors).allSatisfy { distance($0, $1) >= 0.25 },
+                    "syntax colors resolve separately for light and dark editor appearances")
+            }
+            for (id, text, tokens) in [
+                ("html", "<section title=\"hello\">body</section>\n", ["section", "title", "\"hello\""]),
+                ("json", "{\"name\": \"hello\", \"count\": 42, \"active\": true}\n", ["name", "hello", "42", "true"])
+            ] {
+                editor.text = text
+                check(controller.apply(identifier: id, to: editor), "syntax fixture: \(id) applies in \(mode)")
+                let colors = tokens.map { attribute(.foregroundColor, $0) as! NSColor }
+                for a in colors.indices {
+                    for b in colors.indices where a < b {
+                        check(
+                            distance(colors[a], colors[b]) >= 0.18,
+                            "\(mode): \(id) \(tokens[a]) and \(tokens[b]) retain distinct category colors")
+                    }
+                    check(
+                        contrast(colors[a], attribute(.backgroundColor, tokens[a]) as! NSColor) >= 4.5,
+                        "\(mode): actual \(id) \(tokens[a]) text contrast is at least 4.5:1")
+                }
+            }
+            editor.text =
+                "# Heading\n\nPlain **strong** and *emphasis* with `code`.\n\n[Link](https://example.invalid)\n\n- Item\n\n> Quote\n\n```swift\nlet value = 42\n```\n\n~~~\nlet tilde = 42\n~~~\n"
+            editor.resetUndoHistory()
+            editor.setSavePoint()
+            let markdownRevision = editor.revision
+            let applied = controller.apply(identifier: "markdown", to: editor)
+            check(applied, "Markdown is a linked selectable language in \(mode)")
+            if applied {
+                typealias Message = @convention(c) (AnyObject, Selector, UInt32, UInt, Int) -> Int
+                let native = editor.subviews.first!, selector = NSSelectorFromString("message:wParam:lParam:")
+                let send = unsafeBitCast(native.method(for: selector), to: Message.self)
+                for (token, style) in [
+                    ("Heading", 6), ("strong", 2), ("emphasis", 4), ("code", 19),
+                    ("Link", 18), ("- Item", 13), ("> Quote", 15), ("let value", 20), ("let tilde", 21)
+                ] {
+                    let offset = (editor.text as NSString).range(of: token).location
+                    check(
+                        send(native, selector, 2010, UInt(offset), 0) == style,
+                        "\(mode): actual Markdown \(token) uses its lexer category \(style)")
+                    check(
+                        contrast(
+                            attribute(.foregroundColor, token) as! NSColor,
+                            attribute(.backgroundColor, token) as! NSColor) >= 4.5,
+                        "\(mode): actual Markdown \(token) text contrast is at least 4.5:1")
+                }
+                check(
+                    NSFontManager.shared.traits(of: attribute(.font, "strong") as! NSFont).contains(.boldFontMask),
+                    "\(mode): Markdown strong emphasis is bold")
+                check(
+                    NSFontManager.shared.traits(of: attribute(.font, "emphasis") as! NSFont).contains(.italicFontMask),
+                    "\(mode): Markdown emphasis is italic")
+                check(
+                    editor.revision == markdownRevision && !editor.modified,
+                    "\(mode): Markdown highlighting preserves text revision and save point")
+            }
+            // Check every configured built-in category, including categories not present in the
+            // representative documents. Read the real engine tables after each profile applies.
+            typealias StyleMessage = @convention(c) (AnyObject, Selector, UInt32, UInt, Int) -> Int
+            let native = editor.subviews.first!, selector = NSSelectorFromString("message:wParam:lParam:")
+            let send = unsafeBitCast(native.method(for: selector), to: StyleMessage.self)
+            func engineColor(_ value: Int) -> NSColor {
+                NSColor(
+                    srgbRed: CGFloat(value & 255) / 255, green: CGFloat((value >> 8) & 255) / 255,
+                    blue: CGFloat((value >> 16) & 255) / 255, alpha: 1)
+            }
+            for (id, first, second) in [("python", 8, 20), ("cpp", 9, 18)] {
+                check(controller.apply(identifier: id, to: editor), "syntax fixture: overlapping categories in \(id)")
+                let a = engineColor(send(native, selector, 2481, UInt(first), 0)),
+                    b = engineColor(send(native, selector, 2481, UInt(second), 0))
+                check(
+                    distance(a, b) >= 0.18,
+                    "\(mode): \(id) category \(first) and \(second) retain separated colors")
+            }
+            var unreadable: [String] = []
+            editor.text = ""
+            for profile in controller.catalog!.profiles where profile.udl == nil {
+                guard controller.apply(identifier: profile.id, to: editor) else { continue }
+                for style in profile.styles {
+                    let front = engineColor(send(native, selector, 2481, UInt(style.id), 0))
+                    let back = engineColor(send(native, selector, 2482, UInt(style.id), 0))
+                    if contrast(front, back) < 4.5 { unreadable.append("\(profile.id):\(style.name)") }
+                }
+            }
+            check(
+                unreadable.isEmpty,
+                "\(mode): every linked built-in syntax category meets 4.5:1 against its actual background")
+            if !unreadable.isEmpty { print("NOTE low-contrast categories: \(unreadable)") }
+        }
+        let item = controller.languageMenuItems().first { ($0.representedObject as? String) == "markdown" }
+        check(item?.title == "Markdown", "Markdown is discoverable in the real language menu")
+    }
+    @MainActor static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    @MainActor static func editingJSON(
+        _ controller: LanguageController, _ act: @escaping @MainActor @Sendable (NSWindow, [NSView]) -> Bool
+    )
+        -> Bool
+    {
+        let state = LanguageDialogState()
+        let deadline = Date().addingTimeInterval(10)
+        let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated {
+                guard let window = presentedFormWindow, let content = window.contentView else { return }
+                if Date() > deadline {
+                    state.timedOut = true
+                    NSApp.abortModal()
+                    return
+                }
+                if !state.acted { state.acted = act(window, descendants(content)) }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .modalPanel)
+        defer { timer.invalidate() }
+        controller.configure()
+        waitForModelessForms()
+        return state.acted && !state.timedOut
+    }
+    @MainActor static func jsonEditorChecks(bundledURL: URL) throws {
+        let isolated = try IsolatedSupportDirectory("LanguageJSONChecks")
+        defer { isolated.restore() }
+        let path = isolated.url.appendingPathComponent("LanguageProfiles.json")
+        let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        editor.text = "import os\n"
+        editor.resetUndoHistory()
+        editor.setSavePoint()
+        let revision = editor.revision
+        let controller = LanguageController(
+            editorProvider: { editor }, languageProvider: { "python" }, setLanguage: { _ in },
+            bundledCatalog: bundledURL)
+        let bundled = try requireValue(controller.catalog, "fixture: JSON language catalog exists")
+        try controller.persist(bundled)
+        _ = controller.apply(identifier: "python", to: editor)
+        var reapplyCalls = 0
+        controller.openDocuments = {
+            reapplyCalls += 1
+            return [(language: "python", editor: editor)]
+        }
+        var corrected = bundled
+        let index = try requireValue(
+            corrected.profiles.firstIndex { $0.id == "python" }, "fixture: Python profile exists")
+        corrected.profiles[index].title = "Python JSON draft"
+        for style in corrected.profiles[index].styles.indices {
+            corrected.profiles[index].styles[style].fontSize = 21
+        }
+        let correctedJSON = String(decoding: try corrected.encoded(), as: UTF8.self)
+        let before = try Data(contentsOf: path)
+        let invalid = "{ keep this Language JSON draft"
+        var stage = 0, nestedError = false, keptDraft = false, inlineError = false
+        var manager: NSWindow?
+        let retried = editingJSON(controller) { window, views in
+            if stage == 1, window !== manager {
+                nestedError = true
+                NSApp.abortModal()
+                return false
+            }
+            guard let text = views.compactMap({ $0 as? NSTextView }).first,
+                let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Save" })
+            else { return false }
+            switch stage {
+            case 0:
+                manager = window
+                text.string = invalid
+                stage = 1
+                save.performClick(nil)
+            case 1:
+                keptDraft = text.string == invalid && (try? Data(contentsOf: path)) == before && reapplyCalls == 0
+                inlineError = text.accessibilityHelp()?.isEmpty == false
+                text.string = correctedJSON
+                stage = 2
+                save.performClick(nil)
+                return true
+            default: break
+            }
+            return false
+        }
+        check(
+            retried && stage == 2 && keptDraft,
+            "F155 Language JSON retry preserves the draft, storage and current styles")
+        check(!nestedError && inlineError, "F155 invalid Language JSON is marked inline without a nested error modal")
+        let stored = try Data(contentsOf: path)
+        struct Format: Decodable {
+            var overridesVersion: Int?
+            var version: Int?
+        }
+        let format = try JSONDecoder().decode(Format.self, from: stored)
+        check(
+            format.overridesVersion == 1 && format.version == nil,
+            "F155 Language JSON Save still stores overrides rather than a full catalog")
+        let loaded = try LanguageCatalog.load(stored: stored, over: bundled)
+        check(
+            PersistedValue.equal(loaded.profiles, corrected.profiles),
+            "F155 full Language JSON changes roundtrip through overrides")
+        let font = editor.attributedText(forSelection: false).attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        check(
+            reapplyCalls == 1 && font.map { abs($0.pointSize - 21) < 0.01 } == true,
+            "F155 Language JSON Save reapplies the actual changed styles to open documents")
+        check(
+            editor.text == "import os\n" && editor.revision == revision && !editor.modified,
+            "F155 Language JSON configuration never edits document bytes or dirty state")
+        var imported = corrected
+        imported.profiles[index].title = "Imported Language draft"
+        for style in imported.profiles[index].styles.indices { imported.profiles[index].styles[style].fontSize = 23 }
+        let importData = try imported.encoded()
+        let importURL = isolated.url.appendingPathComponent("language-import.json")
+        let futureURL = isolated.url.appendingPathComponent("language-newer-reader.json")
+        let exportURL = isolated.url.appendingPathComponent("language-export.json")
+        try importData.write(to: importURL)
+        var future = Data("{\"minimumReaderVersion\":2,".utf8)
+        future.append(importData.dropFirst())
+        try future.write(to: futureURL)
+        var chosenImport = futureURL, exportNames: [String] = []
+        controller.jsonFilePanels = .init(
+            importURL: { chosenImport },
+            exportURL: { name in
+                exportNames.append(name)
+                return exportURL
+            })
+        stage = 0
+        var refusedDraft = false, importedOnlyDraft = false, exportedDraft = false
+        let files = editingJSON(controller) { _, views in
+            guard let text = views.compactMap({ $0 as? NSTextView }).first,
+                let load = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.import"
+                }),
+                let export = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.export"
+                }),
+                let cancel = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.cancel"
+                })
+            else { return false }
+            switch stage {
+            case 0:
+                text.string = correctedJSON + "\n "
+                stage = 1
+                load.performClick(nil)
+            case 1:
+                refusedDraft =
+                    text.string == correctedJSON + "\n " && text.accessibilityHelp()?.isEmpty == false
+                    && (try? Data(contentsOf: path)) == stored
+                chosenImport = importURL
+                stage = 2
+                load.performClick(nil)
+            case 2:
+                importedOnlyDraft =
+                    text.accessibilityHelp() == nil
+                    && (try? LanguageCatalog.decode(Data(text.string.utf8))) == imported
+                    && (try? Data(contentsOf: path)) == stored && reapplyCalls == 1
+                stage = 3
+                export.performClick(nil)
+            case 3:
+                exportedDraft = (try? LanguageCatalog.decode(Data(contentsOf: exportURL))) == imported
+                stage = 4
+                cancel.performClick(nil)
+                return true
+            default: break
+            }
+            return false
+        }
+        check(
+            files && stage == 4 && refusedDraft, "F155 newer-reader Language import is refused without losing the draft"
+        )
+        check(
+            try Data(contentsOf: futureURL) == future && controller.loadError == nil,
+            "F155 refused external Language input stays unchanged and does not poison saved profiles")
+        check(
+            importedOnlyDraft && exportedDraft && exportNames == ["TextTank-LanguageProfiles.json"],
+            "F155 valid Language import/export uses a full-catalog draft and the documented export name")
+        check(
+            try Data(contentsOf: path) == stored && reapplyCalls == 1,
+            "F155 Cancel after Language import/export keeps stored overrides and live styles")
+        stage = 0
+        let accepted = editingJSON(controller) { _, views in
+            guard
+                let load = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.import"
+                }),
+                let save = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.save"
+                })
+            else { return false }
+            if stage == 0 {
+                stage = 1
+                load.performClick(nil)
+            } else if stage == 1 {
+                stage = 2
+                save.performClick(nil)
+                return true
+            }
+            return false
+        }
+        let importedStored = try Data(contentsOf: path)
+        let importedFormat = try JSONDecoder().decode(Format.self, from: importedStored)
+        let importedLoaded = try LanguageCatalog.load(stored: importedStored, over: bundled)
+        check(
+            accepted && importedFormat.overridesVersion == 1 && importedFormat.version == nil
+                && PersistedValue.equal(importedLoaded.profiles, imported.profiles),
+            "F155 imported Language Save still writes lossless overrides")
+        let importedFont =
+            editor.attributedText(forSelection: false).attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        check(
+            reapplyCalls == 2 && importedFont.map { abs($0.pointSize - 23) < 0.01 } == true
+                && editor.revision == revision && !editor.modified,
+            "F155 imported Language Save reapplies styles without changing document text")
+        controller.jsonFilePanels = .init(importURL: { nil }, exportURL: { _ in nil })
+        stage = 0
+        var cancelledChoicesKeptDraft = false
+        let cancelFiles = editingJSON(controller) { _, views in
+            guard let text = views.compactMap({ $0 as? NSTextView }).first,
+                let load = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.import"
+                }),
+                let export = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.export"
+                }),
+                let cancel = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "language.json.cancel"
+                })
+            else { return false }
+            switch stage {
+            case 0:
+                text.string = correctedJSON + "\n "
+                stage = 1
+                load.performClick(nil)
+            case 1:
+                cancelledChoicesKeptDraft = text.string == correctedJSON + "\n "
+                stage = 2
+                export.performClick(nil)
+            case 2:
+                cancelledChoicesKeptDraft = cancelledChoicesKeptDraft && text.string == correctedJSON + "\n "
+                stage = 3
+                cancel.performClick(nil)
+                return true
+            default: break
+            }
+            return false
+        }
+        check(
+            try cancelFiles && cancelledChoicesKeptDraft && Data(contentsOf: path) == importedStored
+                && reapplyCalls == 2,
+            "F155 cancelled Language file choices keep the draft, stored bytes and live styles")
+        let corrupt = Data("{ preserve unreadable language profiles".utf8)
+        try corrupt.write(to: path)
+        let blocked = LanguageController(
+            editorProvider: { editor }, languageProvider: { "python" }, setLanguage: { _ in },
+            bundledCatalog: bundledURL)
+        var recoveryOnly = false
+        let declined = editingJSON(blocked) { _, views in
+            guard
+                let cancel = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "store.recover.cancel"
+                })
+            else { return false }
+            recoveryOnly = !views.contains { $0 is NSTextView }
+            cancel.performClick(nil)
+            return true
+        }
+        check(
+            try declined && recoveryOnly && Data(contentsOf: path) == corrupt && blocked.storageDamaged,
+            "F155 unreadable Language storage requires explicit recovery before the JSON editor")
+    }
+    @MainActor static func main() {
         Checks.run("LanguageControllerChecks") {
             let isolatedSupport = try IsolatedSupportDirectory("LanguageChecks")
             defer { isolatedSupport.restore() }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
             let
                 window = NSWindow(
@@ -20,6 +449,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 editorProvider: { editor }, languageProvider: { selected }, setLanguage: { selected = $0 },
                 bundledCatalog: bundledURL)
             let catalog = try requireValue(controller.catalog, "fixture: language catalog loaded")
+            try syntaxAppearanceChecks(controller)
             let text = "# café\nclass Example:\n    def work(self):\n        return 1\n"
             editor.text = text
             editor.resetUndoHistory()
@@ -184,7 +614,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             try controller.persist(custom)
             let beforeStyleRevision = editor.revision
             _ = controller.apply(identifier: user.id, to: editor)
-            func styleMatches() -> Bool {
+            @MainActor func styleMatches() -> Bool {
                 let output = editor.attributedText(forSelection: false),
                     font = output.attribute(.font, at: 0, effectiveRange: nil) as! NSFont,
                     color = (output.attribute(.foregroundColor, at: 0, effectiveRange: nil) as! NSColor)
@@ -203,7 +633,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // F21, F83: a saved style change reaches every view of every open document on that
             // profile, the lexer is installed once per document, and other documents are left alone.
             do {
-                func look(_ view: TTEditor) -> (size: CGFloat, red: CGFloat) {
+                @MainActor func look(_ view: TTEditor) -> (size: CGFloat, red: CGFloat) {
                     let output = view.attributedText(forSelection: false),
                         font = output.attribute(.font, at: 0, effectiveRange: nil) as! NSFont,
                         color = (output.attribute(.foregroundColor, at: 0, effectiveRange: nil) as! NSColor)
@@ -212,6 +642,10 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 }
                 let pane = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
                 pane.shareDocument(with: editor)
+                // Earlier checks deliberately put the source in Dark Aqua. Compare identical
+                // appearances for propagation, then test independent appearance resolution below.
+                pane.appearance = editor.effectiveAppearance
+                pane.viewDidChangeEffectiveAppearance()
                 let sameProfile = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
                 sameProfile.text = editor.text
                 sameProfile.resetUndoHistory()
@@ -255,6 +689,22 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 check(
                     look(editor) == look(pane) && abs(look(editor).size - 23.5) > 0.01,
                     "a language chosen in one pane gives both panes the new profile's styles")
+                for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                    editor.appearance = NSAppearance(named: appearance)
+                    pane.appearance = NSAppearance(named: appearance)
+                    editor.viewDidChangeEffectiveAppearance()
+                    pane.viewDidChangeEffectiveAppearance()
+                    check(
+                        look(editor) == look(pane) && abs(look(editor).size - 23.5) > 0.01,
+                        "profile propagation keeps both panes' styles in \(appearance.rawValue)")
+                }
+                pane.appearance = NSAppearance(named: .aqua)
+                pane.viewDidChangeEffectiveAppearance()
+                check(
+                    look(editor).size == look(pane).size && look(editor).red > look(pane).red + 0.5,
+                    "a copied dynamic profile resolves its colour for each pane's own appearance")
+                pane.appearance = editor.effectiveAppearance
+                pane.viewDidChangeEffectiveAppearance()
                 check(
                     fanout.applyToDocument(identifier: user.id, through: editor), "fixture: back on the user language")
                 custom.profiles[index].styles[styleIndex].fontSize = 19.25
@@ -291,7 +741,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             lexWindow.contentView = lexEditor
             let native = lexEditor.subviews.first!, messageSelector = NSSelectorFromString("message:wParam:lParam:")
             let send = unsafeBitCast(native.method(for: messageSelector), to: ScintillaMessage.self)
-            func sci(_ message: UInt32, _ w: UInt = 0, _ l: Int = 0) -> Int {
+            @MainActor func sci(_ message: UInt32, _ w: UInt = 0, _ l: Int = 0) -> Int {
                 send(native, messageSelector, message, w, l)
             }
             let SCI_GETLENGTH: UInt32 = 2006, SCI_GETSTYLEAT: UInt32 = 2010, SCI_GETENDSTYLED: UInt32 = 2028,
@@ -348,18 +798,18 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 print("NOTE missing profiles: \(missing)")
             }
             check(
-                supported == catalog.profiles.count - expectedMissing.count && catalog.profiles.count == 96,
+                supported == catalog.profiles.count - expectedMissing.count && catalog.profiles.count == 97,
                 "every other catalog profile applies (\(supported) of \(catalog.profiles.count))")
-            func message(_ target: TTEditor, _ number: UInt32, _ w: UInt = 0, _ l: Int = 0) -> Int {
+            @MainActor func message(_ target: TTEditor, _ number: UInt32, _ w: UInt = 0, _ l: Int = 0) -> Int {
                 let view = target.subviews.first!
                 return unsafeBitCast(view.method(for: messageSelector), to: ScintillaMessage.self)(
                     view, messageSelector, number, w, l)
             }
-            func styles(_ target: TTEditor) -> [Int] {
+            @MainActor func styles(_ target: TTEditor) -> [Int] {
                 (0..<target.text.utf8.count).map { message(target, SCI_GETSTYLEAT, UInt($0)) }
             }
             var hosts: [NSWindow] = []
-            func hostedEditor() -> TTEditor {
+            @MainActor func hostedEditor() -> TTEditor {
                 let
                     host = NSWindow(
                         contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled],
@@ -390,7 +840,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // G330: the TextTank-authored parts of the user-defined-language lexer. Expected styles
             // are Notepad++'s UDL 2.1 behaviour: style 4 is KEYWORDS1, 13 FOLDER IN CODE1, 1 COMMENTS.
             let SCI_GETFOLDLEVEL: UInt32 = 2223, foldHeader = 0x2000, foldBase = 0x400, keyword1 = 4
-            func userProfile(
+            @MainActor func userProfile(
                 _ name: String, keywords: [String: String], prefix: [String: String] = [:],
                 nesting: [String: Int] = [:]
             ) throws
@@ -518,7 +968,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // G328: a multi-part keyword goes ahead of its own prefixes in its list, on every lex.
             // `e ea else "else if"` is the order the old sort comparator contradicted itself on.
             let keyword2 = 5, SCI_POSITIONFROMLINE: UInt32 = 2167
-            func settled(_ target: TTEditor) -> [Int] {
+            @MainActor func settled(_ target: TTEditor) -> [Int] {
                 _ = message(target, SCI_COLOURISE, UInt(message(target, SCI_GETENDSTYLED)), -1)
                 return styles(target)
             }
@@ -593,7 +1043,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // G329: the lexer keeps its reordered lists between lexes, so they must follow every
             // change to a list. Keywords1 is word list 7 of the user lexer.
             let SCI_SETKEYWORDS: UInt32 = 4005, keywords1List: UInt = 7
-            func setKeywords(_ target: TTEditor, _ list: UInt, _ words: String) {
+            @MainActor func setKeywords(_ target: TTEditor, _ list: UInt, _ words: String) {
                 words.withCString { _ = message(target, SCI_SETKEYWORDS, list, Int(bitPattern: $0)) }
                 _ = message(target, SCI_COLOURISE, 0, -1)
             }
@@ -633,7 +1083,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 controller.apply(identifier: bigLists.id, to: bigEditor)
                 && controller.apply(identifier: smallLists.id, to: smallEditor)
             let costLine = UInt(message(bigEditor, SCI_POSITIONFROMLINE, 39))
-            func relexCost(_ target: TTEditor) -> Double {
+            @MainActor func relexCost(_ target: TTEditor) -> Double {
                 (0..<3).map { _ in timed { for _ in 0..<100 { _ = message(target, SCI_COLOURISE, costLine, -1) } } }
                     .min()!
             }
@@ -673,8 +1123,8 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // G334: the lexer describes itself accurately, and its property plumbing is the lexer's own.
             let SCI_GETLEXER: UInt32 = 4002, SCI_SETPROPERTY: UInt32 = 4004, SCI_GETPROPERTY: UInt32 = 4008,
                 SCI_GETLEXERLANGUAGE: UInt32 = 4012, SCI_DESCRIBEKEYWORDSETS: UInt32 = 4017
-            func lexerText(_ target: TTEditor, _ number: UInt32, _ key: String? = nil) -> String {
-                func fetch(_ w: UInt) -> String {
+            @MainActor func lexerText(_ target: TTEditor, _ number: UInt32, _ key: String? = nil) -> String {
+                @MainActor func fetch(_ w: UInt) -> String {
                     let size = message(target, number, w, 0)
                     var buffer = [CChar](repeating: 0, count: max(size, 0) + 1)
                     return buffer.withUnsafeMutableBufferPointer {
@@ -685,7 +1135,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 guard let key else { return fetch(0) }
                 return key.withCString { fetch(UInt(bitPattern: $0)) }
             }
-            func setProperty(_ target: TTEditor, _ key: String, _ value: String) {
+            @MainActor func setProperty(_ target: TTEditor, _ key: String, _ value: String) {
                 key.withCString { k in
                     value.withCString { v in
                         _ = message(target, SCI_SETPROPERTY, UInt(bitPattern: k), Int(bitPattern: v))
@@ -732,7 +1182,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // ---- Package 18 ----
             let SCI_STYLEGETFORE: UInt32 = 2481, STYLE_DEFAULT: UInt = 32
             let bundledCatalog = try LanguageCatalog.decode(Data(contentsOf: bundledURL))
-            func plainController(_ language: String = "python") -> LanguageController {
+            @MainActor func plainController(_ language: String = "python") -> LanguageController {
                 LanguageController(
                     editorProvider: { nil }, languageProvider: { language }, setLanguage: { _ in },
                     bundledCatalog: bundledURL)
@@ -747,7 +1197,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             func close(_ a: [Double], _ b: [Double], _ tolerance: Double = 0.012) -> Bool {
                 zip(a, b).allSatisfy { abs($0 - $1) <= tolerance }
             }
-            func colors(_ target: TTEditor, at offset: Int) -> (text: [Double], back: [Double]) {
+            @MainActor func colors(_ target: TTEditor, at offset: Int) -> (text: [Double], back: [Double]) {
                 let output = target.attributedText(forSelection: false)
                 return (
                     components(output.attribute(.foregroundColor, at: offset, effectiveRange: nil) as! NSColor),
@@ -779,7 +1229,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             // overwritten, and can be moved aside explicitly.
             var customCatalog = bundledCatalog
             customCatalog.profiles[0].title = "Recovered plain language"
-            func damagedCase(_ name: String, _ write: (URL) throws -> Void) throws {
+            @MainActor func damagedCase(_ name: String, _ write: (URL) throws -> Void) throws {
                 try withIsolatedSupportDirectory("LanguageDamaged") { support in
                     let stored = support.appendingPathComponent("LanguageProfiles.json")
                     try write(stored)
@@ -833,6 +1283,25 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             }
             try damagedCase("file over 16 MiB") {
                 try Data(repeating: 0x20, count: 16 * 1024 * 1024 + 1).write(to: $0)
+            }
+            for late in ["future", "corrupt"] {
+                try withIsolatedSupportDirectory("LanguageLate" + late) { support in
+                    let controller = plainController(), stored = support.appendingPathComponent("LanguageProfiles.json")
+                    try controller.persist(customCatalog)
+                    let valid = try Data(contentsOf: stored)
+                    let observed =
+                        late == "future"
+                        ? Data("{\"minimumReaderVersion\":2,".utf8) + valid.dropFirst()
+                        : Data("retain corrupt late rewrite".utf8)
+                    try observed.write(to: stored)
+                    rejects("F198 a deliberate Language reread refuses a newly observed \(late) file") {
+                        try controller.persist(customCatalog)
+                    }
+                    check(
+                        try Data(contentsOf: stored) == observed && controller.loadError != nil
+                            && controller.storageDamaged,
+                        "F198 a newly observed \(late) Language file is retained behind the shared latch")
+                }
             }
             try withIsolatedSupportDirectory("LanguageSymlink") { support in
                 try withIsolatedSupportDirectory("LanguageSymlinkTarget") { elsewhere in
@@ -895,7 +1364,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 check(
                     written.count < fullSize / 4 && overrides.changed.map(\.id) == ["normal", "python"]
                         && overrides.changed[1].keywordLists == nil && overrides.removed.isEmpty
-                        && overrides.added.count == loaded.profiles.count - 96
+                        && overrides.added.count == loaded.profiles.count - 97
                         && overrides.basedOnSourceCommit == bundledCatalog.sourceCommit,
                     "saving writes only the changes (\(written.count) bytes, was \(fullSize))")
                 check(
@@ -917,13 +1386,13 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 let goldenProfiles = try LanguageCatalog.decode(Data(contentsOf: stored)).profiles
                 let golden = plainController()
                 check(
-                    golden.loadError == nil && golden.catalog?.profiles.count == 96 + goldenProfiles.count
+                    golden.loadError == nil && golden.catalog?.profiles.count == 97 + goldenProfiles.count
                         && goldenProfiles.allSatisfy { golden.profile(identifier: $0.id) == $0 },
                     "the golden full-copy catalog loads with its profiles intact over the bundled languages")
                 try golden.persist(try requireValue(golden.catalog, "fixture: golden catalog"))
                 check(
                     goldenProfiles.allSatisfy { plainController().profile(identifier: $0.id) == $0 }
-                        && plainController().catalog?.profiles.count == 96 + goldenProfiles.count,
+                        && plainController().catalog?.profiles.count == 97 + goldenProfiles.count,
                     "the golden catalog's profiles survive being saved as overrides")
             }
             // F241, F305: one decode, an indexed lookup, and a menu rebuilt only when the catalog changed.
@@ -1002,10 +1471,9 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                     "\(id) is coloured by its own profile styles")
             }
             // F299: adaptive colours are resolved for the editor's own appearance.
-            func calibrated(_ r: Double, _ g: Double, _ b: Double) -> [Double] {
-                components(NSColor(calibratedRed: r, green: g, blue: b, alpha: 1))
-            }
-            let darkKeyword = calibrated(0.65, 0.82, 1), lightKeyword = calibrated(0.08, 0.24, 0.55)
+            // DS-D8 deliberately replaces the previous calibrated blue with this sRGB pair.
+            let darkKeyword = [Double(0xB4) / 255, Double(0x9A) / 255, 1],
+                lightKeyword = [Double(0x60) / 255, Double(0x37) / 255, Double(0xC9) / 255]
             let adaptive = hostedEditor()
             adaptive.text = "return value;\n"
             adaptive.appearance = NSAppearance(named: .aqua)
@@ -1061,7 +1529,9 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             let monoIndex = monoCatalog.profiles.count - 1,
                 monoStyle = try requireValue(
                     mono.styles.firstIndex { $0.name == "KEYWORDS1" }, "fixture: keyword style")
-            func monoColors(_ name: NSAppearance.Name) -> (keyword: [Double], ordinary: [Double], back: [Double]) {
+            @MainActor func monoColors(_ name: NSAppearance.Name) -> (
+                keyword: [Double], ordinary: [Double], back: [Double]
+            ) {
                 let themed = hostedEditor()
                 themed.appearance = NSAppearance(named: name)
                 themed.text = "hello ordinary\n"
@@ -1112,7 +1582,8 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 "javascript: the profile's own keyword style reaches the cpp lexer")
             // F84: a blank font or size field means "follow the editor", and can be saved and restored.
             let inherit = LanguageProfile.Style(id: 4, name: "KEYWORDS1", foreground: "0000FF", fontStyle: 0)
-            func entered(_ original: LanguageProfile.Style, font: String, size: String, bold: Bool = false) throws
+            @MainActor func entered(_ original: LanguageProfile.Style, font: String, size: String, bold: Bool = false)
+                throws
                 -> LanguageProfile.Style
             {
                 try LanguageController.readStyle(
@@ -1151,7 +1622,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             let fontEditor = hostedEditor()
             fontEditor.text = "HELLO ordinary\n"
             _ = controller.apply(identifier: user.id, to: fontEditor)
-            func pointSize(_ target: TTEditor) -> Double {
+            @MainActor func pointSize(_ target: TTEditor) -> Double {
                 Double(
                     (target.attributedText(forSelection: false).attribute(.font, at: 0, effectiveRange: nil) as! NSFont)
                         .pointSize)
@@ -1207,6 +1678,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 picker.indexOfSelectedItem == 2
                     && picker.itemTitles == ["A", "B", "A (style 12)", "Style 13", "Style 14"],
                 "the selected row is the style's index (\(picker.itemTitles))")
+            Checks.section("F155 Language JSON editor") { try jsonEditorChecks(bundledURL: bundledURL) }
             withExtendedLifetime(hosts) {}
             print(
                 "LEXER CONFIGURATION: \(supported) available; missing \(missing). This proves loading and text integrity, not every lexical semantic."

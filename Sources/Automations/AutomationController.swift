@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import Darwin
@@ -6,8 +9,11 @@ import Darwin
 /// modal panels and event tracking. Unlike the main dispatch queue, this still delivers while a
 /// main-queue block or main-actor job is itself inside a nested modal run loop.
 enum MainRunLoop {
-    static func perform(_ block: @escaping () -> Void) {
-        CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue, block)
+    static func perform(_ block: @escaping @MainActor @Sendable () -> Void) {
+        CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { block() }
+        }
         CFRunLoopWakeUp(CFRunLoopGetMain())
     }
 }
@@ -16,23 +22,41 @@ extension Notification.Name {
     static let textTankAutomationsDidChange = Notification.Name("TextTankAutomationsDidChange")
 }
 
-final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation {
+@MainActor final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation {
+    /// Independent isolated compositions must not share AppKit toolbar synchronization state.
+    let toolbarFamilyIdentifier = UUID().uuidString
     private let editorProvider: () -> TTEditor?
     /// Called once each time a saved automation starts to run, before any prompt or change.
     var onInvocation: () -> Void = {}
-    private let newDocument: (String) -> Void
+    private let newDocument: @MainActor (String) -> Void
     private let storage: URL
     private var library = AutomationLibrary(workflows: [])
     /// An existing library that could not be read. It is never overwritten; see `persistLibrary`.
-    private var loadError: Error?
+    let loadState: StoreLoadState
+    private var loadError: Error? {
+        get { loadState.error }
+        set { loadState.error = newValue }
+    }
     /// No library existed and the first write of the presets failed. This does not block saving.
     private var installError: Error?
     private var installErrorReported = false
-    private var busy = false
+    private var busy = false {
+        didSet {
+            manager?.refresh()
+            palette?.refresh()
+        }
+    }
+    private var runControl: AutomationRunControl?
     /// The pasteboard used for clipboard input and output. Checks substitute a private one.
-    var pasteboard = NSPasteboard.general
+    var pasteboard: NSPasteboard?
+    private var activePasteboard: NSPasteboard? { pasteboard ?? RuntimeEnvironment.current.generalPasteboard() }
     /// Internal, not private, so that a check can hold an export open without EventKit.
-    var exportInProgress = false
+    var exportInProgress = false {
+        didSet {
+            manager?.refresh()
+            palette?.refresh()
+        }
+    }
     /// Says why an automation command cannot start while a Reminders export is running.
     private func requireNoExport() throws {
         if exportInProgress {
@@ -58,26 +82,20 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         return m
     }()
 
-    init(editorProvider: @escaping () -> TTEditor?, newDocument: @escaping (String) -> Void) {
+    init(editorProvider: @escaping () -> TTEditor?, newDocument: @escaping @MainActor (String) -> Void) {
         self.editorProvider = editorProvider
         self.newDocument = newDocument
-        let base: URL
-        if let isolated = ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"] {
-            base = URL(fileURLWithPath: isolated, isDirectory: true)
-        } else {
-            base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("TextTank", isDirectory: true)
-        }
-        storage = base.appendingPathComponent("Automations.json")
+        storage = AppStorage.url(.automations)
+        loadState = StoreLoadState(url: storage, displayName: "Saved automations")
         super.init()
         var storageInfo = stat()
         if lstat(storage.path, &storageInfo) == 0 {
             do {
                 library = try AutomationLibrary.decode(
-                    AutomationFileInput.readData(storage, limit: AutomationLibrary.maximumBytes))
+                    AutomationFileInput.readData(storage, limit: AutomationLibrary.maximumBytes, parent: .strict))
             } catch { loadError = error }
         } else if errno != ENOENT {
-            loadError = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            loadError = FileOperationFailure(errno, operation: "inspect saved automations", path: storage.path)
         } else {
             // Presets are ordinary editable definitions, installed only for a new configuration.
             // There is no library to protect here, so a failed first write does not block the
@@ -107,42 +125,27 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     func menuNeedsUpdate(_ menu: NSMenu) { if menu === automationMenu { rebuild() } else { populateInvocations(menu) } }
     /// Fresh menus all dispatch by stable ID and resolve the currently saved definition at invocation.
     func contextMenu() -> NSMenu { invocationMenu(title: "Run Automation") }
-    func makeToolbarItem() -> NSToolbarItem {
-        let item = NSToolbarItem(itemIdentifier: NSToolbarItem.Identifier("TextTank.Automations"))
-        item.label = "Automations"
-        item.paletteLabel = "Automations"
-        let button = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 165, height: 30), pullsDown: true)
-        button.menu = invocationMenu(title: "Automation Launcher")
-        button.setAccessibilityLabel("Automations")
-        button.toolTip = "Run a saved automation or manage your workflows"
-        item.view = button
+    func makeToolbarItem() -> NSMenuToolbarItem {
+        let item = NSMenuToolbarItem(itemIdentifier: .init("TextTank.Automations"))
+        item.label = Strings.text("toolbar.automations", "Automations")
+        item.paletteLabel = item.label
+        let description = Strings.text("toolbar.automations.help", "Run a saved automation or manage automations.")
+        item.image = NSImage(systemSymbolName: "bolt.circle", accessibilityDescription: description)
+        item.toolTip = description
+        refreshToolbarItem(item)
         return item
     }
-    func toolbarIdentifiers() -> [NSToolbarItem.Identifier] {
-        library.workflows.filter { $0.pinToToolbar == true }.map { .init("TextTank.Automation." + $0.id.uuidString) }
+    func refreshToolbarItem(_ item: NSMenuToolbarItem) {
+        item.menu = invocationMenu(title: "Automations", launcher: true)
     }
-    func makeToolbarItem(identifier: NSToolbarItem.Identifier) -> NSToolbarItem? {
-        let prefix = "TextTank.Automation."
-        guard identifier.rawValue.hasPrefix(prefix),
-            let id = UUID(uuidString: String(identifier.rawValue.dropFirst(prefix.count))),
-            let workflow = library.workflows.first(where: { $0.id == id })
-        else { return nil }
-        let item = NSToolbarItem(itemIdentifier: identifier)
-        item.label = workflow.name
-        item.paletteLabel = workflow.name
-        item.toolTip =
-            workflow.output == .reminders
-            ? "Send the current text to a Reminders list you choose" : "Run \(workflow.name)"
-        let button = NSButton(title: workflow.name, target: self, action: #selector(runToolbarButton(_:)))
-        button.identifier = NSUserInterfaceItemIdentifier(id.uuidString)
-        button.bezelStyle = .rounded
-        button.setAccessibilityLabel(workflow.name)
-        item.view = button
-        return item
-    }
-    @objc private func runToolbarButton(_ sender: NSButton) {
-        guard let value = sender.identifier?.rawValue, let id = UUID(uuidString: value) else { return }
-        do { try runSavedAutomation(id: id) } catch { showError(error) }
+    private func canInvoke(_ id: UUID) -> Bool { canInvoke(id, editor: editorProvider()) }
+    private func canInvoke(_ id: UUID, editor: TTEditor?) -> Bool {
+        guard !busy, !exportInProgress, let workflow = library.workflows.first(where: { $0.id == id }) else {
+            return false
+        }
+        if (workflow.input == .document || workflow.input == .selection) && editor == nil { return false }
+        if workflow.output == .editor && (editor == nil || editor?.readOnly == true) { return false }
+        return true
     }
     /// Every menu, shortcut, toolbar and palette resolves the current saved definition by UUID.
     func runSavedAutomation(id: UUID) throws {
@@ -153,17 +156,18 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         }
         busy = true
         defer { busy = false }
-        try run(workflow, capturedEditor: editorProvider())
+        try run(workflow, target: AutomationDocumentTarget(editorProvider()))
     }
-    private func invocationMenu(title: String) -> NSMenu {
+    private func invocationMenu(title: String, launcher: Bool = false) -> NSMenu {
         let result = NSMenu(title: title)
+        if launcher { result.identifier = .init("TextTank.AutomationLauncher") }
         result.delegate = self
         populateInvocations(result)
         return result
     }
     private func populateInvocations(_ menu: NSMenu) {
         menu.removeAllItems()
-        if menu.title == "Automation Launcher" {
+        if menu.identifier?.rawValue == "TextTank.AutomationLauncher" {
             menu.addItem(withTitle: "Automations", action: nil, keyEquivalent: "")
         }
         for workflow in library.workflows.sorted(by: {
@@ -180,33 +184,55 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         manage.target = self
         menu.addItem(manage)
     }
-    func showPalette() {
+    private var palette: ChoicePanel?
+    @MainActor func showPalette() {
+        if let palette {
+            palette.form.window.makeKeyAndOrderFront(nil)
+            return
+        }
         guard idleOrExplain() else { return }
         guard !library.workflows.isEmpty else {
             manage()
             return
         }
-        busy = true
-        defer { busy = false }
-        let alert = TTAlert()
-        alert.messageText = "Run Automation"
-        alert.informativeText =
-            "Choose a saved automation. Its current saved definition will run. Preview is optional; Reminders always asks you to choose a destination and Send."
-        alert.addButton(withTitle: "Run")
-        alert.addButton(withTitle: "Cancel")
-        let choice = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 400, height: 28), pullsDown: false)
-        for workflow in library.workflows {
-            let item = NSMenuItem(title: workflow.name, action: nil, keyEquivalent: "")
-            item.representedObject = workflow.id.uuidString
-            choice.menu?.addItem(item)
+        let panel = ChoicePanel(
+            title: "Run Automation", identifier: "automation.palette", action: "Run",
+            filterLabel: "Filter automations by name")
+        palette = panel
+        panel.retainController(self)
+        var watches: [NSObjectProtocol] = []
+        panel.onClose = { [weak self] in
+            for token in watches { NotificationCenter.default.removeObserver(token) }
+            watches.removeAll()
+            self?.palette = nil
         }
-        alert.accessoryView = choice
-        // Preserve editor context before the palette becomes the key window.
-        let capturedEditor = editorProvider()
-        guard alert.runModal() == .alertFirstButtonReturn, let id = choice.selectedItem?.representedObject as? String,
-            let workflow = library.workflows.first(where: { $0.id.uuidString == id })
-        else { return }
-        do { try run(workflow, capturedEditor: capturedEditor) } catch { showError(error) }
+        for name in [Notification.Name.TTEditorStateDidChange, .TTEditorWillRetire] {
+            watches.append(
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) {
+                    [weak panel] _ in
+                    precondition(Thread.isMainThread)
+                    MainActor.assumeIsolated {
+                        MainRunLoop.perform { [weak panel] in panel?.refresh() }
+                    }
+                })
+        }
+        panel.rows = { [weak self] in self?.library.workflows.map { .init(id: $0.id.uuidString, title: $0.name) } ?? []
+        }
+        panel.canChoose = { [weak self, weak panel] in
+            guard let self, let text = panel?.selectedID, let id = UUID(uuidString: text) else { return false }
+            return self.canInvoke(id, editor: self.editorProvider())
+        }
+        panel.choose = { [weak self] id in
+            guard let self, !self.busy, !self.exportInProgress else { throw FormFailure.busy }
+            guard let workflow = self.library.workflows.first(where: { $0.id.uuidString == id }) else {
+                throw FormFailure.changed
+            }
+            self.busy = true
+            defer { self.busy = false }
+            try self.run(workflow, target: AutomationDocumentTarget(self.editorProvider()))
+            return true
+        }
+        panel.show()
     }
     private func rebuild() {
         automationMenu.removeAllItems()
@@ -235,189 +261,276 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             automationMenu.addItem(item)
         }
     }
-    @objc private func manageAction() { manage() }
-    @objc private func paletteAction() { showPalette() }
+    @MainActor @objc private func manageAction() { manage() }
+    @MainActor @objc private func paletteAction() { showPalette() }
     @objc private func restoreDefaultsAction() { restoreDefaultAutomations() }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(restoreDefaultsAction) { return !busy && !exportInProgress }
+        if menuItem.action == #selector(runAction(_:)) {
+            guard let value = menuItem.representedObject as? String, let id = UUID(uuidString: value) else {
+                return false
+            }
+            return canInvoke(id)
+        }
         return true
     }
     /// A picker with one item for every automation, in order. Items are built as menu items,
     /// because `addItem(withTitle:)` removes an earlier item with the same title and two
     /// automations may share a name. Each item carries its automation's UUID.
-    static func workflowPopup(for workflows: [AutomationDefinition], width: CGFloat = 550) -> NSPopUpButton {
-        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: width, height: 28), pullsDown: false)
-        for workflow in workflows {
-            let item = NSMenuItem(title: workflow.name, action: nil, keyEquivalent: "")
-            item.representedObject = workflow.id.uuidString
-            popup.menu?.addItem(item)
+    private var manager: LibraryManager?
+    private var advancedAction: (() -> Void)?
+    @MainActor func manage() {
+        if let manager {
+            manager.form.window.makeKeyAndOrderFront(nil)
+            return
         }
-        popup.setAccessibilityLabel("Automation")
-        return popup
-    }
-    func manage() {
         guard idleOrExplain() else { return }
-        if let loadError {
-            showError(loadError)
-            return
-        }
-        busy = true
-        defer { busy = false }
-        retryInstall()
-        guard !library.workflows.isEmpty else {
-            busy = false
-            createAutomation()
-            return
-        }
-        let choose = TTAlert()
-        choose.messageText = "Manage Automations"
-        choose.informativeText =
-            "Rename an automation, choose its input and output, and choose its preview and favorite status. Edit Rules opens a visual rule list with sample testing. JSON is optional for advanced users."
-        for (title, id) in [
-            ("Edit", "automation.edit"), ("Cancel", "automation.cancel"), ("Advanced JSON…", "automation.json"),
-            ("Create Automation…", "automation.create"), ("Delete Automation", "automation.delete")
-        ] { choose.addButton(withTitle: title).identifier = NSUserInterfaceItemIdentifier(id) }
-        let selection = Self.workflowPopup(for: library.workflows)
-        choose.accessoryView = selection
-        let response = choose.runModal()
-        if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
-            busy = false
-            manageAdvanced()
-            return
-        }
-        if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
-            busy = false
-            createAutomation()
-            return
-        }
-        if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 4 {
-            if let id = selection.selectedItem?.representedObject as? String {
-                let confirm = TTAlert()
-                confirm.messageText = "Delete this automation?"
-                confirm.informativeText =
-                    "Its saved definition and trigger bindings will be removed. Documents and exported reminders are unchanged."
-                confirm.addButton(withTitle: "Delete").hasDestructiveAction = true
-                confirm.addButton(withTitle: "Cancel")
-                if confirm.runModal() == .alertFirstButtonReturn {
-                    do {
-                        var proposed = library
-                        proposed.workflows.removeAll { $0.id.uuidString == id }
-                        try persistLibrary(proposed)
-                    } catch { showError(error) }
+        do {
+            guard try StoreRecovery.ensureWritable(loadState) else { return }
+            retryInstall()
+            var working = library
+            let baseline = try SavedConfiguration.bytes(library)
+            let panel = LibraryManager(title: "Manage Automations", identifier: "automation.manager")
+            manager = panel
+            panel.retainController(self)
+            panel.onClose = { [weak self] in
+                self?.advancedAction = nil
+                self?.manager = nil
+            }
+            panel.rows = { working.workflows.map { .init(id: $0.id, name: $0.name) } }
+            panel.canEdit = { [weak self] in self.map { !$0.busy && !$0.exportInProgress } ?? false }
+            panel.rename = { id, name in
+                if let i = working.workflows.firstIndex(where: { $0.id == id }) { working.workflows[i].name = name }
+            }
+            let originalIDs = Set(library.workflows.map(\.id))
+            var confirmedEmpty: Data?
+            panel.save = { [weak self, weak panel] in
+                guard let self, let panel, !self.busy, !self.exportInProgress else { throw FormFailure.busy }
+                for definition in working.workflows {
+                    do { try definition.validate() } catch {
+                        panel.reveal(definition.id)
+                        throw error
+                    }
+                }
+                try working.validate()
+                try self.checkShortcutCollisions(working)
+                try SavedConfiguration.requireUnchanged(self.library, since: baseline)
+                let empty = working.workflows.filter { !originalIDs.contains($0.id) && $0.steps.isEmpty }
+                let emptyBytes = try SavedConfiguration.bytes(empty)
+                if !empty.isEmpty && confirmedEmpty != emptyBytes {
+                    let confirm = TTAlert()
+                    confirm.messageText =
+                        empty.count == 1 ? "Save an automation with no rules?" : "Save automations with no rules?"
+                    confirm.informativeText =
+                        "These automations will pass text through unchanged until rules are added. Saving never runs them."
+                    confirm.addButton(withTitle: "Save Without Rules").identifier = NSUserInterfaceItemIdentifier(
+                        "automation.settings.saveEmpty")
+                    confirm.addButton(withTitle: "Cancel", role: .cancel)
+                    confirm.beginSheetModal(for: panel.form.window) { response in
+                        guard response == .alertFirstButtonReturn else { return }
+                        confirmedEmpty = emptyBytes
+                        panel.refresh()
+                        panel.saveChanges()
+                    }
+                    return false
+                }
+                guard try StoreRecovery.ensureWritable(self.loadState) else { return false }
+                try SavedConfiguration.requireUnchanged(self.library, since: baseline)
+                try self.persistLibrary(working)
+                return true
+            }
+            func settings(_ initial: AutomationDefinition, creating: Bool) {
+                let pendingBaseline = try? SavedConfiguration.bytes(working)
+                self.editSettings(of: initial, creating: creating, parent: panel.form.window) { candidate in
+                    guard let pendingBaseline else { throw FormFailure.changed }
+                    try SavedConfiguration.requireUnchanged(working, since: pendingBaseline)
+                    var updated = working
+                    if let index = updated.workflows.firstIndex(where: { $0.id == candidate.id }) {
+                        updated.workflows[index] = candidate
+                    } else if creating {
+                        updated.workflows.append(candidate)
+                    } else {
+                        throw FormFailure.changed
+                    }
+                    try updated.validate()
+                    try self.checkShortcutCollisions(updated)
+                    working = updated
+                    panel.reload(select: candidate.id)
                 }
             }
-            return
-        }
-        guard response == .alertFirstButtonReturn,
-            let id = selection.selectedItem?.representedObject as? String,
-            let workflow = library.workflows.first(where: { $0.id.uuidString == id })
-        else { return }
-        editSettings(of: workflow, creating: false)
+            panel.action("Add…", identifier: "automation.create") {
+                settings(
+                    AutomationDefinition(
+                        id: UUID(), name: "My Automation", input: .document, steps: [], output: .editor,
+                        pinToToolbar: false), creating: true)
+            }
+            panel.action("Edit…", identifier: "automation.edit", needsSelection: true) { [weak panel] in
+                guard let id = panel?.selectedID, let definition = working.workflows.first(where: { $0.id == id })
+                else { return }
+                settings(definition, creating: false)
+            }
+            panel.action("Edit Rules…", identifier: "automation.rules", needsSelection: true) { [weak panel] in
+                guard let panel, let id = panel.selectedID,
+                    let definition = working.workflows.first(where: { $0.id == id })
+                else { return }
+                let pendingBaseline = try? SavedConfiguration.bytes(working)
+                AutomationStepEditor.present(definition, savedWorkflows: working.workflows, parent: panel.form.window) {
+                    revised in
+                    guard let revised, panel.form.window.isVisible else { return }
+                    do {
+                        guard let pendingBaseline else { throw FormFailure.changed }
+                        try SavedConfiguration.requireUnchanged(working, since: pendingBaseline)
+                        guard let index = working.workflows.firstIndex(where: { $0.id == id }) else {
+                            throw FormFailure.changed
+                        }
+                        working.workflows[index].steps = revised.steps
+                        working.workflows[index].name = revised.name
+                        panel.reload(select: id)
+                    } catch { panel.form.showValidation(error) }
+                }
+            }
+            panel.action("Duplicate", identifier: "automation.duplicate", needsSelection: true) { [weak panel] in
+                guard let panel, let id = panel.selectedID, var copy = working.workflows.first(where: { $0.id == id })
+                else { return }
+                copy.id = UUID()
+                copy.shortcut = nil
+                working.workflows.append(copy)
+                panel.reload(select: copy.id)
+            }
+            panel.action("Delete…", identifier: "automation.delete", needsSelection: true) { [weak panel] in
+                panel?.confirmDelete { id in working.workflows.removeAll { $0.id == id } }
+            }
+            let favoriteButton = panel.action(
+                Strings.text("automation.favorite", "Favorite"), identifier: "automation.favorite", needsSelection: true
+            ) { [weak panel] in
+                guard let panel, let id = panel.selectedID, let i = working.workflows.firstIndex(where: { $0.id == id })
+                else { return }
+                working.workflows[i].pinToToolbar = working.workflows[i].pinToToolbar != true
+                panel.reload(select: id)
+            }
+            favoriteButton.setButtonType(.switch)
+            favoriteButton.setAccessibilityLabel("Favorite selected automation")
+            favoriteButton.cell?.setAccessibilityLabel("Favorite selected automation")
+            favoriteButton.setAccessibilityHelp(AutomationDefinition.favoriteHelp)
+            favoriteButton.toolTip = AutomationDefinition.favoriteHelp
+            panel.onSelection = { id in
+                favoriteButton.state =
+                    working.workflows.first(where: { $0.id == id })?.pinToToolbar == true ? .on : .off
+            }
+            advancedAction = { [weak self, weak panel] in
+                guard let self, let panel, panel.canEdit(), panel.form.window.attachedSheet == nil else { return }
+                do {
+                    try JSONLibraryEditor.edit(
+                        working,
+                        configuration: .init(
+                            title: "Advanced Automation Configuration", information: AutomationDefinition.advancedHelp,
+                            accessibilityLabel: "Automation library JSON", exportName: "TextTank-Automations.json",
+                            identifier: "automation.json", size: NSSize(width: 650, height: 330),
+                            reference: .init(
+                                text: AutomationDefinition.ruleKindReference,
+                                accessibilityLabel: "Rule kinds reference", height: 96),
+                            extraTitle: "Insert Example", extraIdentifier: "automation.json.example",
+                            saveTitle: "Use Changes"),
+                        panels: self.jsonFilePanels, parent: panel.form.window, current: { working },
+                        read: { try AutomationFileInput.readData($0, limit: AutomationLibrary.maximumBytes) },
+                        extraAction: { proposed in
+                            var copy = proposed
+                            var example = AutomationDefinition.example
+                            if copy.workflows.contains(where: { $0.id == example.id }) { example.id = UUID() }
+                            copy.workflows.append(example)
+                            return copy
+                        },
+                        save: { proposed in
+                            try SavedConfiguration.requireUnchanged(self.library, since: baseline)
+                            try self.checkShortcutCollisions(proposed)
+                            working = proposed
+                            panel.reload()
+                        })
+                    panel.refresh()
+                } catch { panel.form.showValidation(error) }
+            }
+            panel.secondaryAction("Advanced JSON…", identifier: "automation.json") { [weak self] in
+                self?.manageAdvanced()
+            }
+            panel.show()
+        } catch { showError(error) }
     }
-    /// The settings dialog that Edit and Create Automation share. It stays open until a Save has
-    /// been written or the user cancels, so an error on Save (a taken shortcut, an empty name, a
-    /// failed write) costs neither the settings typed here nor the rule edits made behind it.
-    /// `busy` is held by the caller for the whole dialog.
-    private func editSettings(of initial: AutomationDefinition, creating: Bool) {
-        // Carries the rules, and the name, across Edit Rules round trips. The controls are the
-        // only source for every other field, and a failed Save never writes into this.
-        var workflow = initial
-        let edit = TTAlert()
-        edit.messageText = creating ? "New Automation" : "Edit Automation"
-        edit.informativeText =
-            (creating
-                ? "Nothing is saved until you press Save; Cancel discards the new automation and its rules. " : "")
-            + "The name changes its labels, not its behavior. Editor changes can be undone. Reminders always requires an explicit destination and Send."
-        for (title, id) in [
-            ("Save", "automation.settings.save"), ("Cancel", "automation.settings.cancel"),
-            ("Edit Rules & Test…", "automation.settings.rules")
-        ] { edit.addButton(withTitle: title).identifier = NSUserInterfaceItemIdentifier(id) }
-        let name = NSTextField(string: workflow.name)
+    private func editSettings(
+        of initial: AutomationDefinition, creating: Bool, parent: NSWindow,
+        accept: @escaping (AutomationDefinition) throws -> Void
+    ) {
+        let form = FormPanel(
+            title: creating ? "New Automation" : "Edit Automation", identifier: "automation.settings",
+            size: NSSize(width: 680, height: 510))
+        form.window.contentMinSize = NSSize(width: 600, height: 440)
+        form.note(
+            "Use Changes returns to the manager. Choose Save in the manager to save the library. Editor changes can be undone; external outputs still require explicit invocation."
+        )
+        let name = NSTextField(string: initial.name)
         name.identifier = NSUserInterfaceItemIdentifier("automation.settings.name")
-        let shortcut = NSTextField(string: workflow.shortcut ?? "")
+        let shortcut = NSTextField(string: initial.shortcut ?? "")
         shortcut.identifier = NSUserInterfaceItemIdentifier("automation.settings.shortcut")
         shortcut.placeholderString = "Lowercase letter for Command-Option; blank for none"
-        let input = NSPopUpButton()
-        let output = NSPopUpButton()
-        for value in ["document", "selection", "clipboard", "file"] { input.addItem(withTitle: value) }
-        for value in ["editor", "clipboard", "newDocument", "file", "reminders"] { output.addItem(withTitle: value) }
-        input.selectItem(withTitle: workflow.input.rawValue)
-        output.selectItem(withTitle: workflow.output.rawValue)
+        let input = NSPopUpButton(), output = NSPopUpButton()
+        ControlPresentation.populate(
+            input,
+            choices: [AutomationDefinition.Input.document, .selection, .clipboard, .file].map {
+                ($0.rawValue, $0.displayName)
+            }, selected: initial.input.rawValue)
+        ControlPresentation.populate(
+            output, choices: AutomationDefinition.Output.allCases.map { ($0.rawValue, $0.displayName) },
+            selected: initial.output.rawValue)
         let preview = NSButton(checkboxWithTitle: "Preview before applying", target: nil, action: nil)
-        preview.state = workflow.previewBeforeApply == true ? .on : .off
-        let pinned = NSButton(checkboxWithTitle: "Favorite in the Automations menu", target: nil, action: nil)
-        pinned.state = workflow.pinToToolbar == true ? .on : .off
-        edit.accessoryView = settingsView(
-            rows: [("Name", name), ("Input", input), ("Output", output), ("Shortcut", shortcut)],
-            options: [preview, pinned])
-        while true {
-            let response = edit.runModal()
-            if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
-                edit.window.makeFirstResponder(nil)
-                workflow.name = name.stringValue
-                if let revised = AutomationStepEditor.edit(workflow, savedWorkflows: library.workflows) {
-                    workflow.steps = revised.steps
-                    workflow.name = revised.name
-                    name.stringValue = revised.name
-                }
-                continue
-            }
-            guard response == .alertFirstButtonReturn else { return }
-            edit.window.makeFirstResponder(nil)
-            var candidate = workflow
-            candidate.name = name.stringValue
-            // No shortcut is stored as no value, not as an empty string.
-            candidate.shortcut = shortcut.stringValue.isEmpty ? nil : shortcut.stringValue
-            if let value = input.titleOfSelectedItem, let typed = AutomationDefinition.Input(rawValue: value) {
-                candidate.input = typed
-            }
-            if let value = output.titleOfSelectedItem, let typed = AutomationDefinition.Output(rawValue: value) {
-                candidate.output = typed
-            }
-            candidate.previewBeforeApply = preview.state == .on
-            candidate.pinToToolbar = pinned.state == .on
-            if creating && candidate.steps.isEmpty {
-                let confirm = TTAlert()
-                confirm.messageText = "Save an automation with no rules?"
-                confirm.informativeText =
-                    "It will pass its text through unchanged until you add rules with Edit Rules & Test."
-                confirm.addButton(withTitle: "Save Without Rules").identifier = NSUserInterfaceItemIdentifier(
-                    "automation.settings.saveEmpty")
-                confirm.addButton(withTitle: "Cancel")
-                guard confirm.runModal() == .alertFirstButtonReturn else { continue }
-            }
+        preview.state = initial.previewBeforeApply == true ? .on : .off
+        preview.setAccessibilityLabel("Preview this automation before applying")
+        preview.cell?.setAccessibilityLabel("Preview this automation before applying")
+        let favorite = NSButton(
+            checkboxWithTitle: Strings.text("automation.favorite", "Favorite"), target: nil, action: nil)
+        favorite.state = initial.pinToToolbar == true ? .on : .off
+        favorite.setAccessibilityLabel("Favorite automation")
+        favorite.cell?.setAccessibilityLabel("Favorite automation")
+        favorite.setAccessibilityHelp(AutomationDefinition.favoriteHelp)
+        favorite.toolTip = AutomationDefinition.favoriteHelp
+        form.add(
+            settingsView(
+                rows: [("Name", name), ("Input", input), ("Output", output), ("Shortcut", shortcut)],
+                options: [preview, favorite]))
+        form.button("Use Changes", identifier: "automation.settings.save") {
+            guard form.commitEditing() else { return }
+            var field: NSView? = name
             do {
-                var proposed = library
-                if let index = proposed.workflows.firstIndex(where: { $0.id == candidate.id }) {
-                    proposed.workflows[index] = candidate
-                } else if creating {
-                    proposed.workflows.append(candidate)
-                } else {
-                    throw AutomationError.invalid("This automation no longer exists.")
+                var candidate = initial
+                candidate.name = name.stringValue
+                candidate.shortcut = nil
+                try candidate.validate()
+                field = shortcut
+                candidate.shortcut = shortcut.stringValue.isEmpty ? nil : shortcut.stringValue
+                if let value = ControlPresentation.selectedID(input).flatMap(AutomationDefinition.Input.init(rawValue:))
+                {
+                    candidate.input = value
                 }
-                try checkShortcutCollisions(proposed)
-                try persistLibrary(proposed)
-                return
-            } catch { showError(error) }
+                if let value = ControlPresentation.selectedID(output).flatMap(
+                    AutomationDefinition.Output.init(rawValue:))
+                {
+                    candidate.output = value
+                }
+                candidate.previewBeforeApply = preview.state == .on
+                candidate.pinToToolbar = favorite.state == .on
+                try candidate.validate()
+                try accept(candidate)
+                form.close()
+            } catch { form.showValidation(error, field: error is FormFailure ? nil : field) }
         }
-    }
-    /// Create Automation: the rule builder first, then the same settings dialog as Edit. Nothing
-    /// is saved until that dialog's Save.
-    private func createAutomation() {
-        guard idleOrExplain() else { return }
-        busy = true
-        defer { busy = false }
-        let definition = AutomationDefinition(
-            id: UUID(), name: "My Automation", input: .document, steps: [], output: .editor, pinToToolbar: false)
-        guard let edited = AutomationStepEditor.edit(definition, savedWorkflows: library.workflows) else { return }
-        editSettings(of: edited, creating: true)
+        form.button("Cancel", identifier: "automation.settings.cancel", cancel: true) { form.close() }
+        form.window.initialFirstResponder = name
+        form.show(parent: parent)
     }
     /// Adds fresh copies of the automations a new installation starts with, under new identifiers.
     /// Nothing already saved is replaced, including edited copies of the same presets.
     func restoreDefaultAutomations() {
         guard idleOrExplain() else { return }
-        if let loadError {
-            showError(loadError)
+        do { guard try StoreRecovery.ensureWritable(loadState) else { return } } catch {
+            showError(error)
             return
         }
         busy = true
@@ -429,7 +542,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             "This adds new copies of \(presets.map { "‘\($0.name)’" }.joined(separator: " and ")) as they ship with this version. Your saved automations are kept as they are, including any you edited or renamed."
         confirm.addButton(withTitle: "Add Defaults").identifier = NSUserInterfaceItemIdentifier(
             "automation.restore.confirm")
-        confirm.addButton(withTitle: "Cancel")
+        confirm.addButton(withTitle: "Cancel", role: .cancel)
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
         do {
             var proposed = library
@@ -451,6 +564,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         stack.spacing = 10
         for (title, control) in rows {
             let label = NSTextField(labelWithString: title)
+            ControlPresentation.label("Automation " + title.lowercased(), control: control, caption: label)
             label.translatesAutoresizingMaskIntoConstraints = false
             control.translatesAutoresizingMaskIntoConstraints = false
             label.widthAnchor.constraint(equalToConstant: 110).isActive = true
@@ -463,82 +577,15 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         stack.frame = NSRect(x: 0, y: 0, width: 550, height: CGFloat(rows.count * 34 + options.count * 28))
         return stack
     }
-    func manageAdvanced() {
-        guard idleOrExplain() else { return }
-        if let loadError {
-            showError(
-                AutomationError.invalid(
-                    "Saved automations could not be loaded: \(loadError.localizedDescription)\nThe original file is preserved. Export or repair it outside TextTank before replacing it."
-                ))
-            return
-        }
-        busy = true
-        defer { busy = false }
-        retryInstall()
-        let alert = TTAlert()
-        alert.messageText = "Advanced Automation Configuration"
-        alert.informativeText = AutomationDefinition.advancedHelp
-        for (title, id) in [
-            ("Save", "automation.json.save"), ("Cancel", "automation.json.cancel"),
-            ("Import…", "automation.json.import"),
-            ("Export…", "automation.json.export"), ("Insert Example", "automation.json.example")
-        ] { alert.addButton(withTitle: title).identifier = NSUserInterfaceItemIdentifier(id) }
-        // The rule kinds, generated from the kinds themselves, above the editable JSON.
-        let reference = makeTextView(height: 96)
-        reference.editor.isEditable = false
-        reference.editor.string = AutomationDefinition.ruleKindReference
-        reference.editor.setAccessibilityLabel("Rule kinds reference")
-        let text = makeTextView(height: 330)
-        text.editor.setAccessibilityLabel("Automation library JSON")
-        // An empty library is shown as an empty library; Insert Example adds the example on request.
-        text.editor.string = String(data: (try? library.encoded()) ?? Data(), encoding: .utf8) ?? ""
-        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 650, height: 434))
-        reference.scroll.frame.origin = NSPoint(x: 0, y: 338)
-        accessory.addSubview(reference.scroll)
-        accessory.addSubview(text.scroll)
-        alert.accessoryView = accessory
-        while true {
-            let response = alert.runModal()
-            if response == .alertSecondButtonReturn { return }
-            do {
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
-                    let panel = NSOpenPanel()
-                    panel.allowsMultipleSelection = false
-                    panel.canChooseDirectories = false
-                    if panel.runModal() == .OK, let url = panel.url {
-                        let imported = try AutomationLibrary.decode(
-                            AutomationFileInput.readData(url, limit: AutomationLibrary.maximumBytes))
-                        text.editor.string = String(data: try imported.encoded(), encoding: .utf8)!
-                    }
-                    continue
-                }
-                var proposed = try AutomationLibrary.decode(Data(text.editor.string.utf8))
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
-                    let panel = NSSavePanel()
-                    panel.nameFieldStringValue = "TextTank-Automations.json"
-                    if panel.runModal() == .OK, let url = panel.url {
-                        try proposed.encoded().write(to: url, options: .atomic)
-                    }
-                    continue
-                }
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 4 {
-                    // The example shows the shape of an automation. It joins the JSON in the editor
-                    // only; nothing is saved until Save.
-                    var example = AutomationDefinition.example
-                    if proposed.workflows.contains(where: { $0.id == example.id }) { example.id = UUID() }
-                    proposed.workflows.append(example)
-                    text.editor.string = String(data: try proposed.encoded(), encoding: .utf8)!
-                    continue
-                }
-                try checkShortcutCollisions(proposed)
-                try persistLibrary(proposed)
-                return
-            } catch { showError(error) }
-        }
+    var jsonFilePanels = JSONLibraryEditor.FilePanels.standard
+    @MainActor func manageAdvanced() {
+        if manager == nil { manage() }
+        guard let manager, manager.canEdit(), manager.form.window.attachedSheet == nil else { return }
+        advancedAction?()
     }
     /// Shared private persistence for edited workflows and explicitly selected destinations.
     func persistLibrary(_ proposed: AutomationLibrary) throws {
-        if let loadError { throw loadError } // Never overwrite an unreadable existing library.
+        try loadState.requireWritable() // Never overwrite an unreadable existing library.
         let data = try proposed.encoded()
         let directory = storage.deletingLastPathComponent()
         if FileManager.default.fileExists(atPath: directory.path) {
@@ -558,24 +605,13 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 throw AutomationError.invalid("Automation storage must be a regular file.")
             }
         }
-        let temporary = directory.appendingPathComponent(".automations-" + UUID().uuidString)
-        let descriptor = open(temporary.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer {
-            try? handle.close()
-            try? FileManager.default.removeItem(at: temporary)
-        }
-        try handle.write(contentsOf: data)
-        try handle.synchronize()
-        try handle.close()
-        guard rename(temporary.path, storage.path) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
+        try PrivateFileStore.write(
+            data, to: storage, maximumBytes: AutomationLibrary.maximumBytes, temporaryPrefix: ".automations-")
         installError = nil
         library = proposed
         rebuild()
         NotificationCenter.default.post(name: .textTankAutomationsDidChange, object: self)
+        palette?.refresh()
     }
     private func checkShortcutCollisions(_ proposed: AutomationLibrary) throws {
         func existing(_ menu: NSMenu) -> Set<String> {
@@ -606,32 +642,28 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         }
         do { try runSavedAutomation(id: id) } catch { showError(error) }
     }
-    private func run(_ original: AutomationDefinition, capturedEditor: TTEditor?) throws {
-        // Invocation, not lookup: opening and cancelling the palette never reaches this.
+    private func run(_ workflow: AutomationDefinition, target: AutomationDocumentTarget?) throws {
         onInvocation()
-        let workflow = original
-        // Capture once before showing the preview. Never re-query the frontmost editor on Apply.
-        let editor = capturedEditor
-        let revision = editor?.revision
-        let start = editor?.selectionStart
-        let end = editor?.selectionEnd
-        let selections = editor?.selectionRanges
+        if workflow.input == .document && target == nil {
+            throw AutomationError.invalid("This automation requires an open editor document.")
+        }
         if workflow.input == .selection || workflow.output == .editor {
-            guard let editor else { throw AutomationError.invalid("This automation requires an open editor document.") }
-            // Before any parameter prompt or preview: a read-only document can never take the result.
-            if workflow.output == .editor { try editor.requireWritable() }
-            guard editor.selectionCount == 1 || (workflow.input == .selection && workflow.output == .editor) else {
+            guard let target else { throw AutomationError.invalid("This automation requires an open editor document.") }
+            if workflow.output == .editor { try target.requireWritable() }
+            guard target.selections.count == 1 || (workflow.input == .selection && workflow.output == .editor) else {
                 throw AutomationError.invalid(
                     "Multiple selections require selection input and editor output. Other outputs are not changed.")
             }
         }
+        // Freeze all source bytes before parameter prompts, progress and preview.
+        let selectionInputs = workflow.input == .selection ? try target?.selectionTexts() : nil
         guard
             let resolved = try workflow.resolvingParameters({ index, label, initial in
                 let alert = TTAlert()
                 alert.messageText = "\(workflow.name) — Step \(index + 1)"
                 alert.informativeText = label
                 alert.addButton(withTitle: "Continue")
-                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Cancel", role: .cancel)
                 let field = NSTextField(string: initial)
                 field.frame = NSRect(x: 0, y: 0, width: 500, height: 28)
                 alert.accessoryView = field
@@ -640,25 +672,21 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 return field.stringValue
             })
         else { return }
-        if workflow.input == .selection, workflow.output == .editor, let editor, editor.selectionCount > 1,
-            let revision, let selections
+        if workflow.input == .selection, workflow.output == .editor, let target,
+            let selectionInputs, selectionInputs.count > 1
         {
-            let bytes = Data(editor.text.utf8)
             var outputs: [String] = []
-            for (index, range) in selections.enumerated() {
-                guard let anchor = range["anchor"]?.intValue, let caret = range["caret"]?.intValue, anchor != caret,
-                    min(anchor, caret) >= 0, max(anchor, caret) <= bytes.count,
-                    let text = String(data: bytes.subdata(in: min(anchor, caret)..<max(anchor, caret)), encoding: .utf8)
-                else { throw AutomationError.invalid("Select text in every selection before running this automation.") }
+            for (index, text) in selectionInputs.enumerated() {
                 var output = try transformWithProgress(resolved, input: text)
                 if workflow.previewBeforeApply == true {
                     let alert = TTAlert()
-                    alert.messageText = "\(workflow.name) — Selection \(index + 1) of \(selections.count)"
+                    alert.messageText = "\(workflow.name) — Selection \(index + 1) of \(selectionInputs.count)"
                     alert.informativeText =
                         "All selections apply together after every preview is accepted. Cancel preserves the entire editor."
                     alert.addButton(withTitle: "Accept")
-                    alert.addButton(withTitle: "Cancel")
+                    alert.addButton(withTitle: "Cancel", role: .cancel)
                     let preview = makeTextView(height: 250)
+                    preview.editor.setAccessibilityLabel("Automation output preview")
                     preview.editor.string = output
                     alert.accessoryView = preview.scroll
                     guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -666,24 +694,19 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                 }
                 outputs.append(output)
             }
-            try editor.requireWritable() // Read Only may have been switched on while a preview was open.
-            guard editor.window != nil, editor.selectionRanges == selections,
-                editor.replaceSelections(outputs, expectedRevision: revision)
-            else {
-                throw AutomationError.invalid("The document or selections changed or closed. Nothing was replaced.")
-            }
+            try target.apply(outputs, wholeDocument: false)
             return
         }
         let input: String
         switch workflow.input {
         case .selection:
-            guard let editor, start != end else {
+            guard let selection = selectionInputs?.first else {
                 throw AutomationError.invalid("Select text before running this automation.")
             }
-            input = editor.selectedText
+            input = selection
         case .document:
-            guard let editor else { throw AutomationError.invalid("This automation requires an open editor document.") }
-            input = editor.text
+            guard let target else { throw AutomationError.invalid("This automation requires an open editor document.") }
+            input = target.text
         case .file:
             let panel = NSOpenPanel()
             panel.canChooseDirectories = false
@@ -692,7 +715,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             // File input explicitly accepts valid UTF-8 only; never guess or replace invalid bytes.
             input = try AutomationFileInput.read(url)
         case .clipboard:
-            guard let value = Self.plainText(from: pasteboard) else {
+            guard let board = activePasteboard, let value = Self.plainText(from: board) else {
                 throw AutomationError.invalid("The clipboard does not contain supported text.")
             }
             input = value
@@ -701,34 +724,54 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         if workflow.previewBeforeApply == true {
             let alert = TTAlert()
             alert.messageText = workflow.name
-            let scope = workflow.input == .document ? "entire captured document" : "captured selection"
-            let destination = workflow.output == .editor ? "Replace \(scope)" : "Output: \(workflow.output.rawValue)"
-            alert.informativeText =
-                "Input: \(workflow.input.rawValue). \(destination). Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
+            if workflow.output == .editor {
+                let format =
+                    workflow.input == .document
+                    ? Strings.text(
+                        "automation.preview.document",
+                        "Input: %@. Replace the entire captured document. Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
+                    )
+                    : Strings.text(
+                        "automation.preview.selection",
+                        "Input: %@. Replace the captured selection. Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
+                    )
+                alert.informativeText = String(format: format, workflow.input.displayName)
+            } else {
+                alert.informativeText = String(
+                    format: Strings.text(
+                        "automation.preview.output",
+                        "Input: %@. Output: %@. Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
+                    ), workflow.input.displayName, workflow.output.displayName)
+            }
             alert.addButton(withTitle: "Apply")
-            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Cancel", role: .cancel)
             let preview = makeTextView(height: 350)
+            preview.editor.setAccessibilityLabel("Automation output preview")
             preview.editor.string = output
             alert.accessoryView = preview.scroll
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             output = preview.editor.string
         }
+        func revalidateSource() throws {
+            guard workflow.input == .document || workflow.input == .selection else { return }
+            guard let target else {
+                throw AutomationError.invalid("The original source closed. The result was discarded.")
+            }
+            try target.validateSource(checkSelection: workflow.input == .selection)
+        }
+        try revalidateSource()
         switch workflow.output {
         case .editor:
-            try editor?.requireWritable() // Read Only may have been switched on while a dialog was open.
-            guard let editor, editor.window != nil, editor.revision == revision else {
-                throw AutomationError.invalid(
-                    "The original document changed or closed. Run the automation again with the current text.")
+            guard let target else {
+                throw AutomationError.invalid("The original document closed. Nothing was replaced.")
             }
-            guard editor.selectionCount == 1, editor.selectionStart == start, editor.selectionEnd == end else {
-                throw AutomationError.invalid("The editor selection changed. No text was replaced.")
-            }
-            // Document input replaces only the span that differs, keeping bookmarks and the caret line.
-            guard workflow.input == .document ? editor.replaceDocumentText(output) : editor.replaceSelection(output)
-            else { throw AutomationError.invalid("The automation result could not be written to the editor.") }
+            try target.apply([output], wholeDocument: workflow.input == .document)
         case .clipboard:
-            pasteboard.clearContents()
-            guard pasteboard.setString(output, forType: .string) else {
+            guard let board = activePasteboard else {
+                throw AutomationError.invalid("Clipboard access is unavailable for this isolated support directory.")
+            }
+            board.clearContents()
+            guard board.setString(output, forType: .string) else {
                 throw AutomationError.invalid("The clipboard could not be updated.")
             }
         case .newDocument: newDocument(output)
@@ -738,10 +781,10 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             let panel = NSSavePanel()
             panel.nameFieldStringValue = "Automation-output.txt"
             guard panel.runModal() == .OK, let url = panel.url else { return }
+            try revalidateSource()
             try Data(output.utf8).write(to: url, options: .atomic)
         }
     }
-    private var runControl: AutomationRunControl?
     private var runPanel: NSPanel?
     /// Cancel ends the modal itself. The worker is only asked to stop, because sorting, splitting
     /// and joining cannot be interrupted; it holds a copy of the text and nothing of the editor.
@@ -750,7 +793,8 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         runControl.cancel()
         if let runPanel, NSApp.modalWindow === runPanel { NSApp.stopModal() }
     }
-    /// The worker's result, handed across threads under a lock.
+    /// One-shot worker result for the synchronous 0.2-second fast path. Every read/write is
+    /// protected by this lock; UI/modal result ownership stays in TransformProgress.
     private final class TransformOutcome: @unchecked Sendable {
         private let lock = NSLock()
         private var result: Result<String, Error>?
@@ -768,7 +812,8 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
     /// Progress controls, created only when a run outlasts the short wait. Main thread only.
     /// The worker's blocks hold this box and can outlive the run, so the references are weak:
     /// the panel and its views are owned by the run and released on the main thread.
-    private final class TransformProgress {
+    @MainActor private final class TransformProgress {
+        var result: Result<String, Error>?
         weak var panel: NSPanel?
         weak var bar: NSProgressIndicator?
         weak var status: NSTextField?
@@ -786,16 +831,24 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         let outcome = TransformOutcome(), finished = DispatchSemaphore(value: 0), ui = TransformProgress()
         // Progress and completion are delivered through the run loop, not the main queue, so they
         // arrive even when this run was itself started from a main-queue block.
+        let deliverProgress: @MainActor @Sendable (Int, Int) -> Void = { completed, total in
+            ui.bar?.doubleValue = Double(completed)
+            ui.status?.stringValue = "Processing step \(min(completed+1,total)) of \(total)…"
+        }
+        let deliverResult: @MainActor @Sendable (Result<String, Error>) -> Void = { result in
+            // The modal path publishes its actor-owned result before stopping the same run-loop turn.
+            ui.result = result
+            if let panel = ui.panel, NSApp.modalWindow === panel { NSApp.stopModal() }
+        }
         control.onProgress = { completed, total in
-            MainRunLoop.perform {
-                ui.bar?.doubleValue = Double(completed)
-                ui.status?.stringValue = "Processing step \(min(completed+1,total)) of \(total)…"
-            }
+            MainRunLoop.perform { deliverProgress(completed, total) }
         }
         DispatchQueue.global(qos: .userInitiated).async {
-            outcome.set(Result { try workflow.transform(input, control: control) })
+            let result = Result { try workflow.transform(input, control: control) }
+            // The locked handoff is only for the existing synchronous wait/setup fast path.
+            outcome.set(result)
             finished.signal()
-            MainRunLoop.perform { if let panel = ui.panel, NSApp.modalWindow === panel { NSApp.stopModal() } }
+            MainRunLoop.perform { deliverResult(result) }
         }
         if finished.wait(timeout: .now() + 0.2) == .success, let result = outcome.get() { return try result.get() }
         let panel = NSPanel(
@@ -824,11 +877,15 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         panel.center()
         // A worker that finished during the wait or the setup has its stop block queued for the
         // modal run loop; skipping the modal when the result is already here saves a flash.
-        if outcome.get() == nil { NSApp.runModal(for: panel) }
+        if let result = outcome.get() {
+            ui.result = result
+        } else {
+            NSApp.runModal(for: panel)
+        }
         panel.orderOut(nil)
         // Cancel wins over a result that arrived at the same moment.
         try control.checkCancellation()
-        guard let result = outcome.get() else {
+        guard let result = ui.result else {
             control.cancel()
             throw AutomationError.invalid("Automation cancelled. Nothing was changed.")
         }
@@ -849,8 +906,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             }
             do {
                 let connector = RemindersConnector(
-                    storageURL: self.storage.deletingLastPathComponent().appendingPathComponent(
-                        "ReminderExports", isDirectory: true))
+                    storageURL: AppStorage.url(.reminders, under: self.storage.deletingLastPathComponent()))
                 try await connector.requestAccess()
                 let destinations = try connector.destinations()
                 let writable = destinations.filter { $0.writable }
@@ -858,12 +914,21 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     throw AutomationError.invalid("No writable Reminders lists are available.")
                 }
                 let alert = TTAlert()
-                alert.messageText = "Send \(rows.count) Reminder Items"
+                alert.messageText = String(
+                    format: rows.count == 1
+                        ? Strings.text("reminders.send.title.one", "Send %@ Reminder Item")
+                        : Strings.text("reminders.send.title.other", "Send %@ Reminder Items"),
+                    Strings.number(rows.count))
                 alert.informativeText =
                     "Choose the Reminders list to add these items to. Nothing is sent until you choose Send. Each item's result is recorded, and an item whose result is uncertain is never sent again automatically."
-                alert.addButton(withTitle: "Send \(rows.count) Items")
-                alert.addButton(withTitle: "Cancel")
+                alert.addButton(
+                    withTitle: String(
+                        format: rows.count == 1
+                            ? Strings.text("reminders.send.one", "Send %@ Item")
+                            : Strings.text("reminders.send.other", "Send %@ Items"), Strings.number(rows.count)))
+                alert.addButton(withTitle: "Cancel", role: .cancel)
                 let choice = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 650, height: 28), pullsDown: false)
+                choice.setAccessibilityLabel("Reminders destination list")
                 // A list is named as Reminders names it. Only two lists with the same name in the same
                 // account need telling apart, and then by position rather than by an identifier.
                 let sameName = Dictionary(grouping: writable, by: { "\($0.title)\u{0}\($0.source)" })
@@ -908,7 +973,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     unreadable.informativeText =
                         "A previous export of these items may be recorded in a file that cannot be read, so TextTank cannot tell whether they were already sent. Check Reminders before sending. The files are left unchanged in the ReminderExports folder:\n\n"
                         + Self.issueSummary(issues)
-                    unreadable.addButton(withTitle: "Cancel")
+                    unreadable.addButton(withTitle: "Cancel", role: .cancel)
                     unreadable.addButton(withTitle: "Send Anyway")
                     guard unreadable.runModal() == .alertSecondButtonReturn else { return }
                 case .match(let existing):
@@ -917,14 +982,17 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     repeated.informativeText =
                         "An export with the same rows and destination already exists. Review its confirmed, failed and uncertain results to avoid duplicates. Send Another Copy intentionally creates another set."
                     repeated.addButton(withTitle: "Review Existing Export")
-                    repeated.addButton(withTitle: "Cancel")
+                    repeated.addButton(withTitle: "Cancel", role: .cancel)
                     repeated.addButton(withTitle: "Send Another Copy")
-                    let response = repeated.runModal()
-                    if response == .alertFirstButtonReturn {
+                    enum RepeatedChoice { case review, cancel, sendCopy }
+                    guard let response = repeated.choice([RepeatedChoice.review, .cancel, .sendCopy]),
+                        response != .cancel
+                    else { return }
+                    if response == .review {
                         self.showReminderResults(existing)
                         return
                     }
-                    guard response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 else {
+                    guard response == .sendCopy else {
                         return
                     }
                 }
@@ -967,7 +1035,9 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             }
         )
     }
-    static func matchingExport(rows: [String], destinationID: String, batches: [ReminderBatch]) -> ReminderBatch? {
+    nonisolated static func matchingExport(rows: [String], destinationID: String, batches: [ReminderBatch])
+        -> ReminderBatch?
+    {
         batches.filter { $0.destinationID == destinationID && $0.rows.map(\.title) == rows }
             .max { $0.createdAt < $1.createdAt }
     }
@@ -978,7 +1048,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         case needsConfirmation([ReminderJournalIssue])
         case clear
     }
-    static func exportPrecheck(
+    nonisolated static func exportPrecheck(
         rows: [String], destinationID: String, batches: [ReminderBatch], issues: [ReminderJournalIssue]
     ) -> ReminderExportPrecheck {
         if let existing = matchingExport(rows: rows, destinationID: destinationID, batches: batches) {
@@ -987,19 +1057,19 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         return issues.isEmpty ? .clear : .needsConfirmation(issues)
     }
     /// The batches Clear Confirmed History removes: those with nothing left to resume or reconcile.
-    static func clearableBatches(_ batches: [ReminderBatch]) -> [ReminderBatch] {
+    nonisolated static func clearableBatches(_ batches: [ReminderBatch]) -> [ReminderBatch] {
         batches.filter { !$0.rows.isEmpty && $0.rows.allSatisfy { $0.status == .confirmed } }
     }
     /// Export History rows, newest first.
-    static func historyOrder(_ batches: [ReminderBatch]) -> [ReminderBatch] {
+    nonisolated static func historyOrder(_ batches: [ReminderBatch]) -> [ReminderBatch] {
         batches.sorted { ($0.createdAt, $0.id.uuidString) > ($1.createdAt, $1.id.uuidString) }
     }
     /// File names of unreadable journals with the reason for each, at most ten, then a count.
-    static func issueSummary(_ issues: [ReminderJournalIssue]) -> String {
+    nonisolated static func issueSummary(_ issues: [ReminderJournalIssue]) -> String {
         let lines = issues.prefix(10).map { "\($0.url.lastPathComponent): \($0.message)" }
         return (lines + (issues.count > 10 ? ["and \(issues.count - 10) more"] : [])).joined(separator: "\n")
     }
-    static func journalFailureHeader(_ underlying: Error) -> String {
+    nonisolated static func journalFailureHeader(_ underlying: Error) -> String {
         "The export journal could not be updated (\(underlying.localizedDescription)), so sending stopped. The list below is the outcome held in memory. Export History will show the last attempted item as uncertain, possibly although it was saved, and may be unavailable until the journal folder can be written again. Check Reminders before sending any of these items again."
     }
     /// Told about an export in which every item was confirmed. The app shows it in the document
@@ -1042,8 +1112,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             }
             do {
                 let connector = RemindersConnector(
-                    storageURL: self.storage.deletingLastPathComponent().appendingPathComponent(
-                        "ReminderExports", isDirectory: true))
+                    storageURL: AppStorage.url(.reminders, under: self.storage.deletingLastPathComponent()))
                 let history = try connector.scanBatches()
                 let batches = Self.historyOrder(history.batches)
                 guard !batches.isEmpty || !history.issues.isEmpty else {
@@ -1066,7 +1135,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     "Choose a recorded batch to inspect its durable per-item results. Reading this history does not request system access."
                     + unreadable
                 alert.addButton(withTitle: "Review")
-                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Cancel", role: .cancel)
                 alert.addButton(withTitle: "Request Access and Resume Unsent")
                 let clearable = Self.clearableBatches(batches)
                 if !clearable.isEmpty { alert.addButton(withTitle: "Clear Confirmed History…") }
@@ -1083,8 +1152,14 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     choice.lastItem?.representedObject = batch.id.uuidString
                 }
                 alert.accessoryView = choice
-                let response = alert.runModal()
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
+                enum HistoryChoice { case review, cancel, resume, clear }
+                guard
+                    let response = alert.choice(
+                        clearable.isEmpty
+                            ? [HistoryChoice.review, .cancel, .resume]
+                            : [HistoryChoice.review, .cancel, .resume, .clear]), response != .cancel
+                else { return }
+                if response == .clear {
                     let confirm = TTAlert()
                     confirm.messageText =
                         clearable.count == 1
@@ -1095,7 +1170,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                         + (batches.count > clearable.count
                             ? "\(batches.count - clearable.count) exports with unsent, failed or uncertain items are kept."
                             : "No export has unsent, failed or uncertain items.")
-                    confirm.addButton(withTitle: "Cancel")
+                    confirm.addButton(withTitle: "Cancel", role: .cancel)
                     confirm.addButton(withTitle: "Remove Records").hasDestructiveAction = true
                     guard confirm.runModal() == .alertSecondButtonReturn else { return }
                     let removed = try connector.deleteConfirmedBatches(ids: clearable.map(\.id))
@@ -1110,10 +1185,10 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
                     _ = report.runModal()
                     return
                 }
-                guard response != .alertSecondButtonReturn, let id = choice.selectedItem?.representedObject as? String,
+                guard response != .cancel, let id = choice.selectedItem?.representedObject as? String,
                     let batch = batches.first(where: { $0.id.uuidString == id })
                 else { return }
-                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
+                if response == .resume {
                     // The explicit retry choice authorizes a new access request, never a new batch ID.
                     try await connector.requestAccess()
                     let progress = self.exportProgressPanel(total: batch.rows.count)
@@ -1145,19 +1220,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
         return nil
     }
     private func makeTextView(height: CGFloat) -> (scroll: NSScrollView, editor: NSTextView) {
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 650, height: height))
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        let editor = NSTextView(frame: scroll.bounds)
-        editor.isRichText = false
-        editor.isAutomaticQuoteSubstitutionEnabled = false
-        editor.isAutomaticDashSubstitutionEnabled = false
-        editor.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        editor.autoresizingMask = [.width]
-        editor.isVerticallyResizable = true
-        editor.textContainer?.widthTracksTextView = true
-        scroll.documentView = editor
-        return (scroll, editor)
+        JSONLibraryEditor.makeTextView(size: NSSize(width: 650, height: height))
     }
     private func showError(_ error: Error) {
         // A declined or restricted permission is an ordinary state with a way forward, not a dead end.
@@ -1166,7 +1229,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             alert.messageText = "TextTank cannot use Reminders"
             alert.informativeText = error.localizedDescription
             alert.addButton(withTitle: "Open Privacy Settings")
-            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Cancel", role: .cancel)
             if alert.runModal() == .alertFirstButtonReturn,
                 let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders")
             {
@@ -1174,7 +1237,7 @@ final class AutomationController: NSObject, NSMenuDelegate, NSMenuItemValidation
             }
             return
         }
-        let alert = NSAlert(error: error)
-        alert.runModal()
+        Announce.say(error.localizedDescription)
+        TTAlert.present(error)
     }
 }

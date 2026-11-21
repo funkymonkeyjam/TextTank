@@ -1,8 +1,23 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+@testable import TextTankRuntime
+import EditorBridge
+import NativeSearch
 import zlib
+@MainActor private final class UtilityDialogState {
+    var remaining: [String]
+    var timedOut = false
+    init(_ answers: [String]) { remaining = answers }
+}
+@MainActor private final class UtilityHexState { var stage = 0, draftKept = false }
+
 @main struct UtilityChecks {
-    static func main() {
+    @MainActor static func buttons(_ view: NSView) -> [NSButton] {
+        (view as? NSButton).map { [$0] } ?? [] + view.subviews.flatMap(buttons)
+    }
+    @MainActor static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    @MainActor static func main() {
         Checks.run("UtilityChecks") {
             func rejectsMalformed(_ op: TextUtility, _ value: String, line: UInt = #line) {
                 rejects("\(op) rejects malformed \(value.debugDescription)", line: line) { _ = try op.apply(value) }
@@ -202,6 +217,10 @@ import zlib
                 try HexEncodingOptions(insertSpaces: true, uppercase: false, bytesPerLine: 2, lineEnding: "\r\n")
                     .encode("aéb") == "61 c3\r\na9 62\r\n", "hex options encode bytes not characters")
             check(try HexEncodingOptions(bytesPerLine: 0).encode("café") == "636166C3A9", "hex unwrapped option")
+            let runtimeSupport = try IsolatedSupportDirectory("UtilityChecksRuntime")
+            defer { runtimeSupport.restore() }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
             let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 500, height: 300))
             let window = NSWindow(contentRect: editor.bounds, styleMask: [.titled], backing: .buffered, defer: false)
@@ -222,7 +241,7 @@ import zlib
             check(NSApplication.shared.sendAction(item.action!, to: item.target, from: item), "menu dispatch")
             check(editor.text == "before Y2Fmw6k= after", "menu changes selected UTF8")
             check(unrecordableEdits == 1, "a utility that changes the document reports one unrecordable edit")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "before café after", "one Undo restores exact text")
             editor.text = "bad %GG"
             editor.resetUndoHistory()
@@ -243,7 +262,8 @@ import zlib
             editor.resetUndoHistory()
             editor.setSavePoint()
             try require(
-                editor.setSelectionRanges([["anchor": 0, "caret": 3], ["anchor": 4, "caret": 7]]),
+                editor.setSelectionRanges([TTSelectionRange(anchor: 0, caret: 3), TTSelectionRange(anchor: 4, caret: 7)]
+                ),
                 "fixture: two selections")
             let multiRevision = editor.revision
             rejects(
@@ -326,57 +346,133 @@ import zlib
             check(selectionPlain == "café", "styled export selection boundary")
             // The two dialog utilities. In each modal the menu item presents, the next named
             // button is clicked; a dialog still open after 20 s is aborted and reported.
-            func buttons(_ view: NSView) -> [NSButton] {
-                (view as? NSButton).map { [$0] } ?? [] + view.subviews.flatMap(buttons)
-            }
-            func choose(_ title: String, _ answers: [String]) -> Bool {
-                var remaining = answers, timedOut = false
+            @MainActor func choose(_ title: String, _ answers: [String]) -> Bool {
+                let dialog = UtilityDialogState(answers)
                 let deadline = Date().addingTimeInterval(20)
                 let timer = Timer(timeInterval: 0.005, repeats: true) { _ in
-                    guard let content = NSApp.modalWindow?.contentView else { return }
-                    if Date() > deadline {
-                        timedOut = true
-                        NSApp.abortModal()
-                        return
+                    precondition(Thread.isMainThread)
+                    MainActor.assumeIsolated {
+                        guard let content = NSApp.modalWindow?.contentView else { return }
+                        if Date() > deadline {
+                            dialog.timedOut = true
+                            NSApp.abortModal()
+                            return
+                        }
+                        guard let next = dialog.remaining.first,
+                            let button = buttons(content).first(where: { $0.title == next })
+                        else { return }
+                        dialog.remaining.removeFirst()
+                        button.performClick(nil)
                     }
-                    guard let next = remaining.first, let button = buttons(content).first(where: { $0.title == next })
-                    else { return }
-                    remaining.removeFirst()
-                    button.performClick(nil)
                 }
                 RunLoop.main.add(timer, forMode: .modalPanel)
                 defer { timer.invalidate() }
                 guard let item = menu.items.first(where: { $0.title == title }), let action = item.action else {
                     return false
                 }
-                return NSApp.sendAction(action, to: item.target, from: item) && remaining.isEmpty && !timedOut
+                return NSApp.sendAction(action, to: item.target, from: item) && dialog.remaining.isEmpty
+                    && !dialog.timedOut
             }
-            func load(_ text: String) -> UInt {
+            @MainActor func load(_ text: String) -> UInt {
                 editor.text = text
                 editor.resetUndoHistory()
                 editor.setSavePoint()
-                editor.executeCommand("selectAll")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 return editor.revision
             }
+            // Only disposable PRIVATE boards participate in these explicit clipboard actions.
+            // The pre-repair direct-general branches are a source-only red: never execute them.
+            let ownedBoard = NSPasteboard.withUniqueName()
+            defer { ownedBoard.releaseGlobally() }
+            let previousEffects = RuntimeEnvironment.dependencies
+            var ownedEffects = RuntimeEnvironment.current
+            ownedEffects.generalPasteboard = { ownedBoard }
+            RuntimeEnvironment.dependencies = ownedEffects
+            defer { RuntimeEnvironment.dependencies = previousEffects }
+            let copyRevision = load("café")
+            let copyRecording = unrecordableEdits
+            check(
+                choose("Copy Styled Text as HTML", []),
+                "F269 styled-copy menu dispatch uses the owned clipboard capability")
+            check(
+                ownedBoard.string(forType: .string) == "café" && ownedBoard.data(forType: .html) != nil,
+                "F269 actual styled-copy action writes HTML and exact plain text to the private board")
+            check(
+                editor.revision == copyRevision && !editor.modified && unrecordableEdits == copyRecording,
+                "F269 styled clipboard export leaves document and recording state unchanged")
+            _ = load("255")
+            check(
+                choose("Number Conversion…", ["Convert", "Copy"]) && ownedBoard.string(forType: .string) == "FF",
+                "F269 actual radix Copy writes only the explicitly owned private board")
+            var deniedEffects = ownedEffects
+            deniedEffects.generalPasteboard = { nil }
+            RuntimeEnvironment.dependencies = deniedEffects
+            let sentinel = ownedBoard.string(forType: .string), beforeDenial = ownedBoard.changeCount
+            rejects("F269 nil clipboard capability refuses radix copy before clearing or writing") {
+                try controller.copyConvertedNumber("denied")
+            }
+            rejects("F269 nil clipboard capability refuses styled copy before clearing or writing") {
+                try controller.copyStyledToClipboard(format: "html")
+            }
+            check(
+                ownedBoard.string(forType: .string) == sentinel && ownedBoard.changeCount == beforeDenial,
+                "F269 refused clipboard actions preserve every private-board write boundary")
+            RuntimeEnvironment.dependencies = ownedEffects
             var dialogRevision = load("abc")
             check(
                 choose("UTF-8 to Hex with Options…", ["Cancel"]) && editor.text == "abc"
                     && editor.revision == dialogRevision && unrecordableEdits == 1,
                 "Cancel in Hex Encoding Options changes nothing and reports no unrecordable edit")
+            let hex = UtilityHexState()
+            let hexDeadline = Date().addingTimeInterval(10)
+            let hexRetry = Timer(timeInterval: 0.01, repeats: true) { _ in
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated {
+                    guard let content = NSApp.modalWindow?.contentView else { return }
+                    let views = descendants(content)
+                    if Date() > hexDeadline {
+                        NSApp.abortModal()
+                        return
+                    }
+                    guard let width = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
+                        let apply = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Apply" })
+                    else {
+                        views.compactMap { $0 as? NSButton }.first?.performClick(nil)
+                        return
+                    }
+                    if hex.stage == 0 {
+                        width.stringValue = "invalid width"
+                        hex.stage = 1
+                        apply.performClick(nil)
+                    } else if hex.stage == 1 {
+                        hex.draftKept = width.stringValue == "invalid width"
+                        views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
+                        hex.stage = 2
+                    }
+                }
+            }
+            RunLoop.main.add(hexRetry, forMode: .modalPanel)
+            let hexItem = menu.items.first { $0.title == "UTF-8 to Hex with Options…" }!
+            _ = NSApp.sendAction(hexItem.action!, to: hexItem.target, from: hexItem)
+            hexRetry.invalidate()
+            check(hex.stage == 2 && hex.draftKept, "F214 invalid Hex options retain their input for correction")
+            check(
+                editor.text == "abc" && editor.revision == dialogRevision && unrecordableEdits == 1,
+                "F214 cancelling invalid Hex options preserves text revision and recording state")
             check(
                 choose("UTF-8 to Hex with Options…", ["Apply"]) && editor.text.hasPrefix("616263")
                     && unrecordableEdits == 2,
                 "Apply in Hex Encoding Options replaces the selection and reports one unrecordable edit")
             dialogRevision = load("255")
             check(
-                choose("Number Conversion…", ["Cancel"]) && choose("Number Conversion…", ["Convert", "Cancel"])
+                choose("Number Conversion…", ["Cancel"]) && choose("Number Conversion…", ["Convert", "Done"])
                     && editor.text == "255" && editor.revision == dialogRevision && unrecordableEdits == 2,
                 "opening, converting and cancelling Number Conversion changes nothing and reports no unrecordable edit")
             check(
                 choose("Number Conversion…", ["Convert", "Insert into Editor"]) && editor.text.uppercased() == "FF"
                     && unrecordableEdits == 3,
                 "Insert into Editor from Number Conversion reports one unrecordable edit")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "255" && !editor.modified, "the inserted conversion is one Undo")
             editor.readOnly = true
             let lockedRevision = editor.revision

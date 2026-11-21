@@ -1,19 +1,28 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
-final class WorkspaceBrowserNode {
+@MainActor final class WorkspaceBrowserNode {
     let entry: WorkspaceBrowserEntry
     var children: [WorkspaceBrowserNode]?
     init(_ entry: WorkspaceBrowserEntry) { self.entry = entry }
 }
 
-final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
+@MainActor
+final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate,
+    NSMenuItemValidation
+{
+    func validateMenuItem(_ item: NSMenuItem) -> Bool { !CompareCommandScope.blocksWorkspace }
     let store: WorkspaceBrowserStore
     let monitor = DocumentMonitor()
-    var chooseEncoding: (URL, Error) -> FileEncoding? = EncodingChoice.present
-    var currentDocument: () -> TextDocument? = { NSApp.mainWindow?.windowController?.document as? TextDocument }
+    var chooseEncoding: @MainActor (URL, Error) -> FileEncoding? = EncodingChoice.present
+    var currentDocument: () -> TextDocument? = { EditorServices.current?.activePresentation?.document as? TextDocument }
     private(set) var window: NSPanel?
     let outline = NSOutlineView()
+    private enum Mode: Int { case openDocuments, folders, recentFiles }
+    private var selectedMode: Mode { Mode(rawValue: mode.selectedSegment) ?? .openDocuments }
     private let mode = NSSegmentedControl(
         labels: ["Open Documents", "Folders", "Recent Files"], trackingMode: .selectOne, target: nil, action: nil)
     private let status = AnnouncingLabel(labelWithString: "")
@@ -34,15 +43,12 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     private let recordsSystemRecent: Bool
     init(storeURL: URL? = nil, recordsSystemRecent: Bool = true) {
         self.recordsSystemRecent = recordsSystemRecent
-        let support =
-            ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TextTank")
-        store = WorkspaceBrowserStore(url: storeURL ?? support.appendingPathComponent("WorkspaceBrowser.json"))
+        store = WorkspaceBrowserStore(url: storeURL ?? AppStorage.url(.workspace))
         super.init()
         monitor.onStatus = { [weak self] value in self?.monitorStatus.stringValue = value.message }
-        // AppKit has no notification for a document joining or leaving the document list.
-        // Its window closing or becoming main is the signal.
+        // Explicit document registration/retirement is independent of the shared host window.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowDidBecomeMain(_:)), name: .textTankDocumentsDidChange, object: nil)
         NotificationCenter.default.addObserver(
             self, selector: #selector(windowWillClose(_:)), name: NSWindow.willCloseNotification, object: nil)
         NotificationCenter.default.addObserver(
@@ -54,7 +60,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             // The panel outlives its window (isReleasedWhenClosed is false); do not keep
             // documents alive behind a closed panel.
             documents = []
-            if mode.selectedSegment == 0 { outline.reloadData() }
+            if selectedMode == .openDocuments { outline.reloadData() }
             return
         }
         // The window closes before its document leaves the document list.
@@ -69,9 +75,9 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         guard window?.isVisible == true else { return }
         let current = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
         guard current.count != documents.count || !zip(current, documents).allSatisfy({ $0 === $1 }) else { return }
-        let selected = mode.selectedSegment == 0 ? outline.item(atRow: outline.selectedRow) as? TextDocument : nil
+        let selected = selectedMode == .openDocuments ? outline.item(atRow: outline.selectedRow) as? TextDocument : nil
         documents = current
-        guard mode.selectedSegment == 0 else { return }
+        guard selectedMode == .openDocuments else { return }
         outline.reloadData()
         if let selected, let row = documents.firstIndex(where: { $0 === selected }) {
             outline.selectRowIndexes([row], byExtendingSelection: false)
@@ -89,7 +95,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         if (error as NSError).recoveryAttempter != nil {
             NSApp.presentError(error)
         } else {
-            NSAlert(error: error).runModal()
+            TTAlert.present(error)
         }
     }
     func menu() -> NSMenu {
@@ -139,33 +145,33 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         }.prefix(100).map { $0 }
     }
     @objc private func toggleMonitor(_ sender: NSMenuItem) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         if monitor.document != nil {
             monitor.stop()
             sender.state = .off
             return
         }
         guard let document = currentDocument() else {
-            NSAlert(error: WorkspaceError.invalid("Choose a saved document window before enabling monitoring."))
-                .runModal()
+            TTAlert.present(WorkspaceError.invalid("Choose a saved document window before enabling monitoring."))
             return
         }
         do {
             try monitor.start(document)
             sender.state = .on
             show(nil)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func reloadMonitored(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard let document = monitor.document else {
             monitorStatus.stringValue = "No document is being monitored."
             return
         }
         guard !document.isDocumentEdited else {
-            NSAlert(
-                error: WorkspaceError.invalid(
+            TTAlert.present(
+                WorkspaceError.invalid(
                     "The document has unsaved edits. Use Save As to keep them, or explicitly Revert to Saved; monitoring will not discard them."
-                )
-            ).runModal()
+                ))
             return
         }
         let revision = document.editor.revision
@@ -174,15 +180,19 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         alert.informativeText =
             "Replace the clean editor contents with the current disk bytes. This clears its Undo history."
         alert.addButton(withTitle: "Reload")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do { try monitor.reload(expectedRevision: revision) } catch { NSAlert(error: error).runModal() }
+        do { try monitor.reload(expectedRevision: revision) } catch { TTAlert.present(error) }
     }
     @objc func show(_ sender: Any?) {
         if window == nil { buildWindow() }
         refresh(nil)
         window?.makeKeyAndOrderFront(nil)
-        if let error = store.loadError { status.stringValue = error.localizedDescription }
+        if let error = store.loadError {
+            status.stringValue =
+                "Saved workspace unavailable. Choose Add Folder to review recovery options. "
+                + error.localizedDescription
+        }
     }
     private func buildWindow() {
         let panel = NSPanel(
@@ -205,7 +215,8 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         scroll.documentView = outline
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
-        mode.selectedSegment = 0
+        mode.setAccessibilityLabel("Workspace browser view")
+        mode.selectedSegment = Mode.openDocuments.rawValue
         mode.target = self
         mode.action = #selector(refresh(_:))
         let refresh = NSButton(title: "Refresh", target: self, action: #selector(refresh(_:)))
@@ -247,10 +258,12 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         // Fresh nodes every time: a node caches its listing, so this is what re-reads the disk.
         nodes = store.state.folders.map { WorkspaceBrowserNode(WorkspaceBrowserEntry(url: $0, directory: true)) }
         outline.reloadData()
-        if mode.selectedSegment == 1 { restoreExpansion() }
+        if selectedMode == .folders { restoreExpansion() }
         reloading = false
         status.stringValue =
-            "\(documents.count) open documents · \(nodes.count) saved folders · \(recent.count) recent files"
+            String(
+                format: Strings.text("workspace.counts", "Open documents: %@. Saved folders: %@. Recent files: %@."),
+                Strings.number(documents.count), Strings.number(nodes.count), Strings.number(recent.count))
     }
     /// Expands again the folders that were expanded before the nodes were rebuilt, parents
     /// before children. A folder that is gone, or sits under one that is, is forgotten.
@@ -275,6 +288,11 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         expanded.remove(WorkspaceBrowserState.identity(node.entry.url))
     }
     @objc func addFolder(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        do { guard try StoreRecovery.ensureWritable(store.loadState) else { return } } catch {
+            TTAlert.present(error)
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -282,12 +300,13 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try store.addFolder(url)
-            mode.selectedSegment = 1
+            mode.selectedSegment = Mode.folders.rawValue
             show(nil)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc func removeFolder(_ sender: Any?) {
-        guard mode.selectedSegment == 1, let node = outline.item(atRow: outline.selectedRow) as? WorkspaceBrowserNode,
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        guard selectedMode == .folders, let node = outline.item(atRow: outline.selectedRow) as? WorkspaceBrowserNode,
             store.contains(node.entry.url)
         else {
             status.stringValue = "Select a saved root folder to remove it from this workspace. Files on disk are kept."
@@ -296,16 +315,18 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         do {
             try store.removeFolder(node.entry.url)
             refresh(nil)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func openRecent(_ sender: NSMenuItem) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         guard let url = sender.representedObject as? URL else { return }
         do { _ = try openOfferingEncoding(url) } catch { present(error) }
     }
     @objc func openSelected(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
         let index = outline.selectedRow
         guard index >= 0 else { return }
-        if mode.selectedSegment == 0 {
+        if selectedMode == .openDocuments {
             guard let document = outline.item(atRow: index) as? TextDocument else { return }
             // A row for a document that has since closed is removed, not shown again.
             guard NSDocumentController.shared.documents.contains(where: { $0 === document }) else {
@@ -316,7 +337,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             return
         }
         let url: URL
-        if mode.selectedSegment == 2 {
+        if selectedMode == .recentFiles {
             guard index < recent.count else { return }
             url = recent[index]
         } else {
@@ -352,14 +373,8 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             existing.showWindows()
             return existing
         }
-        let (data, sample) = try WorkspaceStore.readRegularFileSample(url)
-        let document = TextDocument()
-        document.fileURL = url
-        try document.read(
-            captured: data, sample: sample, from: url, ofType: TextDocument.plainTextType, as: encoding)
-        NSDocumentController.shared.addDocument(document)
-        document.makeWindowControllers()
-        document.showWindows()
+        let read = try WorkspaceStore.captureRegularFile(url)
+        let document = try DocumentFactory.openCaptured(read, from: url, as: encoding)
         reloadDocuments()
         if recordsSystemRecent { NSDocumentController.shared.noteNewRecentDocumentURL(url) }
         do { try store.noteRecent(url) } catch {
@@ -373,9 +388,9 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             let listing = try WorkspaceBrowserStore.list(node.entry.url)
             node.children = listing.entries.map(WorkspaceBrowserNode.init)
             if listing.truncated || listing.skipped > 0 {
-                status.stringValue =
-                    "\(listing.skipped) hidden, symbolic-link or special entries skipped"
-                    + (listing.truncated ? " · 2,000-entry listing limit reached" : "")
+                status.stringValue = Strings.workspaceSkipped(
+                    listing.skipped, truncated: listing.truncated,
+                    limit: WorkspaceBrowserStore.defaultListingLimit)
             }
         } catch {
             node.children = []
@@ -384,14 +399,14 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         return node.children ?? []
     }
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        if mode.selectedSegment == 0 { return item == nil ? documents.count : 0 }
-        if mode.selectedSegment == 2 { return item == nil ? recent.count : 0 }
+        if selectedMode == .openDocuments { return item == nil ? documents.count : 0 }
+        if selectedMode == .recentFiles { return item == nil ? recent.count : 0 }
         guard let node = item as? WorkspaceBrowserNode else { return nodes.count }
         return node.entry.directory ? children(node).count : 0
     }
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        if mode.selectedSegment == 0 { return documents[index] }
-        if mode.selectedSegment == 2 { return recent[index] as NSURL }
+        if selectedMode == .openDocuments { return documents[index] }
+        if selectedMode == .recentFiles { return recent[index] as NSURL }
         return (item as? WorkspaceBrowserNode).map { children($0)[index] } ?? nodes[index]
     }
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {

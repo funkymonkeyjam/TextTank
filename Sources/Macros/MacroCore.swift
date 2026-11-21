@@ -1,81 +1,168 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-struct RecordedMacro: Codable, Identifiable, Equatable {
-    struct Search: Codable, Equatable {
-        var query: String, replacement: String, mode: Int
-        var matchCase: Bool, wholeWord: Bool, dotMatchesNewline: Bool, wrap: Bool
-        var action: String
-        func validate() throws {
+package enum MacroLimits {
+    static package let recordedActions = 10_000
+    static package let repeatCount = 10_000
+    static package let playbackActions = 100_000
+}
+
+package struct RecordedMacro: Codable, Identifiable, Equatable {
+    package init(version: Int = 1, id: UUID, name: String, steps: [Step]) {
+        self.version = version
+        self.id = id
+        self.name = name
+        self.steps = steps
+    }
+
+    package struct Search: Codable, Equatable {
+        package init(
+            query: String, replacement: String, mode: Int, matchCase: Bool, wholeWord: Bool, dotMatchesNewline: Bool,
+            wrap: Bool, action: String
+        ) {
+            self.query = query
+            self.replacement = replacement
+            self.mode = mode
+            self.matchCase = matchCase
+            self.wholeWord = wholeWord
+            self.dotMatchesNewline = dotMatchesNewline
+            self.wrap = wrap
+            self.action = action
+        }
+
+        package var query: String, replacement: String, mode: Int
+        package var matchCase: Bool, wholeWord: Bool, dotMatchesNewline: Bool, wrap: Bool
+        package var action: String
+        package func validate() throws {
             guard !query.isEmpty, (0...2).contains(mode),
                 ["next", "previous", "replaceOne", "replaceAll"].contains(action)
             else { throw MacroError.invalid("Invalid captured search parameters or scope.") }
         }
     }
-    struct Step: Codable, Equatable {
-        enum Kind: String, Codable { case insertText, command, findLiteral, replaceSelection, search }
-        var kind: Kind
-        var text: String?
-        var command: String?
-        var matchCase: Bool?
-        var backwards: Bool?
-        var search: Search?
-        static let commands: Set<String> = [
-            "cut", "copy", "paste", "selectAll", "duplicateLine", "deleteLine", "transposeLine", "indent", "unindent",
-            "upper", "lower",
-            "charLeft", "charRight", "lineUp", "lineDown", "home", "lineEnd", "documentStart", "documentEnd",
-            "wordLeft", "wordRight", "deleteBack", "deleteForward", "newLine", "tab", "backTab",
-            "charLeftExtend", "charRightExtend", "lineUpExtend", "lineDownExtend", "homeExtend", "lineEndExtend",
-            "documentStartExtend", "documentEndExtend", "wordLeftExtend", "wordRightExtend",
-            // G367: the rest of the standard Mac key map. Each name is also in the bridge's table.
-            "vcHome", "vcHomeExtend", "pageUp", "pageUpExtend", "pageDown", "pageDownExtend",
-            "paraUp", "paraUpExtend", "paraDown", "paraDownExtend",
-            "wordPartLeft", "wordPartLeftExtend", "wordPartRight", "wordPartRightExtend",
-            "homeDisplay", "lineEndDisplay",
-            "deleteWordLeft", "deleteWordRight", "deleteLineLeft", "deleteLineRight",
-            "lineCut", "lineCopy", "duplicateSelection", "moveLineUp", "moveLineDown", "cancel"
-        ]
-        func validate() throws {
+    /// Cases carry only their own payload. Custom Codable retains the version-1 optional-key wire format.
+    package enum Step: Codable, Equatable {
+        package enum Kind: String, Codable { case insertText, command, findLiteral, replaceSelection, search }
+        case insertText(String)
+        case command(String)
+        case findLiteral(text: String, matchCase: Bool, backwards: Bool)
+        case replaceSelection(String)
+        case search(Search)
+        package var kind: Kind {
+            switch self {
+            case .insertText: return .insertText
+            case .command: return .command
+            case .findLiteral: return .findLiteral
+            case .replaceSelection: return .replaceSelection
+            case .search: return .search
+            }
+        }
+        package var text: String? {
+            switch self {
+            case .insertText(let text), .replaceSelection(let text), .findLiteral(let text, _, _): return text
+            default: return nil
+            }
+        }
+        package var command: String? {
+            if case .command(let value) = self { return value }
+            return nil
+        }
+        package var search: Search? {
+            if case .search(let value) = self { return value }
+            return nil
+        }
+        static package let commands = EditorCommand.recordableIdentifiers
+        package func validate() throws {
+            switch self {
+            case .insertText, .replaceSelection: break
+            case .command(let command):
+                guard Self.commands.contains(command) else {
+                    throw MacroError.invalid("Unrecognized or unsafe macro command.")
+                }
+            case .search(let search): try search.validate()
+            case .findLiteral(let text, _, _):
+                guard !text.isEmpty else {
+                    throw MacroError.invalid("Literal find requires nonempty text, matchCase and backwards parameters.")
+                }
+            }
+        }
+        private enum CodingKeys: String, CodingKey { case kind, text, command, matchCase, backwards, search }
+        package init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let kind = try c.decode(Kind.self, forKey: .kind)
+            // Decode every known key even if it does not belong to this kind. Legacy files ignored
+            // unknown keys, but wrong types or incompatible known payloads must still be refused.
+            let text = try c.decodeIfPresent(String.self, forKey: .text)
+            let command = try c.decodeIfPresent(String.self, forKey: .command)
+            let matchCase = try c.decodeIfPresent(Bool.self, forKey: .matchCase)
+            let backwards = try c.decodeIfPresent(Bool.self, forKey: .backwards)
+            let search = try c.decodeIfPresent(Search.self, forKey: .search)
             if kind != .search && search != nil {
                 throw MacroError.invalid("Search parameters belong only to search steps.")
             }
             switch kind {
             case .insertText, .replaceSelection:
-                guard text != nil, command == nil, matchCase == nil, backwards == nil else {
+                guard let text, command == nil, matchCase == nil, backwards == nil else {
                     throw MacroError.invalid("Text macro step has invalid parameters.")
                 }
+                self = kind == .insertText ? .insertText(text) : .replaceSelection(text)
             case .command:
-                guard let command, Self.commands.contains(command), text == nil, matchCase == nil, backwards == nil
-                else { throw MacroError.invalid("Unrecognized or unsafe macro command.") }
+                guard let command, text == nil, matchCase == nil, backwards == nil else {
+                    throw MacroError.invalid("Unrecognized or unsafe macro command.")
+                }
+                self = .command(command)
             case .search:
                 guard let search, text == nil, command == nil, matchCase == nil, backwards == nil else {
                     throw MacroError.invalid("Invalid search macro step.")
                 }
-                try search.validate()
+                self = .search(search)
             case .findLiteral:
-                guard let text, !text.isEmpty, command == nil, matchCase != nil, backwards != nil else {
+                guard let text, command == nil, let matchCase, let backwards else {
                     throw MacroError.invalid("Literal find requires nonempty text, matchCase and backwards parameters.")
                 }
+                self = .findLiteral(text: text, matchCase: matchCase, backwards: backwards)
+            }
+            try validate()
+        }
+        package func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(kind, forKey: .kind)
+            switch self {
+            case .insertText(let text), .replaceSelection(let text): try c.encode(text, forKey: .text)
+            case .command(let command): try c.encode(command, forKey: .command)
+            case .findLiteral(let text, let matchCase, let backwards):
+                try c.encode(text, forKey: .text)
+                try c.encode(matchCase, forKey: .matchCase)
+                try c.encode(backwards, forKey: .backwards)
+            case .search(let search): try c.encode(search, forKey: .search)
+            }
+        }
+
+    }
+
+    package var version: Int
+    package var id: UUID
+    package var name: String
+    package var steps: [Step]
+    package func validate() throws {
+        let itemName = String(name.prefix(120))
+        guard version == 1 else { throw MacroError.invalid("Macro “\(itemName)” requires version 1.") }
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 120 else {
+            throw MacroError.invalid("The macro name must contain 1–120 characters.")
+        }
+        guard !steps.isEmpty, steps.count <= MacroLimits.recordedActions else {
+            throw MacroError.invalid(
+                "Macro “\(itemName)” requires 1–\(Strings.number(MacroLimits.recordedActions)) supported actions.")
+        }
+        for (index, step) in steps.enumerated() {
+            do { try step.validate() } catch {
+                throw MacroError.invalid("Macro “\(itemName)”, action \(index + 1): \(error.localizedDescription)")
             }
         }
     }
-    var version: Int = 1
-    var id: UUID
-    var name: String
-    var steps: [Step]
-    func validate() throws {
-        guard version == 1, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 120,
-            !steps.isEmpty, steps.count <= 10000
-        else {
-            throw MacroError.invalid(
-                "A macro requires version 1, a name of 1–120 characters, and 1–10000 supported steps.")
-        }
-        for step in steps { try step.validate() }
-    }
 }
-enum MacroError: LocalizedError {
+package enum MacroError: LocalizedError {
     case invalid(String)
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .invalid(let message): return message
         }
@@ -83,24 +170,44 @@ enum MacroError: LocalizedError {
 }
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct MacroLibrary: Codable, Equatable {
-    var version: Int = 1
-    var macros: [RecordedMacro]
-    func validate() throws {
-        guard version == 1, macros.count <= 200, Set(macros.map(\.id)).count == macros.count else {
-            throw MacroError.invalid("Invalid macro library version, count or duplicate IDs.")
+package struct MacroLibrary: VersionedLibrary, Equatable {
+    package init(version: Int = 1, macros: [RecordedMacro]) {
+        self.version = version
+        self.macros = macros
+    }
+
+    static package let libraryContext = "Saved macros"
+    static package var librarySizeError: Error {
+        MacroError.invalid("Saved macros exceed the 32 MiB limit. The file was not changed.")
+    }
+    /// Same 32 MiB resource envelope as saved automations; bound both import and persistence.
+    static package let maximumBytes = 32 * 1024 * 1024
+    package var version: Int
+    package var macros: [RecordedMacro]
+    package func validate() throws {
+        guard version == 1 else { throw MacroError.invalid("Saved macros require version 1.") }
+        guard macros.count <= 200 else { throw MacroError.invalid("Keep at most 200 saved macros.") }
+        var seen = Set<UUID>()
+        var remaining = Self.maximumBytes
+        func consume(_ text: String?) throws {
+            guard let text else { return }
+            let count = text.utf8.count
+            guard count <= remaining else {
+                throw MacroError.invalid("Saved macros exceed the 32 MiB limit. The file was not changed.")
+            }
+            remaining -= count
         }
-        for macro in macros { try macro.validate() }
-    }
-    static func decode(_ data: Data) throws -> MacroLibrary {
-        let library = try JSONDecoder().decode(Self.self, from: data)
-        try library.validate()
-        return library
-    }
-    func encoded() throws -> Data {
-        try validate()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(self)
+        for macro in macros {
+            guard seen.insert(macro.id).inserted else {
+                throw MacroError.invalid("Macro “\(String(macro.name.prefix(120)))” appears more than once.")
+            }
+            try macro.validate()
+            try consume(macro.name)
+            for step in macro.steps {
+                try consume(step.text)
+                try consume(step.search?.query)
+                try consume(step.search?.replacement)
+            }
+        }
     }
 }

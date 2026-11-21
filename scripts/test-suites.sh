@@ -7,37 +7,62 @@ cd "$(dirname "$0")/.."
 source scripts/suite-lib.sh
 suite_begin
 suite_require_build
-# The source manifest binds a run to a git tree. A source archive has no git
-# metadata: the suites still run, and scripts/record-validation.py then records
-# the run as not bound to a stable source tree.
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-python3 - <<'PYMANIFEST'
-import datetime,hashlib,json,pathlib,subprocess
-root=pathlib.Path.cwd()
-paths=[root/pathlib.Path(p) for p in subprocess.check_output(['git','ls-files','-z'],text=True).split('\0') if p and (root/p).is_file()]
-record={'timestamp':datetime.datetime.now(datetime.timezone.utc).isoformat(),'local_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'source_tree':subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip(),'dirty':bool(subprocess.check_output(['git','status','--porcelain'],text=True).strip()),'sha256':{str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}}
-(root/'harness/logs/test-source-manifest.json').write_text(json.dumps(record,indent=2)+'\n')
-PYMANIFEST
-else
-  echo "SKIP source manifest: not a git checkout"
-fi
+# Bind acceptance to clean start/end git trees, including standalone full-suite invocations.
+python3 scripts/record-validation.py capture
 suite_script scripts/test-harness.sh
-ALL_DIRECT="file-checks automation-checks reminder-checks bridge-checks"
-suite_build "$ALL_DIRECT" scripts/build-user-lexer.sh
-suite_build "file-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -o build/tests/file-checks Sources/Documents/FileCodec.swift Sources/Documents/RecoveryStore.swift Sources/Documents/RecoveryWriter.swift "$SUITE_SUPPORT" Tests/FileChecks.swift
+suite_script scripts/test-build-pipeline.sh
+suite_run concurrency-guard-checks harness/logs/concurrency-guard-checks.log python3 Tests/ConcurrencyGuardChecks.py
+suite_build "file-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/file-checks "$SUITE_SUPPORT" Tests/FileChecks.swift
 suite_run file-checks harness/logs/file-checks.log build/tests/file-checks
-suite_build "automation-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -o build/tests/automation-checks Sources/Automations/AutomationCore.swift Sources/Documents/LineOrder.swift "$SUITE_SUPPORT" Tests/AutomationChecks.swift
+suite_build "automation-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/automation-checks "$SUITE_SUPPORT" Tests/AutomationChecks.swift
 suite_run automation-checks harness/logs/automation-checks.log build/tests/automation-checks
-suite_build "reminder-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -o build/tests/reminder-checks Sources/Connectors/RemindersConnector.swift "$SUITE_SUPPORT" Tests/ReminderChecks.swift
+suite_build "reminder-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/reminder-checks "$SUITE_SUPPORT" Tests/ReminderChecks.swift
 suite_run reminder-checks harness/logs/reminder-checks.log build/tests/reminder-checks
-suite_build "bridge-checks" clang++ -std=c++17 -fobjc-arc -mmacosx-version-min=14.0 -I Tests/Support -I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F build/vendor/Debug -framework Scintilla -framework Cocoa Sources/EditorBridge/TTEditor.mm Tests/BridgeChecks.mm build/tests/UserLexer.o Vendor/lexilla/bin/liblexilla.a -Wl,-rpath,"$PWD/build/vendor/Debug" -o build/tests/bridge-checks
+suite_build "bridge-checks" clang++ "${CXX_BASE[@]}" -I Tests/Support -I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F "$VENDOR_BUILD" -framework Scintilla -framework Cocoa -Xlinker "$NATIVE_BRIDGE_LIBRARY" -Xlinker "$NATIVE_SEARCH_LIBRARY" Tests/BridgeChecks.mm -Wl,-rpath,"$VENDOR_BUILD" -o build/tests/bridge-checks
 suite_run bridge-checks harness/logs/bridge-checks.log build/tests/bridge-checks
+
+suite_build "module-contract-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/ModuleContractChecks.swift -o build/tests/module-contract-checks
+suite_run module-contract-checks harness/logs/module-contract-checks.log build/tests/module-contract-checks
+
+suite_build "tab-core-layering" swiftc -typecheck "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabCoreChecks.swift
+suite_run tab-core-layering harness/logs/tab-core-layering.log /bin/echo "PASS TabCore imports canonical Foundation-only Core"
+suite_build "tab-core-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabCoreChecks.swift -o build/tests/tab-core-checks
+suite_run tab-core-checks harness/logs/tab-core-checks.log build/tests/tab-core-checks
+
+suite_build "tab-command-core-layering" swiftc -typecheck "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabCommandCoreChecks.swift
+suite_run tab-command-core-layering harness/logs/tab-command-core-layering.log /bin/echo "PASS TabCommandCore imports canonical Foundation-only Core"
+suite_build "tab-command-core-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabCommandCoreChecks.swift -o build/tests/tab-command-core-checks
+suite_run tab-command-core-checks harness/logs/tab-command-core-checks.log build/tests/tab-command-core-checks
+
+suite_build "tab-organization-core-layering" swiftc -typecheck "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabOrganizationCoreChecks.swift
+suite_run tab-organization-core-layering harness/logs/tab-organization-core-layering.log /bin/echo "PASS TabOrganizationCore imports canonical Foundation-only Core"
+suite_build "tab-organization-core-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabOrganizationCoreChecks.swift -o build/tests/tab-organization-core-checks
+suite_run tab-organization-core-checks harness/logs/tab-organization-core-checks.log build/tests/tab-organization-core-checks
+
+suite_build "tab-selection-core-layering" swiftc -typecheck "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabSelectionCoreChecks.swift
+suite_run tab-selection-core-layering harness/logs/tab-selection-core-layering.log /bin/echo "PASS TabSelectionCore imports canonical Foundation-only Core"
+suite_build "tab-selection-core-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabSelectionCoreChecks.swift -o build/tests/tab-selection-core-checks
+suite_run tab-selection-core-checks harness/logs/tab-selection-core-checks.log build/tests/tab-selection-core-checks
+
+suite_build "tab-group-core-layering" swiftc -typecheck "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabGroupCoreChecks.swift
+suite_run tab-group-core-layering harness/logs/tab-group-core-layering.log /bin/echo "PASS TabGroupCore imports canonical Foundation-only Core"
+suite_build "tab-group-core-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabGroupCoreChecks.swift -o build/tests/tab-group-core-checks
+suite_run tab-group-core-checks harness/logs/tab-group-core-checks.log build/tests/tab-group-core-checks
+
+suite_build "tab-integration-core-layering" swiftc -typecheck "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabIntegrationCoreChecks.swift
+suite_run tab-integration-core-layering harness/logs/tab-integration-core-layering.log /bin/echo "PASS TabIntegrationCore imports canonical Foundation-only Core"
+suite_build "tab-integration-core-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/TabIntegrationCoreChecks.swift -o build/tests/tab-integration-core-checks
+suite_run tab-integration-core-checks harness/logs/tab-integration-core-checks.log build/tests/tab-integration-core-checks
+
+suite_script scripts/test-review.sh
+suite_script scripts/test-compare.sh
+suite_script scripts/test-merge.sh
 
 suite_script scripts/test-documents.sh
 
 # The Foundation-only macro core must keep compiling without AppKit. Its checks
 # run once, in the native build made by scripts/test-macros.sh.
-suite_build "macro-core-layering" swiftc -typecheck -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache Sources/Macros/MacroCore.swift "$SUITE_SUPPORT" Tests/MacroChecks.swift
+suite_build "macro-core-layering" swiftc -typecheck "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/MacroChecks.swift
 suite_run macro-core-layering harness/logs/macro-core-layering.log /bin/echo "PASS MacroCore compiles without AppKit; its checks run in macro-integration-checks"
 
 suite_script scripts/test-macros.sh
@@ -56,5 +81,7 @@ suite_script scripts/test-languages.sh
 suite_script scripts/test-workspace-browser.sh
 # The reduced performance tier; its budgets can fail. The 100 MiB tier stays manual.
 suite_script scripts/test-performance.sh gate
-suite_run parity-inventory harness/logs/parity-inventory.log python3 docs/parity/check_inventory.py
+# The countable part of docs/DESIGN-STANDARDS.md: budgets that only go down, and two hard rules.
+suite_run design-standards-selftest harness/logs/design-standards-selftest.log python3 scripts/check-design-standards.py --selftest
+suite_run design-standards harness/logs/design-standards.log python3 scripts/check-design-standards.py
 suite_finish

@@ -1,3 +1,4 @@
+@testable import TextTankCore
 import Foundation
 @main struct SearchScopeChecks {
     static func main() async {
@@ -158,6 +159,16 @@ import Foundation
             check(
                 try FolderSearchSettings.load(isolated) == settings,
                 "versioned settings roundtrip every control without starting search")
+            Checks.section("G358 escaped search preference envelope") {
+                var large = settings
+                large.options.query = String(repeating: "界", count: 65_536)
+                large.options.replacement = String(repeating: "\u{01}", count: 1_048_576)
+                try large.save(isolated)
+                check(
+                    try FolderSearchSettings.load(isolated) == large,
+                    "G358 previously valid search fields still load when JSON escaping exceeds 2 MiB")
+                try settings.save(isolated)
+            }
             let corrupted = Data("invalid".utf8)
             isolated.set(corrupted, forKey: "TextTank.FolderSearch.v1")
             var refused = false

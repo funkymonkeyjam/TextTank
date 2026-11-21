@@ -1,24 +1,36 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+@testable import TextTankRuntime
+import EditorBridge
+import NativeSearch
 
 final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
     let controller: AutomationController
     init(_ controller: AutomationController) { self.controller = controller }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        controller.toolbarIdentifiers()
+        [.init("TextTank.Automations")]
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        controller.toolbarIdentifiers()
+        [.init("TextTank.Automations")]
     }
     func toolbar(
         _ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar: Bool
     ) -> NSToolbarItem? {
-        controller.makeToolbarItem(identifier: identifier)
+        identifier.rawValue == "TextTank.Automations" ? controller.makeToolbarItem() : nil
     }
 }
 
-@main struct AutomationControllerChecks {
+final class Audit24RecoverySpy: NSObject {
+    var attempts: [Int] = []
+    override func attemptRecovery(fromError error: Error, optionIndex: Int) -> Bool {
+        attempts.append(optionIndex)
+        return true
+    }
+}
+
+@main @MainActor struct AutomationControllerChecks {
     static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     static func typeKeys(_ text: String, in window: NSWindow) {
         for character in text {
@@ -33,8 +45,8 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
     static func ruleKeyboardCheck() -> (Bool, Bool, AutomationDefinition.Step?) {
         var actionSent = false, fieldsEnabled = false, acted = false
         let deadline = Date().addingTimeInterval(5)
-        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
-            guard let modal = NSApp.modalWindow, let content = modal.contentView else { return }
+        let timerAction0: @MainActor @Sendable () -> Void = {
+            guard let modal = presentedFormWindow, let content = modal.contentView else { return }
             if Date() > deadline {
                 NSApp.abortModal()
                 return
@@ -64,8 +76,12 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             typeKeys("2 eggs", in: modal)
             save.performClick(nil)
         }
+        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { timerAction0() }
+        }
         RunLoop.main.add(timer, forMode: .modalPanel)
-        let result = AutomationStepEditor.editStep(.init(kind: .removeBlankLines))
+        let result = capturedStep(.init(kind: .removeBlankLines), timeout: 5)
         timer.invalidate()
         return (actionSent, fieldsEnabled, result)
     }
@@ -73,60 +89,66 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         var stage = 0, nameAccepted = false, sampleAccepted = false, reentryBlocked = false, timedOut = false
         var nestedRule: (Bool, Bool, AutomationDefinition.Step?) = (false, false, nil)
         let deadline = Date().addingTimeInterval(8)
-        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
-            guard let modal = NSApp.modalWindow, let content = modal.contentView else { return }
-            let views = descendants(content), buttons = views.compactMap { $0 as? NSButton }
+        let timerAction1: @MainActor @Sendable () -> Void = {
+            guard let window = presentedFormWindow, let content = window.contentView else { return }
+            let views = descendants(content)
             if Date() > deadline {
                 timedOut = true
-                NSApp.abortModal()
+                window.performClose(nil)
                 return
             }
-            if stage == 0, let create = buttons.first(where: { $0.identifier?.rawValue == "automation.create" }) {
+            switch stage {
+            case 0:
+                guard let create = button("automation.create", in: views) else { return }
                 stage = 1
                 create.performClick(nil)
-            } else if stage == 1,
-                let name = views.compactMap({ $0 as? NSTextField }).first(where: {
-                    $0.stringValue == "My Automation" && $0.isEditable
-                })
-            {
-                stage = 2
+            case 1:
+                guard let name = field("automation.settings.name", in: views),
+                    let use = button("automation.settings.save", in: views)
+                else { return }
                 name.selectText(nil)
-                typeKeys("Keyboard Recipe", in: modal)
-                modal.makeFirstResponder(nil)
+                typeKeys("Keyboard Recipe", in: window)
+                window.makeFirstResponder(nil)
                 nameAccepted = name.stringValue == "Keyboard Recipe" && name.isEditable
-                // A guarded management call must return without creating another modal.
-                // A nested watchdog closes a regression-created alert so the test never hangs.
-                var openedNested = false
-                let guardTimer = Timer(timeInterval: 0.1, repeats: false) { _ in
-                    if NSApp.modalWindow !== modal {
-                        openedNested = true
-                        NSApp.abortModal()
-                    }
-                }
-                RunLoop.main.add(guardTimer, forMode: .modalPanel)
+                let manager = FormPanel.visible.first { $0.window.identifier?.rawValue == "automation.manager" }
                 controller.manage()
-                guardTimer.invalidate()
-                reentryBlocked = !openedNested && NSApp.modalWindow === modal
-            } else if stage == 2, let cancel = buttons.first(where: { $0.title == "Cancel" }),
-                let sample = views.compactMap({ $0 as? NSTextView }).first(where: {
-                    $0.accessibilityLabel() == "Sample input"
-                })
-            {
+                reentryBlocked =
+                    FormPanel.visible.filter { $0.window.identifier?.rawValue == "automation.manager" }.count == 1
+                    && FormPanel.visible.first { $0.window.identifier?.rawValue == "automation.manager" } === manager
+                stage = 2
+                use.performClick(nil)
+            case 2:
+                guard let rules = button("automation.rules", in: views), rules.isEnabled else { return }
                 stage = 3
-                modal.makeFirstResponder(sample)
-                typeKeys("2 eggs", in: modal)
-                sampleAccepted = sample.string == "2 eggs" && modal.firstResponder === sample
+                rules.performClick(nil)
+            case 3:
+                guard let sample = textView("Sample input", in: views), let cancel = button("rules.cancel", in: views)
+                else { return }
+                window.makeFirstResponder(sample)
+                typeKeys("2 eggs", in: window)
+                sampleAccepted = sample.string == "2 eggs" && window.firstResponder === sample
                 nestedRule = ruleKeyboardCheck()
+                stage = 4
                 cancel.performClick(nil)
+            case 4:
+                guard let cancel = button("automation.manager.cancel", in: views) else { return }
+                stage = 5
+                cancel.performClick(nil)
+            default: break
             }
+        }
+        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { timerAction1() }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         controller.manage()
+        waitForModelessForms(timeout: 8)
         timer.invalidate()
-        check(!timedOut && stage == 3, "native Create Automation and Rules modal chain completed")
+        check(!timedOut && stage == 5, "native Create Automation and Rules modeless chain completed")
         check(nameAccepted, "Create Automation name accepts dispatched keyboard events")
         check(sampleAccepted, "Sample Input accepts dispatched keyboard events")
-        check(reentryBlocked, "management cannot open another dialog during Create Automation")
+        check(reentryBlocked, "management reentry keeps the same single owned manager")
         check(nestedRule.0, "nested rule popup dispatch reaches retained controller target")
         check(nestedRule.1, "changing rule kind enables find and replacement fields")
         check(
@@ -141,8 +163,8 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
     ) rethrows -> (value: T, acted: Bool, timedOut: Bool) {
         var acted = false, timedOut = false
         let deadline = Date().addingTimeInterval(timeout)
-        let timer = Timer(timeInterval: 0.005, repeats: true) { _ in
-            guard let modal = NSApp.modalWindow, let content = modal.contentView else { return }
+        let timerAction2: @MainActor @Sendable () -> Void = {
+            guard let modal = presentedFormWindow, let content = modal.contentView else { return }
             if Date() > deadline {
                 timedOut = true
                 NSApp.abortModal()
@@ -150,10 +172,47 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             }
             if !acted { acted = act(modal, descendants(content)) }
         }
+        let timer = Timer(timeInterval: 0.005, repeats: true) { _ in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { timerAction2() }
+        }
         RunLoop.main.add(timer, forMode: .modalPanel)
         defer { timer.invalidate() }
+        let priorForms = Set(FormPanel.visible.map(ObjectIdentifier.init))
         let value = try body()
+        waitForModelessForms(timeout: timeout, excluding: priorForms)
         return (value, acted, timedOut)
+    }
+    static func drivingAdvanced(
+        timeout: TimeInterval, controller: AutomationController, commit: Bool,
+        _ act: @escaping (NSWindow, [NSView]) -> Bool
+    ) -> (value: Void, acted: Bool, timedOut: Bool) {
+        MainActor.assumeIsolated {
+            let route = ManagerChildRoute(
+                managerID: "automation.manager", openerID: "automation.json", childID: "automation.json", commit: commit
+            )
+            return drivingModal(
+                timeout: timeout,
+                { window, views in
+                    MainActor.assumeIsolated { route.step(window, views: views) { _ = act(window, views) } }
+                }
+            ) { controller.manageAdvanced() }
+        }
+    }
+    static func capturedRules(_ original: AutomationDefinition, timeout: TimeInterval) -> AutomationDefinition? {
+        var result: AutomationDefinition?
+        let before = Set(FormPanel.visible.map(ObjectIdentifier.init))
+        AutomationStepEditor.present(original) { result = $0 }
+        waitForModelessForms(timeout: timeout, excluding: before)
+        return result
+    }
+    static func capturedStep(_ original: AutomationDefinition.Step, timeout: TimeInterval) -> AutomationDefinition.Step?
+    {
+        var result: AutomationDefinition.Step?
+        let before = Set(FormPanel.visible.map(ObjectIdentifier.init))
+        AutomationStepEditor.presentStep(original, parent: presentedFormWindow) { result = $0 }
+        waitForModelessForms(timeout: timeout, excluding: before)
+        return result
     }
     static func button(_ identifier: String, in views: [NSView]) -> NSButton? {
         views.compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == identifier }
@@ -177,7 +236,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     let up = button("rules.up", in: views),
                     let down = button("rules.down", in: views), let remove = button("rules.remove", in: views)
                 else { return false }
-                func note() {
+                @MainActor func note() {
                     trail.append(
                         RuleListState(
                             rows: table.numberOfRows, selected: table.selectedRow, up: up.isEnabled,
@@ -199,19 +258,9 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 remove.performClick(nil)
                 note()
                 // Add Rule opens the nested Configure Rule dialog; accept its default rule.
-                let nested = Timer(timeInterval: 0.1, repeats: false) { _ in
-                    guard let alert = NSApp.modalWindow?.contentView,
-                        let save = button("rule.save", in: descendants(alert))
-                    else {
-                        NSApp.abortModal()
-                        return
-                    }
-                    nestedSaved = true
-                    save.performClick(nil)
-                }
-                RunLoop.main.add(nested, forMode: .modalPanel)
-                add.performClick(nil)
-                nested.invalidate()
+                nestedSaved = nestedModal({ _, fields in
+                    button("rule.save", in: fields)?.performClick(nil)
+                }) { add.performClick(nil) }
                 note()
                 up.performClick(nil)
                 note()
@@ -228,7 +277,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 use.performClick(nil)
                 return true
             }
-        ) { AutomationStepEditor.edit(definition) }
+        ) { capturedRules(definition, timeout: 10) }
         check(
             keyLoopClosed && keyLoopReaches,
             "the rule editor's Tab order starts at its first field, reaches its buttons and closes into a loop")
@@ -268,7 +317,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 cancel.performClick(nil)
                 return true
             }
-        ) { AutomationStepEditor.edit(definition) }
+        ) { capturedRules(definition, timeout: 10) }
         check(
             cancelled.acted && !cancelled.timedOut && cancelled.value == nil,
             "Cancel after removing a rule returns no draft")
@@ -278,21 +327,28 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
     /// running, so the nested modal needs a timer of its own. Returns whether `act` ran.
     @discardableResult
     static func nestedModal(_ act: @escaping (NSWindow, [NSView]) -> Void, _ trigger: () -> Void) -> Bool {
-        let outer = NSApp.modalWindow, deadline = Date().addingTimeInterval(8)
+        let outer = presentedFormWindow, deadline = Date().addingTimeInterval(8)
         var acted = false
-        let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-            guard let modal = NSApp.modalWindow, modal !== outer, let content = modal.contentView else {
-                return
-            }
-            if acted || Date() > deadline {
-                if Date() > deadline { NSApp.abortModal() }
-                return
-            }
+        let timerAction3: @MainActor @Sendable () -> Void = {
+            guard let nested = presentedFormWindow, nested !== outer, let content = nested.contentView else { return }
+            if acted || Date() > deadline { return }
             acted = true
-            act(modal, descendants(content))
+            act(nested, descendants(content))
+        }
+        let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { timerAction3() }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         trigger()
+        while let current = presentedFormWindow, current !== outer, Date() < deadline {
+            _ = RunLoop.main.run(mode: .modalPanel, before: Date().addingTimeInterval(0.01))
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        if let current = presentedFormWindow, current !== outer {
+            check(false, "the nested native editor closes through its controls")
+            current.performClose(nil)
+        }
         timer.invalidate()
         return acted
     }
@@ -333,13 +389,26 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             first.id = UUID()
             second.id = UUID()
             second.steps = [Step(kind: .trimWhitespace)]
-            let third = AutomationDefinition.remindersExample
-            let popup = AutomationController.workflowPopup(for: [first, second, third])
-            check(popup.numberOfItems == 3, "G375 Manage Automations lists both automations that share a name")
+            var third = AutomationDefinition.remindersExample
+            let initialBytes = try Data(contentsOf: path)
+            first.shortcut = nil
+            second.shortcut = nil
+            third.shortcut = nil
+            try controller.persistLibrary(AutomationLibrary(workflows: [first, second, third]))
+            controller.manage()
+            let managerWindow = try requireValue(FormPanel.frontWindow, "fixture: actual automation manager")
+            let table = try requireValue(
+                descendants(managerWindow.contentView!).compactMap { $0 as? NSTableView }.first,
+                "fixture: actual automation list")
+            check(table.numberOfRows == 3, "G375 Manage Automations lists both automations that share a name")
+            let identities = (0..<table.numberOfRows).compactMap {
+                table.view(atColumn: 0, row: $0, makeIfNecessary: true)?.identifier?.rawValue
+            }
             check(
-                popup.itemArray.map { $0.representedObject as? String }
-                    == [first.id.uuidString, second.id.uuidString, third.id.uuidString],
-                "G375 each Manage Automations item carries its own automation's identifier, in order")
+                identities == [first.id.uuidString, second.id.uuidString, third.id.uuidString],
+                "G375 each actual manager row carries its own automation identifier, in order")
+            button("automation.manager.cancel", in: descendants(managerWindow.contentView!))?.performClick(nil)
+            try controller.persistLibrary(AutomationLibrary.decode(initialBytes))
             let saved = [first, second, third].map { AutomationRuleSet(name: $0.name, steps: $0.steps) }
             let templates = AutomationTemplates.loadAll().sets
             try require(templates.count == 3, "fixture: the three bundled templates load")
@@ -394,7 +463,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     cancel.performClick(nil)
                     return true
                 }
-            ) { AutomationStepEditor.editStep(Step(kind: .clearLinesEqualTo, find: "x")) }
+            ) { capturedStep(Step(kind: .clearLinesEqualTo, find: "x"), timeout: 8) }
             check(
                 configured.acted && !configured.timedOut && configured.value == nil,
                 "the Configure Rule dialog was driven and cancelled")
@@ -442,11 +511,20 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                             && before.1.width == before.2.width
                         modal.setContentSize(NSSize(width: 1300, height: 980))
                         modal.layoutIfNeeded()
+                        // The window manager clamps a window to its screen (1024×768 in CI),
+                        // or to its minimum height without a screen. Drive the same root layout
+                        // at the requested content size so the growth assertions do not depend
+                        // on the display attached to the machine running this layout check.
+                        let root = modal.contentView!, actualFrame = root.frame
+                        root.setFrameSize(NSSize(width: 1300, height: 980))
+                        root.layoutSubtreeIfNeeded()
                         grew =
                             rules.frame.width > before.0.width + 200 && rules.frame.height > before.0.height + 50
                             && pane.frame.width > before.1.width + 100 && pane.frame.height > before.1.height + 50
                             && sample.frame.width > before.1.width
                         unambiguous = !(modal.contentView?.hasAmbiguousLayout ?? true)
+                        root.frame = actualFrame
+                        root.layoutSubtreeIfNeeded()
                         // A rule edit with nothing tested yet leaves the opening instruction alone.
                         remove.performClick(nil)
                         untouchedStatus = status.stringValue
@@ -465,10 +543,11 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                         }
                         rowCountAfterAdd = table.numberOfRows
                         // The name is still blank: Use These Rules reports it and the builder stays.
-                        nestedModal({ _, nested in
-                            nameError = errorAlertText(in: nested)
-                            errorAlertButton(in: nested)?.performClick(nil)
-                        }) { use.performClick(nil) }
+                        use.performClick(nil)
+                        nameError = status.stringValue
+                        check(
+                            modal.isVisible && name.accessibilityHelp() == nameError,
+                            "DG invalid Rules name stays in the same builder and marks the name")
                         stage = 2
                     case 2:
                         name.selectText(nil)
@@ -479,7 +558,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     }
                     return false
                 }
-            ) { AutomationStepEditor.edit(definition) }
+            ) { capturedRules(definition, timeout: 20) }
             check(
                 edited.acted && !edited.timedOut && stage == 2, "the rule builder was driven through to Use These Rules"
             )
@@ -537,52 +616,58 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             NSApp.mainMenu = menu
             var stage = 0, errorText = "", reopened = false, keptName = "", keptShortcut = "",
                 unchangedOnFailure = false
+            var settingsWindow: NSWindow?
             let managed = drivingModal(
                 timeout: 20,
                 { modal, views in
                     switch stage {
                     case 0:
-                        guard let edit = button("automation.edit", in: views) else { return false }
+                        guard let rules = button("automation.rules", in: views) else { return false }
                         stage = 1
-                        edit.performClick(nil)
-                    case 1:
-                        guard let rules = button("automation.settings.rules", in: views) else { return false }
-                        stage = 2
                         rules.performClick(nil)
-                    case 2:
+                    case 1:
                         guard let remove = button("rules.remove", in: views), let use = button("rules.use", in: views)
                         else { return false }
-                        stage = 3
+                        stage = 2
                         remove.performClick(nil)
                         use.performClick(nil)
+                    case 2:
+                        guard let edit = button("automation.edit", in: views), edit.isEnabled else { return false }
+                        stage = 3
+                        edit.performClick(nil)
                     case 3:
                         guard let save = button("automation.settings.save", in: views),
                             let name = field("automation.settings.name", in: views),
                             let shortcut = field("automation.settings.shortcut", in: views)
                         else { return false }
-                        stage = 4
+                        settingsWindow = modal
                         name.selectText(nil)
                         typeKeys("Renamed after rule edits", in: modal)
                         shortcut.selectText(nil)
                         typeKeys("j", in: modal)
+                        stage = 4
                         save.performClick(nil)
                     case 4:
-                        guard let ok = errorAlertButton(in: views) else { return false }
-                        stage = 5
-                        errorText = errorAlertText(in: views)
-                        ok.performClick(nil)
-                    case 5:
                         guard let save = button("automation.settings.save", in: views),
                             let name = field("automation.settings.name", in: views),
-                            let shortcut = field("automation.settings.shortcut", in: views)
+                            let shortcut = field("automation.settings.shortcut", in: views),
+                            shortcut.accessibilityHelp() != nil
                         else { return false }
-                        stage = 6
-                        reopened = shows("Edit Automation", in: views)
+                        errorText = shortcut.accessibilityHelp() ?? ""
+                        reopened =
+                            modal === settingsWindow && modal.title == "Edit Automation" && NSApp.modalWindow == nil
                         keptName = name.stringValue
                         keptShortcut = shortcut.stringValue
                         unchangedOnFailure = (try? Data(contentsOf: path)) == seeded
                         modal.makeFirstResponder(nil)
                         shortcut.stringValue = ""
+                        stage = 5
+                        save.performClick(nil)
+                    case 5:
+                        guard let save = button("automation.manager.save", in: views), save.isEnabled else {
+                            return false
+                        }
+                        stage = 6
                         save.performClick(nil)
                         return true
                     default: break
@@ -596,7 +681,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             check(
                 errorText.contains("Command-Option-J is already assigned"),
                 "a shortcut taken by an application command is refused on Save")
-            check(reopened, "F203 after the error the Edit Automation dialog is open again")
+            check(reopened, "F203 after the error the same modeless Edit Automation form stays open")
             check(
                 keptName == "Renamed after rule edits" && keptShortcut == "j",
                 "F203 the typed name and shortcut are still in the fields")
@@ -631,38 +716,38 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                         stage = 1
                         create.performClick(nil)
                     case 1:
-                        guard let use = button("rules.use", in: views),
-                            let name = views.compactMap({ $0 as? NSTextField }).first(where: {
-                                $0.stringValue == "My Automation" && $0.isEditable
-                            })
-                        else { return false }
-                        stage = 2
-                        name.selectText(nil)
-                        typeKeys("Created through settings", in: modal)
-                        use.performClick(nil)
-                    case 2:
-                        guard let save = button("automation.settings.save", in: views),
+                        guard let use = button("automation.settings.save", in: views),
+                            let name = field("automation.settings.name", in: views),
                             let shortcut = field("automation.settings.shortcut", in: views)
                         else { return false }
-                        stage = 3
-                        settingsShown =
-                            shows("New Automation", in: views)
-                            && field("automation.settings.name", in: views)?.stringValue == "Created through settings"
-                        unsavedAtSettings = (try? Data(contentsOf: path)) == before
+                        name.selectText(nil)
+                        typeKeys("Created through settings", in: modal)
                         shortcut.selectText(nil)
                         typeKeys("q", in: modal)
+                        modal.makeFirstResponder(nil)
+                        settingsShown =
+                            modal.title == "New Automation" && name.stringValue == "Created through settings"
+                        unsavedAtSettings = (try? Data(contentsOf: path)) == before
+                        stage = 2
+                        use.performClick(nil)
+                    case 2:
+                        guard let save = button("automation.manager.save", in: views), save.isEnabled else {
+                            return false
+                        }
+                        stage = 3
                         save.performClick(nil)
                     case 3:
-                        // No rules: the first answer is Cancel, which returns to the settings.
                         guard button("automation.settings.saveEmpty", in: views) != nil,
                             let cancel = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
                         else { return false }
                         stage = 4
                         cancel.performClick(nil)
                     case 4:
-                        guard let save = button("automation.settings.save", in: views) else { return false }
-                        stage = 5
+                        guard let save = button("automation.manager.save", in: views), save.isEnabled else {
+                            return false
+                        }
                         unsavedAfterDeclining = (try? Data(contentsOf: path)) == before
+                        stage = 5
                         save.performClick(nil)
                     case 5:
                         guard let confirm = button("automation.settings.saveEmpty", in: views) else { return false }
@@ -677,15 +762,15 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             check(created.acted && !created.timedOut && stage == 6, "the Create Automation chain was driven to Save")
             check(
                 settingsShown,
-                "G384 Use These Rules in a new automation opens the settings dialog with the draft's name")
-            check(unsavedAtSettings, "G384 nothing is saved when the rule builder returns")
+                "G384 Add opens editable automation settings before any saved-library change")
+            check(unsavedAtSettings, "G384 using new settings changes only the manager working copy")
             check(unsavedAfterDeclining, "G384 declining to save an automation with no rules saves nothing")
             let after = try stored()
             check(
                 after.workflows.count == countBefore + 1 && after.workflows.last?.name == "Created through settings"
                     && after.workflows.last?.shortcut == "q" && after.workflows.last?.steps == []
                     && after.workflows.last?.input == .document && after.workflows.last?.output == .editor,
-                "G384 Save in the settings dialog stores the new automation with its chosen settings")
+                "G384 explicit manager Save stores the new automation with its chosen settings")
             let saved = try Data(contentsOf: path)
             stage = 0
             let abandoned = drivingModal(
@@ -697,11 +782,13 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                         stage = 1
                         create.performClick(nil)
                     case 1:
-                        guard let use = button("rules.use", in: views) else { return false }
-                        stage = 2
-                        use.performClick(nil)
-                    case 2:
                         guard let cancel = button("automation.settings.cancel", in: views) else { return false }
+                        stage = 2
+                        cancel.performClick(nil)
+                    case 2:
+                        guard let cancel = button("automation.manager.cancel", in: views), cancel.isEnabled else {
+                            return false
+                        }
                         stage = 3
                         cancel.performClick(nil)
                         return true
@@ -720,8 +807,8 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             let empty = try Data(contentsOf: path)
             var stage = 0, initialJSON = "", referenceText = "", helpShown = false
             var afterFirst: AutomationLibrary?, afterSecond: AutomationLibrary?
-            let advanced = drivingModal(
-                timeout: 20,
+            let advanced = drivingAdvanced(
+                timeout: 20, controller: controller, commit: false,
                 { _, views in
                     guard let json = textView("Automation library JSON", in: views),
                         let example = button("automation.json.example", in: views),
@@ -747,7 +834,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     }
                     return false
                 }
-            ) { controller.manageAdvanced() }
+            )
             check(advanced.acted && !advanced.timedOut && stage == 3, "the Advanced JSON dialog was driven")
             check(
                 (try? AutomationLibrary.decode(Data(initialJSON.utf8)))?.workflows.isEmpty == true,
@@ -765,6 +852,215 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 helpShown && referenceText == AutomationDefinition.ruleKindReference
                     && Step.Kind.allCases.allSatisfy { referenceText.contains($0.rawValue) },
                 "G381 the Advanced JSON dialog shows the generated help and every rule kind")
+            var correctedDefinition = AutomationDefinition.example
+            correctedDefinition.name = "Library JSON retry"
+            let correctedLibrary = AutomationLibrary(workflows: [correctedDefinition])
+            let correctedJSON = String(decoding: try correctedLibrary.encoded(), as: UTF8.self)
+            let invalidJSON = "{ keep this invalid JSON draft"
+            var jsonStage = 0, nestedJSONError = false, retryKeptDraft = false
+            var retryKeptStorage = false, inlineJSONError = false
+            var jsonWindow: NSWindow?
+            let retryJSON = drivingAdvanced(
+                timeout: 20, controller: controller, commit: true,
+                { window, views in
+                    if jsonStage == 1, window !== jsonWindow {
+                        nestedJSONError = true
+                        NSApp.abortModal()
+                        return false
+                    }
+                    guard let json = textView("Automation library JSON", in: views),
+                        let save = button("automation.json.save", in: views)
+                    else { return false }
+                    switch jsonStage {
+                    case 0:
+                        jsonWindow = window
+                        json.string = invalidJSON
+                        jsonStage = 1
+                        save.performClick(nil)
+                    case 1:
+                        retryKeptDraft = json.string == invalidJSON
+                        retryKeptStorage = (try? Data(contentsOf: path)) == empty
+                        inlineJSONError = json.accessibilityHelp()?.isEmpty == false
+                        json.string = correctedJSON
+                        jsonStage = 2
+                        save.performClick(nil)
+                        return true
+                    default: break
+                    }
+                    return false
+                }
+            )
+            check(
+                retryJSON.acted && !retryJSON.timedOut && jsonStage == 2, "F155 JSON retry completes after correction")
+            check(retryKeptDraft && retryKeptStorage, "F155 rejected JSON keeps the draft and saved library unchanged")
+            check(
+                !nestedJSONError && inlineJSONError,
+                "F155 invalid library JSON is marked in its editor without a nested error modal")
+            check(try stored() == correctedLibrary, "F155 corrected JSON saves only on the explicit second Save")
+            var importedDefinition = correctedDefinition
+            importedDefinition.id = UUID()
+            importedDefinition.name = "Imported library draft"
+            let importedLibrary = AutomationLibrary(workflows: [importedDefinition])
+            let importURL = path.deletingLastPathComponent().appendingPathComponent("library-import.json")
+            let exportURL = path.deletingLastPathComponent().appendingPathComponent("library-export.json")
+            try importedLibrary.encoded().write(to: importURL)
+            let beforeImport = try Data(contentsOf: path)
+            let originalPanels = controller.jsonFilePanels
+            defer { controller.jsonFilePanels = originalPanels }
+            var chosenImport: URL? = importURL, exportNames: [String] = []
+            controller.jsonFilePanels = .init(
+                importURL: { chosenImport },
+                exportURL: { name in
+                    exportNames.append(name)
+                    return exportURL
+                })
+            var fileStage = 0, importedOnlyDraft = false, exportedOnlyDraft = false
+            let files = drivingAdvanced(
+                timeout: 20, controller: controller, commit: false,
+                { _, views in
+                    guard let json = textView("Automation library JSON", in: views),
+                        let load = button("automation.json.import", in: views),
+                        let export = button("automation.json.export", in: views),
+                        let cancel = button("automation.json.cancel", in: views)
+                    else { return false }
+                    switch fileStage {
+                    case 0:
+                        fileStage = 1
+                        load.performClick(nil)
+                    case 1:
+                        importedOnlyDraft =
+                            (try? AutomationLibrary.decode(Data(json.string.utf8))) == importedLibrary
+                            && (try? Data(contentsOf: path)) == beforeImport
+                        fileStage = 2
+                        export.performClick(nil)
+                    case 2:
+                        exportedOnlyDraft =
+                            (try? AutomationLibrary.decode(Data(contentsOf: exportURL))) == importedLibrary
+                            && (try? Data(contentsOf: path)) == beforeImport
+                        fileStage = 3
+                        cancel.performClick(nil)
+                        return true
+                    default: break
+                    }
+                    return false
+                }
+            )
+            check(
+                files.acted && !files.timedOut && fileStage == 3,
+                "F155 Automation Import and Export run through isolated file choices")
+            check(
+                importedOnlyDraft && exportedOnlyDraft,
+                "F155 import and export only change or copy the Automation draft")
+            check(
+                try Data(contentsOf: path) == beforeImport && stored() == correctedLibrary,
+                "F155 Cancel after import and export leaves the saved Automation library untouched")
+            check(exportNames == ["TextTank-Automations.json"], "F155 Automation export keeps its documented filename")
+            let refusedURL = path.deletingLastPathComponent().appendingPathComponent("library-import-link.json")
+            try FileManager.default.createSymbolicLink(at: refusedURL, withDestinationURL: importURL)
+            chosenImport = refusedURL
+            fileStage = 0
+            var refusedDraft = false, clearedImportError = false
+            let refusedImport = drivingAdvanced(
+                timeout: 20, controller: controller, commit: true,
+                { _, views in
+                    guard let json = textView("Automation library JSON", in: views),
+                        let load = button("automation.json.import", in: views),
+                        let save = button("automation.json.save", in: views)
+                    else { return false }
+                    switch fileStage {
+                    case 0:
+                        json.string = correctedJSON + "\n "
+                        fileStage = 1
+                        load.performClick(nil)
+                    case 1:
+                        refusedDraft =
+                            json.string == correctedJSON + "\n "
+                            && json.accessibilityHelp()?.isEmpty == false
+                            && (try? Data(contentsOf: path)) == beforeImport
+                        chosenImport = importURL
+                        fileStage = 2
+                        load.performClick(nil)
+                    case 2:
+                        clearedImportError =
+                            json.accessibilityHelp() == nil
+                            && (try? AutomationLibrary.decode(Data(json.string.utf8))) == importedLibrary
+                        fileStage = 3
+                        save.performClick(nil)
+                        return true
+                    default: break
+                    }
+                    return false
+                }
+            )
+            check(
+                refusedImport.acted && !refusedImport.timedOut && refusedDraft,
+                "F155 refused symlink import keeps the Automation draft and saved bytes")
+            check(clearedImportError, "F155 a corrected import clears the previous inline error")
+            check(
+                try stored() == importedLibrary
+                    && controller.menu().items.contains {
+                        $0.representedObject as? String == importedDefinition.id.uuidString
+                    }, "F155 explicit imported Save persists and rebuilds the Automation menu")
+            check(
+                try Data(contentsOf: importURL) == importedLibrary.encoded()
+                    && FileManager.default.destinationOfSymbolicLink(atPath: refusedURL.path) == importURL.path,
+                "F155 a refused import preserves the link and its target")
+            let suggestedRecovery = "Keep this isolated JSON draft and choose Cancel."
+            let suggestedError = NSError(
+                domain: "Fixture.JSONRecovery", code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Fixture JSON operation failed",
+                    NSLocalizedRecoverySuggestionErrorKey: suggestedRecovery
+                ])
+            var suggestionStage = 0, sawNativeSuggestion = false, suggestionSaves = 0
+            var suggestionWindow: NSWindow?
+            let suggestionDraft = AutomationLibrary(workflows: [])
+            let suggestionRun = try drivingModal(
+                timeout: 10,
+                { window, views in
+                    if suggestionStage == 1, window !== suggestionWindow {
+                        sawNativeSuggestion = shows(suggestedRecovery, in: views)
+                        if let accept = views.compactMap({ $0 as? NSButton }).first(where: { $0.keyEquivalent == "\r" })
+                        {
+                            accept.performClick(nil)
+                        } else {
+                            NSApp.abortModal()
+                        }
+                        return false
+                    }
+                    guard let save = button("fixture.json.save", in: views),
+                        let cancel = button("fixture.json.cancel", in: views)
+                    else { return false }
+                    if suggestionStage == 0 {
+                        suggestionWindow = window
+                        suggestionStage = 1
+                        MainRunLoop.perform { save.performClick(nil) }
+                    } else if suggestionStage == 1 {
+                        suggestionStage = 2
+                        cancel.performClick(nil)
+                        return true
+                    }
+                    return false
+                }
+            ) {
+                try JSONLibraryEditor.edit(
+                    suggestionDraft,
+                    configuration: .init(
+                        title: "Fixture JSON recovery", information: "Isolated error recovery check.",
+                        accessibilityLabel: "Fixture library JSON", exportName: "fixture.json",
+                        identifier: "fixture.json", size: NSSize(width: 420, height: 160)),
+                    read: { _ in Data() },
+                    save: { _ in
+                        suggestionSaves += 1
+                        throw suggestedError
+                    })
+            }
+            check(
+                suggestionRun.acted && !suggestionRun.timedOut && suggestionStage == 2 && suggestionSaves == 1,
+                "F155 a shared JSON operation failure returns to its unchanged draft")
+            check(
+                sawNativeSuggestion,
+                "F155 shared JSON errors retain native recovery suggestions even without a recovery attempter")
             let restoreItem = controller.menu().items.first { $0.title == "Restore Default Automations…" }
             check(
                 restoreItem != nil && restoreItem?.target === controller
@@ -775,7 +1071,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
             mine.name = "My edited cleanup"
             mine.steps = [Step(kind: .trimWhitespace)]
             try controller.persistLibrary(AutomationLibrary(workflows: [mine]))
-            func restore(confirming: Bool) -> Bool {
+            @MainActor func restore(confirming: Bool) -> Bool {
                 let run = drivingModal(
                     timeout: 10,
                     { _, views in
@@ -824,12 +1120,12 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 !FileManager.default.fileExists(atPath: lockedPath.path),
                 "fixture: the first write of the presets failed")
             check(
-                blocked.toolbarIdentifiers().count == 2
+                blocked.contextMenu().items.filter { $0.representedObject is String }.count == 2
                     && blocked.menu().items.contains { $0.title == AutomationDefinition.example.name },
                 "F75 the presets are available in memory after a failed first write")
             // Manage reports the failure once, then opens as usual.
             var reports: [String] = [], manageOpened = 0
-            func manageAndCancel() -> Bool {
+            @MainActor func manageAndCancel() -> Bool {
                 var stage = 0
                 let run = drivingModal(
                     timeout: 10,
@@ -840,7 +1136,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                             ok.performClick(nil)
                             return false
                         }
-                        guard let cancel = button("automation.cancel", in: views) else { return false }
+                        guard let cancel = button("automation.manager.cancel", in: views) else { return false }
                         manageOpened += 1
                         cancel.performClick(nil)
                         return true
@@ -872,11 +1168,112 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 try refusing.persistLibrary(renamed)
             }
             check(
-                (try Data(contentsOf: unreadablePath)) == damaged && refusing.toolbarIdentifiers().isEmpty,
+                (try Data(contentsOf: unreadablePath)) == damaged
+                    && !refusing.contextMenu().items.contains { $0.representedObject is String },
                 "F75 an existing unreadable library is never overwritten and no presets are substituted")
         }
     }
-    static func horizontalDialogChecks() throws {
+    @MainActor static func horizontalDialogChecks() throws {
+        let ownership = TTAlert()
+        let alertObject: AnyObject = ownership
+        check(!(alertObject is NSAlert), "F304 the horizontal dialog owns its panel instead of subclassing NSAlert")
+        ownership.addButton(withTitle: "OK")
+        let acknowledgmentRoles = ownership.keyRoles()
+        check(
+            acknowledgmentRoles.returnIndex == 0 && acknowledgmentRoles.escapeIndex == 0,
+            "F16 a single acknowledgment has both Return and Escape as a way out")
+        let localizedCancel = TTAlert()
+        localizedCancel.addButton(withTitle: "Proceed")
+        localizedCancel.addButton(withTitle: "Annuler", role: .cancel)
+        check(localizedCancel.keyRoles().escapeIndex == 1, "F16 an explicit cancel role is independent of its title")
+        check(
+            TTAlert.Result(.abort) == .dismissed && TTAlert.Result(.stop) == .dismissed,
+            "F16 unexpected modal termination is a typed dismissal, never a Save choice")
+        let recoveryError = NSError(
+            domain: "Fixture.Error", code: 7,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Fixture failure",
+                NSLocalizedRecoverySuggestionErrorKey: "Try the fixture again.",
+                NSLocalizedRecoveryOptionsErrorKey: ["Retry Fixture", "Cancel Fixture"],
+                NSRecoveryAttempterErrorKey: NSObject()
+            ])
+        let nativeError = TTAlert.errorAlert(recoveryError)
+        check(
+            nativeError.messageText == "Fixture failure"
+                && nativeError.informativeText.contains("Try the fixture again.")
+                && nativeError.buttons.map(\.title) == ["Retry Fixture", "Cancel Fixture"],
+            "F325 shared error presentation preserves native recovery suggestion and choices")
+        let recoverySpy = Audit24RecoverySpy()
+        let recoverable = NSError(
+            domain: "Fixture.NativeRecovery", code: 1,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Fixture recoverable error",
+                NSLocalizedRecoverySuggestionErrorKey: "Retry this isolated fixture.",
+                NSLocalizedRecoveryOptionsErrorKey: ["Retry Fixture", "Cancel Fixture"],
+                NSRecoveryAttempterErrorKey: recoverySpy
+            ])
+        let recoveryDeadline = Date().addingTimeInterval(10)
+        var recoveryPressed = false
+        func recoveryButtons(_ view: NSView) -> [NSButton] {
+            (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(recoveryButtons)
+        }
+        let timerAction4: @MainActor @Sendable () -> Void = {
+            MainActor.assumeIsolated {
+                guard let content = presentedFormWindow?.contentView else { return }
+                if Date() > recoveryDeadline {
+                    NSApp.abortModal()
+                    return
+                }
+                guard !recoveryPressed,
+                    let retry = recoveryButtons(content).first(where: { $0.title == "Retry Fixture" })
+                else { return }
+                recoveryPressed = true
+                retry.performClick(nil)
+            }
+        }
+        let recoveryAnswer = Timer(timeInterval: 0.02, repeats: true) { _ in
+            precondition(Thread.isMainThread)
+            MainActor.assumeIsolated { timerAction4() }
+        }
+        RunLoop.main.add(recoveryAnswer, forMode: .modalPanel)
+        TTAlert.present(recoverable)
+        recoveryAnswer.invalidate()
+        check(
+            recoveryPressed && recoverySpy.attempts == [0],
+            "F325 shared native error presentation invokes the original recovery attempter with the chosen option")
+        let sheetParent = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 300), styleMask: [.titled],
+            backing: .buffered, defer: false)
+        sheetParent.isReleasedWhenClosed = false
+        defer { sheetParent.close() }
+        let sheet = TTAlert()
+        sheet.messageText = "Fixture recovery notice"
+        sheet.addButton(withTitle: "Close")
+        var sheetResponse: NSApplication.ModalResponse?
+        sheet.beginSheetModal(for: sheetParent) { sheetResponse = $0 }
+        check(sheet.window.sheetParent === sheetParent, "F304 the owned dialog presents as a native sheet")
+        sheet.buttons[0].performClick(nil)
+        spinUntil("the fixture sheet ends after its button") { sheetResponse != nil }
+        check(
+            sheetResponse == .alertFirstButtonReturn && sheetParent.attachedSheet == nil,
+            "F304 a native sheet ends with its original button response")
+        weak var releasedSheet: TTAlert?
+        var ephemeralResponse: NSApplication.ModalResponse?
+        autoreleasepool {
+            let ephemeral = TTAlert()
+            ephemeral.addButton(withTitle: "Close")
+            releasedSheet = ephemeral
+            ephemeral.beginSheetModal(for: sheetParent) { ephemeralResponse = $0 }
+        }
+        check(releasedSheet != nil, "F304 a native sheet survives the caller's local alert scope")
+        autoreleasepool { releasedSheet?.buttons[0].performClick(nil) }
+        spinUntil("the locally scoped sheet completes and releases its owner") { releasedSheet == nil }
+        check(
+            ephemeralResponse == .alertFirstButtonReturn && releasedSheet == nil,
+            "F304 a locally scoped sheet still responds and releases its owner on completion")
+        // A negative lifetime probe can leave an ownerless sheet: clean only this fixture
+        // after observing its failure so later modal checks still report their own results.
+        if let orphan = sheetParent.attachedSheet { sheetParent.endSheet(orphan, returnCode: .abort) }
         let alert = TTAlert()
         alert.messageText = "Horizontal action regression"
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 28))
@@ -885,7 +1282,9 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
         for title in ["Save", "Cancel", "Reset Defaults"] { alert.addButton(withTitle: title) }
         for index in [2, 1, 0] {
             var aligned = false
-            let timer = Timer(timeInterval: 0.1, repeats: false) { _ in
+            // The fixture and action are main-actor isolated. Timer transports only this
+            // Sendable actor-bound function, not the non-Sendable dialog object itself.
+            let chooseButton: @MainActor @Sendable () -> Void = {
                 let frames = alert.buttons.map { $0.convert($0.bounds, to: alert.window.contentView) }
                 print("ACTION_GEOMETRY", index, frames)
                 fflush(stdout)
@@ -893,6 +1292,13 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     frames.allSatisfy { abs($0.midY - frames[0].midY) < 1 } && frames[2].maxX < frames[1].minX
                     && frames[1].maxX < frames[0].minX
                 alert.buttons[index].performClick(nil)
+            }
+            let timerAction5: @MainActor @Sendable () -> Void = {
+                MainActor.assumeIsolated { chooseButton() }
+            }
+            let timer = Timer(timeInterval: 0.1, repeats: false) { _ in
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated { timerAction5() }
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             let response = alert.runModal()
@@ -906,13 +1312,56 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 "horizontal dialog preserves accessory on presentation \(index)")
         }
     }
+    static func staleModelessJSONCheck() throws {
+        let isolated = try IsolatedSupportDirectory("ModelessUnicodeConfiguration")
+        defer { isolated.restore() }
+        let controller = AutomationController(editorProvider: { nil }, newDocument: { _ in })
+        var definition = AutomationDefinition.example
+        definition.name = "Caf\u{e9}"
+        let original = AutomationLibrary(workflows: [definition])
+        try controller.persistLibrary(original)
+        controller.manageAdvanced()
+        let window = try requireValue(FormPanel.frontWindow, "fixture: native advanced configuration window")
+        let views = descendants(try requireValue(window.contentView, "fixture: advanced content"))
+        let text = try requireValue(textView("Automation library JSON", in: views), "fixture: advanced JSON text")
+        check(NSApp.modalWindow == nil && window.isVisible, "DG advanced JSON is a real modeless editor")
+        var pending = original
+        pending.workflows[0].name = "Pending name"
+        let pendingText = String(decoding: try pending.encoded(), as: UTF8.self)
+        text.string = pendingText
+        var intervening = original
+        intervening.workflows[0].name = "Cafe\u{301}"
+        try controller.persistLibrary(intervening)
+        let path = isolated.url.appendingPathComponent("Automations.json")
+        let saved = try Data(contentsOf: path)
+        button("automation.json.save", in: views)?.performClick(nil)
+        check(
+            window.isVisible && text.string == pendingText,
+            "DG an intervening native controller write preserves pending JSON and its window")
+        let after = try Data(contentsOf: path)
+        let held = try AutomationLibrary.decode(saved)
+        check(
+            after == saved && Data(held.workflows[0].name.utf8) == Data("Cafe\u{301}".utf8),
+            "DG byte-distinct NFC/NFD controller saves cannot be overwritten by an older modeless form")
+        check(
+            text.accessibilityHelp()?.contains("changed while this window was open") == true,
+            "DG the stale JSON field is marked with the conflict and how to recover")
+        button("automation.json.cancel", in: views)?.performClick(nil)
+        if let manager = FormPanel.frontWindow, manager.identifier?.rawValue == "automation.manager" {
+            button("automation.manager.cancel", in: descendants(manager.contentView!))?.performClick(nil)
+        }
+    }
+
     static func main() {
         Checks.run("AutomationControllerChecks") {
             let isolatedSupport = try IsolatedSupportDirectory("TextTankAutomationControllerChecks"),
                 root = isolatedSupport.url
             defer { isolatedSupport.restore() }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
             Checks.section("horizontal dialog actions") { try horizontalDialogChecks() }
+            Checks.section("modeless Unicode controller conflict") { try staleModelessJSONCheck() }
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 800, height: 500), styleMask: [.titled], backing: .buffered,
                 defer: false)
@@ -923,15 +1372,16 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 editorProvider: { editor }, newDocument: { _ in newDocumentCalls += 1 })
             let path = root.appendingPathComponent("Automations.json")
             var saved = try AutomationLibrary.decode(Data(contentsOf: path))
-            // The toolbar host and the pinned identifier outlive the section that installs them.
+            // The native drop-down host outlives the section that installs it.
             let toolbarHost = AutomationToolbarHost(controller)
-            var pinnedIdentifier: NSToolbarItem.Identifier?
             Checks.section("direct cleanup, toolbar and recipe safety") {
                 check(saved.workflows.count == 2, "new configuration seeds two ordinary saved workflows")
                 check(
                     saved.workflows[0].output == .editor && saved.workflows[1].output == .reminders,
                     "separate cleanup and send definitions")
-                check(controller.toolbarIdentifiers().count == 2, "two individual pinned toolbar buttons available")
+                check(
+                    controller.makeToolbarItem().menu.items.filter { $0.representedObject is String }.count == 2,
+                    "the Automations drop-down lists both saved definitions")
                 let source = "# Ingredients\n- **2 eggs**\n- ½ cup flour\n"
                 editor.text = source
                 editor.resetUndoHistory()
@@ -942,9 +1392,19 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 controller.onInvocation = { invocations += 1 }
                 let palette = drivingModal(
                     timeout: 20,
-                    { _, views in
+                    { paletteWindow, views in
                         guard let cancel = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
                         else { return false }
+                        if let filter = field("automation.palette.filter", in: views),
+                            let table = views.compactMap({ $0 as? NSTableView }).first
+                        {
+                            filter.selectText(nil)
+                            typeKeys(AutomationDefinition.example.name, in: paletteWindow)
+                            paletteWindow.makeFirstResponder(table)
+                            check(
+                                invocations == 0 && table.numberOfRows == 1,
+                                "DG typing and leaving the actual automation filter never invokes it")
+                        }
                         cancel.performClick(nil)
                         return true
                     }
@@ -957,28 +1417,30 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 check(
                     editor.text == "2 eggs\n½ cup flour\n",
                     "cleanup applies directly to actual editor without preview dialog")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == source, "direct cleanup is one Undo action")
                 saved.workflows[0].name = "My recipe tidy"
                 saved.workflows[0].shortcut = "k"
                 saved.workflows[0].previewBeforeApply = nil
                 try controller.persistLibrary(saved)
-                let identifier = try requireValue(
-                    controller.toolbarIdentifiers().first, "fixture: a pinned toolbar identifier exists")
-                pinnedIdentifier = identifier
                 let toolbar = NSToolbar(identifier: "TextTank.AutomationControllerChecks")
                 toolbar.delegate = toolbarHost
                 window.toolbar = toolbar
+                let launcher = try requireValue(
+                    toolbar.items.first as? NSMenuToolbarItem, "fixture: native Automations drop-down")
                 let button = try requireValue(
-                    toolbar.items.first(where: { $0.itemIdentifier == identifier })?.view as? NSButton,
-                    "fixture: direct toolbar button is installed")
-                check(button.window === window, "named automation button is installed in native window toolbar")
-                check(button.title == "My recipe tidy", "renaming updates individual toolbar button label")
+                    launcher.menu.items.first {
+                        $0.representedObject as? String == AutomationDefinition.example.id.uuidString
+                    }, "fixture: saved automation in drop-down")
+                check(
+                    launcher.toolbar === toolbar && launcher.view == nil && toolbar.items.count == 1,
+                    "automations use one standard native drop-down without individual toolbar buttons")
+                check(button.title == "★ My recipe tidy", "renaming updates the drop-down action label")
                 editor.text = source
                 editor.resetUndoHistory()
                 check(
                     NSApp.sendAction(button.action!, to: button.target, from: button),
-                    "toolbar action reaches shared stable-ID dispatcher")
+                    "drop-down action reaches shared stable-ID dispatcher")
                 check(
                     editor.text == "2 eggs\n½ cup flour\n", "absent preview flag applies same saved definition directly"
                 )
@@ -994,7 +1456,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 editor.setSavePoint()
                 check(
                     NSApp.sendAction(button.action!, to: button.target, from: button),
-                    "observed browser recipe runs through actual named toolbar button")
+                    "observed browser recipe runs through actual named drop-down action")
                 let cleanedRows = editor.text.components(separatedBy: .newlines).filter { !$0.isEmpty }
                 check(cleanedRows.count == 28, "observed full browser recipe produces all 28 ingredient rows")
                 check(
@@ -1004,7 +1466,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     editor.window === window && window.contentView === editor && NSApp.windows.count == windowCount,
                     "recipe cleanup stays in same editor and window")
                 check(newDocumentCalls == 0, "recipe cleanup never invokes new-document output")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == browserInput, "one native Undo restores exact original browser clipboard text")
                 let ambiguous = browserInput + "\nunmarked ingredient continuation\n"
                 editor.text = ambiguous
@@ -1047,10 +1509,10 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     try Data(contentsOf: path) == beforeReload,
                     "existing named configuration is not replaced or rewritten by presets")
                 check(
-                    restarted.makeToolbarItem(
-                        identifier: try requireValue(
-                            pinnedIdentifier, "fixture: the pinned toolbar identifier was captured"))?.label
-                        == "My recipe tidy", "toolbar stable identity survives configuration reload")
+                    restarted.makeToolbarItem().menu.items.contains {
+                        $0.representedObject as? String == AutomationDefinition.example.id.uuidString
+                            && $0.title == "★ My recipe tidy"
+                    } == true, "drop-down stable identity survives configuration reload")
                 let menuItem = try requireValue(
                     restarted.menu().items.first(where: {
                         ($0.representedObject as? String) == AutomationDefinition.example.id.uuidString
@@ -1064,13 +1526,14 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 editor.text = selectionSource
                 editor.resetUndoHistory()
                 check(
-                    editor.find("- 2 eggs\n- ½ cup flour\n", matchCase: true, backwards: false),
+                    editor.setSelectionAnchor(
+                        "before\n".utf8.count, caret: "before\n- 2 eggs\n- ½ cup flour\n".utf8.count),
                     "selection test captures exact ingredient range")
                 try restarted.runSavedAutomation(id: AutomationDefinition.example.id)
                 check(
                     editor.text == "before\n2 eggs\n½ cup flour\nafter",
                     "configured selection cleanup preserves surrounding document")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == selectionSource, "selection cleanup undoes together")
                 let multiSource = "- 2 eggs | - ½ cup flour"
                 editor.text = multiSource
@@ -1078,14 +1541,14 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 editor.setSavePoint()
                 check(
                     editor.setSelectionRanges([
-                        ["anchor": NSNumber(value: 0), "caret": NSNumber(value: 8)],
-                        ["anchor": NSNumber(value: multiSource.utf8.count), "caret": NSNumber(value: 11)]
+                        TTSelectionRange(anchor: 0, caret: 8),
+                        TTSelectionRange(anchor: multiSource.utf8.count, caret: 11)
                     ]), "set separate reversed Unicode selections")
                 try restarted.runSavedAutomation(id: AutomationDefinition.example.id)
                 check(
                     editor.text == "2 eggs | ½ cup flour", "automation transforms each captured selection independently"
                 )
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == multiSource, "multiple automation selections undo together")
                 saved.workflows[0].steps = [.init(kind: .clearLinesMatching, find: "(a+)+$")]
                 try restarted.persistLibrary(saved)
@@ -1094,8 +1557,8 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 editor.resetUndoHistory()
                 editor.setSavePoint()
                 _ = editor.setSelectionRanges([
-                    ["anchor": NSNumber(value: 0), "caret": NSNumber(value: 4)],
-                    ["anchor": NSNumber(value: 7), "caret": NSNumber(value: multiFailure.utf8.count)]
+                    TTSelectionRange(anchor: 0, caret: 4),
+                    TTSelectionRange(anchor: 7, caret: multiFailure.utf8.count)
                 ])
                 rejects("a later selection that times out rejects the whole run") {
                     try restarted.runSavedAutomation(id: AutomationDefinition.example.id)
@@ -1115,8 +1578,8 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 editor.resetUndoHistory()
                 editor.setSavePoint()
                 _ = editor.setSelectionRanges([
-                    ["anchor": NSNumber(value: 0), "caret": NSNumber(value: 6)],
-                    ["anchor": NSNumber(value: 7), "caret": NSNumber(value: 14)]
+                    TTSelectionRange(anchor: 0, caret: 6),
+                    TTSelectionRange(anchor: 7, caret: 14)
                 ])
                 try outputController.runSavedAutomation(id: AutomationDefinition.example.id)
                 check(
@@ -1185,7 +1648,10 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 restarted.exportInProgress = false
                 saved.workflows[0].pinToToolbar = false
                 try restarted.persistLibrary(saved)
-                check(restarted.toolbarIdentifiers().count == 1, "toolbar pin setting hides only configured workflow")
+                check(
+                    restarted.contextMenu().items.filter { $0.representedObject is String }.count == 2
+                        && saved.workflows[0].pinToToolbar == false,
+                    "unmarking a favorite keeps both saved automations available")
             }
             Checks.section("user recipe samples") {
                 // Four literal user examples run through a persisted named automation.
@@ -1221,7 +1687,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     check(
                         editor.window === window && window.contentView === editor
                             && NSApp.windows.count == sampleWindows, "sample \(sample) uses same editor and window")
-                    editor.executeCommand("undo")
+                    editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                     check(
                         editor.text.utf8.elementsEqual(input.utf8) && !editor.modified,
                         "sample \(sample) one Undo restores original bytes and savepoint")
@@ -1364,7 +1830,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     largeExpected = rows.joined(separator: "\n") + "\n"
                 try require(
                     largeInput.utf8.count > 4 * 262144, "fixture: the input is well over the 256 KiB worker threshold")
-                func load(_ text: String) -> UInt {
+                @MainActor func load(_ text: String) -> UInt {
                     editor.text = text
                     editor.resetUndoHistory()
                     editor.setSavePoint()
@@ -1386,7 +1852,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     "a run that outlasts the short wait runs behind the modal progress panel, which closes itself")
                 check(progressCancelKey == "\u{1b}", "Escape presses Cancel in the automation progress panel")
                 check(editor.text == largeExpected, "the worker result replaces the large document exactly")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     editor.text == largeInput && !editor.modified,
                     "a large-input automation is one Undo back to the save point")
@@ -1497,7 +1963,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                     editor.text == smallInput && editor.revision == revision && !editor.modified
                         && NSApp.modalWindow == nil,
                     "G409 the cancelled small-input run leaves text, revision and save point untouched")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == smallInput, "G409 the cancelled small-input run left nothing to undo")
                 try restarted.persistLibrary(saved)
             }
@@ -1543,7 +2009,7 @@ final class AutomationToolbarHost: NSObject, NSToolbarDelegate {
                 clipboardLibrary.workflows[0].steps = [.init(kind: .removeBlankLines)]
                 try restarted.persistLibrary(clipboardLibrary)
                 restarted.pasteboard = board
-                defer { restarted.pasteboard = .general }
+                defer { restarted.pasteboard = nil }
                 editor.text = "before"
                 editor.resetUndoHistory()
                 _ = editor.setSelectionAnchor(0, caret: 6)

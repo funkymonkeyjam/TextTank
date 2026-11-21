@@ -1,10 +1,16 @@
+@testable import TextTankCore
 import AppKit
+@testable import TextTankRuntime
+import EditorBridge
+import NativeSearch
 @main struct RunControllerChecks {
     @MainActor static func main() {
         Checks.run("RunControllerChecks") {
-            _ = NSApplication.shared
             let isolatedSupport = try IsolatedSupportDirectory("TextTankRunControllerChecks")
             defer { isolatedSupport.restore() }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
+            _ = NSApplication.shared
             let document = TextDocument()
             document.makeWindowControllers()
             document.editor.text = "original"
@@ -64,7 +70,7 @@ import AppKit
             controller.apply(current)
             check(document.editor.text == "SECOND", "current preview applies explicit matching result")
             check(unrecordable == 1, "applying an extension result reports one unrecordable action")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(document.editor.text == "original", "extension apply one Undo")
             let special = "\u{FEFF}identity\0tail"
             controller.show(
@@ -165,7 +171,7 @@ import AppKit
             check(
                 document.editor.text == "FIRST" && !moved.isEnabled,
                 "a whole-document result captured through a closed pane applies through the remaining view")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             _ = pane.setSelectionAnchor(0, caret: 3)
             controller.show(
                 .success(result), command: sample, target: pane, revision: pane.revision, selection: true, anchor: 0,
@@ -315,9 +321,63 @@ import AppKit
             try ConfiguredRun.decodeLibrary(Data(text.utf8)) == [sample, other],
             "F137 the managed text is the version-1 library")
         let before = try Data(contentsOf: controller.storage)
+        let beforeIdentity =
+            try FileManager.default.attributesOfItem(atPath: controller.storage.path)[.systemFileNumber] as? NSNumber
         try controller.replaceLibrary(json: Data(text.utf8))
         check(
+            try FileManager.default.attributesOfItem(atPath: controller.storage.path)[.systemFileNumber] as? NSNumber
+                == beforeIdentity,
+            "F137 saving an unchanged library preserves the file identity instead of rewriting it")
+        check(
             try Data(contentsOf: controller.storage) == before, "F137 saving the managed text unchanged keeps the file")
+
+        // V32-02: Swift String equality treats NFC and NFD as equal; persisted command
+        // strings still have exact bytes. Exercise the actual controller, file and restart.
+        for startsDecomposed in [false, true] {
+            let initial = startsDecomposed ? "e\u{0301}" : "\u{00E9}"
+            let replacement = startsDecomposed ? "\u{00E9}" : "e\u{0301}"
+            for field in ["name", "executable", "argument"] {
+                var original = other
+                original.name = "Caf" + initial
+                original.executable = "/tmp/caf" + initial
+                original.arguments = [initial]
+                try controller.persist([sample, original])
+                var updated = original
+                switch field {
+                case "name": updated.name = "Caf" + replacement
+                case "executable": updated.executable = "/tmp/caf" + replacement
+                default: updated.arguments[0] = replacement
+                }
+                func bytes(_ command: ConfiguredRun) -> [UInt8] {
+                    switch field {
+                    case "name": return Array(command.name.utf8)
+                    case "executable": return Array(command.executable.utf8)
+                    default: return Array(command.arguments[0].utf8)
+                    }
+                }
+                check(
+                    original == updated && bytes(original) != bytes(updated),
+                    "fixture: canonically equal \(field) values carry distinct UTF-8 bytes")
+                try controller.replaceLibrary(json: try JSONEncoder().encode([sample, updated]))
+                let savedBytes = try Data(contentsOf: controller.storage)
+                let stored = try ConfiguredRun.decodeLibrary(savedBytes)[1]
+                let restarted = try ConfiguredRun.decodeLibrary(Data(RunController().libraryText().utf8))[1]
+                check(
+                    bytes(stored) == bytes(updated) && bytes(restarted) == bytes(updated),
+                    "F137 a byte-only Unicode \(field) edit is stored and reloaded exactly")
+                let identity = try requireValue(
+                    FileManager.default.attributesOfItem(atPath: controller.storage.path)[.systemFileNumber]
+                        as? NSNumber, "fixture: the Run library has a file identity")
+                let formatted = JSONEncoder()
+                formatted.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+                try controller.replaceLibrary(json: try formatted.encode([sample, updated]))
+                check(
+                    try FileManager.default.attributesOfItem(atPath: controller.storage.path)[.systemFileNumber]
+                        as? NSNumber == identity && Data(contentsOf: controller.storage) == savedBytes,
+                    "F137 reformatting a Unicode \(field) library preserves its bytes and file identity")
+            }
+        }
+        try controller.persist([sample, other])
 
         // Edit: same id, new name and arguments.
         var edited = other
@@ -350,10 +410,22 @@ import AppKit
         }
         var relative = other
         relative.executable = "printf"
-        rejects("F137 an edited command with a relative executable is refused", expecting: RunFailure.invalid) {
+        rejects(
+            "F137 an edited command with a relative executable is refused",
+            where: {
+                if case RunFailure.configuration(field: .executable, message: _) = $0 { return true }
+                return false
+            }
+        ) {
             try controller.replaceLibrary(json: try JSONEncoder().encode([sample, relative]))
         }
-        rejects("F137 two entries with one id are refused", expecting: RunFailure.invalid) {
+        rejects(
+            "F137 two entries with one id are refused",
+            where: {
+                if case RunFailure.configuration(field: .identity, message: _) = $0 { return true }
+                return false
+            }
+        ) {
             try controller.replaceLibrary(json: try JSONEncoder().encode([sample, sample]))
         }
         check(
@@ -383,6 +455,9 @@ import AppKit
         try corrupt.write(to: controller.storage)
         let damaged = RunController()
         check(ids(damaged.makeMenu()).isEmpty, "an unreadable library loads no commands")
+        rejects("F198 the direct Run persistence boundary cannot overwrite an unreadable library") {
+            try damaged.persist([sample])
+        }
         rejects("F137 Manage Commands cannot save over an unreadable library") {
             try damaged.replaceLibrary(json: try JSONEncoder().encode([sample]))
         }
@@ -392,37 +467,224 @@ import AppKit
         check(
             try Data(contentsOf: damaged.storage) == corrupt,
             "F137 an unreadable RunCommands.json is left byte for byte")
+        var revealed: [URL] = []
+        let originalReveal = StoreRecovery.reveal
+        StoreRecovery.reveal = { revealed.append($0) }
+        defer { StoreRecovery.reveal = originalReveal }
+        @MainActor func recovery(_ identifier: String, action: (@MainActor () throws -> Bool)? = nil) throws -> Bool {
+            let deadline = Date().addingTimeInterval(5)
+            var clicked = false
+            let tick: @MainActor @Sendable () -> Void = {
+                guard let content = NSApp.modalWindow?.contentView else { return }
+                if Date() > deadline {
+                    NSApp.abortModal()
+                    return
+                }
+                guard
+                    let button = descendants(content).compactMap({ $0 as? NSButton }).first(where: {
+                        $0.identifier?.rawValue == identifier
+                    })
+                else { return }
+                clicked = true
+                button.performClick(nil)
+            }
+            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated { tick() }
+            }
+            RunLoop.main.add(timer, forMode: .modalPanel)
+            defer { timer.invalidate() }
+            let writable: Bool
+            if let action {
+                writable = try action()
+            } else {
+                writable = try StoreRecovery.ensureWritable(damaged.loadState)
+            }
+            check(clicked, "fixture: explicit recovery choice dispatched")
+            return writable
+        }
+        check(
+            try !recovery("store.recover.cancel") && damaged.loadState.error != nil
+                && Data(contentsOf: damaged.storage) == corrupt && revealed.isEmpty,
+            "F198 Cancel preserves the load latch, bytes and Finder isolation")
+        check(
+            try !recovery("store.recover.reveal") && damaged.loadState.error != nil
+                && Data(contentsOf: damaged.storage) == corrupt && revealed == [damaged.storage],
+            "F198 Reveal calls only the injected fixture handler and preserves the load latch and bytes")
+        check(
+            try recovery("store.recover.move") && damaged.loadState.error == nil
+                && !FileManager.default.fileExists(atPath: damaged.storage.path),
+            "F198 explicit Move Aside clears the latch after renaming the entry")
+        let retained = try FileManager.default.contentsOfDirectory(
+            at: damaged.storage.deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("RunCommands.previous-") }
+        check(
+            try retained.count == 1 && Data(contentsOf: retained[0]) == corrupt,
+            "F198 recovery retains the exact unreadable bytes under a unique sibling name")
+        try damaged.persist([sample])
+        check(
+            ids(RunController().makeMenu()) == [sample.id.uuidString],
+            "F198 only an explicit move-aside permits a later save and reload")
+        let preferenceURL = damaged.storage.deletingLastPathComponent().appendingPathComponent("damaged-find.json")
+        let preferenceBytes = Data("retain failed preference bytes".utf8)
+        try preferenceBytes.write(to: preferenceURL)
+        let finder = SearchController(preferencesURL: preferenceURL)
+        finder.queryField.stringValue = "reset this query"
+        check(
+            finder.preferenceNotice.isHidden == false,
+            "F212 failed Find preferences expose persistent recovery")
+        _ = try recovery(
+            "store.recover.move",
+            action: {
+                finder.resetSavedPreferences(nil)
+                return true
+            })
+        let preferenceBackups = try FileManager.default.contentsOfDirectory(
+            at: preferenceURL.deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("damaged-find.previous-") }
+        check(
+            finder.queryField.stringValue.isEmpty && finder.preferenceNotice.isHidden == true
+                && finder.resetPreferencesButton.superview?.isHidden == false
+                && preferenceBackups.count == 1,
+            "F212 explicit preference reset uses common recovery and restores default controls")
+        if let backup = preferenceBackups.first {
+            check(
+                try Data(contentsOf: backup) == preferenceBytes
+                    && FindPreferences.decode(Data(contentsOf: preferenceURL)).options.query.isEmpty,
+                "F212 preference reset retains unreadable bytes beside readable defaults")
+        }
         try controller.persist([sample])
         check(RunController.manageHelp.contains("never runs"), "F137 the dialog says saving runs nothing")
         try manageDialogChecks(controller, sample, other)
+        try configureRetryChecks(controller)
         check(
             RunController.configureHelp.contains("--") && RunController.configureHelp.contains("{selection}")
                 && RunController.configureHelp.contains("option"),
             "F143 Configure explains a selection that begins with -")
     }
-    static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    @MainActor static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     /// Opens Manage Commands… from its menu item and calls `step` each time a modal window is up,
     /// with a count of the calls so far, until the dialogs are gone. False if it had to be aborted.
-    @MainActor static func manage(_ controller: RunController, _ step: @escaping (Int, [NSView]) -> Void) throws -> Bool
-    {
+    @MainActor static func manage(
+        _ controller: RunController, title: String = "Manage Commands…", commit: Bool = true,
+        _ step: @escaping @MainActor @Sendable (Int, [NSView]) -> Void
+    ) throws -> Bool {
         let item = try requireValue(
-            controller.makeMenu().items.first { $0.title == "Manage Commands…" }, "the Manage Commands… item")
+            controller.makeMenu().items.first { $0.title == title }, "the requested Run configuration item")
+        let configure = title == "Configure Command…"
+        let route = ManagerChildRoute(
+            managerID: "run.manager", openerID: configure ? "run.manager.add" : "run.manager.advanced",
+            childID: configure ? "run.command" : "run.json", commit: commit)
         let deadline = Date().addingTimeInterval(8)
-        var calls = 0, aborted = false
+        var calls = 0, aborted = false, finished = false
         let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
-            guard let content = NSApp.modalWindow?.contentView else { return }
-            if Date() > deadline {
-                aborted = true
-                NSApp.abortModal()
-                return
+            MainActor.assumeIsolated {
+                guard let window = presentedFormWindow, let content = window.contentView else { return }
+                if Date() > deadline {
+                    aborted = true
+                    window.performClose(nil)
+                    return
+                }
+                let views = descendants(content)
+                if !finished {
+                    finished = route.step(window, views: views) {
+                        step(calls, views)
+                        calls += 1
+                    }
+                }
             }
-            step(calls, descendants(content))
-            calls += 1
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
         defer { timer.invalidate() }
         NSApp.sendAction(try requireValue(item.action, "its action"), to: item.target, from: item)
-        return !aborted
+        waitForModelessForms(timeout: 8)
+        return finished && !aborted
+    }
+    @MainActor static func configureRetryChecks(_ controller: RunController) throws {
+        var stage = 0, kept = false
+        let completed = try manage(controller, title: "Configure Command…") { _, views in
+            let fields = views.compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+            guard fields.count >= 3,
+                let save = views.compactMap({ $0 as? NSButton }).first(where: {
+                    $0.identifier?.rawValue == "run.command.save"
+                })
+            else {
+                views.compactMap { $0 as? NSButton }.first { $0.title == "OK" }?.performClick(nil)
+                return
+            }
+            if stage == 0 {
+                fields[0].window?.makeFirstResponder(nil)
+                fields[0].stringValue = "Fixture retained Run draft"
+                fields[2].stringValue = "[ invalid JSON"
+                stage = 1
+                save.performClick(nil)
+            } else if stage == 1 {
+                kept =
+                    fields[0].stringValue == "Fixture retained Run draft" && fields[2].stringValue == "[ invalid JSON"
+                fields[2].window?.makeFirstResponder(nil)
+                fields[2].stringValue = "[]"
+                stage = 2
+                save.performClick(nil)
+            }
+        }
+        check(
+            completed && stage == 2 && kept,
+            "F214 a Run configuration error retains the name and invalid arguments for correction")
+        check(
+            RunController().makeMenu().items.contains { $0.title == "Fixture retained Run draft" },
+            "F214 corrected Run configuration persists only after the next explicit Save")
+        for invalidKind in ["name", "executable", "mode"] {
+            var fieldStage = 0, focusedCorrectly = false, retainedName = false
+            let expectedName = "Fixture corrected \(invalidKind)"
+            let retried = try manage(controller, title: "Configure Command…") { _, views in
+                let fields = views.compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+                let buttons = views.compactMap { $0 as? NSButton }
+                guard fields.count >= 3,
+                    let save = buttons.first(where: { $0.identifier?.rawValue == "run.command.save" }),
+                    let shell = buttons.first(where: { $0.identifier?.rawValue == "run.command.shell" }),
+                    let ext = buttons.first(where: { $0.identifier?.rawValue == "run.command.extension" })
+                else {
+                    buttons.first { $0.title == "OK" }?.performClick(nil)
+                    return
+                }
+                if fieldStage == 0 {
+                    fields[0].window?.makeFirstResponder(nil)
+                    fields[0].stringValue = invalidKind == "name" ? "" : expectedName
+                    fields[1].stringValue = invalidKind == "executable" ? "relative" : "/usr/bin/printf"
+                    fields[2].stringValue = "[]"
+                    if invalidKind == "mode" {
+                        shell.state = .on
+                        ext.state = .on
+                    }
+                    fieldStage = 1
+                    save.performClick(nil)
+                } else if fieldStage == 1 {
+                    let invalidControl: NSView =
+                        invalidKind == "name" ? fields[0] : invalidKind == "executable" ? fields[1] : ext
+                    let firstResponder = presentedFormWindow?.firstResponder
+                    let focusedField = (firstResponder as? NSTextView)?.delegate as AnyObject?
+                    focusedCorrectly =
+                        (firstResponder === invalidControl || focusedField === invalidControl)
+                        && invalidControl.accessibilityHelp()?.isEmpty == false
+                    retainedName = fields[0].stringValue == (invalidKind == "name" ? "" : expectedName)
+                    fields[0].window?.makeFirstResponder(nil)
+                    fields[0].stringValue = expectedName
+                    fields[1].stringValue = "/usr/bin/printf"
+                    shell.state = .off
+                    ext.state = .off
+                    fieldStage = 2
+                    save.performClick(nil)
+                }
+            }
+            check(
+                retried && fieldStage == 2 && retainedName && focusedCorrectly,
+                "F214 Run \(invalidKind) rejection preserves the draft and identifies/focuses its actual control")
+            check(
+                RunController().makeMenu().items.contains { $0.title == expectedName },
+                "F214 Run \(invalidKind) correction persists only on explicit Save")
+        }
     }
     @MainActor static func manageDialogChecks(
         _ controller: RunController, _ sample: ConfiguredRun, _ other: ConfiguredRun
@@ -438,7 +700,7 @@ import AppKit
         let both = try Data(contentsOf: controller.storage)
         let onlySample = String(decoding: try JSONEncoder().encode([sample]), as: UTF8.self)
         var opened = "", labelled = false
-        let cancelled = try manage(controller) { _, views in
+        let cancelled = try manage(controller, commit: false) { _, views in
             guard let text = editor(views) else { return }
             opened = text.string
             labelled = text.accessibilityLabel() == "Saved Run commands as JSON" && text.isEditable
@@ -450,11 +712,11 @@ import AppKit
             "F137 Manage Commands… opens on the saved commands in a labelled editor")
         check(try Data(contentsOf: controller.storage) == both, "F137 Cancel in Manage Commands saves nothing")
         var keptAfterError = false
-        let refused = try manage(controller) { call, views in
+        let refused = try manage(controller, commit: false) { call, views in
             if let text = editor(views) {
                 if call == 0 {
                     text.string = "[ not a library"
-                    press("Save", views)
+                    press("Use Changes", views)
                 } else {
                     keptAfterError = text.string == "[ not a library"
                     press("Cancel", views)
@@ -469,7 +731,7 @@ import AppKit
         let saved = try manage(controller) { _, views in
             guard let text = editor(views) else { return }
             text.string = onlySample
-            press("Save", views)
+            press("Use Changes", views)
         }
         check(saved && ids() == [sample.id.uuidString], "F137 Save in Manage Commands deletes the removed command")
         try controller.persist([sample])

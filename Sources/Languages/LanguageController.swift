@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import Darwin
@@ -6,7 +9,7 @@ import Darwin
 private final class LanguageMenu: NSMenu {
     var generation = -1
 }
-final class LanguageController: NSObject, NSMenuDelegate {
+@MainActor final class LanguageController: NSObject, NSMenuDelegate {
     private let editorProvider: () -> TTEditor?
     private let languageProvider: () -> String
     private let setLanguage: (String) -> Void
@@ -28,7 +31,11 @@ final class LanguageController: NSObject, NSMenuDelegate {
     private var menuEntries: [(title: String, id: String)]?
     private var generation = 0
     /// Why the stored LanguageProfiles.json, or the bundled catalog, could not be used.
-    private(set) var loadError: Error?
+    let loadState: StoreLoadState
+    private(set) var loadError: Error? {
+        get { loadState.error }
+        set { loadState.error = newValue }
+    }
     /// True when the stored file is the one that failed. The bundled catalog is then in use, the
     /// file is left exactly as it is, and nothing is saved until it has been moved aside.
     private(set) var storageDamaged = false
@@ -46,20 +53,23 @@ final class LanguageController: NSObject, NSMenuDelegate {
     /// Where the bundled catalog is. Check executables have no bundle and set this to the
     /// repository's copy before they construct a controller or an AppDelegate.
     static var bundledCatalogURL = Bundle.main.url(forResource: "LanguageProfiles", withExtension: "json")
+    convenience init(
+        editorProvider: @escaping () -> TTEditor?, languageProvider: @escaping () -> String,
+        setLanguage: @escaping (String) -> Void
+    ) {
+        self.init(
+            editorProvider: editorProvider, languageProvider: languageProvider,
+            setLanguage: setLanguage, bundledCatalog: Self.bundledCatalogURL)
+    }
     init(
         editorProvider: @escaping () -> TTEditor?, languageProvider: @escaping () -> String,
-        setLanguage: @escaping (String) -> Void, bundledCatalog: URL? = LanguageController.bundledCatalogURL
+        setLanguage: @escaping (String) -> Void, bundledCatalog: URL?
     ) {
         self.editorProvider = editorProvider
         self.languageProvider = languageProvider
         self.setLanguage = setLanguage
-        let base =
-            ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"].map {
-                URL(fileURLWithPath: $0, isDirectory: true)
-            }
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TextTank", isDirectory: true)
-        storage = base.appendingPathComponent("LanguageProfiles.json")
+        storage = AppStorage.url(.languages)
+        loadState = StoreLoadState(url: storage, displayName: "Language profiles")
         super.init()
         load(bundledCatalog)
     }
@@ -76,11 +86,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
             return
         }
         bundled = defaults
-        guard FileManager.default.fileExists(atPath: storage.path) else {
-            catalog = defaults
-            return
-        }
-        do { catalog = try LanguageCatalog.load(stored: Self.readRegular(storage), over: defaults) } catch {
+        do {
+            catalog = try LanguageCatalog.load(stored: Self.readRegular(storage, parent: .strict), over: defaults)
+        } catch  where error.isFileNotFound { catalog = defaults } catch {
             // The bundled languages keep working; the unreadable file is never overwritten.
             catalog = defaults
             loadError = error
@@ -95,19 +103,14 @@ final class LanguageController: NSObject, NSMenuDelegate {
     }
     private func populate(_ menu: LanguageMenu) {
         menu.removeAllItems()
-        func add(_ name: String, _ action: Selector) {
-            let item = NSMenuItem(title: name, action: action, keyEquivalent: "")
-            item.target = self
-            menu.addItem(item)
-        }
-        add("Complete Word", #selector(complete))
-        add("Function List…", #selector(functions))
-        add("Show Keyword Help", #selector(callTip))
+        menu.addItem(title: "Complete Word", action: #selector(complete), target: self)
+        menu.addItem(title: "Function List…", action: #selector(functions), target: self)
+        menu.addItem(title: "Show Keyword Help", action: #selector(callTip), target: self)
         menu.addItem(styleSettingsMenuItem())
-        add("Edit Language Profiles…", #selector(configure))
-        add("Import Notepad++ UDL…", #selector(importUDL))
-        add("Edit Current UDL…", #selector(editUDL))
-        add("Export Current UDL…", #selector(exportUDL))
+        menu.addItem(title: "Edit Language Profiles…", action: #selector(configure), target: self)
+        menu.addItem(title: "Import Notepad++ UDL…", action: #selector(importUDL), target: self)
+        menu.addItem(title: "Edit Current UDL…", action: #selector(editUDL), target: self)
+        menu.addItem(title: "Export Current UDL…", action: #selector(exportUDL), target: self)
         menu.addItem(.separator())
         for item in languageMenuItems() { menu.addItem(item) }
         menu.generation = generation
@@ -146,13 +149,8 @@ final class LanguageController: NSObject, NSMenuDelegate {
     /// Until this has run, `persist` refuses to write.
     @discardableResult func quarantineDamagedStorage() throws -> URL {
         guard storageDamaged else { throw LanguageError.invalid("The language profiles file is not damaged.") }
-        let stamp = DateFormatter()
-        stamp.locale = Locale(identifier: "en_US_POSIX")
-        stamp.dateFormat = "yyyyMMdd-HHmmss"
-        let destination = storage.deletingLastPathComponent().appendingPathComponent(
-            "LanguageProfiles.damaged-\(stamp.string(from: Date()))-\(UUID().uuidString.prefix(8)).json")
-        guard renamex_np(storage.path, destination.path, UInt32(RENAME_EXCL)) == 0 else {
-            throw CocoaError(.fileWriteUnknown)
+        guard let destination = try loadState.moveAside(tag: "damaged") else {
+            throw LanguageError.invalid("The language profiles entry no longer exists.")
         }
         storageDamaged = false
         loadError = nil
@@ -162,24 +160,11 @@ final class LanguageController: NSObject, NSMenuDelegate {
     private func ensureWritable() throws -> Bool {
         guard let loadError else { return true }
         guard storageDamaged else { throw loadError }
-        let alert = TTAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "The saved language profiles could not be read"
-        alert.informativeText =
-            "\(loadError.localizedDescription)\n\n\(storage.path)\n\nThe built-in languages are in use and the file has not been changed. To edit languages, move the file aside: it is renamed next to the original, not deleted, and your imported languages and style changes stay in it."
-        alert.addButton(withTitle: "Move Damaged File Aside and Use Defaults")
-        alert.addButton(withTitle: "Reveal in Finder")
-        alert.addButton(withTitle: "Cancel")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            try quarantineDamagedStorage()
-            return true
-        case .alertSecondButtonReturn:
-            NSWorkspace.shared.activateFileViewerSelecting([storage])
-            return false
-        default: return false
-        }
+        guard try StoreRecovery.ensureWritable(loadState) else { return false }
+        storageDamaged = false
+        return true
     }
+
     @objc private func importUDL() {
         do {
             guard try ensureWritable() else { return }
@@ -205,7 +190,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
                 let id = try first.profile().id
                 if applyToDocument(identifier: id, through: editor) { setLanguage(id) }
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func editUDL() {
         do {
@@ -220,16 +205,10 @@ final class LanguageController: NSObject, NSMenuDelegate {
             alert.informativeText =
                 "Edit the UDL 2.x XML settings, keyword groups, comments, folding, delimiters and styles. Save validates the entire definition before changing it. Renaming here preserves the saved language identifier."
             alert.addButton(withTitle: "Save")
-            alert.addButton(withTitle: "Cancel")
-            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 700, height: 420))
-            scroll.hasVerticalScroller = true
-            let text = NSTextView(frame: scroll.bounds)
-            text.isRichText = false
-            text.isAutomaticQuoteSubstitutionEnabled = false
-            text.isAutomaticDashSubstitutionEnabled = false
-            text.autoresizingMask = [.width]
-            text.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-            scroll.documentView = text
+            alert.addButton(withTitle: "Cancel", role: .cancel)
+            let content = JSONLibraryEditor.makeTextView(size: NSSize(width: 700, height: 420))
+            let scroll = content.scroll, text = content.editor
+            text.setAccessibilityLabel("User-defined language XML")
             text.string = String(data: try definition.encodedXML(), encoding: .utf8)!
             alert.accessoryView = scroll
             while alert.runModal() == .alertFirstButtonReturn {
@@ -244,9 +223,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
                     try persist(proposed)
                     reapply([id])
                     return
-                } catch { NSAlert(error: error).runModal() }
+                } catch { TTAlert.present(error) }
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func exportUDL() {
         do {
@@ -257,7 +236,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
             panel.nameFieldStringValue = "TextTank-UserLanguage.xml"
             guard panel.runModal() == .OK, let url = panel.url else { return }
             try definition.encodedXML().write(to: url, options: .atomic)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     func detect(filename: String, text: String) -> String? { catalog?.detect(filename: filename, text: text) }
     /// Applies a profile to a whole document. The lexer, keyword lists and properties belong to
@@ -304,42 +283,88 @@ final class LanguageController: NSObject, NSMenuDelegate {
         }
         return true
     }
+    /// Keep Notepad++'s lexer style IDs and category names; resolve their presentation for
+    /// this editor appearance. Fixed user/UDL RGB values remain explicit overrides.
     private static func color(_ style: LanguageProfile.Style, imported: Bool) -> NSColor {
         if style.useCustomColor == true { return rgb(style.foreground) }
-        // An imported style without a fixed colour is ordinary text, whether the file gave it no
-        // real colour (nil) or the person turned the custom colour off (false). The palette below
-        // goes by style name, and would turn a UDL's black keyword group blue.
         if imported { return .textColor }
-        // Keep native dynamic contrast unless the user selected a fixed RGB color.
+        guard let category = SyntaxColor.category(style) else { return .textColor }
+        let pair = category.colors, light = rgb(pair.light), dark = rgb(pair.dark)
         return NSColor(
             name: nil,
             dynamicProvider: { appearance in
-                let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                let name = style.name.uppercased()
-                if name.contains("COMMENT") {
-                    return dark
-                        ? NSColor(calibratedRed: 0.62, green: 0.72, blue: 0.64, alpha: 1)
-                        : NSColor(calibratedRed: 0.25, green: 0.39, blue: 0.28, alpha: 1)
-                }
-                if name.contains("STRING") || name.contains("CHARACTER") {
-                    return dark
-                        ? NSColor(calibratedRed: 0.88, green: 0.75, blue: 0.52, alpha: 1)
-                        : NSColor(calibratedRed: 0.48, green: 0.28, blue: 0.08, alpha: 1)
-                }
-                if name.contains("WORD") || name.contains("KEYWORD") || name.contains("INSTRUCTION")
-                    || name.contains("TYPE")
-                {
-                    return dark
-                        ? NSColor(calibratedRed: 0.65, green: 0.82, blue: 1, alpha: 1)
-                        : NSColor(calibratedRed: 0.08, green: 0.24, blue: 0.55, alpha: 1)
-                }
-                if name.contains("NUMBER") {
-                    return dark
-                        ? NSColor(calibratedRed: 0.86, green: 0.69, blue: 0.96, alpha: 1)
-                        : NSColor(calibratedRed: 0.44, green: 0.19, blue: 0.55, alpha: 1)
-                }
-                return .textColor
+                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
             })
+    }
+    private enum SyntaxColor {
+        case comment, string, keyword, type, function, number, property, tag, attribute
+        case variable, `operator`, directive, escape, error
+
+        // All pairs exceed 4.5:1 on the editor's paper/carbon backgrounds (DS-60/61).
+        // Category separation is checked against actual Scintilla output in both appearances.
+        var colors: (light: String, dark: String) {
+            switch self {
+            case .comment: return ("426B38", "89B66B")
+            case .string: return ("A33A00", "F2A567")
+            case .keyword: return ("6037C9", "B49AFF")
+            case .type: return ("00676B", "51D4CF")
+            case .function: return ("756400", "F8DD54")
+            case .number: return ("AD235F", "F18EC8")
+            case .property: return ("075DB4", "77B7FF")
+            case .tag: return ("344CC5", "8EA8FF")
+            case .attribute: return ("006F00", "A5F34D")
+            case .variable: return ("334D7D", "B8D9EF")
+            case .operator: return ("48545D", "C4CBC8")
+            case .directive: return ("C0001B", "FF727C")
+            case .escape: return ("006244", "64D9B3")
+            case .error: return ("820000", "FF4E5E")
+            }
+        }
+        static func category(_ style: LanguageProfile.Style) -> Self? {
+            let name = style.name.uppercased()
+            func has(_ fragments: String...) -> Bool { fragments.contains { name.contains($0) } }
+            // Specific categories precede overlapping names, e.g. COMMENT DOC KEYWORD,
+            // TYPE WORD, STRING ESCAPE, and FUNCTION COMMENT.
+            if has("ERROR", "ILLEGAL", "BAD STRING", "WRONG") { return .error }
+            if has("COMMENT", "BLOCKQUOTE") || name == "POD" { return .comment }
+            if has("ESCAPE", "REGEX", "ENTITY") { return .escape }
+            if has("PREPROC", "DIRECTIVE", "DECORATOR", "PRAGMA", "ANNOTATION", "IFDEF") { return .directive }
+            if has("FRONT MATTER MARKER") { return .operator }
+            if has("ATTRIBUTE") { return .attribute }
+            if has("PROPERTY", "VALUE NAME", "FRONT MATTER KEY") || name == "KEY" { return .property }
+            if has("TAG", "XML START", "XML END", "SGML COMMAND") { return .tag }
+            if has("BUILTIN", "BUILT-IN", "BUILIN", "FUNC", "METHOD", "DEF NAME", "CALLABLE", "CMDLET") {
+                return .function
+            }
+            if has("TYPE", "CLASS NAME", "ENUM", "INTERFACE") || ["CLASS", "STRUCT", "STRUCTURE"].contains(name) {
+                return .type
+            }
+            if has("VAR", "SCALAR", "PARAMETER", "REGISTER") { return .variable }
+            if has(
+                "STRING", "CHARACTER", "TRIPLE", "HEREDOC", "VERBATIM", "BACKTICK", "TEMPLATE LIT.",
+                "INLINE CODE", "CODE BLOCK", "FRONT MATTER") || name == "CHAR"
+            {
+                return .string
+            }
+            if has("NUMBER", "DIGIT", "CONSTANT", "LITERAL", "BOOL", "MONEY") { return .number }
+            if has("KEYWORD", "INSTRUCTION", "RESERVED", "STATEMENT", "HEADER", "HEADING")
+                || ["WORD", "WORD2", "CONTROL", "RETURN", "H1", "H2", "H3", "H4", "H5", "H6"].contains(name)
+            {
+                return .keyword
+            }
+            if has("OPERATOR", "DELIMITER", "SYMBOL", "BRACE", "HRULE") { return .operator }
+            if has("LINK", "URI", "URL", "ULIST", "OLIST", "LIST ITEM") { return .property }
+            if has("STRONG") { return .type }
+            if has("EMPHASIS") || name.hasPrefix("EM1") || name.hasPrefix("EM2") { return .number }
+            // Less common source categories retain their original hue family instead of
+            // silently losing a chromatic Notepad++ style. Neutral source styles stay text.
+            guard let value = UInt32(style.foreground, radix: 16) else { return nil }
+            let r = Int((value >> 16) & 255), g = Int((value >> 8) & 255), b = Int(value & 255)
+            guard max(r, g, b) - min(r, g, b) >= 32 else { return nil }
+            if r >= g && r >= b { return g >= b ? .string : .number }
+            if g >= r && g >= b { return b >= r ? .type : .comment }
+            return r >= g ? .keyword : .property
+        }
     }
     func profile(identifier: String) -> LanguageProfile? {
         guard let index = profileIndex[identifier], let profiles = catalog?.profiles, profiles.indices.contains(index)
@@ -359,8 +384,8 @@ final class LanguageController: NSObject, NSMenuDelegate {
         window.makeFirstResponder(nil)
         // A blank field follows the editor's font or size. The two are independent in Scintilla.
         let name = font.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
-            sizeText = size.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let points = Double(sizeText)
+            sizeText = NumericInput.text(size).trimmingCharacters(in: .whitespacesAndNewlines)
+        let points = NumericInput.number(size)
         guard sizeText.isEmpty || points.map({ (6...72).contains($0) }) == true,
             name.isEmpty || NSFont(name: name, size: points ?? 12) != nil, let chosen = color.usingColorSpace(.sRGB)
         else {
@@ -391,7 +416,7 @@ final class LanguageController: NSObject, NSMenuDelegate {
         if !styles.isEmpty { selector.selectItem(at: 0) }
     }
     /// Carries a saved style into the embedded UDL, so Edit Current UDL and export keep it.
-    static func mirror(_ style: LanguageProfile.Style, into udl: inout UserDefinedLanguage) {
+    nonisolated static func mirror(_ style: LanguageProfile.Style, into udl: inout UserDefinedLanguage) {
         guard let index = udl.styles.firstIndex(where: { $0.name == style.name }) else { return }
         udl.styles[index].attributes["fontName"] = style.fontName
         udl.styles[index].attributes["fontSize"] = style.fontSize.map { String($0) }
@@ -415,8 +440,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
             choose.messageText = "Syntax Style Settings"
             choose.informativeText = "Choose the syntax category to customize for this language."
             choose.addButton(withTitle: "Edit")
-            choose.addButton(withTitle: "Cancel")
+            choose.addButton(withTitle: "Cancel", role: .cancel)
             let selector = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 440, height: 28), pullsDown: false)
+            selector.setAccessibilityLabel("Syntax style to customize")
             Self.populateStylePicker(selector, styles: proposed.profiles[profileIndex].styles)
             choose.accessoryView = selector
             guard choose.runModal() == .alertFirstButtonReturn, selector.indexOfSelectedItem >= 0 else { return }
@@ -430,9 +456,10 @@ final class LanguageController: NSObject, NSMenuDelegate {
                     ? "the adaptive native syntax palette" : "the editor's text color, which follows the appearance")
                 + ". Changes affect this language only."
             edit.addButton(withTitle: "Save")
-            edit.addButton(withTitle: "Cancel")
+            edit.addButton(withTitle: "Cancel", role: .cancel)
             let font = NSTextField(string: style.fontName ?? ""),
-                size = NSTextField(string: style.fontSize.map { String($0) } ?? "")
+                size = NSTextField(string: style.fontSize.map { NumericInput.editable($0) } ?? "")
+            NumericInput.configure(size, fractional: true)
             font.placeholderString = "Editor font"
             size.placeholderString = "Editor size"
             let color = NSColorWell()
@@ -470,9 +497,9 @@ final class LanguageController: NSObject, NSMenuDelegate {
                     try persist(proposed)
                     reapply([proposed.profiles[profileIndex].id])
                     return
-                } catch { NSAlert(error: error).runModal() }
+                } catch { TTAlert.present(error) }
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     @objc private func selectLanguage(_ item: NSMenuItem) {
         guard let id = item.representedObject as? String, let editor = editorProvider(),
@@ -506,105 +533,70 @@ final class LanguageController: NSObject, NSMenuDelegate {
                 self?.onUnrecordableCommand?("Function-list navigation is not recorded in macros yet.")
             }
             navigator?.showWindow(nil)
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
+    var jsonFilePanels = JSONLibraryEditor.FilePanels.standard
     @objc func configure() {
         do {
             guard try ensureWritable() else { return }
             guard let catalog else { return }
-            let alert = TTAlert()
-            alert.messageText = "Language Profiles"
-            alert.informativeText =
-                "Edit native lexer keywords, properties, style emphasis, extension detection and optional function patterns (capture group 1 is the name). This JSON profile format is not Notepad++ UDL XML. Imported files never execute code. Preserve identifiers to keep session language choices. Only your changes are saved, so built-in languages you leave alone follow later versions of TextTank. Removing a profile's \"comments\" turns comment commands off for it; an empty object does the same."
-            for title in ["Save", "Cancel", "Import…", "Export…"] { alert.addButton(withTitle: title) }
-            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 700, height: 420))
-            scroll.hasVerticalScroller = true
-            let text = NSTextView(frame: scroll.bounds)
-            text.isRichText = false
-            text.isAutomaticQuoteSubstitutionEnabled = false
-            text.isAutomaticDashSubstitutionEnabled = false
-            text.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-            text.autoresizingMask = [.width]
-            scroll.documentView = text
-            text.string = String(data: try catalog.encoded(), encoding: .utf8)!
-            alert.accessoryView = scroll
-            while true {
-                let choice = alert.runModal()
-                if choice == .alertSecondButtonReturn { return }
-                do {
-                    if choice.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
-                        let panel = NSOpenPanel()
-                        panel.canChooseDirectories = false
-                        panel.allowsMultipleSelection = false
-                        if panel.runModal() == .OK, let url = panel.url {
-                            text.string = String(
-                                data: try LanguageCatalog.decode(Self.readRegular(url)).encoded(), encoding: .utf8)!
-                        }
-                        continue
-                    }
-                    let proposed = try LanguageCatalog.decode(Data(text.string.utf8))
-                    if choice.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
-                        let panel = NSSavePanel()
-                        panel.nameFieldStringValue = "TextTank-LanguageProfiles.json"
-                        if panel.runModal() == .OK, let url = panel.url {
-                            try proposed.encoded().write(to: url, options: .atomic)
-                        }
-                        continue
-                    }
-                    try persist(proposed)
-                    // The whole catalog may have changed.
-                    reapply(nil)
-                    return
-                } catch { NSAlert(error: error).runModal() }
-            }
-        } catch { NSAlert(error: error).runModal() }
+            try JSONLibraryEditor.edit(
+                catalog,
+                configuration: .init(
+                    title: "Language Profiles",
+                    information:
+                        "Edit native lexer keywords, properties, style emphasis, extension detection and optional function patterns (capture group 1 is the name). This JSON profile format is not Notepad++ UDL XML. Imported files never execute code. Preserve identifiers to keep session language choices. Only your changes are saved, so built-in languages you leave alone follow later versions of TextTank. Removing a profile's \"comments\" turns comment commands off for it; an empty object does the same.",
+                    accessibilityLabel: "Language profiles JSON", exportName: "TextTank-LanguageProfiles.json",
+                    identifier: "language.json", size: NSSize(width: 700, height: 420)),
+                panels: jsonFilePanels,
+                current: {
+                    guard let live = self.catalog else { throw FormFailure.changed }
+                    return live
+                }, read: { try Self.readRegular($0) },
+                save: { proposed in
+                    try self.persist(proposed)
+                    self.reapply(nil)
+                })
+        } catch { TTAlert.present(error) }
     }
     /// Saves what `proposed` changes in the bundled catalog. Never shows UI and never moves files:
     /// while the stored file is unreadable it throws and leaves that file byte for byte as it is.
     func persist(_ proposed: LanguageCatalog) throws {
-        if let loadError { throw loadError }
+        try loadState.requireWritable()
         guard let bundled else { throw LanguageError.invalid("The language catalog is missing from the application.") }
         try proposed.validate()
         let overrides = LanguageOverrides(changing: bundled, to: proposed)
         // What is written must read back as exactly the profiles that were asked for.
         let merged = try overrides.applied(to: bundled)
-        guard merged.profiles == proposed.profiles else {
+        guard PersistedValue.equal(merged.profiles, proposed.profiles) else {
             throw LanguageError.invalid("Language profiles could not be stored without loss; nothing was saved.")
         }
-        let bytes = try overrides.encoded(), directory = storage.deletingLastPathComponent()
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        guard
-            try FileManager.default.attributesOfItem(atPath: directory.path)[.type] as? FileAttributeType
-                == .typeDirectory
-        else { throw LanguageError.invalid("Language storage must be a regular directory.") }
-        if FileManager.default.fileExists(atPath: storage.path) { _ = try Self.readRegular(storage) }
-        let temp = directory.appendingPathComponent(".languages-" + UUID().uuidString)
-        let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode_t(0o600))
-        guard fd >= 0 else { throw CocoaError(.fileWriteNoPermission) }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        defer {
-            try? handle.close()
-            try? FileManager.default.removeItem(at: temp)
+        let bytes = try overrides.encoded()
+        try PrivateFileStore.prepareDirectory(storage.deletingLastPathComponent())
+        // Re-read an existing entry so a late unsafe substitution cannot be overwritten.
+        do {
+            let existing = try Self.readRegular(storage, parent: .strict)
+            _ = try LanguageCatalog.load(stored: existing, over: bundled)
+        } catch  where error.isFileNotFound {} catch {
+            loadError = error
+            storageDamaged = true
+            throw error
         }
-        try handle.write(contentsOf: bytes)
-        try handle.synchronize()
-        try handle.close()
-        guard rename(temp.path, storage.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        try PrivateFileStore.write(
+            bytes, to: storage, maximumBytes: LanguageCatalog.maximumBytes,
+            temporaryPrefix: ".languages-")
         catalog = merged
     }
-    private static func readRegular(_ url: URL) throws -> Data {
-        let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-        guard fd >= 0 else { throw CocoaError(.fileReadNoPermission) }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        defer { try? handle.close() }
-        var info = stat()
-        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= 16 * 1024 * 1024 else {
+    nonisolated private static func readRegular(_ url: URL, parent: PrivateFileStore.ParentPolicy = .selectedInput)
+        throws -> Data
+    {
+        do {
+            return try PrivateFileStore.read(url, maximumBytes: LanguageCatalog.maximumBytes, parent: parent)
+        } catch PrivateFileError.unsafeLocation {
             throw LanguageError.invalid("Language input must be a regular file up to 16 MiB.")
+        } catch PrivateFileError.tooLarge {
+            throw LanguageError.invalid("Language input exceeds 16 MiB.")
         }
-        let bytes = try handle.read(upToCount: 16 * 1024 * 1024 + 1) ?? Data()
-        guard bytes.count <= 16 * 1024 * 1024 else { throw LanguageError.invalid("Language input exceeds 16 MiB.") }
-        return bytes
     }
 }
 
@@ -630,8 +622,16 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
         super.init(window: window)
         // The list is about the document; when its split pane closes it follows the remaining view.
         retirementObserver = NotificationCenter.default.addObserver(
-            forName: .TTEditorWillRetire, object: editor, queue: nil
-        ) { [weak self] note in self?.editor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor }
+            forName: .TTEditorWillRetire, object: nil, queue: nil
+        ) { [weak self] note in
+            precondition(Thread.isMainThread)
+            let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor
+            let retiring = note.object as? TTEditor
+            MainActor.assumeIsolated {
+                guard let self, self.editor === retiring else { return }
+                self.editor = successor
+            }
+        }
         window.title = "Function List"
         window.listedInWindowMenu = true
         window.isReleasedWhenClosed = false
@@ -660,7 +660,12 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
         WindowFrames.track(window, as: "TextTank.FunctionList")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
-    deinit { if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) } }
+    deinit {
+        precondition(Thread.isMainThread)
+        MainActor.assumeIsolated {
+            if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) }
+        }
+    }
     func numberOfRows(in tableView: NSTableView) -> Int { symbols.count }
     func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?, row: Int) -> Any? {
         symbols.indices.contains(row) ? "\(symbols[row].line) · \(symbols[row].name)" : nil
@@ -677,13 +682,12 @@ final class LanguageFunctionController: NSWindowController, NSTableViewDataSourc
         }
     }
     static func navigate(_ symbol: LanguageSymbol, text: String, revision: UInt, editor: TTEditor) -> Bool {
-        guard editor.window != nil, editor.revision == revision, editor.text == text,
+        guard EditorLifetime.isOpen(editor), editor.revision == revision, editor.text == text,
             let range = Range(symbol.range, in: text)
         else { return false }
         let start = text[..<range.lowerBound].utf8.count, end = text[..<range.upperBound].utf8.count
         guard editor.setSelectionAnchor(start, caret: end) else { return false }
-        editor.window?.makeKeyAndOrderFront(nil)
-        editor.window?.makeFirstResponder(editor)
+        EditorLifetime.activate(editor)
         return true
     }
 }

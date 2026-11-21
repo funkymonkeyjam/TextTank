@@ -1,3 +1,4 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import Darwin
@@ -10,12 +11,243 @@ import Darwin
             ).resolvingSymlinksInPath()
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: root) }
+            Checks.section("F198/G361 value stores preserve failures and exact bytes") {
+                struct Value: Codable { var text = "" }
+                func store(_ name: String, legacy: (() throws -> Value?)? = nil) -> JSONFileStore<Value> {
+                    JSONFileStore(
+                        url: root.appendingPathComponent(name), displayName: "Fixture", maximumBytes: 1024,
+                        initial: Value(), decode: { try JSONDecoder().decode(Value.self, from: $0) },
+                        encode: { try JSONEncoder().encode($0) }, legacyValue: legacy)
+                }
+                let path = root.appendingPathComponent("damaged.json"), original = Data("unreadable fixture".utf8)
+                try original.write(to: path)
+                let damaged = store("damaged.json")
+                check(
+                    damaged.state.error != nil && damaged.value.text.isEmpty,
+                    "failed load uses defaults with a durable error latch")
+                for metadata in ["2", "0", "\"2\"", "null"] {
+                    let future = root.appendingPathComponent("reader-" + UUID().uuidString + ".json")
+                    let bytes = Data(("{\"text\":\"retained\",\"minimumReaderVersion\":" + metadata + "}").utf8)
+                    try bytes.write(to: future)
+                    let reader = store(future.lastPathComponent)
+                    check(
+                        reader.state.error != nil && reader.value.text.isEmpty,
+                        "G356 invalid or unsupported minimum reader metadata latches before using data: " + metadata)
+                }
+                do {
+                    try damaged.save(Value(text: "replacement"))
+                    check(false, "failed load blocks direct save")
+                } catch {
+                    check(
+                        try Data(contentsOf: path) == original,
+                        "failed load blocks direct save and preserves original bytes")
+                }
+                let backup = try requireValue(damaged.reset(), "explicit reset returns the retained original")
+                check(
+                    try Data(contentsOf: backup) == original && damaged.state.error == nil
+                        && JSONDecoder().decode(Value.self, from: Data(contentsOf: path)).text.isEmpty,
+                    "explicit reset renames original bytes aside before saving defaults")
+                let migrated = store("migrated.json", legacy: { Value(text: "legacy") })
+                check(
+                    migrated.value.text == "legacy" && !FileManager.default.fileExists(atPath: migrated.state.url.path),
+                    "legacy migration is read-only until an explicit save")
+                try migrated.save(migrated.value)
+                var before = stat(), after = stat()
+                check(lstat(migrated.state.url.path, &before) == 0, "saved fixture identity available")
+                try migrated.save(migrated.value)
+                check(
+                    lstat(migrated.state.url.path, &after) == 0 && before.st_ino == after.st_ino,
+                    "unchanged encoded model is a true no-op")
+                try migrated.save(Value(text: "\u{00e9}"))
+                let nfc = try Data(contentsOf: migrated.state.url)
+                try migrated.save(Value(text: "e\u{0301}"))
+                check(
+                    try Data(contentsOf: migrated.state.url) != nfc,
+                    "canonically equivalent strings preserve distinct UTF-8 bytes instead of becoming no-ops")
+                let unavailable = root.appendingPathComponent("blocked-parent")
+                try Data("block".utf8).write(to: unavailable)
+                let failed = JSONFileStore<Value>(
+                    url: unavailable.appendingPathComponent("prefs.json"), displayName: "Fixture",
+                    maximumBytes: 1024, initial: Value(), decode: { try JSONDecoder().decode(Value.self, from: $0) },
+                    encode: { try JSONEncoder().encode($0) })
+                do {
+                    try failed.save(Value(text: "new"))
+                    check(false, "unavailable preferences report failure")
+                } catch {
+                    check(
+                        failed.lastSaveError != nil && failed.value.text.isEmpty,
+                        "a failed preference save keeps prior model and reports the error")
+                }
+            }
+            Checks.section("G360/F140 support path selection") {
+                let fallback = root.appendingPathComponent("fallback", isDirectory: true)
+                for value in [nil, "", "relative/folder", "/bad\0path"] as [String?] {
+                    check(
+                        AppStorage.resolve(override: value, fallback: fallback) == fallback,
+                        "F140 empty, relative, absent or invalid overrides choose the supplied default without I/O")
+                }
+                check(
+                    !FileManager.default.fileExists(atPath: fallback.path),
+                    "F140 selecting a default path creates or reads no store")
+                let before = ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]
+                defer {
+                    if let before {
+                        setenv("TEXTTANK_SUPPORT_DIRECTORY", before, 1)
+                    } else {
+                        unsetenv("TEXTTANK_SUPPORT_DIRECTORY")
+                    }
+                }
+                for name in ["first-root", "second-root"] {
+                    let chosen = root.appendingPathComponent(name, isDirectory: true)
+                    setenv("TEXTTANK_SUPPORT_DIRECTORY", chosen.path, 1)
+                    check(
+                        AppStorage.url(.commands) == chosen.appendingPathComponent("RunCommands.json"),
+                        "G360 a new path lookup follows the current absolute override")
+                    check(
+                        !AppStorage.permitsLegacyDefaults,
+                        "G360 an isolated root cannot implicitly read shared defaults")
+                    check(
+                        !FileManager.default.fileExists(atPath: chosen.path),
+                        "G360 uncreated absolute roots are accepted without creating them")
+                }
+            }
+            Checks.section("F149 exact private mode under a restrictive process umask") {
+                let owned = root.appendingPathComponent("restrictive-mode")
+                try PrivateFileStore.prepareDirectory(owned)
+                let file = owned.appendingPathComponent("private.json"), bytes = Data("keep private and readable".utf8)
+                do {
+                    // This is the isolated check executable's process, never its parent shell.
+                    let previous = umask(0o777)
+                    defer { umask(previous) }
+                    try PrivateFileStore.write(bytes, to: file, maximumBytes: 100)
+                }
+                check(
+                    (try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber)?
+                        .intValue == 0o600, "F149 restrictive umask cannot produce an unreadable 0000 committed store")
+                check(
+                    (try? PrivateFileStore.read(file, maximumBytes: 100)) == bytes,
+                    "F149 a private write still reads back under the caller's restrictive umask")
+            }
+            Checks.section("F149 shared private byte I/O") {
+                let owned = root.appendingPathComponent("private-store")
+                try PrivateFileStore.prepareDirectory(owned)
+                rejects(
+                    "F206 a failed open retains errno even when directory cleanup changes it",
+                    where: { $0.posixCode == .ENOENT }
+                ) {
+                    _ = try PrivateFileStore.openRegularFile(
+                        owned.appendingPathComponent("missing"), maximumBytes: 100,
+                        closeDirectory: { descriptor in
+                            let result = close(descriptor)
+                            errno = EIO
+                            return result
+                        })
+                }
+                let file = owned.appendingPathComponent("value.json")
+                let before = Data("old exact bytes".utf8), after = Data("new exact bytes".utf8)
+                try PrivateFileStore.write(before, to: file, maximumBytes: 100)
+                rejects("F149 a failed fsync prevents atomic replacement", where: { $0.posixCode == .EIO }) {
+                    try PrivateFileStore.write(
+                        after, to: file, maximumBytes: 100,
+                        synchronize: { _ in
+                            errno = EIO
+                            return -1
+                        })
+                }
+                check(try Data(contentsOf: file) == before, "F149 failed sync preserves the prior bytes")
+                for phase in ["permissions", "close"] {
+                    rejects(
+                        "F206 failed private-file \(phase) prevents commit and retains operation/path/errno",
+                        where: {
+                            guard let failure = $0 as? FileOperationFailure else { return false }
+                            return failure.errorNumber == EIO && failure.path == file.path
+                                && failure.operation.contains(phase == "permissions" ? "permissions" : "close")
+                        }
+                    ) {
+                        if phase == "permissions" {
+                            try PrivateFileStore.write(
+                                after, to: file, maximumBytes: 100,
+                                setMode: { _, _ in
+                                    errno = EIO
+                                    return -1
+                                })
+                        } else {
+                            try PrivateFileStore.write(
+                                after, to: file, maximumBytes: 100,
+                                closeFile: { descriptor in
+                                    _ = close(descriptor)
+                                    errno = EIO
+                                    return -1
+                                })
+                        }
+                    }
+                    check(
+                        try Data(contentsOf: file) == before,
+                        "F149 failed private-file \(phase) preserves original bytes")
+                }
+                check(
+                    try FileManager.default.contentsOfDirectory(atPath: owned.path) == ["value.json"],
+                    "F149 failed sync cleans its own temporary file")
+                try PrivateFileStore.write(after, to: file, maximumBytes: 100)
+                check(
+                    try PrivateFileStore.read(file, maximumBytes: 100) == after,
+                    "F149 shared I/O roundtrips exact bytes")
+                check(
+                    (try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber)?
+                        .intValue == 0o600, "F149 shared writes retain private 0600 mode")
+                check(
+                    (try FileManager.default.attributesOfItem(atPath: owned.path)[.posixPermissions] as? NSNumber)?
+                        .intValue == 0o700, "F149 shared app directories retain private 0700 mode")
+                let alias = root.appendingPathComponent("chosen-parent")
+                try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: owned)
+                let selected = alias.appendingPathComponent("value.json")
+                check(
+                    try PrivateFileStore.read(selected, maximumBytes: 100, parent: .selectedInput) == after,
+                    "F149 a chosen regular import still accepts a symlinked parent")
+                rejects("F149 an app-owned store refuses a symlinked immediate parent") {
+                    _ = try PrivateFileStore.read(selected, maximumBytes: 100)
+                }
+                rejects("F149 shared reads enforce their caller's byte bound") {
+                    _ = try PrivateFileStore.read(file, maximumBytes: 1)
+                }
+                rejects("F149 shared writes enforce the same caller's byte bound") {
+                    try PrivateFileStore.write(after, to: file, maximumBytes: 1)
+                }
+                let moving = root.appendingPathComponent("moving-store"),
+                    moved = root.appendingPathComponent("moved-store")
+                try PrivateFileStore.prepareDirectory(moving)
+                let movingFile = moving.appendingPathComponent("value.json")
+                try PrivateFileStore.write(before, to: movingFile, maximumBytes: 100)
+                rejects("F149 a replaced containing directory cannot commit through a stale descriptor") {
+                    try PrivateFileStore.write(
+                        after, to: movingFile, maximumBytes: 100,
+                        beforeCommit: {
+                            try FileManager.default.moveItem(at: moving, to: moved)
+                            try FileManager.default.createDirectory(at: moving, withIntermediateDirectories: true)
+                        })
+                }
+                check(
+                    try Data(contentsOf: moved.appendingPathComponent("value.json")) == before
+                        && !FileManager.default.fileExists(atPath: movingFile.path),
+                    "F149 folder replacement preserves the prior file and writes nothing into the new folder")
+                let retained = try requireValue(
+                    try PrivateFileStore.write(after, to: file, maximumBytes: 100, retainingDescriptor: true),
+                    "fixture: a journal retains its newly committed descriptor")
+                defer { close(retained) }
+                var byte: UInt8 = 0x5A
+                check(
+                    pwrite(retained, &byte, 1, 0) == 1 && fsync(retained) == 0,
+                    "F149 a retained journal descriptor supports its in-place synchronized outcomes")
+                check(
+                    try Data(contentsOf: file).first == byte,
+                    "F149 retained-descriptor outcomes belong to the committed file")
+            }
             let unsafeLocation: (Error) -> Bool = {
                 if case WorkspaceError.unsafeLocation = $0 { return true }
                 return false
             }
             let tooLarge: (Error) -> Bool = {
-                if case WorkspaceError.tooLarge = $0 { return true }
+                if case WorkspaceError.fileTooLarge = $0 { return true }
                 return false
             }
             func posix(_ code: POSIXErrorCode) -> (Error) -> Bool { { ($0 as? POSIXError)?.code == code } }
@@ -158,6 +390,22 @@ import Darwin
             rejects("read resource limit enforced", where: tooLarge) {
                 _ = try WorkspaceStore.readRegularFile(destination, maximumBytes: 2)
             }
+            // Descriptor dates must equal Foundation's native file date, including subsecond
+            // values that previously lost one Date tick through a double epoch conversion.
+            let dateURL = root.appendingPathComponent("descriptor-date.txt")
+            try Data("owned date fixture".utf8).write(to: dateURL)
+            for nanos in [30_343_616, 36_954_288] {
+                var times = [
+                    timespec(tv_sec: 1_794_979_696, tv_nsec: nanos),
+                    timespec(tv_sec: 1_794_979_696, tv_nsec: nanos)
+                ]
+                try require(utimensat(AT_FDCWD, dateURL.path, &times, 0) == 0, "owned nanosecond date fixture")
+                let captured = try WorkspaceStore.captureRegularFile(dateURL)
+                let native = try FileManager.default.attributesOfItem(atPath: dateURL.path)[.modificationDate] as? Date
+                check(
+                    captured.modificationDate == native && native != nil,
+                    "descriptor date equals native Foundation date without epoch rounding: \(nanos)")
+            }
             // F138: the streamed fingerprint is the fingerprint of the bytes, through the same open.
             for count in [0, 100, 64 * 1024, 128 * 1024, 200_000] {
                 let sized = root.appendingPathComponent("sized-\(count)")
@@ -166,6 +414,15 @@ import Darwin
                     try WorkspaceStore.fingerprint(ofRegularFileAt: sized)
                         == WorkspaceStore.fingerprint(WorkspaceStore.readRegularFile(sized)),
                     "streamed fingerprint of \(count) bytes equals the fingerprint of the bytes read")
+            }
+            do {
+                _ = try WorkspaceStore.readRegularFile(destination, maximumBytes: 2)
+                check(false, "F94 an oversized file is rejected")
+            } catch {
+                check(
+                    error.localizedDescription.contains("2 bytes")
+                        && error.localizedDescription.contains(destination.lastPathComponent),
+                    "F94 a bounded read names the actual file and its actual byte limit")
             }
             rejects("streamed fingerprint enforces the read limit", where: tooLarge) {
                 _ = try WorkspaceStore.fingerprint(ofRegularFileAt: destination, maximumBytes: 2)
@@ -188,7 +445,9 @@ import Darwin
             oversizedReference.documents[0].originalURL = oversized
             check(
                 oversizedReference.inspectReferencedFiles()[0].status
-                    == .unreadable(WorkspaceError.tooLarge.localizedDescription),
+                    == .unreadable(
+                        WorkspaceError.fileTooLarge(limit: WorkspaceStore.maximumSessionBytes, url: oversized)
+                            .localizedDescription),
                 "an original over the limit is reported as too large without being read")
             try FileManager.default.removeItem(at: oversized)
             var cancelledReference = session
@@ -206,7 +465,7 @@ import Darwin
             promptSession.documents[0].originalURL = fifo
             let unread = promptSession.restorePrompt()
             check(
-                unread.message == "Restore 1 Documents from Renamed session?" && unread.detail.hasSuffix("\n\nfifo")
+                unread.message == "Restore 1 Document from Renamed session?" && unread.detail.hasSuffix("\n\nfifo")
                     && unread.detail.contains("have not been read") && !unread.detail.contains("cannot be inspected"),
                 "the first restore prompt names the documents and claims nothing about the originals")
             let inspected = promptSession.restorePrompt(inspections: promptSession.inspectReferencedFiles())

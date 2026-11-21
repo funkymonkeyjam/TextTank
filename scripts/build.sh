@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/env.sh
 mkdir -p build harness/logs
 # Runs one build step with its output in harness/logs/<name>.log. When the step
 # fails, the end of that log and its path are printed, so a failed build is
@@ -23,15 +24,24 @@ if [[ "${1:-}" == --logged-selftest ]]; then
   exit 0
 fi
 python3 scripts/bootstrap.py
-logged scintilla-build xcodebuild -project Vendor/scintilla/cocoa/Scintilla/Scintilla.xcodeproj -scheme Scintilla -configuration Debug -derivedDataPath "$PWD/build/ScintillaDerived" ARCHS=arm64 ONLY_ACTIVE_ARCH=YES MACOSX_DEPLOYMENT_TARGET=14.0 CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$PWD/build/vendor/Debug" CLANG_MODULE_CACHE_PATH="$PWD/build/ModuleCache"
-logged lexilla-build make -C Vendor/lexilla/src -j4 DEBUG=1 CXXFLAGS=-mmacosx-version-min=14.0 ../bin/liblexilla.a
-logged app-build xcodebuild -project TextTank.xcodeproj -scheme TextTank -configuration Debug -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO build
+python3 scripts/runtime_artifacts.py begin --configuration "$CONFIGURATION" --manifest "build/artifacts/$CONFIGURATION/before.json"
+logged scintilla-build xcodebuild -project Vendor/scintilla/cocoa/Scintilla/Scintilla.xcodeproj -scheme Scintilla -configuration "$CONFIGURATION" -derivedDataPath "$PWD/build/ScintillaDerived/$CONFIGURATION" ARCHS="$ARCH" ONLY_ACTIVE_ARCH=YES MACOSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$VENDOR_BUILD" CLANG_MODULE_CACHE_PATH="$PWD/build/ModuleCache"
+logged lexilla-build python3 scripts/build-lexilla.py
+logged app-build xcodebuild -project TextTank.xcodeproj -scheme TextTank -configuration "$CONFIGURATION" -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO build
+python3 scripts/compile_diagnostics.py --log harness/logs/app-build.log
+python3 scripts/check-runtime-linkage.py "$APP_PATH"
+python3 scripts/runtime_artifacts.py links --configuration "$CONFIGURATION" --app "$APP_PATH" --manifest "build/artifacts/$CONFIGURATION/link-before-sign.json" --before "build/artifacts/$CONFIGURATION/before.json"
 # Finder/file-provider metadata is not part of the generated application resources.
-python3 - <<'PYATTR'
-import subprocess
-for attribute in ('com.apple.FinderInfo','com.apple.ResourceFork'):
- subprocess.run(['xattr','-dr',attribute,'build/DerivedData/Build/Products/Debug/TextTank.app'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-PYATTR
-codesign --force --sign - build/DerivedData/Build/Products/Debug/TextTank.app/Contents/Frameworks/Scintilla.framework
-codesign --force --sign - build/DerivedData/Build/Products/Debug/TextTank.app
-printf 'Built %s\n' "$PWD/build/DerivedData/Build/Products/Debug/TextTank.app"
+xattr -dr com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
+xattr -dr com.apple.ResourceFork "$APP_PATH" 2>/dev/null || true
+for framework in Scintilla NativeSearch EditorBridge TextTankCore TextTankRuntime; do
+  codesign --force --sign - "$APP_PATH/Contents/Frameworks/$framework.framework"
+done
+# Metadata may arrive between steps. Reclean generated resources at the enclosing
+# signing boundary too; a later signing or strict-verification failure is still fatal.
+xattr -dr com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
+xattr -dr com.apple.ResourceFork "$APP_PATH" 2>/dev/null || true
+codesign --force --sign - "$APP_PATH"
+codesign --verify --deep --strict "$APP_PATH"
+python3 scripts/runtime_artifacts.py record --configuration "$CONFIGURATION" --app "$APP_PATH" --manifest "build/artifacts/$CONFIGURATION/manifest.json" --before "build/artifacts/$CONFIGURATION/before.json"
+printf 'Built %s\n' "$APP_PATH"

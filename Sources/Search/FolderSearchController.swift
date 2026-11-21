@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
@@ -26,20 +29,27 @@ enum FolderSearchOutcome: Equatable {
 }
 
 final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
+    private enum Scope: Int, CaseIterable { case chosenFolder, workspaceFolders }
+    private var selectedScope: Scope {
+        ControlPresentation.selectedID(scope).flatMap(Int.init).flatMap(Scope.init(rawValue:)) ?? .chosenFolder
+    }
     let queryField = NSTextField(), extensionField = NSTextField(), replacementField = NSTextField(),
         filterField = NSTextField()
     var workspaceRoots: () -> [URL] = { [] }
+    var displayTabWidth: () -> Int = { 4 }
     let scope = NSPopUpButton()
     let hiddenButton = NSButton(checkboxWithTitle: "Include hidden files/folders", target: nil, action: nil)
-    private let defaults: UserDefaults
-    private var settingsError: Error?
+    let preferenceNotice = AnnouncingLabel(labelWithString: "")
+    let resetPreferencesButton = NSButton(title: "Reset Saved Settings…", target: nil, action: nil)
+    private let preferences: JSONFileStore<FolderSearchSettings>
     let mode = NSPopUpButton()
     let wordButton = NSButton(checkboxWithTitle: "Whole word", target: nil, action: nil)
     let dotButton = NSButton(checkboxWithTitle: "Dot matches newline", target: nil, action: nil)
     let caseButton = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
     let recursiveButton = NSButton(checkboxWithTitle: "Include subfolders", target: nil, action: nil)
     let folderLabel = NSTextField(labelWithString: "Choose a folder to search")
-    let status = AnnouncingLabel(labelWithString: "Normal / Extended / Boost regex · UTF-8/UTF-16 · symlinks skipped")
+    let status = AnnouncingLabel(
+        labelWithString: "Normal / Extended / Regular expression (Boost) · UTF-8/UTF-16 · symlinks skipped")
     let table = ActivatingTableView(), details = NSTextView()
     private var folder: URL?
     private var searchedFolder: URL?
@@ -59,7 +69,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         replace.identifier = NSUserInterfaceItemIdentifier("folder.replace.confirm")
         // Files on disk change and editor Undo does not reach them, so Return is Cancel here.
         replace.hasDestructiveAction = true
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         return alert.runModal() == .alertFirstButtonReturn
     }
     /// Passed to FolderReplacement as `beforeCommit`; nil in the app. Runs on the worker.
@@ -83,8 +93,17 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     /// Called with the reason when opening a result moved the caret, which macros cannot record (F277).
     var onUnrecordableCommand: ((String) -> Void)?
 
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    init(defaults: UserDefaults? = nil, preferencesURL: URL? = nil) {
+        let legacy = defaults ?? RuntimeEnvironment.legacyDefaults
+        preferences = JSONFileStore(
+            url: preferencesURL ?? AppStorage.url(.folderSearch), displayName: "Find in Folder settings",
+            maximumBytes: FolderSearchSettings.maximumBytes, initial: FolderSearchSettings(),
+            decode: FolderSearchSettings.decode,
+            encode: { try $0.encoded() },
+            legacyValue: {
+                guard let legacy else { return nil }
+                return try FolderSearchSettings.load(legacy)
+            })
         // A panel, so the document window stays main while Find in Folder is key. It stays on
         // screen when the application is deactivated: a long search keeps its results visible.
         let window = ToolPanel(
@@ -103,10 +122,12 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             title: "Replace Matched Files…", target: self, action: #selector(replaceMatchedFiles(_:)))
         replaceButton.isEnabled = false
         replacementField.placeholderString = "Replacement (same mode as completed search)"
-        cancelButton = NSButton(title: "Cancel Search", target: self, action: #selector(cancelSearch(_:)))
+        cancelButton = NSButton(title: "Stop", target: self, action: #selector(cancelSearch(_:)))
         cancelButton.isEnabled = false
-        mode.addItems(withTitles: ["Normal", "Extended", "Boost regex"])
-        scope.addItems(withTitles: ["Chosen Folder", "Workspace Folders"])
+        ControlPresentation.populate(
+            mode, choices: SearchOptions.Mode.allCases.map { (String($0.rawValue), $0.displayName) }, selected: "0")
+        ControlPresentation.populate(
+            scope, choices: [("0", "Chosen Folder"), ("1", "Workspace Folders")], selected: "0")
         scope.target = self
         scope.action = #selector(scopeChanged(_:))
         filterField.placeholderString = "Filename filters: *.swift *.txt !*Tests* !+\\build"
@@ -140,6 +161,12 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         // Return on the selected row does what a double-click on it does.
         table.onActivate = { [weak self] row in self?.openResult(at: row) }
         table.setAccessibilityLabel("Folder search results")
+        table.toolTip = "Columns use the default tab width captured when the search started."
+        for (control, label) in [
+            (queryField as NSView, "Find in folder"), (replacementField, "Replace matches in files with"),
+            (mode, "Folder search mode"), (scope, "Folder search scope"), (extensionField, "Filename extensions"),
+            (filterField, "Filename filters")
+        ] { control.setAccessibilityLabel(label) }
         table.usesAlternatingRowBackgroundColors = true
         let results = NSScrollView()
         results.documentView = table
@@ -153,39 +180,36 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         detailScroll.hasVerticalScroller = true
         details.autoresizingMask = [.width]
         details.isVerticallyResizable = true
+        resetPreferencesButton.target = self
+        resetPreferencesButton.action = #selector(resetSavedPreferences(_:))
+        resetPreferencesButton.setAccessibilityLabel("Reset saved Find in Folder settings")
+        preferenceNotice.setAccessibilityLabel("Saved Find in Folder settings status")
+        preferenceNotice.lineBreakMode = .byWordWrapping
+        preferenceNotice.maximumNumberOfLines = 2
+        let preferenceSpacer = NSView()
+        preferenceSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        resetPreferencesButton.setContentHuggingPriority(.required, for: .horizontal)
+        let preferenceRow = NSStackView(views: [preferenceNotice, preferenceSpacer, resetPreferencesButton])
+        preferenceRow.spacing = 8
+        preferenceNotice.isHidden = preferences.state.error == nil
         let root = NSStackView(views: [
-            location, queryField, replacements, filterField, semantics, options, status, results, detailScroll
+            location, queryField, replacements, filterField, semantics, options, preferenceRow, status, results,
+            detailScroll
         ])
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 10
         root.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         window.contentView = root
-        for view in [location, queryField, replacements, filterField, semantics, options, status, results, detailScroll]
-        { view.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true }
+        for view in [
+            location, queryField, replacements, filterField, semantics, options, preferenceRow, status, results,
+            detailScroll
+        ] { view.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true }
         detailScroll.heightAnchor.constraint(equalToConstant: 100).isActive = true
         results.heightAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
         extensionField.widthAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
-        do {
-            let settings = try FolderSearchSettings.load(defaults)
-            folder = settings.folder
-            scope.selectItem(at: settings.workspaceScope ? 1 : 0)
-            recursiveButton.state = settings.recursive ? .on : .off
-            hiddenButton.state = settings.includeHidden ? .on : .off
-            extensionField.stringValue = settings.extensions
-            filterField.stringValue = settings.filters
-            queryField.stringValue = settings.options.query
-            replacementField.stringValue = settings.options.replacement
-            mode.selectItem(at: settings.options.mode.rawValue)
-            caseButton.state = settings.options.matchCase ? .on : .off
-            wordButton.state = settings.options.wholeWord ? .on : .off
-            dotButton.state = settings.options.dotMatchesNewline ? .on : .off
-            updateFolderLabel()
-        } catch {
-            settingsError = error
-            filterField.stringValue = "*.*"
-            status.stringValue = "Saved search settings could not be read; original settings preserved."
-        }
+        applySavedPreferences(preferences.value)
+        if let error = preferences.state.error { showPreferenceFailure(error) }
         window.initialFirstResponder = queryField
         WindowFrames.track(window, as: "TextTank.FindInFolder")
     }
@@ -206,35 +230,74 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         folder = url
         scope.selectItem(at: 0)
         updateFolderLabel()
-        try? saveSettings()
+        savePreferencesOrReport()
     }
     @objc private func scopeChanged(_ sender: Any?) {
         updateFolderLabel()
-        try? saveSettings()
+        savePreferencesOrReport()
     }
     private func updateFolderLabel() {
         folderLabel.stringValue =
-            scope.indexOfSelectedItem == 1
-            ? "\(workspaceRoots().count) saved workspace folder(s)" : folder?.path ?? "Choose a folder to search"
+            selectedScope == .workspaceFolders
+            ? Strings.count(workspaceRoots().count, .folder) : folder?.path ?? "Choose a folder to search"
     }
     /// Native setting capture is inert and commits the shared field editor first.
     func saveSettings() throws {
-        guard settingsError == nil else { return } // Preserve a corrupt/future version verbatim.
+
         window?.makeFirstResponder(nil)
         var value = FolderSearchSettings()
         value.folder = folder
-        value.workspaceScope = scope.indexOfSelectedItem == 1
+        value.workspaceScope = selectedScope == .workspaceFolders
         value.recursive = recursiveButton.state == .on
         value.includeHidden = hiddenButton.state == .on
         value.extensions = extensionField.stringValue
         value.filters = filterField.stringValue
         value.options.query = queryField.stringValue
         value.options.replacement = replacementField.stringValue
-        value.options.mode = SearchOptions.Mode(rawValue: mode.indexOfSelectedItem) ?? .normal
+        value.options.mode =
+            ControlPresentation.selectedID(mode).flatMap(Int.init).flatMap(SearchOptions.Mode.init(rawValue:))
+            ?? .normal
         value.options.matchCase = caseButton.state == .on
         value.options.wholeWord = wordButton.state == .on
         value.options.dotMatchesNewline = dotButton.state == .on
-        try value.save(defaults)
+        try preferences.save(value)
+    }
+    private func applySavedPreferences(_ settings: FolderSearchSettings) {
+        folder = settings.folder
+        scope.selectItem(at: scope.indexOfItem(withRepresentedObject: settings.workspaceScope ? "1" : "0"))
+        recursiveButton.state = settings.recursive ? .on : .off
+        hiddenButton.state = settings.includeHidden ? .on : .off
+        extensionField.stringValue = settings.extensions
+        filterField.stringValue = settings.filters
+        queryField.stringValue = settings.options.query
+        replacementField.stringValue = settings.options.replacement
+        mode.selectItem(at: mode.indexOfItem(withRepresentedObject: String(settings.options.mode.rawValue)))
+        caseButton.state = settings.options.matchCase ? .on : .off
+        wordButton.state = settings.options.wholeWord ? .on : .off
+        dotButton.state = settings.options.dotMatchesNewline ? .on : .off
+        updateFolderLabel()
+    }
+    private func showPreferenceFailure(_ error: Error) {
+        preferenceNotice.stringValue =
+            "Saved search settings are unavailable. Searches still work; reset the settings to keep new choices."
+        preferenceNotice.toolTip = error.localizedDescription
+        preferenceNotice.isHidden = false
+        resetPreferencesButton.isHidden = false
+    }
+    private func savePreferencesOrReport() {
+        do {
+            try saveSettings()
+            preferenceNotice.isHidden = true
+        } catch { showPreferenceFailure(error) }
+    }
+    @objc func resetSavedPreferences(_ sender: Any?) {
+        guard StoreRecovery.confirmPreferenceReset(preferences.state) else { return }
+        do {
+            try preferences.reset()
+            applySavedPreferences(preferences.value)
+            preferenceNotice.isHidden = true
+            status.stringValue = "Saved folder search settings were reset. Documents were not changed."
+        } catch { showPreferenceFailure(error) }
     }
     @objc private func startSearch(_ sender: Any?) {
         // Before anything else, so that a refused Return has no side effect at all.
@@ -243,39 +306,42 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             return
         }
         window?.makeFirstResponder(nil)
-        let roots = scope.indexOfSelectedItem == 1 ? workspaceRoots() : (folder.map { [$0] } ?? [])
+        let roots = selectedScope == .workspaceFolders ? workspaceRoots() : (folder.map { [$0] } ?? [])
         guard let folder = roots.first else {
             status.stringValue =
-                scope.indexOfSelectedItem == 1
+                selectedScope == .workspaceFolders
                 ? "Add a folder in Workspace before searching Workspace Folders." : "Choose a folder first."
             lastOutcome = .needsInput
             return
         }
         let query = queryField.stringValue
         guard !query.isEmpty else {
-            status.stringValue = "Enter a nonempty search expression."
+            status.stringValue = "Enter a search expression."
             lastOutcome = .needsInput
             return
         }
         let extensions = Set(
             extensionField.stringValue.split(whereSeparator: { $0 == "," || $0.isWhitespace }).map(String.init))
         var request = FolderSearchRequest(directory: folder, query: query)
+        request.displayTabWidth = displayTabWidth()
         request.matchCase = caseButton.state == .on
         request.recursive = recursiveButton.state == .on
         request.extensions = extensions
-        request.mode = SearchOptions.Mode(rawValue: mode.indexOfSelectedItem) ?? .normal
+        request.mode =
+            ControlPresentation.selectedID(mode).flatMap(Int.init).flatMap(SearchOptions.Mode.init(rawValue:))
+            ?? .normal
         request.wholeWord = wordButton.state == .on
         request.dotMatchesNewline = dotButton.state == .on
         request.filenameFilters = filterField.stringValue
         request.includeHidden = hiddenButton.state == .on
         do {
             _ = try FolderSearchFilters(request.filenameFilters)
-            try saveSettings()
         } catch {
             status.stringValue = error.localizedDescription
             lastOutcome = .failed(error.localizedDescription)
             return
         }
+        savePreferencesOrReport()
         cancelSearch(nil)
         let token = UUID()
         generation = token
@@ -292,7 +358,13 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         searchedFolder = folder
         table.reloadData()
         details.string =
-            "Limits: 10,000 files · 100,000 entries · 32 MiB/file · 256 MiB total · 10,000 results. Symbolic links are excluded. Filename filters: \(request.filenameFilters)."
+            String(
+                format: Strings.text(
+                    "folder.limits",
+                    "Limits: %@ files; %@ entries; %@ per file; %@ total; %@ results. Symbolic links are excluded. Filename filters: %@."
+                ), Strings.number(request.maximumFiles), Strings.number(request.maximumEntries),
+                Strings.bytes(request.maximumFileBytes), Strings.bytes(request.maximumTotalBytes),
+                Strings.number(request.maximumResults), request.filenameFilters)
         searchButton.isEnabled = false
         cancelButton.isEnabled = true
         status.stringValue = "Searching…"
@@ -307,7 +379,9 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                         Task { @MainActor [weak self] in
                             guard let self, self.generation == token, self.cancellation != nil else { return }
                             self.status.stringValue =
-                                "Searching: \(progress.filesSearched) files · \(progress.matches) matches · \(progress.bytesRead) bytes"
+                                Strings.folderProgress(
+                                    files: progress.filesSearched, matches: progress.matches,
+                                    bytesRead: progress.bytesRead)
                         }
                     })
                 guard let self, self.generation == token else { return }
@@ -316,12 +390,18 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                 self.replaceButton.isEnabled =
                     !report.wasCancelled && report.reachedLimit == nil && !report.matches.isEmpty
                 let problems = report.notSearched, excluded = report.excludedTotal
-                self.status.stringValue =
-                    "\(report.matches.count) matches · \(report.filesSearched) files searched"
-                    + (problems.isEmpty ? "" : " · \(problems.count) not searched (errors)")
-                    + (excluded == 0 ? "" : " · \(excluded) excluded by filters or settings")
-                    + (report.wasCancelled ? " · Cancelled (partial results)" : "")
-                    + (report.reachedLimit.map { " · Limit reached: \($0.rawValue) (partial results)" } ?? "")
+                let state: String
+                if report.wasCancelled {
+                    state = Strings.text("folder.cancelled", "Cancelled; partial results")
+                } else if let limit = report.reachedLimit {
+                    state = String(
+                        format: Strings.text("folder.limited", "Limit reached: %@; partial results"), limit.displayName)
+                } else {
+                    state = Strings.text("folder.complete", "Complete")
+                }
+                self.status.stringValue = Strings.folderSummary(
+                    matches: report.matches.count, files: report.filesSearched,
+                    problems: problems.count, excluded: excluded, state: state)
                 self.lastOutcome = .searched(
                     matches: report.matches.count, filesSearched: report.filesSearched,
                     skipped: problems.count + excluded, cancelled: report.wasCancelled,
@@ -366,8 +446,9 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         // The confirmation is modal; nothing may have started meanwhile.
         guard cancellation == nil, !matches.isEmpty else { return }
         window?.makeFirstResponder(nil)
-        var options = searchedOptions
-        options.replacement = replacementField.stringValue
+        var capturedOptions = searchedOptions
+        capturedOptions.replacement = replacementField.stringValue
+        let options = capturedOptions
         let excluded = Set(NSDocumentController.shared.documents.compactMap { $0.fileURL }), snapshot = matches,
             flag = FolderSearchCancellation(), token = UUID(), beforeCommit = replacementBeforeCommit
         generation = token
@@ -376,7 +457,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         searchButton.isEnabled = false
         replaceButton.isEnabled = false
         cancelButton.isEnabled = true
-        status.stringValue = "Replacing snapshot-matched files…"
+        status.stringValue = "Replacing matched files…"
         isSearching = true
         lastOutcome = nil
         work = Task { @MainActor [weak self] in
@@ -416,12 +497,21 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             return
         }
         status.stringValue =
-            "\(lastReplacementOutcomes.filter{$0.status == .replaced}.count) files replaced · \(lastReplacementOutcomes.filter{$0.status != .replaced}.count) unchanged/skipped/failed. Recovery copies retained."
+            String(
+                format: lastReplacementOutcomes.filter { $0.status == .replaced }.count == 1
+                    ? Strings.text(
+                        "folder.replaced.one",
+                        "%@ file replaced · %@ unchanged/skipped/failed. Recovery copies retained.")
+                    : Strings.text(
+                        "folder.replaced.other",
+                        "%@ files replaced · %@ unchanged/skipped/failed. Recovery copies retained."),
+                Strings.number(lastReplacementOutcomes.filter { $0.status == .replaced }.count),
+                Strings.number(lastReplacementOutcomes.filter { $0.status != .replaced }.count))
         lastOutcome = .replaced(
             replaced: lastReplacementOutcomes.filter { $0.status == .replaced }.count,
             notReplaced: lastReplacementOutcomes.filter { $0.status != .replaced }.count)
         details.string = lastReplacementOutcomes.map {
-            "\($0.url.path): \($0.status.rawValue) — \($0.message)"
+            "\($0.url.path): \($0.status.displayName) — \($0.message)"
                 + ($0.backup.map { "\nRecovery copy: \($0.path)" } ?? "")
                 + ($0.recoveryReport.map { "\nDurable recovery report: \($0.path)" } ?? "")
         }.joined(separator: "\n")
@@ -460,7 +550,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         work?.cancel()
     }
     func windowWillClose(_ notification: Notification) {
-        try? saveSettings()
+        savePreferencesOrReport()
         cancelSearch(nil)
         generation = UUID()
         // A cancelled replacement may still be committing its current file off the main thread.
@@ -473,7 +563,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         let match = matches[row]
         switch tableColumn?.identifier.rawValue {
         case "file": return match.url.path
-        case "line": return "\(match.line):\(match.columnUTF16)"
+        case "line": return "\(match.line):\(match.displayColumn)"
         default:
             return match.preview.replacingOccurrences(of: "\n", with: " ↵ ").replacingOccurrences(of: "\r", with: " ↵ ")
         }
@@ -528,7 +618,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                 let report = try? await Task.detached(priority: .userInitiated) {
                     try SearchCore.search(snapshot, options: options)
                 }.value
-                guard self.generation == token, editor.window != nil,
+                guard self.generation == token, EditorLifetime.isOpen(editor),
                     Self.selectResult(match, in: editor, snapshot: snapshot, revision: revision, hits: report?.hits)
                 else {
                     self.status.stringValue =
@@ -538,7 +628,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                 }
                 self.onUnrecordableCommand?("Opening a folder search result is not recorded in macros yet.")
                 document.showWindows()
-                document.windowControllers.first?.window?.makeFirstResponder(editor)
+                EditorLifetime.activate(editor)
             }
         }
     }

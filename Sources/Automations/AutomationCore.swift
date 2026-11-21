@@ -2,14 +2,62 @@
 import Foundation
 import Darwin
 
-struct AutomationDefinition: Codable, Equatable, Identifiable {
-    enum Input: String, Codable { case selection, document, clipboard, file }
-    enum Output: String, Codable { case editor, clipboard, newDocument, file, reminders }
-    struct Step: Codable, Equatable {
+package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable {
+    package init(
+        version: Int = 1, id: UUID, name: String, input: Input, steps: [Step], output: Output, shortcut: String? = nil,
+        destinationID: String? = nil, previewBeforeApply: Bool? = nil, pinToToolbar: Bool? = nil
+    ) {
+        self.version = version
+        self.id = id
+        self.name = name
+        self.input = input
+        self.steps = steps
+        self.output = output
+        self.shortcut = shortcut
+        self.destinationID = destinationID
+        self.previewBeforeApply = previewBeforeApply
+        self.pinToToolbar = pinToToolbar
+    }
+
+    package enum Input: String, Codable, CaseIterable, Sendable {
+        case selection, document, clipboard, file
+        package var displayName: String {
+            switch self {
+            case .selection: return Strings.text("automation.selected_text", "Selected text")
+            case .document: return Strings.text("automation.document", "Document")
+            case .clipboard: return Strings.text("automation.clipboard", "Clipboard")
+            case .file: return Strings.text("automation.file", "File")
+            }
+        }
+    }
+    package enum Output: String, Codable, CaseIterable, Sendable {
+        case editor, clipboard, newDocument, file, reminders
+        package var displayName: String {
+            switch self {
+            case .editor: return Strings.text("automation.captured_document", "Captured document")
+            case .clipboard: return Strings.text("automation.clipboard", "Clipboard")
+            case .newDocument: return Strings.text("automation.new_document", "New document")
+            case .file: return Strings.text("automation.file", "File")
+            case .reminders: return Strings.text("automation.reminders", "Reminders")
+            }
+        }
+    }
+    package struct Step: Codable, Equatable, Sendable {
+        package init(
+            kind: Kind, find: String? = nil, replacement: String? = nil, askForFind: Bool? = nil,
+            askForReplacement: Bool? = nil
+        ) {
+            self.kind = kind
+            self.find = find
+            self.replacement = replacement
+            self.askForFind = askForFind
+            self.askForReplacement = askForReplacement
+        }
+
         /// Raw values are the persisted spellings in Automations.json and rule files and never
         /// change. The five `clear…` kinds empty a matching line and keep its line ending, so their
         /// Swift names say "clear" although the stored spelling says "remove".
-        enum Kind: String, Codable, CaseIterable {
+        package enum Kind: String, Codable, CaseIterable, Sendable {
             case removeListMarkers, removeBlankLines, sortLines, deduplicateLines, replaceLiteral
             case clearLinesEqualTo = "removeLinesEqualTo"
             case clearLinesContaining = "removeLinesContaining"
@@ -21,33 +69,34 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
             /// Locale-aware order (`LineOrder.localizedAscending`); `sortLines` stays code-point order.
             case sortLinesLocalized
         }
-        var kind: Kind
-        var find: String?
-        var replacement: String?
-        var askForFind: Bool?
-        var askForReplacement: Bool?
+        package var kind: Kind
+        package var find: String?
+        package var replacement: String?
+        package var askForFind: Bool?
+        package var askForReplacement: Bool?
     }
-    var version: Int = 1
-    var id: UUID
-    var name: String
-    var input: Input
-    var steps: [Step]
-    var output: Output
+    package var version: Int
+    package var id: UUID
+    package var name: String
+    package var input: Input
+    package var steps: [Step]
+    package var output: Output
     /// A single ASCII letter. UI binds Command-Option-letter and rejects collisions.
-    var shortcut: String?
-    var destinationID: String?
+    package var shortcut: String?
+    package var destinationID: String?
     /// Older definitions decode without these keys. False means apply local output directly;
     /// external connectors still require their own explicit destination/send confirmation.
-    var previewBeforeApply: Bool?
-    var pinToToolbar: Bool?
+    package var previewBeforeApply: Bool?
+    package var pinToToolbar: Bool?
 
     /// The whole-line recipe controls the built-in recipe cleanup clears.
-    static let recipeHeadingPattern = #"(?i)^[ \t]*(?:Ingredients|Cups|Metric|Garnish[ \t]*\(optional\))[ \t]*$"#
+    static package let recipeHeadingPattern =
+        #"(?i)^[ \t]*(?:Ingredients|Cups|Metric|Garnish[ \t]*\(optional\))[ \t]*$"#
     /// An unmarked line that starts with a letter and ends in a colon: a section label.
-    static let colonLabelPattern = #"^[ \t]*[\p{L}][^:]*:[ \t]*$"#
+    static package let colonLabelPattern = #"^[ \t]*[\p{L}][^:]*:[ \t]*$"#
     /// The first-run preset: a strict, marker-based recipe cleanup. Its name says so, because it
     /// refuses a list that mixes marked rows with unmarked rows instead of guessing.
-    static var example: AutomationDefinition {
+    static package var example: AutomationDefinition {
         AutomationDefinition(
             id: UUID(uuidString: "A931733F-310A-4EBF-9C48-38C59202D586")!, name: "Clean up recipe list",
             input: .document,
@@ -59,7 +108,7 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
             ],
             output: .editor, previewBeforeApply: false, pinToToolbar: true)
     }
-    static var remindersExample: AutomationDefinition {
+    static package var remindersExample: AutomationDefinition {
         AutomationDefinition(
             id: UUID(uuidString: "AE932D35-4371-4D64-9091-95780DCD2441")!, name: "Add to Reminders", input: .document,
             steps: [Step(kind: .removeBlankLines)], output: .reminders,
@@ -67,7 +116,7 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
     }
     /// A saved definition may leave the text of an "ask when running" rule empty. A definition that
     /// is about to run or be tested must have every value; `requiringValues` checks that.
-    func validate() throws { try validate(requiringValues: false) }
+    package func validate() throws { try validate(requiringValues: false) }
     private func validate(requiringValues: Bool) throws {
         guard version == 1 else { throw AutomationError.invalid("Unsupported workflow version \(version).") }
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 120 else {
@@ -84,15 +133,17 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         }
     }
     /// The first-run automations, in menu order. Restore Default Automations appends fresh copies.
-    static var firstRunPresets: [AutomationDefinition] { [.example, .remindersExample] }
+    static package var firstRunPresets: [AutomationDefinition] { [.example, .remindersExample] }
     /// Test Rules: the rules alone against a sample. The automation's name, shortcut, input and
     /// output play no part, so an unfinished name in the builder cannot fail a test.
-    static func testRules(_ steps: [Step], sample: String, control: AutomationRunControl? = nil) throws -> String {
+    static package func testRules(_ steps: [Step], sample: String, control: AutomationRunControl? = nil) throws
+        -> String
+    {
         try AutomationDefinition(id: UUID(), name: "Rule test", input: .document, steps: steps, output: .editor)
             .testSample(sample, control: control)
     }
     /// Resolves only explicitly configured prompts. Cancelling any prompt cancels the whole run.
-    func resolvingParameters(_ ask: (Int, String, String) throws -> String?) throws -> AutomationDefinition? {
+    package func resolvingParameters(_ ask: (Int, String, String) throws -> String?) throws -> AutomationDefinition? {
         try validate()
         var resolved = self
         for index in steps.indices {
@@ -112,7 +163,7 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         try resolved.validate(requiringValues: true)
         return resolved
     }
-    func transform(_ input: String, control: AutomationRunControl? = nil) throws -> String {
+    package func transform(_ input: String, control: AutomationRunControl? = nil) throws -> String {
         try validate(requiringValues: true)
         try control?.checkCancellation()
         guard input.utf8.count <= Self.maximumTransformBytes else {
@@ -129,16 +180,16 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
     }
     /// One run, or one sample test, spends at most this long inside pattern matching, summed over
     /// every pattern rule and every line.
-    static let regexBudget: TimeInterval = 0.1
+    static package let regexBudget: TimeInterval = 0.1
     /// The fixed cost of asking the regex engine about one cheap line is not charged to the budget,
     /// so the number of lines alone can never exhaust it.
-    static let regexPerLineAllowance: TimeInterval = 0.000_005
+    static package let regexPerLineAllowance: TimeInterval = 0.000_005
     /// Compiles a pattern for the whole-line rule. The pattern is compiled as typed first, so
     /// validation errors describe the user's own text. It is then wrapped as `\A(?:…)\z`, which makes
     /// the engine try every alternative that could cover the line. A pattern that is valid as typed
     /// but not when wrapped (free-spacing ending in a comment, an unterminated `\Q`) keeps the plain
     /// form, and the caller compares the first match with the line instead.
-    static func wholeLineRegex(_ pattern: String) throws -> (regex: NSRegularExpression, anchored: Bool) {
+    static package func wholeLineRegex(_ pattern: String) throws -> (regex: NSRegularExpression, anchored: Bool) {
         let plain = try NSRegularExpression(pattern: pattern)
         if let wrapped = try? NSRegularExpression(pattern: "\\A(?:" + pattern + ")\\z"),
             wrapped.numberOfCaptureGroups == plain.numberOfCaptureGroups
@@ -295,7 +346,7 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         }
         return result
     }
-    static let maximumTransformBytes = 32 * 1024 * 1024
+    static package let maximumTransformBytes = 32 * 1024 * 1024
     private static func boundedReplacement(
         _ input: String, find: String, replacement: String, control: AutomationRunControl?
     ) throws -> String {
@@ -323,7 +374,7 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
         return output
     }
     /// Draft-only test harness: never resolves inputs/parameters or invokes an output.
-    func testSample(_ input: String, control: AutomationRunControl? = nil) throws -> String {
+    package func testSample(_ input: String, control: AutomationRunControl? = nil) throws -> String {
         try validate(requiringValues: true)
         guard input.utf8.count <= 65536 else { throw AutomationError.invalid("Use a sample of at most 64 KiB.") }
         var text = input
@@ -522,7 +573,7 @@ struct AutomationDefinition: Codable, Equatable, Identifiable {
 
 extension AutomationDefinition.Step.Kind {
     /// The name the rule builder shows. Advanced JSON and rule files use `rawValue`.
-    var label: String {
+    package var label: String {
         switch self {
         case .removeListMarkers: return "Remove bullet markers"
         case .removeBlankLines: return "Remove empty lines"
@@ -544,7 +595,7 @@ extension AutomationDefinition.Step.Kind {
     }
     /// The one list of kinds that take text to match. Validation, the rule dialog and the JSON
     /// reference all read it here.
-    var acceptsFind: Bool {
+    package var acceptsFind: Bool {
         switch self {
         case .replaceLiteral, .clearLinesMatching, .clearLinesEqualTo, .clearLinesContaining,
             .clearLinesStartingWith:
@@ -552,17 +603,17 @@ extension AutomationDefinition.Step.Kind {
         default: return false
         }
     }
-    var acceptsReplacement: Bool { self == .replaceLiteral }
+    package var acceptsReplacement: Bool { self == .replaceLiteral }
     /// The kind whose text to match is a regular expression.
-    var findIsPattern: Bool { self == .clearLinesMatching }
+    package var findIsPattern: Bool { self == .clearLinesMatching }
     /// What the rule dialog and the run-time prompt call the text to match for this kind.
-    var findTitle: String { findIsPattern ? "Pattern" : "Text to match" }
+    package var findTitle: String { findIsPattern ? "Pattern" : "Text to match" }
     /// What the rule dialog and the run-time prompt call the replacement.
-    static let replacementTitle = "Replace with"
+    static package let replacementTitle = "Replace with"
     /// Both names, for a message that the rule builder and the JSON editor each show.
-    var described: String { "“\(label)” (\(rawValue) in JSON)" }
+    package var described: String { "“\(label)” (\(rawValue) in JSON)" }
     /// The JSON fields this kind takes, for the reference.
-    var parameters: String {
+    package var parameters: String {
         guard acceptsFind else { return "no parameters" }
         let find = findIsPattern ? "find (whole-line regular expression)" : "find (literal text)"
         return acceptsReplacement
@@ -573,7 +624,7 @@ extension AutomationDefinition.Step.Kind {
 extension AutomationDefinition.Step {
     /// One rule on its own, as `AutomationDefinition.validate` applies it to every rule. `position`
     /// is the rule's 1-based place in its list, when it has one.
-    func validate(requiringValues: Bool = false, position: Int? = nil) throws {
+    package func validate(requiringValues: Bool = false, position: Int? = nil) throws {
         if askForFind == true && !kind.acceptsFind {
             throw AutomationError.invalid(
                 "\(kind.described) takes no text to match, so it cannot ask for one when running.")
@@ -623,7 +674,7 @@ extension AutomationDefinition.Step {
     /// is left out, and a prompt flag that is off is left out too, so a rule opened and saved
     /// unchanged compares equal to the one that was opened and adds no keys to an exported file.
     /// A flag stored as an explicit `false` stays `false` while the kind is unchanged.
-    static func configured(
+    static package func configured(
         kind: Kind, find: String, replacement: String, askForFind: Bool, askForReplacement: Bool,
         from initial: AutomationDefinition.Step
     ) -> AutomationDefinition.Step {
@@ -639,7 +690,7 @@ extension AutomationDefinition.Step {
                 askForReplacement, accepted: kind.acceptsReplacement, stored: initial.askForReplacement))
     }
     /// One line for the rule list: the kind, its text, its replacement and whether it asks when run.
-    var summary: String {
+    package var summary: String {
         func quoted(_ text: String) -> String { "“\(text.replacingOccurrences(of: "\n", with: "↵").prefix(70))”" }
         var text = kind.label
         if let find { text += "  ·  " + quoted(find) }
@@ -657,76 +708,78 @@ extension AutomationDefinition.Step {
 extension AutomationDefinition {
     /// The rule kinds as Advanced JSON spells them, one line each, generated from `Kind.allCases`
     /// so that a new kind cannot be left out.
-    static var ruleKindReference: String {
+    static package var ruleKindReference: String {
         Step.Kind.allCases.map { "\($0.rawValue) — \($0.label). Takes \($0.parameters)." }.joined(separator: "\n")
     }
-    /// The help shown above the Advanced JSON editor.
-    static var advancedHelp: String {
-        "Edit the JSON below. Rename by changing name and keeping id unchanged. "
-            + "Input: selection, document, clipboard, file. Output: editor, clipboard, newDocument, file, reminders. "
-            + "Each entry of steps has a kind from the list below and only the fields that kind takes. "
-            + "Set askForFind or askForReplacement true to be asked for that text on every run. "
-            + "Optional shortcut: one lowercase letter, bound to Command-Option. "
-            + "Set previewBeforeApply true for a preview before the result is applied. "
-            + "Set pinToToolbar true to list the automation first, as a favorite, in the Automations menus. "
-            + "No automation runs when saved or imported."
+    static package var favoriteHelp: String {
+        Strings.text(
+            "automation.favorite.help",
+            "Favorites appear first in the Automations drop-down and the editor context menu. The menu bar and Run Automation list keep the saved order."
+        )
+    }
+    /// The help shown above the Advanced JSON editor; complete English fallback, not fragments.
+    static package var advancedHelp: String {
+        Strings.text(
+            "automation.advanced.help",
+            "Edit the JSON below. Rename by changing name and keeping id unchanged. Input: selection, document, clipboard, file. Output: editor, clipboard, newDocument, file, reminders. Each entry of steps has a kind from the list below and only the fields that kind takes. Set askForFind or askForReplacement true to be asked for that text on every run. Optional shortcut: one lowercase letter, bound to Command-Option. Set previewBeforeApply true for a preview before the result is applied. Set pinToToolbar true to mark the automation as a favorite. Favorites appear first in the Automations drop-down and the editor context menu. The menu bar and Run Automation list keep the saved order. No automation runs when saved or imported."
+        )
     }
 }
 
 /// The rule builder's ordered list and its selected row. Every change keeps the selection on a
 /// row that exists and refuses to pass the rule limit; a method returns false when it did nothing.
-struct RuleListDraft: Equatable {
-    static let maximumRules = 100
-    private(set) var steps: [AutomationDefinition.Step]
-    private(set) var selected: Int?
-    init(_ steps: [AutomationDefinition.Step]) {
+package struct RuleListDraft: Equatable {
+    static package let maximumRules = 100
+    private(set) package var steps: [AutomationDefinition.Step]
+    private(set) package var selected: Int?
+    package init(_ steps: [AutomationDefinition.Step]) {
         self.steps = steps
         selected = steps.isEmpty ? nil : 0
     }
-    var canAdd: Bool { steps.count < Self.maximumRules }
-    var canDuplicate: Bool { selected != nil && canAdd }
-    var canMoveUp: Bool { (selected ?? 0) > 0 }
-    var canMoveDown: Bool { selected.map { $0 + 1 < steps.count } ?? false }
+    package var canAdd: Bool { steps.count < Self.maximumRules }
+    package var canDuplicate: Bool { selected != nil && canAdd }
+    package var canMoveUp: Bool { (selected ?? 0) > 0 }
+    package var canMoveDown: Bool { selected.map { $0 + 1 < steps.count } ?? false }
     /// Follows the list's own selection: a row that does not exist means no selection.
-    mutating func select(_ row: Int) { selected = steps.indices.contains(row) ? row : nil }
+    mutating package func select(_ row: Int) { selected = steps.indices.contains(row) ? row : nil }
     private mutating func settle(on row: Int) { selected = steps.isEmpty ? nil : max(0, min(row, steps.count - 1)) }
-    mutating func add(_ step: AutomationDefinition.Step) -> Bool {
+    mutating package func add(_ step: AutomationDefinition.Step) -> Bool {
         guard canAdd else { return false }
         steps.append(step)
         settle(on: steps.count - 1)
         return true
     }
-    mutating func replaceSelected(with step: AutomationDefinition.Step) -> Bool {
+    mutating package func replaceSelected(with step: AutomationDefinition.Step) -> Bool {
         guard let selected else { return false }
         steps[selected] = step
         return true
     }
-    mutating func duplicateSelected() -> Bool {
+    mutating package func duplicateSelected() -> Bool {
         guard let selected, canAdd else { return false }
         steps.insert(steps[selected], at: selected + 1)
         settle(on: selected + 1)
         return true
     }
-    mutating func removeSelected() -> Bool {
+    mutating package func removeSelected() -> Bool {
         guard let selected else { return false }
         steps.remove(at: selected)
         settle(on: selected)
         return true
     }
-    mutating func moveSelectedUp() -> Bool {
+    mutating package func moveSelectedUp() -> Bool {
         guard let selected, canMoveUp else { return false }
         steps.swapAt(selected, selected - 1)
         settle(on: selected - 1)
         return true
     }
-    mutating func moveSelectedDown() -> Bool {
+    mutating package func moveSelectedDown() -> Bool {
         guard let selected, canMoveDown else { return false }
         steps.swapAt(selected, selected + 1)
         settle(on: selected + 1)
         return true
     }
     /// Load Rules: the whole list is replaced and the first rule selected.
-    mutating func replaceAll(with replacement: [AutomationDefinition.Step]) {
+    mutating package func replaceAll(with replacement: [AutomationDefinition.Step]) {
         steps = replacement
         settle(on: 0)
     }
@@ -734,19 +787,21 @@ struct RuleListDraft: Equatable {
 
 /// Which test outcome the rule builder may show. A test presents the token it was started with;
 /// every later test, edit or close moves the generation on, so a late result is refused.
-struct RulePreviewState: Equatable {
-    private(set) var generation = 0
-    private(set) var isRunning = false
-    private(set) var showsOutcome = false
+package struct RulePreviewState: Equatable {
+    package init() {}
+
+    private(set) package var generation = 0
+    private(set) package var isRunning = false
+    private(set) package var showsOutcome = false
     /// Starts a test and returns the token its outcome must present.
-    mutating func begin() -> Int {
+    mutating package func begin() -> Int {
         generation += 1
         isRunning = true
         showsOutcome = false
         return generation
     }
     /// True when the outcome belongs to the test that is still current and may be shown.
-    mutating func finish(_ token: Int) -> Bool {
+    mutating package func finish(_ token: Int) -> Bool {
         guard isRunning, token == generation else { return false }
         isRunning = false
         showsOutcome = true
@@ -754,7 +809,7 @@ struct RulePreviewState: Equatable {
     }
     /// An edit, or the builder closing. Returns whether an outcome was on show or a test under way,
     /// which is when the builder has something stale to say so about.
-    mutating func invalidate() -> Bool {
+    mutating package func invalidate() -> Bool {
         let hadSomething = isRunning || showsOutcome
         generation += 1
         isRunning = false
@@ -763,9 +818,9 @@ struct RulePreviewState: Equatable {
     }
 }
 
-enum AutomationError: LocalizedError {
+package enum AutomationError: LocalizedError {
     case invalid(String)
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .invalid(let message): return message
         }
@@ -774,11 +829,18 @@ enum AutomationError: LocalizedError {
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct AutomationLibrary: Codable, Equatable {
-    static let maximumBytes = 32 * 1024 * 1024
-    var version: Int = 1
-    var workflows: [AutomationDefinition]
-    func validate() throws {
+package struct AutomationLibrary: VersionedLibrary, Equatable {
+    package init(version: Int = 1, workflows: [AutomationDefinition]) {
+        self.version = version
+        self.workflows = workflows
+    }
+
+    static package let libraryContext = "Automations"
+    static package var librarySizeError: Error { AutomationError.invalid("Automation configuration exceeds 32 MiB.") }
+    static package let maximumBytes = 32 * 1024 * 1024
+    package var version: Int
+    package var workflows: [AutomationDefinition]
+    package func validate() throws {
         guard version == 1 else { throw AutomationError.invalid("Unsupported library version \(version).") }
         guard workflows.count <= 200 else { throw AutomationError.invalid("At most 200 automations are supported.") }
         var ids = Set<UUID>(), keys = Set<String>()
@@ -793,51 +855,52 @@ struct AutomationLibrary: Codable, Equatable {
             }
         }
     }
-    static func decode(_ data: Data) throws -> AutomationLibrary {
-        guard data.count <= maximumBytes else {
-            throw AutomationError.invalid("Automation configuration exceeds 32 MiB.")
-        }
-        let result = try JSONDecoder().decode(AutomationLibrary.self, from: data)
-        try result.validate()
-        return result
-    }
-    func encoded() throws -> Data {
-        try validate()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(self)
-        guard data.count <= Self.maximumBytes else {
-            throw AutomationError.invalid("Automation configuration exceeds 32 MiB.")
-        }
-        return data
-    }
 }
 
 /// Shared by the worker and native progress controls; no editor escapes onto the worker queue.
-final class AutomationRunControl: @unchecked Sendable {
+final package class AutomationRunControl: @unchecked Sendable {
+    package init() {}
+
     private let lock = NSLock()
     private var cancelled = false
-    var onProgress: ((Int, Int) -> Void)?
-    func cancel() {
+    // The complete mutable state is protected by lock. Callbacks are copied while locked,
+    // then invoked and destroyed after unlock so arbitrary reentry cannot deadlock.
+    private var progressCallback: (@Sendable (Int, Int) -> Void)?
+    package var onProgress: (@Sendable (Int, Int) -> Void)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return progressCallback
+        }
+        set {
+            lock.lock()
+            let displaced = progressCallback
+            progressCallback = newValue
+            lock.unlock()
+            withExtendedLifetime(displaced) {}
+        }
+    }
+    package func cancel() {
         lock.lock()
         cancelled = true
         lock.unlock()
     }
-    func checkCancellation() throws {
+    package func checkCancellation() throws {
         lock.lock()
         let value = cancelled
         lock.unlock()
         if value { throw AutomationError.invalid("Automation cancelled. Nothing was changed.") }
     }
-    func checkpoint(completed: Int, total: Int) throws {
+    package func checkpoint(completed: Int, total: Int) throws {
         try checkCancellation()
-        onProgress?(completed, total)
+        let callback = onProgress
+        callback?(completed, total)
     }
 }
 
 /// Explicit file inputs are bounded regular UTF-8 files, never pipes/devices or followed symlinks.
-enum AutomationFileInput {
-    static func read(_ url: URL, limit: Int = 32 * 1024 * 1024) throws -> String {
+package enum AutomationFileInput {
+    static package func read(_ url: URL, limit: Int = 32 * 1024 * 1024) throws -> String {
         let data = try readData(url, limit: limit)
         guard let text = String(data: data, encoding: .utf8) else {
             throw AutomationError.invalid(
@@ -846,76 +909,53 @@ enum AutomationFileInput {
         return text
     }
     /// A byte limit as a person reads it: "32 MiB", "64 KiB" or "2 bytes".
-    static func describe(limit: Int) -> String {
+    static package func describe(limit: Int) -> String {
         if limit >= 1_048_576, limit % 1_048_576 == 0 { return "\(limit / 1_048_576) MiB" }
         if limit >= 1024, limit % 1024 == 0 { return "\(limit / 1024) KiB" }
         return "\(limit) bytes"
     }
-    static func readData(_ url: URL, limit: Int) throws -> Data {
+    static package func readData(_ url: URL, limit: Int, parent: PrivateFileStore.ParentPolicy = .selectedInput) throws
+        -> Data
+    {
         guard url.isFileURL else { throw AutomationError.invalid("Choose a local text file.") }
-        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-        // The system's own reason: a missing file, a symbolic link (not followed) and a permission
-        // problem are different things to fix.
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        defer { close(descriptor) }
-        var info = stat()
-        guard fstat(descriptor, &info) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        guard info.st_mode & S_IFMT == S_IFREG else {
+        do { return try PrivateFileStore.read(url, maximumBytes: limit, parent: parent) } catch PrivateFileError
+            .unsafeLocation
+        {
             throw AutomationError.invalid("Automation input must be a regular file, not a folder, pipe or device.")
-        }
-        guard info.st_size <= limit else {
+        } catch PrivateFileError.tooLarge {
             throw AutomationError.invalid(
                 "This file is larger than the \(describe(limit: limit)) limit for this input.")
         }
-        var data = Data(), chunk = [UInt8](repeating: 0, count: 65536)
-        while true {
-            let count = Darwin.read(descriptor, &chunk, chunk.count)
-            if count < 0 {
-                if errno == EINTR { continue }
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            }
-            if count == 0 { break }
-            guard data.count <= limit - count else {
-                throw AutomationError.invalid(
-                    "This file is larger than the \(describe(limit: limit)) limit for this input.")
-            }
-            data.append(contentsOf: chunk.prefix(count))
-        }
-        return data
     }
 }
 
 /// Portable processing rules only. Loading never changes a workflow's identity or output.
-struct AutomationRuleSet: Codable {
-    var version: Int = 1
-    var name: String
-    var steps: [AutomationDefinition.Step]
-    func validate() throws {
+package struct AutomationRuleSet: VersionedLibrary {
+    package init(version: Int = 1, name: String, steps: [AutomationDefinition.Step]) {
+        self.version = version
+        self.name = name
+        self.steps = steps
+    }
+
+    static package let libraryContext = "Rules"
+    static package var librarySizeError: Error { AutomationError.invalid("Rule files must be at most 1 MiB.") }
+    static package let maximumBytes = 1_048_576
+    static package let libraryEncodingOptions: JSONEncoder.OutputFormatting = [.prettyPrinted, .sortedKeys]
+    package var version: Int
+    package var name: String
+    package var steps: [AutomationDefinition.Step]
+    package func validate() throws {
         let probe = AutomationDefinition(id: UUID(), name: name, input: .document, steps: steps, output: .editor)
         guard version == 1 else { throw AutomationError.invalid("Unsupported rule-set version.") }
         try probe.validate()
-    }
-    static func decode(_ data: Data) throws -> AutomationRuleSet {
-        guard data.count <= 1_048_576 else { throw AutomationError.invalid("Rule files must be at most 1 MiB.") }
-        let value = try JSONDecoder().decode(Self.self, from: data)
-        try value.validate()
-        return value
-    }
-    func encoded() throws -> Data {
-        try validate()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(self)
-        guard data.count <= 1_048_576 else { throw AutomationError.invalid("Rule files must be at most 1 MiB.") }
-        return data
     }
 }
 
 /// What Load Rules → Import File finds in a file: the rules of a rule file, or the rules of each
 /// automation in a library export. Only steps are ever taken from either.
-enum AutomationRuleImport {
-    static let fallbackName = "Imported rules"
-    static func ruleSets(from data: Data) throws -> (sets: [AutomationRuleSet], fromLibrary: Bool) {
+package enum AutomationRuleImport {
+    static package let fallbackName = "Imported rules"
+    static package func ruleSets(from data: Data) throws -> (sets: [AutomationRuleSet], fromLibrary: Bool) {
         guard data.count <= 1_048_576 else { throw AutomationError.invalid("Rule files must be at most 1 MiB.") }
         let decoder = JSONDecoder()
         let ruleSet: AutomationRuleSet
@@ -946,19 +986,19 @@ enum AutomationRuleImport {
 
 /// Built-in rule templates ship as rule-set JSON resources and are read with the same bounded
 /// decoder as an imported rule file. They carry no sample-specific text.
-enum AutomationTemplates {
+package enum AutomationTemplates {
     /// Resource names in the order the Load Rules list shows them.
-    static let resourceNames = ["trim-and-remove-empty-lines", "sort-unique-lines", "recipe-ingredient-cleanup"]
-    static func url(_ name: String) -> URL {
+    static package let resourceNames = ["trim-and-remove-empty-lines", "sort-unique-lines", "recipe-ingredient-cleanup"]
+    static package func url(_ name: String) -> URL {
         Bundle.main.url(forResource: name + ".rules", withExtension: "json")
             ?? URL(fileURLWithPath: "Resources/AutomationTemplates/\(name).rules.json")
     }
-    static func load(_ name: String) throws -> AutomationRuleSet {
+    static package func load(_ name: String) throws -> AutomationRuleSet {
         try AutomationRuleSet.decode(AutomationFileInput.readData(url(name), limit: 1_048_576))
     }
     /// Every template that loads, and one line for each that does not, so a damaged resource is
     /// reported instead of silently missing from the list.
-    static func loadAll() -> (sets: [AutomationRuleSet], problems: [String]) {
+    static package func loadAll() -> (sets: [AutomationRuleSet], problems: [String]) {
         var sets: [AutomationRuleSet] = [], problems: [String] = []
         for name in resourceNames {
             do { sets.append(try load(name)) } catch {
@@ -971,8 +1011,8 @@ enum AutomationTemplates {
 
 /// Plain text from clipboard HTML by a local scan. Nothing is rendered, run or fetched: markup never
 /// reaches AppKit's WebKit-backed importer, which may load the resources a page refers to.
-enum AutomationHTMLText {
-    static func plainText(from data: Data) -> String? {
+package enum AutomationHTMLText {
+    static package func plainText(from data: Data) -> String? {
         guard data.count <= AutomationDefinition.maximumTransformBytes else { return nil }
         if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]) {
             return String(data: data, encoding: .utf16).flatMap(plainText(from:))
@@ -983,7 +1023,7 @@ enum AutomationHTMLText {
     /// the end of paragraphs, list items, table rows, headings and divisions, runs of white space
     /// collapsed outside `<pre>`, and the basic character references decoded. Returns nil when no
     /// text remains. An unterminated tag or comment drops the rest of the input, as a browser does.
-    static func plainText(from html: String) -> String? {
+    static package func plainText(from html: String) -> String? {
         let source = Array(html.unicodeScalars)
         var out = String.UnicodeScalarView()
         var index = source.first == "\u{FEFF}" ? 1 : 0

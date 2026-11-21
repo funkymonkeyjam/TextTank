@@ -7,25 +7,79 @@
 // `require` is for a precondition the following code cannot run without: it
 // throws out of the enclosing `Checks.section`, and the next section still runs.
 import Foundation
+import CryptoKit
+import ObjectiveC
+#if canImport(TextTankCore)
+    @testable import TextTankCore
+#endif
 
 /// Thrown by `require` after the failure has been recorded.
 struct CheckStop: Error, CustomStringConvertible { let description: String }
 
+/// Complete recorder state. Only these fields are shared; every read/update is
+/// locked, and callback invocation/destruction occurs after unlocking. Conditions,
+/// error descriptions and output remain outside the state lock.
+private final class CheckRecorder: @unchecked Sendable {
+    struct Snapshot: Sendable {
+        let count: Int, fixtureCount: Int
+        let knownDefects: [String], failures: [String]
+        let summary: (@Sendable () -> String)?
+    }
+    private let lock = NSLock()
+    private var count = 0, fixtureCount = 0
+    private var knownDefects: [String] = [], failures: [String] = []
+    private var summary: (@Sendable () -> String)?
+    func snapshot() -> Snapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return Snapshot(
+            count: count, fixtureCount: fixtureCount, knownDefects: knownDefects,
+            failures: failures, summary: summary)
+    }
+    func pass() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+    func fixturePass() {
+        lock.lock()
+        fixtureCount += 1
+        lock.unlock()
+    }
+    func fail(_ entry: String) {
+        lock.lock()
+        failures.append(entry)
+        lock.unlock()
+    }
+    func knownDefect(_ entry: String) {
+        lock.lock()
+        knownDefects.append(entry)
+        lock.unlock()
+    }
+    func replaceSummary(_ value: @escaping @Sendable () -> String) {
+        lock.lock()
+        let displaced = summary
+        summary = value
+        lock.unlock()
+        withExtendedLifetime(displaced) {}
+    }
+}
+
 enum Checks {
     /// Behaviour checks that passed. Suites print this in their summary line.
-    static var count = 0
+    private static let recorder = CheckRecorder()
+    static var count: Int { recorder.snapshot().count }
     /// Fixture-integrity checks that passed; reported apart from behaviour checks.
-    static var fixtureCount = 0
+    static var fixtureCount: Int { recorder.snapshot().fixtureCount }
     /// Confirmed defects that are still present, as `finding: label`. Reported apart
     /// from behaviour checks; see `knownDefect`.
-    static var knownDefects: [String] = []
-    static var failures: [String] = []
+    static var knownDefects: [String] { recorder.snapshot().knownDefects }
+    static var failures: [String] { recorder.snapshot().failures }
     /// `TEXTTANK_FORCE_FAIL=<label>` forces the check with exactly that label to
     /// fail. It exists to prove that a failure is reported and later checks still run.
     static let forcedFailure = ProcessInfo.processInfo.environment["TEXTTANK_FORCE_FAIL"]
     /// `TEXTTANK_SHOW_REJECTIONS=1` prints the error each `rejects` caught.
     static let showRejections = ProcessInfo.processInfo.environment["TEXTTANK_SHOW_REJECTIONS"] != nil
-    private static var summary: (() -> String)?
     /// This executable, resolved before `enterRepositoryRoot` changes the working
     /// directory. Suites that re-run themselves as a child process launch this.
     static let executable: URL =
@@ -44,19 +98,21 @@ enum Checks {
         return (path.hasPrefix(root) ? String(path.dropFirst(root.count)) : path) + ":\(line)"
     }
     static func pass(_ label: String) {
-        count += 1
+        recorder.pass()
         print("PASS \(label)")
         fflush(stdout)
     }
     static func fail(_ label: String, file: StaticString, line: UInt) {
         let entry = "FAIL \(location(file, line)) \(label)"
-        failures.append(entry)
+        recorder.fail(entry)
         print(entry)
         fflush(stdout)
     }
     /// The line a suite prints when every check passed, for example
     /// `Checks.summary { "PASS FileChecks: \(Checks.count) assertions" }`.
-    static func summary(_ text: @escaping () -> String) { summary = text }
+    static func summary(_ text: @escaping @Sendable () -> String) { recorder.replaceSummary(text) }
+    static func fixturePass() { recorder.fixturePass() }
+    static func recordKnownDefect(_ entry: String) { recorder.knownDefect(entry) }
 
     /// Runs one named group of checks. An error thrown out of it is recorded as
     /// a failure of that section only.
@@ -87,23 +143,67 @@ enum Checks {
         finish(name)
     }
     static func finish(_ name: String) -> Never {
-        if failures.isEmpty {
-            if fixtureCount > 0 {
-                print("FIXTURES \(name): \(fixtureCount) fixture integrity checks, not counted below")
+        verifyNativeImages()
+        let result = recorder.snapshot()
+        if result.failures.isEmpty {
+            if result.fixtureCount > 0 {
+                print("FIXTURES \(name): \(result.fixtureCount) fixture integrity checks, not counted below")
             }
-            if !knownDefects.isEmpty {
+            if !result.knownDefects.isEmpty {
                 print(
-                    "KNOWN-DEFECTS \(name): \(knownDefects.count) expected failures, not counted below (\(Set(knownDefects.map { String($0.prefix(while: { $0 != ":" })) }).sorted().joined(separator: ", ")))"
+                    "KNOWN-DEFECTS \(name): \(result.knownDefects.count) expected failures, not counted below (\(Set(result.knownDefects.map { String($0.prefix(while: { $0 != ":" })) }).sorted().joined(separator: ", ")))"
                 )
             }
-            print(summary?() ?? "PASS \(name): \(count) assertions")
+            print(result.summary?() ?? "PASS \(name): \(result.count) assertions")
             fflush(stdout)
             exit(0)
         }
-        print("FAILED \(name): \(failures.count) failed, \(count) passed")
-        for entry in failures { print("  " + entry) }
+        print("FAILED \(name): \(result.failures.count) failed, \(result.count) passed")
+        for entry in result.failures { print("  " + entry) }
         fflush(stdout)
         exit(1)
+    }
+
+    /// Check the code image actually loaded in this process, not merely linker arguments.
+    /// Foundation-only checks without native dependencies have no images to verify here.
+    private static func verifyNativeImages() {
+        let classes = [
+            ("TTEditor", "EditorBridge"), ("TTSearchEngine", "NativeSearch"),
+            ("ScintillaView", "Scintilla"), ("TextDocument", "TextTankRuntime")
+        ]
+        var loaded = classes.compactMap { name, framework -> (AnyClass, String)? in
+            guard let type = NSClassFromString(name) else { return nil }
+            return (type, framework)
+        }
+        #if canImport(TextTankCore)
+            loaded.append((RecoveryStore.self, "TextTankCore"))
+        #endif
+        guard !loaded.isEmpty else { return }
+        do {
+            guard let manifestPath = ProcessInfo.processInfo.environment["TEXTTANK_ARTIFACT_MANIFEST"],
+                let manifest = try JSONSerialization.jsonObject(
+                    with: Data(contentsOf: URL(fileURLWithPath: manifestPath))) as? [String: Any],
+                let images = manifest["images"] as? [String: [String: Any]]
+            else { throw CheckStop(description: "missing validated native artifact manifest") }
+            for image in loaded {
+                let type: AnyClass = image.0
+                let framework = image.1
+                guard let imageName = class_getImageName(type),
+                    let expected = images[framework], let expectedPath = expected["embedded"] as? String,
+                    let expectedHash = expected["embedded_sha256"] as? String
+                else { throw CheckStop(description: "missing actual code-image identity for \(framework)") }
+                let actual = URL(fileURLWithPath: String(cString: imageName)).resolvingSymlinksInPath()
+                let wanted = URL(fileURLWithPath: expectedPath).resolvingSymlinksInPath()
+                let hash = SHA256.hash(data: try Data(contentsOf: actual)).map { String(format: "%02x", $0) }.joined()
+                guard actual == wanted, hash == expectedHash else {
+                    throw CheckStop(
+                        description: "\(framework) was not loaded from the actual signed application artifact")
+                }
+                print("ARTIFACT_IMAGE \(framework) \(hash) \(actual.path)")
+            }
+        } catch {
+            fail("native artifact identity: \(error)", file: #filePath, line: #line)
+        }
     }
     static func describe(_ error: Error) -> String {
         if let stop = error as? CheckStop { return stop.description }
@@ -161,7 +261,7 @@ func fixtureCheck(
             Checks.fail("fixture integrity: \(label)", file: file, line: line)
             return false
         }
-        Checks.fixtureCount += 1
+        Checks.fixturePass()
         print("FIXTURE \(label)")
         fflush(stdout)
         return true
@@ -188,7 +288,7 @@ func knownDefect(
                 line: line)
             return false
         }
-        Checks.knownDefects.append("\(finding): \(label)")
+        Checks.recordKnownDefect("\(finding): \(label)")
         print("KNOWN-DEFECT \(finding) \(label)")
         fflush(stdout)
         return true

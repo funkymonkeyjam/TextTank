@@ -1,12 +1,16 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
-final class UtilityController: NSObject {
-    let activeEditor: () -> TTEditor?
+@MainActor final class UtilityController: NSObject {
+    private let editorProvider: () -> TTEditor?
+    var activeEditor: () -> TTEditor? { editorProvider }
     /// Called immediately before a utility changes the document, and at no other time: asking
     /// for the editor, a cancelled dialog, a failed guard and an export leave a macro recording alone.
     var onUnrecordableEdit: () -> Void = {}
-    init(activeEditor: @escaping () -> TTEditor?) { self.activeEditor = activeEditor }
+    init(activeEditor: @escaping () -> TTEditor?) { self.editorProvider = activeEditor }
     func makeMenu() -> NSMenu {
         precondition(Thread.isMainThread)
         let menu = NSMenu(title: "Text Utilities")
@@ -39,13 +43,13 @@ final class UtilityController: NSObject {
     }
     @objc private func run(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let utility = TextUtility(rawValue: raw) else { return }
-        do { try apply(utility) } catch { NSAlert(error: error).runModal() }
+        do { try apply(utility) } catch { TTAlert.present(error) }
     }
     /// The editor a utility may change, or the first precondition that fails, in a fixed order
     /// that names the cause the person can least see first: no document, read-only (the shared
     /// requireWritable error), several selections, then an empty selection.
     func editableEditor(requireNonEmpty: Bool) throws -> TTEditor {
-        guard let editor = activeEditor(), editor.window != nil else { throw UtilityFailure.noDocument }
+        guard let editor = editorProvider(), EditorLifetime.isOpen(editor) else { throw UtilityFailure.noDocument }
         try editor.requireWritable()
         guard editor.selectionCount == 1 else { throw UtilityFailure.multipleSelections }
         guard !requireNonEmpty || editor.selectionStart != editor.selectionEnd else {
@@ -56,9 +60,9 @@ final class UtilityController: NSObject {
     /// Recheck after a dialog: `editor` must still be the captured editor in the captured state.
     /// Reports what actually changed rather than asking for a selection.
     static func recheck(
-        _ editor: TTEditor?, captured: TTEditor?, revision: UInt?, selection: [[String: NSNumber]]?
+        _ editor: TTEditor?, captured: TTEditor?, revision: UInt?, selection: [TTSelectionRange]?
     ) throws -> TTEditor {
-        guard let editor, editor.window != nil else { throw UtilityFailure.noDocument }
+        guard let editor, EditorLifetime.isOpen(editor) else { throw UtilityFailure.noDocument }
         try editor.requireWritable()
         guard editor === captured, editor.revision == revision, editor.selectionRanges == selection else {
             throw UtilityFailure.documentChanged
@@ -69,7 +73,7 @@ final class UtilityController: NSObject {
     @objc private func hexOptions(_ sender: Any?) {
         let editor: TTEditor
         do { editor = try editableEditor(requireNonEmpty: true) } catch {
-            NSAlert(error: error).runModal()
+            TTAlert.present(error)
             return
         }
         let revision = editor.revision
@@ -81,6 +85,7 @@ final class UtilityController: NSObject {
         let uppercase = NSButton(checkboxWithTitle: "Uppercase hexadecimal", target: nil, action: nil)
         uppercase.state = .on
         let width = NSTextField(string: "16")
+        NumericInput.configure(width)
         let eol = NSPopUpButton()
         eol.addItems(withTitles: ["LF", "CRLF", "CR"])
         let stack = NSStackView(views: [
@@ -92,19 +97,34 @@ final class UtilityController: NSObject {
         stack.frame = NSRect(x: 0, y: 0, width: 340, height: 160)
         alert.accessoryView = stack
         alert.addButton(withTitle: "Apply")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            _ = try Self.recheck(editor, captured: editor, revision: revision, selection: selection)
-            let output = try HexEncodingOptions(
-                insertSpaces: spaces.state == .on, uppercase: uppercase.state == .on,
-                bytesPerLine: Int(width.stringValue) ?? -1, lineEnding: ["\n", "\r\n", "\r"][eol.indexOfSelectedItem]
-            ).encode(input)
-            onUnrecordableEdit()
-            editor.beginUndoGroup()
-            editor.replaceSelection(output)
-            editor.endUndoGroup()
-        } catch { NSAlert(error: error).runModal() }
+        alert.addButton(withTitle: "Cancel", role: .cancel)
+        width.setAccessibilityLabel("Hexadecimal bytes per line")
+        eol.setAccessibilityLabel("Hexadecimal line endings")
+        while alert.runModal() == .alertFirstButtonReturn {
+            do {
+                _ = try Self.recheck(editor, captured: editor, revision: revision, selection: selection)
+                guard let bytesPerLine = NumericInput.integer(width),
+                    (0...65536).contains(bytesPerLine)
+                else {
+                    throw UtilityFailure.malformed("bytes per line; enter a whole number from 0 to 65536")
+                }
+                let output = try HexEncodingOptions(
+                    insertSpaces: spaces.state == .on, uppercase: uppercase.state == .on,
+                    bytesPerLine: bytesPerLine, lineEnding: ["\n", "\r\n", "\r"][eol.indexOfSelectedItem]
+                ).encode(input)
+                onUnrecordableEdit()
+                editor.beginUndoGroup()
+                editor.replaceSelection(output)
+                editor.endUndoGroup()
+                return
+            } catch {
+                if case UtilityFailure.malformed = error {
+                    alert.showValidation(error, field: width)
+                } else {
+                    alert.showValidation(error)
+                }
+            }
+        }
     }
     static let numberConversionNote =
         "Convert an unsigned 32-bit number. Your document changes only if you then choose Insert into Editor."
@@ -112,7 +132,7 @@ final class UtilityController: NSObject {
         let alert = TTAlert()
         alert.messageText = "Number Conversion"
         alert.informativeText = Self.numberConversionNote
-        let captured = activeEditor()
+        let captured = editorProvider()
         let revision = captured?.revision
         let selection = captured?.selectionRanges
         let input = NSTextField(
@@ -122,6 +142,9 @@ final class UtilityController: NSObject {
         for field in [from, to] {
             field.addItems(withTitles: ["Binary (2)", "Octal (8)", "Decimal (10)", "Hexadecimal (16)"])
         }
+        input.setAccessibilityLabel("Number to convert")
+        from.setAccessibilityLabel("Source number base")
+        to.setAccessibilityLabel("Destination number base")
         from.selectItem(at: 2)
         to.selectItem(at: 3)
         let stack = NSStackView(views: [
@@ -133,7 +156,7 @@ final class UtilityController: NSObject {
         stack.frame = NSRect(x: 0, y: 0, width: 350, height: 160)
         alert.accessoryView = stack
         alert.addButton(withTitle: "Convert")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Cancel", role: .cancel)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
             let bases = [2, 8, 10, 16]
@@ -143,28 +166,27 @@ final class UtilityController: NSObject {
             result.messageText = "Converted Number"
             result.informativeText = output
             result.addButton(withTitle: "Copy")
-            result.addButton(withTitle: "Cancel")
+            result.addButton(withTitle: "Done", role: .cancel)
             result.addButton(withTitle: "Insert into Editor")
             let action = result.runModal()
             if action == .alertFirstButtonReturn {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(output, forType: .string)
+                try copyConvertedNumber(output)
             } else if action == .alertThirdButtonReturn {
                 // An empty single selection is allowed here: the result is inserted at the caret.
                 let editor = try Self.recheck(
-                    activeEditor(), captured: captured, revision: revision, selection: selection)
+                    editorProvider(), captured: captured, revision: revision, selection: selection)
                 onUnrecordableEdit()
                 editor.beginUndoGroup()
                 editor.replaceSelection(output)
                 editor.endUndoGroup()
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     /// Snapshot only: Scintilla remains authoritative. An ordinary nonempty
     /// selection is exported; no selection exports the complete document.
     func exportData(format: String) throws -> (Data, String) {
         precondition(Thread.isMainThread)
-        guard let editor = activeEditor(), editor.window != nil else { throw UtilityFailure.noDocument }
+        guard let editor = editorProvider(), EditorLifetime.isOpen(editor) else { throw UtilityFailure.noDocument }
         guard editor.selectionCount == 1 else { throw UtilityFailure.multipleSelections }
         let selected = editor.selectionStart != editor.selectionEnd
         let bytes = selected ? editor.selectionEnd - editor.selectionStart : editor.byteLength
@@ -177,22 +199,41 @@ final class UtilityController: NSObject {
             documentAttributes: [.documentType: type, .characterEncoding: String.Encoding.utf8.rawValue])
         return (data, snapshot.string)
     }
+    private func clipboardForExplicitAction() throws -> NSPasteboard {
+        guard let board = RuntimeEnvironment.current.generalPasteboard() else {
+            throw CocoaError(
+                .featureUnsupported,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Clipboard access is unavailable in this isolated session."
+                ])
+        }
+        return board
+    }
+    func copyConvertedNumber(_ output: String) throws {
+        let board = try clipboardForExplicitAction()
+        board.clearContents()
+        board.setString(output, forType: .string)
+    }
+    func copyStyledToClipboard(format: String) throws {
+        let (data, plain) = try exportData(format: format)
+        let board = try clipboardForExplicitAction()
+        board.clearContents()
+        board.setData(data, forType: format == "html" ? .html : .rtf)
+        board.setString(plain, forType: .string)
+    }
     @objc private func exportStyled(_ sender: NSMenuItem) {
         guard let choice = sender.representedObject as? [String: String], let format = choice["format"] else { return }
         do {
-            let (data, plain) = try exportData(format: format)
             if choice["destination"] == "clipboard" {
-                let pasteboard = NSPasteboard.general
-                pasteboard.clearContents()
-                pasteboard.setData(data, forType: format == "html" ? .html : .rtf)
-                pasteboard.setString(plain, forType: .string)
+                try copyStyledToClipboard(format: format)
             } else {
+                let (data, _) = try exportData(format: format)
                 let panel = NSSavePanel()
                 panel.nameFieldStringValue = "TextTank-export." + format
                 guard panel.runModal() == .OK, let url = panel.url else { return }
                 try data.write(to: url, options: .atomic)
             }
-        } catch { NSAlert(error: error).runModal() }
+        } catch { TTAlert.present(error) }
     }
     func apply(_ utility: TextUtility) throws {
         precondition(Thread.isMainThread)

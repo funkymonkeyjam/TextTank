@@ -1,3 +1,4 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import Darwin
@@ -20,6 +21,20 @@ import Darwin
                 // SIGKILL bypasses defer, normal termination hooks and store deinitialization.
                 kill(getpid(), SIGKILL)
                 fatalError("SIGKILL unexpectedly returned")
+            }
+            if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--writer-reentrancy" {
+                try writerReentrancy(CommandLine.arguments[2])
+                return
+            }
+            for mode in ["submit", "finish"] {
+                let child = Process()
+                child.executableURL = Checks.executable
+                child.arguments = ["--writer-reentrancy", mode]
+                try child.run()
+                child.waitUntilExit()
+                check(
+                    child.terminationReason == .exit && child.terminationStatus == 0,
+                    "F316 displaced recovery capture can reenter writer during " + mode)
             }
             codecAgainstReference()
             let samples = ["", "\0", "\0hello", "A\0B\r\nC\nD\rE", "½ cup — café 👩🏽‍💻 e\u{301}", "\u{FEFF}inside"]
@@ -123,6 +138,28 @@ import Darwin
                 replacedMode == 0o600 && correctedDirectoryMode == 0o700,
                 "replacement repairs old broad recovery metadata")
             check(parentModeBefore == parentModeAfter, "recovery privacy does not chmod parent")
+            check(
+                RecoveryStore.maximumSnapshotBytes > 512 * 1024 * 1024,
+                "F149 recovery does not inherit the smaller session byte ceiling")
+            Checks.section("F149 byte-exact recovery revision identity") {
+                let exactID = UUID()
+                let exact = RecoverySnapshot(
+                    id: exactID, text: "caf\u{E9}", format: FileFormat(), originalURL: nil, revision: 1)
+                try store.save(exact)
+                let saved = try Data(contentsOf: store.fileURL(for: exactID))
+                let canonicalTwin = RecoverySnapshot(
+                    id: exactID, text: "cafe\u{301}", format: FileFormat(), originalURL: nil, revision: 1)
+                rejects(
+                    "F149 equal-revision recovery text must match UTF8 bytes, not canonical String equality",
+                    expecting: RecoveryError.staleRevision
+                ) {
+                    try store.save(canonicalTwin)
+                }
+                check(
+                    try Data(contentsOf: store.fileURL(for: exactID)) == saved,
+                    "F149 refusing byte-distinct equal-revision recovery preserves saved bytes")
+                try store.remove(id: exactID, throughRevision: 1)
+            }
             rejects("stale write", expecting: RecoveryError.staleRevision) { try store.save(first) }
             rejects("stale cleanup", expecting: RecoveryError.staleRevision) {
                 try store.remove(id: id, throughRevision: 1)
@@ -277,13 +314,8 @@ import Darwin
                 "untitled exact recovery after crash")
             check(try Data(contentsOf: original) == originalBytes, "forced crash leaves original unchanged")
             let writer = RecoveryWriter(), entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
-            let eventsLock = NSLock()
-            var events: [String] = []
-            func record(_ event: String) {
-                eventsLock.lock()
-                events.append(event)
-                eventsLock.unlock()
-            }
+            let events = RecoveryEvents()
+            let record: @Sendable (String) -> Void = { events.record($0) }
             writer.submit {
                 entered.signal()
                 release.wait()
@@ -296,9 +328,7 @@ import Darwin
             // F114: finish now drops a snapshot that has not started, so wait for the coalesced
             // write before the cleanup. The order asserted is the one this check always pinned.
             func recorded() -> [String] {
-                eventsLock.lock()
-                defer { eventsLock.unlock() }
-                return events
+                events.read()
             }
             spinUntil("the coalesced recovery write") { recorded().count == 2 }
             writer.finish { record("cleanup") }
@@ -632,4 +662,63 @@ private func codecAgainstReference() {
                 "a \(text.utf8.count)-byte document round-trips exactly as \(encoding) bom=\(bom)")
         }
     }
+}
+
+/// Test-owned event state is shared only through this lock, including snapshot reads.
+private final class RecoveryEvents: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String] = []
+    func record(_ value: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        values.append(value)
+    }
+    func read() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+}
+
+/// The pending closure is the sole owner after enqueue returns. Its destruction reenters
+/// the actual linked writer; a child watchdog turns lock reentrancy into a bounded failure.
+private final class WriterReentryToken: Sendable {
+    let writer: RecoveryWriter
+    let destroyed: DispatchSemaphore
+    init(writer: RecoveryWriter, destroyed: DispatchSemaphore) {
+        self.writer = writer
+        self.destroyed = destroyed
+    }
+    deinit {
+        writer.submit {}
+        destroyed.signal()
+    }
+}
+private func enqueueReentryToken(_ writer: RecoveryWriter, destroyed: DispatchSemaphore) {
+    let token = WriterReentryToken(writer: writer, destroyed: destroyed)
+    writer.submit { withExtendedLifetime(token) {} }
+}
+private func writerReentrancy(_ mode: String) throws {
+    DispatchQueue.global().asyncAfter(deadline: .now() + 3) { exit(70) }
+    let writer = RecoveryWriter(), entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0), destroyed = DispatchSemaphore(value: 0)
+    writer.submit {
+        entered.signal()
+        release.wait()
+    }
+    try require(entered.wait(timeout: .now() + 1) == .success, "fixture: writer operation is blocked")
+    enqueueReentryToken(writer, destroyed: destroyed)
+    if mode == "submit" {
+        writer.submit {}
+        release.signal()
+        writer.finish {}
+    } else if mode == "finish" {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { release.signal() }
+        writer.finish {}
+    } else {
+        throw NSError(domain: "WriterReentryFixture", code: 64)
+    }
+    check(
+        destroyed.wait(timeout: .now() + 1) == .success,
+        "displaced closure is destroyed after unlocking during " + mode)
 }

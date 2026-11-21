@@ -1,3 +1,4 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import Darwin
@@ -15,6 +16,19 @@ import Darwin
                 try? FileManager.default.removeItem(at: root)
                 try? FileManager.default.removeItem(at: outside)
             }
+            let displayRoot = root.appendingPathComponent("display-columns")
+            try FileManager.default.createDirectory(at: displayRoot, withIntermediateDirectories: true)
+            try Data("\t😀e\u{301}x\r\n".utf8).write(to: displayRoot.appendingPathComponent("columns.txt"))
+            var displayRequest = FolderSearchRequest(directory: displayRoot, query: "x")
+            displayRequest.displayTabWidth = 8
+            let displayResult = try await FolderSearch.search(displayRequest)
+            displayRequest.displayTabWidth = 4
+            check(
+                displayResult.matches.count == 1 && displayResult.matches[0].columnUTF16 == 6
+                    && displayResult.matches[0].displayColumn == 12 && displayResult.matches[0].displayTabWidth == 8
+                    && displayResult.matches[0].utf8Range.location == 8,
+                "G346 disk result captures tab stops while preserving UTF16/byte navigation metadata")
+            try FileManager.default.removeItem(at: displayRoot)
             let unicode = "α🦋x\r\nβ🦋\n🦋\rfinal🦋"
             let unicodeURL = root.appendingPathComponent("unicode.txt")
             try Data(unicode.utf8).write(to: unicodeURL)

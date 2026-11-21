@@ -4,15 +4,12 @@ cd "$(dirname "$0")/.."
 source scripts/suite-lib.sh
 suite_begin
 suite_require_build
-suite_build "search-checks search-controller-checks search-replacement-checks search-scope-checks" scripts/build-user-lexer.sh
-suite_build "search-checks search-controller-checks search-replacement-checks search-scope-checks" clang++ -std=c++17 -fobjc-arc -mmacosx-version-min=14.0 -I Sources/Search/Boost -c Sources/Search/TTSearchEngine.mm -o build/tests/BoostSearch.o
-suite_build "search-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -import-objc-header Sources/Search/TTSearchEngine.h Sources/Search/SearchCore.swift "$SUITE_SUPPORT" Tests/SearchChecks.swift build/tests/BoostSearch.o -lc++ -o build/tests/search-checks
+suite_build "search-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/SearchChecks.swift Tests/SearchSessionChecks.swift -Xlinker "$NATIVE_SEARCH_LIBRARY" -lc++ -o build/tests/search-checks
 suite_run search-checks harness/logs/search-checks.log build/tests/search-checks
-suite_build "search-controller-checks" clang++ -std=c++17 -fobjc-arc -mmacosx-version-min=14.0 -I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F build/vendor/Debug -c Sources/EditorBridge/TTEditor.mm -o build/tests/SearchNativeBridge.o
-suite_build "search-controller-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -import-objc-header Sources/EditorBridge/TTEditor.h -F build/vendor/Debug -framework Scintilla Sources/UI/*.swift -framework Cocoa -Xlinker -rpath -Xlinker "$PWD/build/vendor/Debug" Sources/Search/SearchCore.swift Sources/Search/SearchController.swift "$SUITE_SUPPORT" Tests/SearchControllerChecks.swift build/tests/SearchNativeBridge.o build/tests/BoostSearch.o build/tests/UserLexer.o Vendor/lexilla/bin/liblexilla.a -lc++ -o build/tests/search-controller-checks
+suite_build "search-controller-checks" swiftc "${SWIFT_BASE[@]}" -F "$VENDOR_BUILD" -framework Scintilla -framework Cocoa -Xlinker -rpath -Xlinker "$VENDOR_BUILD" "$SUITE_SUPPORT" Tests/Support/ModelessForms.swift Tests/SearchControllerChecks.swift -Xlinker "$NATIVE_BRIDGE_LIBRARY" -Xlinker "$NATIVE_SEARCH_LIBRARY" -lc++ -o build/tests/search-controller-checks
 suite_run search-controller-checks harness/logs/search-controller-checks.log build/tests/search-controller-checks
-suite_build "search-replacement-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -import-objc-header Sources/Search/TTSearchEngine.h Sources/Documents/FileCodec.swift Sources/Search/SearchCore.swift Sources/Search/FolderSearchFilters.swift Sources/Search/FolderSearch.swift Sources/Search/FolderReplacement.swift "$SUITE_SUPPORT" Tests/SearchReplacementChecks.swift build/tests/BoostSearch.o -lc++ -o build/tests/search-replacement-checks
+suite_build "search-replacement-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/SearchReplacementChecks.swift -Xlinker "$NATIVE_SEARCH_LIBRARY" -lc++ -o build/tests/search-replacement-checks
 suite_run search-replacement-checks harness/logs/search-replacement-checks.log build/tests/search-replacement-checks
-suite_build "search-scope-checks" swiftc -target arm64-apple-macos14.0 -module-cache-path build/ModuleCache -import-objc-header Sources/Search/TTSearchEngine.h Sources/Documents/FileCodec.swift Sources/Search/SearchCore.swift Sources/Search/FolderSearchFilters.swift Sources/Search/FolderSearch.swift "$SUITE_SUPPORT" Tests/SearchScopeChecks.swift build/tests/BoostSearch.o -lc++ -o build/tests/search-scope-checks
+suite_build "search-scope-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/SearchScopeChecks.swift -Xlinker "$NATIVE_SEARCH_LIBRARY" -lc++ -o build/tests/search-scope-checks
 suite_run search-scope-checks harness/logs/search-scope-checks.log build/tests/search-scope-checks
 suite_finish

@@ -4,29 +4,52 @@ import Darwin
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct RecoverySnapshot: Codable, Equatable {
-    var schemaVersion: Int = 1
-    let id: UUID
-    let text: String
-    let format: FileFormat
+package struct RecoverySnapshot: Codable, Equatable, Sendable {
+    package init(
+        schemaVersion: Int = 1, id: UUID, text: String, format: FileFormat, originalURL: String?, revision: UInt64,
+        savedAt: Date = Date()
+    ) {
+        self.schemaVersion = schemaVersion
+        self.id = id
+        self.text = text
+        self.format = format
+        self.originalURL = originalURL
+        self.revision = revision
+        self.savedAt = savedAt
+    }
+
+    package var schemaVersion: Int
+    package let id: UUID
+    package let text: String
+    package let format: FileFormat
     /// Informational identity only. RecoveryStore never opens or writes this path.
-    let originalURL: String?
-    let revision: UInt64
-    var savedAt: Date = Date()
+    package let originalURL: String?
+    package let revision: UInt64
+    package var savedAt: Date
 }
 
-struct RecoveryIssue {
-    let url: URL
-    let message: String
+package struct RecoveryIssue {
+    package init(url: URL, message: String) {
+        self.url = url
+        self.message = message
+    }
+
+    package let url: URL
+    package let message: String
 }
-struct RecoveryScan {
-    let snapshots: [RecoverySnapshot]
-    let issues: [RecoveryIssue]
+package struct RecoveryScan {
+    package init(snapshots: [RecoverySnapshot], issues: [RecoveryIssue]) {
+        self.snapshots = snapshots
+        self.issues = issues
+    }
+
+    package let snapshots: [RecoverySnapshot]
+    package let issues: [RecoveryIssue]
 }
 
-enum RecoveryError: Error, LocalizedError {
+package enum RecoveryError: Error, LocalizedError {
     case invalidSnapshot, staleRevision, unsafeLocation
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .invalidSnapshot:
             return "The recovery snapshot is invalid or uses an unsupported version. It has been left untouched."
@@ -39,8 +62,14 @@ enum RecoveryError: Error, LocalizedError {
 /// Inject a dedicated app-owned directory. Methods are serialized within this instance.
 /// Atomic replacement preserves the previous complete snapshot if writing fails.
 /// Does not restore to an original file: callers must present recovered text for review.
-final class RecoveryStore {
-    let directory: URL
+/// Sendable boundary: immutable directory and lock; written and snapshotReadCount
+/// are accessed under lock. All private cache/read helpers are called only by the
+/// locked save/load/scan/remove operations. Path-only helpers use immutable values.
+final package class RecoveryStore: @unchecked Sendable {
+    /// Recovery has no smaller product ceiling than an addressable Data value. Do not import
+    /// the session store's 512 MiB cap: large pending documents were already recoverable.
+    static package let maximumSnapshotBytes = Int.max
+    package let directory: URL
     private let lock = NSLock()
     /// What this instance last wrote for each id, with the identity of the file it left on disk.
     /// While the file still has that identity, save and remove compare revisions from memory
@@ -52,19 +81,24 @@ final class RecoveryStore {
     }
     private var written: [UUID: Written] = [:]
     /// How many snapshot files this instance has read and decoded in full; for checks and diagnosis.
-    private(set) var snapshotReads = 0
+    private var snapshotReadCount = 0
+    package var snapshotReads: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshotReadCount
+    }
     /// Temporary files older than this belong to an earlier process that died during a write.
-    static let processStart: Date = {
+    static package let processStart: Date = {
         var info = kinfo_proc(), size = MemoryLayout<kinfo_proc>.stride
         var name = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
         guard sysctl(&name, UInt32(name.count), &info, &size, nil, 0) == 0, size > 0 else { return Date() }
         let started = info.kp_proc.p_starttime
         return Date(timeIntervalSince1970: TimeInterval(started.tv_sec) + TimeInterval(started.tv_usec) / 1_000_000)
     }()
-    init(directory: URL) { self.directory = directory }
+    package init(directory: URL) { self.directory = directory }
 
     /// Save a monotonically increasing document revision; corrupt/newer records are never overwritten.
-    func save(_ snapshot: RecoverySnapshot) throws {
+    package func save(_ snapshot: RecoverySnapshot) throws {
         lock.lock()
         defer { lock.unlock() }
         try validate(snapshot)
@@ -76,8 +110,8 @@ final class RecoveryStore {
             let existing = try read(destination, expectedID: snapshot.id)
             guard existing.revision <= snapshot.revision else { throw RecoveryError.staleRevision }
             if existing.revision == snapshot.revision {
-                guard existing.text == snapshot.text, existing.format == snapshot.format,
-                    existing.originalURL == snapshot.originalURL
+                guard existing.text.utf8.elementsEqual(snapshot.text.utf8), existing.format == snapshot.format,
+                    existing.originalURL.map({ Data($0.utf8) }) == snapshot.originalURL.map({ Data($0.utf8) })
                 else { throw RecoveryError.staleRevision }
                 remember(snapshot.id, revision: snapshot.revision)
                 return
@@ -89,7 +123,7 @@ final class RecoveryStore {
         remember(snapshot.id, revision: snapshot.revision)
     }
     /// Read exactly one identified snapshot, validating its filename identity and schema.
-    func load(id: UUID) throws -> RecoverySnapshot {
+    package func load(id: UUID) throws -> RecoverySnapshot {
         lock.lock()
         defer { lock.unlock() }
         try checkDirectoryIfPresent()
@@ -99,7 +133,7 @@ final class RecoveryStore {
     /// Directory-level failures still throw because no reliable inventory was possible.
     /// The one thing a scan deletes is a temporary `.pending` file left by a process that died
     /// during a write: it is an unfinished private copy of a document's text that nothing reads.
-    func scan() throws -> RecoveryScan {
+    package func scan() throws -> RecoveryScan {
         lock.lock()
         defer { lock.unlock() }
         try checkDirectoryIfPresent()
@@ -125,13 +159,13 @@ final class RecoveryStore {
     }
     /// Every snapshot, or an error if any entry is unreadable: scan() with its issues made fatal.
     /// Invalid entries are never deleted and there is no fallback to an original file.
-    func loadAll() throws -> [RecoverySnapshot] {
+    package func loadAll() throws -> [RecoverySnapshot] {
         let result = try scan()
         guard result.issues.isEmpty else { throw RecoveryError.invalidSnapshot }
         return result.snapshots
     }
     /// Remove only the revision explicitly acknowledged as saved/discarded, avoiding stale cleanup.
-    func remove(id: UUID, throughRevision: UInt64) throws {
+    package func remove(id: UUID, throughRevision: UInt64) throws {
         lock.lock()
         defer { lock.unlock() }
         try checkDirectoryIfPresent()
@@ -149,7 +183,7 @@ final class RecoveryStore {
     /// remove(id:throughRevision:), so only the listed identities at the scanned revision are
     /// deleted: a snapshot that advanced since the scan, a corrupt file or an unlisted
     /// neighbour is left untouched. Returns one issue per snapshot that was not removed.
-    func discard(_ snapshots: [RecoverySnapshot]) -> [RecoveryIssue] {
+    package func discard(_ snapshots: [RecoverySnapshot]) -> [RecoveryIssue] {
         snapshots.compactMap { snapshot in
             do {
                 try remove(id: snapshot.id, throughRevision: snapshot.revision)
@@ -158,7 +192,7 @@ final class RecoveryStore {
         }
     }
     /// Location only, for reporting and Reveal in Finder. The store never follows it blindly.
-    func fileURL(for id: UUID) -> URL { url(for: id) }
+    package func fileURL(for id: UUID) -> URL { url(for: id) }
     private func url(for id: UUID) -> URL {
         directory.appendingPathComponent(id.uuidString).appendingPathExtension("json")
     }
@@ -204,28 +238,11 @@ final class RecoveryStore {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
     }
     private func privateAtomicWrite(_ data: Data, to destination: URL) throws {
-        let temporary = directory.appendingPathComponent(UUID().uuidString + ".pending")
-        // Create an empty private file before adding any document content. The containing
-        // directory is already 0700, including during initial file creation.
-        guard
-            FileManager.default.createFile(
-                atPath: temporary.path, contents: nil, attributes: [.posixPermissions: 0o600])
-        else {
-            throw CocoaError(.fileWriteNoPermission)
-        }
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        let handle = try FileHandle(forWritingTo: temporary)
-        defer { try? handle.close() }
-        try handle.write(contentsOf: data)
-        try handle.synchronize()
-        try handle.close()
-        if FileManager.default.fileExists(atPath: destination.path) {
-            // Keep the new private metadata, rather than inheriting older broad permissions.
-            _ = try FileManager.default.replaceItemAt(
-                destination, withItemAt: temporary, options: .usingNewMetadataOnly)
-        } else {
-            try FileManager.default.moveItem(at: temporary, to: destination)
-        }
+        do {
+            try PrivateFileStore.write(
+                data, to: destination, maximumBytes: Self.maximumSnapshotBytes,
+                temporaryPrefix: "", temporarySuffix: ".pending")
+        } catch PrivateFileError.unsafeLocation { throw RecoveryError.unsafeLocation }
     }
     private func checkDirectoryIfPresent() throws {
         guard directory.isFileURL else { throw RecoveryError.unsafeLocation }
@@ -237,13 +254,18 @@ final class RecoveryStore {
         }
     }
     private func read(_ url: URL, expectedID: UUID) throws -> RecoverySnapshot {
-        let properties = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-        guard properties.isRegularFile == true, properties.isSymbolicLink != true else {
+        let data: Data
+        do { data = try PrivateFileStore.read(url, maximumBytes: Self.maximumSnapshotBytes) } catch PrivateFileError
+            .unsafeLocation
+        { throw RecoveryError.unsafeLocation } catch  where error.posixCode == .ELOOP {
             throw RecoveryError.unsafeLocation
         }
-        snapshotReads += 1
+        snapshotReadCount += 1
         let snapshot: RecoverySnapshot
-        do { snapshot = try JSONDecoder().decode(RecoverySnapshot.self, from: Data(contentsOf: url)) } catch {
+        do {
+            try PersistedFormat.check(data, context: "Recovery snapshot")
+            snapshot = try JSONDecoder().decode(RecoverySnapshot.self, from: data)
+        } catch {
             throw RecoveryError.invalidSnapshot
         }
         guard snapshot.id == expectedID else { throw RecoveryError.invalidSnapshot }

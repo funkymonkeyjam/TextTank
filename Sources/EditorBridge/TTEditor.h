@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <AppKit/AppKit.h>
-#import "../Search/TTSearchEngine.h"
 NS_ASSUME_NONNULL_BEGIN
 /// Posted by -retireInFavorOf: on the main thread. The object is the view about to leave its
 /// window; userInfo[TTEditorSuccessorKey] is the remaining view of the same document.
@@ -18,6 +17,71 @@ typedef NS_ERROR_ENUM(TTEditorErrorDomain, TTEditorError) {
 /// may listen. It says "look again", not what changed; Scintilla reports selection changes when
 /// it paints, so a periodic refresh is still needed for state no event covers.
 extern NSNotificationName const TTEditorStateDidChangeNotification;
+/// Stable symbolic identifiers remain raw strings on disk; Swift callers carry a distinct type.
+/// Foreign/unknown identifiers are still validated before engine dispatch.
+typedef NSString *TTEditorCommandIdentifier NS_TYPED_EXTENSIBLE_ENUM;
+/// Values match Scintilla's insertion-ending codes; they are not file-format strings.
+typedef NS_ENUM(NSInteger, TTLineEndingMode) {
+    TTLineEndingModeCRLF NS_SWIFT_NAME(TTLineEndingMode.crlf) = 0,
+    TTLineEndingModeCR NS_SWIFT_NAME(TTLineEndingMode.cr) = 1,
+    TTLineEndingModeLF NS_SWIFT_NAME(TTLineEndingMode.lf) = 2,
+};
+typedef NS_ENUM(NSInteger, TTMacroActionKind) {
+    TTMacroActionKindInsertText NS_SWIFT_NAME(TTMacroActionKind.insertText),
+    TTMacroActionKindCommand NS_SWIFT_NAME(TTMacroActionKind.command),
+    TTMacroActionKindUnsupported NS_SWIFT_NAME(TTMacroActionKind.unsupported),
+};
+/// A native recording/playback value. Unsupported messages are diagnostics, never dispatch inputs.
+__attribute__((objc_subclassing_restricted))
+@interface TTMacroAction : NSObject <NSCopying>
+@property(nonatomic, readonly) TTMacroActionKind kind;
+@property(nonatomic, readonly, copy, nullable) NSString *text;
+@property(nonatomic, readonly, copy, nullable) TTEditorCommandIdentifier command;
+@property(nonatomic, readonly, copy, nullable) NSString *name;
+@property(nonatomic, readonly) NSUInteger message;
++ (instancetype)insertText:(NSString *)text NS_SWIFT_NAME(insertText(_:));
++ (instancetype)command:(TTEditorCommandIdentifier)command NS_SWIFT_NAME(command(_:));
++ (instancetype)unsupported:(NSString *)name message:(NSUInteger)message NS_SWIFT_NAME(unsupported(_:message:));
+- (instancetype)init NS_UNAVAILABLE;
+@end
+/// A UTF-8 byte span, distinct from Foundation NSRange values used for UTF-16 search.
+/// Construction does not assert document bounds; the editor validates the complete batch.
+__attribute__((objc_subclassing_restricted))
+@interface TTByteRange : NSObject <NSCopying>
+@property(nonatomic, readonly) NSInteger location;
+@property(nonatomic, readonly) NSInteger length;
+- (instancetype)initWithLocation:(NSInteger)location length:(NSInteger)length;
+- (instancetype)init NS_UNAVAILABLE;
+@end
+/// One immutable replacement of a byte span; the entire edit list is validated before mutation.
+__attribute__((objc_subclassing_restricted))
+@interface TTTextEdit : NSObject <NSCopying>
+@property(nonatomic, readonly, strong) TTByteRange *range;
+@property(nonatomic, readonly, copy) NSString *text;
+- (instancetype)initWithRange:(TTByteRange *)range text:(NSString *)text;
+- (instancetype)init NS_UNAVAILABLE;
+@end
+/// Immutable UTF-8 byte positions. Bounds and scalar alignment are checked by TTEditor,
+/// before any selection is changed; negative/out-of-document values remain rejectable inputs.
+__attribute__((objc_subclassing_restricted))
+@interface TTSelectionRange : NSObject <NSCopying>
+@property(nonatomic, readonly) NSInteger anchor;
+@property(nonatomic, readonly) NSInteger caret;
+- (instancetype)initWithAnchor:(NSInteger)anchor caret:(NSInteger)caret;
+- (instancetype)init NS_UNAVAILABLE;
+@end
+/// Immutable metadata copied from one main-thread engine observation. No view is retained.
+__attribute__((objc_subclassing_restricted))
+@interface TTEditorStatus : NSObject <NSCopying>
+@property(nonatomic, readonly) NSInteger line;
+@property(nonatomic, readonly) NSInteger column;
+@property(nonatomic, readonly) NSInteger lines;
+@property(nonatomic, readonly) NSInteger tabWidth;
+@property(nonatomic, readonly) BOOL useTabs;
+@property(nonatomic, readonly) double fontSize;
+@property(nonatomic, readonly) TTLineEndingMode eol;
+- (instancetype)init NS_UNAVAILABLE;
+@end
 /// Main-thread-only view. All positions remain inside the UTF-8 Scintilla model.
 ///
 /// A split view is two TTEditor views on one Scintilla document (shareDocumentWith:). State
@@ -41,33 +105,35 @@ extern NSNotificationName const TTEditorStateDidChangeNotification;
 @property(nonatomic, readonly) NSUInteger revision;
 /// Byte positions of the primary selection; selectionCount includes additional selections.
 @property(nonatomic, readonly) NSInteger selectionCount;
-@property(nonatomic, readonly) NSArray<NSDictionary<NSString *, NSNumber *> *> *selectionRanges;
+@property(nonatomic, readonly) NSArray<TTSelectionRange *> *selectionRanges;
 /// Changes whenever any selection of this view may have changed: on every text modification, on
 /// every bridge call that can move a selection, and when Scintilla reports a selection update.
 /// A cache key only; it can change without the selection having changed.
 @property(nonatomic, readonly) NSUInteger selectionGeneration;
-- (BOOL)setSelectionRanges:(NSArray<NSDictionary<NSString *, NSNumber *> *> *)ranges;
+- (BOOL)setSelectionRanges:(NSArray<TTSelectionRange *> *)ranges;
 - (BOOL)replaceSelections:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision;
-/// Applies byte-range replacements ({"start","end","text"}, ascending, each start at or after the
+/// Applies typed byte-range replacements (ascending, each start at or after the
 /// previous end) as one undo step without touching the rest of the document, so markers, folds
 /// and the viewport outside the ranges survive. Everything is validated first: revision,
 /// writability, document length, bounds, UTF-8 boundaries, order and encodability. Returns NO
 /// with nothing changed otherwise. Does not move the selection explicitly or scroll.
-- (BOOL)applyEdits:(NSArray<NSDictionary<NSString *, id> *> *)edits expectedRevision:(NSUInteger)revision expectedLength:(NSInteger)length;
+- (BOOL)applyEdits:(NSArray<TTTextEdit *> *)edits expectedRevision:(NSUInteger)revision expectedLength:(NSInteger)length NS_SWIFT_NAME(applyEdits(_:expectedRevision:expectedLength:));
 /// Replaces the content of a live document with one minimal-span edit (common prefix and suffix
 /// are kept), preserving bookmarks, the caret line and the first visible line. Identical text
 /// changes nothing, including revision. NO when read-only or unencodable. setText: remains the
 /// unconditional replace for fresh loads.
 - (BOOL)replaceDocumentText:(NSString *)text;
+/// Reject stale results before even a no-op replacement. Main-thread atomic guard.
+- (BOOL)replaceDocumentText:(NSString *)text expectedRevision:(NSUInteger)revision;
 /// replaceDocumentText: for open, reload and restore: nothing is recorded for Undo, the undo
 /// history is emptied and the result is the save point. NO, changing nothing, when read-only
 /// or unencodable.
 - (BOOL)loadDocumentText:(NSString *)text;
-/// Replaces ascending, non-overlapping byte ranges (NSRange values) under one undo action,
+/// Replaces ascending, non-overlapping byte ranges (TTByteRange values) under one undo action,
 /// without driving the selection per range. Revision, read-only state, bounds, UTF-8
 /// lead-byte alignment and encodability are all checked before the first edit; NO changes
 /// nothing. Afterwards there is one caret, just after the first replacement, scrolled into view.
-- (BOOL)replaceRanges:(NSArray<NSValue *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision;
+- (BOOL)replaceRanges:(NSArray<TTByteRange *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision NS_SWIFT_NAME(replaceRanges(_:withTexts:expectedRevision:));
 @property(nonatomic) BOOL readOnly;
 /// The one read-only guard: every command that edits text calls it before anything else,
 /// including before any dialog, so the reason is always the same and always stated first.
@@ -76,19 +142,20 @@ extern NSNotificationName const TTEditorStateDidChangeNotification;
 /// Called when Scintilla refuses an edit because the document is read-only (typing, a key
 /// command, Undo). Bridge methods that return NO for a read-only document do not call it.
 @property(nonatomic, copy, nullable) void (^onReadOnlyAttempt)(void);
-/// NO, changing nothing, when the document is read-only or the mode is not LF, CRLF or CR.
-- (BOOL)convertLineEndings:(NSString *)mode;
+/// NO, changing nothing, when the document is read-only or the mode is not a supported TTLineEndingMode.
+- (BOOL)convertLineEndings:(TTLineEndingMode)mode;
 /// Sets only the ending inserted by later edits (LF, CRLF or CR). Never rewrites existing
 /// bytes and creates no undo step; convertLineEndings: is the only converting operation.
-- (void)setLineEndingMode:(NSString *)mode;
-- (void)configureTabWidth:(NSInteger)width useTabs:(BOOL)useTabs;
+- (BOOL)setLineEndingMode:(TTLineEndingMode)mode;
+/// NO for an unsupported width; a valid request keeps the existing document-scope policy.
+- (BOOL)configureTabWidth:(NSInteger)width useTabs:(BOOL)useTabs;
 
 @property(nonatomic, readonly) NSInteger selectionStart;
 @property(nonatomic, readonly) NSInteger selectionEnd;
 @property(nonatomic, readonly) NSInteger selectionAnchor;
 @property(nonatomic, readonly) NSInteger selectionCaret;
 /// View metadata; line/column are one-based, column expands tabs.
-@property(nonatomic, readonly) NSDictionary<NSString *, NSNumber *> *statusInfo;
+@property(nonatomic, readonly) TTEditorStatus *statusInfo;
 /// Unicode scalar count across actual selections, without clipboard separators.
 @property(nonatomic, readonly) NSInteger selectedCharacterCount;
 /// Restores one ordinary selection. Rejects out-of-bounds or split UTF-8 code points.
@@ -99,6 +166,8 @@ extern NSNotificationName const TTEditorStateDidChangeNotification;
 - (void)scrollCaretIntoView;
 /// Zero-based display line at the top of this view.
 @property(nonatomic, readonly) NSInteger firstVisibleLine;
+/// Restores view metadata only, clamping offsets to UTF-8 boundaries and visible lines.
+- (void)restoreClosedTabViewWithAnchor:(NSInteger)anchor caret:(NSInteger)caret firstVisibleLine:(NSInteger)firstVisibleLine NS_SWIFT_NAME(restoreClosedTabView(anchor:caret:firstVisibleLine:));
 @property(nonatomic, readonly) NSArray<NSNumber *> *bookmarkLines;
 /// bookmarkLines.count without building the array.
 @property(nonatomic, readonly) NSInteger bookmarkCount;
@@ -111,16 +180,18 @@ extern NSNotificationName const TTEditorStateDidChangeNotification;
 @property(nonatomic, copy, nullable) void (^onChange)(void);
 @property(nonatomic, copy, nullable) void (^onFocus)(void);
 + (NSArray<NSString *> *)availableLanguages;
-/// Called while recording with one step per recordable action: kind "insertText" or "command".
-/// Anything that changed the text or the selection and cannot be replayed arrives as kind
-/// "unsupported" with a "name" for the person (a mouse click or drop, typing in Overtype, a
+/// Called while recording with one typed action per recordable insertion or command.
+/// Anything that changed the text or the selection and cannot be replayed arrives with
+/// TTMacroActionKindUnsupported and a diagnostic name (a mouse click or drop, typing in Overtype, a
 /// completion list, native Undo, an unmapped Scintilla message); the recording must be discarded.
-@property(nonatomic, copy, nullable) void (^onMacroStep)(NSDictionary<NSString *, id> *step);
+@property(nonatomic, copy, nullable) void (^onMacroStep)(TTMacroAction *step);
 /// The symbolic command names a recorded step may carry; the only names playback dispatches.
-+ (NSArray<NSString *> *)macroCommandNames;
++ (NSArray<TTEditorCommandIdentifier> *)macroCommandNames;
+/// Immutable canonical recording map; playback-only aliases are deliberately excluded.
++ (NSDictionary<TTEditorCommandIdentifier, NSNumber *> *)macroCommandMessages;
 - (void)startRecording;
 - (void)stopRecording;
-- (BOOL)executeMacroStep:(NSDictionary<NSString *, id> *)step;
+- (BOOL)executeMacroStep:(TTMacroAction *)step;
 - (void)beginUndoGroup;
 - (void)endUndoGroup;
 @property(nonatomic) BOOL wrap;
@@ -142,9 +213,13 @@ extern NSNotificationName const TTEditorStateDidChangeNotification;
 /// document, so holders of results that do not depend on this view's selection can retarget
 /// them. Posts nothing unless the two views share a document.
 - (void)retireInFavorOf:(TTEditor *)successor;
-- (void)executeCommand:(NSString *)identifier;
+/// NO for an unknown identifier, without changing text, selection or notifications.
+- (BOOL)executeCommand:(TTEditorCommandIdentifier)identifier;
++ (NSArray<TTEditorCommandIdentifier> *)supportedCommandIdentifiers;
 /// YES for executeCommand: identifiers that edit text, which callers guard with requireWritable:.
-+ (BOOL)commandModifiesText:(NSString *)identifier;
++ (BOOL)commandModifiesText:(TTEditorCommandIdentifier)identifier;
+/// The actual focused-view state of a known toggle; NO for non-toggle/unknown identifiers.
+- (BOOL)commandIsChecked:(TTEditorCommandIdentifier)identifier;
 /// Returns NO, changing nothing (selection included), when the text cannot be encoded as
 /// UTF-8 (an unpaired surrogate) or the document is read-only.
 - (BOOL)replaceSelection:(NSString *)text;
@@ -157,13 +232,44 @@ extern NSNotificationName const TTEditorStateDidChangeNotification;
 /// Styled text of the whole document, or of the main selection only when `selection` is YES;
 /// additional selections are not included.
 - (NSAttributedString *)attributedTextForSelection:(BOOL)selection;
-- (void)showCompletions:(NSArray<NSString *> *)words;
-- (void)setSyntaxStyle:(NSInteger)index foreground:(NSColor *)foreground background:(nullable NSColor *)background bold:(BOOL)bold italic:(BOOL)italic;
-- (void)showCallTip:(NSString *)text;
-- (void)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size;
-- (BOOL)setSearchHighlights:(NSArray<NSValue *> *)ranges;
+/// Filters invalid words as before. YES when a nonempty filtered list was requested.
+- (BOOL)showCompletions:(NSArray<NSString *> *)words;
+/// NO for an invalid index/foreign colour; valid non-RGB colours retain the existing fallback.
+- (BOOL)setSyntaxStyle:(NSInteger)index foreground:(NSColor *)foreground background:(nullable NSColor *)background bold:(BOOL)bold italic:(BOOL)italic;
+/// NO for NUL-containing or unencodable text.
+- (BOOL)showCallTip:(NSString *)text;
+/// NO for invalid bounds, an unavailable font or an invalid name; existing state is kept.
+- (BOOL)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size;
+/// Comparison-only presentation primitives; callers use independent snapshot renderers.
+/// No method below edits text, Undo, savepoint or selections. Indicator21/22 and marker2/3/4
+/// are distinct from search20/bookmark1. Main-thread only; all batches prevalidate.
+@property(nonatomic) BOOL comparisonPresentation;
+@property(nonatomic, readonly) BOOL selectionIsRectangular;
+@property(nonatomic, copy, nullable) void (^onComparisonViewportChange)(void);
+@property(nonatomic) NSInteger comparisonTopDisplayLine;
+@property(nonatomic) NSInteger comparisonHorizontalOffset;
+@property(nonatomic, readonly) NSInteger comparisonDisplayRows;
+@property(nonatomic, readonly) NSInteger comparisonLineHeight;
+/// Read the view's actual font including zoom; setting is allowed only in comparison mode
+/// and keeps both renderers on one scale without touching their text or selections.
+@property(nonatomic, strong) NSFont *comparisonFont;
+- (NSInteger)comparisonDocumentLineForDisplayLine:(NSInteger)line;
+- (NSInteger)comparisonDisplayLineForDocumentLine:(NSInteger)line;
+- (NSInteger)comparisonWrapCountForLine:(NSInteger)line;
+- (NSInteger)comparisonYForByte:(NSInteger)position;
+/// kind0 inserted(+),1 deleted(-),2 modified(~). Each batch <=512ranges per layer.
+- (BOOL)addComparisonHighlights:(NSArray<TTByteRange *> *)lines inlineRanges:(NSArray<TTByteRange *> *)spans kind:(NSInteger)kind;
+- (void)clearComparisonPresentation;
+/// Annotation rows are virtual space only. Zero clears, maximum32760 (native signed-short count).
+- (BOOL)setComparisonGapAfterLine:(NSInteger)line rows:(NSInteger)rows;
+/// Source line zero stays visible (native engine rule). Empty clears all hiding.
+- (BOOL)setComparisonHiddenLines:(NSIndexSet *)lines;
+- (void)setComparisonWhitespaceVisible:(BOOL)visible;
+
+- (BOOL)setSearchHighlights:(NSArray<TTByteRange *> *)ranges;
 - (void)clearSearchHighlights;
 
+/// Native Scintilla primitive retained for native control/performance checks. Product Find uses SearchController.
 - (BOOL)find:(NSString *)text matchCase:(BOOL)matchCase backwards:(BOOL)backwards;
 @end
 NS_ASSUME_NONNULL_END

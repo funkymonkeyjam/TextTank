@@ -4,14 +4,14 @@ import zlib
 
 /// Deterministic UTF-8 text utilities. Binary results are rejected, never repaired
 /// with replacement characters. These operations do not execute imported content.
-enum TextUtility: String, CaseIterable {
+package enum TextUtility: String, CaseIterable {
     case base64Encode, base64EncodePadded, base64EncodeUnix, base64EncodeLines, base64Decode, base64DecodeLines,
         base64DecodeStrict
     case quotedPrintableEncode, quotedPrintableDecode, samlDecode
     case urlEncode, urlEncodeExtended, urlEncodeFull, urlEncodeLines, urlEncodeExtendedLines, urlEncodeFullLines,
         urlDecode
     case hexEncode, hexDecode
-    var title: String {
+    package var title: String {
         switch self {
         case .base64EncodeLines: return "Base64 Encode by Line"
         case .base64Decode: return "Base64 Decode"
@@ -34,7 +34,7 @@ enum TextUtility: String, CaseIterable {
         case .hexDecode: return "Hex to UTF-8"
         }
     }
-    func apply(_ input: String) throws -> String {
+    package func apply(_ input: String) throws -> String {
         guard input.utf8.count <= 16 * 1024 * 1024 else { throw UtilityFailure.tooLarge }
         switch self {
         case .base64EncodeLines:
@@ -247,9 +247,9 @@ enum TextUtility: String, CaseIterable {
         }
         return table
     }()
-    static let upperHexDigits = Array("0123456789ABCDEF".utf8)
-    static let lowerHexDigits = Array("0123456789abcdef".utf8)
-    static func appendHex(_ byte: UInt8, to output: inout [UInt8], digits: [UInt8]) {
+    static package let upperHexDigits = Array("0123456789ABCDEF".utf8)
+    static package let lowerHexDigits = Array("0123456789abcdef".utf8)
+    static package func appendHex(_ byte: UInt8, to output: inout [UInt8], digits: [UInt8]) {
         output.append(digits[Int(byte >> 4)])
         output.append(digits[Int(byte & 15)])
     }
@@ -304,9 +304,9 @@ enum TextUtility: String, CaseIterable {
         return text
     }
 }
-enum UtilityFailure: LocalizedError, Equatable {
+package enum UtilityFailure: LocalizedError, Equatable {
     case malformed(String), binaryResult, tooLarge, selectionRequired, multipleSelections, documentChanged, noDocument
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .malformed(let format): return "Invalid \(format) input. The selection was not changed."
         case .binaryResult: return "The decoded bytes are not valid UTF-8 text. The selection was not changed."
@@ -321,10 +321,10 @@ enum UtilityFailure: LocalizedError, Equatable {
     }
 }
 
-struct RadixConversion {
+package struct RadixConversion {
     /// Whitespace and line breaks around the number are ignored: a selected line brings its
     /// line ending along. Anything inside the number is still rejected.
-    static func convert(_ input: String, from: Int, to: Int) throws -> String {
+    static package func convert(_ input: String, from: Int, to: Int) throws -> String {
         let input = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard [2, 8, 10, 16].contains(from), [2, 8, 10, 16].contains(to), !input.isEmpty,
             input.utf8.allSatisfy({ b in
@@ -336,12 +336,20 @@ struct RadixConversion {
     }
 }
 
-struct HexEncodingOptions {
-    var insertSpaces = false
-    var uppercase = true
-    var bytesPerLine = 16
-    var lineEnding = "\n"
-    func encode(_ text: String) throws -> String {
+package struct HexEncodingOptions {
+    package init(insertSpaces: Bool = false, uppercase: Bool = true, bytesPerLine: Int = 16, lineEnding: String = "\n")
+    {
+        self.insertSpaces = insertSpaces
+        self.uppercase = uppercase
+        self.bytesPerLine = bytesPerLine
+        self.lineEnding = lineEnding
+    }
+
+    package var insertSpaces: Bool
+    package var uppercase: Bool
+    package var bytesPerLine: Int
+    package var lineEnding: String
+    package func encode(_ text: String) throws -> String {
         guard (0...65536).contains(bytesPerLine), ["\n", "\r", "\r\n"].contains(lineEnding),
             text.utf8.count <= 16 * 1024 * 1024
         else { throw UtilityFailure.malformed("hex options or input size") }

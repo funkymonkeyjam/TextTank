@@ -9,3 +9,8 @@ output/
 .build/
 
 /tmp/
+
+__pycache__/
+
+# Local, owner-identifying design review retained with investigation evidence.
+/docs/TextTank-Apple-Design-Review-2026-11-15.pdf

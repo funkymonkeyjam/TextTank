@@ -1,65 +1,198 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import NativeSearch
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct SearchOptions: Codable, Equatable, Sendable {
-    enum Mode: Int, Codable, Sendable { case normal = 0, extended = 1, regularExpression = 2 }
-    var query = "", replacement = ""
-    var mode: Mode = .normal
-    var matchCase = false, wholeWord = false, dotMatchesNewline = false, wrap = true
+package struct SearchOptions: Codable, Equatable, Sendable {
+    package init(
+        query: String = "", replacement: String = "", mode: Mode = .normal, matchCase: Bool = false,
+        wholeWord: Bool = false, dotMatchesNewline: Bool = false, wrap: Bool = true
+    ) {
+        self.query = query
+        self.replacement = replacement
+        self.mode = mode
+        self.matchCase = matchCase
+        self.wholeWord = wholeWord
+        self.dotMatchesNewline = dotMatchesNewline
+        self.wrap = wrap
+    }
+
+    package enum Mode: Int, Codable, Sendable, CaseIterable {
+        case normal = 0, extended = 1, regularExpression = 2
+        package var nativeMode: TTSearchMode {
+            switch self {
+            case .normal: return .literal
+            case .extended: return .extended
+            case .regularExpression: return .regularExpression
+            }
+        }
+        package var displayName: String {
+            switch self {
+            case .normal: return Strings.text("search.mode.normal", "Normal")
+            case .extended: return Strings.text("search.mode.extended", "Extended (\\n, \\t, \\xNN)")
+            case .regularExpression: return Strings.text("search.mode.regex", "Regular expression (Boost)")
+            }
+        }
+    }
+    package var query: String, replacement: String
+    package var mode: Mode
+    package var matchCase: Bool, wholeWord: Bool, dotMatchesNewline: Bool, wrap: Bool
+    package func validatePreferences() throws {
+        guard query.utf16.count <= 65_536, replacement.utf16.count <= 1_048_576 else {
+            throw SearchFailure.preferencesTooLarge
+        }
+    }
 }
-struct SearchHit {
-    let range: NSRange
-    let replacement: String
+
+package struct FindPreferences: Codable {
+    package init(version: Int = 1, options: SearchOptions = SearchOptions()) {
+        self.version = version
+        self.options = options
+    }
+
+    package var version: Int
+    package var options: SearchOptions
+    // Six JSON bytes per allowed UTF-16 unit plus keys/flags fit within 8 MiB.
+    static package let maximumBytes = 8 * 1024 * 1024
+    static package func decode(_ data: Data) throws -> Self {
+        guard data.count <= maximumBytes else { throw SearchFailure.preferencesTooLarge }
+        try PersistedFormat.check(data, context: "Find settings")
+        let value = try JSONInputFailure.decode(Self.self, from: data, context: "Find settings")
+        guard value.version == 1 else { throw SearchFailure.preferencesVersion }
+        try value.options.validatePreferences()
+        return value
+    }
+    package func encoded() throws -> Data {
+        guard version == 1 else { throw SearchFailure.preferencesVersion }
+        try options.validatePreferences()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(self)
+    }
 }
-struct SearchReport {
-    let hits: [SearchHit]
-    let truncated: Bool
+package struct SearchDisplayPosition: Equatable, Sendable {
+    package init(line: Int, column: Int) {
+        self.line = line
+        self.column = column
+    }
+
+    package let line: Int
+    package let column: Int
 }
-enum SearchCore {
+package struct SearchHit: Sendable {
+    package init(range: NSRange, replacement: String, displayPosition: SearchDisplayPosition? = nil) {
+        self.range = range
+        self.replacement = replacement
+        self.displayPosition = displayPosition
+    }
+
+    package let range: NSRange
+    package let replacement: String
+    package var displayPosition: SearchDisplayPosition?
+}
+package struct SearchReport: Sendable {
+    package init(hits: [SearchHit], truncated: Bool, purpose: SearchCore.Purpose) {
+        self.hits = hits
+        self.truncated = truncated
+        self.purpose = purpose
+    }
+
+    package let hits: [SearchHit]
+    package let truncated: Bool
+    package let purpose: SearchCore.Purpose
+}
+package enum SearchFailure: LocalizedError, CustomNSError, Equatable {
+    package enum ReplacementCondition: Error, Equatable { case readOnly, multipleSelections, closed, stale }
+    case positionMapping
+    case preferencesTooLarge, preferencesVersion, inlineResultLimit, inlineReplacement(ReplacementCondition)
+    case invalidBookmarkLimit, bookmarkCancelled, bookmarkOffsetsUnordered, bookmarkOffsetOutOfBounds
+    case replacementCancelled, invalidReplacementRange, macroResultLimit, macroReplacement(String)
+    case unknownRecordedAction, macroStopped(String)
+    static package var errorDomain: String { "TextTank.Search" }
+    package var errorCode: Int {
+        switch self {
+        case .inlineResultLimit: return 12
+        case .inlineReplacement: return 13
+        case .positionMapping: return 14
+        case .preferencesTooLarge: return 10
+        case .preferencesVersion: return 11
+        case .invalidReplacementRange: return 3
+        case .macroResultLimit: return 4
+        case .macroReplacement: return 5
+        case .unknownRecordedAction: return 6
+        case .invalidBookmarkLimit, .bookmarkOffsetsUnordered, .bookmarkOffsetOutOfBounds, .macroStopped: return 7
+        case .bookmarkCancelled: return 8
+        case .replacementCancelled: return 9
+        }
+    }
+    package var errorDescription: String? {
+        switch self {
+        case .inlineResultLimit:
+            return "The search reached the result limit. Narrow the Find text and search again; nothing was changed."
+        case .inlineReplacement(.readOnly):
+            return "The selected match could not be replaced because the document is read-only. Nothing was changed."
+        case .inlineReplacement(.multipleSelections):
+            return
+                "The selected match could not be replaced because multiple selections are not supported. Nothing was changed."
+        case .inlineReplacement(.closed):
+            return
+                "The selected match could not be replaced because the document is not in a window. Nothing was changed."
+        case .inlineReplacement(.stale):
+            return
+                "The selected match could not be replaced because the document changed during the step. Nothing was changed."
+        case .positionMapping:
+            return
+                "Search positions could not be prepared within the work limit. Search again; the document was not changed."
+        case .preferencesTooLarge:
+            return
+                "The search text or replacement is too large to keep as saved settings. The search can still run; earlier saved settings were not changed."
+        case .preferencesVersion:
+            return "These saved search settings need another version of TextTank. The original entry was not changed."
+        case .invalidBookmarkLimit: return "Invalid bookmark work limit."
+        case .bookmarkCancelled:
+            return "Bookmark calculation cancelled or exceeded its time budget; bookmarks were preserved."
+        case .bookmarkOffsetsUnordered: return "Bookmark offsets are not in ascending order; bookmarks were preserved."
+        case .bookmarkOffsetOutOfBounds:
+            return "A bookmark offset is past the end of the text; bookmarks were preserved."
+        case .replacementCancelled: return "Replacement cancelled; no text was changed."
+        case .invalidReplacementRange: return "Invalid or overlapping replacement range."
+        case .macroResultLimit: return "Macro search reached the result limit; no edits were applied."
+        case .macroReplacement(let reason): return "Macro replacement was not applied: \(reason)."
+        case .unknownRecordedAction: return "Unrecognized recorded search action."
+        case .macroStopped(let reason): return "Macro stopped: \(reason). Prior edits remain undoable."
+        }
+    }
+    package var errorUserInfo: [String: Any] { [NSLocalizedDescriptionKey: errorDescription ?? ""] }
+}
+
+package enum SearchCore {
+    package enum Purpose: Sendable, Equatable { case allMatches, navigation }
     /// One forward UTF-16 pass over zero-based lines. A break is counted once its terminator has
     /// been passed in full, so an offset between CR and LF is still on the line that owns the
     /// CRLF, as in Scintilla.
     /// Called off-main before any bookmarks are mutated.
-    static func bookmarkLines(
+    static package func bookmarkLines(
         in text: String, locations: [Int], cancellation: TTSearchCancellation, timeLimit: TimeInterval = 2
     ) throws -> [Int] {
         guard locations.count <= 100000, timeLimit > 0, timeLimit <= 30 else {
-            throw NSError(
-                domain: "TextTank.Search", code: 7,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid bookmark work limit."])
+            throw SearchFailure.invalidBookmarkLimit
         }
         let deadline = Date().addingTimeInterval(timeLimit)
         var index = text.utf16.startIndex, position = 0, line = 0, lines: [Int] = []
         func check() throws {
             if cancellation.cancelled || Date() >= deadline {
-                throw NSError(
-                    domain: "TextTank.Search", code: 8,
-                    userInfo: [
-                        NSLocalizedDescriptionKey:
-                            "Bookmark calculation cancelled or exceeded its time budget; bookmarks were preserved."
-                    ])
+                throw SearchFailure.bookmarkCancelled
             }
         }
         try check()
         for target in locations {
             guard target >= position else {
-                throw NSError(
-                    domain: "TextTank.Search", code: 7,
-                    userInfo: [
-                        NSLocalizedDescriptionKey:
-                            "Bookmark offsets are not in ascending order; bookmarks were preserved."
-                    ])
+                throw SearchFailure.bookmarkOffsetsUnordered
             }
             while position < target {
                 guard index < text.utf16.endIndex else {
-                    throw NSError(
-                        domain: "TextTank.Search", code: 7,
-                        userInfo: [
-                            NSLocalizedDescriptionKey:
-                                "A bookmark offset is past the end of the text; bookmarks were preserved."
-                        ])
+                    throw SearchFailure.bookmarkOffsetOutOfBounds
                 }
                 let unit = text.utf16[index], next = text.utf16.index(after: index)
                 if unit == 10 || (unit == 13 && (next == text.utf16.endIndex || text.utf16[next] != 10)) { line += 1 }
@@ -75,34 +208,62 @@ enum SearchCore {
 
     /// The time one interactive search may take. Macro playback of a recorded search step uses
     /// the same value, so a step that could be recorded can also be replayed (F43).
-    static let defaultTimeLimit: TimeInterval = 2
+    static package let defaultTimeLimit: TimeInterval = 2
     /// `range` (UTF-16, default the whole text) limits where matches may lie; hits keep their
     /// offsets in `text` and the engine still sees the text around the range.
-    static func search(
+    static package func search(
         _ text: String, options: SearchOptions, range: NSRange? = nil,
         cancellation: TTSearchCancellation = TTSearchCancellation(), limit: Int = 100000,
-        timeLimit: TimeInterval = defaultTimeLimit
+        timeLimit: TimeInterval = defaultTimeLimit, purpose: Purpose = .allMatches, displayTabWidth: Int? = nil
     ) throws -> SearchReport {
+        let displayDeadline = Date().addingTimeInterval(timeLimit)
         let result = try TTSearchEngine.searchText(
             text, range: range ?? NSRange(location: 0, length: (text as NSString).length), query: options.query,
-            replacement: options.replacement, mode: options.mode.rawValue, matchCase: options.matchCase,
+            replacement: options.replacement, mode: options.mode.nativeMode, matchCase: options.matchCase,
             wholeWord: options.wholeWord, dotMatchesNewline: options.dotMatchesNewline, cancellation: cancellation,
-            maximumMatches: limit, timeLimit: timeLimit)
+            maximumMatches: limit, overlappingLiterals: purpose == .navigation, timeLimit: timeLimit)
+        var hits = result.matches.map { SearchHit(range: $0.range, replacement: $0.replacement) }
+        if let displayTabWidth {
+            let positions = try displayPositions(
+                hits.map { $0.range.location }, in: text,
+                tabWidth: displayTabWidth, cancellation: cancellation, deadline: displayDeadline)
+            for index in hits.indices { hits[index].displayPosition = positions[index] }
+        }
         return SearchReport(
-            hits: result.matches.map { SearchHit(range: $0.range, replacement: $0.replacement) },
-            truncated: result.truncated)
+            hits: hits,
+            truncated: result.truncated, purpose: purpose)
+    }
+    /// Presentation positions share one cancellable forward pass over existing immutable text.
+    /// Internal UTF-16 columns/ranges stay unchanged. Tabs advance to the captured tab stops;
+    /// astral and combining scalars each occupy one column, like native SCI_GETCOLUMN.
+    static package func displayPositions(
+        _ locations: [Int], in text: String, tabWidth: Int,
+        cancellation: TTSearchCancellation, deadline: Date = Date().addingTimeInterval(defaultTimeLimit)
+    ) throws -> [SearchDisplayPosition] {
+        guard (1...32).contains(tabWidth), locations.count <= 100000 else { throw SearchFailure.positionMapping }
+        var cursor = UTFCursor(text, tracksLines: true, tabWidth: tabWidth), positions: [SearchDisplayPosition] = []
+        positions.reserveCapacity(locations.count)
+        let stop = { cancellation.cancelled || Date() >= deadline }
+        for location in locations {
+            guard !stop(), cursor.advance(to: location, stop: stop) else { throw SearchFailure.positionMapping }
+            positions.append(.init(line: cursor.line, column: cursor.displayColumn))
+        }
+        guard !stop() else { throw SearchFailure.positionMapping }
+        return positions
     }
     /// Scalar-granular like byteRanges: nil for surrogate splits, negative and out-of-range input.
-    static func byteRange(_ range: NSRange, in text: String) -> NSRange? { byteRanges([range], in: text)?.first }
+    static package func byteRange(_ range: NSRange, in text: String) -> NSRange? {
+        byteRanges([range], in: text)?.first
+    }
     /// The hits whose byte range is exactly the byte selection. All hits are converted in one
     /// linear pass, so a single Replace costs the same for one match as for a hundred thousand.
-    static func hits(_ hits: [SearchHit], selectedBy selection: NSRange, in text: String) -> [SearchHit] {
+    static package func hits(_ hits: [SearchHit], selectedBy selection: NSRange, in text: String) -> [SearchHit] {
         guard let ranges = byteRanges(hits.map(\.range), in: text) else { return [] }
         return zip(hits, ranges).filter { $0.1 == selection }.map(\.0)
     }
     /// Linear offset conversion for sorted nonoverlapping matches; avoids copying
     /// a document prefix separately for every replacement.
-    static func byteRanges(_ ranges: [NSRange], in text: String) -> [NSRange]? {
+    static package func byteRanges(_ ranges: [NSRange], in text: String) -> [NSRange]? {
         var cursor = UTFCursor(text), output: [NSRange] = []
         for range in ranges {
             guard range.location >= 0, range.length >= 0, range.length <= Int.max - range.location,
@@ -117,22 +278,25 @@ enum SearchCore {
     /// The one forward walk from UTF-16 offsets to UTF-8 offsets, shared by in-document search and
     /// folder search. Targets must not go backwards, so any number of sorted matches costs a single
     /// pass over the text. Line and column (one-based, CRLF counted once) are kept only on request.
-    struct UTFCursor {
-        let text: String
-        let tracksLines: Bool
+    package struct UTFCursor {
+        package let text: String
+        package let tracksLines: Bool
         private var index: String.UnicodeScalarView.Index
-        private(set) var utf16Offset = 0
-        private(set) var byteOffset = 0
-        private(set) var line = 1
-        private(set) var columnUTF16 = 1
-        init(_ text: String, tracksLines: Bool = false) {
+        private(set) package var utf16Offset = 0
+        private(set) package var byteOffset = 0
+        private(set) package var line = 1
+        private(set) package var columnUTF16 = 1
+        private(set) package var displayColumn = 1
+        package let tabWidth: Int
+        package init(_ text: String, tracksLines: Bool = false, tabWidth: Int = 4) {
+            self.tabWidth = tabWidth
             self.text = text
             self.tracksLines = tracksLines
             index = text.unicodeScalars.startIndex
         }
         /// False when the target is behind the cursor, past the end of the text or inside a
         /// surrogate pair, and when `stop` (asked every 4,096 scalars) answers true.
-        mutating func advance(to target: Int, stop: () -> Bool = { false }) -> Bool {
+        mutating package func advance(to target: Int, stop: () -> Bool = { false }) -> Bool {
             let scalars = text.unicodeScalars
             var count = 0
             guard target >= utf16Offset else { return false }
@@ -148,8 +312,15 @@ enum SearchCore {
                     if value == 10 || (value == 13 && (next == scalars.endIndex || scalars[next].value != 10)) {
                         line += 1
                         columnUTF16 = 1
+                        displayColumn = 1
                     } else {
                         columnUTF16 += width
+                        // Scintilla's column stops at CR even at the boundary inside CRLF.
+                        if value == 9 {
+                            displayColumn += tabWidth - ((displayColumn - 1) % tabWidth)
+                        } else if value != 13 {
+                            displayColumn += 1
+                        }
                     }
                 }
                 index = next
@@ -158,21 +329,32 @@ enum SearchCore {
         }
     }
     /// False only between the two halves of a surrogate pair.
-    static func isScalarBoundary(_ i: Int, in source: NSString) -> Bool {
+    static package func isScalarBoundary(_ i: Int, in source: NSString) -> Bool {
         i <= 0 || i >= source.length
             || !(source.character(at: i) >= 0xDC00 && source.character(at: i) <= 0xDFFF
                 && source.character(at: i - 1) >= 0xD800 && source.character(at: i - 1) <= 0xDBFF)
     }
     /// Whether a match is where Next (or Previous) may go from `selection`. `continuing` is true
     /// when the selection is the match the last navigation chose, which is then not chosen again.
-    static func isNavigationCandidate(_ range: NSRange, from selection: NSRange, backwards: Bool, continuing: Bool)
+    static package func isNavigationCandidate(
+        _ range: NSRange, from selection: NSRange, backwards: Bool, continuing: Bool
+    )
         -> Bool
     {
         backwards
             ? NSMaxRange(range) <= selection.location && !(continuing && range == selection)
             : range.location >= NSMaxRange(selection) && !(continuing && range == selection)
     }
-    static func utf16Range(_ range: NSRange, in text: String) -> NSRange? {
+    /// A literal wrap searches the other side of the original boundary, never a match crossing
+    /// that boundary. Regex navigation retains its whole-report/zero-width semantics.
+    static package func isWrappedNavigationCandidate(
+        _ range: NSRange, from selection: NSRange, backwards: Bool,
+        mode: SearchOptions.Mode
+    ) -> Bool {
+        mode == .regularExpression
+            || (backwards ? range.location >= selection.location : NSMaxRange(range) <= NSMaxRange(selection))
+    }
+    static package func utf16Range(_ range: NSRange, in text: String) -> NSRange? {
         let bytes = text.utf8
         guard range.location >= 0, range.length >= 0, range.location <= bytes.count,
             range.length <= bytes.count - range.location
@@ -184,9 +366,10 @@ enum SearchCore {
     }
     /// Builds the result in one forward pass: the text between matches and each replacement are
     /// appended once, so the cost is linear however many matches change length. Hits must be in
-    /// ascending order, must not overlap and must not split a surrogate pair (error code 3).
-    /// A cancelled token stops the pass with error code 9 and nothing is returned.
-    static func replacing(_ text: String, with hits: [SearchHit], cancellation: TTSearchCancellation? = nil) throws
+    /// ascending order, must not overlap and must not split a surrogate pair (invalidReplacementRange).
+    /// A cancelled token stops the pass with replacementCancelled and nothing is returned.
+    static package func replacing(_ text: String, with hits: [SearchHit], cancellation: TTSearchCancellation? = nil)
+        throws
         -> String
     {
         let source = text as NSString, length = source.length
@@ -194,17 +377,13 @@ enum SearchCore {
         var previousEnd = 0
         for (number, hit) in hits.enumerated() {
             if number & 1023 == 0, cancellation?.cancelled == true {
-                throw NSError(
-                    domain: "TextTank.Search", code: 9,
-                    userInfo: [NSLocalizedDescriptionKey: "Replacement cancelled; no text was changed."])
+                throw SearchFailure.replacementCancelled
             }
             guard hit.range.location >= previousEnd, hit.range.length >= 0, hit.range.location <= length,
                 hit.range.length <= length - hit.range.location, isScalarBoundary(hit.range.location, in: source),
                 isScalarBoundary(NSMaxRange(hit.range), in: source)
             else {
-                throw NSError(
-                    domain: "TextTank.Search", code: 3,
-                    userInfo: [NSLocalizedDescriptionKey: "Invalid or overlapping replacement range."])
+                throw SearchFailure.invalidReplacementRange
             }
             if hit.range.location > previousEnd {
                 result.append(

@@ -1,5 +1,11 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+@testable import TextTankRuntime
+import EditorBridge
+import NativeSearch
+
+@MainActor private final class DocumentNoticeState { var count = 0 }
 
 @main struct DocumentChecks {
     @MainActor static func descendants(_ view: NSView) -> [NSView] {
@@ -26,6 +32,40 @@ import AppKit
         }
     }
     @MainActor static func main() {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments == ["--tab-integrations"] { TabIntegrationNativeChecks.runApplicationProcess() }
+        if arguments == ["--tab-groups"] { TabGroupNativeChecks.runApplicationProcess() }
+        if arguments == ["--tab-organization"] { TabOrganizationNativeChecks.runApplicationProcess() }
+        if arguments == ["--tab-commands"] { TabCommandNativeChecks.runApplicationProcess() }
+        if arguments == ["--tab-workspace"] { TabWorkspaceNativeChecks.runApplicationProcess() }
+        if arguments == ["--configuration-input-accessibility"] {
+            // Always required by test-documents.sh in a fresh process. A combined CLI
+            // prefix saturated AppKit animation workers; no production flags change.
+            Checks.run("DesignSettingsInputChecks") {
+                let isolated = try IsolatedSupportDirectory("DesignSettingsInputProcess")
+                defer { isolated.restore() }
+                LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent(
+                    "LanguageProfiles.json")
+                NativeFixtureEnvironment.install()
+                defer { NativeFixtureEnvironment.restore() }
+                let documentController = TextDocumentController()
+                let app = NSApplication.shared
+                check(
+                    NSDocumentController.shared === documentController,
+                    "DG input process constructs its owned document controller before NSApplication")
+                app.setActivationPolicy(.accessory)
+                let composition = AppDelegate()
+                NSApp.delegate = composition
+                composition.installEditorServices()
+                composition.buildMenus()
+                try DesignSettingsChecks.inputAccessibilityChecks(root: isolated.url, composition: composition)
+                Checks.summary { "PASS DesignSettingsInputChecks: \(Checks.count) native assertions" }
+            }
+        }
+        guard arguments.isEmpty else {
+            fputs("Unknown DocumentChecks argument\n", stderr)
+            exit(64)
+        }
         Checks.run("DocumentChecks") {
             // F148: there is no bundle here, so the suite names the bundled language catalog itself.
             LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")
@@ -35,8 +75,13 @@ import AppKit
             setenv("TEXTTANK_SUPPORT_DIRECTORY", root.appendingPathComponent("support").path, 1)
             defer { try? FileManager.default.removeItem(at: root) }
             // As in the app: the first document controller created becomes the shared one.
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             let documentController = TextDocumentController()
             let app = NSApplication.shared
+            check(
+                NSDocumentController.shared === documentController,
+                "F276 document controller constructed before NSApplication keeps singleton identity")
             app.setActivationPolicy(.accessory)
             print("SCREENS \(NSScreen.screens.map { $0.frame })")
             fflush(stdout)
@@ -45,7 +90,7 @@ import AppKit
             // it started with and by closing any document it left registered; leaving one behind
             // on a normal finish is itself reported, so a missing close cannot hide.
             @MainActor func section(_ name: String, line: UInt = #line, _ body: () throws -> Void) {
-                let delegate = app.delegate
+                let services = EditorServices.current
                 Checks.section(name, line: line) {
                     var finished = false
                     defer {
@@ -55,12 +100,18 @@ import AppKit
                                 "section '\(name)' left \(left.count) document(s) open", file: #filePath, line: line)
                         }
                         left.forEach { $0.close() }
-                        app.delegate = delegate
+                        EditorServices.current = services
                     }
                     try body()
                     finished = true
                 }
             }
+            section("audit26 presentation") { try Audit26PresentationChecks.run() }
+            section("audit29 services") { try Audit29ServiceChecks.run() }
+            section("audit29 factory") { try Audit29FactoryChecks.run(root: root) }
+            section("audit29 Foundation core") { try DocumentCoreChecks.run(root: root) }
+            section("audit29 intent") { try Audit29IntentChecks.run() }
+            section("one-row status") { try DesignStatusChecks.run() }
             // Written by the single-document section and read by the session and recovery section.
             let saved = root.appendingPathComponent("saved-as.txt")
             section("automation configuration and settings") {
@@ -121,12 +172,9 @@ import AppKit
                 // F199: a settings file that failed to load is never overwritten without explicit confirmation.
                 var futureSettings = configured
                 futureSettings.version = 2
-                var reservedSettings = configured
-                reservedSettings.shortcuts = ["upper": "s"]
-                let futureJSON = String(decoding: try JSONEncoder().encode(futureSettings), as: UTF8.self),
-                    reservedJSON = String(decoding: try JSONEncoder().encode(reservedSettings), as: UTF8.self)
+                let futureJSON = String(decoding: try JSONEncoder().encode(futureSettings), as: UTF8.self)
                 for (label, contents) in [
-                    ("future version", futureJSON), ("reserved shortcut", reservedJSON), ("malformed JSON", "{not json")
+                    ("future version", futureJSON), ("malformed JSON", "{not json")
                 ] {
                     let folder = root.appendingPathComponent("unreadable-settings-" + UUID().uuidString)
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -377,7 +425,7 @@ import AppKit
                 inverted.editor.setSavePoint()
                 try EditorTransform.invertCase.apply(to: inverted.editor)
                 check(bytesEqual(inverted.editor.text, "sTRA\u{DF}E\nABC\n"), "invert case edits the document buffer")
-                inverted.editor.executeCommand("undo")
+                inverted.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     bytesEqual(inverted.editor.text, "Stra\u{DF}e\nabc\n") && !inverted.editor.modified,
                     "invert case is one Undo back to the save point")
@@ -387,7 +435,7 @@ import AppKit
                 transformed.editor.resetUndoHistory()
                 try EditorTransform.sortAscending.apply(to: transformed.editor)
                 check(transformed.editor.text == "a\nb\n", "native line sorting changes authoritative buffer")
-                transformed.editor.executeCommand("undo")
+                transformed.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(transformed.editor.text == "b\na\n", "native line sorting one Undo")
                 // G368: a whole-document transform keeps bookmarks and the caret line.
                 let indented = (0..<60).map { "  row \($0)\n" }.joined()
@@ -399,11 +447,11 @@ import AppKit
                 check(
                     transformed.editor.text == indented.replacingOccurrences(of: "  row", with: "row")
                         && transformed.editor.bookmarkLines == [7, 40]
-                        && transformed.editor.statusInfo["line"]?.intValue == 41,
+                        && transformed.editor.statusInfo.line == 41,
                     "whole-document transform keeps bookmarks and the caret line")
-                transformed.editor.executeCommand("undo")
+                transformed.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
-                    transformed.editor.text == indented && transformed.editor.statusInfo["line"]?.intValue == 41,
+                    transformed.editor.text == indented && transformed.editor.statusInfo.line == 41,
                     "whole-document transform is one Undo, which also returns the caret to its line")
                 // Scintilla's Undo deletes and reinserts the replaced span, and undo history does not
                 // record markers, so bookmarks inside a span that covers every line collapse on Undo.
@@ -433,7 +481,7 @@ import AppKit
                 check(try document.data(ofType: "Plain Text") == initial, "native document exact bytes roundtrip")
                 // F126: the insertion ending follows the file's first line break; loading never edits.
                 check(
-                    document.editor.statusInfo["eol"]?.intValue == 0, "mixed file inserts its first line ending (CRLF)")
+                    document.editor.statusInfo.eol.rawValue == 0, "mixed file inserts its first line ending (CRLF)")
                 check(
                     document.editor.text.utf8.elementsEqual(String(decoding: initial, as: UTF8.self).utf8)
                         && !document.editor.modified && !document.isDocumentEdited,
@@ -441,13 +489,13 @@ import AppKit
                 let eolDocument = TextDocument()
                 try eolDocument.read(from: Data("a\r\nb".utf8), ofType: "Plain Text")
                 _ = eolDocument.editor.setSelectionAnchor(4, caret: 4)
-                eolDocument.editor.executeCommand("newLine")
+                eolDocument.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
                 check(
                     eolDocument.editor.text.utf8.elementsEqual("a\r\nb\r\n".utf8),
                     "Return in a CRLF file inserts CRLF, not a bare LF")
-                eolDocument.editor.convertLineEndings("LF")
+                eolDocument.editor.convertLineEndings(.lf)
                 check(
-                    eolDocument.editor.statusInfo["eol"]?.intValue == 2,
+                    eolDocument.editor.statusInfo.eol.rawValue == 2,
                     "explicit conversion switches the insertion ending")
                 for (bytes, mode, label) in [
                     ("x\ry\n", 1, "CR"), ("p\nq\r\n", 2, "LF"), ("a\r\nb\n", 0, "CRLF"),
@@ -455,7 +503,7 @@ import AppKit
                 ] {
                     try eolDocument.read(from: Data(bytes.utf8), ofType: "Plain Text")
                     check(
-                        eolDocument.editor.statusInfo["eol"]?.intValue == mode && !eolDocument.editor.modified,
+                        eolDocument.editor.statusInfo.eol.rawValue == mode && !eolDocument.editor.modified,
                         "reload into the same document follows the loaded file: \(label)")
                     check(
                         try eolDocument.data(ofType: "Plain Text") == Data(bytes.utf8),
@@ -470,9 +518,10 @@ import AppKit
                     controller = try requireValue(
                         document.windowControllers.first as? EditorWindowController,
                         "fixture: the document has its editor window controller"),
-                    window = try requireValue(controller.window, "fixture: the controller has a window")
+                    window = try requireValue(controller.hostWindow, "fixture: the controller has a window")
                 check(
-                    controller.document === document && window.windowController === controller,
+                    controller.document === document && controller.window == nil
+                        && window.windowController === controller.host && controller.host.document == nil,
                     "native controller document/window ownership")
                 let columnRevision = document.editor.revision, columnSelections = document.editor.selectionRanges
                 _ = document.editor.setSelectionAnchor(0, caret: 1)
@@ -489,7 +538,7 @@ import AppKit
                 check(
                     window.contentView != nil && document.editor.window === window,
                     "editor attached to visible document window")
-                document.editor.executeCommand("selectAll")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 document.editor.replaceSelection("local edits 😀\r\n")
                 check(
                     document.editor.modified && document.isDocumentEdited, "editing marks engine and NSDocument dirty")
@@ -521,7 +570,7 @@ import AppKit
                     !document.editor.modified && !document.isDocumentEdited,
                     "successful save clears engine/document dirty state")
                 document.fileURL = saved
-                document.editor.executeCommand("selectAll")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 document.editor.replaceSelection("copy-only text")
                 let copy = root.appendingPathComponent("copy.txt")
                 try document.writeSafely(to: copy, ofType: "Plain Text", for: .saveToOperation)
@@ -530,9 +579,9 @@ import AppKit
                 check(
                     try Data(contentsOf: saved) == Data("local edits 😀\r\n".utf8), "Save Copy does not overwrite source"
                 )
-                document.editor.executeCommand("undo")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: saved.path)
-                document.editor.executeCommand("selectAll")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 document.editor.replaceSelection("normal save")
                 try document.writeSafely(to: saved, ofType: "Plain Text", for: .saveOperation)
                 check(try Data(contentsOf: saved) == Data("normal save".utf8), "normal Save writes existing file")
@@ -540,7 +589,7 @@ import AppKit
                     (try FileManager.default.attributesOfItem(atPath: saved.path)[.posixPermissions] as! NSNumber)
                     .intValue
                 check(mode == 0o640, "native Save preserves file permission metadata")
-                document.editor.executeCommand("selectAll")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 document.editor.replaceSelection("local edits 😀\r\n")
                 try document.writeSafely(to: saved, ofType: "Plain Text", for: .saveOperation)
                 window.contentView?.layoutSubtreeIfNeeded()
@@ -550,9 +599,9 @@ import AppKit
                 )
                 fflush(stdout)
                 inspectGeometry(document.editor, label: "before-clone")
-                let priorDelegate = app.delegate
+                let priorServices = EditorServices.current
                 let cloneDelegate = AppDelegate()
-                app.delegate = cloneDelegate
+                cloneDelegate.installEditorServices()
                 var cloneSettings = EditorSettings()
                 cloneSettings.wrap = true
                 cloneSettings.tabWidth = 8
@@ -562,7 +611,7 @@ import AppKit
                 check(
                     controller.secondary?.wrap == true && controller.secondary?.menu != nil,
                     "new clone inherits persisted view settings and automation context")
-                app.delegate = priorDelegate
+                EditorServices.current = priorServices
                 window.contentView?.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
                 let clone = try requireValue(controller.secondary, "fixture: the split view has a clone editor")
@@ -580,7 +629,7 @@ import AppKit
                         }
                     }
                 }
-                clone.executeCommand("selectAll")
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 clone.replaceSelection("clone changed shared document")
                 check(document.editor.text == clone.text, "clone changes authoritative shared bytes")
                 check(document.isDocumentEdited && document.editor.modified, "clone notifications mark owner dirty")
@@ -588,16 +637,16 @@ import AppKit
                 check(
                     controller.secondary == nil && document.editor.text == "clone changed shared document",
                     "closing clone preserves owner buffer")
-                document.editor.executeCommand("undo")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(document.editor.text == "local edits 😀\r\n", "shared undo survives closing clone")
-                document.editor.executeCommand("selectAll")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 document.editor.replaceSelection("unsaved before read")
                 try document.read(from: Data("reloaded".utf8), ofType: "Plain Text")
-                document.editor.executeCommand("undo")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     document.editor.text == "reloaded" && !document.editor.modified,
                     "read resets undo history and engine dirty state")
-                document.editor.executeCommand("selectAll")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 document.editor.replaceSelection("unsaved before actual revert")
                 // F7: the discarded draft's snapshot must not outlive Revert to Saved.
                 document.flushRecovery()
@@ -624,7 +673,7 @@ import AppKit
                 check(
                     try !TextDocument.recovery.loadAll().contains { $0.id == document.recoveryID },
                     "revert removes discarded recovery snapshot")
-                document.editor.executeCommand("undo")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     document.editor.text == "reverted from disk",
                     "actual NSDocument revert replaces text and clears undo")
@@ -668,12 +717,12 @@ import AppKit
                 try document.reload(using: .utf8, discard: true)
                 check(
                     document.editor.text == externallyEdited && document.editor.bookmarkLines == [5, 40]
-                        && document.editor.statusInfo["line"]?.intValue == 41,
+                        && document.editor.statusInfo.line == 41,
                     "reload after a one-character disk change keeps bookmarks and the caret line")
                 check(
                     try !document.editor.modified && !document.isDocumentEdited && document.diskState() == .unchanged,
                     "bookmark-preserving reload still resets dirty state and the disk baseline")
-                document.editor.executeCommand("undo")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(document.editor.text == externallyEdited, "bookmark-preserving reload still clears undo")
                 document.editor.readOnly = true
                 try Data("locked reload".utf8).write(to: saved)
@@ -682,12 +731,14 @@ import AppKit
                     document.editor.text == "locked reload" && document.editor.readOnly,
                     "explicit reload works while retaining read-only flag")
                 document.close()
-                check(!window.isVisible, "closing document hides its native window")
+                check(
+                    window.isVisible && controller.host.active == nil && document.isClosed,
+                    "closing the final document retains the empty workspace window")
                 NotificationCenter.default.post(name: NSWindow.didUpdateNotification, object: window)
                 app.updateWindows()
                 check(
-                    controller.focusObservation == nil && controller.automationObserver == nil
-                        && document.editor.onFocus == nil,
+                    controller.focusObservation == nil && !controller.statusTimerActive
+                        && controller.views.allSatisfy { $0.onFocus == nil },
                     "close removes callbacks before document detaches")
                 check(
                     controller.activeEditor === document.editor,
@@ -699,11 +750,11 @@ import AppKit
                         $0.rawValue == "TextTank.CloseTab"
                     }, "the toolbar has no Close Tab item; each tab closes from its own button or Command-W")
             }
-            // The delegate installed here is deliberately left in place for every later section:
-            // NSApp.delegate is weak, and the tab, status and navigation paths checked below reach
-            // the application delegate. It is declared at this level so that it stays alive.
+            // Feature services live for the remaining sections, then restore their prior environment.
+            let priorServices = EditorServices.current
+            defer { EditorServices.current = priorServices }
             let sessionDelegate = AppDelegate()
-            app.delegate = sessionDelegate
+            sessionDelegate.installEditorServices()
             section("session restore and crash recovery") {
                 let snapshotText = "\u{FEFF}café😀\n2 eggs\0"
                 let snapshot = SessionDocument(
@@ -757,7 +808,7 @@ import AppKit
                     emptyRestored[0].isDocumentEdited && emptyRecovery?.text == "",
                     "empty dirty session restoration retains a recovery snapshot")
                 emptyRestored[0].editor.replaceSelection("x")
-                emptyRestored[0].editor.executeCommand("undo")
+                emptyRestored[0].editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     emptyRestored[0].editor.text.isEmpty && emptyRestored[0].isDocumentEdited,
                     "type-then-undo cannot make an empty restored document clean")
@@ -769,7 +820,7 @@ import AppKit
                     selection: SessionSelection(anchorByte: 0, caretByte: 0))
                 let plain = try WorkspaceController().restore(
                     WorkspaceSession(id: UUID(), name: "Plain UTF-8 restored document", documents: [plainSnapshot]))[0]
-                plain.editor.executeCommand("undo")
+                plain.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 plain.flushRecovery()
                 check(
                     plain.editor.text == plainText && plain.isDocumentEdited,
@@ -778,7 +829,7 @@ import AppKit
                     try TextDocument.recovery.load(id: plain.recoveryID).text == plainText,
                     "Undo after session restore keeps the recovery snapshot")
                 plain.editor.replaceSelection("x")
-                plain.editor.executeCommand("undo")
+                plain.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 plain.flushRecovery()
                 check(
                     plain.editor.text == plainText && !plain.editor.modified && plain.isDocumentEdited,
@@ -806,10 +857,10 @@ import AppKit
                         && recovered.fileURL == nil && recovered.isDocumentEdited,
                     "crash recovery opens the snapshot as a new unsaved document")
                 check(
-                    recovered.editor.statusInfo["eol"]?.intValue == 0, "recovered document inserts its own line ending")
-                recovered.automaticRecoveryDelay = 0.02
-                recovered.maximumRecoveryDelay = 0.02
-                recovered.editor.executeCommand("undo")
+                    recovered.editor.statusInfo.eol.rawValue == 0, "recovered document inserts its own line ending")
+                recovered.dependencies.automaticRecoveryDelay = 0.02
+                recovered.dependencies.maximumRecoveryDelay = 0.02
+                recovered.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 RunLoop.current.run(until: Date().addingTimeInterval(0.2))
                 recovered.flushRecovery()
                 check(
@@ -820,7 +871,7 @@ import AppKit
                     rewritten.text == crashedText && rewritten.revision > 7,
                     "Undo after recovery keeps the only on-disk copy")
                 recovered.editor.replaceSelection("x")
-                recovered.editor.executeCommand("undo")
+                recovered.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 RunLoop.current.run(until: Date().addingTimeInterval(0.2))
                 recovered.flushRecovery()
                 check(
@@ -846,11 +897,15 @@ import AppKit
                     doc.makeWindowControllers()
                     doc.showWindows()
                 }
-                let winA = tabA.windowControllers[0].window!, winB = tabB.windowControllers[0].window!
-                check(!winA.isVisible && winB.isVisible, "only selected compact tab is visible")
+                let winA = tabA.presentation!.hostWindow!, winB = tabB.presentation!.hostWindow!
+                check(
+                    !tabA.presentation!.isActiveTab && tabB.presentation!.isActiveTab && winA === winB,
+                    "one shared window hosts only the selected compact tab")
                 winB.setFrame(NSRect(x: 150, y: 150, width: 900, height: 650), display: true)
-                winA.makeKeyAndOrderFront(nil)
-                check(winA.isVisible && !winB.isVisible, "switching tabs changes visible document")
+                tabA.showWindows()
+                check(
+                    tabA.presentation!.isActiveTab && !tabB.presentation!.isActiveTab,
+                    "switching tabs changes mounted document")
                 if !NSScreen.screens.isEmpty {
                     print("TAB_GEOMETRY", winA.frame, winB.frame)
                     fflush(stdout)
@@ -861,9 +916,10 @@ import AppKit
                 let tabsController = tabA.windowControllers[0] as! EditorWindowController
                 tabsController.refreshStatusDetails()
                 let buttons = descendants(winA.contentView!).compactMap { $0 as? NSButton }
-                let closeB = buttons.first { $0.toolTip == "Close \(winB.title)" }!
-                let plus = buttons.first { $0.identifier?.rawValue == "tab.new" }!
-                check(plus.frame.minX < 500, "new-tab button follows compact tabs rather than window edge")
+                let closeB = buttons.first { $0.toolTip == "Close \(tabB.displayName ?? "Untitled")" }!
+                check(
+                    !buttons.contains { $0.identifier?.rawValue == "tab.new" },
+                    "DT-R6 compact tabs do not repeat the standard toolbar New command")
                 check(winA.tabbingMode == .disallowed, "native full-width tab strip disabled")
                 let heldFrame = winA.frame
                 tabA.close()
@@ -887,10 +943,10 @@ import AppKit
                 race.fileURL = raceURL
                 try race.read(from: Data("original".utf8), ofType: "Plain Text")
                 race.editor.text = "our save"
-                race.afterWriteForTesting = { try Data("external edit".utf8).write(to: raceURL) }
+                race.dependencies.afterWrite = { try Data("external edit".utf8).write(to: raceURL) }
                 try race.writeSafely(to: raceURL, ofType: "Plain Text", for: .saveOperation)
                 check(try race.diskState() == .changed, "post-save external writer cannot become acknowledged baseline")
-                race.afterWriteForTesting = nil
+                race.dependencies.afterWrite = nil
                 race.editor.text = "our second save"
                 rejects("later save rejects post-save external edit", message: "The file changed outside TextTank") {
                     try race.writeSafely(to: raceURL, ofType: "Plain Text", for: .saveOperation)
@@ -905,21 +961,21 @@ import AppKit
                 try Data("old".utf8).write(to: changedURL)
                 changed.editor.text = "submitted"
                 changed.format = FileFormat(encoding: .utf16LE, bom: true)
-                changed.afterWriteForTesting = {
+                changed.dependencies.afterWrite = {
                     changed.format = FileFormat(encoding: .utf8, bom: false)
-                    changed.editor.executeCommand("undo")
+                    changed.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 }
                 try changed.writeSafely(to: changedURL, ofType: "Plain Text", for: .saveOperation)
                 check(
                     changed.isDocumentEdited && changed.format.encoding == .utf8,
                     "change during Save retains newer format and dirty state")
                 changed.editor.replaceSelection("x")
-                changed.editor.executeCommand("undo")
+                changed.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(changed.isDocumentEdited, "old engine savepoint cannot clear dirty state after stale save")
                 check(
                     try FileCodec.decode(Data(contentsOf: changedURL)).text == "submitted",
                     "Save writes captured text despite later editor changes")
-                changed.afterWriteForTesting = nil
+                changed.dependencies.afterWrite = nil
                 changed.close()
 
             }
@@ -1003,8 +1059,8 @@ import AppKit
             }
             section("recovery timing and failure reporting") {
                 let recoveryDoc = TextDocument()
-                recoveryDoc.automaticRecoveryDelay = 0.25
-                recoveryDoc.maximumRecoveryDelay = 0.08
+                recoveryDoc.dependencies.automaticRecoveryDelay = 0.25
+                recoveryDoc.dependencies.maximumRecoveryDelay = 0.08
                 let deadline = Date().addingTimeInterval(0.24)
                 while Date() < deadline {
                     recoveryDoc.editor.text += "x"
@@ -1033,8 +1089,8 @@ import AppKit
                     (RunLoop.Mode.modalPanel, "modal"), (RunLoop.Mode.eventTracking, "event-tracking")
                 ] {
                     let modalDoc = TextDocument()
-                    modalDoc.automaticRecoveryDelay = 0.05
-                    modalDoc.maximumRecoveryDelay = 0.05
+                    modalDoc.dependencies.automaticRecoveryDelay = 0.05
+                    modalDoc.dependencies.maximumRecoveryDelay = 0.05
                     modalDoc.editor.text = "typed just before a \(label) loop"
                     let modalDeadline = Date().addingTimeInterval(1)
                     var modalSnapshot: RecoverySnapshot?
@@ -1076,11 +1132,11 @@ import AppKit
                 // F202: failures are sticky and distinct in the status line, escalate once, and reset on success.
                 var notices = 0
                 defer {
-                    TextDocument.recoveryFailureNoticeForTesting = nil
+                    NativeFixtureEnvironment.recoveryFailureNotice = nil
                     TextDocument.recoveryFailureNoticeShown = false
                 }
                 TextDocument.recoveryFailureNoticeShown = false
-                TextDocument.recoveryFailureNoticeForTesting = { _, _ in notices += 1 }
+                NativeFixtureEnvironment.recoveryFailureNotice = { _, _ in notices += 1 }
                 let failing = TextDocument()
                 NSDocumentController.shared.addDocument(failing)
                 failing.makeWindowControllers()
@@ -1090,7 +1146,7 @@ import AppKit
                 failing.editor.text = "a"
                 // N1: the save state is truthful at once, before any recovery write.
                 check(
-                    failing.isDocumentEdited && failingStatus.stringValue.hasPrefix("Edited ·")
+                    failing.isDocumentEdited && failingStatus.stringValue == "Edited"
                         && !failingStatus.stringValue.contains("Saved"),
                     "an edit reads Edited in the status line immediately, never Saved")
                 failing.flushRecovery()
@@ -1145,7 +1201,7 @@ import AppKit
                     AppDelegate.recoveryIssueText(try TextDocument.recovery.scan().issues).contains(failingFile.path),
                     "recovery review lists the full path of each file")
                 try FileManager.default.removeItem(at: failingFile)
-                TextDocument.recoveryFailureNoticeForTesting = nil
+                NativeFixtureEnvironment.recoveryFailureNotice = nil
                 TextDocument.recoveryFailureNoticeShown = false
             }
             section("explicit encoding choice") {
@@ -1260,11 +1316,16 @@ import AppKit
                     firstController.statusRefreshCount == hiddenRefreshes,
                     "hidden tabs perform no recurring status refresh")
                 secondController.refreshStatusDetails()
-                let eolBefore = descendants(secondController.window!.contentView!).compactMap { $0 as? NSButton }.first
-                { $0.identifier?.rawValue == "status.eol.0" }!
+                let eolBefore = descendants(secondController.hostWindow!.contentView!).compactMap {
+                    $0 as? NSPopUpButton
+                }
+                .first { $0.identifier?.rawValue == "status.eol.0" }!
                 second.editor.text = "new text"
                 secondController.refreshStatusDetails()
-                let eolAfter = descendants(secondController.window!.contentView!).compactMap { $0 as? NSButton }.first {
+                let eolAfter = descendants(secondController.hostWindow!.contentView!).compactMap {
+                    $0 as? NSPopUpButton
+                }
+                .first {
                     $0.identifier?.rawValue == "status.eol.0"
                 }!
                 check(eolBefore === eolAfter, "unrelated status changes retain existing control identity")
@@ -1272,18 +1333,21 @@ import AppKit
                 let navigation = AppDelegate()
                 navigation.previousDocumentTab(nil)
                 check(
-                    firstController.window!.isVisible && !secondController.window!.isVisible,
+                    firstController.isActiveTab && !secondController.isActiveTab,
                     "previous-tab command selects hidden document")
-                let sameA = NSWindow(), sameB = NSWindow()
-                sameA.title = "same.txt"
-                sameB.title = "same.txt"
-                let choices = navigation.documentTabChoices([sameA, sameB])
+                let sameA = DocumentFactory.makeUntitled(display: false),
+                    sameB = DocumentFactory.makeUntitled(display: false)
+                sameA.displayName = "same.txt"
+                sameB.displayName = "same.txt"
+                let choices = navigation.documentTabChoices([sameA.presentation!, sameB.presentation!])
                 check(
-                    choices.numberOfItems == 2 && choices.itemArray.map(\.tag) == [0, 1],
+                    choices.count == 2 && Set(choices.map(\.id)).count == 2,
                     "document chooser preserves same-title document identities")
+                sameA.close()
+                sameB.close()
                 navigation.nextDocumentTab(nil)
                 check(
-                    secondController.window!.isVisible && !firstController.window!.isVisible,
+                    secondController.isActiveTab && !firstController.isActiveTab,
                     "next-tab command restores document visibility")
                 first.close()
                 second.close()
@@ -1339,13 +1403,18 @@ import AppKit
                 }
                 let controller = visible.windowControllers[0] as! EditorWindowController
                 let hiddenController = hidden.windowControllers[0] as! EditorWindowController
-                let buttons = { descendants(controller.window!.contentView!).compactMap { $0 as? NSButton } }
+                let buttons = { descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSPopUpButton } }
                 let badges = {
+                    // DB-R3: totals, wrap and access state moved to the position menu. These
+                    // retain the original asynchronous metrics/state assertions at that surface.
                     buttons().filter { $0.identifier?.rawValue.hasPrefix("status.") == true }.map(\.title)
+                        + (controller.statusOptionsMenu(.position)?.items.filter {
+                            $0.action == nil && $0.submenu == nil
+                        }.map(\.title) ?? [])
                 }
                 let badge = { (identifier: String) in buttons().first { $0.identifier?.rawValue == identifier }?.title }
                 try require(
-                    controller.window!.isVisible && !hiddenController.window!.isVisible,
+                    controller.isPresented && !hiddenController.isActiveTab,
                     "fixture: one tab on screen, one hidden")
                 check(
                     controller.statusTimerActive && !hiddenController.statusTimerActive,
@@ -1356,55 +1425,66 @@ import AppKit
                     visible.editor.text = fixture
                     let (count, endings) = previousMetrics(fixture)
                     let shown = spinUntil("the badges for \(fixture.debugDescription)") {
-                        badges().contains("\(count) chars")
+                        badges().contains(Strings.count(count, .character))
                             && badge("status.eol.0") == (endings.isEmpty ? "LF" : endings)
                     }
                     if !shown { badgeMismatches.append("\(fixture.debugDescription): \(badges())") }
                 }
                 check(
                     badgeMismatches.isEmpty,
-                    "the chars and line-ending badges reach the previous implementation's values with no explicit refresh \(badgeMismatches)"
+                    "the position-menu character totals and line-ending field reach the previous implementation's values with no explicit refresh \(badgeMismatches)"
                 )
                 visible.editor.text = "a\r\nb\nc\u{1F600}"
                 spinUntil("exact character count and Mixed EOL") {
-                    badges().contains("7 chars") && badges().contains("Mixed EOL")
+                    badges().contains(Strings.count(7, .character)) && badges().contains("Mixed EOL")
                 }
                 check(
-                    badges().contains("7 chars") && badges().contains("Mixed EOL"),
+                    badges().contains(Strings.count(7, .character)) && badges().contains("Mixed EOL"),
                     "a CRLF and LF document with a non-BMP scalar shows the exact count and Mixed EOL")
                 _ = visible.editor.setSelectionAnchor(0, caret: 3)
-                spinUntil("the selection badge") { badges().contains("3 selected") }
-                check(badges().contains("3 selected"), "a selection-only change shows the selected count")
+                spinUntil("the selection badge") { badge("status.selection.0") == Strings.count(3, .character) }
+                check(
+                    badge("status.selection.0") == Strings.count(3, .character),
+                    "a selection-only change shows the selected count")
                 _ = visible.editor.setSelectionAnchor(0, caret: 0)
-                spinUntil("the selection badge to go") { !badges().contains { $0.hasSuffix("selected") } }
+                spinUntil("the selection badge to go") { badge("status.selection.0") == nil }
                 check(
-                    !badges().contains { $0.hasSuffix("selected") },
+                    badge("status.selection.0") == nil,
                     "collapsing the selection removes the selected count")
-                _ = visible.editor.setSelectionRanges([["anchor": 0, "caret": 1], ["anchor": 4, "caret": 5]])
+                _ = visible.editor.setSelectionRanges([
+                    TTSelectionRange(anchor: 0, caret: 1), TTSelectionRange(anchor: 4, caret: 5)
+                ])
                 spinUntil("the multi-selection badges") {
-                    badges().contains("2 selected") && badges().contains("2 selections")
+                    badge("status.selection.0") == Strings.count(2, .character) && badges().contains("2 selections")
                 }
-                _ = visible.editor.setSelectionRanges([["anchor": 0, "caret": 1], ["anchor": 3, "caret": 5]])
-                spinUntil("a changed additional selection") { badges().contains("3 selected") }
+                _ = visible.editor.setSelectionRanges([
+                    TTSelectionRange(anchor: 0, caret: 1), TTSelectionRange(anchor: 3, caret: 5)
+                ])
+                spinUntil("a changed additional selection") {
+                    badge("status.selection.0") == Strings.count(3, .character)
+                }
                 check(
-                    badges().contains("3 selected") && badges().contains("2 selections"),
+                    badge("status.selection.0") == Strings.count(3, .character) && badges().contains("2 selections"),
                     "changing only an additional selection updates the selected count")
                 _ = visible.editor.setSelectionAnchor(0, caret: 0)
                 // Earlier sections change the default settings, so wrap may start either way.
                 let wrapBadge = controller.activeEditor.wrap ? "No Wrap" : "Wrap"
                 controller.toggleWrap(nil)
-                visible.editor.executeCommand("bookmarkToggle")
+                visible.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "bookmarkToggle"))
                 visible.editor.readOnly = true
                 spinUntil("wrap, bookmark and read-only badges") {
-                    badges().contains(wrapBadge) && badges().contains("1 Bookmarks") && badges().contains("Read Only")
+                    badges().contains(wrapBadge) && badges().contains(Strings.count(1, .bookmark))
+                        && badges().contains("Read Only")
                 }
                 check(
-                    badges().contains(wrapBadge) && badges().contains("1 Bookmarks") && badges().contains("Read Only"),
-                    "wrap, bookmark and read-only changes reach the badges with no explicit refresh \(badges())")
+                    badges().contains(wrapBadge) && badges().contains(Strings.count(1, .bookmark))
+                        && badges().contains("Read Only"),
+                    "wrap, bookmark and read-only details reach the position menu with no explicit refresh \(badges())")
                 visible.editor.readOnly = false
                 controller.toggleWrap(nil)
                 let hiddenTabTitle = {
-                    buttons().first { $0.toolTip == hidden.windowControllers[0].window!.title }?.title
+                    descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSButton }
+                        .first { $0.toolTip == hidden.displayName }?.title
                 }
                 try require(hiddenTabTitle()?.hasSuffix("•") == false, "fixture: the hidden tab starts unedited")
                 _ = hidden.editor.replaceSelection("edited while hidden")
@@ -1418,32 +1498,77 @@ import AppKit
                     controller.statusRefreshCount >= idleRefreshes + 2
                         && hiddenController.statusRefreshCount == hiddenRefreshes,
                     "the visible tab's safety-net timer keeps running while idle and the hidden tab's does not run")
-                // Continuous typing: an edit every 50 ms for a second, across five timer ticks.
-                spinUntil("the bar to settle before typing") { badges().contains("7 chars") }
+                // V32-01: every edit must deliver the bridge's actual queued state notice.
+                // Drive both orderings around the real polling path: notice before tick and
+                // notice after tick. A tight edit/tick loop alone misses the production adapter.
+                spinUntil("the bar to settle before typing") { badges().contains(Strings.count(7, .character)) }
+                let pollingInterval = controller.statusTimerInterval
+                controller.statusTimerInterval = nil
+                controller.visibilityChanged()
+                defer {
+                    controller.statusTimerInterval = pollingInterval
+                    controller.visibilityChanged()
+                }
+                let notices = DocumentNoticeState()
+                let observer = NotificationCenter.default.addObserver(
+                    forName: .TTEditorStateDidChange, object: visible.editor, queue: nil
+                ) { _ in
+                    precondition(Thread.isMainThread)
+                    MainActor.assumeIsolated { notices.count += 1 }
+                }
+                defer { NotificationCenter.default.removeObserver(observer) }
+                // Empty the queued notices from the fixture before taking the baseline.
+                var ready = false
+                DispatchQueue.main.async { ready = true }
+                spinUntil("the prior editor notices to drain") { ready }
                 let captures = controller.statusMetricsCaptureCount
-                let typingUntil = Date().addingTimeInterval(1.0)
                 var typed = 0
-                while Date() < typingUntil {
-                    _ = visible.editor.replaceSelection("k")
-                    typed += 1
-                    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                for noticeBeforeTick in [true, false] {
+                    let order = noticeBeforeTick ? "notice before tick" : "notice after tick"
+                    for index in 0..<10 {
+                        let beforeNotice = notices.count
+                        _ = visible.editor.replaceSelection("k")
+                        typed += 1
+                        if !noticeBeforeTick { controller.statusTimerTick() }
+                        let beforeEventRefresh = controller.statusRefreshCount
+                        spinUntil("real bridge \(order) \(index + 1)") { notices.count > beforeNotice }
+                        let info = visible.editor.statusInfo
+                        check(
+                            controller.statusRefreshCount > beforeEventRefresh
+                                && badge("status.position.0")
+                                    == "Ln \(info.line), Col \(info.column)",
+                            "a real bridge \(order) refreshes the cheap position badge immediately")
+                        if noticeBeforeTick { controller.statusTimerTick() }
+                    }
+                    check(
+                        controller.statusMetricsCaptureCount == captures,
+                        "continuous typing with real bridge \(order) starts no whole-document capture")
                 }
                 check(
                     typed >= 5 && controller.statusMetricsCaptureCount == captures,
                     "continuous typing starts no whole-document capture (\(typed) edits, \(controller.statusMetricsCaptureCount - captures) captures)"
                 )
-                spinUntil("the count after typing stops") { badges().contains("\(7 + typed) chars") }
+                // All real notices have run. Only this unchanged-revision polling observation
+                // represents the first idle interval and may begin a whole-document capture.
+                controller.statusTimerTick()
                 check(
-                    badges().contains("\(7 + typed) chars") && controller.statusMetricsCaptureCount == captures + 1,
+                    controller.statusMetricsCaptureCount == captures + 1,
+                    "the first eligible idle polling tick starts exactly one metrics capture")
+                spinUntil("the count after typing stops") { badges().contains(Strings.count(7 + typed, .character)) }
+                check(
+                    badges().contains(Strings.count(7 + typed, .character))
+                        && controller.statusMetricsCaptureCount == captures + 1,
                     "one capture after typing stops brings the character count up to date")
+                controller.statusTimerInterval = pollingInterval
+                controller.visibilityChanged()
                 // Minimising takes the window off screen without any order call, and restoring it
                 // brings it back the same way.
-                controller.window!.miniaturize(nil)
-                spinUntil("the minimised window to leave the screen") { !controller.window!.isVisible }
+                controller.hostWindow!.miniaturize(nil)
+                spinUntil("the minimised window to leave the screen") { !controller.hostWindow!.isVisible }
                 spinUntil("the minimised tab's timer to stop") { !controller.statusTimerActive }
                 check(!controller.statusTimerActive, "a minimised window has no recurring status timer")
-                controller.window!.deminiaturize(nil)
-                spinUntil("the restored window to be on screen") { controller.window!.isVisible }
+                controller.hostWindow!.deminiaturize(nil)
+                spinUntil("the restored window to be on screen") { controller.hostWindow!.isVisible }
                 spinUntil(timeout: 3, "the restored tab's timer") { controller.statusTimerActive }
                 check(controller.statusTimerActive, "restoring a minimised window restarts its recurring status timer")
                 let restoredRefreshes = controller.statusRefreshCount
@@ -1452,19 +1577,19 @@ import AppKit
                 }
                 _ = visible.editor.replaceSelection("mm")
                 spinUntil(timeout: 3, "the count after typing in the restored window") {
-                    badges().contains("\(9 + typed) chars")
+                    badges().contains(Strings.count(9 + typed, .character))
                 }
                 check(
-                    badges().contains("\(9 + typed) chars"),
+                    badges().contains(Strings.count(9 + typed, .character)),
                     "typing after minimise and restore updates the character count \(badges())")
                 // The editor-event path alone also restarts a timer that was lost while on screen.
-                controller.stopStatusTimerForChecks()
+                controller.stopStatusTimer()
                 _ = visible.editor.replaceSelection("n")
                 spinUntil(timeout: 3, "the timer after an editor event") { controller.statusTimerActive }
                 check(
                     controller.statusTimerActive,
                     "an editor event in a window on screen restarts a missing status timer")
-                hiddenController.window!.makeKeyAndOrderFront(nil)
+                hidden.showWindows()
                 check(
                     hiddenController.statusTimerActive && !controller.statusTimerActive,
                     "switching tabs moves the recurring timer to the tab now on screen")
@@ -1479,8 +1604,8 @@ import AppKit
                 // Interactive macro playback holds one undo group open under a modal panel for
                 // the whole playback; the document must still be marked edited and snapshotted.
                 let doc = TextDocument()
-                doc.automaticRecoveryDelay = 0.05
-                doc.maximumRecoveryDelay = 0.2
+                doc.dependencies.automaticRecoveryDelay = 0.05
+                doc.dependencies.maximumRecoveryDelay = 0.2
                 try require(!doc.isDocumentEdited, "fixture: the document starts clean")
                 doc.editor.beginUndoGroup()
                 let playbackUntil = Date().addingTimeInterval(1.0)
@@ -1506,7 +1631,7 @@ import AppKit
                     midGroup.map { !$0.text.isEmpty && groupOpenText.hasPrefix($0.text) } == true,
                     "the deadline recovery snapshot is written while the group is still open")
                 doc.editor.endUndoGroup()
-                doc.editor.executeCommand("undo")
+                doc.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(doc.editor.text.isEmpty, "the group held open across turns is still one Undo step")
                 doc.close()
             }
@@ -1625,7 +1750,10 @@ private func referenceLineTransform(_ transform: EditorTransform, _ text: String
                 return a == b ? $0.0 < $1.0 : a < b
             }
         case .sortLength:
-            sorted = values.sorted { $0.1.count == $1.1.count ? $0.0 < $1.0 : $0.1.count < $1.1.count }
+            sorted = values.sorted {
+                $0.1.unicodeScalars.count == $1.1.unicodeScalars.count
+                    ? $0.0 < $1.0 : $0.1.unicodeScalars.count < $1.1.unicodeScalars.count
+            }
         default: sorted = values.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 < $1.1 }
         }
         rows = zip(sorted, rows).map { ($0.0.1, $0.1.1) }

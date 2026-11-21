@@ -1,9 +1,13 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Audit package 11: split view and one definition of the current editor. These sections run
 // inside document-checks after the sections in DocumentPinningChecks.swift and share its
 // support directory. The check process has no main window, so "the document window focused
 // last" is set directly on the application delegate, as the pinning checks do.
 import AppKit
+@testable import TextTankRuntime
+import EditorBridge
+import NativeSearch
 
 extension DocumentChecks {
     @MainActor static func splitViewAndCurrentEditor(root: URL, app: NSApplication, section: SectionRunner) {
@@ -26,54 +30,58 @@ extension DocumentChecks {
             document.showWindows()
             let controller = try requireValue(
                 document.windowControllers.first as? EditorWindowController, "fixture: editor window controller")
-            return (document, controller, try requireValue(controller.window, "fixture: window"))
+            return (document, controller, try requireValue(controller.hostWindow, "fixture: window"))
         }
         @MainActor func recordOneStep(_ delegate: AppDelegate, in editor: TTEditor) throws {
             delegate.macros.startRecording()
             _ = editor.setSelectionAnchor(0, caret: 0)
-            editor.executeCommand("newLine")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
         }
         /// Finishes the recording and undoes its one step, so each case starts from the same text.
         @MainActor func finishes(_ delegate: AppDelegate, in editor: TTEditor) -> Bool {
             let macro = try? delegate.macros.finishRecording()
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             return macro?.steps.isEmpty == false
         }
 
         /// Runs a command that opens app-modal dialogs and answers them in order. Each answer
         /// receives the dialog's views and returns the button to press. A dialog that is not
         /// expected, or not answered within ten seconds, is aborted. True when every answer was used.
-        @MainActor func answeringDialogs(_ answers: [([NSView]) -> NSButton?], _ command: () -> Void) -> Bool {
+        @MainActor func answeringDialogs(
+            _ answers: [@MainActor @Sendable ([NSView]) -> NSButton?], _ command: () -> Void
+        ) -> Bool {
             var pending = answers
             weak var answered: NSWindow?
             let deadline = Date().addingTimeInterval(10)
-            let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
-                MainActor.assumeIsolated {
-                    guard let modal = NSApp.modalWindow, modal !== answered || Date() > deadline else { return }
-                    guard Date() <= deadline, let answer = pending.first, let content = modal.contentView,
-                        let button = answer(descendants(content))
-                    else {
-                        NSApp.abortModal()
-                        return
-                    }
-                    pending.removeFirst()
-                    answered = modal
-                    button.performClick(nil)
+            let tick: @MainActor @Sendable () -> Void = {
+                guard let modal = presentedFormWindow, modal !== answered || Date() > deadline else { return }
+                guard Date() <= deadline, let answer = pending.first, let content = modal.contentView,
+                    let button = answer(descendants(content))
+                else {
+                    NSApp.abortModal()
+                    return
                 }
+                pending.removeFirst()
+                answered = modal
+                button.performClick(nil)
+            }
+            let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
+                MainActor.assumeIsolated { tick() }
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             command()
+            waitForModelessForms()
             timer.invalidate()
             return pending.isEmpty
         }
-        @MainActor func button(_ title: String) -> ([NSView]) -> NSButton? {
+        @MainActor func button(_ title: String) -> @MainActor @Sendable ([NSView]) -> NSButton? {
             { views in views.compactMap { $0 as? NSButton }.first { $0.title == title } }
         }
 
         // F275, F302, F278
         section("one current editor for every controller", #line) {
             let delegate = AppDelegate()
-            app.delegate = delegate
+            delegate.installEditorServices()
             let (document, controller, _) = try opened("current.txt", "- **2 eggs**\n- plain text\n")
             // The case F275 is about: an auxiliary titled window (Find and Replace, a Run result)
             // is main. A document window that has just been shown is main whenever the check
@@ -90,11 +98,11 @@ extension DocumentChecks {
             try require(
                 !(NSApp.mainWindow?.windowController is EditorWindowController),
                 "fixture: no document window is main while the auxiliary window is in front")
-            delegate.lastDocumentController = nil
+            delegate.noteActive(nil)
             check(
-                delegate.currentEditor == nil && delegate.currentDocument == nil,
-                "with no document window focused there is no current editor")
-            delegate.lastDocumentController = controller
+                delegate.currentEditor === document.editor && delegate.currentDocument === document,
+                "the active workspace tab remains current while an auxiliary window is main")
+            delegate.noteActive(controller)
             check(
                 delegate.currentEditor === document.editor && delegate.currentDocument === document
                     && delegate.currentDocumentController === controller,
@@ -114,11 +122,18 @@ extension DocumentChecks {
             check(
                 document.editor.text == "2 eggs\nplain text\n",
                 "an editor-output automation runs on the current editor while another window is main")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             let session = try delegate.workspace.capture(name: "current")
             check(
                 session.activeDocumentID == document.recoveryID,
                 "a saved session marks the current document as active while another window is main")
+            let longName = String(repeating: "s", count: 230)
+            let filename = root.appendingPathComponent(longName + "." + WorkspaceStore.sessionFileExtension)
+            let longSession = try delegate.workspace.capture(name: filename.deletingPathExtension().lastPathComponent)
+            check(
+                longSession.name == String(longName.prefix(200)) && longSession.activeDocumentID == document.recoveryID,
+                "G358 a valid long session filename yields a 200-character display name without losing document identity"
+            )
             let stray = TextDocument()
             let isolated = WorkspaceController()
             isolated.activeDocument = { stray }
@@ -146,11 +161,11 @@ extension DocumentChecks {
             check(
                 !finishes(delegate, in: document.editor),
                 "a text utility that changes the document discards the recording")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             try recordOneStep(delegate, in: document.editor)
             try delegate.automations.runSavedAutomation(id: AutomationDefinition.example.id)
             check(!finishes(delegate, in: document.editor), "running an automation discards the recording")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             try require(
                 document.editor.text == "- **2 eggs**\n- plain text\n", "fixture: the text is back to its start")
             @MainActor func applyButton() throws -> NSButton {
@@ -194,25 +209,25 @@ extension DocumentChecks {
         // F21, F83, G335, G336, G339, G341
         section("split view keeps document state and copies view state", #line) {
             let delegate = AppDelegate()
-            app.delegate = delegate
+            delegate.installEditorServices()
             var global = EditorSettings()
             global.tabWidth = 8
             global.useTabs = false
             global.wrap = false
             try delegate.settings.save(global)
-            defer { try? delegate.settings.save(EditorSettings()) }
+            defer { _ = try? delegate.settings.save(EditorSettings()) }
             let originalCatalog = try requireValue(delegate.languages.catalog, "fixture: language catalog")
             defer { try? delegate.languages.persist(originalCatalog) }
             let (document, controller, window) = try opened("split.py", "import os\nvalue = 42  # note\n")
             try require(document.languageIdentifier == "python", "fixture: the file opens as Python")
             // F302: a document window that becomes main is the document window focused last.
-            delegate.lastDocumentController = nil
+            delegate.noteActive(nil)
             window.becomeMain()
             check(
                 delegate.lastDocumentController === controller,
                 "a document window that becomes main is recorded as the document window focused last")
             if NSApp.mainWindow !== window { window.resignMain() }
-            delegate.lastDocumentController = controller
+            delegate.noteActive(controller)
             let indentTitles = controller.statusOptionsMenu("indent")?.items.map(\.title) ?? []
             let zoomTitles = controller.statusOptionsMenu("font")?.items.map(\.title) ?? []
             check(
@@ -224,8 +239,8 @@ extension DocumentChecks {
                 "the status menu still says text size belongs to the view")
             // Choices made for this document and this view after it opened.
             document.editor.configureTabWidth(2, useTabs: true)
-            for _ in 0..<3 { document.editor.executeCommand("zoomIn") }
-            document.editor.executeCommand("showWhitespace")
+            for _ in 0..<3 { document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "zoomIn")) }
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "showWhitespace"))
             document.editor.wrap = true
             let revision = document.editor.revision
             let closeItem = NSMenuItem(
@@ -233,8 +248,9 @@ extension DocumentChecks {
             let cloneItem = NSMenuItem(
                 title: "", action: #selector(EditorWindowController.clone(_:)), keyEquivalent: "")
             check(
-                controller.validateMenuItem(cloneItem) && !controller.validateMenuItem(closeItem),
-                "without a split, Clone in Split View is enabled and Close Split View is not")
+                controller.validateMenuItem(cloneItem) && cloneItem.state == .off
+                    && !controller.validateMenuItem(closeItem),
+                "without a split, Clone is enabled and unchecked and Close Split View is disabled")
             controller.showFind(nil)
             let findResponder = window.firstResponder
             controller.closeSplit(nil)
@@ -247,12 +263,13 @@ extension DocumentChecks {
             controller.clone(nil)
             let clone = try requireValue(controller.secondary, "fixture: clone view")
             check(
-                !controller.validateMenuItem(cloneItem) && controller.validateMenuItem(closeItem),
-                "with a split, Close Split View is enabled and Clone in Split View is not")
+                controller.validateMenuItem(cloneItem) && cloneItem.state == .on
+                    && controller.validateMenuItem(closeItem),
+                "with a split, Clone stays enabled and checked and Close Split View is enabled")
             check(
-                document.editor.statusInfo["tabWidth"]?.intValue == 2
-                    && document.editor.statusInfo["useTabs"]?.boolValue == true
-                    && clone.statusInfo["tabWidth"]?.intValue == 2 && clone.statusInfo["useTabs"]?.boolValue == true,
+                document.editor.statusInfo.tabWidth == 2
+                    && document.editor.statusInfo.useTabs == true
+                    && clone.statusInfo.tabWidth == 2 && clone.statusInfo.useTabs == true,
                 "clone does not reset per-document indentation")
             check(
                 sci(clone, zoom) == 3 && sci(document.editor, zoom) == 3 && sci(clone, viewWhitespace) == 1
@@ -286,12 +303,15 @@ extension DocumentChecks {
             check(
                 document.editor.revision == revision && !document.isDocumentEdited,
                 "changing the language does not edit the document")
-            let rawItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-            rawItem.representedObject = "python"
-            controller.language(rawItem)
+            let pythonItem = try requireValue(
+                delegate.languages.menu().items.first { ($0.representedObject as? String) == "python" },
+                "fixture: a Python item in the Language menu")
+            check(
+                NSApp.sendAction(pythonItem.action!, to: pythonItem.target, from: pythonItem)
+                    && document.languageIdentifier == "python", "choosing Python uses the real Language menu path")
             check(
                 palette(document.editor) == palette(clone) && sci(clone, lexer) == sci(document.editor, lexer),
-                "a lexer chosen by name in one pane restyles the other pane as well")
+                "a language chosen from the menu in one pane restyles the other pane as well")
             NSApp.sendAction(cppItem.action!, to: cppItem.target, from: cppItem)
             let cpp = palette(document.editor)
 
@@ -301,7 +321,7 @@ extension DocumentChecks {
             try require(
                 sameLanguage.languageIdentifier == "cpp" && otherLanguage.languageIdentifier == "python",
                 "fixture: one more C++ document and one Python document")
-            delegate.lastDocumentController = controller
+            delegate.noteActive(controller)
             let untouched = palette(otherLanguage.editor), untouchedLexer = sci(otherLanguage.editor, lexer)
             let otherRevision = otherLanguage.editor.revision
             var edited = originalCatalog
@@ -329,8 +349,8 @@ extension DocumentChecks {
 
             // F83: the dialogs that save a catalog change re-apply it the same way. Each case first
             // gives the clone and the other C++ document a foreign palette, then saves in the dialog.
-            window.makeKeyAndOrderFront(nil)
-            delegate.lastDocumentController = controller
+            document.showWindows()
+            delegate.noteActive(controller)
             try require(
                 delegate.currentDocument === document && document.languageIdentifier == "cpp",
                 "fixture: the split C++ document is the current document")
@@ -390,7 +410,7 @@ extension DocumentChecks {
                 try require(
                     delegate.languages.applyToDocument(identifier: user.id, through: target.editor),
                     "fixture: the user-defined language applies")
-                target.languageIdentifier = user.id
+                target.noteAppliedLanguage(user.id)
             }
             try scramble()
             let editUDL = try requireValue(
@@ -406,10 +426,10 @@ extension DocumentChecks {
             otherLanguage.close()
 
             // G337 through the real wiring: a recording started in the clone ends with a reload.
-            delegate.lastDocumentController = controller
+            delegate.noteActive(controller)
             _ = window.makeFirstResponder(clone)
             delegate.macros.startRecording()
-            clone.executeCommand("newLine")
+            clone.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
             try document.reload(using: .utf8, discard: true)
             rejects("reloading the document discards a recording started in its clone", message: "reloaded") {
                 _ = try delegate.macros.finishRecording()
@@ -423,11 +443,11 @@ extension DocumentChecks {
 
             // G341: recording across views is not supported, so closing the split ends a recording
             // started in the clone, and the closed clone no longer reports focus.
-            delegate.lastDocumentController = controller
+            delegate.noteActive(controller)
             _ = window.makeFirstResponder(clone)
             try require(delegate.currentEditor === clone, "fixture: the clone is the current editor")
             delegate.macros.startRecording()
-            clone.executeCommand("newLine")
+            clone.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
             controller.closeSplit(nil)
             rejects("closing the split discards a recording started in the clone") {
                 _ = try delegate.macros.finishRecording()
@@ -443,10 +463,10 @@ extension DocumentChecks {
         // G338, G342
         section("results captured through a clone survive Close Split View", #line) {
             let delegate = AppDelegate()
-            app.delegate = delegate
+            delegate.installEditorServices()
             let (document, controller, window) = try opened(
                 "deferred.py", "def one():\n    pass\n\ndef two():\n    pass\n")
-            delegate.lastDocumentController = controller
+            delegate.noteActive(controller)
             // G342: the first view taken out of a document window stays allocated until that window
             // is deallocated. It was reproduced with a bare NSView and no TextTank code in the path
             // (the extra retain is made inside -[NSView _setWindow:]), and the last check of this
@@ -495,7 +515,7 @@ extension DocumentChecks {
             check(
                 document.editor.text == "def three():\n    pass\n",
                 "Apply Extension Result reaches the document after the split it was captured in closed")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             apply.window?.close()
             // A result for a selection belongs to the closed view's selection and is dropped.
             try autoreleasepool {
@@ -524,6 +544,7 @@ extension DocumentChecks {
             // The whole graph goes when the document closes, including a split closed earlier.
             weak var lateClone: TTEditor?
             weak var lateWindow: NSWindow?
+            weak var latePresentation: EditorWindowController?
             weak var lateDocument: TextDocument?
             autoreleasepool {
                 let other = TextDocument()
@@ -534,7 +555,8 @@ extension DocumentChecks {
                     otherController.clone(nil)
                     lateClone = otherController.secondary
                     otherController.closeSplit(nil)
-                    lateWindow = otherController.window
+                    lateWindow = otherController.hostWindow
+                    latePresentation = otherController
                 }
                 lateDocument = other
                 other.close()
@@ -543,8 +565,9 @@ extension DocumentChecks {
                 autoreleasepool { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
             }
             check(
-                lateClone == nil && lateWindow == nil && lateDocument == nil,
-                "closing a document releases its window, its views and a clone closed earlier")
+                lateClone == nil && latePresentation == nil && lateWindow === controller.hostWindow
+                    && lateDocument == nil,
+                "closing a document releases its document and Clone while retaining the shared workspace window")
             document.close()
         }
     }

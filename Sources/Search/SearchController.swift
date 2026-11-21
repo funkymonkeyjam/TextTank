@@ -1,3 +1,6 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
@@ -22,6 +25,8 @@ enum SearchOutcome: Equatable {
 }
 /// What a replacement did to one document; nothing is changed unless it is `applied`.
 enum ReplaceOutcome: Equatable { case applied(Int), readOnly, multipleSelections, closed, stale }
+/// A bar request has its own cancellation token; it never replaces the Find window's held results.
+enum InlineSearchOutcome { case applied, noMatch, stale, cancelled, failed(Error) }
 /// Documents the last Replace or Replace All left untouched, by reason.
 struct ReplaceSkips: Equatable {
     var readOnly = 0, multipleSelections = 0, closed = 0, stale = 0
@@ -33,13 +38,28 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     var currentEditor: () -> TTEditor? = { nil }
     var openEditors: () -> [TTEditor] = { [] }
     var onCommand: ((SearchOptions, String, TTEditor) -> Void)?
+    var readFindText: () -> String? = { nil }
+    var writeFindText: (String) -> Void = { _ in }
     var onUnrecordableCommand: ((String) -> Void)?
+    private enum Scope: Int, CaseIterable {
+        case currentDocument, selection, allOpenDocuments
+        var title: String {
+            switch self {
+            case .currentDocument: return "Current document"
+            case .selection: return "Selection"
+            case .allOpenDocuments: return "All open documents"
+            }
+        }
+    }
+    private var selectedScope: Scope {
+        ControlPresentation.selectedID(scope).flatMap(Int.init).flatMap(Scope.init(rawValue:)) ?? .currentDocument
+    }
     let queryField = NSTextField(), replacementField = NSTextField()
     let mode = NSPopUpButton(), scope = NSPopUpButton()
     let caseButton = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
     let wordButton = NSButton(checkboxWithTitle: "Whole word", target: nil, action: nil)
     let dotButton = NSButton(checkboxWithTitle: "Dot matches newline", target: nil, action: nil)
-    let wrapButton = NSButton(checkboxWithTitle: "Wrap", target: nil, action: nil)
+    let wrapButton = NSButton(checkboxWithTitle: "Wrap Around", target: nil, action: nil)
     let status = AnnouncingLabel(labelWithString: "Search current document, selection or open documents")
     let table = ActivatingTableView()
     private var options = SearchOptions(), generation = UUID(), cancellation: TTSearchCancellation?
@@ -50,6 +70,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     private struct Buffer {
         weak var editor: TTEditor?
         let text: String, revision: UInt, anchor: Int, caret: Int, range: NSRange?
+        let tabWidth: Int
     }
     private struct Row { let buffer: Int, hit: SearchHit }
     private struct Navigation {
@@ -62,8 +83,21 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     private struct ResultKey: Equatable {
         struct Document: Equatable {
             let editor: ObjectIdentifier?, revision: UInt, range: NSRange?
+            let tabWidth: Int
         }
-        let options: SearchOptions, scope: Int, documents: [Document]
+        let options: SearchOptions, scope: Scope, documents: [Document]
+        let purpose: SearchCore.Purpose
+        // Swift String equality folds canonical equivalents, but Boost regexes and replacement
+        // output distinguish their scalar sequences. Cache only identical engine input bytes.
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.scope == rhs.scope && lhs.documents == rhs.documents && lhs.purpose == rhs.purpose
+                && lhs.options.query.utf8.elementsEqual(rhs.options.query.utf8)
+                && lhs.options.replacement.utf8.elementsEqual(rhs.options.replacement.utf8)
+                && lhs.options.mode == rhs.options.mode && lhs.options.matchCase == rhs.options.matchCase
+                && lhs.options.wholeWord == rhs.options.wholeWord
+                && lhs.options.dotMatchesNewline == rhs.options.dotMatchesNewline
+                && lhs.options.wrap == rhs.options.wrap
+        }
     }
     private var retirementObserver: NSObjectProtocol?
     private var resultBuffers: [Buffer] = [], rows: [Row] = []
@@ -78,13 +112,27 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     private(set) var reusedResults = 0
     /// Why the last Replace or Replace All skipped documents; `lastOutcome` carries their total.
     private(set) var lastReplaceSkips = ReplaceSkips()
-    private let defaults: UserDefaults
+    let preferenceNotice = AnnouncingLabel(labelWithString: "")
+    let resetPreferencesButton = NSButton(title: "Reset Saved Settings…", target: nil, action: nil)
+    private let preferences: JSONFileStore<FindPreferences>
     /// True from the moment a search is started until its result, failure or cancellation is shown.
     private(set) var isSearching = false
     /// Nil while a search is running and before the first action.
     private(set) var lastOutcome: SearchOutcome?
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    init(defaults: UserDefaults? = nil, preferencesURL: URL? = nil) {
+        let legacy = defaults ?? RuntimeEnvironment.legacyDefaults
+        preferences = JSONFileStore(
+            url: preferencesURL ?? AppStorage.url(.find), displayName: "Find and Replace settings",
+            maximumBytes: FindPreferences.maximumBytes, initial: FindPreferences(), decode: FindPreferences.decode,
+            encode: { try $0.encoded() },
+            legacyValue: {
+                guard let data = legacy?.data(forKey: "TextTank.Search.v1") else { return nil }
+                guard data.count <= FindPreferences.maximumBytes else { throw SearchFailure.preferencesTooLarge }
+                try PersistedFormat.check(data, context: "Find settings")
+                let options = try JSONInputFailure.decode(SearchOptions.self, from: data, context: "Find settings")
+                try options.validatePreferences()
+                return FindPreferences(options: options)
+            })
         // A panel, so the document window stays main and its menu commands keep working while
         // Find and Replace is key. Escape closes it, which cancels a running search as closing does.
         let window = ToolPanel(
@@ -97,32 +145,38 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         retirementObserver = NotificationCenter.default.addObserver(
             forName: .TTEditorWillRetire, object: nil, queue: nil
         ) { [weak self] note in
-            guard let self, let retiring = note.object as? TTEditor,
-                let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor
-            else { return }
-            for index in self.resultBuffers.indices where self.resultBuffers[index].editor === retiring {
-                self.resultBuffers[index].editor = successor
+            precondition(Thread.isMainThread)
+            let retiring = note.object as? TTEditor
+            let successor = note.userInfo?[TTEditorSuccessorKey] as? TTEditor
+            MainActor.assumeIsolated {
+                guard let self, let retiring, let successor else { return }
+                for index in self.resultBuffers.indices where self.resultBuffers[index].editor === retiring {
+                    self.resultBuffers[index].editor = successor
+                }
+                if self.lastNavigation?.editor === retiring { self.lastNavigation = nil }
+
             }
-            if self.lastNavigation?.editor === retiring { self.lastNavigation = nil }
         }
         window.isReleasedWhenClosed = false
         window.delegate = self
         queryField.placeholderString = "Find"
+        queryField.setAccessibilityLabel("Find in document")
+        replacementField.setAccessibilityLabel("Replace matches with")
+        mode.setAccessibilityLabel("Search mode")
+        scope.setAccessibilityLabel("Search scope")
         // Return in the query field is Find Next. Only Return sends it, never leaving the field.
         queryField.target = self
         queryField.action = #selector(findNextFromQuery(_:))
         queryField.cell?.sendsActionOnEndEditing = false
         replacementField.placeholderString = "Replace with"
-        mode.addItems(withTitles: ["Normal", "Extended (\\n, \\t, \\xNN)", "Regular expression (Boost)"])
-        scope.addItems(withTitles: ["Current document", "Selection", "All open documents"])
-        if let data = defaults.data(forKey: "TextTank.Search.v1"),
-            let saved = try? JSONDecoder().decode(SearchOptions.self, from: data)
-        {
-            options = saved
-        }
+        ControlPresentation.populate(
+            mode, choices: SearchOptions.Mode.allCases.map { (String($0.rawValue), $0.displayName) }, selected: "0")
+        ControlPresentation.populate(
+            scope, choices: Scope.allCases.map { (String($0.rawValue), $0.title) }, selected: "0")
+        options = preferences.value.options
         queryField.stringValue = options.query
         replacementField.stringValue = options.replacement
-        mode.selectItem(at: options.mode.rawValue)
+        mode.selectItem(at: mode.indexOfItem(withRepresentedObject: String(options.mode.rawValue)))
         caseButton.state = options.matchCase ? .on : .off
         wordButton.state = options.wholeWord ? .on : .off
         dotButton.state = options.dotMatchesNewline ? .on : .off
@@ -142,7 +196,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         let marks = NSStackView(views: Array(searchButtons.suffix(3)))
         marks.spacing = 8
         let col = NSTableColumn(identifier: .init("result"))
-        col.title = "Document · UTF-16 offset · Match"
+        col.title = "Document · Line:Column · Match"
         col.width = 730
         table.addTableColumn(col)
         table.dataSource = self
@@ -152,27 +206,52 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         // Return on the selected row does what a double-click on it does.
         table.onActivate = { [weak self] row in self?.activateResult(at: row) }
         table.setAccessibilityLabel("Search results")
+        table.toolTip = "Columns use the tab width captured when the search started."
         let scroll = NSScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
         table.usesAlternatingRowBackgroundColors = true
-        let root = NSStackView(views: [queryField, replacementField, opts, flags, buttons, marks, status, scroll])
+        resetPreferencesButton.target = self
+        resetPreferencesButton.action = #selector(resetSavedPreferences(_:))
+        resetPreferencesButton.setAccessibilityLabel("Reset saved Find and Replace settings")
+        preferenceNotice.setAccessibilityLabel("Saved Find and Replace settings status")
+        let preferenceSpacer = NSView()
+        preferenceSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        resetPreferencesButton.setContentHuggingPriority(.required, for: .horizontal)
+        let preferenceRow = NSStackView(views: [preferenceNotice, preferenceSpacer, resetPreferencesButton])
+        preferenceRow.spacing = 8
+        preferenceNotice.lineBreakMode = .byWordWrapping
+        preferenceNotice.maximumNumberOfLines = 2
+        preferenceNotice.isHidden = preferences.state.error == nil
+        preferenceNotice.stringValue =
+            preferences.state.error == nil
+            ? "" : "Saved search settings could not be read. Reset them to keep new settings."
+        preferenceNotice.toolTip = preferences.state.error?.localizedDescription
+        let root = NSStackView(views: [
+            queryField, replacementField, opts, flags, buttons, marks, preferenceRow, status, scroll
+        ])
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 8
         root.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         window.contentView = root
-        for v in [queryField, replacementField, opts, flags, buttons, marks, status, scroll] {
+        for v in [queryField, replacementField, opts, flags, buttons, marks, preferenceRow, status, scroll] {
             v.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true
         }
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 150).isActive = true
-        window.minSize = NSSize(width: 780, height: 390)
+        window.minSize = NSSize(width: 780, height: 440)
         window.initialFirstResponder = queryField
         WindowFrames.track(window, as: "TextTank.FindAndReplace")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
-    deinit { if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) } }
+    deinit {
+        precondition(Thread.isMainThread)
+        MainActor.assumeIsolated {
+            if let retirementObserver { NotificationCenter.default.removeObserver(retirementObserver) }
+        }
+    }
     @objc func showSearch(_ sender: Any?) {
+        if let shared = readFindText(), !shared.isEmpty { queryField.stringValue = shared }
         showWindow(sender)
         window?.makeKeyAndOrderFront(sender)
         window?.makeFirstResponder(queryField)
@@ -184,14 +263,43 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         var o = SearchOptions()
         o.query = queryField.stringValue
         o.replacement = replacementField.stringValue
-        o.mode = SearchOptions.Mode(rawValue: mode.indexOfSelectedItem) ?? .normal
+        o.mode =
+            ControlPresentation.selectedID(mode).flatMap(Int.init).flatMap(SearchOptions.Mode.init(rawValue:))
+            ?? .normal
         o.matchCase = caseButton.state == .on
         o.wholeWord = wordButton.state == .on
         o.dotMatchesNewline = dotButton.state == .on
         o.wrap = wrapButton.state == .on
-        if let data = try? JSONEncoder().encode(o) { defaults.set(data, forKey: "TextTank.Search.v1") }
+        do {
+            try preferences.save(FindPreferences(options: o))
+            preferenceNotice.isHidden = true
+        } catch { showPreferenceFailure(error) }
         options = o
+        writeFindText(o.query)
         return o
+    }
+    private func showPreferenceFailure(_ error: Error) {
+        preferenceNotice.stringValue =
+            "The search can run, but its settings were not saved. Reset saved settings or try again."
+        preferenceNotice.toolTip = error.localizedDescription
+        preferenceNotice.isHidden = false
+        resetPreferencesButton.isHidden = false
+    }
+    @objc func resetSavedPreferences(_ sender: Any?) {
+        guard StoreRecovery.confirmPreferenceReset(preferences.state) else { return }
+        do {
+            try preferences.reset()
+            options = preferences.value.options
+            queryField.stringValue = options.query
+            replacementField.stringValue = options.replacement
+            mode.selectItem(at: mode.indexOfItem(withRepresentedObject: String(options.mode.rawValue)))
+            caseButton.state = options.matchCase ? .on : .off
+            wordButton.state = options.wholeWord ? .on : .off
+            dotButton.state = options.dotMatchesNewline ? .on : .off
+            wrapButton.state = options.wrap ? .on : .off
+            preferenceNotice.isHidden = true
+            status.stringValue = "Saved search settings were reset. Documents were not changed."
+        } catch { showPreferenceFailure(error) }
     }
     @objc func next(_ sender: Any?) { run(.next) }
     /// Return in the query field. Ignored while a search is running: the buttons are disabled
@@ -215,12 +323,12 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         task?.cancel()
         generation = UUID()
         finish()
-        let editors = scope.indexOfSelectedItem == 2 ? openEditors() : currentEditor().map { [$0] } ?? []
+        let editors = selectedScope == .allOpenDocuments ? openEditors() : currentEditor().map { [$0] } ?? []
         var cleared = Set<ObjectIdentifier>()
-        for editor in editors where editor.window != nil {
+        for editor in editors where EditorLifetime.isOpen(editor) {
             if cleared.insert(ObjectIdentifier(editor)).inserted { editor.clearSearchHighlights() }
         }
-        status.stringValue = "Cleared search highlights from \(cleared.count) document(s)."
+        status.stringValue = Strings.cleared(cleared.count)
         lastOutcome = .clearedHighlights(documents: cleared.count)
     }
     @objc func cancel(_ sender: Any?) {
@@ -239,6 +347,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         lastOutcome = .cancelled
     }
     func windowWillClose(_ notification: Notification) {
+        _ = readOptions()
         cancel(nil)
         // F122: a closed Find window keeps no text snapshot of any document.
         rows = []
@@ -267,20 +376,20 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             fail("Enter a search expression.", .needsInput, audible: navigating)
             return
         }
-        let scopeIndex = scope.indexOfSelectedItem
+        let scopeIndex = selectedScope
         // Captured before the search: focus may have moved by the time the results arrive (F36).
         let current = currentEditor()
-        var editors = scopeIndex == 2 ? openEditors() : current.map { [$0] } ?? []
+        var editors = scopeIndex == .allOpenDocuments ? openEditors() : current.map { [$0] } ?? []
         var identities = Set<ObjectIdentifier>()
         editors = editors.filter { identities.insert(ObjectIdentifier($0)).inserted }
         guard !editors.isEmpty else {
             fail("Open a document first.", .needsInput, audible: navigating)
             return
         }
-        if scopeIndex != 0 {
+        if scopeIndex != .currentDocument {
             onUnrecordableCommand?("Selection and all-open search operations are not recorded in macros.")
         }
-        let currentDocumentScope = scopeIndex == 0, selectionScope = scopeIndex == 1
+        let currentDocumentScope = scopeIndex == .currentDocument, selectionScope = scopeIndex == .selection
         // A scope kept for Selection scope ends with any action in another scope: navigation there
         // would otherwise leave a selection that reads as a continuation inside the old scope.
         if !selectionScope { navigationScope = nil }
@@ -319,20 +428,24 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             buffers.append(
                 Buffer(
                     editor: e, text: text, revision: revision, anchor: e.selectionAnchor, caret: e.selectionCaret,
-                    range: range))
+                    range: range, tabWidth: e.statusInfo.tabWidth))
         }
         // F36: the document a single Replace may edit. In All open documents scope that is the
         // document Next last moved to while its match is still selected, by the same rule as
         // navigation, because the application's current editor can lag behind that move.
         let active =
-            scopeIndex == 2 ? allOpenOrigin(in: buffers, current: current).flatMap { buffers[$0].editor } : current
+            scopeIndex == .allOpenDocuments
+            ? allOpenOrigin(in: buffers, current: current).flatMap { buffers[$0].editor } : current
         var keyOptions = opts
         keyOptions.wrap = false
+        let purpose: SearchCore.Purpose = navigating || action == .replaceOne ? .navigation : .allMatches
         let key = ResultKey(
             options: keyOptions, scope: scopeIndex,
             documents: buffers.map { b in
-                ResultKey.Document(editor: b.editor.map { ObjectIdentifier($0) }, revision: b.revision, range: b.range)
-            })
+                ResultKey.Document(
+                    editor: b.editor.map { ObjectIdentifier($0) }, revision: b.revision, range: b.range,
+                    tabWidth: b.tabWidth)
+            }, purpose: purpose)
         // F223: the same editors at the same revisions with the same options have the same hits,
         // so Next and Previous walk the rows already held instead of searching again.
         if navigating, key == resultKey, resultBuffers.allSatisfy({ $0.editor != nil }) {
@@ -340,7 +453,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             lastOutcome = .found(matches: rows.count, documents: resultBuffers.count, truncated: resultTruncated)
             reusedResults += 1
             let moved = navigate(
-                backwards: action == .previous, wrap: opts.wrap, freshScope: freshScope, allOpen: scopeIndex == 2,
+                backwards: action == .previous, wrap: opts.wrap, freshScope: freshScope,
+                allOpen: scopeIndex == .allOpenDocuments,
                 audible: true)
             if moved, currentDocumentScope, let editor = resultBuffers.first?.editor {
                 onCommand?(opts, action == .previous ? "previous" : "next", editor)
@@ -355,7 +469,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         cancellation = flag
         searchButtons.forEach { $0.isEnabled = false }
         appliedReplace = nil
-        status.stringValue = "Searching snapshots…"
+        status.stringValue = "Searching…"
         isSearching = true
         lastOutcome = nil
         rows = []
@@ -367,33 +481,41 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         // boundaries, anchors and lookbehind see the document around the selection (F37). Hits are
         // already at document offsets.
         let snapshots = buffers.map {
-            ($0.text, $0.range ?? NSRange(location: 0, length: ($0.text as NSString).length))
+            (
+                text: $0.text, scope: $0.range ?? NSRange(location: 0, length: ($0.text as NSString).length),
+                tabWidth: $0.tabWidth
+            )
         }
         task = Task { @MainActor [weak self] in
             do {
                 let computed = try await Task.detached(priority: .userInitiated) {
                     let reports = try snapshots.map {
-                        try SearchCore.search($0.0, options: opts, range: $0.1, cancellation: flag)
+                        try SearchCore.search(
+                            $0.text, options: opts, range: $0.scope, cancellation: flag, purpose: purpose,
+                            displayTabWidth: $0.tabWidth)
                     }
                     let lines =
                         needsBookmarks
                         ? try zip(snapshots, reports).map { snapshot, report in
                             try SearchCore.bookmarkLines(
-                                in: snapshot.0, locations: report.hits.map { $0.range.location }, cancellation: flag)
+                                in: snapshot.text, locations: report.hits.map { $0.range.location }, cancellation: flag)
                         } : []
-                    return (reports, lines)
+                    return (reports: reports, bookmarkLines: lines)
                 }.value
                 guard let self, self.generation == token, !flag.cancelled else { return }
                 let replaced = self.complete(
-                    action, options: opts, key: key, buffers: buffers, reports: computed.0, bookmarkLines: computed.1,
+                    action, options: opts, key: key, buffers: buffers, reports: computed.reports,
+                    bookmarkLines: computed.bookmarkLines,
                     scopeIndex: scopeIndex, active: active, freshScope: freshScope)
                 if let editor = replaced {
                     // F45: a single Replace then moves to the next match. The text has changed, so
                     // that needs a search of the new text; it is recorded as an ordinary Next.
-                    let text = editor.text, revision = editor.revision
+                    let text = editor.text, revision = editor.revision,
+                        tabWidth = editor.statusInfo.tabWidth
                     self.appliedReplace = (self.status.stringValue, self.lastOutcome)
                     let report = try? await Task.detached(priority: .userInitiated) {
-                        try SearchCore.search(text, options: opts, cancellation: flag)
+                        try SearchCore.search(
+                            text, options: opts, cancellation: flag, purpose: .navigation, displayTabWidth: tabWidth)
                     }.value
                     guard self.generation == token, !flag.cancelled else { return }
                     if let report {
@@ -410,7 +532,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         }
     }
     private static func foundStatus(_ matches: Int, _ documents: Int, _ truncated: Bool) -> String {
-        "\(matches) matches in \(documents) document(s)" + (truncated ? " · result limit reached" : "")
+        Strings.found(matches, documents: documents, truncated: truncated)
     }
     private static func replacedStatus(changed: Int, skips: ReplaceSkips) -> String {
         var kinds: [String] = []
@@ -418,18 +540,24 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         if skips.multipleSelections > 0 { kinds.append("\(skips.multipleSelections) with multiple selections") }
         if skips.closed > 0 { kinds.append("\(skips.closed) closed") }
         guard !kinds.isEmpty else {
-            return "Replaced \(changed) matches; \(skips.stale) changed documents skipped. Undo is per document."
+            return Strings.replaced(changed, stale: skips.stale)
         }
         if skips.stale > 0 { kinds.append("\(skips.stale) changed") }
-        return "Replaced \(changed) matches; documents skipped: \(kinds.joined(separator: ", ")). Undo is per document."
+        return String(
+            format: changed == 1
+                ? Strings.text(
+                    "search.replaced.reasons.one", "Replaced %@ match; documents skipped: %@. Undo is per document.")
+                : Strings.text(
+                    "search.replaced.reasons.other", "Replaced %@ matches; documents skipped: %@. Undo is per document."
+                ), Strings.number(changed), kinds.joined(separator: ", "))
     }
     /// Shows the results of a finished search and performs `action` on them. Returns the editor
     /// in which a single Replace was applied when the next match should then be selected.
     private func complete(
         _ action: Action, options opts: SearchOptions, key: ResultKey, buffers: [Buffer], reports: [SearchReport],
-        bookmarkLines: [[Int]], scopeIndex: Int, active: TTEditor?, freshScope: Bool
+        bookmarkLines: [[Int]], scopeIndex: Scope, active: TTEditor?, freshScope: Bool
     ) -> TTEditor? {
-        let currentDocumentScope = scopeIndex == 0, selectionScope = scopeIndex == 1
+        let currentDocumentScope = scopeIndex == .currentDocument, selectionScope = scopeIndex == .selection
         resultBuffers = buffers
         rows = reports.enumerated().flatMap { index, report in report.hits.map { Row(buffer: index, hit: $0) } }
         let truncated = reports.contains { $0.truncated }
@@ -445,7 +573,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             // since changed, or for an editor that is no longer current, moves nothing and a
             // recording that already holds the later edits is discarded.
             if currentDocumentScope, let b = buffers.first,
-                !(b.editor?.window != nil && b.editor?.revision == b.revision && currentEditor() === b.editor)
+                !(b.editor.map { EditorLifetime.isOpen($0) } == true && b.editor?.revision == b.revision
+                    && currentEditor() === b.editor)
             {
                 fail("Result is stale; search again. Selection unchanged.", .staleResult, audible: true)
                 onUnrecordableCommand?(
@@ -454,7 +583,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             }
             // A miss is not recorded: playback stops on a recorded search that finds nothing.
             let moved = navigate(
-                backwards: action == .previous, wrap: opts.wrap, freshScope: freshScope, allOpen: scopeIndex == 2,
+                backwards: action == .previous, wrap: opts.wrap, freshScope: freshScope,
+                allOpen: scopeIndex == .allOpenDocuments,
                 audible: true)
             if moved, currentDocumentScope, let editor = buffers.first?.editor {
                 onCommand?(opts, action == .previous ? "previous" : "next", editor)
@@ -471,13 +601,15 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 // F36: a single Replace edits the document it was pressed in, never a background one.
                 if action == .replaceOne && (active == nil || buffer.editor !== active) { continue }
                 let hits = reports[index].hits
-                let chosen =
-                    action == .replaceOne
-                    ? SearchCore.hits(
-                        hits,
-                        selectedBy: NSRange(
-                            location: min(buffer.anchor, buffer.caret),
-                            length: abs(buffer.anchor - buffer.caret)), in: buffer.text) : hits
+                let chosen: [SearchHit]
+                if action == .replaceOne {
+                    let selected = SearchCore.utf16Range(
+                        NSRange(location: min(buffer.anchor, buffer.caret), length: abs(buffer.anchor - buffer.caret)),
+                        in: buffer.text)
+                    chosen = hits.filter { $0.range == selected }
+                } else {
+                    chosen = hits
+                }
                 if chosen.isEmpty { continue }
                 guard let editor = buffer.editor else {
                     skips.closed += 1
@@ -541,8 +673,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 zeroWidth += hits.filter { $0.range.length == 0 }.count
             }
             status.stringValue =
-                "Marked \(marked) matches; \(stale) changed/closed documents skipped."
-                + (zeroWidth > 0 ? " \(zeroWidth) zero-width matches have no visible span." : "")
+                Strings.marked(marked, stale: stale, zeroWidth: zeroWidth)
             lastOutcome = .marked(matches: marked, stale: stale, zeroWidth: zeroWidth)
         case .bookmark:
             var stale = 0
@@ -551,7 +682,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 return nil
             }
             for (index, b) in buffers.enumerated() {
-                guard let editor = b.editor, editor.window != nil, editor.revision == b.revision,
+                guard let editor = b.editor, EditorLifetime.isOpen(editor), editor.revision == b.revision,
                     !selectionScope || (editor.selectionAnchor == b.anchor && editor.selectionCaret == b.caret)
                 else {
                     stale += 1
@@ -561,7 +692,12 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 lines.formUnion(bookmarkLines[index])
                 _ = editor.setBookmarks(lines.sorted().map { NSNumber(value: $0) })
             }
-            status.stringValue = "Bookmarked matching lines; \(stale) changed documents skipped."
+            status.stringValue = String(
+                format: stale == 1
+                    ? Strings.text("search.bookmarked.one", "Bookmarked matching lines; %@ changed document skipped.")
+                    : Strings.text(
+                        "search.bookmarked.other", "Bookmarked matching lines; %@ changed documents skipped."),
+                Strings.number(stale))
             lastOutcome = .bookmarked(stale: stale)
         }
         return nil
@@ -576,12 +712,17 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         resultBuffers = [
             Buffer(
                 editor: editor, text: text, revision: revision, anchor: editor.selectionAnchor,
-                caret: editor.selectionCaret, range: nil)
+                caret: editor.selectionCaret, range: nil, tabWidth: editor.statusInfo.tabWidth)
         ]
         rows = report.hits.map { Row(buffer: 0, hit: $0) }
         resultKey = ResultKey(
             options: key.options, scope: key.scope,
-            documents: [ResultKey.Document(editor: ObjectIdentifier(editor), revision: revision, range: nil)])
+            documents: [
+                ResultKey.Document(
+                    editor: ObjectIdentifier(editor), revision: revision, range: nil,
+                    tabWidth: editor.statusInfo.tabWidth)
+            ],
+            purpose: report.purpose)
         resultTruncated = report.truncated
         table.reloadData()
         let moved = navigate(backwards: false, wrap: opts.wrap, freshScope: false, allOpen: false, audible: false)
@@ -608,67 +749,169 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         timeLimit: TimeInterval = SearchController.recordedStepTimeLimit
     ) throws {
         let text = editor.text, revision = editor.revision
-        let report = try SearchCore.search(text, options: options, timeLimit: timeLimit)
-        guard !report.truncated else {
-            throw NSError(
-                domain: "TextTank.Search", code: 4,
-                userInfo: [NSLocalizedDescriptionKey: "Macro search reached the result limit; no edits were applied."])
+        let report = try SearchCore.search(
+            text, options: options, timeLimit: timeLimit,
+            purpose: action == "replaceAll" ? .allMatches : .navigation)
+        let matched: Bool
+        do {
+            matched = try applySingleReport(
+                report, text: text, revision: revision, options: options, action: action, in: editor)
+        } catch let condition as SearchFailure.ReplacementCondition {
+            // Keep the existing recorded-macro error API and wording. Inline feedback receives
+            // typed conditions directly and selects complete templates instead of these fragments.
+            switch condition {
+            case .readOnly: throw SearchFailure.macroReplacement("the document is read-only")
+            case .multipleSelections: throw SearchFailure.macroReplacement("multiple selections are not supported")
+            case .closed: throw SearchFailure.macroReplacement("the document is not in a window")
+            case .stale: throw SearchFailure.macroReplacement("the document changed during the step")
+            }
         }
-        guard
-            let selection = SearchCore.utf16Range(
-                NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart), in: text)
-        else { throw Self.recordedSearchStopped("the selection is not on a character boundary") }
-        if action == "replaceAll" || action == "replaceOne" {
-            let hits = action == "replaceAll" ? report.hits : report.hits.filter { $0.range == selection }
-            if !hits.isEmpty {
-                let reason: String
-                switch Self.replace(hits, text: text, revision: revision, in: editor) {
-                case .applied: return
-                case .readOnly: reason = "the document is read-only"
-                case .multipleSelections: reason = "multiple selections are not supported"
-                case .closed: reason = "the document is not in a window"
-                case .stale: reason = "the document changed during the step"
+        if !matched && (action == "next" || action == "previous") {
+            throw Self.recordedSearchStopped("recorded search did not match")
+        }
+    }
+    /// Legacy v1 findLiteral is read-only migration input. It uses the same engine and application
+    /// rules as a new search step; old replaceSelection retains its captured-text caret semantics.
+    static func playLegacyFind(text query: String, matchCase: Bool, backwards: Bool, in editor: TTEditor) throws -> Bool
+    {
+        var options = SearchOptions()
+        options.query = query
+        options.matchCase = matchCase
+        let text = editor.text, revision = editor.revision
+        let report = try SearchCore.search(text, options: options, purpose: .navigation)
+        return try applySingleReport(
+            report, text: text, revision: revision, options: options, action: backwards ? "previous" : "next",
+            continuing: false, in: editor)
+    }
+    /// The bar uses immutable snapshots off-main, then validates document/window/selection and the
+    /// caller's query generation before applying. A cancelled or stale request cannot select, edit or record.
+    /// Macro playback deliberately retains bounded synchronous scheduling over the same engine/apply path.
+    func performInline(
+        options: SearchOptions, action: String, on editor: TTEditor, cancellation: TTSearchCancellation,
+        isCurrent: @escaping () -> Bool, completion: @escaping (InlineSearchOutcome) -> Void
+    ) {
+        let text = editor.text, revision = editor.revision, selections = editor.selectionRanges
+        let anchor = editor.selectionAnchor, caret = editor.selectionCaret
+        let targetDocumentID = EditorLifetime.document(for: editor)?.runtimeID
+        let window = editor.window
+        Task { @MainActor [weak self, weak editor, weak window] in
+            do {
+                let report = try await Task.detached(priority: .userInitiated) {
+                    try SearchCore.search(
+                        text, options: options, cancellation: cancellation,
+                        purpose: action == "replaceAll" ? .allMatches : .navigation)
+                }.value
+                guard !cancellation.cancelled else {
+                    completion(.cancelled)
+                    return
                 }
-                throw NSError(
-                    domain: "TextTank.Search", code: 5,
-                    userInfo: [NSLocalizedDescriptionKey: "Macro replacement was not applied: \(reason)."])
+                guard let self, let editor, EditorLifetime.isOpen(editor),
+                    (targetDocumentID != nil
+                        ? EditorLifetime.document(for: editor)?.runtimeID == targetDocumentID
+                        : editor.window === window),
+                    editor.revision == revision, editor.selectionRanges == selections,
+                    editor.selectionAnchor == anchor, editor.selectionCaret == caret, isCurrent()
+                else {
+                    completion(.stale)
+                    return
+                }
+                let matched = try self.applySingleReport(
+                    report, text: text, revision: revision, options: options, action: action, in: editor)
+                completion(matched ? .applied : .noMatch)
+            } catch {
+                guard !cancellation.cancelled else {
+                    completion(.cancelled)
+                    return
+                }
+                guard self != nil, let editor, EditorLifetime.isOpen(editor),
+                    (targetDocumentID != nil
+                        ? EditorLifetime.document(for: editor)?.runtimeID == targetDocumentID
+                        : editor.window === window),
+                    editor.revision == revision, editor.selectionRanges == selections,
+                    editor.selectionAnchor == anchor, editor.selectionCaret == caret, isCurrent()
+                else {
+                    completion(.stale)
+                    return
+                }
+                if let failure = error as? SearchFailure, failure == .macroResultLimit {
+                    completion(.failed(SearchFailure.inlineResultLimit))
+                } else if let condition = error as? SearchFailure.ReplacementCondition {
+                    completion(.failed(SearchFailure.inlineReplacement(condition)))
+                } else {
+                    completion(.failed(error))
+                }
             }
-        } else if action == "next" || action == "previous" {
-            let backwards = action == "previous"
-            let continuing =
-                lastNavigation.map { $0.editor === editor && $0.revision == revision && $0.range == selection } ?? false
-            let candidates = report.hits.filter {
-                SearchCore.isNavigationCandidate(
-                    $0.range, from: selection, backwards: backwards, continuing: continuing)
-            }
-            let hit =
-                (backwards ? candidates.last : candidates.first)
-                ?? (options.wrap ? (backwards ? report.hits.last : report.hits.first) : nil)
-            guard let hit else { throw Self.recordedSearchStopped("recorded search did not match") }
-            guard let bytes = SearchCore.byteRange(hit.range, in: text),
-                editor.setSelectionAnchor(bytes.location, caret: NSMaxRange(bytes))
-            else { throw Self.recordedSearchStopped("the match could not be selected") }
-            lastNavigation = Navigation(editor: editor, revision: revision, range: hit.range, from: nil)
-        } else {
-            throw NSError(
-                domain: "TextTank.Search", code: 6,
-                userInfo: [NSLocalizedDescriptionKey: "Unrecognized recorded search action."])
         }
     }
-    private static func recordedSearchStopped(_ reason: String) -> NSError {
-        NSError(
-            domain: "TextTank.Search", code: 7,
-            userInfo: [NSLocalizedDescriptionKey: "Macro stopped: \(reason). Prior edits remain undoable."])
+    private func applySingleReport(
+        _ report: SearchReport, text: String, revision: UInt, options: SearchOptions, action: String,
+        in editor: TTEditor
+    ) throws -> Bool {
+        let selection = SearchCore.utf16Range(
+            NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart), in: text)
+        let continuing =
+            lastNavigation.map {
+                $0.editor === editor && $0.revision == revision && $0.range == selection
+            } ?? false
+        let matched = try Self.applySingleReport(
+            report, text: text, revision: revision, options: options, action: action, continuing: continuing, in: editor
+        )
+        if matched && (action == "next" || action == "previous"),
+            let range = SearchCore.utf16Range(
+                NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart), in: text)
+        {
+            lastNavigation = Navigation(editor: editor, revision: revision, range: range, from: nil)
+        }
+        return matched
     }
+    private static func applySingleReport(
+        _ report: SearchReport, text: String, revision: UInt, options: SearchOptions, action: String, continuing: Bool,
+        in editor: TTEditor
+    ) throws -> Bool {
+        // Preserve the pre-extraction cheap rejection boundary: closed/stale/truncated
+        // results must not read selections or scan positions in a captured document.
+        guard !report.truncated else { throw SearchFailure.macroResultLimit }
+        guard EditorLifetime.isOpen(editor), editor.revision == revision else {
+            throw Self.recordedSearchStopped("the document changed or selection is not on a character boundary")
+        }
+        let selection = SearchCore.utf16Range(
+            NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart), in: text)
+        let snapshot = SearchSession.Snapshot(
+            text: text, revision: revision, currentRevision: editor.revision,
+            selection: selection, isOpen: EditorLifetime.isOpen(editor))
+        switch try SearchSession.plan(
+            report, snapshot: snapshot, options: options, action: action, continuing: continuing)
+        {
+        case .noMatch: return false
+        case .select(let bytes):
+            guard editor.setSelectionAnchor(bytes.location, caret: NSMaxRange(bytes)) else {
+                throw Self.recordedSearchStopped("the match could not be selected")
+            }
+            return true
+        case .replace(let hits):
+            let condition: SearchFailure.ReplacementCondition
+            switch Self.replace(hits, text: text, revision: revision, in: editor) {
+            case .applied: return true
+            case .readOnly: condition = .readOnly
+            case .multipleSelections: condition = .multipleSelections
+            case .closed: condition = .closed
+            case .stale: condition = .stale
+            }
+            throw condition
+        }
+    }
+
+    private static func recordedSearchStopped(_ reason: String) -> SearchFailure { .macroStopped(reason) }
     /// `revision` is the staleness authority: every insert and delete moves it, in every view of a
     /// shared document, so an equal revision means `text` is still the editor's text (F223).
     @discardableResult static func highlight(_ hits: [SearchHit], text: String, revision: UInt, in editor: TTEditor)
         -> Bool
     {
-        guard editor.window != nil, editor.revision == revision,
+        guard EditorLifetime.isOpen(editor), editor.revision == revision,
             let ranges = SearchCore.byteRanges(hits.map(\.range), in: text)
         else { return false }
-        return editor.setSearchHighlights(ranges.filter { $0.length > 0 }.map { NSValue(range: $0) })
+        return editor.setSearchHighlights(
+            ranges.filter { $0.length > 0 }.map { TTByteRange(location: $0.location, length: $0.length) })
     }
     @discardableResult static func apply(_ hits: [SearchHit], text: String, revision: UInt, to editor: TTEditor) -> Bool
     {
@@ -679,7 +922,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     /// action, or changes nothing and says why. The selection the command began with is kept around
     /// the text it covered.
     static func replace(_ hits: [SearchHit], text: String, revision: UInt, in editor: TTEditor) -> ReplaceOutcome {
-        guard editor.window != nil else { return .closed }
+        guard EditorLifetime.isOpen(editor) else { return .closed }
         guard !editor.readOnly else { return .readOnly }
         guard editor.revision == revision else { return .stale }
         guard editor.selectionCount == 1 else { return .multipleSelections }
@@ -689,26 +932,14 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         let anchor = editor.selectionAnchor, caret = editor.selectionCaret
         guard let ranges = SearchCore.byteRanges(hits.map(\.range), in: text),
             editor.replaceRanges(
-                ranges.map { NSValue(range: $0) }, withTexts: hits.map(\.replacement), expectedRevision: revision)
+                ranges.map { TTByteRange(location: $0.location, length: $0.length) },
+                withTexts: hits.map(\.replacement), expectedRevision: revision)
         else { return .stale }
-        // Its start stays before a replacement that begins at or covers it, its end stays after one
-        // that ends at or covers it.
-        func carried(_ position: Int, upper: Bool) -> Int {
-            var delta = 0
-            for (hit, range) in zip(hits, ranges) {
-                let start = range.location, end = NSMaxRange(range), length = hit.replacement.utf8.count
-                if position < start || (position == start && (!upper || end > start)) { break }
-                if position < end { return start + delta + (upper ? length : 0) }
-                delta += length - range.length
-            }
-            return position + delta
+        let edits = zip(ranges, hits).map {
+            SearchSession.Edit(range: $0.0, replacementBytes: $0.1.replacement.utf8.count)
         }
-        // A caret at a zero-width match ends after the text inserted there, as typing would leave
-        // it, so a following Next or Replace moves on instead of meeting the same place again.
-        let atInsertion = anchor == caret && ranges.contains { $0.location == caret && $0.length == 0 }
-        let low = carried(min(anchor, caret), upper: atInsertion)
-        let high = anchor == caret ? low : carried(max(anchor, caret), upper: true)
-        _ = editor.setSelectionAnchor(anchor <= caret ? low : high, caret: anchor <= caret ? high : low)
+        let carried = SearchSession.carriedSelection(anchor: anchor, caret: caret, edits: edits)
+        _ = editor.setSelectionAnchor(carried.anchor, caret: carried.caret)
         return .applied(hits.count)
     }
     /// All open documents: the buffer of the document the person is in, for Next, Previous and
@@ -723,7 +954,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         if let last = lastNavigation, let editor = last.editor, editor.revision == last.revision,
             current == nil || current === editor
                 || ((current === last.from || !buffers.contains(where: { $0.editor === current }))
-                    && !(current?.window?.isVisible == true && editor.window?.isVisible != true)),
+                    && !(EditorLifetime.isVisible(current) && !EditorLifetime.isVisible(editor))),
             let index = buffers.firstIndex(where: { $0.editor === editor && $0.revision == last.revision }),
             SearchCore.utf16Range(
                 NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart),
@@ -745,6 +976,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             origin = 0
         }
         var available: [Row] = [], row: Row?
+        var originSelection: NSRange?
         if let origin {
             let b = buffers[origin]
             guard let e = b.editor, e.revision == b.revision,
@@ -754,6 +986,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 fail("Result is stale; search again. Selection unchanged.", .staleResult, audible: audible)
                 return false
             }
+            originSelection = selection
             available = rows.filter { $0.buffer == origin }
             if freshScope {
                 row = backwards ? available.last : available.first
@@ -791,7 +1024,15 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 }
             }
         }
-        if row == nil, wrap { row = backwards ? available.last : available.first }
+        if row == nil, wrap {
+            let wrapped = available.filter { row in
+                guard let selection = originSelection else { return true }
+                return SearchCore.isWrappedNavigationCandidate(
+                    row.hit.range, from: selection, backwards: backwards,
+                    mode: resultKey?.options.mode ?? .normal)
+            }
+            row = backwards ? wrapped.last : wrapped.first
+        }
         guard let row else {
             fail("No further matches.", .noFurtherMatches, audible: audible)
             return false
@@ -807,7 +1048,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     /// not showing at all.
     @discardableResult private func select(_ row: Row, focusEditor: Bool, audible: Bool) -> Bool {
         guard resultBuffers.indices.contains(row.buffer), let editor = resultBuffers[row.buffer].editor,
-            editor.window != nil, editor.revision == resultBuffers[row.buffer].revision,
+            EditorLifetime.isOpen(editor), editor.revision == resultBuffers[row.buffer].revision,
             let range = SearchCore.byteRange(row.hit.range, in: resultBuffers[row.buffer].text),
             editor.setSelectionAnchor(range.location, caret: NSMaxRange(range))
         else {
@@ -816,10 +1057,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         }
         lastNavigation = Navigation(
             editor: editor, revision: editor.revision, range: row.hit.range, from: currentEditor())
-        if focusEditor || editor.window?.isVisible == false {
-            editor.window?.makeKeyAndOrderFront(nil)
-            editor.window?.makeFirstResponder(editor)
-        }
+        if focusEditor || !EditorLifetime.isVisible(editor) { EditorLifetime.activate(editor) }
         return true
     }
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -828,7 +1066,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         let r = rows[row], buffer = resultBuffers[r.buffer]
         let match = (buffer.text as NSString).substring(with: r.hit.range)
         return
-            "\(buffer.editor?.window?.title ?? "Document") · \(r.hit.range.location) · \(String(match.prefix(160)).replacingOccurrences(of:"\n",with:" ↵ "))"
+            "\(EditorLifetime.title(buffer.editor)) · \(r.hit.displayPosition.map { "\($0.line):\($0.column)" } ?? "—") · \(String(match.prefix(160)).replacingOccurrences(of:"\n",with:" ↵ "))"
     }
     /// A double-click. `clickedRow` is -1 for the header and the empty area below the rows,
     /// which therefore do nothing even while a row is selected.

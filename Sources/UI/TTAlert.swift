@@ -1,9 +1,79 @@
+import TextTankCore
+import EditorBridge
+import NativeSearch
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
-/// Shared app-owned modal layout. macOS may stack NSAlert actions vertically;
-/// keep their original response indices while presenting one horizontal row.
-final class TTAlert: NSAlert {
+/// An app-owned panel for decisions and existing forms, with horizontal actions and stable
+/// response indices. It never re-parents NSAlert internals. Native NSError recovery stays in
+/// `present(_:)`; icon/suppression customization belongs to NSAlert, not this panel.
+@MainActor final class TTAlert: NSObject, NSWindowDelegate {
+    enum ButtonRole { case action, cancel }
+    enum Result: Equatable {
+        case button(Int), dismissed
+        init(_ response: NSApplication.ModalResponse) {
+            let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+            self = index >= 0 ? .button(index) : .dismissed
+        }
+    }
+    var messageText = ""
+    var informativeText = ""
+    var alertStyle: NSAlert.Style = .informational
+    var accessoryView: NSView?
+    private var validationMessage: String?
+    private weak var validationField: NSView?
+    /// Preserve the controls and identify the field that needs correction on the next presentation.
+    func showValidation(_ error: Error, field: NSView? = nil) {
+        validationField?.setAccessibilityHelp(nil)
+        validationField?.toolTip = nil
+        validationField = field
+        validationMessage = error.localizedDescription
+        field?.setAccessibilityHelp(validationMessage)
+        field?.toolTip = validationMessage
+        if let field { window.initialFirstResponder = field }
+    }
+    func clearValidation() {
+        validationField?.setAccessibilityHelp(nil)
+        validationField?.toolTip = nil
+        validationField = nil
+        validationMessage = nil
+    }
+    private(set) var buttons: [NSButton] = []
+    private var cancelButtons: Set<ObjectIdentifier> = []
+    let window = NSPanel(
+        contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+    private var sheetKeeper: TTAlert?
+    private var keyMonitor: Any?
+    override init() {
+        super.init()
+        window.isReleasedWhenClosed = false
+        window.hidesOnDeactivate = false
+        window.delegate = self
+    }
+    @discardableResult func addButton(withTitle title: String, role: ButtonRole = .action) -> NSButton {
+        let button = NSButton(title: title, target: self, action: #selector(finishHorizontalAction(_:)))
+        buttons.append(button)
+        if role == .cancel { cancelButtons.insert(ObjectIdentifier(button)) }
+        return button
+    }
+    @discardableResult func run() -> Result { Result(runModal()) }
+    /// A dialog declares its choices once, in its visible button order. Unexpected termination
+    /// has no choice; callers must never interpret an abort or stop as the first button.
+    func choice<Choice>(_ choices: [Choice]) -> Choice? {
+        guard choices.count == buttons.count else { return nil }
+        guard case .button(let index) = run(), choices.indices.contains(index) else { return nil }
+        return choices[index]
+    }
+    /// Keep the native error alert and its recovery attempter/options intact. All error callers
+    /// share this path; flattening the error into strings would discard its recovery behavior.
+    static func errorAlert(_ error: Error) -> NSAlert { NSAlert(error: error) }
+    static func present(_ error: Error) { _ = NSApp.presentError(error) }
+    nonisolated static func requiresNativePresentation(_ error: Error) -> Bool {
+        let native = error as NSError
+        return native.recoveryAttempter != nil || native.localizedRecoveryOptions != nil
+            || native.localizedRecoverySuggestion != nil
+    }
+
     /// States why a command the person chose did nothing. Only for an explicit action, never
     /// from menu validation or a timer.
     static func explain(_ message: String, detail: String = "") {
@@ -12,9 +82,7 @@ final class TTAlert: NSAlert {
         alert.informativeText = detail
         _ = alert.runModal()
     }
-    static func explain(_ error: Error) {
-        explain(error.localizedDescription, detail: (error as NSError).localizedRecoverySuggestion ?? "")
-    }
+    static func explain(_ error: Error) { present(error) }
     private var sizeConstraints: [NSLayoutConstraint] = []
     /// The button Escape presses. By default the one titled "Cancel"; set it for an alert whose
     /// way out has another title.
@@ -22,17 +90,31 @@ final class TTAlert: NSAlert {
     /// Return never presses a destructive button: when the first button is marked destructive,
     /// Return belongs to the way out instead and the destructive action needs a deliberate click.
     func keyRoles() -> (returnIndex: Int?, escapeIndex: Int?) {
-        let escapeIndex = buttons.firstIndex { $0 === escapeButton } ?? buttons.firstIndex { $0.title == "Cancel" }
+        let escapeIndex =
+            buttons.firstIndex { $0 === escapeButton }
+            ?? buttons.firstIndex { cancelButtons.contains(ObjectIdentifier($0)) }
+            // Compatibility for existing dynamically assembled button lists. Production callers
+            // can mark a cancel role without relying on the displayed language.
+            ?? buttons.firstIndex { $0.title == "Cancel" }
+            ?? (buttons.count == 1 && buttons[0].hasDestructiveAction == false ? 0 : nil)
         if buttons.first?.hasDestructiveAction == true { return (escapeIndex, escapeIndex) }
-        return (escapeIndex == 0 ? nil : 0, escapeIndex)
+        return (escapeIndex == 0 && buttons.count > 1 ? nil : 0, escapeIndex)
     }
     @objc private func finishHorizontalAction(_ sender: NSButton) {
-        window.makeFirstResponder(nil)
-        NSApp.stopModal(
-            withCode: NSApplication.ModalResponse(
+        finish(
+            with: NSApplication.ModalResponse(
                 rawValue: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + sender.tag))
     }
-    override func runModal() -> NSApplication.ModalResponse {
+    private func finish(with response: NSApplication.ModalResponse) {
+        // Commit a field editor before the caller reads any control, for modal and sheet paths.
+        window.makeFirstResponder(nil)
+        if let parent = window.sheetParent {
+            parent.endSheet(window, returnCode: response)
+        } else {
+            NSApp.stopModal(withCode: response)
+        }
+    }
+    private func prepare() {
         NSLayoutConstraint.deactivate(sizeConstraints)
         sizeConstraints.removeAll()
         if buttons.isEmpty { _ = addButton(withTitle: "OK") }
@@ -41,9 +123,9 @@ final class TTAlert: NSAlert {
         let accessorySize = accessory?.frame.size ?? .zero
         accessory?.removeFromSuperview()
         let title = NSTextField(wrappingLabelWithString: messageText)
-        title.font = .boldSystemFont(ofSize: 15)
+        title.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
         let detail = NSTextField(wrappingLabelWithString: informativeText)
-        detail.font = .systemFont(ofSize: 13)
+        detail.font = .systemFont(ofSize: NSFont.systemFontSize)
         // Stack spacing uses alignment rectangles. Older macOS rounded buttons
         // extend their frames beyond those rectangles, so reserve their insets too.
         let actionSpacing: CGFloat = 24
@@ -68,7 +150,10 @@ final class TTAlert: NSAlert {
             button.keyEquivalent = index == roles.returnIndex ? "\r" : (index == roles.escapeIndex ? "\u{1b}" : "")
             let width = max(
                 84,
-                ceil((button.title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13)]).width) + 30
+                ceil(
+                    (button.title as NSString).size(withAttributes: [
+                        .font: NSFont.systemFont(ofSize: NSFont.systemFontSize)
+                    ]).width) + 30
             )
             sizeConstraints.append(button.widthAnchor.constraint(equalToConstant: width))
             actions.addArrangedSubview(button)
@@ -81,8 +166,22 @@ final class TTAlert: NSAlert {
         body.orientation = .vertical
         body.alignment = .leading
         body.spacing = 14
+        if alertStyle != .informational,
+            let image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "Warning")
+        {
+            let warning = NSImageView(image: image)
+            warning.setAccessibilityLabel("Warning")
+            body.addArrangedSubview(warning)
+        }
         body.addArrangedSubview(title)
         if !informativeText.isEmpty { body.addArrangedSubview(detail) }
+        if let validationMessage {
+            let validation = AnnouncingLabel(wrappingLabelWithString: validationMessage)
+            validation.setAccessibilityLabel("Input needs correction")
+            body.addArrangedSubview(validation)
+            validation.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
+            Announce.say(validationMessage)
+        }
         if let accessory {
             accessory.translatesAutoresizingMaskIntoConstraints = false
             sizeConstraints.append(accessory.widthAnchor.constraint(equalToConstant: max(1, accessorySize.width)))
@@ -116,21 +215,56 @@ final class TTAlert: NSAlert {
         modal.contentView = root
         root.layoutSubtreeIfNeeded()
         modal.setContentSize(root.fittingSize)
-        modal.center()
+        modal.title = messageText
         modal.initialFirstResponder = initialFocus ?? accessory
-        modal.makeKeyAndOrderFront(nil)
-        if let initialFocus { modal.makeFirstResponder(initialFocus) }
-        defer { modal.orderOut(nil) }
-        var monitor: Any?
-        if let escapeIndex = roles.escapeIndex, escapeIndex == roles.returnIndex {
-            let escape = buttons[escapeIndex]
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak modal] event in
-                guard event.window === modal, event.keyCode == 53 else { return event }
-                escape.performClick(nil)
-                return nil
-            }
+    }
+    private func installKeyMonitor() {
+        removeKeyMonitor()
+        let roles = keyRoles()
+        guard let escapeIndex = roles.escapeIndex else { return }
+        let escape = buttons[escapeIndex]
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, event.window === self.window, event.keyCode == 53 else { return event }
+            escape.performClick(nil)
+            return nil
         }
-        defer { if let monitor { NSEvent.removeMonitor(monitor) } }
-        return NSApp.runModal(for: modal)
+    }
+    private func removeKeyMonitor() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+    }
+    @discardableResult func runModal() -> NSApplication.ModalResponse {
+        prepare()
+        window.center()
+        installKeyMonitor()
+        window.makeKeyAndOrderFront(nil)
+        if let initialFocus = window.initialFirstResponder { window.makeFirstResponder(initialFocus) }
+        defer {
+            window.makeFirstResponder(nil)
+            window.orderOut(nil)
+            removeKeyMonitor()
+        }
+        return NSApp.runModal(for: window)
+    }
+    func beginSheetModal(
+        for parent: NSWindow, completionHandler: ((NSApplication.ModalResponse) -> Void)? = nil
+    ) {
+        prepare()
+        sheetKeeper = self
+        installKeyMonitor()
+        parent.beginSheet(window) { [weak self] response in
+            guard let self else {
+                completionHandler?(response)
+                return
+            }
+            self.removeKeyMonitor()
+            self.window.orderOut(nil)
+            completionHandler?(response)
+            self.sheetKeeper = nil
+        }
+    }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        finish(with: .abort)
+        return false
     }
 }

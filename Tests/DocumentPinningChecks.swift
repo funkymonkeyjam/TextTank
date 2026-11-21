@@ -1,3 +1,4 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Audit package 4: behaviour pinned before refactoring. These sections run inside
 // document-checks, after the sections in DocumentChecks.swift, and share its
@@ -7,6 +8,11 @@
 // compared with what the build does. A `knownDefect` line marks behaviour the audit
 // confirmed as wrong: it is not pinned as correct, and it fails when it is repaired.
 import AppKit
+@testable import TextTankRuntime
+import EditorBridge
+import NativeSearch
+
+@MainActor private final class ColumnExplanation { var text = "" }
 
 extension DocumentChecks {
     typealias SectionRunner = (_ name: String, _ line: UInt, _ body: () throws -> Void) -> Void
@@ -47,8 +53,8 @@ extension DocumentChecks {
                     "case-insensitive sort keeps input order between rows that differ only in case"
                 ),
                 (
-                    .sortLength, "ccc\ne\u{301}e\u{301}\nz\n", "z\ne\u{301}e\u{301}\nccc\n",
-                    "length sort counts characters, not bytes or scalars"
+                    .sortLength, "ccc\ne\u{301}e\u{301}\nz\n", "z\nccc\ne\u{301}e\u{301}\n",
+                    "length sort counts Unicode scalars, consistent with native character counts"
                 ),
                 (.reverseLines, "a\r\nb\rc\n", "c\r\nb\ra\n", "reverse keeps the separator sequence"),
                 (
@@ -111,7 +117,7 @@ extension DocumentChecks {
             _ = editor.setSelectionAnchor(0, caret: 6)
             try EditorTransform.sortAscending.apply(to: editor)
             check(editor.text == "a\nb\nc\nz\ny\n", "a transform with a selection changes only the selected rows")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 editor.text == "c\nb\na\nz\ny\n" && !editor.modified,
                 "selection transform is one Undo back to the save point")
@@ -136,7 +142,8 @@ extension DocumentChecks {
                 "refused read-only transform leaves text and revision unchanged")
             editor.readOnly = false
             try require(
-                editor.setSelectionRanges([["anchor": 0, "caret": 1], ["anchor": 2, "caret": 3]]),
+                editor.setSelectionRanges([TTSelectionRange(anchor: 0, caret: 1), TTSelectionRange(anchor: 2, caret: 3)]
+                ),
                 "fixture: two selections")
             rejects("transform refuses multiple selections", message: "This command works on a single selection") {
                 try EditorTransform.reverseLines.apply(to: editor)
@@ -189,7 +196,7 @@ extension DocumentChecks {
                 editor.text = text
                 check(
                     same(editor.text, text)
-                        && editor.statusInfo["lines"]?.intValue == UnicodeFixtures.lineBreaks(in: text) + 1,
+                        && editor.statusInfo.lines == UnicodeFixtures.lineBreaks(in: text) + 1,
                     "\(name): the editor keeps the exact bytes and counts only CR, LF and CRLF as line breaks")
                 // The status bar's position at the end of the text: the line is counted in CR, LF and
                 // CRLF breaks, the column in Unicode scalars after the last break (current behaviour:
@@ -200,8 +207,8 @@ extension DocumentChecks {
                     ).last?.count ?? 0
                 check(
                     editor.setSelectionAnchor(text.utf8.count, caret: text.utf8.count)
-                        && editor.statusInfo["line"]?.intValue == UnicodeFixtures.lineBreaks(in: text) + 1
-                        && editor.statusInfo["column"]?.intValue == lastRow + 1,
+                        && editor.statusInfo.line == UnicodeFixtures.lineBreaks(in: text) + 1
+                        && editor.statusInfo.column == lastRow + 1,
                     "\(name): the status line and column at the end of the text count CR/LF breaks and scalars")
             }
             // The line model is CR, LF and CRLF only. Swift's isNewline and NSString's line
@@ -246,7 +253,7 @@ extension DocumentChecks {
             editor.text = wide
             check(
                 editor.setSelectionAnchor(wide.utf8.count, caret: wide.utf8.count)
-                    && editor.statusInfo["column"]?.intValue == 7,
+                    && editor.statusInfo.column == 7,
                 "the status column after a ZWJ emoji and a combining pair counts six scalars, not two characters")
             automation.steps = [.init(kind: .clearLinesEqualTo, find: UnicodeFixtures.zwjEmoji)]
             check(
@@ -420,14 +427,14 @@ extension DocumentChecks {
         }
         // G342
         section("split view focus and per-view state", #line) {
-            let priorDelegate = app.delegate, splitDelegate = AppDelegate()
-            app.delegate = splitDelegate
-            defer { app.delegate = priorDelegate }
+            let priorServices = EditorServices.current, splitDelegate = AppDelegate()
+            splitDelegate.installEditorServices()
+            defer { EditorServices.current = priorServices }
             var viewSettings = EditorSettings()
             viewSettings.tabWidth = 8
             viewSettings.useTabs = false
             try splitDelegate.settings.save(viewSettings)
-            defer { try? splitDelegate.settings.save(EditorSettings()) }
+            defer { _ = try? splitDelegate.settings.save(EditorSettings()) }
             let url = root.appendingPathComponent("split-view.txt")
             try Data("zero\none\ntwo\n".utf8).write(to: url)
             let document = TextDocument()
@@ -440,10 +447,10 @@ extension DocumentChecks {
             let
                 controller = try requireValue(
                     document.windowControllers.first as? EditorWindowController, "fixture: editor window controller"),
-                window = try requireValue(controller.window, "fixture: window")
+                window = try requireValue(controller.hostWindow, "fixture: window")
             let primaryStatus = document.editor.statusInfo
             check(
-                primaryStatus["tabWidth"]?.intValue == 8 && primaryStatus["useTabs"]?.boolValue == false,
+                primaryStatus.tabWidth == 8 && primaryStatus.useTabs == false,
                 "the primary view takes the saved tab settings")
             weak var released: TTEditor?
             try autoreleasepool {
@@ -455,17 +462,17 @@ extension DocumentChecks {
                     "a new clone becomes the active editor")
                 let cloneStatus = clone.statusInfo
                 check(
-                    cloneStatus["tabWidth"]?.intValue == 8 && cloneStatus["useTabs"]?.boolValue == false
-                        && document.editor.statusInfo["tabWidth"]?.intValue == 8
-                        && document.editor.statusInfo["useTabs"]?.boolValue == false,
+                    cloneStatus.tabWidth == 8 && cloneStatus.useTabs == false
+                        && document.editor.statusInfo.tabWidth == 8
+                        && document.editor.statusInfo.useTabs == false,
                     "the clone takes the saved tab settings and the primary view keeps its own")
                 clone.configureTabWidth(2, useTabs: true)
                 // Scintilla keeps tab width and tabs-or-spaces in the document, so a clone cannot
                 // differ from the primary view, although the status menu calls them view settings.
                 check(
-                    document.editor.statusInfo["tabWidth"]?.intValue == 2
-                        && document.editor.statusInfo["useTabs"]?.boolValue == true
-                        && clone.statusInfo["tabWidth"]?.intValue == 2,
+                    document.editor.statusInfo.tabWidth == 2
+                        && document.editor.statusInfo.useTabs == true
+                        && clone.statusInfo.tabWidth == 2,
                     "tab settings changed through the clone apply to the shared document and so to both views")
                 clone.configureTabWidth(8, useTabs: false)
                 check(
@@ -490,15 +497,15 @@ extension DocumentChecks {
                         && clone.revision - cloneRevision == document.editor.revision - primaryRevision,
                     "both views' revision counters advance by the same amount for edits from either side")
                 check(clone.revision == document.editor.revision, "the two views report the same revision")
-                document.editor.executeCommand("undo")
-                clone.executeCommand("undo")
+                document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     document.editor.text == "zero\none\ntwo\n" && !document.isDocumentEdited,
                     "undo from each view returns the shared buffer to its save point")
                 // The search, utility and language controllers ask the application delegate for the
                 // current editor; menu commands go to the window controller's active editor.
                 // The check process has no main window, so the delegate is told which window is frontmost.
-                splitDelegate.lastDocumentController = controller
+                splitDelegate.noteActive(controller)
                 check(
                     window.makeFirstResponder(clone) && splitDelegate.currentEditor === clone,
                     "with the clone focused it is the current editor the search, utility and language controllers receive"
@@ -513,7 +520,7 @@ extension DocumentChecks {
                         && document.editor.selectionEnd == 8,
                     "a menu command with the clone active uses the clone's selection and leaves the primary view's selection alone"
                 )
-                clone.executeCommand("undo")
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(
                     document.editor.text == "zero\none\ntwo\n" && !document.isDocumentEdited,
                     "the command sent through the clone is one Undo in the shared history")
@@ -522,7 +529,7 @@ extension DocumentChecks {
                     "with the primary view focused it is the current editor again")
                 let indicatorAllOnFor: UInt32 = 2506, searchIndicator = 1 << 20
                 check(
-                    document.editor.setSearchHighlights([NSValue(range: NSRange(location: 0, length: 4))])
+                    document.editor.setSearchHighlights([TTByteRange(location: 0, length: 4)])
                         && sci(clone, indicatorAllOnFor, 1) & searchIndicator != 0
                         && sci(clone, indicatorAllOnFor, 5) & searchIndicator == 0,
                     "a search highlight set through the primary view is present in the clone")
@@ -640,19 +647,9 @@ extension DocumentChecks {
             search.dotMatchesNewline = true
             search.wrap = false
             let searchBytes = try golden("SearchOptions.json") {
-                // The Find window writes its options when an action reads the controls.
-                let writer = SearchController(defaults: defaults)
-                writer.queryField.stringValue = search.query
-                writer.replacementField.stringValue = search.replacement
-                writer.mode.selectItem(at: search.mode.rawValue)
-                writer.caseButton.state = .on
-                writer.wordButton.state = .on
-                writer.dotButton.state = .on
-                writer.wrapButton.state = .off
-                writer.findAll(nil)
-                writer.cancel(nil)
-                return try requireValue(
-                    defaults.data(forKey: "TextTank.Search.v1"), "fixture: the Find window saved its options")
+                // The legacy defaults fixture remains byte/schema compatible. New Find files
+                // wrap these unchanged options in a versioned FindPreferences envelope.
+                try JSONEncoder().encode(search)
             }
             defaults.set(searchBytes, forKey: "TextTank.Search.v1")
             let finder = SearchController(defaults: defaults)
@@ -734,6 +731,11 @@ extension DocumentChecks {
                 id: idA, text: sessionText, format: FileFormat(encoding: .windows1252, bom: false),
                 originalURL: "file:///Users/Shared/TextTank%20Fixture/project/list.txt", revision: 42)
             snapshot.savedAt = stamp
+            let layoutBytes = try Data(contentsOf: folder.appendingPathComponent("SessionLayout.texttanksession"))
+            let layoutSession = try WorkspaceStore.load(from: copy(layoutBytes, "SessionLayout.texttanksession"))
+            check(
+                layoutSession.documents.count == 2 && layoutSession.layoutState?.groups.count == 4,
+                "golden multi-group shared pinned session decodes through production file reader")
             let snapshotBytes = try golden("RecoverySnapshot.json") {
                 let store = RecoveryStore(
                     directory: scratch.appendingPathComponent("write-recovery", isDirectory: true))
@@ -779,12 +781,11 @@ extension DocumentChecks {
             let macro = RecordedMacro(
                 id: idA, name: "Golden macro",
                 steps: [
-                    .init(kind: .insertText, text: "caf\u{E9}"), .init(kind: .command, command: "lineEnd"),
-                    .init(kind: .findLiteral, text: "x", matchCase: true, backwards: false),
-                    .init(kind: .replaceSelection, text: "y"),
-                    .init(
-                        kind: .search,
-                        search: .init(
+                    .insertText("caf\u{E9}"), .command("lineEnd"),
+                    .findLiteral(text: "x", matchCase: true, backwards: false),
+                    .replaceSelection("y"),
+                    .search(
+                        .init(
                             query: "a+", replacement: "b", mode: 2, matchCase: true, wholeWord: false,
                             dotMatchesNewline: false, wrap: true, action: "replaceAll"))
                 ])
@@ -878,11 +879,84 @@ extension DocumentChecks {
                     && overlaid.profiles[0] == storedOverrides.added[0] && overlaid.profiles[2] == base.profiles[2]
                     && overlaid.sourceCommit == "base",
                 "golden language overrides merge over a bundled catalog: changed, cleared, removed, added and ordered")
+            let futureRecovery = RecoveryStore(directory: scratch.appendingPathComponent("reader-gated-recovery"))
+            try FileManager.default.createDirectory(
+                at: futureRecovery.fileURL(for: idA).deletingLastPathComponent(), withIntermediateDirectories: true)
+            let readers: [(String, String, Data, (Data) throws -> Void)] = [
+                ("Settings", "version", settingsBytes, { _ = try EditorSettings.decode($0) }),
+                (
+                    "Find", "version", try FindPreferences(options: search).encoded(),
+                    { _ = try FindPreferences.decode($0) }
+                ),
+                ("Folder", "version", folderBytes, { _ = try FolderSearchSettings.decode($0) }),
+                (
+                    "Browser", "version", browserBytes,
+                    { data in
+                        let store = WorkspaceBrowserStore(url: try copy(data, "reader-browser.json"))
+                        if let error = store.loadError { throw error }
+                    }
+                ),
+                ("Run", "version", runBytes, { _ = try ConfiguredRun.decodeLibrary($0) }),
+                ("Session", "schemaVersion", sessionBytes, { _ = try WorkspaceSession.decode($0) }),
+                (
+                    "Recovery", "schemaVersion", snapshotBytes,
+                    { data in
+                        try data.write(to: futureRecovery.fileURL(for: idA))
+                        _ = try futureRecovery.load(id: idA)
+                    }
+                ),
+                (
+                    "Reminder", "schemaVersion", batchBytes,
+                    { data in
+                        _ = try ReminderJournal.read(copy(data, "reader-reminder.json"), id: idA)
+                    }
+                ),
+                ("Macro", "version", macroBytes, { _ = try MacroLibrary.decode($0) }),
+                ("Automation", "version", automationBytes, { _ = try AutomationLibrary.decode($0) }),
+                ("Language", "version", catalogBytes, { _ = try LanguageCatalog.decode($0) }),
+                (
+                    "Overrides", "overridesVersion", overridesBytes,
+                    { _ = try LanguageCatalog.load(stored: $0, over: base) }
+                )
+            ]
+            for (name, versionKey, bytes, read) in readers {
+                // Edit only envelope bytes. JSONSerialization's object bridge drops a leading
+                // FEFF inside a string on this macOS; it must never rewrite snapshot payloads.
+                func metadata(_ minimum: Int) throws -> Data {
+                    var result = bytes
+                    let opening = try requireValue(result.firstIndex(of: 0x7B), "fixture: JSON object opening")
+                    result.insert(contentsOf: Data("\"minimumReaderVersion\":\(minimum),".utf8), at: opening + 1)
+                    return result
+                }
+                let future = try metadata(2)
+                rejects("G356 \(name) production reader refuses newer minimum reader metadata") { try read(future) }
+                try read(metadata(1))
+                check(true, "G356 \(name) accepts reader 1 metadata without a schema migration")
+                var missing = bytes
+                let key = Data("\"\(versionKey)\"".utf8)
+                let field = try requireValue(
+                    missing.range(of: key, options: .backwards), "fixture: required version key")
+                var lower = field.lowerBound, upper = field.upperBound
+                func space(_ byte: UInt8) -> Bool { byte == 0x20 || byte == 0x0A || byte == 0x0D || byte == 0x09 }
+                while upper < missing.count && (space(missing[upper]) || missing[upper] == 0x3A) { upper += 1 }
+                try require(missing[upper] == 0x31, "fixture: recorded schema version is 1")
+                upper += 1
+                while upper < missing.count && space(missing[upper]) { upper += 1 }
+                if missing[upper] == 0x2C {
+                    upper += 1
+                } else {
+                    while lower > 0 && space(missing[lower - 1]) { lower -= 1 }
+                    if lower > 0 && missing[lower - 1] == 0x2C { lower -= 1 }
+                }
+                missing.removeSubrange(lower..<upper)
+                rejects("G356 \(name) never defaults a missing required schema version") { try read(missing) }
+            }
             let present = Set(try FileManager.default.contentsOfDirectory(atPath: folder.path))
             check(
                 present == [
                     "Settings.json", "SearchOptions.json", "FolderSearchSettings.json", "WorkspaceBrowser.json",
-                    "RunLibrary.json", "Session.texttanksession", "RecoverySnapshot.json", "ReminderBatch.json",
+                    "RunLibrary.json", "Session.texttanksession", "SessionLayout.texttanksession",
+                    "RecoverySnapshot.json", "ReminderBatch.json",
                     "MacroLibrary.json", "Automations.json", "LanguageCatalog.json", "LanguageOverrides.json"
                 ], "every committed persistence fixture is decoded by a check")
             check(!writing, "persistence fixtures were not rewritten by this run")
@@ -896,7 +970,7 @@ extension DocumentChecks {
             let
                 controller = try requireValue(
                     document.windowControllers.first as? EditorWindowController, "fixture: editor window controller"),
-                window = try requireValue(controller.window, "fixture: window")
+                window = try requireValue(controller.hostWindow, "fixture: window")
             sessionDelegate.buildMenus()
             let bar = try requireValue(NSApp.mainMenu, "fixture: buildMenus installs a main menu")
             func walk(_ menu: NSMenu, _ path: String) -> [(String, NSMenuItem)] {
@@ -906,6 +980,66 @@ extension DocumentChecks {
                         + (item.submenu.map { walk($0, here) } ?? [])
                 }
             }
+            func snapshot(_ menu: NSMenu, path: [Int] = []) -> [[String: String]] {
+                menu.items.enumerated().flatMap { index, item -> [[String: String]] in
+                    let position = path + [index]
+                    let row: [String: String] = [
+                        "position": position.map(String.init).joined(separator: "."),
+                        "title": item.title,
+                        "action": item.action.map(NSStringFromSelector) ?? "",
+                        "key": item.keyEquivalent,
+                        "modifiers": String(item.keyEquivalentModifierMask.rawValue),
+                        "target": item.target == nil ? "responder" : "explicit",
+                        "object": item.representedObject.map { String(describing: $0) } ?? ""
+                    ]
+                    return [row] + (item.submenu.map { snapshot($0, path: position) } ?? [])
+                }
+            }
+            let menuSnapshot = snapshot(bar)
+            let menuSnapshotData = try JSONSerialization.data(withJSONObject: menuSnapshot, options: [.sortedKeys])
+            let legacyMenu =
+                try JSONSerialization.jsonObject(
+                    with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("menu-tree-wave-3.json")))
+                as! [[String: String]]
+            let additions =
+                try JSONSerialization.jsonObject(
+                    with: Data(
+                        contentsOf: TestPaths.fixtures.appendingPathComponent("menu-tree-wave-5-d1-additions.json")))
+                as! [[String: String]]
+            let mergeAdditions =
+                try JSONSerialization.jsonObject(
+                    with: Data(
+                        contentsOf:
+                            TestPaths.fixtures.appendingPathComponent("menu-tree-wave-5-d2-additions.json")))
+                as! [[String: String]]
+            let boundary = legacyMenu.firstIndex { $0["position"] == "6" }!
+            let expectedMenu =
+                Array(legacyMenu[..<boundary]) + additions + mergeAdditions + Array(legacyMenu[boundary...])
+            let expectedMenuData = try JSONSerialization.data(withJSONObject: expectedMenu, options: [.sortedKeys])
+            check(
+                menuSnapshotData == expectedMenuData,
+                "F191 the complete menu tree preserves order, titles, actions, shortcuts, dispatch roles and represented objects"
+            )
+            try Audit29IntentChecks.checkMenuTargets(bar, composition: sessionDelegate)
+            let helperMenu = NSMenu()
+            let helperItem = helperMenu.addItem(
+                title: "Fixture command", action: #selector(EditorWindowController.command(_:)),
+                keyEquivalent: "j", modifiers: [.control, .shift], target: controller,
+                representedObject: "upper", isEnabled: false, state: .on)
+            check(
+                helperMenu.items.count == 1 && helperMenu.items.first === helperItem
+                    && helperItem.title == "Fixture command"
+                    && helperItem.action == #selector(EditorWindowController.command(_:))
+                    && helperItem.keyEquivalent == "j" && helperItem.keyEquivalentModifierMask == [.control, .shift]
+                    && helperItem.target === controller && helperItem.representedObject as? String == "upper"
+                    && !helperItem.isEnabled && helperItem.state == .on,
+                "F191 the shared menu helper preserves explicit dispatch, shortcut, identity and validation metadata")
+            let helperDefault = helperMenu.addItem(title: "Fixture heading", action: nil)
+            check(
+                helperDefault.target == nil && helperDefault.action == nil && helperDefault.keyEquivalent.isEmpty
+                    && helperDefault.keyEquivalentModifierMask == .command && helperDefault.representedObject == nil
+                    && helperDefault.isEnabled && helperDefault.state == .off,
+                "F191 the shared menu helper keeps NSMenuItem defaults when options are omitted")
             let items = walk(bar, "")
             check(
                 bar.items.map(\.title) == [
@@ -1027,7 +1161,7 @@ extension DocumentChecks {
                     }?.1, "fixture: \(mode) menu item")
                 controller.convertEOL(item)
                 check(
-                    same(document.editor.text, expected) && document.editor.statusInfo["eol"]?.intValue == eol,
+                    same(document.editor.text, expected) && document.editor.statusInfo.eol.rawValue == eol,
                     "Convert Line Endings to \(mode) rewrites every ending and switches the insertion ending")
             }
             let wrapped = controller.activeEditor.wrap
@@ -1073,9 +1207,9 @@ extension DocumentChecks {
                 "a command that edits nothing still runs in a read-only document")
             _ = document.editor.setSelectionAnchor(0, caret: 1)
             rejects("Convert Line Endings states that the document is read-only", message: "This document is read-only")
-            { try controller.convertLineEndings(to: "LF") }
+            { try controller.convertLineEndings(to: .lf) }
             check(
-                unchangedWhileLocked() && document.editor.statusInfo["eol"]?.intValue == 2,
+                unchangedWhileLocked() && document.editor.statusInfo.eol.rawValue == 2,
                 "a refused line-ending conversion changes neither the text nor the insertion ending")
             rejects(
                 "Convert to an encoding states that the document is read-only", message: "This document is read-only"
@@ -1090,16 +1224,19 @@ extension DocumentChecks {
             ) { try controller.replaceSelectionFromBar() }
             check(unchangedWhileLocked(), "a refused Replace Selection changes neither the text nor the selection")
             document.editor.readOnly = false
+            controller.findField.stringValue = "b"
             try controller.replaceSelectionFromBar()
+            spinUntil("the strict inline replacement to finish") { !controller.inlineSearchPending }
+
             check(
                 same(document.editor.text, "forbidden\r\na\n"),
                 "Replace Selection in the bar replaces the selection once the document is writable")
-            try controller.convertLineEndings(to: "LF")
+            try controller.convertLineEndings(to: .lf)
             check(
                 same(document.editor.text, "forbidden\na\n"),
                 "Convert Line Endings converts once the document is writable")
-            rejects("an unknown line-ending name is refused with a reason", message: "could not be converted") {
-                try controller.convertLineEndings(to: "bogus")
+            rejects("an unknown native line-ending code is refused with a reason", message: "could not be converted") {
+                try controller.convertLineEndings(to: TTLineEndingMode(rawValue: -1)!)
             }
             // Column insert: the success path of applyColumn, with one Undo.
             document.editor.text = "x\nx\nx\n"
@@ -1107,7 +1244,8 @@ extension DocumentChecks {
             document.editor.setSavePoint()
             try require(
                 document.editor.setSelectionRanges([
-                    ["anchor": 0, "caret": 1], ["anchor": 2, "caret": 3], ["anchor": 4, "caret": 4]
+                    TTSelectionRange(anchor: 0, caret: 1), TTSelectionRange(anchor: 2, caret: 3),
+                    TTSelectionRange(anchor: 4, caret: 4)
                 ]), "fixture: three column selections")
             let columnRevision = document.editor.revision, columnSelections = document.editor.selectionRanges
             check(
@@ -1115,7 +1253,7 @@ extension DocumentChecks {
                     ["1", "2", "3"], to: document.editor, revision: columnRevision, selections: columnSelections)
                     && document.editor.text == "1\n2\n3x\n",
                 "column insertion replaces each selection with its own value in selection order")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 document.editor.text == "x\nx\nx\n" && !document.editor.modified,
                 "column insertion is one Undo back to the save point")
@@ -1126,19 +1264,21 @@ extension DocumentChecks {
             // Insert into Each Selection through its real dialog: plain text, then sequential numbers.
             // F207: a dialog that cannot do what was asked says why in a second alert. The helpers
             // below answer the dialog, then record that alert's text here and dismiss it.
-            var explanation = ""
-            @MainActor func dismissExplanation(_ modal: NSWindow, after dialog: NSWindow?) {
+            let explanation = ColumnExplanation()
+            let dismissExplanation: @MainActor @Sendable (NSWindow, NSWindow?) -> Void = { modal, dialog in
                 guard modal !== dialog, let content = modal.contentView,
                     let ok = descendants(content).compactMap({ $0 as? NSButton }).first(where: { $0.title == "OK" })
                 else { return }
-                explanation = descendants(content).compactMap { ($0 as? NSTextField)?.stringValue }.joined(
+                explanation.text = descendants(content).compactMap { ($0 as? NSTextField)?.stringValue }.joined(
                     separator: "\n")
                 ok.performClick(nil)
             }
-            func columnDialog(text: String, numbered: Bool, start: String, step: String, confirm: Bool = true) -> Bool {
+            @MainActor func columnDialog(
+                text: String, numbered: Bool, start: String, step: String, confirm: Bool = true
+            ) -> Bool {
                 var acted = false, timedOut = false
                 var dialog: NSWindow?
-                explanation = ""
+                explanation.text = ""
                 let deadline = Date().addingTimeInterval(10)
                 let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                     MainActor.assumeIsolated {
@@ -1149,11 +1289,11 @@ extension DocumentChecks {
                             return
                         }
                         guard !acted else {
-                            dismissExplanation(modal, after: dialog)
+                            dismissExplanation(modal, dialog)
                             return
                         }
                         let views = descendants(content)
-                        func find<T: NSView>(_ identifier: String, _ type: T.Type) -> T? {
+                        @MainActor func find<T: NSView>(_ identifier: String, _ type: T.Type) -> T? {
                             views.compactMap { $0 as? T }.first { $0.identifier?.rawValue == identifier }
                         }
                         guard let textField = find("column.text", NSTextField.self),
@@ -1176,13 +1316,14 @@ extension DocumentChecks {
                 timer.invalidate()
                 return acted && !timedOut
             }
-            func threeSelections() throws -> UInt {
+            @MainActor func threeSelections() throws -> UInt {
                 document.editor.text = "x\nx\nx\n"
                 document.editor.resetUndoHistory()
                 document.editor.setSavePoint()
                 try require(
                     document.editor.setSelectionRanges([
-                        ["anchor": 0, "caret": 1], ["anchor": 2, "caret": 3], ["anchor": 4, "caret": 5]
+                        TTSelectionRange(anchor: 0, caret: 1), TTSelectionRange(anchor: 2, caret: 3),
+                        TTSelectionRange(anchor: 4, caret: 5)
                     ]), "fixture: three selected columns")
                 return document.editor.revision
             }
@@ -1191,7 +1332,7 @@ extension DocumentChecks {
                 columnDialog(text: "ab", numbered: false, start: "1", step: "1")
                     && document.editor.text == "ab\nab\nab\n",
                 "Insert into Each Selection puts the typed text in every selection")
-            document.editor.executeCommand("undo")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 document.editor.text == "x\nx\nx\n" && !document.editor.modified,
                 "the dialog's insertion is one Undo back to the save point")
@@ -1210,7 +1351,7 @@ extension DocumentChecks {
                     && document.editor.revision == untouched, "a start value that is not a whole number inserts nothing"
             )
             check(
-                explanation.contains("Start and Increment must be whole numbers"),
+                explanation.text.contains("Start and Increment must be whole numbers"),
                 "a start value that is not a whole number is explained instead of a beep")
             untouched = try threeSelections()
             check(
@@ -1218,51 +1359,61 @@ extension DocumentChecks {
                     && document.editor.text == "x\nx\nx\n" && document.editor.revision == untouched,
                 "a sequence that would overflow inserts nothing")
             check(
-                explanation.contains("The number sequence is too large"),
+                explanation.text.contains("The number sequence is too large"),
                 "a sequence that would overflow is explained instead of a beep")
             untouched = try threeSelections()
             check(
                 columnDialog(text: "ab", numbered: false, start: "1", step: "1", confirm: false)
                     && document.editor.text == "x\nx\nx\n" && document.editor.revision == untouched,
                 "Cancel in Insert into Each Selection inserts nothing")
-            check(explanation.isEmpty, "Cancel in Insert into Each Selection shows no explanation")
+            check(explanation.text.isEmpty, "Cancel in Insert into Each Selection shows no explanation")
             // F12: Go to Line through its real dialog, on the engine's own line model.
-            func goToLineDialog(_ entry: String, confirm: Bool = true) -> Bool {
+            @MainActor func goToLineDialog(_ entry: String, confirm: Bool = true) -> Bool {
                 var acted = false, timedOut = false
-                var dialog: NSWindow?
-                explanation = ""
+                explanation.text = ""
                 let deadline = Date().addingTimeInterval(10)
                 let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
                     MainActor.assumeIsolated {
-                        guard let modal = NSApp.modalWindow, let content = modal.contentView else { return }
+                        guard let window = presentedFormWindow, let content = window.contentView else { return }
                         if Date() > deadline {
                             timedOut = true
-                            NSApp.abortModal()
-                            return
-                        }
-                        guard !acted else {
-                            dismissExplanation(modal, after: dialog)
+                            window.performClose(nil)
                             return
                         }
                         let views = descendants(content)
                         guard
                             let field = views.compactMap({ $0 as? NSTextField }).first(where: {
                                 $0.identifier?.rawValue == "goToLine.line"
-                            }),
-                            let press = views.compactMap({ $0 as? NSButton }).first(where: {
+                            })
+                        else { return }
+                        if acted {
+                            // Invalid input remains in this same modeless form, instead of a replacement alert.
+                            explanation.text =
+                                views.compactMap { $0 as? NSTextField }.first {
+                                    $0.accessibilityLabel()?.hasPrefix("Input needs correction") == true
+                                }?.stringValue ?? ""
+                            check(
+                                field.stringValue == entry && field.accessibilityHelp() != nil,
+                                "DG Go to Line keeps and marks the rejected input")
+                            views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
+                            return
+                        }
+                        guard
+                            let button = views.compactMap({ $0 as? NSButton }).first(where: {
                                 $0.title == (confirm ? "Go" : "Cancel")
                             })
                         else { return }
                         acted = true
-                        dialog = modal
+                        window.makeFirstResponder(nil)
                         field.stringValue = entry
-                        press.performClick(nil)
+                        button.performClick(nil)
                     }
                 }
                 RunLoop.main.add(timer, forMode: .modalPanel)
                 let item = NSMenuItem(title: "Go to Line…", action: nil, keyEquivalent: "")
                 item.representedObject = "goToLine"
                 controller.perform(NSSelectorFromString("statusOption:"), with: item)
+                waitForModelessForms()
                 timer.invalidate()
                 return acted && !timedOut
             }
@@ -1274,14 +1425,12 @@ extension DocumentChecks {
                 goToLineDialog("3") && document.editor.selectionCaret == 7 && document.editor.selectionAnchor == 7,
                 "Go to Line places the caret at the start of the one-based line across CRLF and CR")
             check(
-                goToLineDialog("4") && document.editor.selectionCaret == 11 && explanation.isEmpty,
+                goToLineDialog("4") && document.editor.selectionCaret == 11 && explanation.text.isEmpty,
                 "Go to Line reaches the empty line after the final line break, with nothing to explain")
             for entry in ["5", "0", "two", "-1"] {
                 check(
                     goToLineDialog(entry) && document.editor.selectionCaret == 11
-                        && explanation.contains(
-                            entry == "two" ? "Enter a whole line number" : "There is no line \(entry)")
-                        && explanation.contains("Enter a line number from 1 to 4."),
+                        && explanation.text.contains("Enter a whole line number from 1 to 4."),
                     "Go to Line \(entry) says that line does not exist and names the valid range")
             }
             check(
@@ -1304,7 +1453,7 @@ extension DocumentChecks {
             document.editor.setSavePoint()
             _ = document.editor.setSelectionAnchor(0, caret: 0)
             recorder.startRecording()
-            document.editor.executeCommand("charRight")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             check(
                 !EditorWindowController.goToLine(9, in: document.editor, macros: recorder)
                     && EditorWindowController.clearSelection(in: document.editor, macros: recorder)
@@ -1314,7 +1463,7 @@ extension DocumentChecks {
                 try recorder.finishRecording()?.steps.count == 1,
                 "the recording is still saveable after a refused Go to Line and a no-op Clear Selection")
             recorder.startRecording()
-            document.editor.executeCommand("charRightExtend")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRightExtend"))
             check(
                 EditorWindowController.clearSelection(in: document.editor, macros: recorder)
                     && document.editor.selectionAnchor == document.editor.selectionCaret
@@ -1324,7 +1473,7 @@ extension DocumentChecks {
                 _ = try recorder.finishRecording()
             }
             recorder.startRecording()
-            document.editor.executeCommand("charRight")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             check(
                 EditorWindowController.goToLine(3, in: document.editor, macros: recorder)
                     && document.editor.selectionCaret == 8 && discarded.count == 2

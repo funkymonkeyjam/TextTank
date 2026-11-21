@@ -1,8 +1,12 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Audit package 6: document open, save and recovery correctness. These sections run inside
 // document-checks after the sections in DocumentChecks.swift and share its support directory
 // and document controller. Nothing here presents a panel: every chooser is an injected closure.
 import AppKit
+@testable import TextTankRuntime
+import EditorBridge
+import NativeSearch
 
 extension DocumentChecks {
     @MainActor static func openSaveRecovery(root: URL, documents: TextDocumentController, section: SectionRunner) {
@@ -23,8 +27,56 @@ extension DocumentChecks {
             return lstat(url.path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFLNK
         }
         @MainActor func edit(_ document: TextDocument, _ text: String) {
-            document.editor.executeCommand("selectAll")
+            document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
             document.editor.replaceSelection(text)
+        }
+
+        section("F316 actual document completion transport ownership", #line) {
+            let shared = NSDocumentController.shared
+            let url = area.appendingPathComponent("completion-owned.txt")
+            var directCalls = 0
+            let direct = TextDocumentController.OpenDelivery(documents, url: url, display: false) {
+                document, alreadyOpen, error in
+                directCalls += 1
+                check(
+                    Thread.isMainThread && document == nil && alreadyOpen && error == nil,
+                    "F316 live-owner completion preserves its arguments and direct main turn")
+            }
+            direct.receive(nil, true, nil)
+            check(directCalls == 1, "F316 actual production completion transport invokes main input synchronously once")
+            for absentOwner in [false, true] {
+                let owner: TextDocumentController? = absentOwner ? nil : documents
+                var callbacks = 0, onMain = false, receivedAlreadyOpen = false
+                var receivedCode: Int?
+                let delivery = TextDocumentController.OpenDelivery(owner, url: url, display: false) {
+                    document, alreadyOpen, error in
+                    callbacks += 1
+                    onMain = Thread.isMainThread && document == nil
+                    receivedAlreadyOpen = alreadyOpen
+                    receivedCode = (error as NSError?)?.code
+                }
+                check(
+                    NSDocumentController.shared === documents,
+                    "F316 live and nil-owner completion setup keeps the existing document-controller singleton")
+                let posted = DispatchSemaphore(value: 0)
+                let worker = Thread {
+                    delivery.receive(nil, true, CocoaError(.fileReadUnknown))
+                    posted.signal()
+                }
+                worker.start()
+                try require(
+                    posted.wait(timeout: .now() + 5) == .success,
+                    "F316 framework-style worker completion returns without waiting for main")
+                check(callbacks == 0, "F316 worker completion does not invoke caller UI captures inline")
+                spinUntil(timeout: 1, "F316 completion reaches its owned main turn") { callbacks == 1 }
+                check(
+                    onMain && receivedAlreadyOpen && receivedCode == CocoaError.fileReadUnknown.rawValue,
+                    "F316 live and nil-owner deliveries preserve callback arguments on main")
+                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+                check(
+                    callbacks == 1 && NSDocumentController.shared === shared,
+                    "F316 production delivery completes exactly once without replacing the shared document controller")
+            }
         }
 
         // F127
@@ -48,7 +100,7 @@ extension DocumentChecks {
                 "explicit Latin-1 open decodes the text and records the format without a BOM")
             check(try latin.diskState() == .unchanged, "explicitly opened legacy file has an exact disk baseline")
             edit(latin, "changed")
-            latin.editor.executeCommand("undo")
+            latin.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 try latin.data(ofType: "Plain Text") == latinBytes,
                 "edit and undo leave the legacy file's bytes exact")
@@ -271,6 +323,34 @@ extension DocumentChecks {
             try files.createSymbolicLink(at: leaf, withDestinationURL: target)
             let inside = alias.appendingPathComponent("inside.txt")
             try Data("inside a linked folder\n".utf8).write(to: real.appendingPathComponent("inside.txt"))
+            // The framework can set fileURL from its own queue. Canonical metadata must be
+            // immediately visible without draining main, while the existing recovery increment
+            // remains queued for main. This fixture owns both aliases and never calls the editor
+            // from the worker.
+            let setterDocument = TextDocument()
+            let setterBase = setterDocument.recoveryBase
+            let setterDone = DispatchSemaphore(value: 0)
+            let setterThread = Thread {
+                setterDocument.fileURL = leaf
+                setterDone.signal()
+            }
+            setterThread.start()
+            try require(
+                setterDone.wait(timeout: .now() + 5) == .success,
+                "F316 owned off-main fileURL setter completes without main coordination")
+            check(
+                setterDocument.fileURL == leaf && setterDocument.diskURL == TextDocument.canonicalDiskURL(target),
+                "F316 off-main fileURL setter publishes its canonical location synchronously")
+            check(
+                setterDocument.recoveryBase == setterBase,
+                "F316 off-main setter preserves queued recovery metadata timing")
+            spinUntil(timeout: 1, "F316 owned setter recovery metadata reaches main") {
+                setterDocument.recoveryBase == setterBase + 1
+            }
+            check(
+                setterDocument.recoveryBase == setterBase + 1,
+                "F316 off-main setter increments recovery metadata on its original main-queue turn")
+            setterDocument.close()
             for (label, url, actual) in [
                 ("symlink leaf", leaf, target),
                 ("symlinked parent folder", inside, real.appendingPathComponent("inside.txt"))
@@ -289,21 +369,22 @@ extension DocumentChecks {
                 edit(document, "saved \(label)\n")
                 // NSDocument reads fileURL from its file-presenter queue. Only the thread doing
                 // the write may see the resolved destination; any other keeps the opened path.
-                var seenElsewhere: URL?, seenByWriter: URL?
-                document.duringWriteForTesting = {
+                let seenElsewhere = FileURLObservation()
+                var seenByWriter: URL?
+                document.dependencies.duringWrite = {
                     seenByWriter = document.fileURL
                     let done = DispatchSemaphore(value: 0)
                     let other = Thread {
-                        seenElsewhere = document.fileURL
+                        seenElsewhere.set(document.fileURL)
                         done.signal()
                     }
                     other.start()
                     _ = done.wait(timeout: .now() + 5)
                 }
                 try document.writeSafely(to: url, ofType: "Plain Text", for: .saveOperation)
-                document.duringWriteForTesting = nil
+                document.dependencies.duringWrite = nil
                 check(
-                    seenByWriter == document.diskURL && seenElsewhere == url && document.fileURL == url,
+                    seenByWriter == document.diskURL && seenElsewhere.value == url && document.fileURL == url,
                     "\(label): only the writing thread sees the resolved location during an in-place Save")
                 check(
                     try Data(contentsOf: actual) == Data("saved \(label)\n".utf8) && !document.isDocumentEdited
@@ -635,5 +716,24 @@ extension DocumentChecks {
             try WorkspaceStore.save(session, to: renamed)
             check(try WorkspaceStore.load(from: renamed) == session, "a snapshot saved under any name still loads")
         }
+    }
+}
+
+/// Only the worker's opened URL crosses this test's file-presenter wait. No UI or callback
+/// enters the lock; all mutable state is private and displaced values release after unlock.
+private final class FileURLObservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: URL?
+    func set(_ next: URL?) {
+        lock.lock()
+        let displaced = stored
+        stored = next
+        lock.unlock()
+        withExtendedLifetime(displaced) {}
+    }
+    var value: URL? {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
     }
 }

@@ -1,42 +1,75 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 #if TEXTTANK_NATIVE_MACRO_TEST
     import AppKit
+    @testable import TextTankRuntime
+    import EditorBridge
+    import NativeSearch
 #endif
 
 @main struct MacroChecks {
     #if TEXTTANK_NATIVE_MACRO_TEST
-        static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-        static func control<T: NSView>(_ identifier: String, _ type: T.Type, in views: [NSView]) -> T? {
+        @MainActor final class ChoosingState { var acted = false, timedOut = false }
+        @MainActor final class InteractiveStopState {
+            var pressed = false, timedOut = false, acknowledged = false
+            var prefix = ""
+        }
+        @MainActor static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        @MainActor static func control<T: NSView>(_ identifier: String, _ type: T.Type, in views: [NSView]) -> T? {
             views.compactMap { $0 as? T }.first { $0.identifier?.rawValue == identifier }
         }
         /// Sends a Macros menu item's own action while a timer in modal mode answers the dialog it opens.
         /// `act` is called on every tick until it returns true; a modal still open at the deadline is aborted.
-        static func choosing(_ item: NSMenuItem, _ act: @escaping ([NSView]) -> Bool) -> Bool {
-            var acted = false, timedOut = false
+        @MainActor static func choosing(_ item: NSMenuItem, _ act: @escaping @MainActor @Sendable ([NSView]) -> Bool)
+            -> Bool
+        {
+            let state = ChoosingState()
             let deadline = Date().addingTimeInterval(10)
             let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-                guard let content = NSApp.modalWindow?.contentView else { return }
-                if Date() > deadline {
-                    timedOut = true
-                    NSApp.abortModal()
-                    return
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated {
+                    guard let content = presentedFormWindow?.contentView else { return }
+                    if Date() > deadline {
+                        state.timedOut = true
+                        NSApp.abortModal()
+                        return
+                    }
+                    if !state.acted { state.acted = act(descendants(content)) }
                 }
-                if !acted { acted = act(descendants(content)) }
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             defer { timer.invalidate() }
             guard let action = item.action, NSApp.sendAction(action, to: item.target, from: item) else { return false }
-            return acted && !timedOut
+            waitForModelessForms()
+            return state.acted && !state.timedOut
         }
-        static func item(_ selector: String, in controller: MacroController, id: UUID? = nil) -> NSMenuItem? {
+        @MainActor static func choosingAdvanced(
+            _ item: NSMenuItem, commit: Bool, _ act: @escaping @MainActor @Sendable ([NSView]) -> Bool
+        )
+            -> Bool
+        {
+            MainActor.assumeIsolated {
+                let route = ManagerChildRoute(
+                    managerID: "macro.manager", openerID: "macro.manager.advanced", childID: "macro.json",
+                    commit: commit)
+                return choosing(item) { views in
+                    MainActor.assumeIsolated {
+                        guard let window = presentedFormWindow else { return false }
+                        return route.step(window, views: views) { _ = act(views) }
+                    }
+                }
+            }
+        }
+        @MainActor static func item(_ selector: String, in controller: MacroController, id: UUID? = nil) -> NSMenuItem?
+        {
             controller.menu().items.first {
                 $0.action == NSSelectorFromString(selector)
                     && (id == nil || ($0.representedObject as? String) == id?.uuidString)
             }
         }
         /// F253: Save Last Recording, a restart, then playback from the Macros menu.
-        static func menuFlowChecks(editor: TTEditor, support: URL) throws {
+        @MainActor static func menuFlowChecks(editor: TTEditor, support: URL) throws {
             let storage = support.appendingPathComponent("Macros.json")
             let controller = MacroController(editorProvider: { editor })
             editor.text = "ab"
@@ -44,16 +77,21 @@ import Foundation
             editor.setSavePoint()
             _ = editor.setSelectionAnchor(1, caret: 1)
             controller.startRecording()
-            editor.executeCommand("newLine")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
             let recording = try requireValue(try controller.finishRecording(), "fixture: a one-step recording")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             try require(editor.text == "ab", "fixture: the recorded edit is undone")
-            func answer(_ field: String, _ value: String?, _ button: String) -> ([NSView]) -> Bool {
+            @MainActor func answer(_ field: String, _ value: String?, _ button: String)
+                -> @MainActor @Sendable ([NSView]) -> Bool
+            {
                 { views in
                     guard let press = control(button, NSButton.self, in: views),
                         let input = control(field, NSTextField.self, in: views)
                     else { return false }
-                    if let value { input.stringValue = value }
+                    if let value {
+                        input.window?.makeFirstResponder(nil)
+                        input.stringValue = value
+                    }
                     press.performClick(nil)
                     return true
                 }
@@ -99,7 +137,7 @@ import Foundation
                 choosing(savedItem, answer("macro.play.count", "3", "macro.play.confirm")),
                 "a saved macro plays from its menu item with a repeat count")
             check(editor.text == "a\n\n\nb", "saved macro playback repeats the recorded edit at the caret")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "ab" && !editor.modified, "menu playback of a saved macro is one Undo")
             _ = editor.setSelectionAnchor(1, caret: 1)
             revision = editor.revision
@@ -110,29 +148,269 @@ import Foundation
             check(
                 choosing(lastItem, answer("macro.play.count", "2", "macro.play.confirm")) && editor.text == "a\n\nb",
                 "Play Last Recording replays the unsaved recording through the same dialog")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "ab" && !editor.modified, "Play Last Recording is one Undo")
+            // F316: exercise the real interactive playback timer and its actual Stop action,
+            // rather than the separate synchronous play(shouldCancel:) control below.
+            editor.text = "ab"
+            editor.resetUndoHistory()
+            editor.setSavePoint()
+            _ = editor.setSelectionAnchor(1, caret: 1)
+            let stopRevision = editor.revision
+            let stopState = InteractiveStopState()
+            let stopDeadline = Date().addingTimeInterval(10)
+            let stopTimer = Timer(timeInterval: 0.01, repeats: true) { _ in
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated {
+                    guard let content = NSApp.modalWindow?.contentView else { return }
+                    let views = descendants(content)
+                    if Date() > stopDeadline {
+                        stopState.timedOut = true
+                        NSApp.abortModal()
+                        return
+                    }
+                    if !stopState.pressed, editor.revision > stopRevision,
+                        let stop = views.compactMap({ $0 as? NSButton }).first(where: {
+                            $0.action == NSSelectorFromString("cancelPlayback")
+                        })
+                    {
+                        stopState.prefix = editor.text
+                        stopState.pressed = true
+                        stop.performClick(nil)
+                    } else if stopState.pressed,
+                        let acknowledge = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "OK" })
+                    {
+                        stopState.acknowledged = true
+                        acknowledge.performClick(nil)
+                    }
+                }
+            }
+            RunLoop.main.add(stopTimer, forMode: .modalPanel)
+            let stopped = choosing(savedItem, answer("macro.play.count", "1000", "macro.play.confirm"))
+            stopTimer.invalidate()
+            check(
+                stopped && stopState.pressed && !stopState.timedOut && stopState.acknowledged
+                    && NSApp.modalWindow == nil,
+                "F316 real interactive Macro Stop returns from playback and its native error notice")
+            let completed = stopState.prefix.utf8.count - 2
+            check(
+                completed > 0 && completed < 1000
+                    && stopState.prefix == "a" + String(repeating: "\n", count: completed) + "b",
+                "F316 real Stop retains an exact nonempty incomplete prefix of completed editing steps")
+            check(
+                editor.text == stopState.prefix && editor.modified,
+                "F316 the interactive timer stops without advancing after the Stop turn")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            check(
+                editor.text == "ab" && !editor.modified,
+                "F316 actual interactive Stop preserves one Undo to the original save point")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            check(
+                editor.text == "ab" && !editor.modified,
+                "F316 interactive Stop leaves no second partial edit to undo")
             check(
                 item("playLast", in: restarted)?.isEnabled == false
                     && item("saveLast", in: restarted)?.isEnabled == false,
                 "a restarted controller has no last recording to play or save")
+            let savedBeforeConflict = try Data(contentsOf: storage)
+            _ = NSApp.sendAction(saveItem.action!, to: saveItem.target, from: saveItem)
+            let pending = try requireValue(FormPanel.visible.last, "fixture: modeless recording name")
+            pending.window.makeFirstResponder(nil)
+            let pendingName = try requireValue(
+                control("macro.save.name", NSTextField.self, in: descendants(pending.window.contentView!)),
+                "fixture: pending recording name")
+            pendingName.stringValue = "Kept pending name"
+            controller.startRecording()
+            let savePending = try requireValue(
+                control("macro.save.confirm", NSButton.self, in: descendants(pending.window.contentView!)),
+                "fixture: recording save action")
+            check(!savePending.isEnabled, "DG an actual active recording disables the open recording-name Save action")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
+            let intervening = try requireValue(
+                try controller.finishRecording(), "fixture: intervening completed recording")
+            check(
+                savePending.isEnabled,
+                "DG recording completion re-enables Save without treating the manager as execution busy")
+            savePending.performClick(nil)
+            check(
+                pending.window.isVisible && pendingName.stringValue == "Kept pending name"
+                    && descendants(pending.window.contentView!).compactMap { $0 as? NSTextField }.contains {
+                        $0.stringValue.contains("changed while this window was open")
+                    },
+                "DG a real intervening recording completion preserves and explains the stale name draft")
+            check(
+                try Data(contentsOf: storage) == savedBeforeConflict,
+                "DG a stale recording-name Save never overwrites the saved library")
+            control("macro.save.cancel", NSButton.self, in: descendants(pending.window.contentView!))?.performClick(nil)
+            check(
+                choosing(saveItem, answer("macro.save.name", "Newer recording", "macro.save.confirm")),
+                "DG a reopened name form saves the newer recording")
+            let afterConflict = try MacroLibrary.decode(Data(contentsOf: storage))
+            check(
+                afterConflict.macros.contains {
+                    $0.id == intervening.id && $0.name == "Newer recording" && $0.steps == intervening.steps
+                },
+                "DG stale-save refusal preserves the actual newer recording for later Save")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        }
+        @MainActor static func jsonManagerChecks(editor: TTEditor) throws {
+            let isolated = try IsolatedSupportDirectory("MacroJSONChecks")
+            defer { isolated.restore() }
+            let path = isolated.url.appendingPathComponent("Macros.json")
+            let macro = RecordedMacro(id: UUID(), name: "JSON manager", steps: [.insertText("é\0e\u{301}")])
+            let initial = MacroLibrary(macros: [macro])
+            try initial.encoded().write(to: path)
+            let controller = MacroController(editorProvider: { editor })
+            let manage = try requireValue(item("manage", in: controller), "fixture: the macro JSON manager item")
+            let before = try Data(contentsOf: path)
+            let editorText = editor.text, revision = editor.revision, modified = editor.modified
+            var corrected = macro
+            corrected.name = "Renamed in JSON"
+            let correctedLibrary = MacroLibrary(macros: [corrected])
+            let correctedJSON = String(decoding: try correctedLibrary.encoded(), as: UTF8.self)
+            let invalid = "{ preserve the macro JSON draft"
+            var stage = 0, nestedError = false, keptDraft = false, inlineError = false
+            var manager: NSWindow?
+            let retried = choosingAdvanced(manage, commit: true) { views in
+                if stage == 1, presentedFormWindow !== manager {
+                    nestedError = true
+                    NSApp.abortModal()
+                    return false
+                }
+                guard let text = views.compactMap({ $0 as? NSTextView }).first,
+                    let save = views.compactMap({ $0 as? NSButton }).first(where: {
+                        $0.identifier?.rawValue == "macro.json.save"
+                    })
+                else { return false }
+                switch stage {
+                case 0:
+                    manager = presentedFormWindow
+                    text.string = invalid
+                    stage = 1
+                    save.performClick(nil)
+                case 1:
+                    keptDraft = text.string == invalid && (try? Data(contentsOf: path)) == before
+                    inlineError = text.accessibilityHelp()?.isEmpty == false
+                    text.string = correctedJSON
+                    stage = 2
+                    save.performClick(nil)
+                    return true
+                default: break
+                }
+                return false
+            }
+            check(retried && stage == 2 && keptDraft, "F155 Macro JSON retry retains the draft and saved bytes")
+            check(!nestedError && inlineError, "F155 invalid Macro JSON is marked inline without a nested error modal")
+            check(
+                try MacroLibrary.decode(Data(contentsOf: path)) == correctedLibrary,
+                "F155 explicit corrected Macro JSON Save roundtrips exact typed steps")
+            let restarted = MacroController(editorProvider: { editor })
+            check(
+                item("playSaved:", in: restarted, id: macro.id)?.title == corrected.name,
+                "F155 a JSON rename keeps the macro identity after restart")
+            check(
+                editor.text == editorText && editor.revision == revision && editor.modified == modified,
+                "F155 editing a Macro library never executes its steps")
+            var imported = corrected
+            imported.name = "Imported Macro draft"
+            let importedLibrary = MacroLibrary(macros: [imported])
+            let source = isolated.url.appendingPathComponent("macro-import.json")
+            let exported = isolated.url.appendingPathComponent("macro-export.json")
+            try importedLibrary.encoded().write(to: source)
+            let saved = try Data(contentsOf: path)
+            var exportNames: [String] = []
+            controller.jsonFilePanels = .init(
+                importURL: { source },
+                exportURL: { name in
+                    exportNames.append(name)
+                    return exported
+                })
+            stage = 0
+            var draftOnly = false, exportedDraft = false
+            let cancelled = choosingAdvanced(manage, commit: false) { views in
+                guard let text = control("macro.json.text", NSTextView.self, in: views),
+                    let load = control("macro.json.import", NSButton.self, in: views),
+                    let export = control("macro.json.export", NSButton.self, in: views),
+                    let cancel = control("macro.json.cancel", NSButton.self, in: views)
+                else { return false }
+                switch stage {
+                case 0:
+                    stage = 1
+                    load.performClick(nil)
+                case 1:
+                    draftOnly =
+                        (try? MacroLibrary.decode(Data(text.string.utf8))) == importedLibrary
+                        && (try? Data(contentsOf: path)) == saved
+                    stage = 2
+                    export.performClick(nil)
+                case 2:
+                    exportedDraft = (try? MacroLibrary.decode(Data(contentsOf: exported))) == importedLibrary
+                    stage = 3
+                    cancel.performClick(nil)
+                    return true
+                default: break
+                }
+                return false
+            }
+            check(
+                cancelled && stage == 3 && draftOnly && exportedDraft,
+                "F155 Macro import and export use the draft without saving it")
+            check(
+                try Data(contentsOf: path) == saved, "F155 Cancel after Macro import and export preserves saved bytes")
+            check(exportNames == ["TextTank-Macros.json"], "F155 Macro export keeps its documented filename")
+            stage = 0
+            let accepted = choosingAdvanced(manage, commit: true) { views in
+                guard let load = control("macro.json.import", NSButton.self, in: views),
+                    let save = control("macro.json.save", NSButton.self, in: views)
+                else { return false }
+                if stage == 0 {
+                    stage = 1
+                    load.performClick(nil)
+                } else if stage == 1 {
+                    stage = 2
+                    save.performClick(nil)
+                    return true
+                }
+                return false
+            }
+            check(
+                try accepted && MacroLibrary.decode(Data(contentsOf: path)) == importedLibrary,
+                "F155 explicit Save commits the imported Macro draft")
+            check(
+                editor.text == editorText && editor.revision == revision,
+                "F155 imported Macro Save executes no recorded text")
+            let corrupt = Data("{ preserve unreadable macros".utf8)
+            try corrupt.write(to: path)
+            let blocked = MacroController(editorProvider: { editor })
+            let blockedManager = try requireValue(
+                item("manage", in: blocked), "fixture: unreadable Macro manager remains recoverable")
+            var recoveryOnly = false
+            let declined = choosing(blockedManager) { views in
+                guard let cancel = control("store.recover.cancel", NSButton.self, in: views) else { return false }
+                recoveryOnly = !views.contains { $0 is NSTextView }
+                cancel.performClick(nil)
+                return true
+            }
+            check(
+                try declined && recoveryOnly && Data(contentsOf: path) == corrupt && blocked.loadingError != nil,
+                "F155 unreadable Macro storage requires explicit recovery before opening the JSON editor")
         }
         /// Navigation from the Find window fronts the document window; checks never put one on screen.
         final class QuietWindow: NSWindow { override func makeKeyAndOrderFront(_ sender: Any?) {} }
         /// Stands in for the system's drag information, so a real drop runs through a content view.
-        final class FakeDrop: NSObject {
+        @MainActor final class FakeDrop: NSObject {
             @objc let draggingPasteboard = NSPasteboard.withUniqueName()
             @objc var draggingLocation = NSPoint.zero
             @objc let draggingSourceOperationMask = NSDragOperation.copy
             @objc let draggingSource: Any? = nil
         }
         /// Package 12: a recording either reproduces what was done or is discarded with a named reason.
-        static func fidelityChecks(editor: TTEditor, window: NSWindow) throws {
+        @MainActor static func fidelityChecks(editor: TTEditor, window: NSWindow) throws {
             let controller = MacroController(editorProvider: { editor })
             var reasons: [String] = []
             controller.onInvalidated = { reasons.append($0) }
-            func load(_ text: String, caret: Int = 0) {
-                editor.executeCommand("streamSelection")
+            @MainActor func load(_ text: String, caret: Int = 0) {
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "streamSelection"))
                 editor.text = text
                 editor.resetUndoHistory()
                 editor.setSavePoint()
@@ -141,11 +419,11 @@ import Foundation
             let content = try requireValue(
                 descendants(editor).first { $0.className == "TTContentView" }, "fixture: the editor's content view")
             let input = try requireValue(content as? NSTextInputClient, "fixture: the content view takes text input")
-            func type(_ text: String) {
+            @MainActor func type(_ text: String) {
                 input.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
             }
             /// A real key event through the content view, so Scintilla's own Mac key map chooses the message.
-            func key(_ scalar: Int, code: UInt16, _ flags: NSEvent.ModifierFlags = []) throws {
+            @MainActor func key(_ scalar: Int, code: UInt16, _ flags: NSEvent.ModifierFlags = []) throws {
                 let characters = String(UnicodeScalar(UInt32(scalar))!)
                 let event = try requireValue(
                     NSEvent.keyEvent(
@@ -159,7 +437,7 @@ import Foundation
             let pageDown = NSPageDownFunctionKey
             var clock = ProcessInfo.processInfo.systemUptime
             /// A click in the content view. Clicks are five seconds apart so none is a double click.
-            func click(at point: NSPoint, in view: NSView) throws {
+            @MainActor func click(at point: NSPoint, in view: NSView) throws {
                 clock += 5
                 for (type, time) in [(NSEvent.EventType.leftMouseDown, clock), (.leftMouseUp, clock + 0.05)] {
                     let event = try requireValue(
@@ -181,14 +459,14 @@ import Foundation
             try key(down, code: 125, [.numericPad, .function])
             let prefix = try requireValue(try controller.finishRecording(), "fixture: the prefix recording is saveable")
             check(
-                prefix.steps.first == .init(kind: .command, command: "vcHome")
-                    && prefix.steps.last == .init(kind: .command, command: "lineDown")
+                prefix.steps.first == .command("vcHome")
+                    && prefix.steps.last == .command("lineDown")
                     && prefix.steps.compactMap(\.text).joined() == "// " && editor.text == "// one\ntwo\nthree"
                     && reasons.isEmpty, "Home, typing and Down record as vcHome, the typed text and lineDown")
             load(lines, caret: 2)
             try controller.play(prefix, on: editor, repeats: 3)
             check(editor.text == "// one\n// two\n// three", "the recorded prefix macro prefixes each line on replay")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == lines && !editor.modified, "the replayed prefix macro is one Undo")
             load("alpha beta\ngamma", caret: 10)
             controller.startRecording()
@@ -201,7 +479,34 @@ import Foundation
                     && reasons.isEmpty,
                 "Command-Left, Page Down, Escape and Option-Delete are recorded instead of discarding the recording")
             // Parity: one allow-list, in the bridge and in the persisted format.
-            let bridgeNames = Set(TTEditor.macroCommandNames())
+            let fixture = try requireValue(
+                JSONSerialization.jsonObject(
+                    with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("editor-commands-wave-3.json")))
+                    as? [String: Any], "fixture: frozen native command contract")
+            let messages = try requireValue(
+                fixture["bridge_replay_messages"] as? [String: Int], "fixture: frozen recording numbers")
+            check(
+                Dictionary(
+                    uniqueKeysWithValues: TTEditor.macroCommandMessages().map { ($0.key.rawValue, $0.value.intValue) })
+                    == messages,
+                "F281 canonical command names keep every exact accepted Scintilla message number")
+            let supported = Set(
+                try requireValue(fixture["bridge_supported"] as? [String], "fixture: supported identifiers"))
+            check(
+                Set(TTEditor.supportedCommandIdentifiers().map(\.rawValue)) == supported
+                    && supported == Set(EditorCommand.allCases.map(\.rawValue)),
+                "F281 Swift catalog and full bridge dispatch support the frozen exact identifier set")
+            let modifies = Set(
+                try requireValue(fixture["modifies_text"] as? [String], "fixture: text modifying commands"))
+            check(
+                Set(supported.filter { TTEditor.commandModifiesText(TTEditorCommandIdentifier(rawValue: $0)) })
+                    == modifies,
+                "F281 read-only classification preserves the exact accepted editing subset")
+            check(
+                messages["indent"] == nil && messages["unindent"] == nil && messages["tab"] != nil
+                    && messages["backTab"] != nil,
+                "F281 playback-only indent aliases never compete for canonical Tab recording names")
+            let bridgeNames = Set(TTEditor.macroCommandNames().map(\.rawValue))
             check(
                 bridgeNames.union(["indent", "unindent"]) == RecordedMacro.Step.commands,
                 "the bridge's command table and the macro format's command list name the same commands")
@@ -210,13 +515,16 @@ import Foundation
             var refused: [String] = []
             for name in RecordedMacro.Step.commands.sorted() where usePasteboard || !clipboard.contains(name) {
                 load("alpha beta\ngamma", caret: 3)
-                if !editor.executeMacroStep(["kind": "command", "command": name]) { refused.append(name) }
+                if !editor.executeMacroStep(TTMacroAction.command(TTEditorCommandIdentifier(rawValue: name))) {
+                    refused.append(name)
+                }
             }
             if !refused.isEmpty { print("commands the bridge refused: \(refused)") }
             check(refused.isEmpty, "every command a macro file may name is accepted by the bridge")
             for name in RecordedMacro.Step.commands.sorted() {
                 rejects("a \(name) step carrying text is refused by validation") {
-                    try RecordedMacro.Step(kind: .command, text: "x", command: name).validate()
+                    let json = "{\"kind\":\"command\",\"text\":\"x\",\"command\":\"\(name)\"}"
+                    _ = try JSONDecoder().decode(RecordedMacro.Step.self, from: Data(json.utf8))
                 }
             }
             // No message number or parameter from a file reaches Scintilla.
@@ -232,8 +540,10 @@ import Foundation
             check(
                 editor.text == "keep" && editor.selectionCaret == 1 && !editor.modified,
                 "a step that carried SCI_CLEARALL as a number runs only its named command")
-            rejects("a file cannot name the bridge's unsupported marker as a step kind", where: { $0 is DecodingError })
-            {
+            rejects(
+                "a file cannot name the bridge's unsupported marker as a step kind",
+                where: { ($0 as? JSONInputFailure)?.underlying is DecodingError }
+            ) {
                 _ = try MacroLibrary.decode(
                     Data(
                         String(decoding: smuggled, as: UTF8.self).replacingOccurrences(
@@ -244,14 +554,14 @@ import Foundation
             // F67 and G367: a named reason, at once, and the previous recording survives.
             load("alpha beta", caret: 0)
             controller.startRecording()
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             let kept = try requireValue(try controller.finishRecording(), "fixture: a good recording to keep")
             controller.startRecording()
             check(
                 controller.discardReason == nil && item("stopRecording", in: controller)?.title == "Stop Recording",
                 "a live recording offers Stop Recording and has no discard reason")
-            editor.executeCommand("charRight")
-            editor.executeCommand("rectangularSelection")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "rectangularSelection"))
             check(
                 reasons.count == 1 && reasons[0].contains("Rectangular selection")
                     && reasons[0].contains("is not recordable yet") && controller.discardReason == reasons[0],
@@ -260,7 +570,7 @@ import Foundation
                 item("stopRecording", in: controller)?.title == "Stop Recording (Already Discarded)"
                     && item("stopRecording", in: controller)?.isEnabled == true,
                 "the menu says the recording in progress is already discarded and can still be stopped")
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             controller.invalidateRecording(reason: "a second reason")
             check(reasons.count == 1, "a discarded recording reports once; later reasons are not announced")
             var stopMessage = ""
@@ -283,7 +593,7 @@ import Foundation
                 item("playLast", in: controller)?.isEnabled == true,
                 "the previous recording is still offered after an empty one")
             controller.startRecording()
-            editor.executeCommand("charLeft")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charLeft"))
             let newer = try requireValue(try controller.finishRecording(), "fixture: a newer good recording")
             check(
                 newer.id != kept.id && newer.steps != kept.steps, "a new successful recording replaces the previous one"
@@ -297,14 +607,14 @@ import Foundation
             let clicked = editor.selectionCaret
             try require(clicked > 0 && clicked < 10, "fixture: a synthesized click places the caret in the first line")
             controller.startRecording()
-            editor.executeCommand("charRight")
-            editor.executeCommand("charLeft")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charLeft"))
             try click(at: near, in: content)
             check(
                 try controller.finishRecording()?.steps.count == 2 && reasons.isEmpty,
                 "a click that changes neither caret nor text leaves the recording saveable")
             controller.startRecording()
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             try click(at: below, in: content)
             check(
                 reasons.count == 1 && reasons[0].contains("mouse") && editor.selectionCaret != clicked,
@@ -320,7 +630,7 @@ import Foundation
                 descendants(editor).first { $0.className == "SCIMarginView" }, "fixture: the editor's margin view")
             load("alpha beta\n  gamma delta\nlast line\n", caret: 0)
             controller.startRecording()
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             clock += 5
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                 let event = try requireValue(
@@ -372,12 +682,13 @@ import Foundation
             drop.draggingLocation = splitContent.convert(near, to: nil)
             let dropInfo = unsafeBitCast(drop, to: NSDraggingInfo.self)
             controller.startRecording()
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             let beforeDrop = editor.revision
             _ = splitContent.draggingEntered(dropInfo)
             _ = splitContent.draggingUpdated(dropInfo)
+            let performedDrop = splitContent.performDragOperation(dropInfo)
             try require(
-                splitContent.performDragOperation(dropInfo) && editor.text.contains("DROP")
+                performedDrop && editor.text.contains("DROP")
                     && editor.revision != beforeDrop,
                 "fixture: the drop into the split view edited the recorded document")
             check(
@@ -389,32 +700,107 @@ import Foundation
             split.onFocus = nil
             splitWindow.contentView = nil
             reasons = []
-            // Application-layer find and replace change the selection and the text outside Scintilla's
-            // recording and are recorded by the caller afterwards; they must stay recordable.
+            // Audit27: the pre-consolidation accepted 65,537-unit legacy query is now bounded by
+            // the shared engine. Preserve rejection state rather than silently skipping a macro step.
+            let longQuery = String(repeating: "q", count: 65_537)
+            load(longQuery, caret: 0)
+            let beforeLimit = editor.revision
+            let overLimit = RecordedMacro(
+                id: UUID(), name: "Old long query",
+                steps: [
+                    .findLiteral(text: longQuery, matchCase: true, backwards: false)
+                ])
+            rejects("legacy find reports the shared 64 Ki query limit", message: "64 Ki") {
+                try controller.play(overLimit, on: editor)
+            }
+            check(
+                editor.revision == beforeLimit && editor.selectionCaret == 0
+                    && editor.text.utf8.elementsEqual(longQuery.utf8),
+                "a legacy query rejected by the shared limit preserves bytes, revision and selection")
+            let boundaryQuery = String(repeating: "q", count: 65_536)
+            load(boundaryQuery, caret: 0)
+            check(
+                try SearchController.playLegacyFind(text: boundaryQuery, matchCase: true, backwards: false, in: editor),
+                "the shared legacy shim accepts the full 64 Ki query boundary")
+            for (text, query) in [
+                ("İ i", "i"), ("é e\u{301}", "é"), ("Σ σ ς", "σ"), ("Straße STRASSE", "ss"), ("alpha 🦋 alpha", "🦋")
+            ] {
+                load(text, caret: text.utf8.count)
+                var shared = SearchOptions()
+                shared.query = query
+                let first = try SearchCore.search(text, options: shared).hits.first
+                let bytes = first.flatMap { SearchCore.byteRange($0.range, in: text) }
+                check(
+                    try SearchController.playLegacyFind(text: query, matchCase: false, backwards: false, in: editor)
+                        && bytes
+                            == NSRange(
+                                location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart),
+                    "legacy Unicode navigation wraps to the same shared-engine bytes")
+            }
+            for (text, query, anchor, caret, backwards) in [
+                ("aaa", "aa", 1, 1, false), ("aaa", "aa", 3, 3, true),
+                ("ab", "ab", 1, 1, false), ("ab", "ab", 1, 1, true),
+                ("aaa", "aa", 0, 2, false), ("aaa", "aa", 0, 2, true),
+                ("aaa", "aa", 2, 0, true), ("aaa", "aa", 3, 1, false),
+                ("😀😀😀", "😀😀", 4, 4, false)
+            ] {
+                load(text, caret: caret)
+                _ = editor.setSelectionAnchor(anchor, caret: caret)
+                let originalMatched = editor.find(query, matchCase: true, backwards: backwards)
+                let originalStart = editor.selectionStart, originalEnd = editor.selectionEnd
+                let originalAnchor = editor.selectionAnchor, originalCaret = editor.selectionCaret
+                load(text, caret: caret)
+                _ = editor.setSelectionAnchor(anchor, caret: caret)
+                let sharedMatched = try SearchController.playLegacyFind(
+                    text: query, matchCase: true, backwards: backwards, in: editor)
+                print(
+                    "CHARACTERIZE navigation \(text.debugDescription) q=\(query.debugDescription) sel=\(anchor):\(caret) back=\(backwards): native=\(originalMatched):\(originalStart):\(originalEnd) shared=\(sharedMatched):\(editor.selectionStart):\(editor.selectionEnd)"
+                )
+                check(
+                    sharedMatched == originalMatched && editor.selectionStart == originalStart
+                        && editor.selectionEnd == originalEnd,
+                    "shared navigation preserves native literal overlap/interior/wrap boundaries")
+                check(
+                    editor.selectionAnchor == originalAnchor && editor.selectionCaret == originalCaret,
+                    "shared literal navigation preserves native output anchor/caret direction")
+            }
+            // Application actions capture full search parameters, using the same v1 format as the Find window.
+            let sharedFinder = SearchController()
+            var barOptions = SearchOptions()
+            barOptions.query = "egg"
+            barOptions.matchCase = true
             load("egg and egg", caret: 0)
             controller.startRecording()
-            let found = editor.find("egg", matchCase: true, backwards: false)
-            controller.recordFind(text: "egg", matchCase: true, backwards: false, matched: found, editor: editor)
-            if editor.replaceSelection("milk") { controller.recordReplace(text: "milk", editor: editor) }
+            try sharedFinder.playRecorded(options: barOptions, action: "next", on: editor)
+            controller.recordSearch(.init(options: barOptions, action: "next"), editor: editor)
+            barOptions.replacement = "milk"
+            try sharedFinder.playRecorded(options: barOptions, action: "replaceOne", on: editor)
+            controller.recordSearch(.init(options: barOptions, action: "replaceOne"), editor: editor)
             let literal = try controller.finishRecording()
+            var findOptions = barOptions
+            findOptions.replacement = ""
             check(
                 literal?.steps == [
-                    .init(kind: .findLiteral, text: "egg", matchCase: true, backwards: false),
-                    .init(kind: .replaceSelection, text: "milk")
-                ] && editor.text == "milk and egg" && reasons.isEmpty,
-                "a live recording keeps exactly the literal find and the replacement made through the application")
-
-            // F68: a find that matched nothing is not a step.
+                    .search(.init(options: findOptions, action: "next")),
+                    .search(.init(options: barOptions, action: "replaceOne"))
+                ]
+                    && editor.text == "milk and egg" && reasons.isEmpty,
+                "a live recording keeps only shared search steps for Find and strict replacement")
+            // F68: failed navigation is never reported to the recorder as a completed search action.
             load("alpha beta", caret: 0)
             controller.startRecording()
-            editor.executeCommand("charRight")
-            let missed = editor.find("absent", matchCase: false, backwards: false)
-            controller.recordFind(text: "absent", matchCase: false, backwards: false, matched: missed, editor: editor)
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
+            barOptions.query = "absent"
+            rejects("a missed shared navigation reports no match", message: "did not match") {
+                try sharedFinder.playRecorded(options: barOptions, action: "next", on: editor)
+            }
             check(
-                try !missed && controller.finishRecording()?.steps == [.init(kind: .command, command: "charRight")],
-                "a literal find that did not match is left out of the recording")
+                try controller.finishRecording()?.steps == [.command("charRight")],
+                "a find that did not match is left out of the recording")
             controller.startRecording()
-            controller.recordFind(text: "absent", matchCase: false, backwards: false, matched: false, editor: editor)
+            rejects("an unmatched search reports failure", message: "did not match") {
+                try sharedFinder.playRecorded(options: barOptions, action: "next", on: editor)
+            }
             rejects("a recording of only an unmatched find saves nothing", message: "No supported editing actions") {
                 _ = try controller.finishRecording()
             }
@@ -430,12 +816,12 @@ import Foundation
             rejects("completion popup invalidates recording", message: "completion list") {
                 _ = try controller.finishRecording()
             }
-            editor.executeCommand("cancel")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "cancel"))
             reasons = []
             load("call(", caret: 0)
             controller.startRecording()
             editor.showCallTip("call(argument)")
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             check(
                 try controller.finishRecording()?.steps.count == 1 && reasons.isEmpty,
                 "a call tip leaves the recording saveable")
@@ -443,7 +829,7 @@ import Foundation
             // F277: application-layer caret jumps.
             load("one\ntwo\nthree", caret: 0)
             controller.startRecording()
-            editor.executeCommand("newLine")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
             check(
                 controller.unrecordedJump(in: editor, reason: "Go to Line is not recorded in macros yet.") {
                     editor.goToLine(3)
@@ -455,7 +841,7 @@ import Foundation
             reasons = []
             load("one\ntwo\nthree", caret: 0)
             controller.startRecording()
-            editor.executeCommand("charRightExtend")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRightExtend"))
             check(
                 controller.unrecordedJump(in: editor, reason: "Clear Selection is not recorded in macros yet.") {
                     editor.setSelectionAnchor(editor.selectionCaret, caret: editor.selectionCaret)
@@ -467,7 +853,7 @@ import Foundation
             reasons = []
             load("one\ntwo\nthree", caret: 4)
             controller.startRecording()
-            editor.executeCommand("newLine")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
             let caret = editor.selectionCaret
             check(
                 try !controller.unrecordedJump(in: editor, reason: "unused") { editor.goToLine(99) }
@@ -477,7 +863,7 @@ import Foundation
                 "a refused jump and a jump to where the caret already is leave the recording saveable")
             load("one\ntwo\nthree", caret: 4)
             controller.startRecording()
-            editor.executeCommand("newLine")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
             check(
                 try controller.unrecordedJump(in: editor, reason: "unused") { editor.goToLine(3) }
                     && editor.selectionCaret == caret && reasons.isEmpty
@@ -540,7 +926,7 @@ import Foundation
             finder.findAll(nil)
             _ = spinUntil("the Find All search to finish") { !finder.isSearching }
             controller.startRecording()
-            editor.executeCommand("charRight")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
             finder.open(row: 1)
             check(
                 editor.selectionStart == 7 && reasons.count == 1 && reasons[0].contains("search result"),
@@ -565,12 +951,12 @@ import Foundation
             load("aaa x", caret: 0)
             try controller.play(try requireValue(golden.macros.first, "fixture: the golden macro"), on: editor)
             check(editor.text == "cbféb y", "the golden saved macro library decodes and plays as before")
-            editor.executeCommand("undo")
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "aaa x" && !editor.modified, "the golden macro replay is one Undo")
 
             // F222: until-end compares the caret with the byte length, never a copy of the document.
             let advance = RecordedMacro(
-                id: UUID(), name: "Advance", steps: [.init(kind: .command, command: "charRight")])
+                id: UUID(), name: "Advance", steps: [.command("charRight")])
             load("é\n👩🏽‍💻\r\nz", caret: 0)
             try controller.play(advance, on: editor, untilEnd: true)
             check(
@@ -579,7 +965,7 @@ import Foundation
             let rows = 20000
             load(String(repeating: String(repeating: "x", count: 149) + "\n", count: rows), caret: 0)
             let lineDown = RecordedMacro(
-                id: UUID(), name: "Down", steps: [.init(kind: .command, command: "lineDown")])
+                id: UUID(), name: "Down", steps: [.command("lineDown")])
             let scale = max(1, Double(ProcessInfo.processInfo.environment["TEXTTANK_PERF_BUDGET_SCALE"] ?? "") ?? 1)
             let started = ProcessInfo.processInfo.systemUptime
             try controller.play(lineDown, on: editor, untilEnd: true)
@@ -591,20 +977,98 @@ import Foundation
             load("", caret: 0)
         }
     #endif
+    #if TEXTTANK_NATIVE_MACRO_TEST
+        @MainActor
+    #endif
     static func main() {
         Checks.run("MacroChecks") {
+            let commandFixture = try requireValue(
+                JSONSerialization.jsonObject(
+                    with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("editor-commands-wave-3.json")))
+                    as? [String: Any], "fixture: frozen command contract")
+            func frozen(_ key: String) throws -> Set<String> {
+                Set(try requireValue(commandFixture[key] as? [String], "fixture: frozen " + key))
+            }
+            check(
+                Set(EditorCommand.allCases.map(\.rawValue)) == (try frozen("bridge_supported")),
+                "F281 catalog preserves every accepted command identifier, including keyboard-only commands")
+            let frozenRecordable = try frozen("recordable")
+            let frozenViewOnly = try frozen("view_only"), frozenAssignable = try frozen("shortcut_assignable")
+            check(
+                EditorCommand.recordableIdentifiers == frozenRecordable
+                    && RecordedMacro.Step.commands == frozenRecordable,
+                "F281 catalog keeps the exact accepted macro-safe subset")
+            check(
+                EditorCommand.viewOnlyIdentifiers == frozenViewOnly
+                    && EditorCommand.shortcutIdentifiers == frozenAssignable,
+                "F281 view-only and assignable subsets remain separate and exact")
             let id = UUID()
             var macro = RecordedMacro(
                 id: id, name: "My edit",
                 steps: [
-                    .init(kind: .insertText, text: "½ café 👩🏽‍💻\0\r\n"),
-                    .init(kind: .command, command: "charLeft"),
-                    .init(kind: .findLiteral, text: "$()", matchCase: true, backwards: true),
-                    .init(kind: .replaceSelection, text: "2 eggs")
+                    .insertText("½ café 👩🏽‍💻\0\r\n"),
+                    .command("charLeft"),
+                    .findLiteral(text: "$()", matchCase: true, backwards: true),
+                    .replaceSelection("2 eggs")
                 ])
+            func decodedWireStep(_ raw: [String: Any]) throws -> RecordedMacro.Step {
+                let bytes = try JSONSerialization.data(withJSONObject: raw)
+                let step = try JSONDecoder().decode(RecordedMacro.Step.self, from: bytes)
+                try step.validate()
+                return step
+            }
+            for raw: [String: Any] in [
+                ["kind": "command", "command": "SCI_SETDOCPOINTER"],
+                ["kind": "command", "command": "undo"],
+                ["kind": "command", "command": "charLeft", "text": "x"],
+                ["kind": "insertText", "text": 7],
+                ["kind": "insertText", "text": "x", "matchCase": false],
+                ["kind": "search", "search": [:]], ["kind": "unsupported"]
+            ] {
+                rejects("persisted wire refuses malformed or unsafe actions") {
+                    _ = try decodedWireStep(raw)
+                }
+            }
+            let direct = try decodedWireStep(["kind": "insertText", "text": "é\0e\u{301}", "future": 7])
+            check(
+                direct.text?.utf8.elementsEqual("é\0e\u{301}".utf8) == true,
+                "persisted wire preserves composed/decomposed Unicode and NUL bytes")
+            let symbolic = try decodedWireStep([
+                "kind": "command", "command": "charRight", "message": 2004, "wParam": 7, "lParam": 9
+            ])
+            check(
+                symbolic == .command("charRight"),
+                "wire message numbers remain ignored data; only the validated symbolic command is retained")
+            // Audit27: freeze the legacy wire bytes before replacing the optional payload model.
+            let goldenBytes = try Data(
+                contentsOf: TestPaths.fixtures.appendingPathComponent("persistence/MacroLibrary.json"))
+            check(
+                try MacroLibrary.decode(goldenBytes).encoded() == goldenBytes,
+                "legacy macro encoder preserves golden bytes")
+            for json in [
+                #"{"kind":"insertText","text":"x","future":17}"#,
+                #"{"kind":"replaceSelection","text":""}"#,
+                #"{"kind":"findLiteral","text":"é","matchCase":false,"backwards":true,"search":null}"#
+            ] {
+                let step = try JSONDecoder().decode(RecordedMacro.Step.self, from: Data(json.utf8))
+                try step.validate()
+                check(true, "legacy optional omissions, null and unknown keys stay readable")
+            }
             let library = MacroLibrary(macros: [macro])
             let data = try library.encoded()
             check(try MacroLibrary.decode(data) == library, "capture data exact Unicode/NUL and find params roundtrip")
+            Checks.section("F149 bounded macro libraries") {
+                var large = macro
+                large.steps = [.insertText(String(repeating: "x", count: 32 * 1024 * 1024))]
+                let largeLibrary = MacroLibrary(macros: [large])
+                let oversized = try JSONEncoder().encode(largeLibrary)
+                rejects("F149 the macro reader refuses a valid library over 32 MiB", message: "32 MiB") {
+                    _ = try MacroLibrary.decode(oversized)
+                }
+                rejects("F149 the macro writer cannot create a library its reader refuses", message: "32 MiB") {
+                    _ = try largeLibrary.encoded()
+                }
+            }
             macro.name = "Renamed"
             check(
                 try MacroLibrary.decode(MacroLibrary(macros: [macro]).encoded()).macros[0].id == id,
@@ -613,7 +1077,7 @@ import Foundation
             rejects("unknown command cannot launch shell", message: "Unrecognized or unsafe macro command") {
                 _ = try MacroLibrary.decode(Data(json.replacingOccurrences(of: "charLeft", with: "executeShell").utf8))
             }
-            rejects("unknown step kind", where: { $0 is DecodingError }) {
+            rejects("unknown step kind", where: { ($0 as? JSONInputFailure)?.underlying is DecodingError }) {
                 _ = try MacroLibrary.decode(Data(json.replacingOccurrences(of: "insertText", with: "reminders").utf8))
             }
             rejects("pointer step rejected", message: "Unrecognized or unsafe macro command") {
@@ -624,17 +1088,21 @@ import Foundation
             invalid.version = 2
             rejects("unknown version", message: "requires version 1") { try invalid.validate() }
             invalid = macro
-            invalid.steps = [.init(kind: .command, command: "undo")]
+            invalid.steps = [.command("undo")]
             rejects("undo command cannot escape grouped replay", message: "Unrecognized or unsafe macro command") {
                 try invalid.validate()
             }
-            invalid.steps = [.init(kind: .findLiteral, text: "", matchCase: false, backwards: false)]
+            invalid.steps = [.findLiteral(text: "", matchCase: false, backwards: false)]
             rejects("empty find") { try invalid.validate() }
-            invalid.steps = [.init(kind: .findLiteral, text: "needle")]
-            rejects("missing captured find parameters") { try invalid.validate() }
-            invalid.steps = [.init(kind: .insertText, text: "x", command: "cut")]
-            rejects("incompatible parameters") { try invalid.validate() }
-            rejects("duplicate macro ID", message: "duplicate IDs") {
+            for json in [
+                #"{"kind":"findLiteral","text":"needle"}"#,
+                #"{"kind":"insertText","text":"x","command":"cut"}"#
+            ] {
+                rejects("missing or incompatible captured parameters") {
+                    _ = try JSONDecoder().decode(RecordedMacro.Step.self, from: Data(json.utf8))
+                }
+            }
+            rejects("duplicate macro ID", message: "appears more than once") {
                 try MacroLibrary(macros: [macro, macro]).validate()
             }
             var other = macro
@@ -645,7 +1113,77 @@ import Foundation
             #if TEXTTANK_NATIVE_MACRO_TEST
                 let isolatedSupport = try IsolatedSupportDirectory("TextTankMacroChecks")
                 defer { isolatedSupport.restore() }
+                NativeFixtureEnvironment.install()
+                defer { NativeFixtureEnvironment.restore() }
                 _ = NSApplication.shared
+                Checks.section("F149 unsafe macro storage") {
+                    let originalOverride = isolatedSupport.url.path
+                    defer { setenv("TEXTTANK_SUPPORT_DIRECTORY", originalOverride, 1) }
+                    let valid = try MacroLibrary(macros: [macro]).encoded()
+                    for kind in ["symlink", "fifo"] {
+                        let directory = isolatedSupport.url.appendingPathComponent("unsafe-" + kind)
+                        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                        let path = directory.appendingPathComponent("Macros.json")
+                        let target = directory.appendingPathComponent("original.json")
+                        try valid.write(to: target)
+                        var release: DispatchWorkItem?
+                        if kind == "symlink" {
+                            try FileManager.default.createSymbolicLink(at: path, withDestinationURL: target)
+                        } else {
+                            try require(mkfifo(path.path, 0o600) == 0, "fixture: macro FIFO exists")
+                            // The old reader blocks until this writer arrives and then wrongly accepts
+                            // its JSON. The fixed reader rejects the FIFO without opening the writer.
+                            let writer = DispatchWorkItem {
+                                let descriptor = open(path.path, O_WRONLY | O_NONBLOCK)
+                                if descriptor >= 0 {
+                                    _ = valid.withUnsafeBytes { write(descriptor, $0.baseAddress, $0.count) }
+                                    close(descriptor)
+                                }
+                            }
+                            release = writer
+                            DispatchQueue.global().asyncAfter(deadline: .now() + 0.2, execute: writer)
+                        }
+                        setenv("TEXTTANK_SUPPORT_DIRECTORY", directory.path, 1)
+                        let unsafe = MacroController(editorProvider: { nil })
+                        release?.cancel()
+                        check(unsafe.loadingError != nil, "F149 a refused macro \(kind) latches its load failure")
+                        rejects("F149 a refused macro \(kind) cannot be overwritten") {
+                            try unsafe.persist(library)
+                        }
+                        check(
+                            !unsafe.menu().items.contains { $0.representedObject as? String == macro.id.uuidString },
+                            "F149 a macro \(kind) is refused instead of loaded")
+                        check(
+                            try Data(contentsOf: target) == valid,
+                            "F149 refusing a macro \(kind) preserves its target bytes")
+                        var node = stat()
+                        check(
+                            lstat(path.path, &node) == 0
+                                && node.st_mode & S_IFMT == (kind == "symlink" ? S_IFLNK : S_IFIFO),
+                            "F149 refusing a macro \(kind) leaves the original node in place")
+                    }
+                    let dangling = isolatedSupport.url.appendingPathComponent("dangling-library")
+                    try FileManager.default.createDirectory(at: dangling, withIntermediateDirectories: true)
+                    let danglingPath = dangling.appendingPathComponent("Macros.json")
+                    try FileManager.default.createSymbolicLink(
+                        at: danglingPath, withDestinationURL: dangling.appendingPathComponent("absent.json"))
+                    setenv("TEXTTANK_SUPPORT_DIRECTORY", dangling.path, 1)
+                    let danglingController = MacroController(editorProvider: { nil })
+                    check(
+                        danglingController.loadingError != nil,
+                        "F198 a dangling macro link is a refused entry, not a missing library")
+                    let corruptDirectory = isolatedSupport.url.appendingPathComponent("corrupt-library")
+                    try FileManager.default.createDirectory(at: corruptDirectory, withIntermediateDirectories: true)
+                    let corruptFile = corruptDirectory.appendingPathComponent("Macros.json")
+                    let corruptBytes = Data("{preserve this unreadable library".utf8)
+                    try corruptBytes.write(to: corruptFile)
+                    setenv("TEXTTANK_SUPPORT_DIRECTORY", corruptDirectory.path, 1)
+                    let corruptController = MacroController(editorProvider: { nil })
+                    rejects("F198 the macro save boundary refuses an unreadable existing regular file") {
+                        try corruptController.persist(library)
+                    }
+                    check(try Data(contentsOf: corruptFile) == corruptBytes, "F198 unreadable macro bytes stay exact")
+                }
                 let window = NSWindow(
                     contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered,
                     defer: false)
@@ -659,79 +1197,79 @@ import Foundation
                 let edit = RecordedMacro(
                     id: UUID(), name: "Literal replacement",
                     steps: [
-                        .init(kind: .findLiteral, text: "egg", matchCase: true, backwards: false),
-                        .init(kind: .replaceSelection, text: "milk")
+                        .findLiteral(text: "egg", matchCase: true, backwards: false),
+                        .replaceSelection("milk")
                     ])
                 try controller.play(edit, on: editor, repeats: 2)
                 check(editor.text == "café milk milk 👩🏽‍💻", "native literal find/replace repeat captures parameters")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == original, "native repeated macro is one Undo group")
-                editor.executeCommand("selectAll")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "selectAll"))
                 let failing = RecordedMacro(
                     id: UUID(), name: "Stop on missing search",
                     steps: [
-                        .init(kind: .insertText, text: "changed"),
-                        .init(kind: .findLiteral, text: "absent", matchCase: false, backwards: false)
+                        .insertText("changed"),
+                        .findLiteral(text: "absent", matchCase: false, backwards: false)
                     ])
                 rejects("native missing search aborts") { try controller.play(failing, on: editor) }
                 check(editor.text == "changed", "native earlier edit retained for explicit Undo")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == original, "native partial replay remains one Undo")
                 controller.startRecording()
-                editor.executeCommand("newLine")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
                 let captured = try controller.finishRecording()
                 check(
                     captured?.steps.contains(where: { $0.kind == .insertText }) == true,
                     "actual native newline recording remains saveable")
                 controller.startRecording()
-                editor.executeCommand("charRight")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
                 controller.willExecuteCommand("trimTrailing", on: editor)
-                editor.executeCommand("trimTrailing")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "trimTrailing"))
                 rejects("target-based trim cannot silently save partial recording") {
                     _ = try controller.finishRecording()
                 }
                 let clone = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 400))
                 clone.shareDocument(with: editor)
                 controller.startRecording()
-                editor.executeCommand("charRight")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
                 controller.editorDidFocus(clone)
-                clone.executeCommand("newLine")
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
                 rejects("clone focus switch invalidates incomplete recording") { _ = try controller.finishRecording() }
                 // G337: reload and close announce the document through its primary view; a
                 // recording started in the clone belongs to the same document.
                 let cloneController = MacroController(editorProvider: { clone })
                 cloneController.startRecording()
-                clone.executeCommand("charRight")
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
                 cloneController.editorWillReset(editor, reason: "Reloaded")
                 rejects("reload through primary invalidates clone recording", message: "Reloaded") {
                     _ = try cloneController.finishRecording()
                 }
                 let unrelated = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 400))
                 cloneController.startRecording()
-                clone.executeCommand("newLine")
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
                 cloneController.editorWillReset(unrelated, reason: "Another document reloaded")
                 check(
                     (try cloneController.finishRecording())?.steps.isEmpty == false,
                     "a reload of another document leaves the recording saveable")
-                clone.executeCommand("undo")
+                clone.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 controller.startRecording()
-                editor.executeCommand("charRight")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
                 controller.invalidateRecording(reason: "Automation invoked")
                 rejects("automation invocation invalidates incomplete recording") {
                     _ = try controller.finishRecording()
                 }
                 controller.startRecording()
-                editor.executeCommand("charRight")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
                 controller.editorWillReset(editor, reason: "Reloaded")
                 rejects("reload cannot leave saveable partial macro") { _ = try controller.finishRecording() }
                 controller.startRecording()
-                editor.executeCommand("newLine")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "newLine"))
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 rejects("native Undo cannot silently save partial recording") { _ = try controller.finishRecording() }
                 controller.startRecording()
-                editor.executeCommand("charRight")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
                 controller.willExecuteCommand("zoomIn", on: editor)
-                editor.executeCommand("zoomIn")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "zoomIn"))
                 check(
                     try controller.finishRecording()?.steps.count == 1,
                     "view-only zoom does not invalidate valid edit recording")
@@ -742,7 +1280,7 @@ import Foundation
                 _ = editor.setSelectionAnchor(0, caret: 0)
                 let lockedRevision = editor.revision
                 let replacing = RecordedMacro(
-                    id: UUID(), name: "Replace", steps: [.init(kind: .replaceSelection, text: "x")])
+                    id: UUID(), name: "Replace", steps: [.replaceSelection("x")])
                 editor.readOnly = true
                 rejects(
                     "playback into a read-only document states that it is read-only",
@@ -756,8 +1294,10 @@ import Foundation
                     "refused playback leaves text, revision and save point unchanged")
                 // F207: a recorded replacement is not appended when the editor refused it.
                 controller.startRecording()
-                editor.executeCommand("charRight")
-                if editor.replaceSelection("never") { controller.recordReplace(text: "never", editor: editor) }
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
+                if editor.replaceSelection("never") {
+                    controller.recordSearch(.init(options: SearchOptions(), action: "replaceOne"), editor: editor)
+                }
                 check(
                     try controller.finishRecording()?.steps.map(\.kind) == [.command],
                     "a replacement the read-only editor refused is not recorded as a macro step")
@@ -770,17 +1310,17 @@ import Foundation
                 editor.resetUndoHistory()
                 _ = editor.setSelectionAnchor(0, caret: 0)
                 let advance = RecordedMacro(
-                    id: UUID(), name: "Advance", steps: [.init(kind: .command, command: "charRight")])
+                    id: UUID(), name: "Advance", steps: [.command("charRight")])
                 try controller.play(advance, on: editor, untilEnd: true)
                 check(editor.selectionCaret == editor.text.utf8.count, "until-end playback reaches document boundary")
                 _ = editor.setSelectionAnchor(0, caret: 0)
                 let stalled = RecordedMacro(
-                    id: UUID(), name: "No movement", steps: [.init(kind: .command, command: "home")])
+                    id: UUID(), name: "No movement", steps: [.command("home")])
                 rejects("until-end no-progress guard") { try controller.play(stalled, on: editor, untilEnd: true) }
                 editor.text = "original"
                 editor.resetUndoHistory()
                 _ = editor.setSelectionAnchor(0, caret: 0)
-                let typing = RecordedMacro(id: UUID(), name: "Typing", steps: [.init(kind: .insertText, text: "x")])
+                let typing = RecordedMacro(id: UUID(), name: "Typing", steps: [.insertText("x")])
                 var calls = 0
                 rejects("cancel playback between steps") {
                     try controller.play(
@@ -791,13 +1331,13 @@ import Foundation
                         })
                 }
                 check(editor.text == "xxxoriginal", "cancel retains only completed steps")
-                editor.executeCommand("undo")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(editor.text == "original", "cancelled playback remains one Undo")
                 let search = RecordedMacro.Search(
                     query: "(egg)", replacement: "$1s", mode: 2, matchCase: true, wholeWord: false,
                     dotMatchesNewline: false, wrap: true, action: "replaceAll")
                 let searchMacro = RecordedMacro(
-                    id: UUID(), name: "Captured search", steps: [.init(kind: .search, search: search)])
+                    id: UUID(), name: "Captured search", steps: [.search(search)])
                 check(
                     try MacroLibrary.decode(MacroLibrary(macros: [searchMacro]).encoded()).macros[0] == searchMacro,
                     "all regex parameters roundtrip")
@@ -832,7 +1372,7 @@ import Foundation
                     dotMatchesNewline: false, wrap: false, action: "next")
                 let deleteTodo = RecordedMacro(
                     id: UUID(), name: "Delete found lines",
-                    steps: [.init(kind: .search, search: findNext), .init(kind: .command, command: "deleteLine")])
+                    steps: [.search(findNext), .command("deleteLine")])
                 for untilEnd in [false, true] {
                     let label = untilEnd ? "until-end" : "repeat-500"
                     editor.text = todoSource
@@ -849,13 +1389,14 @@ import Foundation
                     check(
                         editor.text == "keep\ntail one\ntail two\n",
                         "\(label) playback removes exactly the matching lines and leaves the rest")
-                    editor.executeCommand("undo")
+                    editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                     check(editor.text == todoSource && !editor.modified, "\(label) stopped playback is one Undo")
                 }
                 Checks.section("Recording fidelity") { try fidelityChecks(editor: editor, window: window) }
                 Checks.section("Macros menu save and playback") {
                     try menuFlowChecks(editor: editor, support: isolatedSupport.url)
                 }
+                Checks.section("F155 Macro JSON manager") { try jsonManagerChecks(editor: editor) }
             #endif
             Checks.summary {
                 "PASS MacroChecks: \(Checks.count) assertions; persistence/security checks; native integration only when TEXTTANK_NATIVE_MACRO_TEST is defined"

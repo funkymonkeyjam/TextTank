@@ -3,25 +3,77 @@ import Foundation
 
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
-struct ConfiguredRun: Codable, Equatable {
-    var version = 1
-    var id = UUID()
-    var name: String
-    var executable: String
-    var arguments: [String]
-    var shellMode = false
-    var extensionMode = false
-    func validate() throws {
-        guard version == 1, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 200,
-            executable.hasPrefix("/"), !executable.contains("\0"), arguments.count <= 256,
-            arguments.allSatisfy({ !$0.contains("\0") && $0.utf8.count <= 1024 * 1024 }),
-            !(shellMode && extensionMode)
-        else { throw RunFailure.invalid }
+package struct ConfiguredRun: Codable, Equatable, Sendable {
+    package init(
+        version: Int = 1, id: UUID = UUID(), name: String, executable: String, arguments: [String],
+        shellMode: Bool = false, extensionMode: Bool = false
+    ) {
+        self.version = version
+        self.id = id
+        self.name = name
+        self.executable = executable
+        self.arguments = arguments
+        self.shellMode = shellMode
+        self.extensionMode = extensionMode
+    }
+
+    package var version: Int
+    package var id: UUID
+    package var name: String
+    package var executable: String
+    package var arguments: [String]
+    package var shellMode: Bool
+    package var extensionMode: Bool
+    package func validate() throws {
+        let title = String(name.prefix(200))
+        guard version == 1 else {
+            throw RunFailure.configuration(
+                field: .version,
+                message: "Run command “\(title)” requires version 1. The saved commands were not changed.")
+        }
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 200 else {
+            throw RunFailure.configuration(
+                field: .name,
+                message: "The Run command name must contain 1–200 characters. The saved commands were not changed.")
+        }
+        guard executable.hasPrefix("/"), !executable.contains("\0") else {
+            throw RunFailure.configuration(
+                field: .executable,
+                message:
+                    "Run command “\(title)” must use an absolute executable path without a NUL character. The saved commands were not changed."
+            )
+        }
+        guard arguments.count <= 256 else {
+            throw RunFailure.configuration(
+                field: .arguments,
+                message:
+                    "Run command “\(title)” must contain at most 256 arguments. The saved commands were not changed.")
+        }
+        for (index, argument) in arguments.enumerated() {
+            guard !argument.contains("\0"), argument.utf8.count <= 1024 * 1024 else {
+                throw RunFailure.configuration(
+                    field: .argument(index + 1),
+                    message:
+                        "Argument \(index + 1) of Run command “\(title)” must contain no NUL character and be at most 1 MiB. The saved commands were not changed."
+                )
+            }
+        }
+        guard !(shellMode && extensionMode) else {
+            throw RunFailure.configuration(
+                field: .mode,
+                message:
+                    "Run command “\(title)” cannot use shell mode and text extension mode together. The saved commands were not changed."
+            )
+        }
         if shellMode && (executable != "/bin/zsh" || arguments.count != 2 || arguments.first != "-c") {
-            throw RunFailure.invalid
+            throw RunFailure.configuration(
+                field: .shell,
+                message:
+                    "Run command “\(title)” must use /bin/zsh with -c and one script argument in shell mode. The saved commands were not changed."
+            )
         }
     }
-    func resolved(file: URL?, selection: String) throws -> Self {
+    package func resolved(file: URL?, selection: String) throws -> Self {
         try validate()
         var result = self
         // Shell code never interpolates document contents. Those values are exposed
@@ -50,13 +102,26 @@ struct ConfiguredRun: Codable, Equatable {
         try result.validate()
         return result
     }
-    static func validateLibrary(_ commands: [Self]) throws {
-        guard commands.count <= 1000, Set(commands.map(\.id)).count == commands.count else { throw RunFailure.invalid }
-        for command in commands { try command.validate() }
+    static package func validateLibrary(_ commands: [Self]) throws {
+        guard commands.count <= 1000 else {
+            throw RunFailure.configuration(
+                field: .library, message: "Keep at most 1000 Run commands. The saved commands were not changed.")
+        }
+        var seen = Set<UUID>()
+        for command in commands {
+            guard seen.insert(command.id).inserted else {
+                throw RunFailure.configuration(
+                    field: .identity,
+                    message:
+                        "Run command “\(String(command.name.prefix(200)))” appears more than once. The saved commands were not changed."
+                )
+            }
+            try command.validate()
+        }
     }
     /// One shared byte ceiling for persistence and restart, including JSON escaping.
-    static let maximumLibraryBytes = 1024 * 1024
-    static func encodeLibrary(_ commands: [Self]) throws -> Data {
+    static package let maximumLibraryBytes = 1024 * 1024
+    static package func encodeLibrary(_ commands: [Self], sortedKeys: Bool = false) throws -> Data {
         try validateLibrary(commands)
         // Reject obviously oversized inputs before JSONEncoder allocates an expanded
         // representation. JSON overhead/escaping is checked on the encoded result.
@@ -68,19 +133,22 @@ struct ConfiguredRun: Codable, Equatable {
                 remaining -= bytes
             }
         }
-        let data = try JSONEncoder().encode(commands)
+        let encoder = JSONEncoder()
+        if sortedKeys { encoder.outputFormatting = .sortedKeys }
+        let data = try encoder.encode(commands)
         guard data.count <= maximumLibraryBytes else { throw RunFailure.configurationTooLarge }
         return data
     }
-    static func decodeLibrary(_ data: Data) throws -> [Self] {
+    static package func decodeLibrary(_ data: Data) throws -> [Self] {
         guard data.count <= maximumLibraryBytes else { throw RunFailure.configurationTooLarge }
-        let commands = try JSONDecoder().decode([Self].self, from: data)
+        try PersistedFormat.check(data, context: "Run commands", array: true)
+        let commands = try JSONInputFailure.decode([Self].self, from: data, context: "Run commands")
         try validateLibrary(commands)
         return commands
     }
     /// What selecting this command executes, for the menu tooltip: the mode, the executable and
     /// the arguments as stored. Bounded, because one argument may be up to 1 MiB.
-    func summary(limit: Int = 300) -> String {
+    package func summary(limit: Int = 300) -> String {
         var text = (shellMode ? "shell: " : extensionMode ? "text extension: " : "") + executable
         for argument in arguments where text.count <= limit {
             let shown = String(argument.prefix(limit + 1)).map { $0.isNewline || $0 == "\t" ? " " : $0 }
@@ -91,17 +159,29 @@ struct ConfiguredRun: Codable, Equatable {
     }
     /// Version 1 extension contract: UTF-8 document/selection on stdin, UTF-8 result
     /// on stdout, diagnostics on stderr, exit 0 required. No automatic mutation.
-    static var uppercaseSample: Self {
+    static package var uppercaseSample: Self {
         Self(
             name: "Uppercase ASCII (sample extension)", executable: "/usr/bin/tr", arguments: ["a-z", "A-Z"],
             extensionMode: true)
     }
 }
-enum RunFailure: Error, LocalizedError {
+package enum RunConfigurationField: Equatable {
+    case version, name, executable, arguments, argument(Int), mode, shell, library, identity
+}
+package enum RunFailure: Error, LocalizedError, Equatable {
     case invalid, fileRequired, busy, tooLarge, configurationTooLarge, documentChanged, documentClosed
-    case selectionUnsuitable
-    var errorDescription: String? {
+    case selectionUnsuitable, noDocument, multipleSelections
+    case configuration(field: RunConfigurationField, message: String)
+    case preparationFailed(Int32)
+    package var errorDescription: String? {
         switch self {
+        case .noDocument: return "Open a document before running a text extension. Nothing was changed."
+        case .multipleSelections:
+            return
+                "This text extension needs one selection. Collapse multiple selections and try again. Nothing was changed."
+        case .configuration(_, let message): return message
+        case .preparationFailed(let code):
+            return "The command could not be prepared: \(String(cString: strerror(code))). Nothing was run."
         case .invalid: return "Invalid command configuration. Use an absolute executable path and an argument array."
         case .fileRequired: return "This command needs a saved document path."
         case .busy: return "A command is already running. Wait for it to finish or cancel it, then try again."
@@ -119,7 +199,7 @@ enum RunFailure: Error, LocalizedError {
     }
 }
 /// Why a run ended. Exactly one applies; only `finished` leaves complete output.
-enum RunTermination: Equatable, CaseIterable {
+package enum RunTermination: Equatable, CaseIterable, Sendable {
     /// The command exited by itself and all of its output was read.
     case finished
     /// The user cancelled it, or TextTank was quitting.
@@ -130,7 +210,7 @@ enum RunTermination: Equatable, CaseIterable {
     case outputLimit
     /// It exited, but a process it started still held its output open and was stopped.
     case lingeringDescendants
-    var summary: String {
+    package var summary: String {
         switch self {
         case .finished: return "finished"
         case .cancelled: return "cancelled"
@@ -142,21 +222,30 @@ enum RunTermination: Equatable, CaseIterable {
         }
     }
 }
-struct RunResult {
-    let stdout: Data, stderr: Data
+package struct RunResult: Sendable {
+    package init(stdout: Data, stderr: Data, status: Int32, reason: RunTermination) {
+        self.stdout = stdout
+        self.stderr = stderr
+        self.status = status
+        self.reason = reason
+    }
+
+    package let stdout: Data, stderr: Data
     /// The exit status, 128 + signal for a signalled leader, or -1 when no status is known
     /// (nothing was launched, or the exit status could not be collected).
-    let status: Int32
-    let reason: RunTermination
-    var statusLine: String { (status < 0 ? "No exit status" : "Exit \(status)") + " · " + reason.summary }
+    package let status: Int32
+    package let reason: RunTermination
+    package var statusLine: String { (status < 0 ? "No exit status" : "Exit \(status)") + " · " + reason.summary }
 }
 /// Explicit process group with bounded nonblocking pipes. Imports are inert.
-final class RunExecution: @unchecked Sendable {
+final package class RunExecution: @unchecked Sendable {
+    package init() {}
+
     private let lock = NSLock()
     private var active = false, cancelRequested = false
     private let running = DispatchGroup()
-    static let defaultTimeout: TimeInterval = 30
-    func cancel() {
+    static package let defaultTimeout: TimeInterval = 30
+    package func cancel() {
         lock.lock()
         cancelRequested = true
         lock.unlock()
@@ -169,13 +258,13 @@ final class RunExecution: @unchecked Sendable {
     /// Cancels and waits until `execute` has returned on its own thread, so the child and its
     /// process group are gone. The wait is signalled by the worker, never by the main queue, so
     /// this may be called from the main thread. True when nothing is running any more.
-    func cancelAndWait(timeout: TimeInterval) -> Bool {
+    package func cancelAndWait(timeout: TimeInterval) -> Bool {
         cancel()
         return running.wait(timeout: .now() + timeout) == .success
     }
     /// `workingDirectory` nil inherits the caller's working directory. The environment is always
     /// inherited as it is.
-    func execute(
+    package func execute(
         _ command: ConfiguredRun, input: Data = Data(), timeout: TimeInterval = RunExecution.defaultTimeout,
         workingDirectory: URL? = nil
     ) throws -> RunResult {
@@ -219,8 +308,12 @@ final class RunExecution: @unchecked Sendable {
             guard fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == 0 else { throw failure() }
         }
         var actions: posix_spawn_file_actions_t?, attributes: posix_spawnattr_t?
-        guard posix_spawn_file_actions_init(&actions) == 0, posix_spawnattr_init(&attributes) == 0 else {
-            throw RunFailure.invalid
+        let actionsError = posix_spawn_file_actions_init(&actions)
+        guard actionsError == 0 else { throw RunFailure.preparationFailed(actionsError) }
+        let attributesError = posix_spawnattr_init(&attributes)
+        guard attributesError == 0 else {
+            posix_spawn_file_actions_destroy(&actions)
+            throw RunFailure.preparationFailed(attributesError)
         }
         defer {
             posix_spawn_file_actions_destroy(&actions)

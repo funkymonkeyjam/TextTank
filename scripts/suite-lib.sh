@@ -15,6 +15,18 @@
 #
 # TEXTTANK_SUITE_TIMEOUT sets the per-suite limit in seconds (default 300).
 
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+
+# First-party Swift is warning-clean. A new toolchain can be inspected with an explicit
+# TEXTTANK_WARNINGS_AS_ERRORS=0 override; ordinary acceptance keeps warnings fatal.
+SWIFT_WARNING_FLAGS=()
+case "${TEXTTANK_WARNINGS_AS_ERRORS:-1}" in
+  1) SWIFT_WARNING_FLAGS=(-warnings-as-errors); SWIFT_BASE+=(-warnings-as-errors) ;;
+  0) ;;
+  *) echo "TEXTTANK_WARNINGS_AS_ERRORS must be 0 or 1" >&2; exit 64 ;;
+esac
+
+
 SUITE_BROKEN=" "
 SUITE_OWNER=0
 SUITE_FIRST_RECORD=1
@@ -33,12 +45,25 @@ suite_begin() {
 }
 
 suite_require_build() {
-  if [[ ! -d build/vendor/Debug/Scintilla.framework || ! -f Vendor/lexilla/bin/liblexilla.a ]]; then
-    echo "The native dependencies are not built (build/vendor/Debug/Scintilla.framework and Vendor/lexilla/bin/liblexilla.a are required). Run scripts/build.sh first." >&2
-    if [[ "${GITHUB_ACTIONS:-}" == true ]]; then echo "::error::Native dependencies are not built; run scripts/build.sh first"; fi
-    suite_record "NOT-BUILT" "$(basename "$0")" "run scripts/build.sh first"
+  local actual_app status=0
+  TEXTTANK_ARTIFACT_MANIFEST="${TEXTTANK_ARTIFACT_MANIFEST:-$TEXTTANK_ROOT/build/artifacts/$CONFIGURATION/manifest.json}"
+  actual_app=$(python3 scripts/runtime_artifacts.py validate --configuration "$CONFIGURATION" --manifest "$TEXTTANK_ARTIFACT_MANIFEST") || status=$?
+  if [[ "$status" != 0 ]]; then
+    suite_record "NOT-BUILT" "$(basename "$0")" "canonical signed artifacts are absent, stale or invalid; run scripts/build.sh first"
     suite_finish
   fi
+  APP_PATH="$actual_app"
+  TEXTTANK_FRAMEWORKS="$APP_PATH/Contents/Frameworks"
+  NATIVE_BRIDGE_LIBRARY="$TEXTTANK_FRAMEWORKS/EditorBridge.framework/Versions/A/EditorBridge"
+  NATIVE_SEARCH_LIBRARY="$TEXTTANK_FRAMEWORKS/NativeSearch.framework/Versions/A/NativeSearch"
+  NATIVE_CORE_LIBRARY="$TEXTTANK_FRAMEWORKS/TextTankCore.framework/Versions/A/TextTankCore"
+  TEXTTANK_MODULE_PRODUCTS=$(python3 -c 'import json,sys; from pathlib import Path; v=json.load(open(sys.argv[1])); print(Path(v["build_root"])/"build/DerivedData/Build/Products"/v["configuration"])' "$TEXTTANK_ARTIFACT_MANIFEST")
+  TEXTTANK_SDKROOT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["toolchain"]["sdk"])' "$TEXTTANK_ARTIFACT_MANIFEST")
+  # Put the actual embedded signed frameworks before the dependency build folder.
+  # Header input bytes are validated separately; no product source is compiled here.
+  SWIFT_BASE+=(-sdk "$TEXTTANK_SDKROOT" -F "$TEXTTANK_FRAMEWORKS" -F "$TEXTTANK_MODULE_PRODUCTS" -Xlinker -rpath -Xlinker "$TEXTTANK_FRAMEWORKS" -Xlinker "$NATIVE_CORE_LIBRARY" -Xlinker "$NATIVE_SEARCH_LIBRARY")
+  CXX_BASE+=(-isysroot "$TEXTTANK_SDKROOT" -F "$TEXTTANK_FRAMEWORKS" "-Wl,-rpath,$TEXTTANK_FRAMEWORKS")
+  export APP_PATH TEXTTANK_FRAMEWORKS TEXTTANK_ARTIFACT_MANIFEST NATIVE_BRIDGE_LIBRARY NATIVE_SEARCH_LIBRARY
 }
 
 # status <TAB> suite <TAB> detail
@@ -47,7 +72,7 @@ suite_record() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$TEXTTANK_SUITE_RESULT
 suite_build() {
   local names="$1" name status
   shift
-  "$@" && return 0
+  python3 scripts/compile_diagnostics.py -- "$@" && return 0
   status=$?
   for name in $names; do
     if [[ "$SUITE_BROKEN" != *" $name "* ]]; then
@@ -61,19 +86,58 @@ suite_build() {
 
 suite_run() {
   local name="$1" log="$2" status=0 limit="${TEXTTANK_SUITE_TIMEOUT:-300}"
+  local requires_completion="${TEXTTANK_NATIVE_COMPLETION_REQUIRED:-0}"
+  local log_status=0 log_detail
+  local -a pipeline_status
   shift 2
   if [[ "$SUITE_BROKEN" == *" $name "* ]]; then echo "NOT RUN $name: its build failed"; return 0; fi
+  if [[ "$1" == build/tests/* || "$1" == "$PWD"/build/tests/* ]]; then requires_completion=1; fi
   # alarm() survives exec, so the suite itself receives SIGALRM when the limit passes.
-  perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or die "cannot run $ARGV[0]: $!\n"' "$limit" "$@" 2>&1 | tee "$log" || status=${PIPESTATUS[0]}
+  # Both branches copy PIPESTATUS before any other command can overwrite it (Bash 3.2).
+  if perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or die "cannot run $ARGV[0]: $!\n"' "$limit" "$@" 2>&1 | tee "$log"; then
+    pipeline_status=("${PIPESTATUS[@]}")
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
+  fi
+  status=${pipeline_status[0]}
+  log_status=${pipeline_status[1]}
+  log_detail="log $log"
+  if [[ "$log_status" != 0 ]]; then
+    log_detail="log unavailable: $log (tee exit $log_status; check exit $status)"
+    echo "FAIL $name: log write failed (tee exit $log_status; check exit $status); stale log contents are not accepted" >&2
+    # Keep the check's failure/timeout when it already failed; a successful check
+    # cannot turn a failed evidence write into acceptance.
+    if [[ "$status" == 0 ]]; then status=1; fi
+  fi
+  if [[ "$status" == 0 && "$requires_completion" == 1 ]] && ! grep -Eq '^(PASS )?[A-Za-z][A-Za-z0-9]*Checks: [0-9]+ (native )?assertions' "$log"; then
+    echo "FAIL $name: exited zero without its native completion summary; the suite is incomplete" | tee -a "$log"
+    status=1
+  fi
+  if [[ "$status" == 0 && ( "$1" == build/tests/* || "$1" == "$PWD"/build/tests/* ) ]]; then
+    local native_dependencies image_name inspection_status
+    if native_dependencies=$(otool -L "$1" 2>&1); then
+      for image_name in NativeSearch EditorBridge Scintilla TextTankCore TextTankRuntime; do
+        if [[ "$native_dependencies" == *"/$image_name.framework/"* ]] && ! grep -q "^ARTIFACT_IMAGE $image_name " "$log"; then
+          echo "FAIL $name: missing actual loaded signed $image_name image proof" | tee -a "$log"
+          status=1
+        fi
+      done
+    else
+      inspection_status=$?
+      echo "FAIL $name: dependency inspection failed (otool exit $inspection_status)" | tee -a "$log"
+      printf '%s\n' "$native_dependencies" | tee -a "$log"
+      status=1
+    fi
+  fi
   if [[ "$status" == 0 ]]; then
     suite_record "PASS" "$name" "$(tail -n 1 "$log" | cut -c1-110)"
   elif [[ "$status" == 142 ]]; then
-    suite_record "TIMEOUT" "$name" "no result after $limit s; log $log"
-    echo "TIMEOUT $name: stopped after $limit s (TEXTTANK_SUITE_TIMEOUT); log $log"
+    suite_record "TIMEOUT" "$name" "no result after $limit s; $log_detail"
+    echo "TIMEOUT $name: stopped after $limit s (TEXTTANK_SUITE_TIMEOUT); $log_detail"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then echo "::error::$name timed out after $limit s"; fi
   else
-    suite_record "FAILED" "$name" "exit $status; log $log"
-    echo "FAILED $name: exit $status; log $log"
+    suite_record "FAILED" "$name" "exit $status; $log_detail"
+    echo "FAILED $name: exit $status; $log_detail"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then echo "::error::$name failed with exit $status"; fi
   fi
   return 0

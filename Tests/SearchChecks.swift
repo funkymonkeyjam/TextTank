@@ -1,21 +1,51 @@
+@testable import TextTankCore
 import Foundation
+import NativeSearch
 /// Reports "not cancelled" for the first polls and "cancelled" from then on, so
 /// a search is cancelled while it is running without a timer or a second thread.
-final class CancelAfterPolls: TTSearchCancellation {
+final class CancelAfterPolls: TTSearchCancellation, @unchecked Sendable {
     private let allowed: Int
-    private(set) var polls = 0
+    private let lock = NSLock()
+    private var pollCount = 0
+    var polls: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return pollCount
+    }
     init(allowed: Int) {
         self.allowed = allowed
         super.init()
     }
     override var cancelled: Bool {
-        polls += 1
-        return polls > allowed
+        lock.lock()
+        defer { lock.unlock() }
+        pollCount += 1
+        return pollCount > allowed
     }
 }
 @main struct SearchChecks {
     static func main() {
         Checks.run("SearchChecks") {
+            try SearchSessionChecks.run()
+            rejects(
+                "F181 bookmark work-limit failures have a distinct typed identity",
+                expecting: SearchFailure.invalidBookmarkLimit
+            ) {
+                _ = try SearchCore.bookmarkLines(
+                    in: "abc", locations: [0], cancellation: TTSearchCancellation(), timeLimit: 0)
+            }
+            rejects(
+                "F181 reversed bookmark offsets have their own typed identity",
+                expecting: SearchFailure.bookmarkOffsetsUnordered
+            ) {
+                _ = try SearchCore.bookmarkLines(in: "abc", locations: [2, 1], cancellation: TTSearchCancellation())
+            }
+            check(
+                POSIXError(.ENOENT).isFileNotFound
+                    && NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT)).isFileNotFound
+                    && FileOperationFailure(ENOENT, operation: "read", path: "/fixture/absent").isFileNotFound
+                    && !POSIXError(.EACCES).isFileNotFound,
+                "F181 one missing-file predicate preserves native and bridged error identities")
             func search(
                 _ text: String, _ query: String, _ replacement: String = "",
                 mode: SearchOptions.Mode = .regularExpression, caseSensitive: Bool = true, whole: Bool = false,
@@ -475,22 +505,22 @@ final class CancelAfterPolls: TTSearchCancellation {
                 "ranged result cap reports truncation")
             let rangedAll = try SearchCore.search("aaaaa", options: rangedOptions, range: at(1, 3), limit: 3)
             check(!rangedAll.truncated && rangedAll.hits.count == 3, "ranged result cap counts only hits in the range")
-            // F210: typed results; the dictionary selector stays as a wrapper.
+            // F210/F29: typed results and full-text requests preserve UTF-16 ranges and expansion.
             let typed = try TTSearchEngine.searchText(
-                "a b", range: at(0, 3), query: "\\w", replacement: "<$0>", mode: 2, matchCase: true, wholeWord: false,
+                "a b", range: at(0, 3), query: "\\w", replacement: "<$0>", mode: .regularExpression, matchCase: true,
+                wholeWord: false,
                 dotMatchesNewline: false, cancellation: TTSearchCancellation(), maximumMatches: 1, timeLimit: 2)
             check(
                 typed.truncated && typed.matches.count == 1 && typed.matches[0].range == at(0, 1)
                     && typed.matches[0].replacement == "<a>", "typed search result carries range and replacement")
-            let legacy = try TTSearchEngine.matches(
-                inText: "a b", query: "\\w", replacement: "<$0>", mode: 2, matchCase: true, wholeWord: false,
-                dotMatchesNewline: false, cancellation: TTSearchCancellation(), maximumMatches: 5, timeLimit: 2)
-            let legacyRows = legacy["matches"] as? [[String: Any]] ?? []
+            let fullText = try TTSearchEngine.searchText(
+                "a b", range: at(0, 3), query: "\\w", replacement: "<$0>", mode: .regularExpression,
+                matchCase: true, wholeWord: false, dotMatchesNewline: false,
+                cancellation: TTSearchCancellation(), maximumMatches: 5, timeLimit: 2)
             check(
-                legacy["truncated"] as? Bool == false
-                    && legacyRows.map { ($0["range"] as? NSValue)?.rangeValue } == [at(0, 1), at(2, 1)]
-                    && legacyRows.map { $0["replacement"] as? String } == ["<a>", "<b>"],
-                "dictionary selector still returns the same matches")
+                !fullText.truncated && fullText.matches.map(\.range) == [at(0, 1), at(2, 1)]
+                    && fullText.matches.map(\.replacement) == ["<a>", "<b>"],
+                "typed full-text request returns the same UTF-16 matches and replacements")
             var bad = SearchOptions()
             bad.query = "a"
             check(
@@ -510,6 +540,34 @@ final class CancelAfterPolls: TTSearchCancellation {
             check(
                 message { _ = try SearchCore.search("a", options: bad) }.contains("search expression"),
                 "oversized search expression is named")
+            var overlapping = SearchOptions(query: "aa", replacement: "X", matchCase: true)
+            let allAA = try SearchCore.search("aaa", options: overlapping)
+            let nextAA = try SearchCore.search("aaa", options: overlapping, purpose: .navigation)
+            check(
+                allAA.hits.map(\.range) == [NSRange(location: 0, length: 2)]
+                    && nextAA.hits.map(\.range) == [NSRange(location: 0, length: 2), NSRange(location: 1, length: 2)],
+                "navigation purpose enumerates overlapping literals while Find All remains nonoverlap")
+            let boundedAA = try SearchCore.search("aaa", options: overlapping, limit: 1, purpose: .navigation)
+            check(
+                boundedAA.hits.count == 1 && boundedAA.truncated, "overlapping navigation keeps the existing result cap"
+            )
+            overlapping.query = "😀😀"
+            check(
+                try SearchCore.search("😀😀😀", options: overlapping, purpose: .navigation).hits.map(\.range)
+                    == [NSRange(location: 0, length: 4), NSRange(location: 2, length: 4)],
+                "overlapping navigation advances past whole astral scalars")
+            overlapping.query = "\u{301}\u{301}"
+            check(
+                try SearchCore.search("e\u{301}\u{301}\u{301}", options: overlapping, purpose: .navigation).hits.map(
+                    \.range)
+                    == [NSRange(location: 1, length: 2), NSRange(location: 2, length: 2)],
+                "overlapping navigation advances by scalar rather than grapheme")
+            overlapping.query = #"\x61\x61"#
+            overlapping.mode = .extended
+            check(
+                try SearchCore.search("aaa", options: overlapping, purpose: .navigation).hits.count == 2
+                    && SearchCore.search("aaa", options: overlapping).hits.count == 1,
+                "extended literals share the navigation-purpose matcher")
             bad.query = ""
             check(
                 message { _ = try SearchCore.search("a", options: bad) }.contains("nonempty"),
@@ -517,7 +575,8 @@ final class CancelAfterPolls: TTSearchCancellation {
             check(
                 message {
                     _ = try TTSearchEngine.searchText(
-                        "a", range: at(0, 1), query: "a", replacement: "", mode: 3, matchCase: true, wholeWord: false,
+                        "a", range: at(0, 1), query: "a", replacement: "", mode: TTSearchMode(rawValue: 3)!,
+                        matchCase: true, wholeWord: false,
                         dotMatchesNewline: false, cancellation: TTSearchCancellation(), maximumMatches: 1, timeLimit: 2)
                 }.contains("mode"), "unknown search mode is named")
             check(
@@ -549,8 +608,7 @@ final class CancelAfterPolls: TTSearchCancellation {
                 "bulk-copied input keeps every surrogate pair and offset")
             // Searches run on background tasks, so two can compile and match at once. Before Boost's
             // locks were enabled this aborted the process inside its traits cache.
-            let mismatches = NSLock()
-            var wrong = 0
+            let mismatches = SearchMismatchCounter()
             DispatchQueue.concurrentPerform(iterations: 16) { worker in
                 var concurrent = SearchOptions()
                 concurrent.mode = .regularExpression
@@ -558,13 +616,13 @@ final class CancelAfterPolls: TTSearchCancellation {
                     concurrent.query = turn % 2 == 0 ? "a+\(worker % 3)" : "b+"
                     let found = (try? SearchCore.search("aa\(worker % 3) bb", options: concurrent).hits.count) ?? -1
                     if found != 1 {
-                        mismatches.lock()
-                        wrong += 1
-                        mismatches.unlock()
+                        mismatches.record()
                     }
                 }
             }
-            check(wrong == 0, "regex searches on sixteen threads at once compile, share the cache and match correctly")
+            check(
+                mismatches.count == 0,
+                "regex searches on sixteen threads at once compile, share the cache and match correctly")
             // F162: one cursor converts offsets for in-document and folder search alike.
             var cursor = SearchCore.UTFCursor("é\r\n🥑x\ry", tracksLines: true)
             check(
@@ -601,5 +659,21 @@ final class CancelAfterPolls: TTSearchCancellation {
                 "a zero-width match just chosen is not chosen again")
             Checks.summary { "PASS SearchChecks: \(Checks.count) assertions" }
         }
+    }
+}
+
+/// The complete shared mismatch count is private and lock-protected.
+private final class SearchMismatchCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func record() {
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
     }
 }

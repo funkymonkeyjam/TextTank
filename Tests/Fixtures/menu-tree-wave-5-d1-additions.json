@@ -1,0 +1,155 @@
+[
+  {
+    "position": "5.12",
+    "title": "",
+    "action": "",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": ""
+  },
+  {
+    "position": "5.13",
+    "title": "Compare",
+    "action": "submenuAction:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "explicit",
+    "object": ""
+  },
+  {
+    "position": "5.13.0",
+    "title": "Compare Text…",
+    "action": "showPicker:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "explicit",
+    "object": ""
+  },
+  {
+    "position": "5.13.1",
+    "title": "Select for Compare",
+    "action": "markCurrent:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "explicit",
+    "object": ""
+  },
+  {
+    "position": "5.13.2",
+    "title": "Compare with Selected",
+    "action": "compareCurrent:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "explicit",
+    "object": ""
+  },
+  {
+    "position": "5.13.3",
+    "title": "",
+    "action": "",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": ""
+  },
+  {
+    "position": "5.13.4",
+    "title": "Previous Change",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "previous"
+  },
+  {
+    "position": "5.13.5",
+    "title": "Next Change",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "next"
+  },
+  {
+    "position": "5.13.6",
+    "title": "Side by Side",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "sideBySide"
+  },
+  {
+    "position": "5.13.7",
+    "title": "Unified",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "unified"
+  },
+  {
+    "position": "5.13.8",
+    "title": "Linked Scrolling",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "linked"
+  },
+  {
+    "position": "5.13.9",
+    "title": "Collapse Unchanged",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "collapse"
+  },
+  {
+    "position": "5.13.10",
+    "title": "Expand All Unchanged Lines",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "expandAll"
+  },
+  {
+    "position": "5.13.11",
+    "title": "Show Whitespace",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "whitespace"
+  },
+  {
+    "position": "5.13.12",
+    "title": "Wrap Lines",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "wrap"
+  },
+  {
+    "position": "5.13.13",
+    "title": "Refresh Comparison",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "refresh"
+  },
+  {
+    "position": "5.13.14",
+    "title": "Cancel Comparison",
+    "action": "performCompareCommand:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "responder",
+    "object": "cancel"
+  }
+]

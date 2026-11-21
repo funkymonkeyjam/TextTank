@@ -1,3 +1,4 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 @main struct LanguageChecks {
@@ -5,10 +6,45 @@ import Foundation
         Checks.run("LanguageChecks") {
             let catalog = try LanguageCatalog.decode(
                 Data(contentsOf: TestPaths.resources.appendingPathComponent("LanguageProfiles.json")))
-            check(catalog.profiles.count == 96, "all 96 source definitions retained")
+            check(
+                catalog.profiles.count == 97 && catalog.profiles.filter { $0.id != "markdown" }.count == 96,
+                "all 96 source definitions plus the app-authored Markdown profile retained")
             check(catalog.sourceCommit == "61246e5741fd7c59352f3feb5ccc7e33e4594d15", "reference source pinned")
             check(try LanguageCatalog.decode(catalog.encoded()) == catalog, "catalog roundtrip")
+            var oversizedCatalog = catalog
+            oversizedCatalog.profiles[0].keywordLists = Dictionary(
+                uniqueKeysWithValues: (0..<17).map {
+                    (String($0), String(repeating: "a", count: 1024 * 1024))
+                })
+            rejects("G358 catalog writer refuses bytes its 16 MiB reader cannot load") {
+                _ = try oversizedCatalog.encoded()
+            }
+            var accented = catalog
+            accented.profiles[0].title = "\u{00e9}"
+            var decomposed = accented
+            decomposed.profiles[0].title = "e\u{0301}"
+            let exact = try LanguageOverrides(changing: accented, to: decomposed).applied(to: accented)
+            check(
+                Array(exact.profiles[0].title.utf8) == Array(decomposed.profiles[0].title.utf8),
+                "language differences preserve canonically equivalent Unicode byte changes")
             check(catalog.detect(filename: "HELLO.PY", text: "") == "python", "case-insensitive extension detection")
+            for filename in ["README.md", "NOTES.MD", "guide.markdown", "notes.mdown", "readme.mkd"] {
+                check(
+                    catalog.detect(filename: filename, text: "# Heading\n") == "markdown",
+                    "Markdown extension detection: \(filename)")
+            }
+            var beforeMarkdown = catalog
+            beforeMarkdown.profiles.removeAll { $0.id == "markdown" }
+            let upgradedMarkdown = try LanguageCatalog.load(stored: beforeMarkdown.encoded(), over: catalog)
+            check(
+                upgradedMarkdown.profiles.contains { $0.id == "markdown" },
+                "a legacy full-copy catalog gains the new Markdown profile")
+            let removedMarkdown = try LanguageOverrides(changing: catalog, to: beforeMarkdown).encoded()
+            check(
+                try !LanguageCatalog.load(stored: removedMarkdown, over: catalog).profiles.contains {
+                    $0.id == "markdown"
+                },
+                "an explicit saved Markdown deletion remains respected")
             check(
                 catalog.detect(filename: "CMakeLists.txt", text: "") == "cmake", "special filename beats txt extension")
             check(
@@ -17,6 +53,18 @@ import Foundation
             check(catalog.detect(filename: "unknown.zzzz", text: "") == nil, "unknown file remains explicit choice")
             let python = try requireValue(
                 catalog.profiles.first { $0.id == "python" }, "fixture: python profile exists")
+            var invalidColor = python
+            invalidColor.styles = [.init(id: 4, name: "Fixture style", foreground: "nothex", fontStyle: 0)]
+            do {
+                try invalidColor.validate()
+                check(false, "F213 invalid profile color is rejected")
+            } catch {
+                check(
+                    error.localizedDescription.contains(python.title)
+                        && error.localizedDescription.contains("style 4 foreground")
+                        && error.localizedDescription.contains("six hexadecimal"),
+                    "F213 language validation names the affected profile, style and color field")
+            }
             check(python.completions.contains("def"), "source keywords supply completion")
             let symbols = try LanguageFunctions.symbols(
                 text: "# café\r\nclass Example:\r\n    def work(self):\r\n        return 1\r\n", profile: python)
@@ -402,7 +450,7 @@ import Foundation
             let forkBytes = try fork.encoded()
             let migrated = try LanguageCatalog.load(stored: forkBytes, over: catalog)
             check(
-                migrated.profiles.count == 97 && migrated.profiles.contains { $0.id == "cobol" }
+                migrated.profiles.count == 98 && migrated.profiles.contains { $0.id == "cobol" }
                     && migrated.profiles.first { $0.id == "python" }
                         == changedCatalog.profiles.first { $0.id == "python" }
                     && migrated.profiles.first { $0.id == "python" }?.styles[0].foreground == "123456"
@@ -432,7 +480,7 @@ import Foundation
             reordered.profiles.swapAt(1, 40)
             let reorderedStored = LanguageOverrides(changing: catalog, to: reordered)
             check(
-                try reorderedStored.changed.isEmpty && reorderedStored.order?.count == 96
+                try reorderedStored.changed.isEmpty && reorderedStored.order?.count == 97
                     && LanguageCatalog.load(stored: try reorderedStored.encoded(), over: catalog) == reordered,
                 "a reordered catalog keeps its order")
             check(
@@ -444,7 +492,7 @@ import Foundation
             let goldenCatalog = try LanguageCatalog.decode(golden),
                 goldenLoaded = try LanguageCatalog.load(stored: golden, over: catalog)
             check(
-                goldenLoaded.profiles.count == 96 + goldenCatalog.profiles.count
+                goldenLoaded.profiles.count == 97 + goldenCatalog.profiles.count
                     && goldenCatalog.profiles.allSatisfy { goldenLoaded.profiles.contains($0) }
                     && goldenLoaded.sourceCommit == catalog.sourceCommit
                     && LanguageOverrides(changing: catalog, to: goldenLoaded).added == goldenCatalog.profiles,

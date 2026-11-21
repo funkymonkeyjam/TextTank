@@ -1,23 +1,22 @@
-# Research inputs used by TextTank
+# Research provenance and limits
 
-This index is curated from the accumulated investigation. It publishes requirements, provenance and limitations, not proprietary application code, machine profiles or personal documents. Source findings are not Windows runtime observations. The implementation evidence belongs in the candidate's test/review records.
+This index publishes requirements, provenance and limitations, not proprietary application code, machine profiles or personal documents. Ordinary source observations are distinct from actual REA Evidence, user-reported runtime observations and design proposals. None is a current candidate certificate.
 
-| Record | Use and limit |
-|---|---|
-| [Reference profile](../parity/reference-profile.json) | Frozen Notepad++ source commit, 96 language definitions and hashes for standard configuration/packaging inputs. Actual released distribution artifact/version/hash remain unresolved. |
-| [Working capability inventory](../parity/capabilities.json) | Required command surfaces and separately identified high-risk behavior interactions. All initially unassessed/not-run. Semantic deduplication and dialog/dynamic/preferences expansion remain open, so the row count is not a completeness denominator. |
-| [Every seed disposition](../parity/seed-dispositions.json) | All 531 original command/range definitions retained; explicit alias/group dispositions. 531 is not a feature count. |
-| [Inventory builder](../parity/build_inventory.py) | Reproducible source-only extraction; takes a frozen checkout and seed JSON as explicit arguments. Never marks implementation or tests complete. |
-| [Research digest](findings.md) | Decisions, previous evidence types and regression risks carried into implementation. |
-| [Source links](sources.json) | Pinned primary source URLs from the earlier source investigation. |
-| [Automation acceptance](../parity/automation-acceptance.json) | User-named workflow and connector behaviors required in addition to editor parity. |
+- [Capability matrix](../parity/README.md): all reference requirements, source links, seed dispositions, automation requirements and a small dated implementation/check map. Static rows and aliases are not a behavioral denominator.
+- [Research digest](findings.md) and [pinned source links](sources.json): architectural decisions and reference limits.
+- [Utility differences](utility-audit.md) and [workspace notes](workspace-browser.md): scoped implementation/reference observations.
+- [User-reported Reminders observation](../parity/user-validation-2026-11-14.json): one reported happy path. The exact binary, destination and permission state were not independently inspected; fault/retry behavior is not established by it.
 
 ## Reference identity
 
-[Official source](https://github.com/notepad-plus-plus/notepad-plus-plus/tree/61246e5741fd7c59352f3feb5ccc7e33e4594d15): source version 8.9.8.1, vendored Scintilla 5.6.7 and Lexilla 5.5.4. These are reference facts, not TextTank dependency pins. The standard package recipe includes mimeTools, NppConverter and NppExport; their functions cannot be dropped as optional third-party plugins. Detailed plugin versions and exact error/option semantics still need official package/source evidence.
+The [frozen official source](https://github.com/notepad-plus-plus/notepad-plus-plus/tree/61246e5741fd7c59352f3feb5ccc7e33e4594d15) reports Notepad++ 8.9.8.1 with reference Scintilla 5.6.7/Lexilla 5.5.4. TextTank's separate implementation pins are recorded in `Dependencies.lock.json`. The reference package recipe includes MIME Tools, NppConverter and NppExport; required equivalent functionality cannot be waived as optional plugins. Released binary bytes and source/release differences remain unresolved; matching version labels do not prove matching code.
 
-The verified [REA workflow](https://github.com/morluto/rea/blob/8c857ce56c68ca46d202db0c9571277974c9e167/.agents/skills/reverse-engineer-anything/SKILL.md) routes complete source-repository analysis to ordinary tools. No new binary or Windows runtime observation is claimed by this inventory.
+The verified [REA workflow](https://github.com/morluto/rea/blob/8c857ce56c68ca46d202db0c9571277974c9e167/.agents/skills/reverse-engineer-anything/SKILL.md) routes complete source-repository analysis to normal source tools. This matrix adds no Windows binary/runtime observations.
 
-## Local provenance check
+## Historical material
 
-All 91 entries in the execution handoff's local source-input manifest matched their expected SHA-256 on 14 November 2026. The per-entry hash audit is `harness/reference-inputs.json`; it contains relative input names and hashes only. The local raw evidence is not needed to run TextTank and is not copied wholesale into the public repository.
+Historical run state, orchestration prompts, agent reports, large generator intermediates and the one-off language importer were removed from the current product tree and retained byte-for-byte with a hash/blob manifest in the surrounding investigation. They are also recoverable from [product source commit `cb66cfd24cb40f9764d6079018532667d6003342`](https://github.com/funkymonkeyjam/TextTank/tree/cb66cfd24cb40f9764d6079018532667d6003342). These dated records include the former `harness/reviews/`, `harness/reference-inputs.json` and original parity inputs; use Git history when reproducing that research. They are not copied into current review documentation.
+
+The former 91-input local handoff audit records what was checked on 14 November 2026, not a current source-tree result. The old importer was a one-off research tool with unverified regeneration assumptions; it is no longer a production source utility. Bundled `Resources/LanguageProfiles.json` retains all 96 original imported definitions and their original input hashes. The owner-authorized 17 November 2026 addition is a separately documented, TextTank-authored Markdown profile using the pinned Lexilla lexer; it is not attributed to the Notepad++ import. Future regeneration needs a maintained, input-verified procedure and must retain this app-authored addition.
+
+For a current candidate, use `validation.json` and its source tree/log hashes. Current UI appearance, physical keyboard paths, VoiceOver, actual macOS 14/15/Intel behavior and live connector fault scenarios remain unverified unless the specific candidate record says otherwise.

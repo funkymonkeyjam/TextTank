@@ -1,3 +1,5 @@
+@testable import TextTankRuntime
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import Darwin
@@ -286,12 +288,52 @@ import Darwin
                     "cancelled pending rows resume same batch without duplicating first")
             }
             await Checks.section("batch and journal validation") {
-                await rejects("empty batch rejected before external writes", where: invalidBatch) {
+                await rejects(
+                    "empty batch rejected before external writes",
+                    where: {
+                        if case ReminderConnectorError.noRows = $0 { return true }
+                        return false
+                    }
+                ) {
                     _ = try await connector.export(rows: [], destinationID: "a", batchID: UUID())
                 }
-                await rejects("blank row rejected", where: invalidBatch) {
+                await rejects(
+                    "blank row rejected",
+                    where: {
+                        if case ReminderConnectorError.invalidRow(number: 1) = $0 { return true }
+                        return false
+                    }
+                ) {
                     _ = try await connector.export(rows: ["  "], destinationID: "a", batchID: UUID())
                 }
+                let tooManyFake = FakeReminderStore()
+                let tooMany = RemindersConnector(
+                    storageURL: root.appendingPathComponent("too-many-rows"), store: tooManyFake)
+                await rejects(
+                    "F204 too many items names the input limit, not a corrupt journal",
+                    where: {
+                        if case ReminderConnectorError.tooManyRows(limit: 10000) = $0 { return true }
+                        return false
+                    }
+                ) {
+                    _ = try await tooMany.export(
+                        rows: Array(repeating: "item", count: 10001), destinationID: "a", batchID: UUID())
+                }
+                check(tooManyFake.saves.isEmpty, "F204 item limit rejection sends nothing")
+                let badLockDirectory = root.appendingPathComponent("unsafe-lock")
+                try FileManager.default.createDirectory(at: badLockDirectory, withIntermediateDirectories: true)
+                let badLock = badLockDirectory.appendingPathComponent(".export.lock")
+                try require(mkfifo(badLock.path, 0o600) == 0, "F204 fixture: export lock is a FIFO")
+                let badLockFake = FakeReminderStore()
+                let badLockConnector = RemindersConnector(storageURL: badLockDirectory, store: badLockFake)
+                await rejects(
+                    "F204 an unsafe export lock is identified separately from journal contents",
+                    where: {
+                        if case ReminderConnectorError.unsafeLock = $0 { return true }
+                        return false
+                    }
+                ) { _ = try await badLockConnector.export(rows: ["item"], destinationID: "a", batchID: UUID()) }
+                check(badLockFake.saves.isEmpty, "F204 unsafe lock rejection sends nothing")
                 let fifoDirectory = root.appendingPathComponent("fifo-journal")
                 try FileManager.default.createDirectory(at: fifoDirectory, withIntermediateDirectories: true)
                 let fifoID = UUID(), fifoURL = fifoDirectory.appendingPathComponent(UUID().uuidString)
@@ -312,7 +354,13 @@ import Darwin
                 let oversizedFake = FakeReminderStore(), oversizedID = UUID()
                 let oversizedConnector = RemindersConnector(storageURL: oversizedDirectory, store: oversizedFake)
                 let oversizedRows = Array(repeating: String(repeating: "x", count: 1048576), count: 33)
-                await rejects("aggregate journal ceiling rejects before first save", where: invalidBatch) {
+                await rejects(
+                    "aggregate journal ceiling rejects before first save",
+                    where: {
+                        if case ReminderConnectorError.journalTooLarge = $0 { return true }
+                        return false
+                    }
+                ) {
                     _ = try await oversizedConnector.export(
                         rows: oversizedRows, destinationID: "a", batchID: oversizedID)
                 }
@@ -326,7 +374,7 @@ import Darwin
                 if case ReminderConnectorError.journalFailed(let batch, _) = $0 { return batch }
                 return nil
             }
-            func failure(_ work: () async throws -> Void) async -> Error? {
+            @MainActor func failure(_ work: @MainActor () async throws -> Void) async -> Error? {
                 do {
                     try await work()
                     return nil
@@ -591,6 +639,25 @@ import Darwin
                         && a.rows.map(\.message) == b.rows.map(\.message)
                 }
                 let layout = try ReminderJournal.layout(batch)
+                let restrictiveDirectory = root.appendingPathComponent("restrictive-journal-mode")
+                try FileManager.default.createDirectory(
+                    at: restrictiveDirectory, withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700])
+                let restrictiveWriter = ReminderJournalFile(directory: restrictiveDirectory, id: batch.id)
+                do {
+                    // Only this isolated check executable's process, never its parent shell.
+                    let previous = umask(0o777)
+                    defer { umask(previous) }
+                    try await restrictiveWriter.record(batch)
+                }
+                let restrictiveURL = restrictiveDirectory.appendingPathComponent(batch.id.uuidString + ".json")
+                check(
+                    (try FileManager.default.attributesOfItem(atPath: restrictiveURL.path)[.posixPermissions]
+                        as? NSNumber)?.intValue == 0o600,
+                    "F149 journal replacement restores exact 0600 even under a restrictive process umask")
+                check(
+                    (try? ReminderJournal.read(restrictiveURL, id: batch.id))?.batch.id == batch.id,
+                    "F149 a committed journal remains readable under the restored process umask")
                 check(
                     same(try JSONDecoder().decode(ReminderBatch.self, from: layout.data), batch),
                     "slotted journal decodes to the same batch as the synthesized decoder expects")
@@ -604,6 +671,38 @@ import Darwin
                         try JSONDecoder().decode(
                             ReminderBatch.self, from: try RemindersConnector.encodedJournal(batch)), batch),
                     "compact journal of earlier builds still decodes to the same batch")
+                var nearLimit = ReminderBatch(
+                    id: UUID(), destinationID: "fixture", destinationTitle: "Fixture", destinationSource: "Local",
+                    rows: (0..<32).map { _ in ReminderRow(id: UUID(), title: "") }, createdAt: Date())
+                let overhead = try ReminderJournal.layout(nearLimit, slotWidth: 0).data.count
+                let titleBytes =
+                    (ReminderJournal.maximumBytes - overhead - ReminderJournal.blockSize) / nearLimit.rows.count
+                nearLimit.rows = nearLimit.rows.map {
+                    ReminderRow(id: $0.id, title: String(repeating: "x", count: titleBytes))
+                }
+                rejects(
+                    "F204 padded export layout reports capacity separately from corruption",
+                    where: {
+                        if case ReminderConnectorError.journalTooLarge = $0 { return true }
+                        return false
+                    }
+                ) { _ = try ReminderJournal.layout(nearLimit) }
+                let compactNearLimit = try ReminderJournal.layout(nearLimit, slotWidth: 0)
+                check(
+                    compactNearLimit.data.count <= ReminderJournal.maximumBytes,
+                    "F204 near-limit fixture fits the compact layout")
+                let compactDirectory = root.appendingPathComponent("compact-capacity-fallback")
+                try FileManager.default.createDirectory(
+                    at: compactDirectory, withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700])
+                let compactWriter = ReminderJournalFile(directory: compactDirectory, id: nearLimit.id)
+                try await compactWriter.record(nearLimit)
+                let writtenNearLimit = try ReminderJournal.read(
+                    compactDirectory.appendingPathComponent(nearLimit.id.uuidString + ".json"), id: nearLimit.id
+                ).batch
+                check(
+                    writtenNearLimit.rows.map(\.title) == nearLimit.rows.map(\.title),
+                    "F204 actual journal writer preserves padded-to-compact fallback at the byte limit")
                 let many = ReminderBatch(
                     id: UUID(), destinationID: "a", destinationTitle: "Shopping", destinationSource: "Local",
                     rows: (0..<500).map { ReminderRow(id: UUID(), title: String(repeating: "x", count: $0 % 97 + 1)) },

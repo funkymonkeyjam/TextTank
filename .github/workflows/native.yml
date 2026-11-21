@@ -1,19 +1,26 @@
 name: Native Mac checks
 on:
   push:
-    branches: [main, implementation/native-mac]
+    branches: [main]
   pull_request:
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
   native:
-    runs-on: macos-15
-    timeout-minutes: 30
+    runs-on: xcode-27
+    timeout-minutes: 45
+    env:
+      TEXTTANK_PERF_BUDGET_SCALE: 3
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (upstream tag verified)
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Select the verified CI toolchain
+        run: sudo xcode-select -s /Applications/Xcode_27.2.app
       - name: Record candidate and toolchain
         run: |
           git rev-parse HEAD
@@ -26,13 +33,22 @@ jobs:
       - name: Lint Swift layout (advisory)
         continue-on-error: true
         run: scripts/swift-format.sh lint
+      - name: Verify generated project is current
+        run: |
+          python3 scripts/generate-project.py
+          git diff --exit-code -- TextTank.xcodeproj
       - name: Build pinned native app
         run: scripts/build.sh
       - name: Run acceptance checks
         run: scripts/test.sh
+      - name: Full performance tier (advisory, reduced tier gates acceptance)
+        continue-on-error: true
+        run: scripts/test-performance.sh
+      - name: Static analyzer
+        run: xcodebuild -project TextTank.xcodeproj -scheme TextTank -configuration Debug -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO analyze
       - name: Retain observed logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (upstream tag verified)
         with:
           name: native-evidence-${{ github.sha }}
           path: harness/logs

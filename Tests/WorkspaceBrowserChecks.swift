@@ -1,8 +1,17 @@
+@testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+@testable import TextTankRuntime
+import EditorBridge
+import NativeSearch
 import Darwin
+@MainActor private final class SessionCancelState { var pressed = false, timedOut = false }
+
 @main struct WorkspaceBrowserChecks {
-    static func main() {
+    @MainActor static func descendants(_ view: NSView) -> [NSView] {
+        [view] + view.subviews.flatMap(descendants)
+    }
+    @MainActor static func main() {
         Checks.run("WorkspaceBrowserChecks") {
             // F148: there is no bundle here, so the suite names the bundled language catalog itself.
             LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")
@@ -14,6 +23,8 @@ import Darwin
                 NSDocumentController.shared.documents.forEach { $0.close() }
                 try? FileManager.default.removeItem(at: root)
             }
+            NativeFixtureEnvironment.install()
+            defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
             let folder = root.appendingPathComponent("project")
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -137,7 +148,7 @@ import Darwin
             controller.show(nil)
             check(controller.window != nil && controller.window?.contentView != nil, "native browser built")
             // F91: the Open Documents list follows the documents without Refresh and without the status line.
-            func listed() -> Int { controller.outlineView(controller.outline, numberOfChildrenOfItem: nil) }
+            @MainActor func listed() -> Int { controller.outlineView(controller.outline, numberOfChildrenOfItem: nil) }
             func pump() { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
             check(
                 listed() == NSDocumentController.shared.documents.count && listed() > 0,
@@ -165,11 +176,11 @@ import Darwin
             check(closedDocument == nil, "the list does not keep a closed document alive")
             // Refresh rebuilds the folder nodes, which is what re-reads the disk; expansion survives it.
             controller.select(mode: 1)
-            func rootNode() throws -> WorkspaceBrowserNode {
+            @MainActor func rootNode() throws -> WorkspaceBrowserNode {
                 try requireValue(
                     controller.outline.item(atRow: 0) as? WorkspaceBrowserNode, "fixture: the saved folder is listed")
             }
-            func names(_ node: WorkspaceBrowserNode) -> [String] {
+            @MainActor func names(_ node: WorkspaceBrowserNode) -> [String] {
                 (0..<controller.outlineView(controller.outline, numberOfChildrenOfItem: node)).compactMap {
                     (controller.outlineView(controller.outline, child: $0, ofItem: node) as? WorkspaceBrowserNode)?
                         .entry.url.lastPathComponent
@@ -189,7 +200,7 @@ import Darwin
                 "Refresh re-reads the folder from disk")
             check(controller.outline.isItemExpanded(secondRoot), "an expanded folder stays expanded across Refresh")
             check(
-                controller.statusText.contains("open documents") && controller.statusText.contains("saved folders"),
+                controller.statusText.contains("Open documents:") && controller.statusText.contains("Saved folders:"),
                 "Refresh still ends with the counts summary")
             controller.select(mode: 0)
             controller.select(mode: 1)
@@ -284,7 +295,7 @@ import Darwin
             var published: [DocumentMonitorStatus] = []
             monitor.onStatus = { published.append($0) }
             try monitor.start(watched)
-            func waitFor(_ wanted: DocumentMonitorStatus, line: UInt = #line) {
+            @MainActor func waitFor(_ wanted: DocumentMonitorStatus, line: UInt = #line) {
                 spinUntil("the document monitor to report \(wanted)", line: line) { monitor.status == wanted }
                 check(monitor.status == wanted, "background monitor result", line: line)
             }
@@ -333,8 +344,8 @@ import Darwin
             let staleRevision = watched.editor.revision
             watched.editor.replaceSelection("newer")
             rejects("monitor rejects stale explicit reload") { try monitor.reload(expectedRevision: staleRevision) }
-            watched.editor.executeCommand("undo")
-            watched.editor.executeCommand("undo")
+            watched.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            watched.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             try monitor.reload(expectedRevision: watched.editor.revision)
             check(watched.editor.text == "changed on disk", "explicit clean monitor reload")
             try FileManager.default.removeItem(at: fresh)
@@ -351,10 +362,6 @@ import Darwin
             // load, finish first, so a few attempts are allowed.
             let polled = folder.appendingPathComponent("polled.bin")
             try Data(repeating: 0x61, count: 30 * 1024 * 1024).write(to: polled)
-            let host = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled], backing: .buffered,
-                defer: true)
-            host.isReleasedWhenClosed = false
             var releasedDuringPoll = false, stoppedAfterRelease = true
             for _ in 0..<5 where !releasedDuringPoll {
                 weak var polledDocument: TextDocument?
@@ -362,7 +369,7 @@ import Darwin
                 try autoreleasepool {
                     let document = TextDocument()
                     document.fileURL = polled
-                    host.contentView = document.editor
+                    document.makeWindowControllers()
                     polledDocument = document
                     try dropped.start(document)
                     try require(dropped.status == .checking && dropped.document === document, "the monitor is polling")
@@ -376,16 +383,27 @@ import Darwin
                 releasedDuringPoll = polledDocument == nil && dropped.status == .checking
                 spinUntil("the monitor of a released document to stop") { dropped.status == .stopped }
                 stoppedAfterRelease = stoppedAfterRelease && dropped.status == .stopped && dropped.document == nil
-                host.contentView = nil
             }
             check(releasedDuringPoll, "F117 a poll in flight does not keep its document alive")
             check(stoppedAfterRelease, "F117 a monitor whose document was released stops at the next result")
-            host.contentView = nil
-            host.close()
+            // The worker also must not own the monitor itself. Its only strong owner is
+            // main-owned; deinit invalidates the timer synchronously on this same thread.
+            let disposableDocument = TextDocument()
+            disposableDocument.fileURL = polled
+            disposableDocument.makeWindowControllers()
+            weak var releasedMonitor: DocumentMonitor?
+            try autoreleasepool {
+                let disposableMonitor = DocumentMonitor()
+                releasedMonitor = disposableMonitor
+                try disposableMonitor.start(disposableDocument)
+                try require(disposableMonitor.status == .checking, "fixture: disposable monitor started a poll")
+            }
+            check(releasedMonitor == nil, "F316 an in-flight inspection does not retain its main-owned monitor")
+            disposableDocument.close()
             let app = AppDelegate()
-            let previousDelegate = NSApp.delegate
-            NSApp.delegate = app
-            defer { NSApp.delegate = previousDelegate }
+            let previousServices = EditorServices.current
+            app.installEditorServices()
+            defer { EditorServices.current = previousServices }
             let python = folder.appendingPathComponent("extension-only.py")
             try Data("value = 1".utf8).write(to: python)
             let detected = try controller.open(python)
@@ -395,7 +413,9 @@ import Darwin
             // G373: a language chosen by hand survives Reload and Revert; only the first load detects.
             // Every run's colour, font and traits. Two languages can share one keyword colour, so the
             // first colour alone does not tell them apart.
-            func styling(_ editor: TTEditor) -> NSAttributedString { editor.attributedText(forSelection: false) }
+            @MainActor func styling(_ editor: TTEditor) -> NSAttributedString {
+                editor.attributedText(forSelection: false)
+            }
             let scriptURL = folder.appendingPathComponent("manual-choice.py")
             try Data("return 42;".utf8).write(to: scriptURL)
             let manual = try controller.open(scriptURL)
@@ -409,7 +429,7 @@ import Darwin
                     && app.languages.apply(identifier: "javascript", to: manualReference)
                     && app.languages.apply(identifier: "python", to: pythonReference),
                 "fixture: a Python file is switched to JavaScript by hand")
-            manual.languageIdentifier = "javascript"
+            manual.noteAppliedLanguage("javascript")
             check(
                 styling(manualReference).length == 10 && styling(manualReference) != styling(pythonReference),
                 "fixture: the two languages colour the sample differently")
@@ -506,7 +526,7 @@ import Darwin
             let summary = controller.statusText
             check(
                 controller.monitorStatusText == DocumentMonitorStatus.changed.message
-                    && summary.contains("open documents"), "Refresh does not erase the monitor's changed notice")
+                    && summary.contains("Open documents:"), "Refresh does not erase the monitor's changed notice")
             let completedPolls = controller.monitor.fileReads + controller.monitor.metadataOnlyPolls
             spinUntil("one more monitor poll to complete") {
                 controller.monitor.poll()
@@ -534,6 +554,41 @@ import Darwin
             check(
                 WorkspaceController.checkOriginals(of: checkedSession)?.map(\.status) == [.unchanged, .missing],
                 "Check Originals returns each original's status from the background inspection")
+            // Hold enough bounded inspection work for the real Cancel action to interrupt it.
+            // Repeated references are inert session data, all pointing at our owned fixture.
+            let cancellableSession = WorkspaceSession(
+                id: UUID(), name: "Cancelled native inspection",
+                documents: (0..<1000).map { _ in
+                    SessionDocument(
+                        id: UUID(), originalURL: polled, text: "", format: FileFormat(), isDirty: false,
+                        selection: SessionSelection(anchorByte: 0, caretByte: 0),
+                        originalSHA256: String(repeating: "0", count: 64))
+                })
+            let cancelState = SessionCancelState(), cancelDeadline = Date().addingTimeInterval(3)
+            let cancelTimer = Timer(timeInterval: 0.001, repeats: true) { _ in
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated {
+                    if Date() > cancelDeadline {
+                        cancelState.timedOut = true
+                        NSApp.abortModal()
+                        return
+                    }
+                    guard !cancelState.pressed else { return }
+                    guard let content = NSApp.modalWindow?.contentView,
+                        let button = descendants(content).compactMap({ $0 as? NSButton }).first(where: {
+                            $0.title == "Cancel"
+                        })
+                    else { return }
+                    cancelState.pressed = true
+                    button.performClick(nil)
+                }
+            }
+            RunLoop.main.add(cancelTimer, forMode: .modalPanel)
+            let cancelledInspection = WorkspaceController.checkOriginals(of: cancellableSession)
+            cancelTimer.invalidate()
+            check(
+                cancelState.pressed && !cancelState.timedOut && cancelledInspection == nil && NSApp.modalWindow == nil,
+                "F316 actual Check Originals Cancel returns no partial result and closes its modal")
             check(listed() > 0, "fixture: the panel lists documents before it closes")
             controller.window?.close()
             check(listed() == 0, "a closed panel holds no documents")
