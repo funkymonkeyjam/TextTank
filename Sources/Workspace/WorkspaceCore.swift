@@ -320,8 +320,8 @@ package enum WorkspaceError: LocalizedError {
 }
 
 /// Explicit file-panel URL in/out. No shell, plugin, workflow, or source-file writes.
-/// Same-directory rename is atomic; bytes are fsynced before replacement. This is
-/// not a claim of power-loss durability for the containing filesystem/directory.
+/// The session requests a device flush before rename and another for its containing folder afterward.
+/// Filesystems without device-flush support use POSIX fsync.
 package enum WorkspaceStore {
     static package let maximumSessionBytes = 512 * 1024 * 1024
     /// The one extension TextTank proposes for session snapshots and declares in Info.plist as
@@ -467,7 +467,8 @@ package enum WorkspaceStore {
     static package func writePrivate(_ data: Data, to url: URL) throws {
         do {
             try PrivateFileStore.write(
-                data, to: url, maximumBytes: maximumSessionBytes, temporaryPrefix: ".texttank-session-")
+                data, to: url, maximumBytes: maximumSessionBytes, temporaryPrefix: ".texttank-session-",
+                synchronize: PrivateFileStore.flushToStorage, synchronizeDirectory: PrivateFileStore.flushToStorage)
         } catch { throw mappedFileError(error) }
     }
 }

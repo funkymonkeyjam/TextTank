@@ -434,13 +434,15 @@ import AppKit
             return
         }
         // The status line stays in its failure state until a later recovery write succeeds.
+        recoveryCopyKept = false
+        let summary = error is PublishedFileSyncFailure ? "⚠︎ Recovery copy unconfirmed" : "⚠︎ Recovery copy not written"
         controllers.forEach {
-            $0.showRecoveryStatus("⚠︎ Recovery copy not written: \(error.localizedDescription)", failed: true)
+            $0.showRecoveryStatus("\(summary): \(error.localizedDescription)", failed: true, failureSummary: summary)
         }
         let escalate = recoveryFailures.recordFailure(sessionAlreadyNotified: Self.recoveryFailureNoticeShown)
         if recoveryFailures.consecutiveFailures == 1 {
             NSLog(
-                "TextTank: recovery snapshot %@ could not be written: %@", recoveryID.uuidString,
+                "TextTank: recovery snapshot %@ could not be confirmed: %@", recoveryID.uuidString,
                 error.localizedDescription)
         }
         if escalate { Self.recoveryFailureNoticeShown = presentRecoveryFailureNotice(error) }
@@ -454,9 +456,9 @@ import AppKit
         }
         let alert = TTAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Unsaved changes are not being backed up"
+        alert.messageText = "TextTank could not confirm the recovery copy"
         alert.informativeText =
-            "TextTank could not write the crash-recovery copy of “\(displayName ?? "this document")” more than once in a row. If the app quit unexpectedly now, recent edits could be lost. The document itself is unchanged; save it to keep your work.\n\nReason: \(error.localizedDescription)\n\nThis notice appears once per session. The status line keeps showing the failure until a recovery copy is written again."
+            "TextTank could not confirm the crash-recovery copy of “\(displayName ?? "this document")” more than once in a row. If the app quit unexpectedly now, recent edits could be lost. The document itself is unchanged; save it to keep your work.\n\nReason: \(error.localizedDescription)\n\nThis notice appears once per session. The status line keeps showing the failure until a recovery copy is written again."
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window)
         return true

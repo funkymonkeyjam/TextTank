@@ -155,6 +155,29 @@ import Darwin
                         })
                 }
                 check(try Data(contentsOf: file) == before, "F149 failed sync preserves the prior bytes")
+                let published = root.appendingPathComponent("published-sync.json")
+                try PrivateFileStore.write(before, to: published, maximumBytes: 100)
+                var synchronizedFile = false, sawPublication = false
+                do {
+                    try PrivateFileStore.write(
+                        after, to: published, maximumBytes: 100,
+                        synchronize: { descriptor in
+                            synchronizedFile = (try? Data(contentsOf: published)) == before
+                            return PrivateFileStore.flushToStorage(descriptor)
+                        },
+                        synchronizeDirectory: { descriptor in
+                            var info = stat()
+                            sawPublication =
+                                fstat(descriptor, &info) == 0 && info.st_mode & S_IFMT == S_IFDIR
+                                && (try? Data(contentsOf: published)) == after
+                            errno = EIO
+                            return -1
+                        })
+                    check(false, "directory sync failure must be reported after publication")
+                } catch is PublishedFileSyncFailure {
+                    check(synchronizedFile && sawPublication, "file sync precedes rename and directory sync follows it")
+                    check(try Data(contentsOf: published) == after, "an unconfirmed publication retains the new bytes")
+                }
                 for phase in ["permissions", "close"] {
                     rejects(
                         "F206 failed private-file \(phase) prevents commit and retains operation/path/errno",

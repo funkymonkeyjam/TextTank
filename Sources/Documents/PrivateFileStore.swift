@@ -151,6 +151,15 @@ package enum PrivateFileError: LocalizedError {
     }
 }
 
+/// Publication has already happened. A retry must not roll back or remove the visible file.
+package struct PublishedFileSyncFailure: LocalizedError {
+    let failure: FileOperationFailure
+    package init(failure: FileOperationFailure) { self.failure = failure }
+    package var errorDescription: String? {
+        "The file is in place, but storage could not confirm the write. " + failure.localizedDescription
+    }
+}
+
 /// Shared byte I/O only. Models keep their validation, load-failure latch and storage policy.
 /// A selected import follows its parent path but never its final component; app-owned stores
 /// and existing WorkspaceStore callers also refuse a symlinked immediate parent directory.
@@ -252,11 +261,46 @@ package enum PrivateFileStore {
             throw FileOperationFailure(errno, operation: "set private folder permissions", path: directory.path)
         }
     }
-    /// The optional synchronizer is a narrow failure seam: a failed sync must not commit.
-    /// Data and its 0600 metadata reach fsync before the same-directory atomic rename.
+    /// Ask the device to flush. Filesystems without that operation retain POSIX fsync semantics.
+    static package func flushToStorage(_ descriptor: Int32) -> Int32 {
+        func retryInterrupted(_ call: () -> Int32) -> Int32 {
+            var result = call()
+            while result == -1 && errno == EINTR { result = call() }
+            return result
+        }
+        let result = retryInterrupted { fcntl(descriptor, F_FULLFSYNC) }
+        if result == -1 && [ENOTSUP, EOPNOTSUPP, EINVAL, ENOTTY, ENOSYS].contains(errno) {
+            return retryInterrupted { fsync(descriptor) }
+        }
+        return result
+    }
+    /// A matching recovery revision may be a prior publication whose directory sync failed.
+    static package func confirmExistingWrite(at url: URL, matches: (stat) -> Bool = { _ in true }) throws {
+        let directory = try directoryDescriptor(for: url)
+        defer { close(directory) }
+        let fd = openat(directory, url.lastPathComponent, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { throw FileOperationFailure(errno, operation: "open saved file", path: url.path) }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, matches(info) else {
+            throw PrivateFileError.unsafeLocation
+        }
+        for descriptor in [fd, directory] {
+            guard flushToStorage(descriptor) == 0 else {
+                throw PublishedFileSyncFailure(
+                    failure: .init(errno, operation: "synchronize saved file or folder", path: url.path))
+            }
+        }
+        var current = stat()
+        guard fstatat(directory, url.lastPathComponent, &current, AT_SYMLINK_NOFOLLOW) == 0,
+            current.st_dev == info.st_dev, current.st_ino == info.st_ino
+        else { throw PrivateFileError.unsafeLocation }
+    }
+    /// The file flush must succeed before rename. A subsequent directory flush can fail after publication.
     @discardableResult static package func write(
         _ data: Data, to url: URL, maximumBytes: Int, temporaryPrefix: String = ".texttank-",
         temporarySuffix: String = "", synchronize: (Int32) -> Int32 = { fsync($0) },
+        synchronizeDirectory: ((Int32) -> Int32)? = nil,
         beforeCommit: () throws -> Void = {}, retainingDescriptor: Bool = false,
         setMode: (Int32, mode_t) -> Int32 = { fchmod($0, $1) }, closeFile: (Int32) -> Int32 = { close($0) }
     ) throws -> Int32? {
@@ -325,6 +369,11 @@ package enum PrivateFileStore {
         else { throw PrivateFileError.unsafeLocation }
         guard renameat(directory, temporary, directory, url.lastPathComponent) == 0 else {
             throw FileOperationFailure(errno, operation: "replace file", path: url.path)
+        }
+        if let synchronizeDirectory, synchronizeDirectory(directory) != 0 {
+            throw PublishedFileSyncFailure(
+                failure: .init(
+                    errno, operation: "synchronize containing folder", path: url.deletingLastPathComponent().path))
         }
         if retainingDescriptor {
             descriptorOpen = false // Ownership transfers to the slotted journal, which closes it.

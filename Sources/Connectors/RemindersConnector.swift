@@ -62,7 +62,7 @@ enum ReminderConnectorError: Error, LocalizedError {
         case .journalFailed(let batch, let underlying):
             let confirmed = batch.rows.filter { $0.status == .confirmed }.count
             return
-                "The export journal could not be updated (\(underlying.localizedDescription)). \(confirmed) of \(batch.rows.count) items were confirmed before sending stopped. Export History may show the last attempted item as uncertain; check Reminders before sending again."
+                "The export journal could not be confirmed (\(underlying.localizedDescription)). \(confirmed) of \(batch.rows.count) items were confirmed before sending stopped. Export History may show the last attempted item as uncertain; check Reminders before sending again."
         }
     }
 }
@@ -275,6 +275,13 @@ actor ReminderJournalFile {
         return stored.batch
     }
 
+    /// A previous run may have published every acknowledgement and then failed to sync its directory.
+    func confirmLoadedFile() throws {
+        guard let identity else { throw ReminderConnectorError.invalidBatch }
+        try PrivateFileStore.confirmExistingWrite(at: url) { info in
+            info.st_dev == identity.device && info.st_ino == identity.inode
+        }
+    }
     /// Makes the batch durable with row `index` as it is now. Returns after the bytes are synced.
     func record(_ batch: ReminderBatch, row index: Int? = nil) throws {
         guard descriptor >= 0, let index, slots.indices.contains(index) else { return try replace(with: batch) }
@@ -287,7 +294,10 @@ actor ReminderJournalFile {
         var bytes = content
         bytes.append(Data(repeating: 0x20, count: slot.count - content.count))
         try Self.write(bytes, to: descriptor, at: slot.lowerBound)
-        guard fsync(descriptor) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard fsync(descriptor) == 0 else {
+            throw PublishedFileSyncFailure(
+                failure: .init(errno, operation: "synchronize updated export record", path: url.path))
+        }
     }
 
     private func replace(with batch: ReminderBatch) throws {
@@ -302,7 +312,8 @@ actor ReminderJournalFile {
         guard
             let created = try PrivateFileStore.write(
                 layout.data, to: url, maximumBytes: ReminderJournal.maximumBytes,
-                temporaryPrefix: "", temporarySuffix: ".pending",
+                temporaryPrefix: "", temporarySuffix: ".pending", synchronize: PrivateFileStore.flushToStorage,
+                synchronizeDirectory: PrivateFileStore.flushToStorage,
                 beforeCommit: {
                     guard try ReminderJournal.identity(atPath: self.url.path) == expectedIdentity else {
                         throw ReminderConnectorError.invalidBatch
@@ -449,6 +460,7 @@ actor ReminderJournalFile {
             guard batch.destinationID == destinationID, batch.rows.map(\.title) == rows else {
                 throw ReminderConnectorError.invalidBatch
             }
+            if batch.rows.allSatisfy({ $0.status == .confirmed }) { try await journal.confirmLoadedFile() }
         } else {
             batch = ReminderBatch(
                 id: batchID, destinationID: destinationID, destinationTitle: selected.title,
@@ -488,7 +500,7 @@ actor ReminderJournalFile {
                 batch.rows[index].status = .uncertain
                 batch.rows[index].message = error.localizedDescription
             }
-            // If this write fails, disk retains uncertain, never a replayable pending row. The
+            // After an acknowledgement failure, the visible record may be uncertain or updated. The
             // write is not retried; the in-memory outcome travels with the error.
             do { try await journal.record(batch, row: index) } catch {
                 throw ReminderConnectorError.journalFailed(batch, underlying: error)

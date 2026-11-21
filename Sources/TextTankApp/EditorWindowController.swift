@@ -36,11 +36,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     func appendStatusMessage(_ suffix: String) { setStatusMessage(fullStatusText + suffix) }
     private func updateLeadingStatus() {
-        let compact = recoveryStatusFailed ? "⚠︎ Recovery copy not written" : compactStatusText
+        let compact = compactStatusText
         statusDetails.setLeadingStatus(statusLabel, fullText: fullStatusText, compactText: compact)
         if recoveryStatusFailed {
             statusLabel.toolTip =
-                "\(fullStatusText)\n\nCrash-recovery copies of this document are not being written. Save the document to keep your work. This message clears when a recovery copy is written again."
+                "\(fullStatusText)\n\nSave the document to keep your work. This message clears when a recovery copy is written again."
         } else {
             statusLabel.toolTip = fullStatusText == compact ? nil : fullStatusText
         }
@@ -359,12 +359,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             }
         }
     }
-    func showRecoveryStatus(_ message: String, failed: Bool) {
+    func showRecoveryStatus(_ message: String, failed: Bool, failureSummary: String = "⚠︎ Recovery copy not written") {
         transientStatus = nil
         recoveryStatusFailed = failed
         if failed, fullStatusText != message { Announce.say(message, from: hostWindow) }
         let compact = (document as? TextDocument)?.recoveredOrigin == nil ? message : "Recovered copy — Save As to keep"
-        applyStatusMessage(message, compactMessage: compact)
+        applyStatusMessage(message, compactMessage: failed ? failureSummary : compact)
         // The failure is carried by the words and the symbol; full-strength label colour keeps it
         // readable in both appearances, where small red text was not.
         statusLabel.textColor = failed ? .labelColor : .secondaryLabelColor

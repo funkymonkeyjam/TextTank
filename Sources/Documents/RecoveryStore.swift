@@ -242,6 +242,9 @@ final package class RecoveryStore: @unchecked Sendable {
                 guard existing.text.utf8.elementsEqual(snapshot.text.utf8), existing.format == snapshot.format,
                     existing.originalURL.map({ Data($0.utf8) }) == snapshot.originalURL.map({ Data($0.utf8) })
                 else { throw RecoveryError.staleRevision }
+                if knownRevision(of: snapshot.id) != snapshot.revision {
+                    try PrivateFileStore.confirmExistingWrite(at: destination)
+                }
                 remember(snapshot.id, revision: snapshot.revision)
                 return
             }
@@ -363,7 +366,8 @@ final package class RecoveryStore: @unchecked Sendable {
         do {
             try PrivateFileStore.write(
                 data, to: destination, maximumBytes: Self.maximumSnapshotBytes,
-                temporaryPrefix: "", temporarySuffix: ".pending")
+                temporaryPrefix: "", temporarySuffix: ".pending", synchronize: PrivateFileStore.flushToStorage,
+                synchronizeDirectory: PrivateFileStore.flushToStorage)
         } catch PrivateFileError.unsafeLocation { throw RecoveryError.unsafeLocation }
     }
     private func read(_ url: URL, expectedID: UUID) throws -> RecoverySnapshot {
