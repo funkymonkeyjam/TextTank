@@ -139,3 +139,15 @@ physical/platform limits remain in exact validation evidence.
 Run `scripts/test-bundle.sh` after `scripts/build.sh` with the same configuration. The normal native suite exercises the Debug bundle and the review package wrapper exercises Release. The check verifies the expanded property list, copied resources, compiled localization catalog, embedded Scintilla linkage and strict signature. It gives the actual bundled executable a disposable UTF-8 file and allows 20 seconds for successful exit.
 
 The executable accepts `--smoke-test FILE` as its first two arguments. It opens that file through the application’s document controller, constructs its editor window offscreen, writes one JSON line with the opened path and editor byte count, and exits. It uses a newly created private support directory and omits the smoke document from Recent Documents.
+
+## Bundled command-line editor
+
+Choose **TextTank → Install tt Command-Line Tool…** and select a directory you own. TextTank makes a symlink to the helper inside the app. You can also run `/Applications/TextTank.app/Contents/Helpers/tt` directly. To use the short name, choose a directory that is already on your shell’s PATH.
+
+- `tt "notes file.txt:12"` opens a local text file at line 12. An existing filename ending with a colon and digits takes precedence.
+- `printf 'first line\n' | tt -` opens UTF-8 standard input as an unsaved document.
+- `tt --wait notes.txt` waits until that document closes. For a single Git invocation, use `GIT_EDITOR='tt --wait' git commit`.
+- `tt --diff before.txt after.txt` compares two local files.
+- `tt -- -leading-dash.txt` opens a filename beginning with a dash.
+
+The app and tool must run in the same macOS login session. The tool reports open, decode and comparison errors on standard error and exits unsuccessfully. Closing a different document leaves a waiting invocation active.

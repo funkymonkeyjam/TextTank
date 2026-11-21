@@ -22,7 +22,7 @@ def resolved_settings(root, configuration):
     queries = [(['-project', 'TextTank.xcodeproj', '-alltargets',
                  'SYMROOT=' + str(root / 'build/DerivedData/Build/Products'),
                  'OBJROOT=' + str(root / 'build/DerivedData/Build/Intermediates.noindex')],
-                {'TextTank', 'NativeSearch', 'EditorBridge', 'TextTankCore', 'TextTankRuntime'}),
+                {'TextTank', 'NativeSearch', 'EditorBridge', 'TextTankCore', 'TextTankRuntime', 'tt'}),
                (['-project', 'Vendor/scintilla/cocoa/Scintilla/Scintilla.xcodeproj', '-scheme', 'Scintilla',
                  '-derivedDataPath', str(root / 'build/ScintillaDerived' / configuration),
                  'ARCHS=' + identity['architecture'], 'ONLY_ACTIVE_ARCH=YES',

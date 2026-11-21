@@ -165,6 +165,17 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
         try resolved.validate(requiringValues: true)
         return resolved
     }
+    package func requireSuppliedText() throws {
+        guard (input == .selection || input == .document), output == .editor,
+            previewBeforeApply != true,
+            !steps.contains(where: { $0.askForFind == true || $0.askForReplacement == true })
+        else {
+            throw AutomationError.invalid(
+                "This automation requires app interaction or another input or output. Choose an editor-text automation without prompts or preview."
+            )
+        }
+    }
+
     package func transform(_ input: String, control: AutomationRunControl? = nil) throws -> String {
         try validate(requiringValues: true)
         try control?.checkCancellation()
@@ -880,6 +891,34 @@ package struct AutomationLibrary: VersionedLibrary, Equatable {
     static package let maximumBytes = SizePolicy.standard.automationLibrary
     package var version: Int
     package var workflows: [AutomationDefinition]
+    /// Reads existing versioned bytes through the same private-parent policy as the manager.
+    /// A missing library is distinct from an unreadable or unsupported existing one.
+    static package func readIfPresent(at url: URL) throws -> Self? {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else {
+            if errno == ENOENT { return nil }
+            throw FileOperationFailure(errno, operation: "inspect saved automations", path: url.path)
+        }
+        return try decode(AutomationFileInput.readData(url, limit: maximumBytes, parent: .strict))
+    }
+
+    /// External text consumers do not install the presets, create a configuration, or write back decoded data.
+    static package func forSuppliedText(at url: URL = AppStorage.url(.automations)) throws -> Self {
+        try readIfPresent(at: url) ?? Self(workflows: AutomationDefinition.firstRunPresets)
+    }
+
+    package func namedForSuppliedText(_ name: String) throws -> AutomationDefinition {
+        let matches = workflows.filter { $0.name == name }
+        guard matches.count == 1, let workflow = matches.first else {
+            throw AutomationError.invalid(
+                matches.isEmpty
+                    ? "No saved automation has that name."
+                    : "More than one saved automation has that name. Rename one in Manage Automations.")
+        }
+        try workflow.requireSuppliedText()
+        return workflow
+    }
+
     package func validate() throws {
         guard version == 1 else { throw AutomationError.invalid("Unsupported library version \(version).") }
         guard workflows.count <= 200 else { throw AutomationError.invalid("At most 200 automations are supported.") }

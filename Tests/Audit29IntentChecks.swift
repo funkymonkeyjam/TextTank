@@ -80,6 +80,7 @@ import NativeSearch
             }
             let expected: AnyObject?
             switch path[0] {
+            case 0 where row["action"] == "installCommandLine:": expected = composition
             case 0: expected = composition.settings
             case 1: expected = composition.workspace
             case 2: expected = composition.workspaceBrowser

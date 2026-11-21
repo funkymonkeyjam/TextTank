@@ -199,6 +199,7 @@ import AppKit
         }
     }
     func applicationDidBecomeActive(_ notification: Notification) {
+        startForegroundInterfaceIfNeeded()
         let front = currentDocument
         front?.externalFile.setApplicationActive(true)
         front?.externalFile.check(prioritized: true)
@@ -215,7 +216,7 @@ import AppKit
     }
 
     private var replacementRetentionTimer: DispatchSourceTimer?
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    private func startReplacementRetention() {
         let cleanup = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "TextTank.folder-replacement-retention", qos: .utility))
         cleanup.schedule(deadline: .now() + 2, repeating: .seconds(86_400), leeway: .seconds(120))
         cleanup.setEventHandler {
@@ -228,6 +229,73 @@ import AppKit
         }
         replacementRetentionTimer = cleanup
         cleanup.resume()
+    }
+    private lazy var commandLine = CommandLineController { [weak self] in self?.compare }
+    @objc func handleCommandLine(_ notice: Notification) {
+        guard let raw = notice.userInfo?["request"] as? String,
+            let id = UUID(uuidString: raw)
+        else { return }
+        Task { await commandLine.accept(id) }
+    }
+    @objc func installCommandLine(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.title = "Install the tt Command-Line Tool"
+        panel.message = "Choose a folder you own for a link to TextTank’s tt tool."
+        panel.prompt = "Install"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+        panel.begin { [weak self] result in
+            guard result == .OK, let url = panel.url else { return }
+            do {
+                let path = try CommandLineController.install(
+                    helper: Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/tt"), in: url)
+                self?.knownWorkspace?.showTabMessage("Installed tt at " + path.path)
+            } catch { TTAlert.present(error) }
+        }
+    }
+    private lazy var textServices = TextServices(newDocument: Self.openAutomationOutput)
+
+    func installTextServices() { NSApp.servicesProvider = textServices }
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        installTextServices()
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(handleCommandLine(_:)),
+            name: TTInvocation.wakeName, object: String(ProcessInfo.processInfo.processIdentifier),
+            suspensionBehavior: .deliverImmediately)
+        NSAppleEventManager.shared().setEventHandler(
+            self, andSelector: #selector(handleOpenTextURL(_:reply:)), forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL))
+    }
+    @objc func handleOpenTextURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        do {
+            guard let raw = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue else {
+                throw TextOpenRequest.invalidURL
+            }
+            _ = try TextOpenRequest(raw).open()
+        } catch {
+            reply.setParam(NSAppleEventDescriptor(int32: Int32(paramErr)), forKeyword: keyErrorNumber)
+            reply.setParam(NSAppleEventDescriptor(string: error.localizedDescription), forKeyword: keyErrorString)
+            knownWorkspace?.showTabMessage(error.localizedDescription)
+        }
+    }
+    private enum LaunchInterface { case waitingForLaunch, waitingForForeground, started }
+    private var launchInterface = LaunchInterface.waitingForLaunch
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard launchInterface == .waitingForLaunch else { return }
+        launchInterface = .waitingForForeground
+        if smokeFile != nil || NSApp.isActive { startForegroundInterfaceIfNeeded() }
+    }
+
+    /// A background App Intent can finish entirely inside the app's normal process without
+    /// displaying startup alerts, restoring tabs, seeding manager presets or starting a session timer.
+    private func startForegroundInterfaceIfNeeded() {
+        guard launchInterface == .waitingForForeground else { return }
+        launchInterface = .started
         buildMenus()
         settings.apply()
         searchController.onCommand = { [weak self] options, action, editor in
@@ -287,7 +355,7 @@ import AppKit
             openSmokeDocument(smokeFile)
             return
         }
-        NSApp.activate()
+        startReplacementRetention()
         TextDocument.recovery.scanForLaunch { [weak self] result in
             self?.launchInventory = result
             self?.deliverLaunchInventory()
@@ -302,7 +370,10 @@ import AppKit
         else { return }
         launchInventory = nil
         var sessionNotices: [String] = []
-        restoreLaunchDocuments(review: { originals in self.restoreRecovery(result, originals: originals) }) {
+        restoreLaunchDocuments(
+            createUntitledIfEmpty: !CommandLine.arguments.contains("--texttank-external-request"),
+            review: { originals in self.restoreRecovery(result, originals: originals) }
+        ) {
             sessionNotices.append(contentsOf: $0)
         }
         showSessionNotices(sessionNotices)
@@ -318,7 +389,9 @@ import AppKit
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window) { _ in }
     }
-    func restoreLaunchDocuments(review: ([URL: TextDocument]) -> Void, report: ([String]) -> Void) {
+    func restoreLaunchDocuments(
+        createUntitledIfEmpty: Bool = true, review: ([URL: TextDocument]) -> Void, report: ([String]) -> Void
+    ) {
         let session = AutomaticSession()
         automaticSession = session
         var originals = [URL: TextDocument]()
@@ -340,7 +413,7 @@ import AppKit
             }
         }
         review(originals)
-        if NSDocumentController.shared.documents.isEmpty { newDocument(nil) }
+        if createUntitledIfEmpty && NSDocumentController.shared.documents.isEmpty { newDocument(nil) }
         session.start { [weak self] in self?.checkpointSession() }
     }
     func checkpointSession() {
@@ -524,6 +597,9 @@ import AppKit
         app.addItem(
             title: "Settings…", action: #selector(SettingsController.showSettings(_:)), keyEquivalent: ",",
             target: settings)
+        app.addItem(
+            title: "Install tt Command-Line Tool…", action: #selector(installCommandLine(_:)), keyEquivalent: "",
+            target: self)
         app.addItem(.separator())
         // The standard application items. AppKit fills the Services menu.
         let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")

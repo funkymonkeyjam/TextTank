@@ -53,3 +53,13 @@ package enum TextTankApplication {
         withExtendedLifetime(delegate) {}
     }
 }
+
+extension TextTankApplication {
+    /// Explicit Shortcuts file input follows the same bounded local-text open path as the URL and tt tool.
+    @MainActor package static func openSuppliedTextFile(_ url: URL) throws {
+        guard url.isFileURL else { throw TextOpenRequest.invalidURL }
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        _ = try TextOpenRequest(path: url.path, line: nil).open()
+    }
+}

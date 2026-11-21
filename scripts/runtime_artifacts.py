@@ -36,7 +36,7 @@ def is_input(name):
     path = Path(name)
     if '__pycache__' in path.parts or path.name == '.DS_Store':
         return False
-    if path.parts[0] in ('Sources', 'Resources', 'scripts'):
+    if path.parts[0] in ('Sources', 'Resources', 'scripts', 'Tools'):
         return True
     if path.parts[0] == 'TextTank.xcodeproj':
         return path.suffix in ('.pbxproj', '.xcscheme', '.xcconfig', '.xcsettings', '.plist')
@@ -55,7 +55,7 @@ def tracked_inputs(root):
 
 def inputs(root, require_checkout=False):
     names = {'Dependencies.lock.json'}
-    for directory in ('Sources', 'Resources', 'scripts', 'TextTank.xcodeproj'):
+    for directory in ('Sources', 'Resources', 'scripts', 'Tools', 'TextTank.xcodeproj'):
         for path in (root / directory).rglob('*'):
             name = str(path.relative_to(root))
             if (path.is_file() or path.is_symlink()) and is_input(name):
