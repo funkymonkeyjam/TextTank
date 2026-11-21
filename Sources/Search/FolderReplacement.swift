@@ -199,11 +199,11 @@ package enum FolderReplacement {
         package let message: String
     }
     static package func undo(
-        manifest: URL, excluding openFiles: Set<URL> = [],
+        manifest: URL, reviewed: FolderReplacementBatch.Snapshot? = nil, excluding openFiles: Set<URL> = [],
         cancellation: FolderSearchCancellation = FolderSearchCancellation(), beforeCommit: ((URL) -> Void)? = nil
     ) throws -> [UndoOutcome] {
         let batch = try FolderReplacementBatch(reopening: manifest)
-        let snapshot = try batch.snapshotForUndo()
+        let snapshot = try batch.snapshotForUndo(reviewed: reviewed)
         let excluded = Set(openFiles.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
         return snapshot.entries.map { entry, state in
             let url = URL(fileURLWithPath: entry.path)

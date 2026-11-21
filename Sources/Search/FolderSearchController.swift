@@ -54,6 +54,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     let table = ActivatingTableView(), details = NSTextView()
     private var folder: URL?
     private var searchedFolder: URL?
+    private weak var recoveryHistory: FolderReplacementHistoryPanel?
     private var replaceButton: NSButton!
     private(set) var lastReplacementOutcomes: [FolderReplacementOutcome] = []
     private var matches: [FolderSearchMatch] = []
@@ -148,7 +149,9 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         let history = NSButton(title: "Replacement Report", target: self, action: #selector(showReplacementReport(_:)))
         let undo = NSButton(
             title: "Undo Last Folder Replace…", target: self, action: #selector(undoLastFolderReplace(_:)))
-        let replacements = NSStackView(views: [replacementField, replaceButton, history, undo])
+        let review = NSButton(title: "Review Backups…", target: self, action: #selector(showRecoveryBatches(_:)))
+        let replacements = NSStackView(views: [replacementField, replaceButton])
+        let recoveryActions = NSStackView(views: [history, undo, review])
         for (id, title, width) in [
             ("file", "File", 300.0), ("line", "Line:Column", 100.0), ("preview", "Preview", 500.0)
         ] {
@@ -196,7 +199,8 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         preferenceRow.spacing = 8
         preferenceNotice.isHidden = preferences.state.error == nil
         let root = NSStackView(views: [
-            location, queryField, replacements, filterField, semantics, options, preferenceRow, status, results,
+            location, queryField, replacements, recoveryActions, filterField, semantics, options, preferenceRow, status,
+            results,
             detailScroll
         ])
         root.orientation = .vertical
@@ -205,7 +209,8 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         root.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         window.contentView = root
         for view in [
-            location, queryField, replacements, filterField, semantics, options, preferenceRow, status, results,
+            location, queryField, replacements, recoveryActions, filterField, semantics, options, preferenceRow, status,
+            results,
             detailScroll
         ] { view.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true }
         detailScroll.heightAnchor.constraint(equalToConstant: 100).isActive = true
@@ -493,6 +498,11 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
             self.finish()
         }
     }
+    @objc func showRecoveryBatches(_ sender: Any?) {
+        let panel = recoveryHistory ?? FolderReplacementHistoryPanel()
+        recoveryHistory = panel
+        panel.show()
+    }
     @objc func undoLastFolderReplace(_ sender: Any?) {
         guard cancellation == nil, let window, window.attachedSheet == nil else { return }
         let flag = FolderSearchCancellation(), token = UUID()
@@ -519,24 +529,25 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                 self.finish()
             }
             do {
-                let preview = try await Task.detached(priority: .userInitiated) { () throws -> (URL, Int)? in
+                let preview = try await Task.detached(priority: .userInitiated) {
+                    () throws -> (URL, FolderReplacementBatch.Snapshot)? in
                     guard let manifest = try FolderReplacementBatch.latestManifest() else { return nil }
-                    return (
-                        manifest, try FolderReplacementBatch.read(manifest).entries.filter { $0.1 != .restored }.count
-                    )
+                    return (manifest, try FolderReplacementBatch.read(manifest))
                 }.value
                 guard self.generation == token, !flag.isCancelled else { return }
-                guard let (manifest, pendingCount) = preview, pendingCount > 0 else {
+                let pending = preview?.1.entries.filter { $0.1 != .restored } ?? []
+                guard let (manifest, reviewed) = preview, !pending.isEmpty else {
                     self.status.stringValue = "There are no files to restore in the last folder replacement."
                     self.lastOutcome = .noReplacementReport
                     return
                 }
                 let alert = TTAlert()
                 alert.messageText = "Undo Last Folder Replace?"
-                let total = String.localizedStringWithFormat(
-                    pendingCount == 1 ? "%@ file" : "%@ files", Strings.number(pendingCount))
+                let total = Strings.count(pending.count, .file)
+                let roots = Set(pending.map { $0.0.root }).sorted()
+                let locations = roots.prefix(3).joined(separator: "\n") + (roots.count > 3 ? "\n…" : "")
                 alert.informativeText =
-                    "Check \(total) in the last replacement batch. TextTank restores original bytes and file metadata only where the saved replacement still matches. Open or externally changed files are kept and listed in the report."
+                    "Check \(total) from \(reviewed.created.formatted()).\n\n\(locations)\n\nTextTank restores original bytes and file metadata only where the saved replacement still matches. Open or externally changed files are kept and listed in the report."
                 let restore = alert.addButton(withTitle: "Restore Original Files")
                 restore.identifier = .init("folder.undo.confirm")
                 restore.hasDestructiveAction = true
@@ -553,7 +564,8 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                 self.status.stringValue = "Restoring original files…"
                 let openFiles = Set(NSDocumentController.shared.documents.compactMap(\.fileURL))
                 let restored = try await Task.detached(priority: .userInitiated) {
-                    try FolderReplacement.undo(manifest: manifest, excluding: openFiles, cancellation: flag)
+                    try FolderReplacement.undo(
+                        manifest: manifest, reviewed: reviewed, excluding: openFiles, cancellation: flag)
                 }.value
                 guard self.generation == token else { return }
                 let count = restored.filter { $0.status == .restored }.count

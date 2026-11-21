@@ -25,10 +25,12 @@ package final class FolderReplacementBatch {
         let state: State
         let entry: Entry?
     }
-    package struct Snapshot {
+    package struct Snapshot: Sendable {
         package let id: UUID
         package let created: Date
         package let entries: [(Entry, State)]
+        let manifestDigest: String
+        let completeTail: Bool
     }
 
     static func canonicalPath(of store: URL) -> String {
@@ -58,13 +60,18 @@ package final class FolderReplacementBatch {
         id = UUID()
         directory = store.appendingPathComponent(id.uuidString, isDirectory: true)
     }
-    init(reopening manifest: URL) throws {
+    init(reopening manifest: URL, retired: Bool = false) throws {
         directory = manifest.deletingLastPathComponent()
-        guard manifest.lastPathComponent == Self.manifestName, let uuid = UUID(uuidString: directory.lastPathComponent),
+        let name = directory.lastPathComponent
+        let identity = retired && name.hasPrefix(".deleting-") ? String(name.dropFirst(".deleting-".count)) : name
+        guard manifest.lastPathComponent == Self.manifestName, let uuid = UUID(uuidString: identity),
+            name == (retired ? ".deleting-" : "") + uuid.uuidString,
             Self.canonicalPath(of: directory.deletingLastPathComponent())
                 == Self.canonicalPath(of: AppStorage.url(.folderReplacements))
         else { throw PrivateFileError.unsafeLocation }
         id = uuid
+        let storeFD = try Self.openStore()
+        defer { close(storeFD) }
         let parent = try PrivateFileStore.directoryDescriptor(for: manifest)
         defer { close(parent) }
         let fd = openat(parent, Self.manifestName, O_RDWR | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
@@ -85,15 +92,29 @@ package final class FolderReplacementBatch {
         }
         stream = fd
     }
-    /// Truncate only a torn, uncommitted final line, after every complete record parsed successfully.
-    func snapshotForUndo() throws -> Snapshot {
+    func verifiesManifest(in directory: Int32) -> Bool {
+        var locked = stat(), current = stat()
+        return fstat(stream, &locked) == 0
+            && fstatat(directory, Self.manifestName, &current, AT_SYMLINK_NOFOLLOW) == 0
+            && locked.st_dev == current.st_dev && locked.st_ino == current.st_ino
+    }
+    func lockedSnapshot() throws -> Snapshot { try Self.decode(lockedBytes(), id: id) }
+    private func lockedBytes() throws -> Data {
         var info = stat()
         guard fstat(stream, &info) == 0, info.st_size > 0, info.st_size <= Self.maximumManifestBytes,
             lseek(stream, 0, SEEK_SET) == 0
         else { throw PrivateFileError.unsafeLocation }
-        let bytes = try FolderReplacement.read(
+        return try FolderReplacement.read(
             stream, size: Int(info.st_size), cancellation: FolderSearchCancellation(), path: manifest.path)
-        let snapshot = try Self.decode(bytes, manifest: manifest)
+    }
+    /// Truncate only a torn, uncommitted final line, after every complete record parsed successfully.
+    func snapshotForUndo(reviewed: Snapshot?) throws -> Snapshot {
+        let bytes = try lockedBytes()
+        let snapshot = try Self.decode(bytes, id: id)
+        if let reviewed, snapshot.manifestDigest != reviewed.manifestDigest {
+            throw FolderSearchError.invalidRequest(
+                "The selected batch changed after review. Open Undo again to review its current files.")
+        }
         guard let last = bytes.lastIndex(of: 10) else { throw PrivateFileError.unsafeLocation }
         let end = off_t(last + 1)
         guard (end == bytes.count || ftruncate(stream, end) == 0), lseek(stream, 0, SEEK_END) == end else {
@@ -101,22 +122,39 @@ package final class FolderReplacementBatch {
         }
         return snapshot
     }
+    static func openStore() throws -> Int32 {
+        let store = AppStorage.url(.folderReplacements)
+        let fd = try PrivateFileStore.directoryDescriptor(for: store.appendingPathComponent(manifestName))
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_uid == getuid(), info.st_mode & 0o077 == 0 else {
+            close(fd)
+            throw PrivateFileError.unsafeLocation
+        }
+        return fd
+    }
     package static func latestManifest() throws -> URL? {
+        try manifests().first
+    }
+    package static func manifests() throws -> [URL] { try listing().map { $0.1 } }
+    package static func listing() throws -> [(Date, URL)] {
         let store = AppStorage.url(.folderReplacements)
         let children: [URL]
         do {
+            let storeFD = try openStore()
+            defer { close(storeFD) }
             children = try FileManager.default.contentsOfDirectory(
                 at: store, includingPropertiesForKeys: [.creationDateKey])
-        } catch  where error.isFileNotFound { return nil }
-        let candidates = try children.filter { UUID(uuidString: $0.lastPathComponent) != nil }.map { child in
-            let values = try child.resourceValues(forKeys: [.creationDateKey, .isDirectoryKey, .isSymbolicLinkKey])
-            guard values.isDirectory == true, values.isSymbolicLink == false, let created = values.creationDate
-            else { throw PrivateFileError.unsafeLocation }
-            return (created, child)
+        } catch  where error.isFileNotFound { return [] }
+        let candidates = children.filter { UUID(uuidString: $0.lastPathComponent) != nil }.map { child in
+            let values = try? child.resourceValues(forKeys: [.creationDateKey, .isDirectoryKey, .isSymbolicLinkKey])
+            // Unknown entries remain visible and take precedence in Last so it never
+            // silently applies to an older batch when the newest cannot be verified.
+            let date = values?.isDirectory == true && values?.isSymbolicLink == false ? values?.creationDate : nil
+            return (date ?? Date.distantFuture, child)
         }
-        return candidates.max {
-            $0.0 == $1.0 ? $0.1.lastPathComponent < $1.1.lastPathComponent : $0.0 < $1.0
-        }?.1.appendingPathComponent(manifestName)
+        return candidates.sorted {
+            $0.0 == $1.0 ? $0.1.lastPathComponent > $1.1.lastPathComponent : $0.0 > $1.0
+        }.map { ($0.0, $0.1.appendingPathComponent(manifestName)) }
     }
     deinit { if stream >= 0 { close(stream) } }
     private func openManifest() throws {
@@ -225,16 +263,19 @@ package final class FolderReplacementBatch {
     }
     package static func read(_ manifest: URL) throws -> Snapshot {
         let bytes = try PrivateFileStore.read(manifest, maximumBytes: maximumManifestBytes)
-        return try decode(bytes, manifest: manifest)
+        guard let id = UUID(uuidString: manifest.deletingLastPathComponent().lastPathComponent) else {
+            throw PrivateFileError.unsafeLocation
+        }
+        return try decode(bytes, id: id)
     }
-    private static func decode(_ bytes: Data, manifest: URL) throws -> Snapshot {
+    private static func decode(_ bytes: Data, id: UUID) throws -> Snapshot {
         var lines = bytes.split(separator: 10, omittingEmptySubsequences: false)
         // The writer syncs each complete line before acting on it. Ignore an uncommitted tail.
         if !lines.isEmpty { lines.removeLast() }
         guard let first = lines.first else { throw PrivateFileError.unsafeLocation }
         let decoder = JSONDecoder()
         let header = try decoder.decode(Header.self, from: Data(first))
-        guard header.version == 1, header.id.uuidString == manifest.deletingLastPathComponent().lastPathComponent
+        guard header.version == 1, header.id == id
         else {
             throw FolderSearchError.invalidRequest("The folder replacement manifest version or identity is invalid.")
         }
@@ -257,6 +298,8 @@ package final class FolderReplacementBatch {
                     "The folder replacement manifest contains an invalid transition.")
             }
         }
-        return Snapshot(id: header.id, created: header.created, entries: entries.filter { $0.1 != .abandoned })
+        return Snapshot(
+            id: header.id, created: header.created, entries: entries.filter { $0.1 != .abandoned },
+            manifestDigest: FolderSearch.sha256Hex(bytes), completeTail: bytes.last == 10)
     }
 }

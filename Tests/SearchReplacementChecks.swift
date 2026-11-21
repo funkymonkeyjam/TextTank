@@ -93,6 +93,117 @@ import Darwin
             "repeated Undo does not revisit older batches or overwrite external edits")
     }
 
+    static func historyCases(in root: URL) async throws {
+        let privateSupport = try IsolatedSupportDirectory("TextTankReplacementPolicy")
+        defer { privateSupport.restore() }
+        func make(_ name: String, batch: FolderReplacementBatch = FolderReplacementBatch()) async throws -> (URL, URL) {
+            let dir = root.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
+            let file = dir.appendingPathComponent("owned.txt")
+            try Data("before".utf8).write(to: file)
+            let matches = try await FolderSearch.search(FolderSearchRequest(directory: dir, query: "before")).matches
+            var options = SearchOptions()
+            options.query = "before"
+            options.replacement = "after"
+            let result = try FolderReplacement.replace(directory: dir, matches: matches, options: options, batch: batch)
+            try require(result.first?.status == .replaced, "owned batch for " + name)
+            return (batch.manifest, file)
+        }
+        let future = Date().addingTimeInterval(8 * 86400)
+        let (a, original) = try await make("history-selected")
+        let saved = try FolderReplacementBatch.read(a)
+        check(
+            try FolderReplacementHistory.retention() == .keep
+                && FolderReplacementHistory.prune(now: future).removed == 0,
+            "default retention preserves even an old completed batch")
+        _ = try FolderReplacement.undo(manifest: a)
+        rejects("a stale Undo confirmation cannot restore a newly changed batch") {
+            _ = try FolderReplacement.undo(manifest: a, reviewed: saved)
+        }
+        rejects("a stale review cannot delete a changed batch") {
+            try FolderReplacementHistory.delete(a, reviewed: saved)
+        }
+        let current = try FolderReplacementBatch.read(a)
+        let unrelated = a.deletingLastPathComponent().appendingPathComponent("unrelated-note.txt")
+        try Data("retain".utf8).write(to: unrelated)
+        rejects("unknown members protect a private directory from deletion") {
+            try FolderReplacementHistory.delete(a, reviewed: current)
+        }
+        check(
+            try Data(contentsOf: unrelated) == Data("retain".utf8) && Data(contentsOf: original) == Data("before".utf8),
+            "unspecified private item and source file survive refusal")
+        try FileManager.default.removeItem(at: unrelated)
+        try FolderReplacementHistory.delete(a, reviewed: current)
+        check(
+            try !FileManager.default.fileExists(atPath: a.deletingLastPathComponent().path)
+                && Data(contentsOf: original) == Data("before".utf8),
+            "explicit deletion removes only the confirmed private batch")
+        let (b, user) = try await make("history-aged")
+        let (broken, untouched) = try await make("history-incomplete")
+        let marker = FileHandle(forWritingAtPath: broken.path)!
+        _ = try marker.seekToEnd()
+        try marker.write(contentsOf: Data("{".utf8))
+        try marker.close()
+        var active: FolderReplacementBatch? = FolderReplacementBatch()
+        let (inUse, activeFile) = try await make("history-in-use", batch: active!)
+        try FolderReplacementHistory.setRetention(.week, replacing: .keep)
+        check(try FolderReplacementHistory.retention() == .week, "retention choice survives a fresh disk read")
+        rejects("stale retention controls keep the newer preference") {
+            try FolderReplacementHistory.setRetention(.month, replacing: .keep)
+        }
+        check(
+            try FolderReplacementHistory.prune().removed == 0 && FileManager.default.fileExists(atPath: b.path),
+            "in-period originals survive scheduled cleanup")
+        let report = try FolderReplacementHistory.prune(now: future)
+        check(
+            try report.removed == 1 && !FileManager.default.fileExists(atPath: b.path)
+                && FileManager.default.fileExists(atPath: broken.path)
+                && FileManager.default.fileExists(atPath: inUse.path)
+                && Data(contentsOf: user) == Data("after".utf8) && Data(contentsOf: untouched) == Data("after".utf8),
+            "configured age removes only the old complete batch and retains interrupted and in-use records")
+        withExtendedLifetime(active) {}
+        active = nil
+        let repaired = try FolderReplacementHistory.prune(now: future)
+        check(
+            try repaired.removed == 1 && !FileManager.default.fileExists(atPath: inUse.path)
+                && Data(contentsOf: activeFile) == Data("after".utf8),
+            "later cleanup succeeds after the writer releases its batch")
+        let (interrupted, currentFile) = try await make("history-delete-interrupted")
+        let dir = interrupted.deletingLastPathComponent()
+        let retired = dir.deletingLastPathComponent().appendingPathComponent(".deleting-" + dir.lastPathComponent)
+        try FileManager.default.moveItem(at: dir, to: retired)
+        _ = try FolderReplacementHistory.prune()
+        check(
+            try !FileManager.default.fileExists(atPath: retired.path)
+                && Data(contentsOf: currentFile) == Data("after".utf8),
+            "restart completes an interrupted private deletion without touching the user's file")
+        let protected = AppStorage.url(.folderReplacements).appendingPathComponent("Retention.json")
+        let futurePolicy = Data("{\"version\":9,\"days\":7}".utf8)
+        try futurePolicy.write(to: protected)
+        rejects("future retention schema blocks automatic pruning") {
+            _ = try FolderReplacementHistory.prune(now: future)
+        }
+        rejects("an unsupported policy cannot be silently overwritten") {
+            try FolderReplacementHistory.setRetention(.keep, replacing: .week)
+        }
+        check(
+            try Data(contentsOf: protected) == futurePolicy && FileManager.default.fileExists(atPath: broken.path),
+            "unreadable settings and remaining private backup stay intact")
+        let store = AppStorage.url(.folderReplacements)
+        let preserved = privateSupport.url.appendingPathComponent("owned-store-offline")
+        try FileManager.default.moveItem(at: store, to: preserved)
+        let elsewhere = root.appendingPathComponent("owned-unrelated-directory")
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: false)
+        let sentinel = elsewhere.appendingPathComponent(".deleting-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: sentinel, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(at: store, withDestinationURL: elsewhere)
+        rejects("a linked storage root cannot be pruned") { _ = try FolderReplacementHistory.prune(now: future) }
+        rejects("a linked storage root cannot supply a batch list") { _ = try FolderReplacementBatch.listing() }
+        check(
+            FileManager.default.fileExists(atPath: sentinel.path),
+            "cleanup preserves the separate directory behind a storage alias")
+    }
+
     static func main() async {
         if CommandLine.arguments.count == 3 {
             let argument = URL(fileURLWithPath: CommandLine.arguments[2])
@@ -481,6 +592,7 @@ import Darwin
                     && Data(contentsOf: interruptedFile) == initialBytes,
                 "a newly launched Undo recognizes a prepared entry whose file was never changed")
             try await undoCases(in: root)
+            try await historyCases(in: root)
             Checks.summary { "PASS SearchReplacementChecks: \(Checks.count) assertions" }
         }
     }

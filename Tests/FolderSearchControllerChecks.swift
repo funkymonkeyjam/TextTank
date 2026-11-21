@@ -465,6 +465,69 @@ import NativeSearch
                 coldFolder.lastOutcome == .restored(restored: 1, other: 0)
                     && coldFolder.details.string.contains(closedFile.lastPathComponent),
                 "Undo shows its per-file report")
+            let manifest = try requireValue(byFile["closed.txt"]?.recoveryReport, "reviewed batch location")
+            coldFolder.showRecoveryBatches(nil)
+            let history = try requireValue(
+                FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.FolderReplacementBackups" },
+                "actual recovery history window")
+            let controls = everyView(try requireValue(history.window.contentView, "history contents"))
+            let delete = try requireValue(
+                controls.compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "folder.backups.delete" },
+                "review deletion button")
+            let reviewedFiles = try requireValue(
+                controls.compactMap { $0 as? NSTextView }.first {
+                    $0.accessibilityLabel() == "Files and recovery states"
+                },
+                "reviewed files view")
+            await waitUntil("the fresh history window to read its selected batch") {
+                delete.isEnabled && reviewedFiles.string.contains("closed.txt")
+            }
+            check(
+                reviewedFiles.string.contains("restored") && reviewedFiles.string.contains(closedFile.path),
+                "actual history displays original path and recovered file state")
+            let age: NSPopUpButton = try requireValue(
+                controls.compactMap { $0 as? NSPopUpButton }.first { $0.menu?.item(withTag: 90) != nil }, "retention picker")
+            for accept in [false, true] {
+                age.selectItem(withTag: 7)
+                _ = NSApp.sendAction(age.action!, to: age.target, from: age)
+                let content = try requireValue(history.window.attachedSheet?.contentView, "retention confirmation")
+                let button = try requireValue(
+                    everyView(content).compactMap { $0 as? NSButton }.first {
+                        $0.title == (accept ? "Apply Retention" : "Cancel")
+                    },
+                    "retention choice")
+                button.performClick(nil)
+                await waitUntil("retention choice to settle") {
+                    (try? FolderReplacementHistory.retention()) == (accept ? .week : .keep)
+                        && history.window.attachedSheet == nil && age.isEnabled
+                }
+                check(
+                    try FolderReplacementHistory.retention() == (accept ? .week : .keep),
+                    "only explicit confirmation changes the stored age policy")
+            }
+            await waitUntil("review to settle after retention") {
+                delete.isEnabled && reviewedFiles.string.contains("closed.txt")
+            }
+            for accept in [false, true] {
+                delete.performClick(nil)
+                let content = try requireValue(
+                    history.window.attachedSheet?.contentView, "selected batch deletion sheet")
+                let button = try requireValue(
+                    everyView(content).compactMap { $0 as? NSButton }.first {
+                        $0.title == (accept ? "Delete Batch" : "Cancel")
+                    },
+                    "batch deletion choice")
+                button.performClick(nil)
+                await waitUntil("private deletion choice to settle") {
+                    history.window.attachedSheet == nil
+                        && FileManager.default.fileExists(atPath: manifest.path) != accept
+                }
+                check(
+                    try FileManager.default.fileExists(atPath: manifest.path) != accept
+                        && Data(contentsOf: closedFile) == Data("needle closed\n".utf8),
+                    "deletion confirmation governs only the displayed private batch")
+            }
+            history.close()
             openDocument.close()
             document.close()
             // Package 21 (F293, G391, G400): Find in Folder is a panel that leaves the document
