@@ -1140,7 +1140,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     } else if action == "replaceAll" {
                         self.showTransientStatus("Replaced 0 matches.")
                     } else if action == "replaceOne" {
-                        NSSound.beep()
                         self.showTransientStatus("Select one match of the Find text before replacing it.")
                     } else {
                         NSSound.beep()

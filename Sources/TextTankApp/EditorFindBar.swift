@@ -22,7 +22,7 @@ final class EditorFindBar: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
     private var compact: Bool { bounds.width < 700 }
-    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: compact ? 100 : 50) }
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: compact ? 76 : 50) }
     override func setFrameSize(_ newSize: NSSize) {
         let wasCompact = compact
         super.setFrameSize(newSize)
@@ -44,11 +44,14 @@ final class EditorFindBar: NSView {
                 x += width + gap
             }
         }
+        // A 320 × 200 group leaves 76 points above the editor and status row.
+        // Keep full-size fields and navigation. Small native checkboxes leave room for the count.
+        let flagSize: NSControl.ControlSize = bounds.width < 360 ? .small : .regular
+        for flag in flags where flag.controlSize != flagSize { flag.controlSize = flagSize }
         if compact {
-            row([find, done], flexible: find, y: 76)
-            row([replace] + replaceActions, flexible: replace, y: 51)
-            row([navigation, count, more], flexible: count, y: 26)
-            row(flags, flexible: nil, y: 0)
+            row([find, navigation, done], flexible: find, y: 52)
+            row([replace] + replaceActions + [more], flexible: replace, y: 26)
+            row(flags + [count], flexible: count, y: 0)
         } else {
             // Keep the empty count label's slot stable while the next query is pending.
             let controls: [NSView] = [navigation, more, done]
