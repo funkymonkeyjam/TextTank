@@ -88,19 +88,21 @@ suite_run() {
   local name="$1" log="$2" status=0 limit="${TEXTTANK_SUITE_TIMEOUT:-300}"
   local requires_completion="${TEXTTANK_NATIVE_COMPLETION_REQUIRED:-0}"
   local log_status=0 log_detail
-  local -a pipeline_status
   shift 2
   if [[ "$SUITE_BROKEN" == *" $name "* ]]; then echo "NOT RUN $name: its build failed"; return 0; fi
   if [[ "$1" == build/tests/* || "$1" == "$PWD"/build/tests/* ]]; then requires_completion=1; fi
-  # alarm() survives exec, so the suite itself receives SIGALRM when the limit passes.
-  # Both branches copy PIPESTATUS before any other command can overwrite it (Bash 3.2).
-  if perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or die "cannot run $ARGV[0]: $!\n"' "$limit" "$@" 2>&1 | tee "$log"; then
-    pipeline_status=("${PIPESTATUS[@]}")
-  else
-    pipeline_status=("${PIPESTATUS[@]}")
+  local status_file supervisor=0
+  status_file=$(mktemp "${TMPDIR:-/tmp}/texttank-suite-status.XXXXXX") || return 1
+  python3 scripts/watch-suite.py "$limit" "$log" "$status_file" "$@" || supervisor=$?
+  if ! read -r status log_status < "$status_file"; then
+    status=1
+    log_status=unknown
   fi
-  status=${pipeline_status[0]}
-  log_status=${pipeline_status[1]}
+  rm -f "$status_file"
+  if [[ "$supervisor" != 0 ]]; then
+    echo "$name: suite supervisor exit $supervisor; command exit $status, log exit $log_status" >&2
+    status=$supervisor
+  fi
   log_detail="log $log"
   if [[ "$log_status" != 0 ]]; then
     log_detail="log unavailable: $log (tee exit $log_status; check exit $status)"
