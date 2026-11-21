@@ -190,9 +190,17 @@ import AppKit
     }
     func applicationDidBecomeActive(_ notification: Notification) {
         let front = currentDocument
+        front?.externalFile.setApplicationActive(true)
         front?.externalFile.check(prioritized: true)
         for case let document as TextDocument in NSDocumentController.shared.documents where document !== front {
+            document.externalFile.setApplicationActive(true)
             document.externalFile.check()
+        }
+    }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        for case let document as TextDocument in NSDocumentController.shared.documents {
+            document.externalFile.setApplicationActive(false)
         }
     }
 

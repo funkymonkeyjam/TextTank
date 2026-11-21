@@ -564,6 +564,7 @@ import AppKit
         let adapter = EditorWindowController(document: self)
         addWindowController(adapter)
         adapter.host.register(adapter, document: self)
+        externalFile.setApplicationActive(NSApp.isActive)
         NotificationCenter.default.post(name: .textTankDocumentsDidChange, object: self)
     }
     override func read(from url: URL, ofType typeName: String) throws {

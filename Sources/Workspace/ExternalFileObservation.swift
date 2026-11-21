@@ -28,6 +28,11 @@ import TextTankCore
         return queue
     }()
     private var generation: UInt = 0
+    private var applicationIsActive = NSApp?.isActive == true
+    private lazy var watch = ExternalFileWatch { [weak self] generation in
+        guard let self, self.generation == generation, self.applicationIsActive, self.policy != .ignore else { return }
+        self.check(prioritized: self.document?.presentation?.isActiveTab == true)
+    }
     private weak var inspectionOperation: Operation?
     private(set) var checking = false
     private var checkAgain = false
@@ -59,6 +64,14 @@ import TextTankCore
         check(prioritized: document?.presentation?.isActiveTab == true)
     }
 
+    func setApplicationActive(_ active: Bool) {
+        applicationIsActive = active
+        synchronizeWatch()
+    }
+    private func synchronizeWatch() {
+        let target = applicationIsActive && policy != .ignore && document?.isOpen == true ? document?.diskURL : nil
+        watch.follow(target, generation: generation)
+    }
     private var state: State? {
         guard let document, document.isOpen, let url = document.diskURL, let baseline = document.originalDiskFingerprint
         else { return nil }
@@ -69,6 +82,7 @@ import TextTankCore
     }
     func invalidate() {
         generation &+= 1
+        synchronizeWatch()
         if document?.isClosed == true {
             inspectionOperation?.cancel()
             inspectionOperation = nil
@@ -86,6 +100,7 @@ import TextTankCore
         }
     }
     func check(prioritized: Bool = false) {
+        synchronizeWatch()
         guard policy != .ignore, let expected = state else { return }
         frontmost = frontmost || prioritized
         guard !checking else {
