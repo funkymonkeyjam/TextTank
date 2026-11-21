@@ -38,6 +38,8 @@ package struct EditorSettings: Codable, Equatable {
     package var autoPairEnabled: Bool { autoPair ?? false }
     package var autoIndent: Bool?
     package var autoIndentEnabled: Bool { autoIndent ?? true }
+    package var reopenLastSession: Bool?
+    package var reopensLastSession: Bool { reopenLastSession ?? true }
     package var wrap: Bool
     package var appearance: String
     package var externalChangePolicy: ExternalChangePolicy?
@@ -428,6 +430,14 @@ final package class SettingsStore {
                 throw SettingsError.changedOnDisk
             }
             return latest.diskChangeBehavior == requested ? nil : "\"" + requested.rawValue + "\""
+        }
+    }
+    package func updateLaunchPreference(from displayed: Bool, to requested: Bool, reservedKeys: Set<String>) throws {
+        try updateMember("reopenLastSession", reservedKeys: reservedKeys) { latest in
+            guard latest.reopensLastSession == displayed || latest.reopensLastSession == requested else {
+                throw SettingsError.changedOnDisk
+            }
+            return latest.reopensLastSession == requested ? nil : (requested ? "true" : "false")
         }
     }
     private func updateMember(

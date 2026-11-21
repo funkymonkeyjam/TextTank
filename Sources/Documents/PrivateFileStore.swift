@@ -8,7 +8,7 @@ package enum AppStorage {
     package enum Location: String {
         case settings = "Settings.json", macros = "Macros.json", automations = "Automations.json"
         case languages = "LanguageProfiles.json", commands = "RunCommands.json", workspace = "WorkspaceBrowser.json"
-        case recovery = "Recovery", reminders = "ReminderExports"
+        case recovery = "Recovery", reminders = "ReminderExports", lastSession = "LastSession.json"
         case find = "FindPreferences.json", folderSearch = "FolderSearchPreferences.json"
         package var isDirectory: Bool { self == .recovery || self == .reminders }
     }
@@ -303,7 +303,7 @@ package enum PrivateFileStore {
         _ data: Data, to url: URL, maximumBytes: Int, temporaryPrefix: String = ".texttank-",
         temporarySuffix: String = "", synchronize: (Int32) -> Int32 = { fsync($0) },
         synchronizeDirectory: ((Int32) -> Int32)? = nil,
-        beforeCommit: () throws -> Void = {}, retainingDescriptor: Bool = false,
+        beforeCommit: () throws -> Void = {}, requireMissing: Bool = false, retainingDescriptor: Bool = false,
         setMode: (Int32, mode_t) -> Int32 = { fchmod($0, $1) }, closeFile: (Int32) -> Int32 = { close($0) }
     ) throws -> Int32? {
         guard data.count <= maximumBytes else { throw PrivateFileError.tooLarge(limit: maximumBytes, url: url) }
@@ -369,7 +369,11 @@ package enum PrivateFileStore {
         guard currentDirectory.st_mode & S_IFMT == S_IFDIR,
             currentDirectory.st_dev == directoryInfo.st_dev, currentDirectory.st_ino == directoryInfo.st_ino
         else { throw PrivateFileError.unsafeLocation }
-        guard renameat(directory, temporary, directory, url.lastPathComponent) == 0 else {
+        let renamed =
+            requireMissing
+            ? renameatx_np(directory, temporary, directory, url.lastPathComponent, UInt32(RENAME_EXCL))
+            : renameat(directory, temporary, directory, url.lastPathComponent)
+        guard renamed == 0 else {
             throw FileOperationFailure(errno, operation: "replace file", path: url.path)
         }
         if let synchronizeDirectory, synchronizeDirectory(directory) != 0 {

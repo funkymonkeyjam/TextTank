@@ -255,12 +255,13 @@ import AppKit
     /// Status-line text for a recovered draft: what it is a draft of and when it was written.
     /// Cleared when the draft is saved under a name of its own.
     private(set) var recoveredOrigin: String?
+    private var recoveredOriginalURL: String?
     /// Suppresses ordinary edit/recovery callbacks while a read or restore establishes its checkpoints.
     private var loading = false
     /// A transient decoder override for one read; nil keeps automatic detection.
     private var openEncoding: FileEncoding?
     /// Explicit interpretation of the last successful disk baseline, independent of unsaved conversion.
-    private var revertEncoding: FileEncoding?
+    private(set) var revertEncoding: FileEncoding?
     private var readingURL: URL?
     /// A snapshot records the file it belongs to. A moved or renamed file is new snapshot
     /// metadata at the same text revision, so it needs a later recovery revision.
@@ -291,6 +292,7 @@ import AppKit
                     externalFile.invalidate()
                     // Only the existing main-thread setter route clears the recovered label.
                     recoveredOrigin = nil
+                    recoveredOriginalURL = nil
                 }
             } else {
                 DispatchQueue.main.async { [weak self] in
@@ -500,7 +502,8 @@ import AppKit
     private func recoveryPreparation() -> RecoveryWriter.Prepare {
         let store = Self.recovery, id = recoveryID, revision = recoveryRevision
         if shouldKeepRecoveryCopy {
-            let bytes = editor.checkedUTF8Data, capturedFormat = format, originalURL = fileURL?.absoluteString
+            let bytes = editor.checkedUTF8Data, capturedFormat = format,
+                originalURL = fileURL?.absoluteString ?? recoveredOriginalURL
             let capturedAt = Date()
             return {
                 let snapshot = try RecoverySnapshot(
@@ -771,7 +774,9 @@ import AppKit
         updateChangeCount(.changeDone)
     }
     /// Opens one recovery snapshot as a new unsaved document that keeps the snapshot's identity.
-    @discardableResult static func openRecovered(_ snapshot: RecoverySnapshot) throws -> TextDocument {
+    @discardableResult static func openRecovered(_ snapshot: RecoverySnapshot, originalGroup: String? = nil) throws
+        -> TextDocument
+    {
         let (base, overflow) = snapshot.revision.addingReportingOverflow(1)
         guard !overflow else { throw RecoveryError.invalidSnapshot }
         let doc = DocumentFactory.makeUntitled(
@@ -783,7 +788,10 @@ import AppKit
             populate: { document in
                 document.loadUnsavedSnapshot(text: snapshot.text, format: snapshot.format)
                 // Display only: recovery never opens or writes the original path.
-                document.recoveredOrigin = SnapshotLabel.status(for: snapshot)
+                document.recoveredOrigin =
+                    SnapshotLabel.status(for: snapshot)
+                    + (originalGroup.map { " · Original open in " + $0 } ?? "")
+                document.recoveredOriginalURL = SnapshotLabel.origin(of: snapshot)?.absoluteString
                 if let name = SnapshotLabel.originName(of: snapshot) { document.displayName = "Recovered " + name }
             })
         doc.showWindows()

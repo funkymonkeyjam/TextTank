@@ -286,7 +286,7 @@ Recovery snapshot (`RecoverySnapshot`, one `<id>.json` per unsaved document in t
 | `id` | UUID string | yes | Must equal the file name. |
 | `text` | string | yes | The whole editor text. It may hold characters `format` cannot encode; those are kept. |
 | `format` | object | yes | As for a session document. |
-| `originalURL` | file URL string | no | The file the draft belongs to, absent for an untitled one. Note that this is a string here and a URL in a session document; both hold the same absolute `file://` form. Shown in the recovery prompt, in the recovered window's title and status line, and nowhere else: recovery never opens or writes that path. |
+| `originalURL` | file URL string | no | The file the draft belongs to, absent for an untitled one. Note that this is a string here and a URL in a session document; both hold the same absolute `file://` form. Shown in the recovery prompt and recovered window. If that original has already reopened, recovery associates the reviewed draft with its group. Recovery never opens or writes that path. |
 | `revision` | integer | yes | Monotonic per `id`, at most 2^63 - 1. A snapshot is never replaced by a lower revision, and never by an equal revision with different content. |
 | `savedAt` | date | yes | When the snapshot was written. Shown in the recovery prompt and the recovered window's status line. |
 
@@ -520,6 +520,12 @@ remain once per document with focused or per-document MRU selection. Explicit se
 optional layout state as described below; automatic launch recovery remains separate. Group shortcuts are unassigned pending a complete system conflict
 check; the reference combinations are not assumed safe on an arbitrary Mac.
 
+
+### Automatic last-session layout
+
+`LastSession.json` in Application Support has a top-level version of 1. Its file list maps identifiers to absolute local paths and optional explicitly selected file encodings. Its layout uses the existing workspace layout format, including group order, active tabs, pins, byte selections and first visible lines. Untitled tabs and document text stay in the recovery and explicit-session mechanisms. A periodic checkpoint publishes changed metadata. A committed quit captures the final layout before closing its presentations. Canceling quit resumes periodic capture.
+
+The default launch setting opens existing originals from disk and reports skipped paths together. A file already open retains its current buffer. Startup with existing documents preserves their layout and focus. Recovery then offers its usual decision. Choosing Recover opens a separate unsaved draft in its reopened original’s group. The draft keeps the informational origin for a subsequent interrupted session. Older settings default to reopening the last session. An unknown or unreadable automatic-session version is preserved.
 
 ### Stage 4 document targets and explicit session layout
 

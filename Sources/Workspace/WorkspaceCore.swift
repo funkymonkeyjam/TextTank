@@ -475,3 +475,82 @@ package enum WorkspaceStore {
         } catch { throw mappedFileError(error) }
     }
 }
+
+/// The automatic launch file describes disk originals and their presentations. Recovery
+/// and explicitly saved session snapshots keep their own identity and content formats.
+package struct LastSessionLayout: Codable, Equatable, Sendable {
+    package struct File: Codable, Equatable, Sendable {
+        package let id: DocumentID
+        package let path: String
+        package let encoding: FileEncoding?
+        package init(id: DocumentID, url: URL, encoding: FileEncoding? = nil) throws {
+            guard url.isFileURL, ["", "localhost"].contains(url.host?.lowercased() ?? "") else {
+                throw WorkspaceError.invalid("Invalid local path.")
+            }
+            self.id = id
+            self.path = url.standardizedFileURL.path
+            self.encoding = encoding
+        }
+        package var url: URL { URL(fileURLWithPath: path) }
+    }
+    package static let maximumBytes = 4 * 1024 * 1024
+    package let version: Int
+    package let files: [File]
+    package let layout: WorkspaceLayoutState
+
+    package init(files: [File], layout: WorkspaceLayoutState) throws {
+        self.version = 1
+        self.files = files
+        self.layout = Self.filter(layout, retaining: Set(files.map(\.id)))
+        try validate()
+    }
+    package static func filter(_ original: WorkspaceLayoutState, retaining ids: Set<DocumentID>) -> WorkspaceLayoutState
+    {
+        var state = original
+        for index in state.groups.indices {
+            let group = state.groups[index]
+            let kept = group.tabs.indices.filter { ids.contains(group.tabs[$0].documentID) }
+            state.groups[index].tabs = kept.map { group.tabs[$0] }
+            state.groups[index].activeTabIndex =
+                kept.firstIndex { $0 >= (group.activeTabIndex ?? 0) } ?? kept.indices.last
+        }
+        if let focused = state.groups.first(where: { $0.slot == state.focusedGroup }), focused.tabs.isEmpty,
+            let occupied = state.groups.first(where: { !$0.tabs.isEmpty })
+        {
+            state.focusedGroup = occupied.slot
+        }
+        return state
+    }
+    private func validate() throws {
+        try layout.validate()
+        let ids = Set(files.map(\.id))
+        guard version == 1, files.count <= 4096, ids.count == files.count,
+            Set(files.map(\.path)).count == files.count,
+            files.allSatisfy({ $0.path.hasPrefix("/") && !$0.path.contains("\0") && $0.path.utf8.count <= 4096 }),
+            Set(layout.groups.flatMap(\.tabs).map(\.documentID)) == ids
+        else { throw WorkspaceError.invalid("The automatic session contains invalid paths or tabs.") }
+    }
+    package static func readBytes(_ url: URL) throws -> Data? {
+        do { return try PrivateFileStore.read(url, maximumBytes: maximumBytes) } catch let error as FileOperationFailure
+            where error.errorNumber == ENOENT
+        { return nil }
+    }
+    package static func decode(_ data: Data) throws -> Self {
+        try PersistedFormat.check(data, context: "Automatic session")
+        let state = try JSONDecoder().decode(Self.self, from: data)
+        try state.validate()
+        return state
+    }
+    package static func read(_ url: URL) throws -> Self? { try readBytes(url).map(decode) }
+    package func encoded() throws -> Data {
+        try validate()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(self)
+    }
+    package func write(_ url: URL) throws {
+        try PrivateFileStore.write(
+            try encoded(), to: url, maximumBytes: Self.maximumBytes,
+            synchronize: PrivateFileStore.flushToStorage, synchronizeDirectory: PrivateFileStore.flushToStorage)
+    }
+}

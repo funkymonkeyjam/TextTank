@@ -246,3 +246,217 @@ final class SessionCheckCancellation: @unchecked Sendable {
         lock.unlock()
     }
 }
+
+@MainActor struct OpenSessionLayout {
+    let layout: WorkspaceLayoutState
+    let documents: [TextDocument]
+    init(_ host: WorkspaceWindowController) {
+        layout = host.captureSessionLayout()
+        var seen = Set<DocumentID>()
+        documents = host.presentations.compactMap { presentation in
+            guard let doc = presentation.document as? TextDocument, seen.insert(doc.runtimeID).inserted else {
+                return nil
+            }
+            return doc
+        }
+    }
+    func diskLayout() throws -> LastSessionLayout {
+        let files = try documents.compactMap { doc -> LastSessionLayout.File? in
+            guard let url = doc.fileURL else { return nil }
+            return try .init(id: DocumentID(doc.recoveryID), url: url, encoding: doc.revertEncoding)
+        }
+        return try LastSessionLayout(files: files, layout: layout)
+    }
+}
+
+@MainActor final class AutomaticSession {
+    let url: URL
+    private var writable = true
+    private let writer: SessionWriter
+    private var writing = false
+    private var timer: Timer?
+    private var reviewed: LastSessionLayout?
+    private var review: OpenSessionLayout?
+    private var suspending = false
+    init(url: URL = AppStorage.url(.lastSession)) {
+        self.url = url
+        writer = SessionWriter(url)
+    }
+    func read() throws -> LastSessionLayout? {
+        do { return try writer.open() } catch {
+            writable = false
+            throw error
+        }
+    }
+    func start(_ tick: @escaping @MainActor @Sendable () -> Void) {
+        timer?.invalidate()
+        let source = Timer(timeInterval: 30, repeats: true) { [weak self] timer in
+            guard self != nil else {
+                timer.invalidate()
+                return
+            }
+            MainActor.assumeIsolated { tick() }
+        }
+        source.tolerance = 3
+        timer = source
+        RunLoop.main.add(source, forMode: .common)
+    }
+    func checkpoint(_ host: WorkspaceWindowController?, report: @escaping @MainActor @Sendable (Error) -> Void) {
+        guard writable, !suspending, !writing, let host, !host.isMutatingGroups else { return }
+        do {
+            let state = try OpenSessionLayout(host).diskLayout()
+            writing = true
+            writer.submit(state) { [weak self] error in
+                self?.writing = false
+                if let error { report(error) }
+            }
+        } catch { report(error) }
+    }
+    func beginReview(_ host: WorkspaceWindowController?) {
+        guard !suspending else { return }
+        suspending = true
+        review = host.map(OpenSessionLayout.init)
+    }
+    func nativeReviewEnded(accepted: Bool) {
+        guard accepted else {
+            cancelReview()
+            return
+        }
+        // Keep final Save As paths after the review and release the closed NSDocuments.
+        if let captured = review, let state = try? captured.diskLayout() {
+            reviewed = state
+            review = nil
+        }
+    }
+    func documentOpened() {
+        if reviewed != nil { cancelReview() }
+    }
+    func cancelReview() {
+        reviewed = nil
+        review = nil
+        suspending = false
+    }
+    @discardableResult func commit(_ host: WorkspaceWindowController?) throws -> Bool {
+        timer?.invalidate()
+        timer = nil
+        suspending = true
+        defer {
+            review = nil
+            reviewed = nil
+        }
+        guard writable else { return false }
+        if let reviewed { return try writer.finish(reviewed) }
+        guard let capture = review ?? host.map(OpenSessionLayout.init) else { return true }
+        return try writer.finish(capture.diskLayout())
+    }
+
+    /// Ordinary opens with an already populated workspace keep their own layout and focus.
+    func reopen(_ state: LastSessionLayout, in host: WorkspaceWindowController) -> (
+        files: [URL: TextDocument], notices: [String]
+    ) {
+        let previous = host.active
+        var mapping = [DocumentID: TextDocument](), originals = [URL: TextDocument](), notices = [String]()
+        for item in state.files {
+            let url = item.url, disk = TextDocument.canonicalDiskURL(url)
+            do {
+                if let doc = NSDocumentController.shared.documents.compactMap({ $0 as? TextDocument }).first(where: {
+                    $0.fileURL?.standardizedFileURL == url || $0.diskURL == disk
+                }) {
+                    mapping[item.id] = doc
+                } else {
+                    let read = try WorkspaceStore.captureRegularFile(disk, maximumBytes: Int.max)
+                    mapping[item.id] = try DocumentFactory.openCaptured(
+                        read, from: url, expectedDiskURL: disk,
+                        as: item.encoding, display: false)
+                }
+                originals[url] = mapping[item.id]
+            } catch { notices.append(url.path + " — " + error.localizedDescription) }
+        }
+        let available = LastSessionLayout.filter(state.layout, retaining: Set(mapping.keys))
+        if let previous {
+            host.activate(previous, focus: false, explicit: false)
+        } else if !mapping.isEmpty
+            && (!host.canFitSessionLayout(available.layout)
+                || !host.restoreSessionLayout(available, documents: mapping))
+        {
+            notices.append("The saved layout could not be restored. Its available files are open in one group.")
+        }
+        return (originals, notices)
+    }
+}
+
+/// Only this queue owns lastWritten. A committed quit joins any older periodic publication
+/// before writing its final metadata. Background work never waits for the AppKit queue.
+private final class SessionWriter: @unchecked Sendable {
+    let url: URL
+    private let queue = DispatchQueue(label: "TextTank.automatic-session", qos: .utility)
+    private var observed = false
+    private var expected: Data?
+    private var lastWritten: LastSessionLayout?
+    init(_ url: URL) { self.url = url }
+    func open() throws -> LastSessionLayout? {
+        try queue.sync {
+            let bytes = try LastSessionLayout.readBytes(url)
+            let state = try bytes.map(LastSessionLayout.decode)
+            expected = bytes
+            lastWritten = state
+            observed = true
+            return state
+        }
+    }
+    private enum Conflict: Error { case changed }
+    private func write(_ state: LastSessionLayout) throws -> Bool {
+        guard observed else { return false }
+        let bytes = try state.encoded()
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        var coordinationError: NSError?
+        var result: Result<Bool, Error>?
+        coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { destination in
+            result = Result {
+                guard destination.standardizedFileURL == self.url.standardizedFileURL,
+                    try LastSessionLayout.readBytes(destination) == self.expected
+                else { return false }
+                if self.lastWritten == state { return true }
+                do {
+                    try PrivateFileStore.write(
+                        bytes, to: destination, maximumBytes: LastSessionLayout.maximumBytes,
+                        synchronize: PrivateFileStore.flushToStorage,
+                        synchronizeDirectory: PrivateFileStore.flushToStorage,
+                        beforeCommit: {
+                            guard try LastSessionLayout.readBytes(destination) == self.expected else {
+                                throw Conflict.changed
+                            }
+                        }, requireMissing: self.expected == nil)
+                } catch Conflict.changed { return false } catch let error as FileOperationFailure
+                    where self.expected == nil && error.errorNumber == EEXIST
+                { return false } catch let error as PublishedFileSyncFailure {
+                    self.expected = bytes
+                    self.lastWritten = nil
+                    throw error
+                }
+                self.expected = bytes
+                self.lastWritten = state
+                return true
+            }
+        }
+        if let coordinationError { throw coordinationError }
+        guard let result else { throw CocoaError(.fileWriteUnknown) }
+        return try result.get()
+    }
+    func finish(_ state: LastSessionLayout) throws -> Bool { try queue.sync { try write(state) } }
+    func submit(_ state: LastSessionLayout, completion: @escaping @MainActor @Sendable (Error?) -> Void) {
+        queue.async {
+            let result = Result { try self.write(state) }
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let accepted): completion(accepted ? nil : SessionChanged())
+                case .failure(let error): completion(error)
+                }
+            }
+        }
+    }
+}
+
+private struct SessionChanged: LocalizedError {
+    var errorDescription: String? { "Another writer changed the last-session file. Its contents were preserved." }
+}

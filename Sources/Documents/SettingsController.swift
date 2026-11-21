@@ -198,6 +198,7 @@ extension EditorSettings {
     private let width = NSTextField(), size = NSTextField(), zoom = NSTextField()
     private let tabs = NSButton(checkboxWithTitle: "Indent with tabs", target: nil, action: nil)
     private let wrap = NSButton(checkboxWithTitle: "Wrap lines", target: nil, action: nil)
+    private let launchBehavior = NSPopUpButton()
     private let appearance = NSPopUpButton()
     private let diskChanges = NSPopUpButton()
     private let face = NSTextField(labelWithString: "")
@@ -272,6 +273,12 @@ extension EditorSettings {
         appearance.action = #selector(selectAppearance(_:))
         form.add(row("Appearance", appearance, "settings.appearance"))
         ControlPresentation.populate(
+            launchBehavior, choices: [("restore", "Reopen last session"), ("new", "New document")],
+            selected: displayed.reopensLastSession ? "restore" : "new")
+        launchBehavior.target = self
+        launchBehavior.action = #selector(selectLaunchBehavior(_:))
+        form.add(row("At launch", launchBehavior, "settings.atLaunch"))
+        ControlPresentation.populate(
             diskChanges,
             choices: [
                 (ExternalChangePolicy.ask.rawValue, "Ask"),
@@ -328,6 +335,8 @@ extension EditorSettings {
         appearance.select(appearance.itemArray.first { ($0.representedObject as? String) == latest.appearance })
         diskChanges.select(
             diskChanges.itemArray.first { ($0.representedObject as? String) == latest.diskChangeBehavior.rawValue })
+        launchBehavior.selectItem(at: latest.reopensLastSession ? 0 : 1)
+        displayed.reopenLastSession = latest.reopenLastSession
         displayed.externalChangePolicy = latest.externalChangePolicy
         face.stringValue =
             latest.unavailableFontNotice ?? (latest.resolvedBaseFont.displayName ?? latest.resolvedBaseFont.fontName)
@@ -429,6 +438,21 @@ extension EditorSettings {
             showError(error, field: sender)
         }
     }
+    @objc private func selectLaunchBehavior(_ sender: NSPopUpButton) {
+        guard form.acceptsActions, let key = ControlPresentation.selectedID(sender) else { return }
+        let previous = owner.value
+        do {
+            try owner.store.updateLaunchPreference(
+                from: displayed.reopensLastSession, to: key == "restore",
+                reservedKeys: SettingsController.reservedShortcuts(in: NSApp.mainMenu))
+            owner.apply(replacing: previous)
+            valuesChanged()
+            form.clearValidation()
+        } catch {
+            valuesChanged()
+            showError(error, field: sender)
+        }
+    }
     @objc private func selectDiskChangePolicy(_ sender: NSPopUpButton) {
         guard form.acceptsActions, let key = ControlPresentation.selectedID(sender),
             let policy = ExternalChangePolicy(rawValue: key)
@@ -499,7 +523,7 @@ extension EditorSettings {
         case .reset:
             alert.messageText = "Reset all editor settings to their defaults?"
             alert.informativeText =
-                "This resets font, zoom, indentation, view preferences, appearance and assigned shortcuts."
+                "This resets font, zoom, indentation, view preferences, launch behavior, appearance and assigned shortcuts."
             title = "Reset Defaults"
         }
         alert.addButton(withTitle: "Cancel", role: .cancel)

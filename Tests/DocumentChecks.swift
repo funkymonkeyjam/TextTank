@@ -1766,6 +1766,13 @@ import NativeSearch
             windowMenuAndKeyboard(root: root, app: app, sessionDelegate: sessionDelegate) { name, line, body in
                 section(name, line: line, body)
             }
+            section("automatic last session") {
+                try withIsolatedSupportDirectory("automatic-session") { _ in
+                    let oldMenu = app.mainMenu
+                    defer { app.mainMenu = oldMenu }
+                    try AutomaticSessionChecks.run(app: app, controller: documentController)
+                }
+            }
             section("clean quit") {
                 let termination = AppDelegate().applicationShouldTerminate(app)
                 check(termination == .terminateNow, "clean application quit does not wait for async reply")

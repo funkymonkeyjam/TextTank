@@ -90,6 +90,81 @@ enum EncodingChoice {
 /// the stock controller cannot do there. Create it before anything touches
 /// `NSDocumentController.shared`.
 final class TextDocumentController: NSDocumentController {
+    var willReviewOpenDocuments: (() -> Void)?
+    var didReviewOpenDocuments: ((Bool) -> Void)?
+    var didRegisterDocument: (() -> Void)?
+    private var nativeReviewDepth = 0
+    var isReviewingOpenDocuments: Bool { nativeReviewDepth > 0 }
+
+    /// AppKit can close the documents before it asks its application delegate about quitting.
+    /// Its stock review may nest a close-all callback. Capture once around the outer operation.
+    override func reviewUnsavedDocuments(
+        withAlertTitle title: String?, cancellable: Bool, delegate: Any?,
+        didReviewAllSelector selector: Selector?, contextInfo: UnsafeMutableRawPointer?
+    ) {
+        guard tracksApplicationReview(delegate) else {
+            super.reviewUnsavedDocuments(
+                withAlertTitle: title, cancellable: cancellable, delegate: delegate,
+                didReviewAllSelector: selector, contextInfo: contextInfo)
+            return
+        }
+        let callback = beginNativeReview(delegate, selector: selector, info: contextInfo)
+        super.reviewUnsavedDocuments(
+            withAlertTitle: title, cancellable: cancellable, delegate: self,
+            didReviewAllSelector: #selector(nativeReviewCompleted(_:accepted:contextInfo:)), contextInfo: callback)
+    }
+    override func closeAllDocuments(
+        withDelegate delegate: Any?, didCloseAllSelector selector: Selector?,
+        contextInfo: UnsafeMutableRawPointer?
+    ) {
+        guard tracksApplicationReview(delegate) else {
+            super.closeAllDocuments(withDelegate: delegate, didCloseAllSelector: selector, contextInfo: contextInfo)
+            return
+        }
+        let callback = beginNativeReview(delegate, selector: selector, info: contextInfo)
+        super.closeAllDocuments(
+            withDelegate: self, didCloseAllSelector: #selector(nativeReviewCompleted(_:accepted:contextInfo:)),
+            contextInfo: callback)
+    }
+    private func tracksApplicationReview(_ object: Any?) -> Bool {
+        guard willReviewOpenDocuments != nil, let target = object as AnyObject? else { return false }
+        return nativeReviewDepth > 0 || target === self || target === NSApp || target === NSApp.delegate
+    }
+    private final class NativeReviewCallback {
+        let target: AnyObject?
+        let selector: Selector?
+        let info: UnsafeMutableRawPointer?
+        init(_ target: Any?, _ selector: Selector?, _ info: UnsafeMutableRawPointer?) {
+            self.target = target as AnyObject?
+            self.selector = selector
+            self.info = info
+        }
+        @MainActor func forward(_ controller: NSDocumentController, accepted: Bool) {
+            guard let target, let selector, let cls = object_getClass(target),
+                let implementation = class_getMethodImplementation(cls, selector)
+            else { return }
+            // NSDocumentController.h specifies the same BOOL/context signature for both callbacks.
+            typealias Reply =
+                @convention(c) (AnyObject, Selector, NSDocumentController, ObjCBool, UnsafeMutableRawPointer?) -> Void
+            unsafeBitCast(implementation, to: Reply.self)(target, selector, controller, ObjCBool(accepted), info)
+        }
+    }
+    private func beginNativeReview(_ target: Any?, selector: Selector?, info: UnsafeMutableRawPointer?)
+        -> UnsafeMutableRawPointer
+    {
+        nativeReviewDepth += 1
+        if nativeReviewDepth == 1 { willReviewOpenDocuments?() }
+        return Unmanaged.passRetained(NativeReviewCallback(target, selector, info)).toOpaque()
+    }
+    @objc private func nativeReviewCompleted(
+        _ controller: NSDocumentController, accepted: Bool, contextInfo: UnsafeMutableRawPointer?
+    ) {
+        guard let contextInfo else { return }
+        let callback = Unmanaged<NativeReviewCallback>.fromOpaque(contextInfo).takeRetainedValue()
+        nativeReviewDepth -= 1
+        if nativeReviewDepth == 0 { didReviewOpenDocuments?(accepted) }
+        callback.forward(controller, accepted: accepted)
+    }
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         if CompareCommandScope.blocksWorkspace,
             [#selector(openDocument(_:)), #selector(newDocument(_:)), #selector(saveAllDocuments(_:))].contains(
@@ -113,6 +188,7 @@ final class TextDocumentController: NSDocumentController {
     }
     override func addDocument(_ document: NSDocument) {
         super.addDocument(document)
+        didRegisterDocument?()
         (document as? TextDocument)?.makeWindowControllers()
     }
     var chooseEncoding: @MainActor (URL, Error) -> FileEncoding? = EncodingChoice.present
