@@ -450,6 +450,44 @@ import Foundation
             }
             func commands(_ macro: RecordedMacro?) -> [String] { macro?.steps.compactMap(\.command) ?? [] }
 
+            do {
+                let isolated = try IsolatedSupportDirectory("ReturnMacroCodec")
+                let previousEnding = editor.statusInfo.eol
+                defer {
+                    isolated.restore()
+                    _ = editor.setLineEndingMode(previousEnding)
+                }
+                let recorder = MacroController(editorProvider: { editor })
+                let original = " \t雪"
+                let expected = Data((original + "\r\n \t").utf8)
+                load(original, caret: original.utf8.count)
+                _ = editor.setLineEndingMode(.crlf)
+                recorder.startRecording()
+                try key(13, code: 36)
+                let captured = try requireValue(try recorder.finishRecording(), "captured native Return")
+                check(
+                    captured.steps == [.insertText("\r"), .insertText("\n"), .insertText(" \t")]
+                        && editor.utf8Data == expected,
+                    "native CRLF Return and mixed indentation reach the full macro recorder as literal bytes")
+                let legacy = RecordedMacro(id: UUID(), name: "Legacy New Line", steps: [.command("newLine")])
+                try recorder.persist(MacroLibrary(macros: [captured, legacy]))
+                let stored = try MacroLibrary.decode(Data(contentsOf: AppStorage.url(.macros)))
+                let reopened = MacroController(editorProvider: { editor })
+                try require(
+                    stored.macros == [captured, legacy] && reopened.loadingError == nil,
+                    "persisted Return macros reopen")
+                load(original, caret: original.utf8.count)
+                try reopened.play(stored.macros[0], on: editor)
+                check(
+                    editor.utf8Data == expected && editor.selectionCaret == expected.count,
+                    "a persisted native Return replays byte-for-byte with its resulting caret")
+                editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+                check(editor.text == original && !editor.modified, "persisted Return playback is one Undo")
+                load(original, caret: original.utf8.count)
+                try reopened.play(stored.macros[1], on: editor)
+                check(editor.utf8Data == Data((original + "\r\n").utf8), "a legacy New Line macro remains literal")
+            }
+
             // G367: the canonical "prefix each line" macro, recorded with the standard Mac keys.
             let lines = "one\ntwo\nthree"
             load(lines, caret: 2)

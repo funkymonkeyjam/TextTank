@@ -51,7 +51,7 @@ import AppKit
     }
 }
 
-@MainActor final class SettingsController: NSObject {
+@MainActor final class SettingsController: NSObject, NSMenuItemValidation {
     private let store: SettingsStore
     var value: EditorSettings { store.value }
     var ignoredShortcutBindings: [ShortcutLoadIssue] { store.ignoredShortcutBindings }
@@ -84,7 +84,27 @@ import AppKit
     }
     func apply(to editor: TTEditor) {
         editor.configureTabWidth(value.tabWidth, useTabs: value.useTabs)
+        editor.autoIndentEnabled = value.autoIndentEnabled
         editor.wrap = value.wrap
+    }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(toggleAutoIndent(_:)) else { return true }
+        item.state = value.autoIndentEnabled ? .on : .off
+        return true
+    }
+    @objc func toggleAutoIndent(_ sender: Any?) {
+        // Recovery requires explicit consent in Settings before replacing a damaged file.
+        guard loadError == nil, ignoredShortcutBindings.isEmpty else {
+            showSettings(sender)
+            return
+        }
+        var updated = value
+        updated.autoIndent = !value.autoIndentEnabled
+        do {
+            try save(updated)
+        } catch {
+            TTAlert.present(error)
+        }
     }
     /// The composition root applies this synchronous change to open documents and menus.
     func apply(replacing previous: EditorSettings? = nil) { onApply(value, previous) }

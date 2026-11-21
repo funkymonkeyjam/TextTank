@@ -810,6 +810,15 @@ extension DocumentChecks {
             check(
                 try AutomationLibrary.decode(automationBytes) == automations,
                 "golden automation library decodes to the recorded definition with every optional field")
+            // This historical file comes from the pre-flag encoder, so never regenerate it with golden().
+            let legacyBytes = try Data(contentsOf: folder.appendingPathComponent("Automations-before-flags.json"))
+            let legacyLibrary = try AutomationLibrary.decode(legacyBytes)
+            let legacyWorkflow = try requireValue(legacyLibrary.workflows.first, "historical automation")
+            check(
+                legacyLibrary.workflows.count == 1 && legacyWorkflow.id == idA
+                    && legacyWorkflow.shortcut == "" && legacyWorkflow.previewBeforeApply == nil
+                    && legacyWorkflow.pinToToolbar == nil,
+                "the pre-flag automation library preserves its empty shortcut and absent flags")
 
             let language = UserDefinedLanguage(
                 name: "Golden language", extensions: "gold", version: "2.1",
@@ -957,7 +966,8 @@ extension DocumentChecks {
                     "Settings.json", "SearchOptions.json", "FolderSearchSettings.json", "WorkspaceBrowser.json",
                     "RunLibrary.json", "Session.texttanksession", "SessionLayout.texttanksession",
                     "RecoverySnapshot.json", "ReminderBatch.json",
-                    "MacroLibrary.json", "Automations.json", "LanguageCatalog.json", "LanguageOverrides.json"
+                    "MacroLibrary.json", "Automations.json", "Automations-before-flags.json", "LanguageCatalog.json",
+                    "LanguageOverrides.json"
                 ], "every committed persistence fixture is decoded by a check")
             check(!writing, "persistence fixtures were not rewritten by this run")
         }

@@ -81,6 +81,11 @@ import Darwin
         @MainActor func openSharedAndCloseOriginal(_ document: TextDocument) throws -> TabID {
             let a = try requireValue(document.presentation, "T3 original adapter")
             let aid = try requireValue(host.model.activeTab?.id, "T3 original TabID")
+            let initialSettings = app.settings.value
+            var disabled = initialSettings
+            disabled.autoIndent = false
+            EditorSettingsApplication.apply(disabled, replacing: initialSettings)
+            defer { EditorSettingsApplication.apply(initialSettings, replacing: disabled) }
             a.clone(nil)
             retired.primary = a.primaryEditor
             retired.clone = a.secondary
@@ -95,6 +100,14 @@ import Darwin
             check(
                 a.secondary != nil && b.secondary != nil && b.secondary!.sharesDocument(with: a.primaryEditor),
                 "T3 both tab-local Clones share document")
+            let panes = a.views + b.views
+            check(
+                panes.count == 4 && panes.allSatisfy { !$0.autoIndentEnabled },
+                "both grouped primaries and local Clones inherit disabled auto-indent")
+            var enabled = disabled
+            enabled.autoIndent = true
+            EditorSettingsApplication.apply(enabled, replacing: disabled)
+            check(panes.allSatisfy(\.autoIndentEnabled), "a settings change reaches every pane in both groups")
             check(a.isPresented && b.isPresented, "T3 cold release has both real group presentations mounted")
             host.closeTab(aid, sender: nil)
             check(

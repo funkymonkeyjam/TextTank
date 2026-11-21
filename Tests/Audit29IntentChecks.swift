@@ -92,7 +92,10 @@ import NativeSearch
                 }
             case 6: expected = composition.runner
             case 7: expected = composition.utilities
-            case 8: expected = composition.workspaceWindow.groupCommands
+            case 8:
+                expected =
+                    row["action"] == "toggleAutoIndent:"
+                    ? composition.settings : composition.workspaceWindow.groupCommands
             case 9: expected = composition.languages
             case 10: expected = composition.macros
             case 11: expected = composition.automations
