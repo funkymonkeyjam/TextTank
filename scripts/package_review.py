@@ -10,8 +10,10 @@ import subprocess
 import tempfile
 import sys
 import re
+import zipfile
 from bootstrap import obtain_archive
 import runtime_artifacts
+import ci_evidence
 
 
 # Review documentation is an explicit product-facing set. Session state, agent
@@ -144,12 +146,11 @@ def main():
             raise SystemExit('git archive failed')
         source_tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
         validation = verify_validation(root, source_tree)
-        ci_path = root / 'harness/logs/candidate-ci.json'
-        validation['ci'] = {'status': 'not_observed', 'source_tree': source_tree}
-        if ci_path.exists():
-            ci = json.loads(ci_path.read_text())
-            if ci.get('source_tree') == source_tree:
-                validation['ci'] = {'status': 'self_reported', 'source_tree': source_tree, 'reported_status': ci.get('status', 'unknown')}
+        try:
+            validation['ci'] = ci_evidence.authenticate(sha, source_tree, os.environ.get('TEXTTANK_CI_RUN_ID'),
+                                                        os.environ.get('TEXTTANK_CI_RUN_ATTEMPT'))
+        except (KeyError, TypeError, zipfile.BadZipFile, subprocess.TimeoutExpired) as error:
+            raise ValueError('Hosted native evidence is unavailable or malformed.') from error
         validation['packaged_source_commit'] = sha
         log = root / 'harness/logs/full-acceptance.log'
         if not log.is_file():
@@ -207,6 +208,7 @@ def main():
             'source_tree': source_tree,
             'built_from_clean_commit': True,
             'build_configuration': 'Release',
+            'configuration': 'Release',
             'release_manifest_sha256': release_manifest,
             'created_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'app_tree_sha256': tree_hash(package / 'TextTank.app'),
@@ -218,21 +220,22 @@ def main():
             'signing': 'local ad-hoc; codesign deep/strict verification passed; not notarized',
             'dependencies': lock['dependencies'],
             'files': {str(p.relative_to(package)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(sources.iterdir())},
-            'ci_status': 'Not inferred by packaging. Consult the exact source-commit CI result.',
+            'ci_status': validation['ci']['conclusion'],
+            'ci_run': validation['ci']['url'],
             'limitations': 'Not full Notepad++ parity; see REVIEW-ME.md. No Intel/older-macOS runtime claim; live EventKit happy path is user-confirmed, remaining live failure/retry cases are unverified.',
         }
         validation['app_tree_sha256'] = manifest['app_tree_sha256']
         validation = public_diagnostics(validation, root)
         (package / 'validation.json').write_text(json.dumps(validation, indent=2) + '\n')
         (package / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-        zipfile = stage / 'TextTank-review.zip'
-        subprocess.run(['ditto', '-c', '-k', '--norsrc', '--noextattr', '--keepParent', str(package), str(zipfile)], check=True)
-        zip_hash = hashlib.sha256(zipfile.read_bytes()).hexdigest()
+        zip_path = stage / 'TextTank-review.zip'
+        subprocess.run(['ditto', '-c', '-k', '--norsrc', '--noextattr', '--keepParent', str(package), str(zip_path)], check=True)
+        zip_hash = hashlib.sha256(zip_path.read_bytes()).hexdigest()
         if capture('git', 'rev-parse', 'HEAD') != sha or capture('git', 'status', '--porcelain', '--untracked-files=normal'):
             raise SystemExit('Source changed during packaging; staged files were not delivered')
         # Complete the deliverable before replacing its directory. Staging is on the
         # output filesystem, so publication uses directory renames, never a cross-device move.
-        zipfile.rename(package / 'TextTank-review.zip')
+        zip_path.rename(package / 'TextTank-review.zip')
         manifest['zip_sha256'] = zip_hash
         (package / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         checks = [f'{zip_hash}  TextTank-review.zip'] + [f'{digest}  {name}' for name, digest in manifest['files'].items()]

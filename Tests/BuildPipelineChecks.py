@@ -921,6 +921,8 @@ sys.exit(93)
 
 if __name__ == '__main__':
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(BuildPipelineChecks)
+    from CIEvidenceChecks import CIEvidenceChecks
+    suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(CIEvidenceChecks))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if result.wasSuccessful():
         print(f'PASS BuildPipelineChecks: {result.testsRun} fault scenarios; isolated fixtures, no app launch')
