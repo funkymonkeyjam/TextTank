@@ -51,6 +51,19 @@ import AppKit
     }
 }
 
+extension EditorSettings {
+    @MainActor var resolvedBaseFont: NSFont {
+        NSFont(name: fontName ?? "Menlo", size: basePointSize)
+            ?? NSFont(name: "Menlo", size: basePointSize)
+            ?? NSFont.monospacedSystemFont(ofSize: basePointSize, weight: .regular)
+    }
+    @MainActor var unavailableFontNotice: String? {
+        guard let fontName, NSFont(name: fontName, size: basePointSize) == nil else { return nil }
+        return
+            "“\(fontName)” is unavailable. Using \(resolvedBaseFont.displayName ?? resolvedBaseFont.fontName) until the saved font is available."
+    }
+}
+
 @MainActor final class SettingsController: NSObject, NSMenuItemValidation {
     private let store: SettingsStore
     var value: EditorSettings { store.value }
@@ -80,9 +93,13 @@ import AppKit
             settings, replacingUnreadable: replacingUnreadable,
             reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
         apply(replacing: previous)
+        if previous.fontName != settings.fontName, let message = settings.unavailableFontNotice { onStatus(message) }
         return backup
     }
     func apply(to editor: TTEditor) {
+        let font = value.resolvedBaseFont
+        editor.setBaseFontName(font.fontName, size: font.pointSize)
+        editor.applyDefaultZoomLevel(value.initialZoom)
         editor.configureTabWidth(value.tabWidth, useTabs: value.useTabs)
         editor.autoIndentEnabled = value.autoIndentEnabled
         editor.braceHighlightEnabled = value.braceHighlightEnabled
@@ -159,6 +176,7 @@ import AppKit
         form.note(
             "Changes apply when you save. Indentation and wrapping chosen for an individual document are kept. Shortcut keys use Command; uppercase adds Shift."
         )
+        if let notice = value.unavailableFontNotice { form.note(notice) }
         let width = NSTextField(string: String(value.tabWidth))
         NumericInput.configure(width)
         let tabs = NSButton(checkboxWithTitle: "Indent with tabs", target: nil, action: nil)
@@ -215,7 +233,7 @@ import AppKit
                     let confirm = TTAlert()
                     confirm.messageText = "Reset all editor settings to their defaults?"
                     confirm.informativeText =
-                        "Tab width, indentation, brace and current-line highlighting, indentation guides, wrapping, appearance and every assigned shortcut return to their defaults. Documents are not changed."
+                        "Tab width, indentation, brace and current-line highlighting, indentation guides, font, default zoom, wrapping, appearance and every assigned shortcut return to their defaults. Documents are not changed."
                     confirm.addButton(withTitle: "Cancel", role: .cancel)
                     confirm.addButton(withTitle: "Reset Defaults").hasDestructiveAction = true
                     guard confirm.runModal() == .alertSecondButtonReturn else { return }

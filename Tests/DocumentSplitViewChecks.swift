@@ -225,6 +225,16 @@ extension DocumentChecks {
                 legacy.currentLineHighlight == nil && legacy.currentLineHighlightEnabled
                     && legacy.indentGuides == nil && legacy.indentGuidesEnabled,
                 "legacy line and guide options default to on")
+            check(
+                legacy.fontName == nil && legacy.fontSize == nil && legacy.defaultZoom == nil
+                    && legacy.resolvedBaseFont.fontName == NSFont(name: "Menlo", size: 14)?.fontName
+                    && legacy.basePointSize == 14 && legacy.initialZoom == 0,
+                "legacy settings keep Menlo at 14 points and zero zoom")
+            var malformed = legacy
+            for size in [Double.nan, .infinity, 5.99, 72.01] {
+                malformed.fontSize = size
+                check((try? malformed.validate()) == nil, "reject unsafe base size without applying it")
+            }
             global.currentLineHighlight = false
             global.indentGuides = false
             global.braceHighlight = false

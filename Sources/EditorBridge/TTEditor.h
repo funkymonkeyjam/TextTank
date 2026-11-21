@@ -248,6 +248,12 @@ __attribute__((objc_subclassing_restricted))
 - (BOOL)showCallTip:(NSString *)text;
 /// NO for invalid bounds, an unavailable font or an invalid name; existing state is kept.
 - (BOOL)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size;
+/// Global base metrics are per-view. Explicit profile face and size override each dimension separately.
+- (BOOL)setBaseFontName:(NSString *)name size:(double)size;
+@property(nonatomic) NSInteger zoomLevel;
+/// Inherit subsequent default changes until the user zooms this view independently.
+- (void)applyDefaultZoomLevel:(NSInteger)level;
+- (BOOL)setSyntaxFont:(NSInteger)index faceOverride:(nullable NSString *)name sizeOverride:(nullable NSNumber *)size;
 /// Comparison-only presentation primitives; callers use independent snapshot renderers.
 /// No method below edits text, Undo, savepoint or selections. Indicator21/22 and marker2/3/4
 /// are distinct from search20/bookmark1. Main-thread only; all batches prevalidate.

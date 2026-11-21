@@ -19,6 +19,11 @@ package struct EditorSettings: Codable, Equatable {
     package var version: Int
     package var tabWidth: Int
     package var useTabs: Bool
+    package var fontName: String?
+    package var fontSize: Double?
+    package var defaultZoom: Int?
+    package var basePointSize: Double { fontSize ?? 14 }
+    package var initialZoom: Int { defaultZoom ?? 0 }
     package var currentLineHighlight: Bool?
     package var currentLineHighlightEnabled: Bool { currentLineHighlight ?? true }
     package var indentGuides: Bool?
@@ -54,6 +59,13 @@ package struct EditorSettings: Codable, Equatable {
         guard version == 1, (1...32).contains(tabWidth), ["system", "light", "dark"].contains(appearance) else {
             throw SettingsError.invalid
         }
+        if let fontName {
+            guard !fontName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, fontName.utf8.count <= 200,
+                fontName.rangeOfCharacter(from: .controlCharacters) == nil
+            else { throw SettingsError.invalidFont }
+        }
+        guard basePointSize.isFinite, (6...72).contains(basePointSize), (-10...60).contains(initialZoom)
+        else { throw SettingsError.invalidFont }
         if let failure = shortcutValidationFailure(reservedKeys: reservedKeys) { throw failure.error }
     }
     /// The same deterministic validation supplies identity to editors and errors to strict saves.
@@ -166,8 +178,7 @@ package struct ShortcutLoadIssue: Equatable {
     }
 }
 package enum SettingsError: Error, LocalizedError, Equatable {
-    case invalid, conflict, unreadable, tabWidth, unknownShortcut, invalidShortcut, changedOnDisk,
-        ambiguousViewPreference
+    case invalid, invalidFont, conflict, unreadable, tabWidth, unknownShortcut, invalidShortcut, changedOnDisk, ambiguousViewPreference
     case duplicateShortcut(first: String, second: String, key: String)
     package var errorDescription: String? {
         switch self {
@@ -176,6 +187,7 @@ package enum SettingsError: Error, LocalizedError, Equatable {
                 "The saved View preference is ambiguous. Check Settings.json for duplicate preference keys, then try again."
         case .changedOnDisk: return "The settings file changed before this edit finished. Try the command again."
         case .tabWidth: return "Tab width must be a whole number from 1 to 32. The settings were not changed."
+        case .invalidFont: return "Choose a font name, a size from 6 to 72 points and a default zoom from −10 to 60."
         case .invalid: return "Unsupported settings version or value. Existing settings have not been replaced."
         case .conflict:
             return

@@ -275,10 +275,9 @@ private final class LanguageMenu: NSMenu {
                 bold: style.fontStyle & 1 != 0,
                 italic: style.fontStyle & 2 != 0)
             if style.fontName != nil || style.fontSize != nil {
+                let face = style.fontName.flatMap { NSFont(name: $0, size: style.fontSize ?? 14)?.fontName }
                 editor.setSyntaxFont(
-                    style.id,
-                    name: style.fontName ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular).fontName,
-                    size: style.fontSize ?? 12)
+                    style.id, faceOverride: face, sizeOverride: style.fontSize.map(NSNumber.init(value:)))
             }
         }
         return true

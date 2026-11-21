@@ -303,7 +303,7 @@ static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
     if (y < 0) { NSInteger skip = (NSInteger)floor(-y / height); y += skip * height; number += skip; }
     std::vector<char> face((size_t)[engine message:SCI_STYLEGETFONT wParam:STYLE_LINENUMBER lParam:0] + 1);
     [engine message:SCI_STYLEGETFONT wParam:STYLE_LINENUMBER lParam:(sptr_t)face.data()];
-    CGFloat size = [engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_LINENUMBER] / 100.0 + [engine message:SCI_GETZOOM];
+    CGFloat size = MAX(1, [engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_LINENUMBER] / 100.0 + [engine message:SCI_GETZOOM]);
     NSInteger rgb = [engine message:SCI_STYLEGETFORE wParam:STYLE_LINENUMBER];
     NSString *faceName = [NSString stringWithUTF8String:face.data()] ?: @"";
     NSString *key = [NSString stringWithFormat:@"%@|%.2f|%ld", faceName, size, (long)rgb];
@@ -495,6 +495,8 @@ static NSHashTable *TTDeferredEditors() {
 struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @interface TTEditor () <ScintillaNotificationProtocol> {
     TTLineNumberState _lineNumberState;
+    NSInteger _defaultZoomLevel;
+    BOOL _followsDefaultZoom;
     BOOL _indentingReturn;
     id _accessibilityDisplayObserver;
     BOOL _braceCacheValid;
@@ -513,6 +515,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @property(nonatomic) TTInteractionState pendingInteraction;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxStyles;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber *,NSDictionary *> *syntaxFonts;
+@property(nonatomic, copy) NSString *baseFontName;
+@property(nonatomic) double basePointSize;
 /// Digit count the line-number margin was last sized for; see -updateLineNumberMargin:.
 @property(nonatomic) int marginDigits;
 @property(nonatomic, readwrite) NSUInteger selectionGeneration;
@@ -553,7 +557,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         _accessibilityDisplayObserver = [NSWorkspace.sharedWorkspace.notificationCenter
             addObserverForName:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification object:nil
             queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) { [weakEditor applyPalette]; }];
-        [_engine setFontName:@"Menlo" size:14 bold:NO italic:NO];
+        _followsDefaultZoom = YES;
+        _baseFontName = @"Menlo";
+        _basePointSize = 14;
         [self applyPalette];
         self.accessibilityDocumentName = nil;
         [_engine message:SCI_SETMARGINTYPEN wParam:0 lParam:SC_MARGIN_NUMBER];
@@ -613,9 +619,14 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     const sptr_t current = [_engine message:SCI_GETMARGINWIDTHN wParam:0];
     if (!show && current == 0) return;
     _marginDigits = [self lineNumberDigits];
-    const std::string widest((size_t)_marginDigits, '9');
+    // Some user font faces have proportional figures. Measure every figure at the actual gutter style and zoom.
+    sptr_t widest = 0;
+    for (char figure = '0'; figure <= '9'; ++figure) {
+        const std::string sample((size_t)_marginDigits, figure);
+        widest = MAX(widest, [_engine message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER lParam:(sptr_t)sample.c_str()]);
+    }
     // 3 is Scintilla's own padding right of the number; 2 keeps the first digit off the edge.
-    const sptr_t width = MAX((sptr_t)48, [_engine message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER lParam:(sptr_t)widest.c_str()] + 3 + 2);
+    const sptr_t width = MAX((sptr_t)48, widest + 3 + 2);
     if (width != current) [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:width];
 }
 - (void)viewDidChangeEffectiveAppearance {
@@ -641,6 +652,10 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     const BOOL dark = [self usesDarkPalette], highContrast = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
     const sptr_t foreground = dark ? 0xF0F6F4 : 0x1F2015;
     const sptr_t background = dark ? 0x171810 : 0xF0F6F4;
+    [_engine message:SCI_STYLESETFONT wParam:STYLE_DEFAULT lParam:(sptr_t)_baseFontName.UTF8String];
+    [_engine message:SCI_STYLESETSIZEFRACTIONAL wParam:STYLE_DEFAULT lParam:lround(_basePointSize * 100)];
+    [_engine message:SCI_STYLESETBOLD wParam:STYLE_DEFAULT lParam:0];
+    [_engine message:SCI_STYLESETITALIC wParam:STYLE_DEFAULT lParam:0];
     [_engine message:SCI_STYLESETFORE wParam:STYLE_DEFAULT lParam:foreground];
     [_engine message:SCI_STYLESETBACK wParam:STYLE_DEFAULT lParam:background];
     [_engine message:SCI_STYLECLEARALL];
@@ -687,7 +702,10 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     }
     NSDictionary *styles=[_syntaxStyles copy];
     for(NSNumber *index in styles) {NSDictionary *s=styles[index];[self setSyntaxStyle:index.integerValue foreground:s[@"foreground"] background:s[@"background"] bold:[s[@"bold"] boolValue] italic:[s[@"italic"] boolValue]];}
-    NSDictionary *fonts=[_syntaxFonts copy];for(NSNumber *index in fonts){NSDictionary *f=fonts[index];[self setSyntaxFont:index.integerValue name:f[@"name"] size:[f[@"size"] doubleValue]];}
+    for (NSNumber *index in _syntaxFonts) {
+        NSDictionary *override = _syntaxFonts[index];
+        [self applyFontToStyle:index.integerValue name:override[@"name"] size:override[@"size"]];
+    }
     // STYLECLEARALL put the line-number style back on the default font.
     [self updateLineNumberMargin:NO];
     _engine.needsDisplay = YES;
@@ -1134,7 +1152,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     return [[TTEditorStatus alloc] initWithLine:[_engine message:SCI_LINEFROMPOSITION wParam:caret]+1
         column:[_engine message:SCI_GETCOLUMN wParam:caret]+1+[_engine message:SCI_GETSELECTIONNCARETVIRTUALSPACE wParam:[_engine message:SCI_GETMAINSELECTION]]
         lines:[_engine message:SCI_GETLINECOUNT] tabWidth:[_engine message:SCI_GETTABWIDTH]
-        useTabs:[_engine message:SCI_GETUSETABS] fontSize:[_engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_DEFAULT]/100.0+[_engine message:SCI_GETZOOM]
+        useTabs:[_engine message:SCI_GETUSETABS] fontSize:MAX(1, [_engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_DEFAULT]/100.0+[_engine message:SCI_GETZOOM])
         eol:[_engine message:SCI_GETEOLMODE]];
 }
 - (NSInteger)selectionCaret { [self assertThread]; return [_engine message:SCI_GETCURRENTPOS]; }
@@ -1227,12 +1245,16 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (void)adoptViewStateFrom:(TTEditor *)other {
     [self assertThread]; if (!other || other == self) return;
+    _baseFontName = other.baseFontName;
+    _basePointSize = other.basePointSize;
     [self adoptSyntaxStylesFrom:other];
     self.autoIndentEnabled = other.autoIndentEnabled;
     self.braceHighlightEnabled = other.braceHighlightEnabled;
     self.currentLineHighlightEnabled = other.currentLineHighlightEnabled;
     self.indentGuidesEnabled = other.indentGuidesEnabled;
+    _defaultZoomLevel = other->_defaultZoomLevel;
     [_engine message:SCI_SETZOOM wParam:(uptr_t)[other.engine message:SCI_GETZOOM]];
+    _followsDefaultZoom = other->_followsDefaultZoom;
     [_engine message:SCI_SETWRAPMODE wParam:(uptr_t)[other.engine message:SCI_GETWRAPMODE]];
     [_engine message:SCI_SETVIEWWS wParam:(uptr_t)[other.engine message:SCI_GETVIEWWS]];
     [_engine message:SCI_SETVIEWEOL wParam:(uptr_t)[other.engine message:SCI_GETVIEWEOL]];
@@ -1841,13 +1863,60 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         [_engine message:SCI_INDICATORFILLRANGE wParam:range.location lParam:range.length];
     return YES;
 }
+- (BOOL)setBaseFontName:(NSString *)name size:(double)size {
+    [self assertThread];
+    if (!std::isfinite(size) || size < 6 || size > 72 || ![name isKindOfClass:NSString.class] ||
+        !name.length || name.length > 200 || [name rangeOfString:@"\0"].location != NSNotFound ||
+        ![NSFont fontWithName:name size:size]) return NO;
+    const double points = lround(size * 100) / 100.0;
+    if ([_baseFontName isEqualToString:name] && _basePointSize == points) return YES;
+    _baseFontName = [name copy];
+    _basePointSize = points;
+    [self applyPalette];
+    _emptyLineNumbers.needsDisplay = YES;
+    [self scheduleStateNotification];
+    return YES;
+}
+- (NSInteger)zoomLevel { [self assertThread]; return [_engine message:SCI_GETZOOM]; }
+- (void)setZoomLevel:(NSInteger)level {
+    [self assertThread];
+    if (level >= -10 && level <= 60 && level != self.zoomLevel) [_engine message:SCI_SETZOOM wParam:level];
+}
+- (void)applyDefaultZoomLevel:(NSInteger)level {
+    [self assertThread];
+    if (level < -10 || level > 60) return;
+    _defaultZoomLevel = level;
+    if (_followsDefaultZoom) self.zoomLevel = level;
+}
+- (void)applyFontToStyle:(NSInteger)index name:(NSString *)name size:(NSNumber *)size {
+    NSString *face = name ?: _baseFontName;
+    double points = size ? size.doubleValue : _basePointSize;
+    [_engine message:SCI_STYLESETFONT wParam:index lParam:(sptr_t)face.UTF8String];
+    [_engine message:SCI_STYLESETSIZEFRACTIONAL wParam:index lParam:lround(points * 100)];
+}
 - (BOOL)setSyntaxFont:(NSInteger)index name:(NSString *)name size:(double)size {
     [self assertThread];
-    if(index<0 || index>255 || !std::isfinite(size) || size<6 || size>96 || ![name isKindOfClass:NSString.class] || name.length>200 || [name rangeOfString:@"\0"].location!=NSNotFound)return NO;
-    NSFont *font=[NSFont fontWithName:name size:size];if(font==nil)return NO;
-    _syntaxFonts[@(index)]=@{@"name":name,@"size":@(size)};
-    [_engine message:SCI_STYLESETFONT wParam:index lParam:(sptr_t)name.UTF8String];[_engine message:SCI_STYLESETSIZEFRACTIONAL wParam:index lParam:(sptr_t)lround(size*100)];
-    if (index == STYLE_LINENUMBER || index == STYLE_DEFAULT) { [self updateLineNumberMargin:NO]; _emptyLineNumbers.needsDisplay = YES; }
+    if (![name isKindOfClass:NSString.class] || !name.length) return NO;
+    return [self setSyntaxFont:index faceOverride:name sizeOverride:@(size)];
+}
+- (BOOL)setSyntaxFont:(NSInteger)index faceOverride:(NSString *)name sizeOverride:(NSNumber *)size {
+    [self assertThread];
+    if (index < 0 || index > 255) return NO;
+    if (size && (![size isKindOfClass:NSNumber.class] || !std::isfinite(size.doubleValue) ||
+                 size.doubleValue < 6 || size.doubleValue > 96)) return NO;
+    if (name && (![name isKindOfClass:NSString.class] || !name.length || name.length > 200 ||
+                 [name rangeOfString:@"\0"].location != NSNotFound ||
+                 ![NSFont fontWithName:name size:_basePointSize])) return NO;
+    NSMutableDictionary *override = [NSMutableDictionary dictionary];
+    if (name) override[@"name"] = name;
+    if (size) override[@"size"] = size;
+    if (override.count) _syntaxFonts[@(index)] = override;
+    else [_syntaxFonts removeObjectForKey:@(index)];
+    [self applyFontToStyle:index name:name size:size];
+    if (index == STYLE_LINENUMBER || index == STYLE_DEFAULT) {
+        [self updateLineNumberMargin:NO];
+        _emptyLineNumbers.needsDisplay = YES;
+    }
     return YES;
 }
 - (BOOL)showCallTip:(NSString *)text {
@@ -1988,7 +2057,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     // Keep the line-number margin wide enough: zoom rescales its font, and added or removed lines
     // change the digit count. A margin width is view state, so setting it here edits nothing.
     // The filler numbers are drawn at the zoomed size, which the compared values need not show.
-    if (code == SCN_ZOOM) { [self updateLineNumberMargin:NO]; _emptyLineNumbers.needsDisplay = YES; [self scheduleStateNotification]; }
+    if (code == SCN_ZOOM) { _followsDefaultZoom = self.zoomLevel == _defaultZoomLevel; [self updateLineNumberMargin:NO]; _emptyLineNumbers.needsDisplay = YES; [self scheduleStateNotification]; }
     else if (code == SCN_MODIFIED && notification->linesAdded != 0 && [self lineNumberDigits] != _marginDigits) [self updateLineNumberMargin:NO];
     if (code == SCN_ZOOM || (code == SCN_UPDATEUI && (notification->updated & (SC_UPDATE_V_SCROLL | SC_UPDATE_H_SCROLL)))) [self comparisonViewportChanged];
     if (code == SCN_UPDATEUI) {

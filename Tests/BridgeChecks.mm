@@ -444,6 +444,84 @@ static void currentLineAndGuideChecks() {
         "view changes preserve read-only text, caret, selection, Undo, search decoration and bookmark");
 }
 
+static void baseFontMetricsChecks() {
+    TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 550, 300)];
+    ScintillaView *engine = (ScintillaView *)editor.subviews.firstObject;
+    auto metrics = [](ScintillaView *view, int style, NSString *face, int hundredths) {
+        char name[512] = {};
+        [view message:SCI_STYLEGETFONT wParam:style lParam:(sptr_t)name];
+        return [face isEqualToString:@(name)] && [view message:SCI_STYLEGETSIZEFRACTIONAL wParam:style] == hundredths;
+    };
+    check(metrics(engine, 255, @"Menlo", 1400) && editor.zoomLevel == 0, "legacy global metrics reach style 255");
+    [editor loadDocumentText:[@"abc\n" stringByPaddingToLength:40000 withString:@"abc\n" startingAtIndex:0]];
+    NSData *bytes = editor.utf8Data;
+    NSInteger revision = editor.revision;
+    const sptr_t originalWidth = [engine message:SCI_GETMARGINWIDTHN wParam:0];
+    [editor setSyntaxFont:1 faceOverride:@"Courier" sizeOverride:nil];
+    [editor setSyntaxFont:2 faceOverride:nil sizeOverride:@12.25];
+    [editor setSyntaxFont:3 name:@"Courier" size:18.5];
+    [editor setSyntaxStyle:3 foreground:NSColor.systemRedColor background:nil bold:YES italic:YES];
+    const sptr_t colour = [engine message:SCI_STYLEGETFORE wParam:3];
+    check([editor setBaseFontName:@"Monaco" size:31.75], "base setter accepts installed face and fractional points");
+    check(metrics(engine, 1, @"Courier", 3175) && metrics(engine, 2, @"Monaco", 1225) &&
+          metrics(engine, 3, @"Courier", 1850) && metrics(engine, 255, @"Monaco", 3175),
+          "face-only, size-only, paired and inherited native styles resolve independently");
+    check([engine message:SCI_STYLEGETBOLD wParam:3] && [engine message:SCI_STYLEGETITALIC wParam:3] &&
+          [engine message:SCI_STYLEGETFORE wParam:3] == colour, "base change preserves profile traits and foreground");
+    const sptr_t newWidth = [engine message:SCI_GETMARGINWIDTHN wParam:0];
+    const sptr_t figures = [engine message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER lParam:(sptr_t)"99999"];
+    printf("native gutter before=%ld after=%ld figures=%ld\n", (long)originalWidth, (long)newWidth, (long)figures);
+    check(newWidth > originalWidth && newWidth == figures + 5 && metrics(engine, STYLE_LINENUMBER, @"Monaco", 3175),
+          "five actual gutter figures fit native margin after base change");
+    [editor setBaseFontName:@"Georgia" size:39];
+    const sptr_t zeros = [engine message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER lParam:(sptr_t)"00000"];
+    const sptr_t nines = [engine message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER lParam:(sptr_t)"99999"];
+    printf("proportional gutter actual=%ld zeros=%ld nines=%ld\n", (long)[engine message:SCI_GETMARGINWIDTHN wParam:0], (long)zeros, (long)nines);
+    check(zeros > nines && [engine message:SCI_GETMARGINWIDTHN wParam:0] >= zeros + 5,
+          "proportional numerals wider than nine fit the real line-number gutter");
+    [editor setBaseFontName:@"Monaco" size:31.75];
+    editor.zoomLevel = 3;
+    check(editor.statusInfo.fontSize == 34.75, "status reports effective fractional points after local zoom");
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:editor.frame styleMask:NSWindowStyleMaskBorderless
+        backing:NSBackingStoreBuffered defer:NO];
+    window.contentView = editor;
+    [engine message:SCI_GOTOLINE wParam:10000];
+    [editor layoutSubtreeIfNeeded];
+    NSBitmapImageRep *sample = [editor bitmapImageRepForCachingDisplayInRect:editor.bounds];
+    [editor cacheDisplayInRect:editor.bounds toBitmapImageRep:sample];
+    NSView *filler = [editor valueForKey:@"emptyLineNumbers"];
+    [filler cacheDisplayInRect:filler.bounds toBitmapImageRep:[filler bitmapImageRepForCachingDisplayInRect:filler.bounds]];
+    NSFont *fillerFont = [[filler valueForKey:@"attributes"] objectForKey:NSFontAttributeName];
+    check([fillerFont.fontName isEqualToString:@"Monaco"] && fillerFont.pointSize == 34.75,
+          "beyond-EOF drawing uses the zoomed native gutter face and fractional size");
+    TTEditor *clone = [[TTEditor alloc] initWithFrame:editor.frame];
+    [clone shareDocumentWith:editor]; [clone adoptViewStateFrom:editor];
+    ScintillaView *other = (ScintillaView *)clone.subviews.firstObject;
+    check(metrics(other, 255, @"Monaco", 3175) && metrics(other, 2, @"Monaco", 1225) &&
+          clone.zoomLevel == 3, "full clone adoption copies base, overrides and zoom");
+    [clone applyDefaultZoomLevel:3];
+    [clone applyDefaultZoomLevel:2];
+    check(clone.zoomLevel == 3, "new global default passing through local zoom preserves local ownership");
+    [clone executeCommand:@"zoomOut"];
+    [clone applyDefaultZoomLevel:4];
+    check(clone.zoomLevel == 4, "manual return to current default resumes following it");
+    clone.zoomLevel = 4;
+    [clone setBaseFontName:@"Menlo" size:21.5]; [clone adoptSyntaxStylesFrom:editor];
+    check(metrics(other, 1, @"Courier", 2150) && metrics(other, 2, @"Menlo", 1225) && clone.zoomLevel == 4 &&
+          editor.zoomLevel == 3, "syntax-only propagation preserves independent view base and zoom");
+    [editor setSyntaxFont:STYLE_DEFAULT name:@"Courier" size:19];
+    [editor setLanguage:@"null"];
+    check(metrics(engine, STYLE_DEFAULT, @"Monaco", 3175) && metrics(engine, 3, @"Monaco", 3175) &&
+          ![engine message:SCI_STYLEGETBOLD wParam:3], "profile removal restores even an overridden style default");
+    check(![editor setBaseFontName:@"TextTank-Missing-Font-240" size:12] &&
+          ![editor setBaseFontName:@"Courier" size:NAN] && ![editor setBaseFontName:@"Courier" size:73] &&
+          metrics(engine, 255, @"Monaco", 3175), "invalid base changes leave every metric in place");
+    [editor setBaseFontName:@"Menlo" size:6]; editor.zoomLevel = -10;
+    check(editor.statusInfo.fontSize == 1, "minimum effective points match the native renderer");
+    check(editor.utf8Data.length == bytes.length && [editor.utf8Data isEqual:bytes] && editor.revision == revision &&
+          ![engine message:SCI_CANUNDO] && !editor.modified, "style, zoom and clone operations preserve bytes, revision and Undo");
+}
+
 static void cancellationContract() {
     TTSearchCancellation *token=[TTSearchCancellation new];
     check(!token.cancelled && ![[token valueForKey:@"cancelled"] boolValue], "F316 native cancellation starts false and retains its safe KVC getter");
@@ -470,6 +548,7 @@ int main(int argc, char **argv) {
         [NSApplication sharedApplication];
         ttchecks::section("Return indentation", returnIndentChecks);
         ttchecks::section("Current line and indentation guides", currentLineAndGuideChecks);
+        ttchecks::section("Base font metrics", baseFontMetricsChecks);
         ttchecks::section("Live brace feedback", braceHighlightChecks);
         ttchecks::section("D1 comparison drop and gutter isolation", [&] {
             TTEditor *renderer=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,240)];

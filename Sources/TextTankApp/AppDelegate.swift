@@ -221,6 +221,10 @@ import AppKit
             alert.informativeText = message
             _ = alert.runModal()
         }
+        if let message = settings.value.unavailableFontNotice {
+            Announce.say(message)
+            lastDocumentController?.showTransientStatus(message, seconds: 8, announce: false)
+        }
         if settings.shortcutLoadNotice != nil {
             let message =
                 "Some saved shortcuts were ignored. Other settings remain in use. Open Settings to review them; the original settings file is preserved."

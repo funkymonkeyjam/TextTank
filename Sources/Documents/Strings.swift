@@ -14,7 +14,7 @@ package enum Strings {
         value.formatted(.number.locale(locale))
     }
     static package func points(_ value: Double, locale: Locale = .current) -> String {
-        value.formatted(.number.locale(locale).precision(.fractionLength(0...1)))
+        value.formatted(.number.locale(locale).precision(.fractionLength(0...2)))
     }
     static package func bytes(_ value: Int) -> String {
         let formatter = ByteCountFormatter()
