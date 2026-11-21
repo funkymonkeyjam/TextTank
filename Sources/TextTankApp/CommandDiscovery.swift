@@ -185,7 +185,7 @@ import EditorBridge
             }
         case "selectLanguage:": return ("Reads language profile • Changes active editor highlighting", nil)
         case "startRecording", "stopRecording": return ("Reads editor commands • Changes recording state", nil)
-        case "playLast", "playSaved:", "playAgain:": return ("Reads recorded commands • Changes active editor", nil)
+        case "playLast", "playSaved:", "playAgain": return ("Reads recorded commands • Changes active editor", nil)
         default: break
         }
         if selector == "command:", let raw = item.representedObject as? String {

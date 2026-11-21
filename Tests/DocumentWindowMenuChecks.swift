@@ -208,6 +208,9 @@ extension DocumentChecks {
                 "system services and recursive palette invocation are omitted")
             check(entries.contains { $0.item.action == NSSelectorFromString("runAction:") && $0.row.detail.hasPrefix("Reads ") && $0.row.detail.contains("Writes ") },
                 "saved workflows identify their actual input and output")
+            check(entries.contains {
+                $0.item.action == #selector(MacroController.playAgain) && $0.row.detail == "Reads recorded commands • Changes active editor"
+            }, "Play Again declares its recorded input and current editor destination")
             let menu = NSMenu(), target = PaletteActionFixture(), other = PaletteActionFixture()
             let item = NSMenuItem(title: "Owned action", action: #selector(PaletteActionFixture.selected(_:)), keyEquivalent: "")
             item.target = target
