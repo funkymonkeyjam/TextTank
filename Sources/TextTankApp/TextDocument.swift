@@ -2,6 +2,7 @@ import TextTankCore
 import EditorBridge
 import NativeSearch
 import AppKit
+import UniformTypeIdentifiers
 
 /// The Objective-C name is fixed, so `NSDocumentClass` in Info.plist does not depend on the
 /// name of the Swift module.
@@ -766,7 +767,9 @@ import AppKit
     func readInitialUTF8IfEligible(from url: URL, signature: FileSignature, ofType type: String,
                                    isCancelled: () -> Bool = { false }) throws -> Bool {
         guard signature.size >= SizePolicy.standard.streamedImportThreshold, signature.size <= Int32.max,
-              type == Self.plainTextType, openEncoding == nil || openEncoding == .utf8,
+              let contentType = UTType(type),
+              contentType.conforms(to: .plainText) || contentType == .json || contentType == .xml,
+              openEncoding == nil || openEncoding == .utf8,
               !opened, !languageResolved, presentations.isEmpty, editor.byteLength == 0, editor.revision == 0,
               !editor.readOnly else { return false }
         let stream = InitialFileStream(capacity: UInt(signature.size), detectsEncoding: openEncoding == nil)

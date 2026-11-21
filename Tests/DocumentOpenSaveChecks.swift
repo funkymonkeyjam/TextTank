@@ -57,6 +57,50 @@ extension DocumentChecks {
             document.editor.replaceSelection(text)
         }
 
+        section("large native text types use the streamed first read", #line) {
+            try files.createDirectory(at: area, withIntermediateDirectories: true)
+            let limit = SizePolicy.standard.streamedImportThreshold
+            var bytes = Data(repeating: 0x20, count: limit)
+            for index in stride(from: 127, to: limit, by: 128) { bytes[index] = 0x0A }
+            let formats = [("swift", "let value = 0"), ("json", "null"), ("xml", "<v/>")]
+            for (ext, prefix) in formats {
+                try autoreleasepool {
+                    let url = area.appendingPathComponent("native-type." + ext)
+                    bytes.replaceSubrange(0..<32, with: Data(repeating: 0x20, count: 32))
+                    bytes.replaceSubrange(0..<prefix.utf8.count, with: prefix.utf8)
+                    try bytes.write(to: url)
+                    let type = try documents.typeForContents(of: url)
+                    let signature = try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: limit)
+                    let document = TextDocument()
+                    let streamed = try document.readInitialUTF8IfEligible(from: url, signature: signature, ofType: type)
+                    check(streamed && document.editor.byteLength == limit && !document.isDocumentEdited,
+                          "actual native type for ." + ext + " uses the validated first-read loader")
+                }
+            }
+            let url = area.appendingPathComponent("native-type.swift")
+            let signature = try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: limit)
+            let document = TextDocument()
+            for type in ["public.rtf", "public.data", "app.texttank.session", "org.example.unregistered"] {
+                let streamed = try document.readInitialUTF8IfEligible(from: url, signature: signature, ofType: type)
+                check(!streamed && document.editor.byteLength == 0, type + " retains the ordinary read path")
+            }
+            bytes[bytes.count - 1] = 0xFF
+            try bytes.write(to: url)
+            let invalidSignature = try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: limit)
+            let nativeType = try documents.typeForContents(of: url)
+            let originalRevision = document.editor.revision
+            var rejected = false
+            do { _ = try document.readInitialUTF8IfEligible(from: url, signature: invalidSignature, ofType: nativeType) }
+            catch FileCodecError.invalidBytes(.utf8) { rejected = true }
+            check(rejected && document.editor.byteLength == 0 && document.editor.revision == originalRevision,
+                  "late invalid UTF-8 leaves the existing native document untouched")
+            document.editor.replaceSelection("keep")
+            let editedRevision = document.editor.revision
+            let streamed = try document.readInitialUTF8IfEligible(from: url, signature: invalidSignature, ofType: nativeType)
+            check(!streamed && document.editor.text == "keep" && document.editor.revision == editedRevision,
+                  "an edited native document retains its bytes when the first-read path declines")
+        }
+
         section("size-scaled automatic recovery", #line) {
             let mib = 1024 * 1024
             let scales: [(Int, Double?)] = [
