@@ -168,11 +168,18 @@ import Darwin
                             === opened,
                     "a newly opened document appears without Refresh")
                 check(controller.statusText == statusBeforeOpen, "the quiet reload leaves the status line alone")
+                let presenterQueue = opened.presentedItemOperationQueue
                 opened.close()
+                // A file presenter callback can still own the closed document after its row goes
+                // away. Drain prior callbacks and their main-queue deliveries inside this pool.
+                let drained = DispatchGroup()
+                drained.enter()
+                presenterQueue.addBarrierBlock { DispatchQueue.main.async { drained.leave() } }
+                spinUntil("the closed document to leave the list and its presenter callbacks to drain") {
+                    listed() == listedBefore && drained.wait(timeout: .now()) == .success
+                }
             }
-            spinUntil("the closed document to leave the list") { listed() == listedBefore }
             check(listed() == listedBefore, "a closed document leaves the list without Refresh")
-            autoreleasepool { pump() }
             check(closedDocument == nil, "the list does not keep a closed document alive")
             // Refresh rebuilds the folder nodes, which is what re-reads the disk; expansion survives it.
             controller.select(mode: 1)
