@@ -47,7 +47,7 @@ import NativeSearch
         delegate.onLaunch = { [self] in
             // A real AppKit timer callback allows main-queue deliveries in nested RunLoop waits.
             let timer = Timer(timeInterval: 0.01, repeats: false) { [self] _ in
-                MainActor.assumeIsolated {
+                MainActor.assumeIsolated { () -> Void in
                     Checks.run("TabWorkspaceChecks") {
                         defer {
                             isolated.restore()

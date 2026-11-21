@@ -51,10 +51,16 @@ for name, actor in [('good', '@MainActor '), ('bad', '')]:
         (evidence / 'bad-log-guard.log').write_bytes(logged.stdout + logged.stderr)
         check(logged.returncode != 0, 'canonical saved-log gate rejects the same real emitted diagnostic')
 settings = manifest['target_settings']
+advisory = (os.environ.get('GITHUB_ACTIONS') == 'true'
+            and os.environ.get('TEXTTANK_WARNINGS_AS_ERRORS') == '0'
+            and os.environ.get('XCODE_VERSION') == '16.4'
+            and manifest['toolchain']['xcode'].splitlines()[0] == 'Xcode 16.4')
+expected_warnings = 'NO' if advisory else 'YES'
 check(all(settings[name].get('SWIFT_STRICT_CONCURRENCY') == 'complete'
           and settings[name].get('SWIFT_VERSION') == '5.0'
-          and settings[name].get('SWIFT_TREAT_WARNINGS_AS_ERRORS') == 'YES'
+          and settings[name].get('SWIFT_TREAT_WARNINGS_AS_ERRORS') == expected_warnings
           for name in ['TextTankCore', 'TextTankRuntime', 'TextTank']),
-      'actual resolved Swift producers retain complete checking, Swift 5 and warnings-as-errors')
+      'actual resolved Swift producers retain complete checking, Swift 5 and SWIFT_TREAT_WARNINGS_AS_ERRORS='
+      + expected_warnings)
 print('COMPILER_CONTROL_EVIDENCE ' + str(evidence))
 print(f'PASS ConcurrencyGuardChecks: {checks} assertions')

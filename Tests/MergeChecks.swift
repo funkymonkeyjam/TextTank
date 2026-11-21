@@ -130,7 +130,7 @@ enum MergePatchOracle {
         check((try? Data(contentsOf: file)) ?? Data() == after, "D2 standard tool byte reconstruction \(name)")
     }
     static func main() async {
-        await Checks.run("MergeChecks") {
+        func runCases() async throws {
             var pairs = try JSONDecoder().decode(
                 [Pair].self, from: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("review/corpus.json")))
             pairs += [
@@ -152,15 +152,12 @@ enum MergePatchOracle {
                         after: (0..<27).map { "\(($0 * 3 + n) % 13)\n" }.joined()))
             }
             let unique = (0..<250).map { "line-\($0)\n" }
-            pairs += [
-                .init(
-                    name: "unique-anchors", before: unique.joined(),
-                    after: (["new\n"] + unique.dropFirst() + ["end\n"]).joined()),
-                .init(name: "reverse-unique", before: unique.joined(), after: unique.reversed().joined()),
-                .init(
-                    name: "distant-context", before: (0..<40).map { "row\($0)\n" }.joined(),
-                    after: (0..<40).map { $0 == 2 || $0 == 35 ? "changed\($0)\n" : "row\($0)\n" }.joined())
-            ]
+            let anchored = "new\n" + unique.dropFirst().joined() + "end\n"
+            pairs.append(Pair(name: "unique-anchors", before: unique.joined(), after: anchored))
+            pairs.append(Pair(name: "reverse-unique", before: unique.joined(), after: unique.reversed().joined()))
+            let distantBefore = (0..<40).map { "row\($0)\n" }.joined()
+            let distantAfter = (0..<40).map { $0 == 2 || $0 == 35 ? "changed\($0)\n" : "row\($0)\n" }.joined()
+            pairs.append(Pair(name: "distant-context", before: distantBefore, after: distantAfter))
             var evaluated = 0
             let tool = Process(), versionPipe = Pipe()
             tool.executableURL = URL(fileURLWithPath: "/usr/bin/git")
@@ -344,5 +341,6 @@ enum MergePatchOracle {
                 "D2_CORPUS pairs=\(pairs.count) strategies=2 directions=2 subset_plans=\(evaluated) profile=512m30s finalF0caps=unchanged"
             )
         }
+        await Checks.run("MergeChecks") { try await runCases() }
     }
 }

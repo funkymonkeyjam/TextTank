@@ -24,7 +24,7 @@ import NativeSearch
             app.delegate = delegate
             delegate.launched = {
                 let timer = Timer(timeInterval: 0.01, repeats: false) { _ in
-                    MainActor.assumeIsolated {
+                    MainActor.assumeIsolated { () -> Void in
                         Checks.run("TabOrganizationNativeChecks") {
                             defer {
                                 context.isolated.restore()
