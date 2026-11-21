@@ -131,6 +131,29 @@ enum MergePatchOracle {
     }
     static func main() async {
         func runCases() async throws {
+            for separator in ["\n", "\r", "\r\n", "\r\n\n"] {
+                let original = try snapshot("same" + separator + "before" + separator)
+                let modified = try snapshot("same" + separator + "after" + separator)
+                let result = await ReviewDiffEngine.compare(original, modified)
+                check((result.lfFramedStrategy == .myers) == (separator == "\n"), "LF framing follows actual source splits")
+                let untagged = ReviewChangeSet(
+                    original: result.original, modified: result.modified, blocks: result.blocks,
+                    completeness: result.completeness, metrics: result.metrics)
+                for (changes, strategy) in [(result, ReviewDiffStrategy.myers), (result, .anchored), (untagged, .myers)] {
+                    // The delivery hook belongs to the LF solver. A separate token records it
+                    // without cancelling the export or bypassing its normal byte checks.
+                    let solverCompleted = ReviewCancellation()
+                    let patch = try await UnifiedPatch.write(
+                        original: original, modified: modified, changes: changes, strategy: strategy,
+                        hooks: .init(checkpoint: { phase, _ in
+                            if phase == .delivery { solverCompleted.cancel() }
+                        }))
+                    let expectedReuse = separator == "\n" && strategy == .myers && changes.lfFramedStrategy == .myers
+                    check(solverCompleted.isCancelled != expectedReuse, "LF export respects solver, strategy and framing")
+                    let reconstructed = try MergePatchOracle.apply(patch, to: original.bytes)
+                    check(reconstructed == modified.bytes, "LF export reconstructs complete input for each framing")
+                }
+            }
             var pairs = try JSONDecoder().decode(
                 [Pair].self, from: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("review/corpus.json")))
             pairs += [

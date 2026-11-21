@@ -23,14 +23,23 @@ package enum UnifiedPatch {
             guard !token.isCancelled else { throw MergeFailure(.cancelled) }
             guard remaining.maximumWork >= 0 else { throw MergeFailure(budget: .work) }
             guard remaining.seconds > 0 else { throw MergeFailure(budget: .time) }
-            let lf = await ReviewDiffEngine.compareLF(
-                original, modified, strategy: strategy, policy: remaining, token: token, hooks: hooks)
-            switch lf.completeness {
-            case .complete: break
-            case .cancelled: throw MergeFailure(.cancelled)
-            case .budgetStopped(let reason): throw MergeFailure(budget: reason)
+            let lf: ReviewChangeSet
+            if !changes.blocks.isEmpty, changes.lfFramedStrategy == strategy,
+                changes.metrics.resultBytes <= min(SizePolicy.standard.reviewOutput, policy.maximumOutputBytes)
+            {
+                // Complete LF-only source coordinates from this strategy are already patch
+                // records. validatePair above still proves all ranges and unchanged gaps.
+                lf = changes
+            } else {
+                lf = await ReviewDiffEngine.compareLF(
+                    original, modified, strategy: strategy, policy: remaining, token: token, hooks: hooks)
+                switch lf.completeness {
+                case .complete: break
+                case .cancelled: throw MergeFailure(.cancelled)
+                case .budgetStopped(let reason): throw MergeFailure(budget: reason)
+                }
+                remaining.maximumWork -= lf.metrics.work
             }
-            remaining.maximumWork -= lf.metrics.work
             remaining.seconds = policy.seconds - (hooks.clock() - started)
             guard !token.isCancelled else { throw MergeFailure(.cancelled) }
             guard remaining.maximumWork >= 0 else { throw MergeFailure(budget: .work) }

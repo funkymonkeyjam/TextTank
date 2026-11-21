@@ -39,6 +39,8 @@ package struct ReviewChangeSet: Sendable {
     package let blocks: [ReviewChangeBlock]
     package let completeness: ReviewCompleteness
     package let metrics: ReviewDiffMetrics
+    /// Set by the first-party solver only after full validation of LF-compatible source lines.
+    var lfFramedStrategy: ReviewDiffStrategy? = nil
     package var identical: Bool { completeness == .complete && blocks.isEmpty }
 }
 package struct ReviewInlinePolicy: Sendable {
@@ -159,6 +161,7 @@ struct ReviewLine {
 struct ReviewLines {
     let snapshot: TextSnapshot
     let ranges: [ReviewLine]
+    let usedCarriageReturnBoundaries: Bool
     init(_ snapshot: TextSnapshot, meter: ReviewMeter, lfOnly: Bool = false) throws {
         self.snapshot = snapshot
         try meter.enter(.lines)
@@ -171,6 +174,7 @@ struct ReviewLines {
         let capacity = min(snapshot.bytes.count, min(250_000, meter.policy.maximumLines))
         try meter.reserve(capacity * 64)
         var lines: [ReviewLine] = []
+        var sawCR = false
         lines.reserveCapacity(capacity)
         try snapshot.bytes.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
             var start = 0, i = 0, hash: UInt64 = 14_695_981_039_346_656_037
@@ -185,6 +189,7 @@ struct ReviewLines {
                     i += 1
                 }
                 if c == 10 || (!lfOnly && c == 13) {
+                    if c == 13 { sawCR = true }
                     guard lines.count < capacity else { throw ReviewHalt.budget(.lines) }
                     lines.append(.init(lower: start, upper: i, hash: hash))
                     start = i
@@ -197,6 +202,7 @@ struct ReviewLines {
             }
         }
         ranges = lines
+        usedCarriageReturnBoundaries = sawCR
     }
     func offset(_ index: Int) -> Int { index == ranges.count ? snapshot.bytes.count : ranges[index].lower }
 }
