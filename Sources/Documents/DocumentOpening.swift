@@ -165,6 +165,11 @@ final class TextDocumentController: NSDocumentController {
         if nativeReviewDepth == 0 { didReviewOpenDocuments?(accepted) }
         callback.forward(controller, accepted: accepted)
     }
+
+    var recordsRecentDocuments = true
+    override func noteNewRecentDocumentURL(_ url: URL) {
+        if recordsRecentDocuments { super.noteNewRecentDocumentURL(url) }
+    }
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         if CompareCommandScope.blocksWorkspace,
             [#selector(openDocument(_:)), #selector(newDocument(_:)), #selector(saveAllDocuments(_:))].contains(

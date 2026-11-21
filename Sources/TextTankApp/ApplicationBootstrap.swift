@@ -1,7 +1,20 @@
 import AppKit
+import TextTankCore
 
 package enum TextTankApplication {
     @MainActor package static func run() {
+        if CommandLine.arguments.dropFirst().first == "--smoke-test" {
+            guard CommandLine.arguments.count == 3 else {
+                smokeFailure("Expected --smoke-test FILE.")
+            }
+            let file = URL(fileURLWithPath: CommandLine.arguments[2]).standardizedFileURL
+            let support: URL
+            do { support = try AppStorage.makeTemporarySupportDirectory() }
+            catch { smokeFailure(error.localizedDescription) }
+            defer { try? FileManager.default.removeItem(at: support) }
+            run(smokeFile: file) { error in smokeFailure(error.localizedDescription, cleanup: support) }
+            return
+        }
         run { error in
             let app = NSApplication.shared
             app.setActivationPolicy(.regular)
@@ -12,7 +25,12 @@ package enum TextTankApplication {
                 detail: error.localizedDescription)
         }
     }
-    @MainActor static func run(onRecoveryFailure: (Error) -> Void) {
+    static func smokeFailure(_ message: String, cleanup: URL? = nil) -> Never {
+        if let cleanup { try? FileManager.default.removeItem(at: cleanup) }
+        FileHandle.standardError.write(Data(("TextTank bundle smoke failed: " + message + "\n").utf8))
+        exit(EXIT_FAILURE)
+    }
+    @MainActor static func run(smokeFile: URL? = nil, onRecoveryFailure: (Error) -> Void) {
         do {
             try TextDocument.recovery.claimOwnership()
         } catch {
@@ -22,8 +40,10 @@ package enum TextTankApplication {
         // The first document controller created becomes the shared one, so this comes first.
         let documents = TextDocumentController()
         let app = NSApplication.shared
-        app.setActivationPolicy(.regular)
+        app.setActivationPolicy(smokeFile == nil ? .regular : .prohibited)
+        documents.recordsRecentDocuments = smokeFile == nil
         let delegate = AppDelegate()
+        delegate.smokeFile = smokeFile
         app.delegate = delegate
         delegate.installEditorServices()
         if NSDocumentController.shared !== documents {
