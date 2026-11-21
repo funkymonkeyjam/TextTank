@@ -147,17 +147,39 @@ static NSHashTable<TTEditor *> *TTRecordingEditors() {
     dispatch_once(&once, ^{ table = [NSHashTable weakObjectsHashTable]; });
     return table;
 }
-static thread_local bool TTInsideMouseOrDrop = false;
+// A drop can produce several before-change notifications followed by a caret move.
+// Deliver its first rejection immediately, once per recording, including on a clone.
+struct TTMouseRecording {
+    TTEditor *editor;
+    TTInteractionState before;
+    bool reported;
+};
+struct TTMouseMacroInteraction {
+    std::vector<TTMouseRecording> recordings;
+    TTMouseRecording *find(TTEditor *editor) {
+        for (auto &recording : recordings) if (recording.editor == editor) return &recording;
+        return nullptr;
+    }
+    void capture(TTEditor *editor) {
+        TTMouseRecording recording{editor, [editor interactionState], false};
+        if (auto *existing = find(editor)) *existing = recording;
+        else recordings.push_back(recording);
+    }
+};
+static thread_local TTMouseMacroInteraction *TTActiveMouseInteraction = nullptr;
 static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
-    NSArray<TTEditor *> *recording = TTRecordingEditors().allObjects;
-    if (!recording.count) { handle(); return; }
-    std::vector<TTInteractionState> before;
-    for (TTEditor *editor in recording) before.push_back([editor interactionState]);
-    const bool outer = TTInsideMouseOrDrop;
-    TTInsideMouseOrDrop = true;
-    @try { handle(); } @finally { TTInsideMouseOrDrop = outer; }
-    NSUInteger index = 0;
-    for (TTEditor *editor in recording) [editor noteUnrecordedInteractionSince:before[index++]];
+    if (TTActiveMouseInteraction || !TTRecordingEditors().count) { handle(); return; }
+    TTMouseMacroInteraction interaction;
+    for (TTEditor *editor in TTRecordingEditors().allObjects) interaction.capture(editor);
+    TTActiveMouseInteraction = &interaction;
+    @try {
+        handle();
+        // Copy before calling observers, which may start another recording.
+        for (size_t i = 0; i < interaction.recordings.size(); ++i) {
+            const auto recording = interaction.recordings[i];
+            if (!recording.reported) [recording.editor noteUnrecordedInteractionSince:recording.before];
+        }
+    } @finally { TTActiveMouseInteraction = nullptr; }
 }
 static char TTPairCloser(NSString *text) {
     if (text.length != 1) return 0;
@@ -334,6 +356,12 @@ static thread_local bool TTWatchMacroMessages = false;
 @end
 @implementation TTScintillaView
 + (Class)contentViewClass { return TTContentView.class; }
+- (void)insertText:(id)text {
+    // ScintillaView's public insertion selector calls the backend directly.
+    TTEditor *editor = ((TTContentView *)self.content).editor;
+    if (!editor) { [super insertText:text]; return; }
+    [editor performNativeMacroInput:^{ [super insertText:text]; }];
+}
 - (sptr_t)dispatchMessage:(unsigned int)message wParam:(uptr_t)wParam lParam:(sptr_t)lParam search:(NSObject *)search {
     if (!TTWatchMacroMessages) return [super message:message wParam:wParam lParam:lParam];
     TTMacroMessage frame{self, message, search, wParam, lParam};
@@ -1773,11 +1801,20 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
 - (TTInteractionState)interactionState {
     return {_revision, [_engine message:SCI_GETSELECTIONS], [_engine message:SCI_GETANCHOR], [_engine message:SCI_GETCURRENTPOS]};
 }
+- (void)reportUnrecordedMouseInteraction {
+    if (TTActiveMouseInteraction) {
+        if (auto *recording = TTActiveMouseInteraction->find(self)) {
+            if (recording->reported) return;
+            recording->reported = true;
+        }
+    }
+    [self reportMacroStep:[TTMacroAction unsupported:@"A mouse click, mouse selection or drag and drop" message:0]];
+}
 - (void)noteUnrecordedInteractionSince:(TTInteractionState)before {
     if (!_macroRecording || !_onMacroStep) return;
     const TTInteractionState now = [self interactionState];
     if (now.revision == before.revision && now.selections == before.selections && now.anchor == before.anchor && now.caret == before.caret) return;
-    [self reportMacroStep:[TTMacroAction unsupported:@"A mouse click, mouse selection or drag and drop" message:0]];
+    [self reportUnrecordedMouseInteraction];
 }
 /// The handler may clear itself while it runs (a discard does), so it is held for the call.
 - (void)reportMacroStep:(TTMacroAction *)step {
@@ -1813,6 +1850,7 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
 }
 - (void)startRecording {
     [self assertThread]; _macroRecording = YES; _interactionPending = NO; _marginMouseDown = NO;
+    if (TTActiveMouseInteraction) TTActiveMouseInteraction->capture(self);
     [TTRecordingEditors() addObject:self];
     TTWatchMacroMessages = true;
     if (!_macroMouseMonitor) {
@@ -1828,6 +1866,10 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
     [self assertThread];
     // A margin click still waiting for its comparison is settled before the recording can be saved.
     [self settlePendingInteraction];
+    if (TTActiveMouseInteraction) {
+        auto *recording = TTActiveMouseInteraction->find(self);
+        if (recording && !recording->reported) [self noteUnrecordedInteractionSince:recording->before];
+    }
     if (_inNativeMacroInput) _retiredNativeMacroInput = YES;
     if (_inNativeMacroInput && _nativeInputChanged && !_nativeInputReported) {
         _nativeInputChanged = NO;
@@ -2464,7 +2506,8 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
         if (_inNativeMacroInput && _retiredNativeMacroInput)
             [self reportMacroStep:[TTMacroAction unsupported:@"Native input crossed the start of this recording" message:0]];
         else if (_inNativeMacroInput) _nativeInputChanged = YES;
-        else [self reportMacroStep:[TTMacroAction unsupported:TTInsideMouseOrDrop ? @"A mouse click, mouse selection or drag and drop" : @"A native editing operation without a recorded macro step" message:0]];
+        else if (TTActiveMouseInteraction) [self reportUnrecordedMouseInteraction];
+        else [self reportMacroStep:[TTMacroAction unsupported:@"A native editing operation without a recorded macro step" message:0]];
     }
     if (_macroRecording && _onMacroStep && frame && code == SCN_MODIFIED &&
         (type & (SC_MOD_BEFOREINSERT | SC_MOD_BEFOREDELETE)) && !(frame->source == _engine && frame->sourceStepReported)) {
@@ -2524,7 +2567,7 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
             NSString *name = TTMacroNamesByMessage()[@(notification->message)];
             if (name) step = [TTMacroAction command:name];
         }
-        if (step && _inNativeMacroInput && !frame) _nativeInputReported = YES;
+        if (_inNativeMacroInput && !frame) _nativeInputReported = YES;
         if (step && frame && frame->source == _engine && frame->message == (unsigned int)notification->message)
             frame->sourceStepReported = YES;
         [self reportMacroStep:step ?: TTUnrecordableStep(notification->message)];
