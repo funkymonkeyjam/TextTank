@@ -5,7 +5,8 @@ package enum UnifiedPatch {
     package static func write(
         original: TextSnapshot, modified: TextSnapshot, changes: ReviewChangeSet,
         strategy: ReviewDiffStrategy = .myers, policy: ReviewDiffPolicy = CompareTimeAllowance.standard.patchPolicy,
-        token: ReviewCancellation = ReviewCancellation(), hooks: ReviewDiffHooks = .init(), raw: Bool = true
+        token: ReviewCancellation = ReviewCancellation(), hooks: ReviewDiffHooks = .init(), raw: Bool = true,
+        relativeComponents: [String]? = nil
     ) async throws -> Data {
         guard raw else { throw MergeFailure(.incomplete) }
         return try await withTaskCancellationHandler {
@@ -48,7 +49,8 @@ package enum UnifiedPatch {
             return try await Task.detached {
                 do {
                     return try serialize(
-                        original, modified, lf, meter: ReviewMeter(finalPolicy, token: token, hooks: hooks))
+                        original, modified, lf, relativeComponents: relativeComponents,
+                        meter: ReviewMeter(finalPolicy, token: token, hooks: hooks))
                 } catch ReviewHalt.cancelled { throw MergeFailure(.cancelled) } catch ReviewHalt.budget(let reason) {
                     throw MergeFailure(budget: reason)
                 }
@@ -58,7 +60,10 @@ package enum UnifiedPatch {
         }
     }
     private struct Hunk { var a: Int, endA: Int, b: Int, endB: Int }
-    private static func serialize(_ a: TextSnapshot, _ b: TextSnapshot, _ changes: ReviewChangeSet, meter: ReviewMeter)
+    private static func serialize(
+        _ a: TextSnapshot, _ b: TextSnapshot, _ changes: ReviewChangeSet, relativeComponents: [String]?,
+        meter: ReviewMeter
+    )
         throws -> Data
     {
         try meter.poll()
@@ -123,11 +128,35 @@ package enum UnifiedPatch {
             }
             return String(decoding: bytes, as: UTF8.self)
         }
-        let oldName = try label(a.label), newName = try label(b.label)
+        let headers: String
+        if let parts = relativeComponents {
+            guard !parts.isEmpty, parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("/") })
+            else { throw MergeFailure(.invalidRange) }
+            let path = parts.joined(separator: "/")
+            guard path.utf8.count <= 4096 else { throw MergeFailure(.budgetExceeded) }
+            // Git's quoted path format also works for tabs, quoted names and non-ASCII filenames.
+            func quoted(_ side: String) throws -> String {
+                var result = "\"" + side + "/"
+                for byte in path.utf8 {
+                    try meter.spend()
+                    if (32...126).contains(byte) && byte != 34 && byte != 92 {
+                        result.append(Character(UnicodeScalar(byte)))
+                    } else {
+                        result += String(format: "\\%03o", byte)
+                    }
+                }
+                result += "\""
+                labels += result.utf8.count
+                return result
+            }
+            headers = try "--- \(quoted("a"))\n+++ \(quoted("b"))\n"
+        } else {
+            headers = try "--- a/\(label(a.label))\n+++ b/\(label(b.label))\n"
+        }
         // Pre-admit the maximum output before building it; actual count stays separately guarded.
         try meter.reserve(
             min(cap, a.bytes.count + b.bytes.count + (al.ranges.count + bl.ranges.count) * 40 + labels + 128))
-        try append(Data("--- a/\(oldName)\n+++ b/\(newName)\n".utf8))
+        try append(Data(headers.utf8))
         func row(_ prefix: UInt8, _ snapshot: TextSnapshot, _ line: ReviewLine) throws {
             let n = line.upper - line.lower
             guard n + 1 <= cap - output.count else { throw MergeFailure(.budgetExceeded) }

@@ -20,7 +20,8 @@ package struct FolderSearchRequest: Sendable {
         extensions: Set<String> = [], filenameFilters: String = "*.*", excludingSearchedFiles: Set<String> = [],
         displayTabWidth: Int = 4, maximumFiles: Int = 10000, maximumEntries: Int = 100000,
         maximumFileBytes: Int = SizePolicy.standard.folderInput, maximumTotalBytes: Int = SizePolicy.standard.folderTotal,
-        maximumResults: Int = 10000, previewUTF16Length: Int = 240, listsPolicyExclusions: Bool = false
+        maximumInspectionBytes: Int = 64 * 1024 * 1024, maximumResults: Int = 10000, previewUTF16Length: Int = 240,
+        listsPolicyExclusions: Bool = false
     ) {
         self.directory = directory
         self.query = query
@@ -38,6 +39,7 @@ package struct FolderSearchRequest: Sendable {
         self.maximumEntries = maximumEntries
         self.maximumFileBytes = maximumFileBytes
         self.maximumTotalBytes = maximumTotalBytes
+        self.maximumInspectionBytes = maximumInspectionBytes
         self.maximumResults = maximumResults
         self.previewUTF16Length = previewUTF16Length
         self.listsPolicyExclusions = listsPolicyExclusions
@@ -62,6 +64,9 @@ package struct FolderSearchRequest: Sendable {
     package var maximumEntries: Int
     package var maximumFileBytes: Int
     package var maximumTotalBytes: Int
+    package var maximumInspectionBytes: Int
+    package var maximumDuration: TimeInterval = 60
+    package var perFileTimeLimit = SearchCore.defaultTimeLimit
     package var maximumResults: Int
     package var previewUTF16Length: Int
     /// Also list every policy exclusion in `FolderSearchReport.skipped`, for checks and
@@ -108,7 +113,7 @@ package enum FolderSearchSkipReason: Hashable, Sendable {
     case symbolicLink, hidden, nonRecursiveDirectory, extensionFiltered, filenameFiltered, folderFiltered,
         duplicateScope, notRegularFile, fileTooLarge
     /// A recovery copy, journal or temporary file written by folder replacement.
-    case recoveryArtifact
+    case recoveryArtifact, binaryFormat
     case invalidEncoding(String), unreadable(String)
     /// True when the entry was meant to be searched and was not, which makes coverage incomplete.
     /// Every other reason is a policy exclusion the request asked for.
@@ -121,7 +126,7 @@ package enum FolderSearchSkipReason: Hashable, Sendable {
     /// Policy exclusions in the order they are summarised.
     static package let policyExclusions: [FolderSearchSkipReason] = [
         .filenameFiltered, .extensionFiltered, .folderFiltered, .hidden, .symbolicLink, .nonRecursiveDirectory,
-        .duplicateScope, .notRegularFile, .recoveryArtifact
+        .duplicateScope, .notRegularFile, .recoveryArtifact, .binaryFormat
     ]
     /// Wording for the results window.
     package var explanation: String {
@@ -135,6 +140,7 @@ package enum FolderSearchSkipReason: Hashable, Sendable {
         case .duplicateScope: return "already searched under another folder"
         case .notRegularFile: return "not a regular file"
         case .recoveryArtifact: return "TextTank recovery copy"
+        case .binaryFormat: return "binary file"
         case .fileTooLarge: return "larger than the per-file limit"
         case .invalidEncoding(let detail): return "not valid text: \(detail)"
         case .unreadable(let detail): return detail
@@ -151,12 +157,15 @@ package struct FolderSearchSkipped: Equatable, Sendable {
     package let reason: FolderSearchSkipReason
 }
 package enum FolderSearchLimit: String, Sendable {
-    case entries, files, totalBytes, results
+    case entries, files, totalBytes, inspectionBytes, results, elapsed, consecutiveTimeouts
     package var displayName: String {
         switch self {
         case .entries: return Strings.text("folder.limit.entries", "entries visited")
         case .files: return Strings.text("folder.limit.files", "files considered")
-        case .totalBytes: return Strings.text("folder.limit.bytes", "total data read")
+        case .totalBytes: return Strings.text("folder.limit.text-bytes", "searchable text bytes")
+        case .inspectionBytes: return "file inspection bytes"
+        case .elapsed: return "folder search time limit"
+        case .consecutiveTimeouts: return "three consecutive file searches timed out"
         case .results: return Strings.text("folder.limit.results", "search results")
         }
     }
@@ -195,6 +204,9 @@ package struct FolderSearchReport: Sendable {
     }
     package var entriesVisited: Int
     package var filesConsidered: Int
+    /// Bytes read from excluded, failed or over-budget inputs, separately bounded across roots.
+    package var inspectionBytes = 0
+    fileprivate var consecutiveTimeouts = 0
     package var filesSearched: Int
     package var bytesRead: Int
     package var searchedFiles: Set<String>
@@ -248,8 +260,11 @@ package enum FolderSearch {
         progress: (@Sendable (FolderSearchProgress) -> Void)? = nil
     ) async throws -> FolderSearchReport {
         if Task.isCancelled { cancellation.cancel() }
+        let deadline = ProcessInfo.processInfo.systemUptime + request.maximumDuration
         let work = Task.detached(priority: .userInitiated) {
-            try run(request, filters: try validate(request), cancellation: cancellation, progress: progress)
+            try run(
+                request, filters: try validate(request), cancellation: cancellation,
+                deadline: deadline, priorTimeouts: 0, progress: progress)
         }
         return try await withTaskCancellationHandler(
             operation: { try await work.value }, onCancel: { cancellation.cancel() })
@@ -257,10 +272,12 @@ package enum FolderSearch {
     /// One root of a request that `validate` has already accepted.
     private static func searchValidated(
         _ request: FolderSearchRequest, filters: FolderSearchFilters, cancellation: FolderSearchCancellation,
-        progress: (@Sendable (FolderSearchProgress) -> Void)?
+        deadline: Double, priorTimeouts: Int, progress: (@Sendable (FolderSearchProgress) -> Void)?
     ) async throws -> FolderSearchReport {
         let work = Task.detached(priority: .userInitiated) {
-            try run(request, filters: filters, cancellation: cancellation, progress: progress)
+            try run(
+                request, filters: filters, cancellation: cancellation, deadline: deadline, priorTimeouts: priorTimeouts,
+                progress: progress)
         }
         return try await withTaskCancellationHandler(
             operation: { try await work.value }, onCancel: { cancellation.cancel() })
@@ -277,11 +294,16 @@ package enum FolderSearch {
         }
         // Filters are parsed and the expression is compiled once for all roots, off the caller's
         // thread. An error here is the whole search's error, not one unreadable root each.
+        let deadline = ProcessInfo.processInfo.systemUptime + template.maximumDuration
         let filters = try await Task.detached(priority: .userInitiated) { try validate(template) }.value
         var report = FolderSearchReport(), roots: [URL] = []
         for directory in directories {
             if cancellation.isCancelled || Task.isCancelled {
                 report.wasCancelled = true
+                return report
+            }
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                report.reachedLimit = .elapsed
                 return report
             }
             guard directory.isFileURL, !directory.path.contains("\0"),
@@ -311,23 +333,20 @@ package enum FolderSearch {
                 report.wasCancelled = true
                 break
             }
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                report.reachedLimit = .elapsed
+                break
+            }
             var request = template
             request.directory = root
             request.excludingSearchedFiles.formUnion(report.searchedFiles)
             request.maximumFiles = template.maximumFiles - report.filesConsidered
             request.maximumEntries = template.maximumEntries - report.entriesVisited
             request.maximumTotalBytes = template.maximumTotalBytes - report.bytesRead
+            request.maximumInspectionBytes = template.maximumInspectionBytes - report.inspectionBytes
             request.maximumResults = template.maximumResults - report.matches.count
-            if request.maximumFiles <= 0 {
-                report.reachedLimit = .files
-                break
-            }
             if request.maximumEntries <= 0 {
                 report.reachedLimit = .entries
-                break
-            }
-            if request.maximumTotalBytes <= 0 {
-                report.reachedLimit = .totalBytes
                 break
             }
             if request.maximumResults <= 0 {
@@ -337,7 +356,8 @@ package enum FolderSearch {
             let baseline = report
             do {
                 let part = try await searchValidated(
-                    request, filters: filters, cancellation: cancellation,
+                    request, filters: filters, cancellation: cancellation, deadline: deadline,
+                    priorTimeouts: report.consecutiveTimeouts,
                     progress: { p in
                         progress?(
                             .init(
@@ -352,6 +372,8 @@ package enum FolderSearch {
                 report.filesConsidered += part.filesConsidered
                 report.filesSearched += part.filesSearched
                 report.bytesRead += part.bytesRead
+                report.inspectionBytes += part.inspectionBytes
+                report.consecutiveTimeouts = part.consecutiveTimeouts
                 report.searchedFiles.formUnion(part.searchedFiles)
                 report.wasCancelled = part.wasCancelled
                 report.reachedLimit = part.reachedLimit
@@ -447,7 +469,10 @@ package enum FolderSearch {
             !request.directory.path.contains("\0"), !request.query.isEmpty
         else { throw FolderSearchError.invalidRequest("Choose a local directory and nonempty search expression.") }
         guard request.maximumFiles > 0, request.maximumEntries > 0, request.maximumFileBytes > 0,
-            request.maximumTotalBytes > 0, request.maximumResults > 0, (1...32).contains(request.displayTabWidth),
+            request.maximumTotalBytes > 0, request.maximumInspectionBytes > 0, request.maximumResults > 0,
+            request.maximumDuration.isFinite, request.maximumDuration > 0, request.perFileTimeLimit > 0,
+            request.perFileTimeLimit <= 30,
+            (1...32).contains(request.displayTabWidth),
             (16...8192).contains(request.previewUTF16Length)
         else {
             throw FolderSearchError.invalidRequest(
@@ -472,7 +497,7 @@ package enum FolderSearch {
     }
     private static func run(
         _ request: FolderSearchRequest, filters: FolderSearchFilters, cancellation: FolderSearchCancellation,
-        progress: (@Sendable (FolderSearchProgress) -> Void)?
+        deadline: Double, priorTimeouts: Int, progress: (@Sendable (FolderSearchProgress) -> Void)?
     ) throws -> FolderSearchReport {
         // Normalize platform aliases only after rejecting a symlink root itself.
         let rootFD: Int32, root: URL
@@ -484,8 +509,18 @@ package enum FolderSearch {
         defer { close(rootFD) }
         let listing = request.listsPolicyExclusions, options = searchOptions(request)
         var report = FolderSearchReport()
+        report.consecutiveTimeouts = priorTimeouts
         if cancellation.isCancelled {
             report.wasCancelled = true
+            return report
+        }
+        guard ProcessInfo.processInfo.systemUptime < deadline else {
+            report.reachedLimit = .elapsed
+            return report
+        }
+        let privateStore = FolderReplacementBatch.canonicalPath(of: AppStorage.url(.folderReplacements))
+        if FolderReplacementBatch.contains(root.path, in: privateStore) {
+            report.skip(root, .recoveryArtifact, listing: listing)
             return report
         }
         var enumerationErrors: [FolderSearchSkipped] = []
@@ -507,11 +542,20 @@ package enum FolderSearch {
                 report.wasCancelled = true
                 break
             }
+            if ProcessInfo.processInfo.systemUptime >= deadline {
+                report.reachedLimit = .elapsed
+                break
+            }
             if report.entriesVisited >= request.maximumEntries {
                 report.reachedLimit = .entries
                 break
             }
             report.entriesVisited += 1
+            if FolderReplacementBatch.contains(url.path, in: privateStore) {
+                iterator.skipDescendants()
+                report.skip(url, .recoveryArtifact, listing: listing)
+                continue
+            }
             let values: URLResourceValues
             do { values = try url.resourceValues(forKeys: keys) } catch {
                 report.skip(url, .unreadable(error.localizedDescription), listing: listing)
@@ -559,44 +603,50 @@ package enum FolderSearch {
                 report.skip(url, .duplicateScope, listing: listing)
                 continue
             }
-            if report.filesConsidered >= request.maximumFiles {
-                report.reachedLimit = .files
-                break
-            }
-            report.filesConsidered += 1
-            if (values.fileSize ?? 0) > request.maximumFileBytes {
-                report.skip(url, .fileTooLarge, listing: listing)
-                continue
-            }
             let remaining = request.maximumTotalBytes - report.bytesRead
-            if remaining <= 0 || (values.fileSize ?? 0) > remaining {
-                report.reachedLimit = .totalBytes
+            let inspection = request.maximumInspectionBytes - report.inspectionBytes
+            guard inspection > 0 else {
+                report.reachedLimit = .inspectionBytes
                 break
             }
-            let bytes: Data
+            var consumed = 0
+            let bytes: Data, decoded: DecodedFile
             do {
                 bytes = try readFile(
-                    url, root: root, rootFD: rootFD, maximumBytes: min(request.maximumFileBytes, remaining),
-                    cancellation: cancellation, onBytes: { report.bytesRead += $0 })
-            } catch ReadFailure.cancelled {
-                report.wasCancelled = true
-                break
-            } catch ReadFailure.tooLarge {
-                if remaining < request.maximumFileBytes {
-                    report.reachedLimit = .totalBytes
+                    url, root: root, rootFD: rootFD, maximumBytes: request.maximumFileBytes,
+                    inspectionRemaining: inspection, deadline: deadline,
+                    cancellation: cancellation, onBytes: { consumed += $0 })
+                decoded = try FileCodec.decode(bytes)
+            } catch {
+                report.inspectionBytes += consumed
+                switch error {
+                case ReadFailure.cancelled:
+                    report.wasCancelled = true
+                    break searchLoop
+                case ReadFailure.timeLimit:
+                    report.reachedLimit = .elapsed
+                    break searchLoop
+                case ReadFailure.tooLarge: report.skip(url, .fileTooLarge, listing: listing)
+                case ReadFailure.binary: report.skip(url, .binaryFormat, listing: listing)
+                case ReadFailure.cannotInspect:
+                    report.reachedLimit = .inspectionBytes
+                    break searchLoop
+                case is FileCodecError: report.skip(url, .invalidEncoding(error.localizedDescription), listing: listing)
+                default: report.skip(url, .unreadable(error.localizedDescription), listing: listing)
+                }
+                if report.inspectionBytes >= request.maximumInspectionBytes {
+                    report.reachedLimit = .inspectionBytes
                     break
                 }
-                report.skip(url, .fileTooLarge, listing: listing)
-                continue
-            } catch {
-                report.skip(url, .unreadable(error.localizedDescription), listing: listing)
                 continue
             }
-            let decoded: DecodedFile
-            do { decoded = try FileCodec.decode(bytes) } catch {
-                report.skip(url, .invalidEncoding(error.localizedDescription), listing: listing)
-                continue
+            guard report.filesConsidered < request.maximumFiles, bytes.count <= remaining else {
+                report.inspectionBytes += consumed
+                report.reachedLimit = report.filesConsidered >= request.maximumFiles ? .files : .totalBytes
+                break
             }
+            report.bytesRead += consumed
+            report.filesConsidered += 1
             if cancellation.isCancelled {
                 report.wasCancelled = true
                 break
@@ -606,16 +656,33 @@ package enum FolderSearch {
             let fingerprint = sha256Hex(bytes)
             let text = decoded.text as NSString
             let hits: SearchReport
+            let secondsLeft = deadline - ProcessInfo.processInfo.systemUptime
+            guard secondsLeft > 0 else {
+                report.reachedLimit = .elapsed
+                break
+            }
             do {
                 hits = try SearchCore.search(
                     decoded.text, options: options, cancellation: cancellation.engineToken,
-                    limit: min(100000, request.maximumResults - report.matches.count))
+                    limit: min(100000, request.maximumResults - report.matches.count),
+                    timeLimit: min(request.perFileTimeLimit, secondsLeft))
+                report.consecutiveTimeouts = 0
             } catch {
                 if cancellation.isCancelled {
                     report.wasCancelled = true
                     break
                 }
                 report.skip(url, .unreadable("Search: " + error.localizedDescription), listing: listing)
+                if ProcessInfo.processInfo.systemUptime >= deadline {
+                    report.reachedLimit = .elapsed
+                    break
+                }
+                report.consecutiveTimeouts =
+                    TTSearchEngine.timedOut(error as NSError) ? report.consecutiveTimeouts + 1 : 0
+                if report.consecutiveTimeouts >= 3 {
+                    report.reachedLimit = .consecutiveTimeouts
+                    break
+                }
                 continue
             }
             // One bad range fails this file only, as a failed search of it does, and before any
@@ -623,10 +690,14 @@ package enum FolderSearch {
             guard
                 let positions = located(
                     hits.hits.map(\.range), in: decoded.text, tabWidth: request.displayTabWidth,
-                    stop: { cancellation.isCancelled })
+                    stop: { cancellation.isCancelled || ProcessInfo.processInfo.systemUptime >= deadline })
             else {
                 if cancellation.isCancelled {
                     report.wasCancelled = true
+                    break searchLoop
+                }
+                if ProcessInfo.processInfo.systemUptime >= deadline {
+                    report.reachedLimit = .elapsed
                     break searchLoop
                 }
                 report.skip(
@@ -637,6 +708,10 @@ package enum FolderSearch {
             for (hit, position) in zip(hits.hits, positions) {
                 if cancellation.isCancelled {
                     report.wasCancelled = true
+                    break searchLoop
+                }
+                if ProcessInfo.processInfo.systemUptime >= deadline {
+                    report.reachedLimit = .elapsed
                     break searchLoop
                 }
                 let match = hit.range
@@ -666,11 +741,14 @@ package enum FolderSearch {
         return report
     }
     private enum ReadFailure: LocalizedError {
-        case cancelled, tooLarge, notRegular, invalidRelativePath, changed
+        case cancelled, tooLarge, notRegular, invalidRelativePath, changed, binary, cannotInspect, timeLimit
         var errorDescription: String? {
             switch self {
             case .cancelled: return "Search cancelled."
             case .tooLarge: return "File exceeds the configured read limit."
+            case .timeLimit: return "Folder search time limit reached."
+            case .binary: return "Recognized binary file."
+            case .cannotInspect: return "Insufficient remaining read allowance."
             case .notRegular: return "The entry is not a regular file."
             case .invalidRelativePath: return "The entry is outside the selected directory."
             case .changed: return "File changed while being read; retry to search its new contents."
@@ -680,7 +758,8 @@ package enum FolderSearch {
     /// Open each relative directory component with O_NOFOLLOW, anchored to the chosen
     /// root descriptor. A renamed/symlink-swapped descendant cannot escape the scope.
     private static func readFile(
-        _ url: URL, root: URL, rootFD: Int32, maximumBytes: Int, cancellation: FolderSearchCancellation,
+        _ url: URL, root: URL, rootFD: Int32, maximumBytes: Int, inspectionRemaining: Int, deadline: Double,
+        cancellation: FolderSearchCancellation,
         onBytes: (Int) -> Void
     ) throws -> Data {
         let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
@@ -703,10 +782,28 @@ package enum FolderSearch {
         var info = stat()
         guard fstat(fd, &info) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         guard (info.st_mode & S_IFMT) == S_IFREG else { throw ReadFailure.notRegular }
-        guard info.st_size >= 0, info.st_size <= maximumBytes else { throw ReadFailure.tooLarge }
-        var result = Data()
+        guard info.st_size >= 0 else { throw ReadFailure.tooLarge }
+        if cancellation.isCancelled { throw ReadFailure.cancelled }
+        let sampleSize = min(1024, inspectionRemaining, Int(info.st_size))
+        var result = try handle.read(upToCount: sampleSize) ?? Data()
+        guard result.count == sampleSize else { throw ReadFailure.changed }
+        onBytes(result.count)
+        let utf16 = result.starts(with: [0xFF, 0xFE]) || result.starts(with: [0xFE, 0xFF])
+        if !utf16 && looksBinary(result) { throw ReadFailure.binary }
+        if !utf16 && result.count < info.st_size {
+            // Up to three trailing bytes may be the beginning of the next UTF-8 scalar.
+            let validPrefix = (0...min(3, result.count)).contains { count in
+                String(data: result.dropLast(count), encoding: .utf8) != nil
+            }
+            if !validPrefix { throw FileCodecError.invalidBytes(.utf8) }
+        }
+        guard info.st_size <= maximumBytes else { throw ReadFailure.tooLarge }
+        // Reserve enough inspection capacity for a possible late decoding error. Valid text returns
+        // that reservation and is charged to the searchable-text budget instead.
+        guard info.st_size <= inspectionRemaining else { throw ReadFailure.cannotInspect }
         while result.count < Int(info.st_size) {
             if cancellation.isCancelled { throw ReadFailure.cancelled }
+            if ProcessInfo.processInfo.systemUptime >= deadline { throw ReadFailure.timeLimit }
             let chunk = try handle.read(upToCount: min(64 * 1024, Int(info.st_size) - result.count)) ?? Data()
             if chunk.isEmpty { throw ReadFailure.changed }
             result.append(chunk)
@@ -718,6 +815,19 @@ package enum FolderSearch {
             after.st_mtimespec.tv_nsec == info.st_mtimespec.tv_nsec
         else { throw ReadFailure.changed }
         return result
+    }
+    private static func looksBinary(_ bytes: Data) -> Bool {
+        if bytes.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) || bytes.starts(with: [255, 216, 255])
+            || bytes.starts(with: "GIF87a".utf8) || bytes.starts(with: "GIF89a".utf8)
+            || bytes.starts(with: [80, 75, 3, 4]) || bytes.starts(with: [80, 75, 5, 6])
+        {
+            return true
+        }
+        // Preserve ordinary tabs, line endings and occasional embedded NULs in text.
+        let controls = bytes.reduce(0) { count, byte in
+            count + ((byte < 9 || (14...31).contains(byte) || byte == 127) ? 1 : 0)
+        }
+        return controls >= 8 && controls * 8 >= bytes.count
     }
     private static func preview(_ text: NSString, match: NSRange, maximum: Int) -> (
         text: String, range: SearchSpan, truncated: Bool

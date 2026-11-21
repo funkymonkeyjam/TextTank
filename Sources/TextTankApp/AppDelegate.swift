@@ -208,7 +208,20 @@ import AppKit
         }
     }
 
+    private var replacementRetentionTimer: DispatchSourceTimer?
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let cleanup = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "TextTank.folder-replacement-retention", qos: .utility))
+        cleanup.schedule(deadline: .now() + 2, repeating: .seconds(86_400), leeway: .seconds(120))
+        cleanup.setEventHandler {
+            do {
+                if try FolderReplacementHistory.prune().needsReview != 0 {
+                    NSLog("Some private folder replacement backups could not be cleaned up.")
+                }
+            }
+            catch { NSLog("Folder replacement backup cleanup needs review in Find in Folder.") }
+        }
+        replacementRetentionTimer = cleanup
+        cleanup.resume()
         buildMenus()
         settings.apply()
         searchController.onCommand = { [weak self] options, action, editor in

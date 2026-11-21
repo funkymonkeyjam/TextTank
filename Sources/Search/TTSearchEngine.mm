@@ -29,6 +29,7 @@
 - (instancetype)initWithMatches:(NSArray<TTSearchMatch *> *)matches truncated:(BOOL)truncated { if ((self=[super init])) { _matches=[matches copy]; _truncated=truncated; } return self; }
 @end
 namespace {
+struct SearchTimeLimit : std::runtime_error { using std::runtime_error::runtime_error; };
 struct Budget {
     TTSearchCancellation *cancellation;
     std::chrono::steady_clock::time_point deadline;
@@ -36,7 +37,7 @@ struct Budget {
     void check() const {
         if ((++operations & 1023)==0) {
             if (cancellation.cancelled) throw std::runtime_error("Search cancelled; no replacement was applied.");
-            if (std::chrono::steady_clock::now()>deadline) throw std::runtime_error("Search exceeded its time budget; narrow the scope or simplify the pattern.");
+            if (std::chrono::steady_clock::now()>deadline) throw SearchTimeLimit("Search exceeded its time budget; narrow the scope or simplify the pattern.");
         }
     }
 };
@@ -144,6 +145,9 @@ SearchRegex compiledRegex(const std::wstring &pattern,bool matchCase){
 }
 }
 @implementation TTSearchEngine
++ (BOOL)isTimeLimitError:(NSError *)error {
+    return [error.domain isEqualToString:@"TextTank.Search"] && [error.userInfo[@"TextTankSearchTimeLimit"] boolValue];
+}
 + (NSString *)decodeExtended:(NSString *)text {
     NSMutableString *out=[NSMutableString string];
     for(NSUInteger i=0;i<text.length;i++) {
@@ -231,7 +235,7 @@ SearchRegex compiledRegex(const std::wstring &pattern,bool matchCase){
             NSRange remainder=scope;NSStringCompareOptions options=NSLiteralSearch|(matchCase?0:NSCaseInsensitiveSearch);
             while(remainder.location<=scopeEnd){
                 if(cancellation.cancelled)throw std::runtime_error("Search cancelled; no replacement was applied.");
-                if(std::chrono::steady_clock::now()>budget.deadline)throw std::runtime_error("Search exceeded its time budget; narrow the scope.");
+                if(std::chrono::steady_clock::now()>budget.deadline)throw SearchTimeLimit("Search exceeded its time budget; narrow the scope.");
                 NSRange r=[text rangeOfString:needle options:options range:remainder];if(r.location==NSNotFound)break;
                 bool accept=!wholeWord||(!wordBefore(text,r.location)&&!wordAfter(text,NSMaxRange(r)));
                 if(accept){if(matches.count>=(NSUInteger)maximumMatches){truncated=true;break;}outputSize+=replacementText.length;if(outputSize>maximumUnits)throw std::runtime_error("Replacement expansion exceeded the 64 Mi UTF-16 safety limit.");[matches addObject:[[TTSearchMatch alloc]initWithRange:r replacement:replacementText]];}
@@ -244,7 +248,12 @@ SearchRegex compiledRegex(const std::wstring &pattern,bool matchCase){
             }
         }
         return [[TTSearchResult alloc]initWithMatches:matches truncated:truncated];
-    }catch(const std::exception&e){if(error)*error=[NSError errorWithDomain:@"TextTank.Search" code:1 userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithUTF8String:e.what()]?:@"Search failed safely."}];return nil;}
+    } catch(const SearchTimeLimit &e) {
+        if (error) *error = [NSError errorWithDomain:@"TextTank.Search" code:1 userInfo:@{
+            NSLocalizedDescriptionKey: [NSString stringWithUTF8String:e.what()], @"TextTankSearchTimeLimit": @YES
+        }];
+        return nil;
+    } catch(const std::exception&e){if(error)*error=[NSError errorWithDomain:@"TextTank.Search" code:1 userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithUTF8String:e.what()]?:@"Search failed safely."}];return nil;}
     catch(...){if(error)*error=[NSError errorWithDomain:@"TextTank.Search" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Search failed safely."}];return nil;}}
     @catch(NSException *e){if(error)*error=[NSError errorWithDomain:@"TextTank.Search" code:2 userInfo:@{NSLocalizedDescriptionKey:e.reason?:@"Search failed safely."}];return nil;}
 }

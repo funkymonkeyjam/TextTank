@@ -1622,7 +1622,7 @@ extension DocumentChecks {
                 query: "colour", replacement: "", matches: 3, files: 2, folders: 1)
             check(
                 explanation.hasPrefix("Delete every match of “colour”: 3 matches in 2 files.")
-                    && explanation.contains(".texttank-backup") && explanation.contains("Undo in the editor does not")
+                    && explanation.contains("private recovery batch in TextTank Application Support") && explanation.contains("Undo in the editor does not")
                     && !explanation.contains("root"),
                 "the disk-replace prompt states the change, its size and that editor Undo does not reverse it")
             // N8: saving Settings carries a changed default only to views that still had the old one.

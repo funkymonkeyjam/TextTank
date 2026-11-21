@@ -10,7 +10,8 @@ package enum AppStorage {
         case languages = "LanguageProfiles.json", commands = "RunCommands.json", workspace = "WorkspaceBrowser.json"
         case recovery = "Recovery", reminders = "ReminderExports", lastSession = "LastSession.json"
         case find = "FindPreferences.json", folderSearch = "FolderSearchPreferences.json"
-        package var isDirectory: Bool { self == .recovery || self == .reminders }
+        case folderReplacements = "FolderReplacements"
+        package var isDirectory: Bool { self == .recovery || self == .reminders || self == .folderReplacements }
     }
     static package func resolve(override: String?, fallback: URL) -> URL {
         guard let override, override.hasPrefix("/"), !override.contains("\0") else { return fallback }
@@ -400,16 +401,19 @@ package enum PreparedFileIdentity: Equatable, Sendable {
     static func inspect(_ directory: Int32, _ name: String) throws -> PreparedFileIdentity {
         var info = stat()
         if fstatat(directory, name, &info, AT_SYMLINK_NOFOLLOW) == 0 {
-            guard info.st_mode & S_IFMT == S_IFREG else { throw PrivateFileError.unsafeLocation }
-            return .regular(
-                device: Int64(info.st_dev), inode: info.st_ino, length: info.st_size,
-                modified: Int64(info.st_mtimespec.tv_sec), modifiedNS: Int64(info.st_mtimespec.tv_nsec),
-                changed: Int64(info.st_ctimespec.tv_sec), changedNS: Int64(info.st_ctimespec.tv_nsec))
+            return try regularFile(info)
         }
         guard errno == ENOENT else {
             throw FileOperationFailure(errno, operation: "inspect patch destination", path: name)
         }
         return .missing
+    }
+    fileprivate static func regularFile(_ info: stat) throws -> PreparedFileIdentity {
+        guard info.st_mode & S_IFMT == S_IFREG else { throw PrivateFileError.unsafeLocation }
+        return .regular(
+            device: Int64(info.st_dev), inode: info.st_ino, length: info.st_size,
+            modified: Int64(info.st_mtimespec.tv_sec), modifiedNS: Int64(info.st_mtimespec.tv_nsec),
+            changed: Int64(info.st_ctimespec.tv_sec), changedNS: Int64(info.st_ctimespec.tv_nsec))
     }
     package static func capture(_ url: URL) throws -> PreparedFileIdentity {
         let directory = try PrivateFileStore.directoryDescriptor(for: url)
@@ -442,6 +446,26 @@ package final class PreparedPrivateFile: @unchecked Sendable {
         unlinkat(directory, temporary, 0)
         close(directory)
     }
+    /// Only a user-selected existing export supplies permissions. Staging stays private until publication.
+    private func retainDestinationAccess() throws {
+        let source = openat(directory, url.lastPathComponent, O_EVTONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard source >= 0 else { throw PreparedOutputFailure.changed }
+        defer { close(source) }
+        var original = stat()
+        guard fstat(source, &original) == 0, try PreparedFileIdentity.regularFile(original) == expected else {
+            throw PreparedOutputFailure.changed
+        }
+        let staged = openat(directory, temporary, O_WRONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard staged >= 0 else { throw PreparedOutputFailure.changed }
+        defer { close(staged) }
+        var attributes = stat()
+        guard fstat(staged, &attributes) == 0,
+            (original.st_uid == attributes.st_uid && original.st_gid == attributes.st_gid)
+                || fchown(staged, original.st_uid, original.st_gid) == 0,
+            fcopyfile(source, staged, nil, copyfile_flags_t(COPYFILE_ACL)) == 0,
+            fchmod(staged, original.st_mode & 0o777) == 0
+        else { throw FileOperationFailure(errno, operation: "retain patch permissions", path: url.path) }
+    }
     /// All throwing checks precede rename. Success is committed; no fallible step follows it.
     package func commit() throws {
         lock.lock()
@@ -452,6 +476,7 @@ package final class PreparedPrivateFile: @unchecked Sendable {
             unlinkat(directory, temporary, 0)
             close(directory)
         }
+        if expected != .missing { try retainDestinationAccess() }
         var current = stat()
         guard lstat(url.deletingLastPathComponent().path, &current) == 0,
             current.st_mode & S_IFMT == S_IFDIR, current.st_dev == device, current.st_ino == inode,

@@ -47,13 +47,71 @@ package enum FolderReplacement {
             }
         }
     }
+    private struct Projection {
+        let original: Data, encoded: Data, oldText: String, newText: String, format: FileFormat, count: Int
+    }
+    private struct SelectedFile {
+        let parent: Int32, source: Int32, info: stat, parts: [String]
+        init(root: Int32, prefix: String, url: URL, privateRoot: String) throws {
+            guard let parts = FolderSearch.relativeComponents(of: url.path, under: prefix),
+                !FolderSearch.isRecoveryArtifact(parts[parts.count - 1]),
+                !FolderReplacementBatch.contains(url.path, in: privateRoot)
+            else { throw Failure.unsafe }
+            let parent = try openParent(root: root, parts: parts)
+            let source = openat(parent, parts.last!, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            var info = stat()
+            guard source >= 0, fstat(source, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+                info.st_nlink == 1, info.st_mode & 0o222 != 0, info.st_uid == getuid()
+            else {
+                close(parent)
+                if source >= 0 { close(source) }
+                throw Failure.unsafe
+            }
+            self.parts = parts
+            self.parent = parent
+            self.source = source
+            self.info = info
+        }
+        func closeDescriptors() {
+            close(source)
+            close(parent)
+        }
+        func project(url: URL, expected: String, options: SearchOptions, cancellation: FolderSearchCancellation) throws
+            -> Projection
+        {
+            guard info.st_size >= 0, info.st_size <= SizePolicy.standard.folderInput else { throw Failure.inputTooLarge }
+            let original = try read(source, size: Int(info.st_size), cancellation: cancellation, path: url.path)
+            guard sha(original) == expected else { throw Failure.changed }
+            let decoded = try FileCodec.decode(original)
+            let found = try SearchCore.search(
+                decoded.text, options: options, cancellation: cancellation.engineToken, limit: 100_000)
+            guard !found.truncated else {
+                throw FolderSearchError.invalidRequest("Replacement result limit reached; file not changed.")
+            }
+            let output: String
+            do {
+                output = try SearchCore.replacing(
+                    decoded.text, with: found.hits, cancellation: cancellation.engineToken)
+            } catch {
+                if cancellation.isCancelled { throw Failure.cancelled }
+                throw error
+            }
+            let encoded = try FileCodec.encode(output, format: decoded.format)
+            guard encoded.count <= SizePolicy.standard.folderReplacementOutput else { throw Failure.resultTooLarge }
+            return Projection(
+                original: original, encoded: encoded, oldText: decoded.text,
+                newText: output, format: decoded.format, count: found.hits.count)
+        }
+    }
     static package func replace(
         directory: URL, matches: [FolderSearchMatch], options: SearchOptions, excluding: Set<URL> = [],
-        cancellation: FolderSearchCancellation = FolderSearchCancellation(), beforeCommit: ((URL) -> Void)? = nil
+        cancellation: FolderSearchCancellation = FolderSearchCancellation(),
+        batch: FolderReplacementBatch = FolderReplacementBatch(), beforeCommit: ((URL) -> Void)? = nil
     ) throws -> [FolderReplacementOutcome] {
         guard let opened = try? FolderSearch.openCanonicalDirectory(directory) else { throw Failure.unsafe }
         let root = opened.fd, rootPath = opened.path, prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
         defer { close(root) }
+        let privateRoot = FolderReplacementBatch.canonicalPath(of: batch.directory.deletingLastPathComponent())
         let excluded = Set(excluding.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
         let grouped = Dictionary(grouping: matches, by: { $0.url })
         var results: [FolderReplacementOutcome] = []
@@ -81,59 +139,18 @@ package enum FolderReplacement {
             }
             var backup: URL?, reportURL: URL?
             do {
-                // The matches are the caller's, so this is the guard that keeps a recovery copy,
-                // journal or temporary file from ever being rewritten.
-                guard let parts = FolderSearch.relativeComponents(of: url.path, under: prefix),
-                    !FolderSearch.isRecoveryArtifact(parts[parts.count - 1])
-                else { throw Failure.unsafe }
-                var parent = dup(root)
-                guard parent >= 0 else { throw Failure.unsafe }
-                defer { close(parent) }
-                for part in parts.dropLast() {
-                    let next = openat(parent, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
-                    guard next >= 0 else { throw Failure.unsafe }
-                    close(parent)
-                    parent = next
-                }
-                let name = parts.last!, source = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-                guard source >= 0 else { throw Failure.unsafe }
-                defer { close(source) }
-                var initial = stat()
-                guard fstat(source, &initial) == 0, initial.st_mode & S_IFMT == S_IFREG, initial.st_nlink == 1,
-                    initial.st_mode & 0o222 != 0, initial.st_uid == getuid()
-                else { throw Failure.unsafe }
-                guard initial.st_size >= 0, initial.st_size <= SizePolicy.standard.folderInput else { throw Failure.inputTooLarge }
-                let original = try read(source, size: Int(initial.st_size), cancellation: cancellation, path: url.path)
-                guard sha(original) == expected else { throw Failure.changed }
-                let decoded = try FileCodec.decode(original)
-                let found = try SearchCore.search(
-                    decoded.text, options: options, cancellation: cancellation.engineToken, limit: 100000)
-                guard !found.truncated else {
-                    throw FolderSearchError.invalidRequest("Replacement result limit reached; file not changed.")
-                }
-                let output: String
-                do {
-                    output = try SearchCore.replacing(
-                        decoded.text, with: found.hits, cancellation: cancellation.engineToken)
-                } catch {
-                    if cancellation.isCancelled { throw Failure.cancelled }
-                    throw error
-                }
-                let encoded = try FileCodec.encode(output, format: decoded.format)
+                let file = try SelectedFile(root: root, prefix: prefix, url: url, privateRoot: privateRoot)
+                defer { file.closeDescriptors() }
+                let parent = file.parent, source = file.source, initial = file.info, name = file.parts.last!
+                let projection = try file.project(
+                    url: url, expected: expected, options: options, cancellation: cancellation)
+                let original = projection.original, encoded = projection.encoded
                 if encoded == original {
                     results.append(.init(url: url, status: .unchanged, message: "No byte changes.", backup: nil))
                     continue
                 }
-                guard encoded.count <= SizePolicy.standard.folderReplacementOutput else { throw Failure.resultTooLarge }
-                let tempName = ".texttank-replacement-" + UUID().uuidString
-                let temp = openat(parent, tempName, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-                guard temp >= 0 else {
-                    throw FileOperationFailure(errno, operation: "create replacement beside", path: url.path)
-                }
-                defer {
-                    close(temp)
-                    unlinkat(parent, tempName, 0)
-                }
+                let stage = try StagingFile(for: url, parent: parent)
+                let temp = stage.file
                 try write(encoded, to: temp, path: url.path)
                 // Copy permissions, ownership, ACLs, extended attributes and flags
                 // from the still-open source descriptor, without copying its data.
@@ -146,67 +163,26 @@ package enum FolderReplacement {
                     throw FileOperationFailure(
                         errno, operation: "update file metadata or replacement beside", path: url.path)
                 }
-                let backupName = ".texttank-backup-" + UUID().uuidString
-                let copy = openat(parent, backupName, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-                guard copy >= 0 else {
-                    throw FileOperationFailure(errno, operation: "create recovery copy beside", path: url.path)
-                }
-                do {
-                    try write(original, to: copy, path: url.path)
-                    guard fsync(copy) == 0 else {
-                        throw FileOperationFailure(errno, operation: "sync recovery copy beside", path: url.path)
-                    }
-                    close(copy)
-                } catch {
-                    close(copy)
-                    unlinkat(parent, backupName, 0)
-                    throw error
-                }
-                backup = url.deletingLastPathComponent().appendingPathComponent(backupName)
-                let reportName = backupName + ".json"
-                let journal: [String: String] = [
-                    "version": "1", "state": "prepared", "file": name, "backup": backupName, "originalSHA256": expected,
-                    "replacementSHA256": sha(encoded),
-                    "note": "Prepared does not prove whether rename committed. Compare file hashes before restoring."
-                ]
-                // Until the rename is attempted the file is certainly unchanged, so a failure,
-                // a conflict or a cancellation here leaves no recovery copy and no "prepared"
-                // journal behind. Once the rename has been attempted both are kept, whatever it
-                // returned: its result can be ambiguous on a network volume.
+                let entry = FolderReplacementBatch.Entry(
+                    id: UUID(), root: rootPath, path: url.path, originalSHA256: expected,
+                    replacementSHA256: sha(encoded), originalMode: UInt16(initial.st_mode & 0o7777))
+                backup = try batch.prepare(source: source, original: original, entry: entry)
+                reportURL = batch.manifest
                 var renameAttempted = false
                 do {
-                    guard fsync(parent) == 0 else {
-                        throw FileOperationFailure(errno, operation: "sync directory beside", path: url.path)
-                    }
-                    try persistReport(journal, name: reportName, parent: parent, path: url.path)
-                    reportURL = url.deletingLastPathComponent().appendingPathComponent(reportName)
                     beforeCommit?(url)
                     if cancellation.isCancelled { throw Failure.cancelled }
-                    let current = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-                    guard current >= 0 else { throw Failure.changed }
-                    defer { close(current) }
-                    var latest = stat()
-                    guard fstat(current, &latest) == 0, latest.st_mode & S_IFMT == S_IFREG,
-                        latest.st_ino == initial.st_ino, latest.st_dev == initial.st_dev,
-                        latest.st_size == initial.st_size, latest.st_mtimespec.tv_sec == initial.st_mtimespec.tv_sec,
-                        latest.st_mtimespec.tv_nsec == initial.st_mtimespec.tv_nsec, latest.st_nlink == 1,
-                        latest.st_mode == initial.st_mode, latest.st_uid == initial.st_uid,
-                        latest.st_gid == initial.st_gid, latest.st_flags == initial.st_flags,
-                        latest.st_ctimespec.tv_sec == initial.st_ctimespec.tv_sec,
-                        latest.st_ctimespec.tv_nsec == initial.st_ctimespec.tv_nsec,
-                        try read(current, size: Int(latest.st_size), cancellation: cancellation, path: url.path)
-                            == original
-                    else { throw Failure.changed }
+                    try verifyCurrent(
+                        parent: parent, name: name, initial: initial, bytes: original,
+                        cancellation: cancellation, path: url.path)
                     renameAttempted = true
-                    guard renameat(parent, tempName, parent, name) == 0 else {
+                    guard renameat(stage.folder, StagingFile.name, parent, name) == 0 else {
                         throw FileOperationFailure(
                             errno, operation: "update file metadata or replacement beside", path: url.path)
                     }
                 } catch {
                     if !renameAttempted {
-                        unlinkat(parent, backupName, 0)
-                        unlinkat(parent, reportName, 0)
-                        _ = fsync(parent)
+                        try batch.mark(entry, .abandoned)
                         backup = nil
                         reportURL = nil
                     }
@@ -214,20 +190,23 @@ package enum FolderReplacement {
                 }
                 // Once renamed the file is changed even if directory durability fails.
                 let durable = fsync(parent) == 0
-                var committed = journal
-                committed["state"] = "replaced"
                 var journalConfirmed = true
-                do { try persistReport(committed, name: reportName, parent: parent, path: url.path) } catch {
+                do { try batch.mark(entry, .replaced) } catch {
                     journalConfirmed = false
                 }
                 results.append(
                     .init(
                         url: url, status: .replaced,
-                        message: "Replaced \(found.hits.count) match(es)."
+                        message: "Replaced \(projection.count) match(es)."
                             + (durable && journalConfirmed
                                 ? ""
-                                : " Completion journal/directory synchronization failed; prepared recovery report retained."),
+                                : " Completion journal/directory synchronization failed; private recovery evidence retained."),
                         backup: backup, recoveryReport: reportURL))
+            } catch let pending as FolderReplacementBatch.UnconfirmedPreparation {
+                results.append(
+                    .init(
+                        url: url, status: .failed, message: pending.localizedDescription,
+                        backup: pending.backup, recoveryReport: pending.manifest))
             } catch Failure.changed {
                 results.append(
                     .init(
@@ -247,21 +226,299 @@ package enum FolderReplacement {
         }
         return results
     }
-    private static func persistReport(_ report: [String: String], name: String, parent: Int32, path: String) throws {
-        let temporary = ".texttank-report-" + UUID().uuidString
-        let fd = openat(parent, temporary, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
-        guard fd >= 0 else { throw FileOperationFailure(errno, operation: "create recovery report beside", path: path) }
-        defer {
-            close(fd)
-            unlinkat(parent, temporary, 0)
+    package struct PatchPreview: Sendable {
+        package let bytes: Data
+        package let changedFiles: Int, skippedOpenFiles: Int, textConversions: Int
+        package let roots: [URL]
+        private let sourcePaths: Set<String>
+        private let sourceIdentities: [FileSignature]
+
+        fileprivate init(
+            bytes: Data, changedFiles: Int, skippedOpenFiles: Int, textConversions: Int,
+            roots: [URL], sourcePaths: Set<String>, sourceIdentities: [FileSignature]
+        ) {
+            self.bytes = bytes
+            self.changedFiles = changedFiles
+            self.skippedOpenFiles = skippedOpenFiles
+            self.textConversions = textConversions
+            self.roots = roots
+            self.sourcePaths = sourcePaths
+            self.sourceIdentities = sourceIdentities
         }
-        try write(JSONEncoder().encode(report), to: fd, path: path)
-        guard fsync(fd) == 0, renameat(parent, temporary, parent, name) == 0, fsync(parent) == 0 else {
-            throw FileOperationFailure(errno, operation: "commit recovery report beside", path: path)
+        package func checkDestination(_ url: URL, openFiles: [URL]) throws {
+            try PrivateFileStore.validateLocalURL(url)
+            let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+            var info = stat()
+            let exists = lstat(path, &info) == 0
+            guard !sourcePaths.contains(path),
+                !openFiles.contains(where: { $0.standardizedFileURL.resolvingSymlinksInPath().path == path }),
+                !exists
+                    || (info.st_nlink == 1
+                        && !sourceIdentities.contains(where: {
+                            $0.device == Int64(info.st_dev) && $0.inode == info.st_ino
+                        }))
+            else {
+                throw FolderSearchError.invalidRequest("Choose a patch destination outside the matched and open files.")
+            }
         }
     }
+
+    /// Project the same completed search used by Replace, without staging source files or creating a backup batch.
+    static package func preview(
+        fallbackDirectory: URL, matches: [FolderSearchMatch], options: SearchOptions, excluding: Set<URL> = [],
+        cancellation: FolderSearchCancellation = .init(), maximumBytes: Int = 32 * 1024 * 1024
+    ) async throws -> PatchPreview {
+        let grouped = Dictionary(grouping: matches, by: { $0.sourceRoot ?? fallbackDirectory })
+        let roots = grouped.keys.sorted { $0.path < $1.path }
+        let excluded = Set(excluding.map { $0.standardizedFileURL.resolvingSymlinksInPath().path })
+        let privateRoot = FolderReplacementBatch.canonicalPath(of: AppStorage.url(.folderReplacements))
+        let sourcePaths = Set(matches.map { $0.url.standardizedFileURL.resolvingSymlinksInPath().path })
+        var patch = Data(), identities: [FileSignature] = []
+        var changed = 0, skipped = 0, conversions = 0
+        let limit = min(maximumBytes, 32 * 1024 * 1024)
+        let deadline = ProcessInfo.processInfo.systemUptime + 30
+        for (index, directory) in roots.enumerated() {
+            let opened = try FolderSearch.openCanonicalDirectory(directory)
+            defer { close(opened.fd) }
+            let prefix = opened.path.hasSuffix("/") ? opened.path : opened.path + "/"
+            let byFile = Dictionary(grouping: grouped[directory]!, by: { $0.url })
+            for url in byFile.keys.sorted(by: { $0.path < $1.path }) {
+                guard !cancellation.isCancelled, !Task.isCancelled else { throw CancellationError() }
+                guard ProcessInfo.processInfo.systemUptime < deadline else { throw MergeFailure(.budgetExceeded) }
+                if excluded.contains(url.standardizedFileURL.resolvingSymlinksInPath().path) {
+                    skipped += 1
+                    continue
+                }
+                let rows = byFile[url]!
+                guard let expected = rows.first?.sourceSHA256,
+                    rows.allSatisfy({ $0.sourceSHA256 == expected })
+                else { throw Failure.changed }
+                let file = try SelectedFile(root: opened.fd, prefix: prefix, url: url, privateRoot: privateRoot)
+                defer { file.closeDescriptors() }
+                let p = try file.project(url: url, expected: expected, options: options, cancellation: cancellation)
+                identities.append(FileSignature(file.info))
+                guard p.original != p.encoded else { continue }
+                let utf8 = p.format.encoding == .utf8
+                let a = try TextSnapshot(
+                    bytes: utf8 ? p.original : Data(p.oldText.utf8), source: .file(UUID()), label: url.lastPathComponent
+                )
+                let b = try TextSnapshot(
+                    bytes: utf8 ? p.encoded : Data(p.newText.utf8), source: .file(UUID()), label: url.lastPathComponent)
+                var policy = ReviewDiffPolicy.default
+                policy.maximumOutputBytes = max(0, limit - patch.count)
+                policy.seconds = min(policy.seconds, deadline - ProcessInfo.processInfo.systemUptime)
+                let delta = await ReviewDiffEngine.compare(a, b, policy: policy)
+                guard !cancellation.isCancelled, !Task.isCancelled else { throw CancellationError() }
+                let parts = roots.count == 1 ? file.parts : ["folder-\(index + 1)"] + file.parts
+                let bytes = try await UnifiedPatch.write(
+                    original: a, modified: b, changes: delta,
+                    policy: policy, relativeComponents: parts)
+                let note =
+                    utf8
+                    ? Data() : Data("# TextTank UTF-8 text preview of \(p.format.encoding.displayName) source\n".utf8)
+                guard note.count + bytes.count <= limit - patch.count else { throw MergeFailure(.budgetExceeded) }
+                patch.append(note)
+                patch.append(bytes)
+                if !utf8 { conversions += 1 }
+                changed += 1
+            }
+        }
+        guard !cancellation.isCancelled, !Task.isCancelled else { throw CancellationError() }
+        return PatchPreview(
+            bytes: patch, changedFiles: changed, skippedOpenFiles: skipped, textConversions: conversions,
+            roots: roots, sourcePaths: sourcePaths, sourceIdentities: identities)
+    }
+    package enum UndoStatus: String, Sendable {
+        case restored, alreadyOriginal, skipped, changed, failed, cancelled
+    }
+    package struct UndoOutcome: Sendable {
+        package let url: URL
+        package let status: UndoStatus
+        package let message: String
+    }
+    static package func undo(
+        manifest: URL, reviewed: FolderReplacementBatch.Snapshot? = nil, excluding openFiles: Set<URL> = [],
+        cancellation: FolderSearchCancellation = FolderSearchCancellation(), beforeCommit: ((URL) -> Void)? = nil
+    ) throws -> [UndoOutcome] {
+        let batch = try FolderReplacementBatch(reopening: manifest)
+        let snapshot = try batch.snapshotForUndo(reviewed: reviewed)
+        let excluded = Set(openFiles.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
+        return snapshot.entries.map { entry, state in
+            let url = URL(fileURLWithPath: entry.path)
+            if state == .restored {
+                return .init(url: url, status: .alreadyOriginal, message: "Already processed by Undo.")
+            }
+            if cancellation.isCancelled {
+                return .init(url: url, status: .cancelled, message: "Cancelled before restoring this file.")
+            }
+            if excluded.contains(url.resolvingSymlinksInPath().standardizedFileURL.path) {
+                return .init(url: url, status: .skipped, message: "File is open in TextTank.")
+            }
+            do {
+                return try restore(entry: entry, batch: batch, cancellation: cancellation, beforeCommit: beforeCommit)
+            } catch Failure.changed {
+                return .init(
+                    url: url, status: .changed,
+                    message: "File changed since replacement. Kept current file and recovery copy.")
+            } catch Failure.cancelled {
+                return .init(url: url, status: .cancelled, message: "Cancelled before restoring this file.")
+            } catch { return .init(url: url, status: .failed, message: error.localizedDescription) }
+        }
+    }
+
+    private static func restore(
+        entry: FolderReplacementBatch.Entry, batch: FolderReplacementBatch,
+        cancellation: FolderSearchCancellation, beforeCommit: ((URL) -> Void)?
+    ) throws -> UndoOutcome {
+        let url = URL(fileURLWithPath: entry.path)
+        let root = try FolderSearch.openCanonicalDirectory(URL(fileURLWithPath: entry.root))
+        defer { close(root.fd) }
+        guard root.path.utf8.elementsEqual(entry.root.utf8), entry.originalMode <= 0o7777,
+            let parts = FolderSearch.relativeComponents(
+                of: entry.path, under: root.path == "/" ? "/" : root.path + "/"),
+            let leaf = parts.last, !FolderSearch.isRecoveryArtifact(leaf),
+            !FolderReplacementBatch.contains(
+                entry.path, in: FolderReplacementBatch.canonicalPath(of: AppStorage.url(.folderReplacements)))
+        else { throw Failure.unsafe }
+        let parent = try openParent(root: root.fd, parts: parts)
+        defer { close(parent) }
+        let current = openat(parent, leaf, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard current >= 0 else { throw FileOperationFailure(errno, operation: "open file for Undo", path: url.path) }
+        defer { close(current) }
+        var initial = stat()
+        guard fstat(current, &initial) == 0, initial.st_mode & S_IFMT == S_IFREG, initial.st_nlink == 1,
+            initial.st_uid == getuid(), initial.st_mode & 0o222 != 0,
+            initial.st_size >= 0, initial.st_size <= SizePolicy.standard.folderReplacementOutput
+        else { throw Failure.unsafe }
+        let currentBytes = try read(current, size: Int(initial.st_size), cancellation: cancellation, path: url.path)
+        let currentDigest = sha(currentBytes)
+        guard currentDigest == entry.replacementSHA256 || currentDigest == entry.originalSHA256 else {
+            throw Failure.changed
+        }
+        if currentDigest == entry.originalSHA256 {
+            // Includes a crash before forward rename, or after restoring but before the journal mark.
+            try verifyCurrent(
+                parent: parent, name: leaf, initial: initial, bytes: currentBytes, cancellation: cancellation,
+                path: url.path)
+            guard fsync(parent) == 0 else {
+                throw FileOperationFailure(errno, operation: "confirm original file directory", path: url.path)
+            }
+            try batch.mark(entry, .restored)
+            return .init(url: url, status: .alreadyOriginal, message: "File already contains its original bytes.")
+        }
+        let backup = batch.directory.appendingPathComponent(entry.backupName)
+        let saved = try PrivateFileStore.openRegularFile(backup, maximumBytes: SizePolicy.standard.folderInput)
+        defer { close(saved.descriptor) }
+        guard saved.info.st_nlink == 1, saved.info.st_uid == getuid(), saved.info.st_mode & 0o077 == 0 else {
+            throw Failure.unsafe
+        }
+        let bytes = try read(
+            saved.descriptor, size: Int(saved.info.st_size), cancellation: cancellation, path: backup.path)
+        guard sha(bytes) == entry.originalSHA256 else {
+            throw FolderSearchError.invalidRequest(
+                "Private original failed its content check. The current file was kept.")
+        }
+        let stage = try StagingFile(for: url, parent: parent)
+        try write(bytes, to: stage.file, path: url.path)
+        // Use the current file's creation date and ACL. Use only the saved original for xattrs and mode.
+        guard fcopyfile(current, stage.file, nil, copyfile_flags_t(COPYFILE_STAT | COPYFILE_ACL)) == 0,
+            fcopyfile(saved.descriptor, stage.file, nil, copyfile_flags_t(COPYFILE_XATTR)) == 0,
+            fchmod(stage.file, mode_t(entry.originalMode)) == 0, futimens(stage.file, nil) == 0, fsync(stage.file) == 0
+        else {
+            throw FileOperationFailure(errno, operation: "prepare original file for Undo", path: url.path)
+        }
+        beforeCommit?(url)
+        if cancellation.isCancelled { throw Failure.cancelled }
+        try verifyCurrent(
+            parent: parent, name: leaf, initial: initial, bytes: currentBytes, cancellation: cancellation,
+            path: url.path)
+        guard renameat(stage.folder, StagingFile.name, parent, leaf) == 0 else {
+            throw FileOperationFailure(errno, operation: "restore original file", path: url.path)
+        }
+        let durable = fsync(parent) == 0
+        do {
+            // An unconfirmed rename keeps its previous recovery entry available for a safe retry.
+            if durable { try batch.mark(entry, .restored) }
+        } catch {
+            return .init(
+                url: url, status: .restored,
+                message: "Original restored. The private manifest update could not be confirmed.")
+        }
+        return .init(
+            url: url, status: .restored,
+            message: durable
+                ? "Original bytes, mode and extended attributes restored."
+                : "Original restored. Directory synchronization could not be confirmed.")
+    }
+    private final class StagingFile {
+        static let name = "replacement"
+        let directory: URL
+        let folder: Int32
+        let file: Int32
+        init(for url: URL, parent: Int32) throws {
+            guard faccessat(parent, ".", W_OK, 0) == 0 else {
+                throw FileOperationFailure(errno, operation: "create replacement in", path: url.path)
+            }
+            directory = try FileManager.default.url(
+                for: .itemReplacementDirectory, in: .userDomainMask,
+                appropriateFor: url, create: true)
+            do {
+                folder = try PrivateFileStore.directoryDescriptor(for: directory.appendingPathComponent(Self.name))
+            } catch {
+                _ = rmdir(directory.path)
+                throw error
+            }
+            file = openat(folder, Self.name, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            if file < 0 {
+                let failure = FileOperationFailure(errno, operation: "create replacement for", path: url.path)
+                close(folder)
+                _ = rmdir(directory.path)
+                throw failure
+            }
+        }
+        deinit {
+            close(file)
+            _ = unlinkat(folder, Self.name, 0)
+            close(folder)
+            _ = rmdir(directory.path)
+        }
+    }
+    private static func openParent(root: Int32, parts: [String]) throws -> Int32 {
+        var parent = dup(root)
+        guard parent >= 0 else { throw Failure.unsafe }
+        for part in parts.dropLast() {
+            let next = openat(parent, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            guard next >= 0 else {
+                close(parent)
+                throw Failure.unsafe
+            }
+            close(parent)
+            parent = next
+        }
+        return parent
+    }
+    private static func verifyCurrent(
+        parent: Int32, name: String, initial: stat, bytes: Data,
+        cancellation: FolderSearchCancellation, path: String
+    ) throws {
+        let current = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard current >= 0 else { throw Failure.changed }
+        defer { close(current) }
+        var latest = stat()
+        guard fstat(current, &latest) == 0, latest.st_mode & S_IFMT == S_IFREG,
+            latest.st_ino == initial.st_ino, latest.st_dev == initial.st_dev,
+            latest.st_size == initial.st_size, latest.st_mtimespec.tv_sec == initial.st_mtimespec.tv_sec,
+            latest.st_mtimespec.tv_nsec == initial.st_mtimespec.tv_nsec, latest.st_nlink == 1,
+            latest.st_mode == initial.st_mode, latest.st_uid == initial.st_uid,
+            latest.st_gid == initial.st_gid, latest.st_flags == initial.st_flags,
+            latest.st_ctimespec.tv_sec == initial.st_ctimespec.tv_sec,
+            latest.st_ctimespec.tv_nsec == initial.st_ctimespec.tv_nsec,
+            try read(current, size: Int(latest.st_size), cancellation: cancellation, path: path)
+                == bytes
+        else { throw Failure.changed }
+    }
     private static func sha(_ data: Data) -> String { FolderSearch.sha256Hex(data) }
-    private static func read(_ fd: Int32, size: Int, cancellation: FolderSearchCancellation, path: String) throws
+    static func read(_ fd: Int32, size: Int, cancellation: FolderSearchCancellation, path: String) throws
         -> Data
     {
         var output = Data(), bytes = [UInt8](repeating: 0, count: 65536)
@@ -275,7 +532,7 @@ package enum FolderReplacement {
         }
         return output
     }
-    private static func write(_ data: Data, to fd: Int32, path: String) throws {
+    static func write(_ data: Data, to fd: Int32, path: String) throws {
         try data.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {
