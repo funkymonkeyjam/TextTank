@@ -290,6 +290,12 @@ __attribute__((objc_subclassing_restricted))
 
 - (BOOL)setSearchHighlights:(NSArray<TTByteRange *> *)ranges;
 - (void)clearSearchHighlights;
+/// Physical line length, without layout or text copying.
+- (NSUInteger)findPreviewLineLengthAtByte:(NSUInteger)position;
+/// Maximum physical line length currently intersecting this viewport, using line metadata only.
+@property(nonatomic, readonly) NSUInteger findPreviewLongestVisibleLine;
+/// Temporary Find-bar marks are separate from the advanced Find window's persistent highlights.
+- (BOOL)setFindPreviewHighlights:(NSArray<TTByteRange *> *)ranges;
 
 /// Native Scintilla primitive retained for native control/performance checks. Product Find uses SearchController.
 - (BOOL)find:(NSString *)text matchCase:(BOOL)matchCase backwards:(BOOL)backwards;

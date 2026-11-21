@@ -1367,6 +1367,20 @@ extension DocumentChecks {
                 "DS35 backwards field navigation retains the field editor")
             // A real bar action records shared search only after the asynchronous result applies.
             sessionDelegate.noteActive(controller)
+            // Passive typing may select a result. Escape restores the exact opening direction.
+            let priorQuery = controller.findField.stringValue
+            _ = document.editor.setSelectionAnchor(3, caret: 1)
+            controller.showFind(nil)
+            controller.findField.stringValue = "alpha"
+            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            spinUntil("inline count publication") { !controller.findCount.stringValue.isEmpty }
+            check(document.editor.selectedText.lowercased() == "alpha" && !controller.findCount.stringValue.isEmpty,
+                  "live Find publishes a native selection and its count")
+            controller.hideFind(nil)
+            check(document.editor.selectionAnchor == 3 && document.editor.selectionCaret == 1,
+                  "closing an uncommitted live Find restores the reversed opening selection")
+            controller.findField.stringValue = priorQuery
+            controller.showFind(nil)
             let beforeBarRecording = document.editor.text
             let recordingAnchor = document.editor.selectionAnchor, recordingCaret = document.editor.selectionCaret
             sessionDelegate.macros.startRecording()

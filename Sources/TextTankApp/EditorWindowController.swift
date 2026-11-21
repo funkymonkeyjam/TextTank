@@ -8,6 +8,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
 {
     let split = NSSplitView()
     let findField = NSSearchField()
+    let findCount = NSTextField(labelWithString: "")
+    private var findPreview: InlineFindPreview?
     let replaceField = NSTextField()
     let caseBox = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
     let findNextButton = NSButton(title: "Next", target: nil, action: nil)
@@ -130,6 +132,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             if self.host.active !== self { self.host.tabCommands.cancelReopen() }
             self.host.activate(self, focus: false, explicit: false, preserveSelection: true)
             self.lastEditor = editor
+            self.resumeVisibleFindPreview()
             self.updateInlineFindValidation()
             let app = EditorServices.current
             app?.noteActiveController(self)
@@ -192,6 +195,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     if self.host.active !== self { self.host.tabCommands.cancelReopen() }
                     self.host.activate(self, focus: false, explicit: false, preserveSelection: true)
                     self.lastEditor = pane
+                    self.resumeVisibleFindPreview()
                 } else {
                     _ = self.focusPresentationChrome(explicit: false)
                 }
@@ -205,7 +209,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         split.isVertical = true
         split.dividerStyle = .thin
         split.addArrangedSubview(primaryEditor)
-        findField.placeholderString = "Find literal text"
+        findField.placeholderString = "Find"
+        findCount.identifier = .init("editor.find.count")
+        findCount.setAccessibilityLabel("Find matches in document")
+        findCount.lineBreakMode = .byTruncatingTail
         replaceField.placeholderString = "Replace with"
         findNextButton.target = self
         findNextButton.action = #selector(findNext(_:))
@@ -217,7 +224,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         doneButton.setAccessibilityLabel("Close Find in document")
         caseBox.setAccessibilityLabel("Match case in document search")
         let search = EditorFindBar(controls: [
-            findField, replaceField, caseBox, findNextButton, replaceMatchButton, doneButton
+            findField, replaceField, caseBox, findNextButton, replaceMatchButton, doneButton, findCount
         ])
         // Return in the field finds the next match, Shift-Return the previous one, Escape closes.
         findField.delegate = self
@@ -275,6 +282,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 guard let self, !self.statusClosed, let editor = changed else { return }
                 if editor === self.primaryEditor || editor === self.secondary {
                     self.updateInlineFindValidation()
+                    if let preview = self.findPreview, preview.editor === editor, preview.revision != editor.revision {
+                        self.scheduleFindPreview()
+                    }
                     if self.isPresented { self.refreshStatusDetails(source: .editorEvent) }
                 }
 
@@ -308,6 +318,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// Starts the recurring status refresh when the hostWindow comes on screen and stops it when the
     /// hostWindow leaves, so a hidden tab has no timer at all.
     func visibilityChanged() {
+        if !isActiveTab && findPreview != nil { endFindPreview() }
         let visible = isPresented && !statusClosed && statusTimerInterval != nil
         if !visible {
             statusTimer?.invalidate()
@@ -746,6 +757,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     func prepareForClose() {
         linePanel?.close()
         saveToolbarArrangement()
+        endFindPreview(restore: false)
         cancelInlineSearch()
         statusClosed = true
         updateInlineFindValidation()
@@ -846,9 +858,46 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     /// The advanced hostWindow and inline bar share the query without scheduling another search.
     func acceptSharedFindText(_ text: String) {
+        endFindPreview()
         cancelInlineSearch()
         findField.stringValue = text
         updateInlineFindValidation()
+    }
+    func endFindPreview(restore: Bool = true) {
+        let ending = findPreview
+        findPreview = nil
+        ending?.cancel(restore: restore)
+        findCount.stringValue = ""
+        findCount.toolTip = nil
+        findCount.setAccessibilityHelp(nil)
+    }
+    func resumeVisibleFindPreview() {
+        if findBarVisible && findPreview?.editor !== activeEditor { scheduleFindPreview() }
+    }
+    private func scheduleFindPreview() {
+        guard findBarVisible, isActiveTab, !statusClosed, let document = document as? TextDocument, document.isOpen else {
+            endFindPreview()
+            return
+        }
+        let editor = activeEditor
+        if findPreview?.editor !== editor || findPreview?.revision != editor.revision {
+            endFindPreview()
+            findPreview = InlineFindPreview(editor)
+        }
+        let query = findField.stringValue, matchCase = caseBox.state == .on
+        findCount.stringValue = ""
+        findCount.toolTip = nil
+        findCount.setAccessibilityHelp(nil)
+        findPreview?.search(options: SearchOptions(query:query, matchCase:matchCase), isCurrent: { [weak self, weak editor] in
+            guard let self, let editor else { return false }
+            return self.findBarVisible && self.isActiveTab && self.activeEditor === editor
+                && !self.statusClosed && self.findField.stringValue.utf8.elementsEqual(query.utf8)
+                && (self.caseBox.state == .on) == matchCase
+        }, publish: { [weak self] message, detail in
+            self?.findCount.stringValue = message
+            self?.findCount.toolTip = detail ?? message
+            self?.findCount.setAccessibilityHelp(detail)
+        })
     }
     @objc func showFind(_ sender: Any?) {
         guard (document as? TextDocument)?.isOpen == true else { return }
@@ -857,12 +906,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         // Remember the pane the find bar acts on before focus leaves it.
         lastEditor = activeEditor
         setFindBar(visible: true)
+        endFindPreview()
+        findPreview = InlineFindPreview(activeEditor)
         if findField.stringValue.isEmpty { findField.stringValue = Self.findPasteboardText }
         hostWindow?.makeFirstResponder(findField)
         findField.selectText(nil)
         updateInlineFindValidation()
+        scheduleFindPreview()
     }
     @objc func hideFind(_ sender: Any?) {
+        endFindPreview()
         cancelInlineSearch()
         let editor = activeEditor
         setFindBar(visible: false)
@@ -870,6 +923,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     /// Command-E: the selected text becomes the text to find, here and in other apps.
     @objc func useSelectionForFind(_ sender: Any?) {
+        endFindPreview(restore: false)
         cancelInlineSearch()
         let selected = activeEditor.selectedText
         guard !selected.isEmpty, !selected.contains(where: \.isNewline) else {
@@ -905,11 +959,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         if let field = notification.object as? NSTextField, field === findField || field === replaceField {
             _ = focusPresentationChrome()
             cancelInlineSearch()
+            if field === findField { scheduleFindPreview() }
         }
     }
     @objc private func inlineFindOptionsChanged(_ sender: Any?) {
         guard focusPresentationChrome() else { return }
         cancelInlineSearch()
+        scheduleFindPreview()
     }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         guard control === findField else { return false }
@@ -980,6 +1036,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         else {
             return
         }
+        findPreview?.cancel(restore: false)
+        findCount.stringValue = ""
         Self.findPasteboardText = options.query
         search.queryField.stringValue = options.query
         let token = inlineSearchGeneration, flag = TTSearchCancellation()
@@ -1003,6 +1061,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 self.updateInlineFindValidation()
                 switch result {
                 case .applied:
+                    self.endFindPreview(restore: false)
+                    if self.findBarVisible { self.findPreview = InlineFindPreview(self.activeEditor) }
                     guard let editor else { return }
                     delegate.macros?.recordSearch(.init(options: options, action: action), editor: editor)
                     if action == "replaceOne" {

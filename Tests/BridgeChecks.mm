@@ -462,6 +462,12 @@ static void currentLineAndGuideChecks() {
             && [pane message:SCI_STYLEGETBACK wParam:STYLE_INDENTGUIDE]==0xffffff
             && [pane message:SCI_STYLEGETBOLD wParam:STYLE_INDENTGUIDE], "profile guide-slot ink, paper and bold survive palette and clone adoption");
     }
+    check([editor setFindPreviewHighlights:@[[[TTByteRange alloc] initWithLocation:6 length:1]]]
+        && [other message:SCI_INDICATORVALUEAT wParam:25 lParam:6]
+        && [editor setFindPreviewHighlights:@[]]
+        && ![native message:SCI_INDICATORVALUEAT wParam:25 lParam:6]
+        && [native message:SCI_INDICATORVALUEAT wParam:20 lParam:6],
+        "temporary Find marks clear across shared views and preserve advanced Find marks");
     [editor setComparisonPresentation:YES];
     check(!frame(native) && guide(native)==SC_IV_NONE && frame(other) && guide(other)==SC_IV_LOOKBOTH,
           "comparison suppression never alters its sibling editing pane");
