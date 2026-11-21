@@ -1108,36 +1108,24 @@ extension DocumentChecks {
             func represented(_ action: Selector) -> [String] {
                 items.filter { $0.1.action == action }.compactMap { $0.1.representedObject as? String }
             }
-            // The editor command names accepted by TTEditor's dispatch. Each one is executed by
-            // name in bridge-checks ("every editor command by name"); a name missing here is a
-            // menu item that would do nothing, because executeCommand ignores unknown names.
-            let dispatch: Set<String> = [
-                "undo", "redo", "cut", "copy", "paste", "selectAll", "duplicateLine", "deleteLine", "transposeLine",
-                "indent", "unindent", "upper", "lower", "duplicateSelection", "deleteWordLeft", "deleteWordRight",
-                "deleteLineLeft", "deleteLineRight", "zoomIn", "zoomOut", "moveLineUp", "moveLineDown",
-                "rectangularSelection", "streamSelection", "addNextOccurrence", "selectAllOccurrences",
-                "clearAdditionalSelections", "foldAll", "unfoldAll", "showWhitespace", "toggleEOL", "toggleLineNumbers",
-                "toggleOvertype", "joinLines", "trimTrailing", "gotoMatchingBrace", "selectMatchingBrace",
-                "bookmarkToggle", "bookmarkNext", "bookmarkPrevious"
-            ]
-            let basics: Set<String> = [
-                "bookmarkClearAll", "bookmarkCopyLines", "bookmarkCutLines", "bookmarkDeleteLines", "bookmarkInvert",
-                "foldCurrent", "foldLevel1", "foldLevel2", "foldLevel3", "foldLevel4", "foldLevel5", "foldLevel6",
-                "foldLevel7", "foldLevel8"
-            ]
-            let allowed = dispatch.union(basics)
+            // The reviewed menu fixtures own expected placement, selector and exact multiplicity.
+            // The native command table owns what the editor can actually execute.
+            let commandSelector = #selector(EditorWindowController.command(_:))
+            let expectedCommands = expectedMenu.compactMap { row in
+                row["action"] == NSStringFromSelector(commandSelector) ? row["object"] : nil
+            }.sorted()
+            let commands = represented(commandSelector)
             let native = Set(TTEditor.supportedCommandIdentifiers().map(\.rawValue))
-            let commands = represented(#selector(EditorWindowController.command(_:)))
             let unknown = commands.filter { id in
                 if id.hasPrefix("transform.") { return EditorTransform(rawValue: String(id.dropFirst(10))) == nil }
-                guard allowed.contains(id), let command = EditorCommand(rawValue: id) else { return true }
+                guard let command = EditorCommand(rawValue: id) else { return true }
                 return !native.contains(command.nativeIdentifier.rawValue)
             }
             if !check(
-                unknown.isEmpty && commands.count >= 40 && basics.isSubset(of: Set(commands)),
+                unknown.isEmpty && expectedCommands.count >= 40 && commands.sorted() == expectedCommands,
                 "every editor command menu item names a transform or a command the bridge dispatches")
             {
-                print("NOTE unknown command names: \(unknown); missing menu routes: \(basics.subtracting(commands).sorted())")
+                print("NOTE unknown command names: \(unknown); missing: \(Set(expectedCommands).subtracting(commands).sorted()); extra: \(Set(commands).subtracting(expectedCommands).sorted()); actual/expected counts: \(commands.count)/\(expectedCommands.count)")
             }
             check(
                 Set(commands.filter { $0.hasPrefix("transform.") }.map { String($0.dropFirst(10)) })
