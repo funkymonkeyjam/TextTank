@@ -17,6 +17,6 @@ Save your sample in a folder you choose. Change “tea” to “green tea” and
 
 Use two editor groups
 
-With your sample active, choose View → Editor Layout → Two Columns. Choose View → Open in Another Group and select the other group. Edit one view and observe the same document in the other. Choose View → Editor Layout → Single Group to return.
+With your sample active, choose View → Editor Group Layout → Two Columns. Choose View → Show Tab in Another Group and select the other group. Edit one view and observe the same document in the other. Choose View → Editor Group Layout → Single Group to return.
 
 Choose Help → TextTank User Guide for more ways to open, search and review text.

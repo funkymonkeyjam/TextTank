@@ -1432,7 +1432,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Clone"
+            "value": "Split Tab View"
           }
         }
       }
@@ -1482,7 +1482,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Return to a single view of the current document."
+            "value": "Return this tab to one view of the document."
           }
         }
       }
@@ -1492,7 +1492,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Show a second view of the current document, or return to a single view."
+            "value": "Split this tab into two views of the same document, or return to one view."
           }
         }
       }

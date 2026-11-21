@@ -13,7 +13,7 @@ Comparing versions
 File → Compare with Saved Version compares the active file on disk with its editor contents. A comparison has its own window. Review its changes there and return to the original tab to continue editing. If a file changes outside TextTank, review the notice in its tab before choosing Reload.
 
 Editor groups
-View → Editor Layout lets you place groups side by side. Move to Group moves a tab. Open in Another Group shows the same document in both groups, with independent views and shared edits. Returning to Single Group brings the tabs together.
+View → Editor Group Layout lets you place groups side by side. Move to Group moves a tab. Show Tab in Another Group shows the same document in both groups, with independent views and shared edits. Returning to Single Group brings the tabs together.
 
 Automations and macros
 The Automations menu lists saved workflows. Read the input and destination before running one. Clean up recipe list reads the current document and replaces its text. Macros can record supported editing commands for replay. Stop recording before saving a macro. Edit → Undo reverses a change in the active document.

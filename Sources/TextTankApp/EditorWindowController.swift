@@ -714,7 +714,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             let help =
                 secondary == nil
                 ? EditorToolbarCommand.split.scope
-                : Strings.text("toolbar.split.close.help", "Return to a single view of the current document.")
+                : Strings.text("toolbar.split.close.help", "Return this tab to one view of the document.")
             if item.toolTip != help {
                 item.toolTip = help
                 item.image = NSImage(
