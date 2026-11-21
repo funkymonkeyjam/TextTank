@@ -631,7 +631,7 @@ private actor CompareFileGate {
             app.activate(ignoringOtherApps: true)
             _ = NSRunningApplication.current.activate(options: [.activateAllWindows])
             survivingPicker.window?.makeKeyAndOrderFront(nil)
-            try await Task.sleep(nanoseconds: 30_000_000)
+            await waitUntil("comparison source picker to become key") { survivingPicker.window?.isKeyWindow == true }
             let pickerCount = documents.documents.count
             let pickerNew = NSMenuItem(title: "New", action: #selector(AppDelegate.newDocument(_:)), keyEquivalent: "n")
             check(
@@ -670,7 +670,7 @@ private actor CompareFileGate {
             _ = NSRunningApplication.current.activate(options: [.activateAllWindows])
             routed.window?.makeKeyAndOrderFront(nil)
             _ = routed.window?.makeFirstResponder(routed.left.editor)
-            try await Task.sleep(nanoseconds: 30_000_000)
+            await waitUntil("comparison window to become key") { routed.window?.isKeyWindow == true }
             check(
                 routed.window?.isKeyWindow == true && CompareCommandScope.blocksWorkspace,
                 "D1 owned comparison is key and blocks workspace scope")
