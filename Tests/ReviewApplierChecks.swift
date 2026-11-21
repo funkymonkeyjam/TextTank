@@ -238,6 +238,18 @@ private final class ReviewOwnedGate: @unchecked Sendable {
             check(
                 file.bytes == Data("alpha beta\n".utf8) && file.format == FileFormat(), "F0 bounded strict file capture"
             )
+            let ownedFolder = isolated.url.appendingPathComponent("selected-source")
+            try FileManager.default.createDirectory(at: ownedFolder, withIntermediateDirectories: false)
+            let owned = ownedFolder.appendingPathComponent("chosen.txt")
+            try Data("owned selection".utf8).write(to: owned)
+            let alias = isolated.url.appendingPathComponent("chosen-folder-alias")
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: ownedFolder)
+            let chosen = try await ReviewSnapshotCapture.file(alias.appendingPathComponent("chosen.txt"))
+            let direct = try await ReviewSnapshotCapture.file(owned)
+            check(
+                chosen.bytes == direct.bytes && chosen.capturedFileIdentity == direct.capturedFileIdentity
+                    && chosen.label == "chosen.txt",
+                "Compare accepts a selected parent alias and records the real opened file")
             let injected = try ReviewSnapshotCapture.clipboard { Data("\u{feff}\0".utf8) }
             check(injected.bytes == Data("\u{feff}\0".utf8), "F0 explicit injected clipboard only")
             let malformed = isolated.url.appendingPathComponent("invalid.txt")
