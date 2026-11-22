@@ -73,6 +73,76 @@ import NativeSearch
 @MainActor enum TabWorkspaceNativeChecks {
     @MainActor private final class Observation { var switched = false }
     private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    /// Use an actual resizable AppKit frame. Dispatching directly to the text view would bypass the defect.
+    private static func checkFrameTextClicks(returningTo host: NSWindow) throws {
+        let window = DocumentTabWindow(
+            contentRect: NSRect(x: 200, y: 200, width: 620, height: 180),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 620, height: 180))
+        window.contentView = editor
+        window.makeKeyAndOrderFront(nil)
+        NativeWindowEvents.wait("frame click fixture is key") { window.isKeyWindow }
+        defer {
+            window.close()
+            host.makeKeyAndOrderFront(nil)
+        }
+        let view = try requireValue(descendants(editor).first { $0 is NSTextInputClient }, "native text input surface")
+        let scroll = try requireValue(view.enclosingScrollView, "native text scroll view")
+        scroll.scrollerStyle = .overlay
+        editor.wrap = false
+        let line = "English " + String(repeating: "א", count: 100) + " end."
+        _ = editor.loadDocumentText(line + "\nshort")
+        let index = (line as NSString).length - 1
+        let byteAfter = line.utf8.count
+        let glyph = NSRange(location: index, length: 1)
+        func point(_ fraction: CGFloat) -> NSPoint {
+            let rect = window.convertFromScreen(view.accessibilityFrame(for: glyph))
+            return NSPoint(x: rect.minX + rect.width * fraction, y: rect.midY)
+        }
+        func prepare() {
+            _ = editor.setSelectionAnchor(1, caret: 1)
+            editor.horizontalScrollOffset = 0
+            editor.displayIfNeeded()
+            editor.horizontalScrollOffset = Int((point(0.78).x - window.frame.width + 2).rounded())
+            editor.displayIfNeeded()
+        }
+        func send(_ type: NSEvent.EventType, _ location: NSPoint, clicks: Int = 1) throws {
+            let event = try requireValue(
+                NSEvent.mouseEvent(
+                    with: type, location: location, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 1, clickCount: clicks, pressure: type == .leftMouseUp ? 0 : 1),
+                "frame mouse event")
+            window.sendEvent(event)
+        }
+        func settle() { RunLoop.main.run(until: Date(timeIntervalSinceNow: NSEvent.doubleClickInterval + 0.08)) }
+        prepare()
+        let edge = point(0.78)
+        let border = try requireValue(window.contentView?.superview, "native frame")
+        check(
+            window.frame.width - edge.x > 1 && window.frame.width - edge.x < 3
+                && border.hitTest(border.convert(edge, from: nil)) === border,
+            "final glyph right half under native resize frame")
+        try send(.leftMouseDown, edge)
+        try send(.leftMouseUp, edge)
+        settle()
+        check(
+            editor.selectionRanges.first?.caret == byteAfter, "stationary frame click places caret after final period")
+        prepare()
+        let left = point(0.22)
+        try send(.leftMouseDown, left)
+        try send(.leftMouseUp, left)
+        settle()
+        check(editor.selectionRanges.first?.caret == byteAfter - 1, "left half places caret before final period")
+        prepare()
+        let p = point(0.78)
+        try send(.leftMouseDown, p)
+        try send(.leftMouseUp, p)
+        _ = editor.setSelectionAnchor(2, caret: 2)
+        settle()
+        check(editor.selectionRanges.first?.caret == 2, "stale frame click preserves a newer selection")
+    }
     static func runApplicationProcess() -> Never {
         do { try WorkspaceCheckApplicationProcess().run() } catch {
             Checks.fail("Owned native application setup failed: \(error)", file: #filePath, line: #line)
@@ -147,6 +217,7 @@ import NativeSearch
         check(
             window.validateMenuItem(closeMenuItem) && window.validateUserInterfaceItem(closeMenuItem),
             "T0-R18 active window Close validation retains its single-tab route")
+        try checkFrameTextClicks(returningTo: window)
         let frame = window.frame, editor = a.editor
         a.showWindows()
         pa.clone(nil)

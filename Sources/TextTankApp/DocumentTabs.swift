@@ -6,7 +6,11 @@ import AppKit
 /// Native workspace chrome. This window never represents a document's lifetime.
 final class DocumentTabWindow: NSWindow {
     var host: WorkspaceWindowController? { windowController as? WorkspaceWindowController }
+    private var framePress: FrameTextClick?
+    private var frameClickTimer: Timer?
+
     override func resignKey() {
+        cancelFrameClick()
         super.resignKey()
         host?.tabStrips.forEach { $0.cancelReorder() }
     }
@@ -44,7 +48,49 @@ final class DocumentTabWindow: NSWindow {
         if attachedSheet == nil, [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
             host?.endBackgroundCloseReturn()
         }
+        switch event.type {
+        case .leftMouseDown:
+            if event.clickCount == 1 { frameClickTimer?.fire() }
+            cancelFrameClick()
+            framePress = FrameTextClick(window: self, down: event)
+        case .leftMouseDragged:
+            cancelFrameClick()
+        case .keyDown, .rightMouseDown, .otherMouseDown, .scrollWheel:
+            frameClickTimer?.fire()
+            cancelFrameClick()
+        default:
+            break
+        }
         super.sendEvent(event)
+        if event.type == .leftMouseUp, let press = framePress {
+            guard event.locationInWindow == press.down.locationInWindow else {
+                cancelFrameClick()
+                return
+            }
+            // AppKit uses a double-click on this strip to expand the window. Give its
+            // second down priority; a single followed by typing is committed above.
+            let timer = Timer(
+                fireAt: Date(timeIntervalSinceNow: NSEvent.doubleClickInterval), interval: 0,
+                target: self, selector: #selector(commitFrameClick(_:)), userInfo: event, repeats: false)
+            frameClickTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
+    @objc private func commitFrameClick(_ timer: Timer) {
+        guard timer === frameClickTimer, let press = framePress, let up = timer.userInfo as? NSEvent else { return }
+        cancelFrameClick()
+        press.placeCaret(in: self, up: up)
+    }
+    private func cancelFrameClick() {
+        framePress = nil
+        frameClickTimer?.invalidate()
+        frameClickTimer = nil
+    }
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        let previous = firstResponder
+        let accepted = super.makeFirstResponder(responder)
+        if firstResponder !== previous { cancelFrameClick() }
+        return accepted
     }
     override func makeKeyAndOrderFront(_ sender: Any?) {
         super.makeKeyAndOrderFront(sender)
@@ -65,6 +111,51 @@ final class DocumentTabWindow: NSWindow {
     override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
         super.order(place, relativeTo: otherWin)
         host?.visibilityChanged()
+    }
+}
+
+/// AppKit gives a resizable window's frame first refusal over text in its inside edge.
+@MainActor private struct FrameTextClick {
+    let down: NSEvent
+    private let frame: NSRect
+    private let view: NSView
+    private let editor: TTEditor
+    private let character: Int
+    private let revision: UInt
+    private let selection: UInt
+    private let loadEpoch: UInt?
+
+    init?(window: NSWindow, down: NSEvent) {
+        guard down.clickCount == 1, down.modifierFlags.intersection([.control, .option, .command]).isEmpty,
+            window.isKeyWindow, window.attachedSheet == nil, NSApp.modalWindow == nil,
+            let root = window.contentView, let border = root.superview,
+            border.hitTest(border.convert(down.locationInWindow, from: nil)) === border,
+            let surface = root.hitTest(border.convert(down.locationInWindow, from: nil))
+        else { return nil }
+        let hit = (surface as? NSClipView)?.documentView ?? surface
+        guard let editor = sequence(first: hit, next: { $0.superview }).first(where: { $0 is TTEditor }) as? TTEditor
+        else { return nil }
+        let byte = editor.characterByte(atWindowPoint: down.locationInWindow, inTextView: hit)
+        guard byte != NSNotFound else { return nil }
+        self.down = down
+        frame = window.frame
+        view = hit
+        self.editor = editor
+        character = byte
+        revision = editor.revision
+        selection = editor.selectionGeneration
+        loadEpoch = EditorLifetime.document(for: editor)?.loadEpoch
+    }
+
+    func placeCaret(in window: NSWindow, up: NSEvent) {
+        guard window.isKeyWindow, window.frame == frame, view.window === window,
+            EditorLifetime.isOpen(editor), editor.revision == revision, editor.selectionGeneration == selection,
+            let current = FrameTextClick(window: window, down: down),
+            current.view === view, current.character == character, current.loadEpoch == loadEpoch,
+            window.makeFirstResponder(view)
+        else { return }
+        view.mouseDown(with: down)
+        view.mouseUp(with: up)
     }
 }
 

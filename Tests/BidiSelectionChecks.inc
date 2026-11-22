@@ -148,6 +148,20 @@ static void TTCheckBidiSelection(void) {
     check(pixels,"partial Hebrew selection changes pixels only inside that glyph on mixed and purely RTL lines");
     check(painted,"native selection retains both configured text ink and background");
 
+    [e loadDocumentText:@"אבגד\nX"];
+    NSRect alephBox = [window convertRectFromScreen:[(id)content accessibilityFrameForRange:NSMakeRange(0,1)]];
+    NSRect daletBox = [window convertRectFromScreen:[(id)content accessibilityFrameForRange:NSMakeRange(3,1)]];
+    const CGFloat rowY = NSMidY(alephBox);
+    auto characterAt = [&](CGFloat x) {
+        return [e characterByteAtWindowPoint:NSMakePoint(x,rowY) inTextView:content];
+    };
+    check(characterAt(NSMinX(alephBox)+NSWidth(alephBox)*0.25)==0 &&
+          characterAt(NSMinX(alephBox)+NSWidth(alephBox)*0.75)==0 && characterAt(NSMidX(daletBox))==6,
+          "both halves of visible RTL characters have the correct byte hit");
+    check(characterAt(NSMaxX(alephBox)+50)==NSNotFound && characterAt(NSMinX(daletBox)-5)==NSNotFound &&
+          [e characterByteAtWindowPoint:NSMakePoint(NSMidX(alephBox),rowY) inTextView:native]==NSNotFound,
+          "blank space beyond either edge of RTL text and non-text controls have no character hit");
+
     TTEditor *clone=[[TTEditor alloc] initWithFrame:e.bounds];
     [e loadDocumentText:@"left  right\nX"];[clone shareDocumentWith:e];[e setSelectionAnchor:5 caret:5];
     [e replaceSelection:@"אבגד"];const NSRange aleph=NSMakeRange(5,1), dalet=NSMakeRange(8,1);

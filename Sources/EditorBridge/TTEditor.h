@@ -207,6 +207,9 @@ __attribute__((objc_subclassing_restricted))
 - (void)scrollToDocumentLine:(NSInteger)line subline:(NSInteger)subline NS_SWIFT_NAME(scrollTo(documentLine:subline:));
 /// Horizontal scroll in pixels, bounded by this view’s scroll extent when restoring.
 @property(nonatomic) NSInteger horizontalScrollOffset;
+/// Byte position of the displayed character under a window point, or NSNotFound for blank space or another control.
+- (NSInteger)characterByteAtWindowPoint:(NSPoint)point inTextView:(NSView *)view
+    NS_SWIFT_NAME(characterByte(atWindowPoint:inTextView:));
 /// Restores view metadata only, clamping offsets to UTF-8 boundaries and visible lines.
 - (void)restoreClosedTabViewWithAnchor:(NSInteger)anchor caret:(NSInteger)caret firstVisibleLine:(NSInteger)firstVisibleLine NS_SWIFT_NAME(restoreClosedTabView(anchor:caret:firstVisibleLine:));
 @property(nonatomic, readonly) NSArray<NSNumber *> *bookmarkLines;
