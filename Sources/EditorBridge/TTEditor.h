@@ -198,6 +198,13 @@ __attribute__((objc_subclassing_restricted))
 - (void)scrollCaretIntoView;
 /// Zero-based display line at the top of this view.
 @property(nonatomic, readonly) NSInteger firstVisibleLine;
+/// Native logical line and its wrapped display-row offset at the top of this view.
+@property(nonatomic, readonly) NSInteger firstVisibleDocumentLine;
+@property(nonatomic, readonly) NSInteger firstVisibleSubline;
+/// Session anchors also cover a mounted view awaiting its first native wrap paint.
+@property(nonatomic, readonly) NSInteger sessionTopDocumentLine;
+@property(nonatomic, readonly) NSInteger sessionTopSubline;
+- (void)scrollToDocumentLine:(NSInteger)line subline:(NSInteger)subline NS_SWIFT_NAME(scrollTo(documentLine:subline:));
 /// Horizontal scroll in pixels, bounded by this view’s scroll extent when restoring.
 @property(nonatomic) NSInteger horizontalScrollOffset;
 /// Restores view metadata only, clamping offsets to UTF-8 boundaries and visible lines.

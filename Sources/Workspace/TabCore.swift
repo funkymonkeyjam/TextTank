@@ -144,7 +144,18 @@ package struct TabWorkspace: Equatable, Sendable {
 package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
     /// The tab's existing fields still describe its active pane for earlier v1 readers.
     /// Clone creates a vertical divider. The other pane shares the same document.
+    package enum PaneWrapping: Codable, Equatable, Sendable {
+        case unwrapped
+        case wrapped(documentLine: Int, subline: Int)
+
+        var valid: Bool {
+            if case let .wrapped(line, subline) = self { return line >= 0 && subline >= 0 }
+            return true
+        }
+    }
     package struct Split: Codable, Equatable, Sendable {
+        package var activeWrapping: PaneWrapping?
+        package var otherWrapping: PaneWrapping?
         package var otherAnchorByte: Int
         package var otherCaretByte: Int
         package var otherFirstVisibleLine: Int
@@ -220,6 +231,7 @@ package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
                 if let split = tab.split {
                     guard split.otherAnchorByte >= 0, split.otherCaretByte >= 0, split.otherFirstVisibleLine >= 0,
                         split.otherHorizontalOffset >= 0, split.activeHorizontalOffset >= 0,
+                        split.activeWrapping?.valid != false, split.otherWrapping?.valid != false,
                         (0...1).contains(split.primaryFraction)
                     else { throw TabModelError.invalid }
                 }

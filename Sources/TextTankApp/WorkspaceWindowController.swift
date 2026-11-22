@@ -181,7 +181,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         active?.resumeVisibleFindPreview()
         window?.contentView?.layoutSubtreeIfNeeded()
         for group in model.groups {
-            if let id = group.activeTab { entries[id]?.applyRestoredDividerIfMounted() }
+            if let id = group.activeTab { entries[id]?.applyRestoredSplitIfMounted() }
         }
     }
     private func refreshLayoutPicker() {
