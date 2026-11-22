@@ -1416,6 +1416,17 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
         };
     }
 }
+- (NSInteger)characterByteAtWindowPoint:(NSPoint)point inTextView:(NSView *)view {
+    [self assertThread];
+    if (!self.window || view != _engine.content) return NSNotFound;
+    const NSPoint local = [_engine.scrollView convertPoint:point fromView:nil];
+    if (!NSPointInRect(local, _engine.scrollView.bounds)) return NSNotFound;
+    const sptr_t byte = [_engine message:SCI_CHARPOSITIONFROMPOINTCLOSE
+                                  wParam:(uptr_t)local.x lParam:(sptr_t)local.y];
+    if (byte < 0 || byte >= [_engine message:SCI_GETLENGTH]) return NSNotFound;
+    const sptr_t ch = [_engine message:SCI_GETCHARAT wParam:byte];
+    return ch == '\r' || ch == '\n' ? NSNotFound : byte;
+}
 - (NSInteger)horizontalScrollOffset { [self assertThread]; return [_engine message:SCI_GETXOFFSET]; }
 - (void)setHorizontalScrollOffset:(NSInteger)offset {
     [self assertThread];

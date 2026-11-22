@@ -54,11 +54,11 @@
     {
       "dependency": "scintilla",
       "path": "scripts/dependency-patches/scintilla-long-bidi-runs.patch",
-      "sha256": "b05f5b395bd064967935a1fc3cc3d4eade8957267c88c1e3d6dcb7cab359f16f",
+      "sha256": "4eb47746d8d4401d0c56e1e7f09c6e28517bd4897c8beefb0032579ed1625921",
       "files": {
         "cocoa/PlatCocoa.h": "4e47e2e773b9d8b3952577ea90293a7a5be7815020834b8d5669c86c86abc9a0",
         "cocoa/PlatCocoa.mm": "afeb72ca362c5906d93436762b142071aef9a1c769fcbcea43f78d087edcb1e9",
-        "src/EditView.cxx": "c73209b9b50effd1ad40cad02b5d4af213655771a662f759b39d86c535f8e285",
+        "src/EditView.cxx": "8214a9030c9651f9944fa2f264fe5cad3137ca25ed5cc4c2ac895919c2bb147d",
         "src/Platform.h": "6bf9f9632052767e9fdcd8df187274b0adc3f344721864aa24cd41c1c204ed94",
         "src/PositionCache.cxx": "9501f076f0146f42840d124d7b26453bf3c4d2d0302b792898c1ac59a2066916",
         "src/PositionCache.h": "5714997b6edfb830bfc4fac8836efda76d66bcf722f65f550383d964a4d90f90"

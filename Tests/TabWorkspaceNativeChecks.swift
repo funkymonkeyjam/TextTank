@@ -73,6 +73,151 @@ import NativeSearch
 @MainActor enum TabWorkspaceNativeChecks {
     @MainActor private final class Observation { var switched = false }
     private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    @MainActor private final class EdgeCommandTarget: NSObject {
+        let editor: TTEditor
+        private(set) var carets: [Int] = []
+        init(_ editor: TTEditor) { self.editor = editor }
+        @objc func duplicateLine(_ sender: Any?) {
+            carets.append(editor.selectionRanges.first?.caret ?? -1)
+            _ = editor.executeCommand(TTEditorCommandIdentifier(rawValue: "duplicateLine"))
+        }
+    }
+    /// Use an actual resizable AppKit frame. Dispatching directly to the text view would bypass the defect.
+    private static func checkFrameTextClicks(returningTo host: NSWindow) throws {
+        let window = DocumentTabWindow(
+            contentRect: NSRect(x: 200, y: 200, width: 620, height: 180),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 620, height: 180))
+        window.contentView = editor
+        window.makeKeyAndOrderFront(nil)
+        NativeWindowEvents.wait("frame click fixture is key") { window.isKeyWindow }
+        defer {
+            window.close()
+            host.makeKeyAndOrderFront(nil)
+        }
+        let view = try requireValue(descendants(editor).first { $0 is NSTextInputClient }, "native text input surface")
+        let scroll = try requireValue(view.enclosingScrollView, "native text scroll view")
+        scroll.scrollerStyle = .overlay
+        editor.wrap = false
+        let line = "English " + String(repeating: "א", count: 100) + " end."
+        _ = editor.loadDocumentText(line + "\nshort")
+        let index = (line as NSString).length - 1
+        let byteAfter = line.utf8.count
+        let glyph = NSRange(location: index, length: 1)
+        func point(_ fraction: CGFloat) -> NSPoint {
+            let rect = window.convertFromScreen(view.accessibilityFrame(for: glyph))
+            return NSPoint(x: rect.minX + rect.width * fraction, y: rect.midY)
+        }
+        func prepare(caret: Int = 1) {
+            _ = editor.setSelectionAnchor(caret, caret: caret)
+            editor.horizontalScrollOffset = 0
+            editor.displayIfNeeded()
+            editor.horizontalScrollOffset = Int((point(0.78).x - window.frame.width + 2).rounded())
+            editor.displayIfNeeded()
+        }
+        var eventNumber = 0
+        func click(_ location: NSPoint, draggingTo end: NSPoint? = nil) throws {
+            eventNumber += 1
+            func mouse(_ type: NSEvent.EventType, _ point: NSPoint) throws -> NSEvent {
+                try requireValue(
+                    NSEvent.mouseEvent(
+                        with: type, location: point, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                        context: nil, eventNumber: eventNumber, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1),
+                    "frame mouse event")
+            }
+            let down = try mouse(.leftMouseDown, location)
+            let drag = try end.map { try mouse(.leftMouseDragged, $0) }
+            let up = try mouse(.leftMouseUp, end ?? location)
+            // A system frame may track synchronously inside its mouseDown. Supply
+            // the whole gesture first, then dispatch only events AppKit left queued.
+            NSApp.postEvent(up, atStart: true)
+            if let drag { NSApp.postEvent(drag, atStart: true) }
+            NSApp.sendEvent(down)
+            let remaining: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
+            while let next = NSApp.nextEvent(
+                matching: remaining, until: .distantPast, inMode: .default, dequeue: false),
+                next.window === window, next.eventNumber == eventNumber,
+                let owned = NSApp.nextEvent(matching: remaining, until: .distantPast, inMode: .default, dequeue: true)
+            {
+                NSApp.sendEvent(owned)
+            }
+        }
+        func settle() { RunLoop.main.run(until: Date(timeIntervalSinceNow: NSEvent.doubleClickInterval + 0.08)) }
+        prepare()
+        let edge = point(0.78)
+        let border = try requireValue(window.contentView?.superview, "native frame")
+        check(
+            window.frame.width - edge.x > 1 && window.frame.width - edge.x < 3
+                && border.hitTest(border.convert(edge, from: nil)) === border,
+            "final glyph right half under native resize frame")
+        try click(edge)
+        settle()
+        check(
+            editor.selectionRanges.first?.caret == byteAfter, "stationary frame click places caret after final period")
+        prepare()
+        let left = point(0.22)
+        try click(left)
+        settle()
+        check(editor.selectionRanges.first?.caret == byteAfter - 1, "left half places caret before final period")
+        prepare()
+        let dragOrigin = point(0.78), originalFrame = window.frame
+        try click(dragOrigin, draggingTo: NSPoint(x: dragOrigin.x - 32, y: dragOrigin.y))
+        settle()
+        check(
+            editor.selectionCaret == 1 && editor.selectionAnchor == 1,
+            "moving the native resize edge leaves the original caret unchanged")
+        window.setFrame(originalFrame, display: true)
+        prepare()
+        let p = point(0.78)
+        try click(p)
+        _ = editor.setSelectionAnchor(2, caret: 2)
+        settle()
+        check(editor.selectionRanges.first?.caret == 2, "stale frame click preserves a newer selection")
+
+        // Use an owned native control so key-equivalent dispatch has one known target
+        // without reconfiguring the process-wide menu after the full-screen suite.
+        let target = EdgeCommandTarget(editor)
+        let button = NSButton(
+            title: "Duplicate Line", target: target, action: #selector(EdgeCommandTarget.duplicateLine(_:)))
+        button.frame = NSRect(x: 20, y: 10, width: 130, height: 24)
+        button.keyEquivalent = "d"
+        button.keyEquivalentModifierMask = .command
+        editor.addSubview(button)
+        func commandD() throws -> Bool {
+            let key = try requireValue(
+                NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: .command,
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                    characters: "d", charactersIgnoringModifiers: "d", isARepeat: false, keyCode: 2),
+                "duplicate-line shortcut")
+            return window.performKeyEquivalent(with: key)
+        }
+        prepare(caret: byteAfter + 2)
+        let control = try commandD()
+        check(
+            control && target.carets == [byteAfter + 2] && editor.text == line + "\nshort\nshort",
+            "native Command-D control duplicates the seeded second line")
+        _ = editor.loadDocumentText(line + "\nshort")
+        prepare(caret: byteAfter + 2)
+        let trailing = point(0.78), offset = editor.horizontalScrollOffset
+        try click(trailing)
+        // Exercise an invalidation with the same range, without relying on paint timing.
+        let generation = editor.selectionGeneration
+        _ = editor.setSelectionAnchor(byteAfter + 2, caret: byteAfter + 2)
+        editor.horizontalScrollOffset = offset
+        check(
+            editor.selectionGeneration != generation && point(0.78) == trailing,
+            "selection cache invalidated while the same range and clicked glyph remain in place")
+        let handled = try commandD()
+        print(
+            "Frame key equivalent", "key window", window.isKeyWindow, "point", trailing,
+            "handled", handled, "action caret bytes", target.carets, "expected", byteAfter)
+        check(
+            handled && target.carets == [byteAfter + 2, byteAfter] && editor.text == line + "\n" + line + "\nshort",
+            "immediate Command-D duplicates the clicked line")
+    }
     static func runApplicationProcess() -> Never {
         do { try WorkspaceCheckApplicationProcess().run() } catch {
             Checks.fail("Owned native application setup failed: \(error)", file: #filePath, line: #line)
@@ -583,6 +728,7 @@ import NativeSearch
                 exited && !fullWindow.styleMask.contains(.fullScreen),
                 "T0-R16 actual native full-screen exit notification and state")
         }
+        try checkFrameTextClicks(returningTo: fullWindow)
         print(
             "T0 physical keyboard/VoiceOver/full-screen interaction: unverified; native API transitions recorded above")
     }
