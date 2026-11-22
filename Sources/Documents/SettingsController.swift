@@ -94,10 +94,12 @@ extension EditorSettings {
     func reconcileShortcuts(with menu: NSMenu) {
         store.reconcileShortcuts(reservedKeys: Self.reservedShortcuts(in: menu))
     }
-    @discardableResult func save(_ settings: EditorSettings, replacingUnreadable: Bool = false) throws -> URL? {
+    @discardableResult func save(
+        _ settings: EditorSettings, replacingUnreadable: Bool = false, requiringCurrent: Bool = false
+    ) throws -> URL? {
         let previous = value
         let backup = try store.save(
-            settings, replacingUnreadable: replacingUnreadable,
+            settings, replacingUnreadable: replacingUnreadable, requiringCurrent: requiringCurrent,
             reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
         apply(replacing: previous)
         liveForm?.valuesChanged()
@@ -359,7 +361,7 @@ extension EditorSettings {
         guard try owner.store.fileIsCurrent() else { throw LiveError.changed }
         var latest = owner.value
         try update(&latest)
-        if latest != owner.value { try owner.save(latest) }
+        if latest != owner.value { try owner.save(latest, requiringCurrent: true) }
         form.clearValidation()
     }
     private func merge<T: Equatable>(
@@ -680,7 +682,10 @@ extension EditorSettings {
         panelSelection = nil
         let manager = NSFontManager.shared
         let owned = manager.target as AnyObject? === self
-        legacyFilter.withLock { $0 = false }
+        let usedLegacyFilter = legacyFilter.withLock { enabled in
+            defer { enabled = false }
+            return enabled
+        }
         if owned, let previousCollection, let (popup, item) = collectionControl(previousCollection, in: shared) {
             selectCollection(item, in: popup)
         }
@@ -692,7 +697,9 @@ extension EditorSettings {
         if shared.accessoryView === fixedPitch { shared.accessoryView = previousAccessory }
         if shared.delegate === self {
             shared.delegate = previousDelegate
-            shared.reloadDefaultFontFamilies()
+            // The shared panel tears down its family browser before windowWillClose.
+            // Only a still-open panel with an active delegate filter needs rebuilding.
+            if usedLegacyFilter && !closing { shared.reloadDefaultFontFamilies() }
         }
         if owned {
             if let previousFont { manager.setSelectedFont(previousFont, isMultiple: previousMultiple) }
