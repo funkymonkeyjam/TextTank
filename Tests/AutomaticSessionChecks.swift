@@ -80,6 +80,26 @@ import EditorBridge
         try paint(b)
         check(b.firstVisibleLine == 0 && b.selectionCaret == 0,
               "a new user caret wins over the unresolved restoration")
+        let frame = NSRect(x: 0, y: 0, width: 559, height: 300)
+        let offscreen = NSWindow(contentRect: frame, styleMask: .titled, backing: .buffered, defer: false)
+        for supersede in [false, true] {
+            let fresh = TTEditor(frame: frame)
+            offscreen.contentView = fresh
+            check(fresh.loadDocumentText("first owned line\n" + line), "fresh wrapped scroll fixture loaded")
+            fresh.wrap = true
+            fresh.restoreClosedTabView(anchor: 8, caret: 17, firstVisibleLine: 0)
+            fresh.scrollTo(documentLine: 1, subline: 52)
+            check(fresh.sessionTopSubline == 52, "checkpoint retains target while layout is pending")
+            if supersede { _ = fresh.setSelectionAnchor(0, caret: 0) }
+            try paint(fresh)
+            if supersede {
+                check(fresh.firstVisibleLine == 0 && fresh.selectionCaret == 0,
+                      "a late native wrap cannot supersede the user's new selection")
+            } else {
+                check(fresh.firstVisibleDocumentLine == 1 && fresh.firstVisibleSubline == 52 && fresh.selectionCaret == 17,
+                      "first paint restores the target inside the second physical line")
+            }
+        }
         var invalid = state
         invalid.groups[0].tabs[0].split?.otherWrapping = .wrapped(documentLine: 0, subline: -1)
         rejects("negative wrapped subrow invalidates the layout") { try invalid.validate() }

@@ -1379,13 +1379,21 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
 - (NSInteger)sessionTopSubline {
     return _pendingWrappedViewport && _pendingWrappedViewport(NO) ? _pendingTopSubline : self.firstVisibleSubline;
 }
+// Use measured line heights only. SCI_SCROLLVERTICAL installs an independent
+// deferred engine scroll that could override a newer caret at first paint.
+- (void)scrollToMeasuredDocumentLine:(sptr_t)line subline:(sptr_t)subline {
+    const sptr_t first = [_engine message:SCI_VISIBLEFROMDOCLINE wParam:line];
+    const sptr_t next = [_engine message:SCI_VISIBLEFROMDOCLINE wParam:line + 1];
+    const sptr_t withinLine = MIN(subline, MAX(0, next - first - 1));
+    [_engine message:SCI_SETFIRSTVISIBLELINE wParam:first + withinLine];
+}
 - (void)scrollToDocumentLine:(NSInteger)line subline:(NSInteger)subline {
     [self assertThread];
     const sptr_t last = MAX(0, [_engine message:SCI_GETLINECOUNT] - 1);
     const sptr_t docLine = MAX(0, MIN(line, last));
     const sptr_t offset = MAX(0, MIN(subline, INT_MAX));
     _pendingWrappedViewport = nil;
-    [_engine message:SCI_SCROLLVERTICAL wParam:docLine lParam:offset];
+    [self scrollToMeasuredDocumentLine:docLine subline:offset];
     // The first visible paint measures wrapped sublines at the restored width.
     // Reapply an unresolved anchor once, only while the same view state still
     // owns the request. There is no delayed timer or document-wide reflow.
@@ -1403,7 +1411,7 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
                 pane.revision != revision || pane.selectionAnchor != anchor ||
                 pane.selectionCaret != caret || pane.firstVisibleDocumentLine != beforeLine ||
                 pane.firstVisibleSubline != beforeSub) return NO;
-            if (apply) [pane.engine message:SCI_SCROLLVERTICAL wParam:docLine lParam:offset];
+            if (apply) [pane scrollToMeasuredDocumentLine:docLine subline:offset];
             return YES;
         };
     }
