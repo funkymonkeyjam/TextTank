@@ -11,7 +11,7 @@ extension EditorTransform {
         }
         let selection = editor.selectionStart != editor.selectionEnd
         let source = selection ? editor.selectedText : editor.text
-        guard source.utf8.count <= 16 * 1024 * 1024 else {
+        guard source.utf8.count <= SizePolicy.standard.editorTransform else {
             throw DocumentActionError.selectionTooLarge
         }
         let output = transform(source)

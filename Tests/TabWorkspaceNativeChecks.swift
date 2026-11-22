@@ -202,9 +202,31 @@ import NativeSearch
         captured.editor.text = "captured"
         captured.editor.resetUndoHistory()
         let runner = RunController()
-        runner.editor = { captured.activeEditor }
-        try runner.start(ConfiguredRun.uppercaseSample)
+        runner.editor = { composition.currentEditor }
+        var launches = 0
+        runner.onUnrecordableAction = { launches += 1 }
+        func reviewButton(_ identifier: String) throws -> NSButton {
+            let sheet = try requireValue(
+                captured.windowForSheet?.attachedSheet, "T0 first-Run review on the captured tab")
+            return try requireValue(
+                sheet.contentView.map(descendants)?.compactMap { $0 as? NSButton }.first {
+                    $0.identifier?.rawValue == identifier
+                }, "T0 first-Run review button")
+        }
+        let cancelled = ConfiguredRun(name: "T0 Cancel", executable: "/usr/bin/printf", arguments: ["unused"])
+        try runner.start(cancelled)
+        try reviewButton("run.approval.cancel").performClick(nil)
+        check(
+            launches == 0 && !runner.isRunning && captured.editor.text == "captured",
+            "T0 Cancel leaves the command unstarted and the captured tab unchanged")
+
+        var sample = ConfiguredRun.uppercaseSample
+        sample.id = UUID() // The owned fixture exercises its own first approval on every run.
+        try runner.start(sample)
+        try reviewButton("run.approval.confirm").performClick(nil)
+        try require(launches == 1, "T0 explicit review starts the real uppercase command exactly once")
         b.showWindows()
+        try require(composition.currentEditor === b.activeEditor, "T0 switches the live Run target before completion")
         var apply: NSButton?
         spinUntil("T0 actual Run completion after switching tabs") {
             apply = NSApp.windows.flatMap { $0.contentView.map(descendants) ?? [] }.compactMap { $0 as? NSButton }.last

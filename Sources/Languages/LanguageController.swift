@@ -592,9 +592,9 @@ private final class LanguageMenu: NSMenu {
         do {
             return try PrivateFileStore.read(url, maximumBytes: LanguageCatalog.maximumBytes, parent: parent)
         } catch PrivateFileError.unsafeLocation {
-            throw LanguageError.invalid("Language input must be a regular file up to 16 MiB.")
+            throw LanguageError.invalid("Choose a regular local language file up to \(SizePolicy.describe(LanguageCatalog.maximumBytes)).")
         } catch PrivateFileError.tooLarge {
-            throw LanguageError.invalid("Language input exceeds 16 MiB.")
+            throw LanguageError.invalid("Language input exceeds \(SizePolicy.describe(LanguageCatalog.maximumBytes)). Split the catalog or choose a smaller file.")
         }
     }
 }

@@ -66,7 +66,7 @@ final package class WorkspaceBrowserStore {
         self.url = url
         loadState = StoreLoadState(url: url, displayName: "Saved workspace")
         do {
-            let data = try WorkspaceStore.readRegularFile(url, maximumBytes: 1024 * 1024)
+            let data = try WorkspaceStore.readRegularFile(url, maximumBytes: SizePolicy.standard.workspacePreferences)
             try PersistedFormat.check(data, context: "Saved workspace")
             let decoded = try JSONDecoder().decode(WorkspaceBrowserState.self, from: data)
             try decoded.validate()
@@ -82,7 +82,7 @@ final package class WorkspaceBrowserStore {
         try value.validate()
         try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
         try PrivateFileStore.write(
-            JSONEncoder().encode(value), to: url, maximumBytes: 1024 * 1024, temporaryPrefix: ".workspace-")
+            JSONEncoder().encode(value), to: url, maximumBytes: SizePolicy.standard.workspacePreferences, temporaryPrefix: ".workspace-")
         state = value
         loadError = nil
     }

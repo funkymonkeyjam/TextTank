@@ -4,8 +4,9 @@ import Foundation
 package enum UnifiedPatch {
     package static func write(
         original: TextSnapshot, modified: TextSnapshot, changes: ReviewChangeSet,
-        strategy: ReviewDiffStrategy = .myers, policy: ReviewDiffPolicy = MergeCore.policy,
-        token: ReviewCancellation = ReviewCancellation(), hooks: ReviewDiffHooks = .init(), raw: Bool = true
+        strategy: ReviewDiffStrategy = .myers, policy: ReviewDiffPolicy = CompareTimeAllowance.standard.patchPolicy,
+        token: ReviewCancellation = ReviewCancellation(), hooks: ReviewDiffHooks = .init(), raw: Bool = true,
+        relativeComponents: [String]? = nil, maximumPatchBytes: Int = .max
     ) async throws -> Data {
         guard raw else { throw MergeFailure(.incomplete) }
         return try await withTaskCancellationHandler {
@@ -14,28 +15,47 @@ package enum UnifiedPatch {
             let validation = try await Task.detached { () -> ReviewDiffMetrics in
                 let meter = ReviewMeter(policy, token: token, hooks: hooks)
                 do { try MergeCore.validatePair(original, modified, changes, meter: meter) } catch ReviewHalt.cancelled
-                { throw MergeFailure(.cancelled) } catch is ReviewHalt { throw MergeFailure(.budgetExceeded) }
+                { throw MergeFailure(.cancelled) } catch ReviewHalt.budget(let reason) {
+                    throw MergeFailure(budget: reason)
+                }
                 return meter.metrics
             }.value
             var remaining = policy
             remaining.maximumWork -= validation.work
             remaining.seconds -= hooks.clock() - started
-            guard remaining.maximumWork >= 0, remaining.seconds > 0 else { throw MergeFailure(.budgetExceeded) }
-            let lf = await ReviewDiffEngine.compareLF(
-                original, modified, strategy: strategy, policy: remaining, token: token, hooks: hooks)
-            guard lf.completeness == .complete else {
-                throw MergeFailure(lf.completeness == .cancelled ? .cancelled : .budgetExceeded)
+            guard !token.isCancelled else { throw MergeFailure(.cancelled) }
+            guard remaining.maximumWork >= 0 else { throw MergeFailure(budget: .work) }
+            guard remaining.seconds > 0 else { throw MergeFailure(budget: .time) }
+            let lf: ReviewChangeSet
+            if !changes.blocks.isEmpty, changes.lfFramedStrategy == strategy,
+                changes.metrics.resultBytes <= min(SizePolicy.standard.reviewOutput, policy.maximumOutputBytes)
+            {
+                // Complete LF-only source coordinates from this strategy are already patch
+                // records. validatePair above still proves all ranges and unchanged gaps.
+                lf = changes
+            } else {
+                lf = await ReviewDiffEngine.compareLF(
+                    original, modified, strategy: strategy, policy: remaining, token: token, hooks: hooks)
+                switch lf.completeness {
+                case .complete: break
+                case .cancelled: throw MergeFailure(.cancelled)
+                case .budgetStopped(let reason): throw MergeFailure(budget: reason)
+                }
+                remaining.maximumWork -= lf.metrics.work
             }
-            remaining.maximumWork -= lf.metrics.work
             remaining.seconds = policy.seconds - (hooks.clock() - started)
-            guard remaining.maximumWork >= 0, remaining.seconds > 0 else { throw MergeFailure(.budgetExceeded) }
+            guard !token.isCancelled else { throw MergeFailure(.cancelled) }
+            guard remaining.maximumWork >= 0 else { throw MergeFailure(budget: .work) }
+            guard remaining.seconds > 0 else { throw MergeFailure(budget: .time) }
             let finalPolicy = remaining
             return try await Task.detached {
                 do {
                     return try serialize(
-                        original, modified, lf, meter: ReviewMeter(finalPolicy, token: token, hooks: hooks))
-                } catch ReviewHalt.cancelled { throw MergeFailure(.cancelled) } catch is ReviewHalt {
-                    throw MergeFailure(.budgetExceeded)
+                        original, modified, lf, relativeComponents: relativeComponents,
+                        maximumPatchBytes: maximumPatchBytes,
+                        meter: ReviewMeter(finalPolicy, token: token, hooks: hooks))
+                } catch ReviewHalt.cancelled { throw MergeFailure(.cancelled) } catch ReviewHalt.budget(let reason) {
+                    throw MergeFailure(budget: reason)
                 }
             }.value
         } onCancel: {
@@ -43,7 +63,11 @@ package enum UnifiedPatch {
         }
     }
     private struct Hunk { var a: Int, endA: Int, b: Int, endB: Int }
-    private static func serialize(_ a: TextSnapshot, _ b: TextSnapshot, _ changes: ReviewChangeSet, meter: ReviewMeter)
+    private static func serialize(
+        _ a: TextSnapshot, _ b: TextSnapshot, _ changes: ReviewChangeSet, relativeComponents: [String]?,
+        maximumPatchBytes: Int,
+        meter: ReviewMeter
+    )
         throws -> Data
     {
         try meter.poll()
@@ -76,10 +100,10 @@ package enum UnifiedPatch {
                 hunks.append(h)
             }
         }
-        let cap = min(32 * 1024 * 1024, meter.policy.maximumOutputBytes)
+        let cap = max(0, min(maximumPatchBytes, SizePolicy.standard.reviewOutput, meter.policy.maximumOutputBytes))
         var output = Data(), labels = 0
         func append(_ bytes: Data) throws {
-            guard bytes.count <= cap - output.count else { throw MergeFailure(.budgetExceeded) }
+            guard bytes.count <= cap - output.count else { throw MergeFailure(budget: .output) }
             try MergeCore.charge(bytes.count, meter: meter)
             output.append(bytes)
         }
@@ -108,14 +132,38 @@ package enum UnifiedPatch {
             }
             return String(decoding: bytes, as: UTF8.self)
         }
-        let oldName = try label(a.label), newName = try label(b.label)
+        let headers: String
+        if let parts = relativeComponents {
+            guard !parts.isEmpty, parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("/") })
+            else { throw MergeFailure(.invalidRange) }
+            let path = parts.joined(separator: "/")
+            guard path.utf8.count <= 4096 else { throw MergeFailure(.budgetExceeded) }
+            // Git's quoted path format also works for tabs, quoted names and non-ASCII filenames.
+            func quoted(_ side: String) throws -> String {
+                var result = "\"" + side + "/"
+                for byte in path.utf8 {
+                    try meter.spend()
+                    if (32...126).contains(byte) && byte != 34 && byte != 92 {
+                        result.append(Character(UnicodeScalar(byte)))
+                    } else {
+                        result += String(format: "\\%03o", byte)
+                    }
+                }
+                result += "\""
+                labels += result.utf8.count
+                return result
+            }
+            headers = try "--- \(quoted("a"))\n+++ \(quoted("b"))\n"
+        } else {
+            headers = try "--- a/\(label(a.label))\n+++ b/\(label(b.label))\n"
+        }
         // Pre-admit the maximum output before building it; actual count stays separately guarded.
         try meter.reserve(
             min(cap, a.bytes.count + b.bytes.count + (al.ranges.count + bl.ranges.count) * 40 + labels + 128))
-        try append(Data("--- a/\(oldName)\n+++ b/\(newName)\n".utf8))
+        try append(Data(headers.utf8))
         func row(_ prefix: UInt8, _ snapshot: TextSnapshot, _ line: ReviewLine) throws {
             let n = line.upper - line.lower
-            guard n + 1 <= cap - output.count else { throw MergeFailure(.budgetExceeded) }
+            guard n + 1 <= cap - output.count else { throw MergeFailure(budget: .output) }
             try MergeCore.charge(n, meter: meter)
             output.append(prefix)
             snapshot.bytes.withUnsafeBytes { output.append(contentsOf: $0[line.lower..<line.upper]) }

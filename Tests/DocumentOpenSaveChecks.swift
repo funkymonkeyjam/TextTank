@@ -31,6 +31,89 @@ extension DocumentChecks {
             document.editor.replaceSelection(text)
         }
 
+        section("large native text types use the streamed first read", #line) {
+            try files.createDirectory(at: area, withIntermediateDirectories: true)
+            let limit = SizePolicy.standard.streamedImportThreshold
+            var bytes = Data(repeating: 0x20, count: limit)
+            for index in stride(from: 127, to: limit, by: 128) { bytes[index] = 0x0A }
+            let formats = [("swift", "let value = 0"), ("json", "null"), ("xml", "<v/>")]
+            for (ext, prefix) in formats {
+                try autoreleasepool {
+                    let url = area.appendingPathComponent("native-type." + ext)
+                    bytes.replaceSubrange(0..<32, with: Data(repeating: 0x20, count: 32))
+                    bytes.replaceSubrange(0..<prefix.utf8.count, with: prefix.utf8)
+                    try bytes.write(to: url)
+                    let type = try documents.typeForContents(of: url)
+                    let signature = try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: limit)
+                    let document = TextDocument()
+                    let streamed = try document.readInitialUTF8IfEligible(from: url, signature: signature, ofType: type)
+                    check(streamed && document.editor.byteLength == limit && !document.isDocumentEdited,
+                          "actual native type for ." + ext + " uses the validated first-read loader")
+                }
+            }
+            let url = area.appendingPathComponent("native-type.swift")
+            let signature = try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: limit)
+            let document = TextDocument()
+            for type in ["public.rtf", "public.data", "app.texttank.session", "org.example.unregistered"] {
+                let streamed = try document.readInitialUTF8IfEligible(from: url, signature: signature, ofType: type)
+                check(!streamed && document.editor.byteLength == 0, type + " retains the ordinary read path")
+            }
+            bytes[bytes.count - 1] = 0xFF
+            try bytes.write(to: url)
+            let invalidSignature = try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: limit)
+            let nativeType = try documents.typeForContents(of: url)
+            let originalRevision = document.editor.revision
+            var rejected = false
+            do { _ = try document.readInitialUTF8IfEligible(from: url, signature: invalidSignature, ofType: nativeType) }
+            catch FileCodecError.invalidBytes(.utf8) { rejected = true }
+            check(rejected && document.editor.byteLength == 0 && document.editor.revision == originalRevision,
+                  "late invalid UTF-8 leaves the existing native document untouched")
+            document.editor.replaceSelection("keep")
+            let editedRevision = document.editor.revision
+            let streamed = try document.readInitialUTF8IfEligible(from: url, signature: invalidSignature, ofType: nativeType)
+            check(!streamed && document.editor.text == "keep" && document.editor.revision == editedRevision,
+                  "an edited native document retains its bytes when the first-read path declines")
+        }
+
+        section("size-scaled automatic recovery", #line) {
+            let mib = 1024 * 1024
+            let scales: [(Int, Double?)] = [
+                (0, 1), (8 * mib, 1), (8 * mib + 1, 2), (32 * mib, 2),
+                (32 * mib + 1, 4), (64 * mib, 4), (128 * mib, 4), (128 * mib + 1, 8), (256 * mib, 8),
+                (256 * mib + 1, nil)
+            ]
+            check(
+                scales.allSatisfy { TextDocument.automaticRecoveryScale(byteCount: $0.0) == $0.1 },
+                "actual UTF-8 byte boundaries retain small timings and pause only above 256 MiB")
+            let writer = RecoveryWriter(), entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+            let valid = DispatchSemaphore(value: 0), invalid = DispatchSemaphore(value: 0),
+                wrote = DispatchSemaphore(value: 0)
+            writer.submit {
+                entered.signal()
+                _ = release.wait(timeout: .now() + 3)
+            }
+            guard entered.wait(timeout: .now() + 2) == .success else { throw CocoaError(.fileWriteUnknown) }
+            writer.submitPrepared({ { wrote.signal() } }, didPrepare: { valid.signal() }, completion: { _ in })
+            writer.submitPrepared(
+                { throw EditorCaptureError.invalidUTF8 }, didPrepare: { invalid.signal() }, completion: { _ in })
+            guard valid.wait(timeout: .now() + 2) == .success, invalid.wait(timeout: .now() + 2) == .success else {
+                release.signal()
+                throw CocoaError(.fileWriteUnknown)
+            }
+            let waiter = DispatchSemaphore(value: 0), completed = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async {
+                waiter.signal()
+                writer.waitForPendingWrites()
+                completed.signal()
+            }
+            _ = waiter.wait(timeout: .now() + 2)
+            check(completed.wait(timeout: .now()) == .timedOut, "oversized flush waits for its eligible predecessor")
+            release.signal()
+            check(
+                completed.wait(timeout: .now() + 2) == .success && wrote.wait(timeout: .now()) == .success,
+                "an invalid newer capture cannot displace the last valid queued draft at the cutoff")
+
+        }
         section("invalid editor bytes preserve saved files and recovery", #line) {
             let source = area.appendingPathComponent("checked-capture.txt"), disk = Data("saved file".utf8)
             let doc = try loaded(source, disk)

@@ -73,7 +73,7 @@ final class EditorFindBar: NSView {
 @MainActor final class InlineFindPreview {
     weak var editor: TTEditor?
     let revision: UInt
-    private static let paintLineLimit = 1_048_576
+    private static let paintLineLimit = SizePolicy.standard.findHighlightLine
     private let openingCaret: Int
     private let original: [TTSelectionRange]
     private let mayMoveSelection: Bool

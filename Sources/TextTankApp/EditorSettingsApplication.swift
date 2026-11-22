@@ -31,10 +31,10 @@ import AppKit
                     {
                         editor.configureTabWidth(value.tabWidth, useTabs: value.useTabs)
                     }
-                    if previous.wrap != value.wrap, editor.wrap == previous.wrap { editor.wrap = value.wrap }
+                    if doc.deferredLargeFileLanguage == nil, previous.wrap != value.wrap, editor.wrap == previous.wrap { editor.wrap = value.wrap }
                 } else {
                     editor.configureTabWidth(value.tabWidth, useTabs: value.useTabs)
-                    editor.wrap = value.wrap
+                    if doc.deferredLargeFileLanguage == nil { editor.wrap = value.wrap }
                 }
             }
         }

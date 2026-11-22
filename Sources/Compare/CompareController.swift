@@ -118,6 +118,10 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     private let sourceLabels = [NSTextField(wrappingLabelWithString: ""), NSTextField(wrappingLabelWithString: "")]
     private let status = AnnouncingLabel(labelWithString: "")
     private let progress = NSProgressIndicator()
+    private enum Retry { case comparison(CompareSource, CompareSource), patch(CompareCommand) }
+    private var retry: Retry? { didSet { retryButton.isHidden = retry == nil } }
+    private var nextAllowance = CompareTimeAllowance.standard
+    let retryButton = NSButton(title: "Retry with More Time", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
     private var navigation = CompareNavigation(count: 0)
     private var unifiedMode = false, linked = true, collapsed = false, whitespace = false, wrapped = false
@@ -186,7 +190,12 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         cancelButton.target = self
         cancelButton.action = #selector(cancel(_:))
         cancelButton.setAccessibilityLabel("Cancel comparison computation")
-        let bottom = NSStackView(views: [status, progress, cancelButton])
+        retryButton.target = self
+        retryButton.action = #selector(retryWithMoreTime(_:))
+        retryButton.toolTip = "Allow up to \(Int(CompareTimeAllowance.extended.seconds)) seconds for this operation."
+        retryButton.setAccessibilityHelp(retryButton.toolTip)
+        retryButton.isHidden = true
+        let bottom = NSStackView(views: [status, progress, cancelButton, retryButton])
         bottom.orientation = .horizontal
         for view in [labels, split, tableScroll, bottom] {
             view.translatesAutoresizingMaskIntoConstraints = false
@@ -360,7 +369,34 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         status.toolTip = message
         status.setAccessibilityLabel(message)
     }
+    func clearRetry() { retry = nil }
+    func offerPatchRetry(_ command: CompareCommand) {
+        guard readyForMerge, CompareCommand.patchCommands.contains(command) else { return }
+        retry = .patch(command)
+    }
+    @objc private func retryWithMoreTime(_ sender: Any?) {
+        guard !isClosed, !isBusy, !merge.isBusy, let retry else { return }
+        clearRetry()
+        switch retry {
+        case .comparison(let a, let b):
+            guard !a.isStale, !b.isStale, let service else {
+                showStatus("A source changed or closed. Refresh the comparison.")
+                return
+            }
+            pending = (a, b)
+            nextAllowance = .extended
+            service.enqueue(self)
+        case .patch(let command):
+            guard merge.canPerform(command) else {
+                pollSources()
+                showStatus(merge.validationReason(command) ?? "Refresh the comparison before exporting.")
+                return
+            }
+            merge.retryPatch(command)
+        }
+    }
     func showQueued() {
+        clearRetry()
         isBusy = true
         showStatus(merge.appliedAwaitingComparison ? "Changes applied. Waiting to compare…" : "Waiting to compare…")
         progress.startAnimation(nil)
@@ -374,17 +410,26 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         generation = job
         token = ReviewCancellation()
         let cancellation = token
+        let allowance = nextAllowance
+        nextAllowance = .standard
         let x = a.snapshot, y = b.snapshot
         showStatus("Comparing…")
         worker = Task { [weak self] in
-            let result = await engine.compare(x, y, policy: .default, token: cancellation, hooks: .init())
+            let hooks = ReviewDiffHooks()
+            let started = hooks.clock()
+            var diffPolicy = ReviewDiffPolicy.default
+            diffPolicy.seconds = allowance.seconds
+            let result = await engine.compare(x, y, policy: diffPolicy, token: cancellation, hooks: hooks)
             do {
                 try Task.checkCancellation()
                 guard !cancellation.isCancelled else { throw CompareFailure.cancelled }
                 let p: CompareProjection?
                 if result.completeness == .complete {
+                    var policy = ComparePolicy.default
+                    policy.seconds = allowance.seconds - (hooks.clock() - started)
+                    guard policy.seconds > 0 else { throw CompareFailure.budget(.time) }
                     p = try await CompareProjection.build(
-                        original: x, modified: y, changes: result, token: cancellation)
+                        original: x, modified: y, changes: result, policy: policy, token: cancellation, hooks: hooks)
                 } else {
                     p = nil
                 }
@@ -424,6 +469,9 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 } else {
                     self.pending = nil
                     self.refreshing = false
+                    if result.completeness == .budgetStopped(.time), allowance == .standard {
+                        self.retry = .comparison(a, b)
+                    }
                     let reason =
                         "Incomplete comparison. \(Self.reason(result.completeness)) " + self.merge.interruptionDetail
                     if self.projection != nil {
@@ -441,6 +489,9 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                     self.cancelButton.isHidden = true
                     self.pending = nil
                     self.refreshing = false
+                    if case CompareFailure.budget(.time) = error, allowance == .standard, !a.isStale, !b.isStale {
+                        self.retry = .comparison(a, b)
+                    }
                     if self.projection != nil {
                         self.outOfDate = true
                         self.retainedFailure = self.comparisonFailure(error)
@@ -493,7 +544,9 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         updateLabels()
         if isBusy && refreshing && pending == nil { return }
         let a = pending?.0 ?? original, b = pending?.1 ?? modified
+        if case let .comparison(left, right) = retry, left.isStale || right.isStale { clearRetry() }
         if a?.isStale == true || b?.isStale == true {
+            clearRetry()
             outOfDate = true
             merge.sourceInvalidated()
             if isBusy {
@@ -507,6 +560,8 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         }
     }
     @objc func cancel(_ sender: Any?) {
+        clearRetry()
+        nextAllowance = .standard
         merge.cancelWork()
         token.cancel()
         worker?.cancel()
@@ -1007,6 +1062,7 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         window?.toolbar?.validateVisibleItems()
     }
     private func refresh() {
+        clearRetry()
         merge.resultReplaced()
         guard let a = original, let b = modified, let service else { return }
         do {

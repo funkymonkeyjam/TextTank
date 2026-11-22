@@ -54,7 +54,7 @@ package struct FindPreferences: Codable {
     package var version: Int
     package var options: SearchOptions
     // Six JSON bytes per allowed UTF-16 unit plus keys/flags fit within 8 MiB.
-    static package let maximumBytes = 8 * 1024 * 1024
+    static package let maximumBytes = SizePolicy.standard.searchSettings
     static package func decode(_ data: Data) throws -> Self {
         guard data.count <= maximumBytes else { throw SearchFailure.preferencesTooLarge }
         try PersistedFormat.check(data, context: "Find settings")

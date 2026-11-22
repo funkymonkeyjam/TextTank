@@ -57,6 +57,7 @@ package enum ReviewDiffEngine {
         let meter = ReviewMeter(policy, token: token, hooks: hooks)
         var blocks: [ReviewChangeBlock] = []
         var completeness: ReviewCompleteness = .complete
+        var lfFramedStrategy: ReviewDiffStrategy?
         do {
             guard !Thread.isMainThread else { throw ReviewHalt.budget(.mainThread) }
             try meter.enter(.lines)
@@ -83,6 +84,9 @@ package enum ReviewDiffEngine {
             meter.metrics.phases.insert(.delivery)
             hooks.checkpoint?(.delivery, meter.metrics.work)
             if token.isCancelled { throw ReviewHalt.cancelled }
+            if lfOnly || (!a.usedCarriageReturnBoundaries && !b.usedCarriageReturnBoundaries) {
+                lfFramedStrategy = strategy
+            }
         } catch ReviewHalt.cancelled {
             completeness = .cancelled
             blocks = []
@@ -96,7 +100,7 @@ package enum ReviewDiffEngine {
         meter.metrics.seconds = max(0, hooks.clock() - meter.started)
         return .init(
             original: original.id, modified: modified.id, blocks: blocks, completeness: completeness,
-            metrics: meter.metrics)
+            metrics: meter.metrics, lfFramedStrategy: lfFramedStrategy)
     }
 }
 struct ReviewLineRange { var a: Int, endA: Int, b: Int, endB: Int }

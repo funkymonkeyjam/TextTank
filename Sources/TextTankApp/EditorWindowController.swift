@@ -211,7 +211,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
 
             }
         }
-        if editor == nil { EditorServices.current?.settings?.apply(to: primaryEditor) }
+        if editor == nil {
+            EditorServices.current?.settings?.apply(to: primaryEditor)
+            if document.deferredLargeFileLanguage != nil { primaryEditor.wrap = false }
+        }
         let root = presentationRoot
         split.delegate = self
         split.isVertical = true
@@ -280,9 +283,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         statusLabel.lineBreakMode = .byClipping
         applyStatusMessage(
             document.currentSaveStateStatus,
-            compactMessage: document.recoveredOrigin == nil
-                ? document.currentSaveStateStatus : "Recovered copy — Save As to keep")
+            compactMessage: document.compactPausedRecoveryStatus
+                ?? (document.recoveredOrigin == nil
+                    ? document.currentSaveStateStatus : "Recovered copy — Save As to keep"))
         configureExternalReload()
+        statusDetails.largeFileButton.target = self
+        statusDetails.largeFileButton.action = #selector(enableLargeFileEditing(_:))
         statusDetails.menuProvider = { [weak self] field in
             guard let self, self.focusPresentationChrome(explicit: false) else { return nil }
             EditorServices.current?.noteActiveController(self)
@@ -399,7 +405,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         transientStatus = nil
         recoveryStatusFailed = failed
         if failed, fullStatusText != message { Announce.say(message, from: hostWindow) }
-        let compact = (document as? TextDocument)?.recoveredOrigin == nil ? message : "Recovered copy — Save As to keep"
+        let doc = document as? TextDocument
+        let compact =
+            doc?.compactPausedRecoveryStatus
+            ?? (doc?.recoveredOrigin == nil ? message : "Recovered copy — Save As to keep")
         applyStatusMessage(message, compactMessage: failed ? failureSummary : compact)
         // The failure is carried by the words and the symbol; full-strength label colour keeps it
         // readable in both appearances, where small red text was not.
@@ -415,6 +424,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// Explicit action refreshes keep their immediate metrics capture.
     func refreshStatusDetails(for suppliedDocument: TextDocument? = nil, source: StatusRefreshSource = .explicit) {
         guard let doc = suppliedDocument ?? document as? TextDocument else { return }
+        statusDetails.showsLargeFileAction = doc.deferredLargeFileLanguage != nil
         statusRefreshCount += 1
         // Any refresh in a hostWindow on screen restarts a missing timer, the editor-event path included.
         if statusTimer == nil { visibilityChanged() }
@@ -1261,6 +1271,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             }
             return true
         }
+    }
+    @objc private func enableLargeFileEditing(_ sender: Any?) {
+        guard focusPresentationChrome() else { return }
+        (document as? TextDocument)?.enableLargeFileEditing()
     }
     @objc func toggleWrap(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }

@@ -286,7 +286,8 @@ import NativeSearch
             let documentsBefore = NSDocumentController.shared.documents.count
             check(
                 NSApp.sendAction(NSSelectorFromString("replaceMatchedFiles:"), to: busy, from: nil)
-                    && confirmations.count == 1 && confirmations[0].contains(".texttank-backup"),
+                    && confirmations.count == 1
+                    && confirmations[0].contains("private recovery batch in TextTank Application Support"),
                 "Replace Matched Files asks once, with the explanation, through the confirmation seam")
             await waitUntil("the replacement to reach its first commit") { gate.isHolding }
             busy.queryField.stringValue = "other"
@@ -321,11 +322,17 @@ import NativeSearch
             let started = pressReturn(), restarted = pressReturn()
             check(started && restarted && busy.isSearching, "Return while a search is running starts the search again")
             await waitUntil("the restarted search to finish") { !busy.isSearching }
+            let privateManifest = try requireValue(
+                busy.lastReplacementOutcomes.first?.recoveryReport, "private batch location")
             check(
-                busy.lastOutcome
-                    == .searched(matches: 3, filesSearched: 3, skipped: 10, cancelled: false, limitReached: false)
-                    && busy.numberOfRows(in: busy.table) == 3,
-                "the restarted search completes; recovery copies are excluded, not searched")
+                try busy.lastOutcome
+                    == .searched(matches: 3, filesSearched: 3, skipped: 4, cancelled: false, limitReached: false)
+                    && busy.numberOfRows(in: busy.table) == 3
+                    && FolderReplacementBatch.read(privateManifest).entries.count == 3
+                    && !FileManager.default.contentsOfDirectory(atPath: busyRoot.path).contains {
+                        $0.hasPrefix(".texttank-")
+                    },
+                "the restarted search sees only four fixture exclusions and all three backups are private")
             busy.activateResult(row: 2)
             check(
                 openedResults.map(\.lastPathComponent) == ["a.txt", "c.txt"],
@@ -389,6 +396,44 @@ import NativeSearch
                 "fixture: replace-flow search dispatched")
             await waitUntil("the replace-flow search to finish") { !flow.isSearching }
             try require(flow.numberOfRows(in: flow.table) == 2, "fixture: both files matched on disk")
+            let buttons = everyView(try requireValue(flow.window?.contentView, "folder patch buttons")).compactMap {
+                $0 as? NSButton
+            }
+            let dryRun = try requireValue(
+                buttons.first { $0.action == #selector(FolderSearchController.previewFolderPatch(_:)) }, "Preview Patch"
+            )
+            let export = try requireValue(
+                buttons.first { $0.action == #selector(FolderSearchController.exportFolderPatch(_:)) }, "Export Preview"
+            )
+            dryRun.performClick(nil)
+            await waitUntil("replacement patch preview") { !flow.isSearching }
+            check(
+                export.isEnabled && flow.details.string.contains("+pin closed")
+                    && !flow.details.string.contains("+pin open") && flow.status.stringValue.contains("1 open"),
+                "actual Preview Patch shows closed-file change and explicitly counts the skipped dirty document")
+            flow.choosePatchFile = { _ in nil }
+            export.performClick(nil)
+            await waitUntil("cancel export") { !flow.isSearching }
+            check(
+                try flow.status.stringValue.contains("cancelled")
+                    && Data(contentsOf: closedFile) == Data("needle closed\n".utf8),
+                "save panel cancel leaves staged files unchanged")
+            flow.choosePatchFile = { _ in closedFile }
+            export.performClick(nil)
+            await waitUntil("protect selected source") { !flow.isSearching }
+            check(
+                try flow.status.stringValue.contains("Could not export")
+                    && Data(contentsOf: closedFile) == Data("needle closed\n".utf8),
+                "ordinary export refuses a selected source")
+            let destination = support.appendingPathComponent("explicit-folder.patch")
+            flow.choosePatchFile = { _ in destination }
+            export.performClick(nil)
+            await waitUntil("export the previewed bytes") { !flow.isSearching }
+            check(
+                try String(contentsOf: destination, encoding: .utf8) == flow.details.string
+                    && Data(contentsOf: openFile) == Data("needle open\n".utf8)
+                    && openDocument.editor.text.hasPrefix("unsaved "),
+                "Export Preview writes only selected destination while disk originals and dirty editor stay intact")
             var confirmed = false
             let giveUp = Date().addingTimeInterval(10)
             let confirm = Timer(timeInterval: 0.05, repeats: true) { _ in
@@ -427,6 +472,101 @@ import NativeSearch
                 flow.lastOutcome == .replaced(replaced: 1, notReplaced: 1) && flow.lastReplacementOutcomes.count == 2
                     && flow.numberOfRows(in: flow.table) == 0,
                 "the replacement report counts one replaced and one skipped file and clears the stale results")
+            let coldFolder = FolderSearchController(
+                preferencesURL: support.appendingPathComponent("reopened-folder.json"))
+            let coldWindow = try requireValue(coldFolder.window, "cold folder window")
+            let undoButton = try requireValue(
+                coldWindow.contentView.flatMap {
+                    everyView($0).compactMap { $0 as? NSButton }
+                        .first { $0.action == #selector(FolderSearchController.undoLastFolderReplace(_:)) }
+                }, "named folder Undo command")
+            for shouldRestore in [false, true] {
+                undoButton.performClick(nil)
+                await waitUntil("the owned folder Undo confirmation to appear") { coldWindow.attachedSheet != nil }
+                let sheet = try requireValue(coldWindow.attachedSheet?.contentView, "owned Undo confirmation sheet")
+                let buttons = everyView(sheet).compactMap { $0 as? NSButton }
+                let confirm = try requireValue(
+                    buttons.first { $0.identifier?.rawValue == "folder.undo.confirm" }, "restore choice")
+                check(confirm.hasDestructiveAction, "restoring originals requires an explicit destructive choice")
+                let cancel = try requireValue(buttons.first { $0.title == "Cancel" }, "cancel choice")
+                (shouldRestore ? confirm : cancel).performClick(nil)
+                await waitUntil("the owned folder Undo command to finish") { !coldFolder.isSearching }
+                let expected = shouldRestore ? "needle closed\n" : "pin closed\n"
+                check(
+                    try Data(contentsOf: closedFile) == Data(expected.utf8)
+                        && openDocument.editor.text == "unsaved needle open\n" && openDocument.isDocumentEdited,
+                    shouldRestore
+                        ? "a fresh window restores its recorded replacement and preserves the unsaved neighbor"
+                        : "Cancel leaves replacement and unsaved neighbor unchanged")
+            }
+            check(
+                coldFolder.lastOutcome == .restored(restored: 1, other: 0)
+                    && coldFolder.details.string.contains(closedFile.lastPathComponent),
+                "Undo shows its per-file report")
+            let manifest = try requireValue(byFile["closed.txt"]?.recoveryReport, "reviewed batch location")
+            coldFolder.showRecoveryBatches(nil)
+            let history = try requireValue(
+                FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.FolderReplacementBackups" },
+                "actual recovery history window")
+            let controls = everyView(try requireValue(history.window.contentView, "history contents"))
+            let delete = try requireValue(
+                controls.compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "folder.backups.delete" },
+                "review deletion button")
+            let reviewedFiles = try requireValue(
+                controls.compactMap { $0 as? NSTextView }.first {
+                    $0.accessibilityLabel() == "Files and recovery states"
+                },
+                "reviewed files view")
+            await waitUntil("the fresh history window to read its selected batch") {
+                delete.isEnabled && reviewedFiles.string.contains("closed.txt")
+            }
+            check(
+                reviewedFiles.string.contains("restored") && reviewedFiles.string.contains(closedFile.path),
+                "actual history displays original path and recovered file state")
+            let age: NSPopUpButton = try requireValue(
+                controls.compactMap { $0 as? NSPopUpButton }.first { $0.menu?.item(withTag: 90) != nil },
+                "retention picker")
+            for accept in [false, true] {
+                age.selectItem(withTag: 7)
+                _ = NSApp.sendAction(age.action!, to: age.target, from: age)
+                let content = try requireValue(history.window.attachedSheet?.contentView, "retention confirmation")
+                let button = try requireValue(
+                    everyView(content).compactMap { $0 as? NSButton }.first {
+                        $0.title == (accept ? "Apply Retention" : "Cancel")
+                    },
+                    "retention choice")
+                button.performClick(nil)
+                await waitUntil("retention choice to settle") {
+                    (try? FolderReplacementHistory.retention()) == (accept ? .week : .keep)
+                        && history.window.attachedSheet == nil && age.isEnabled
+                }
+                check(
+                    try FolderReplacementHistory.retention() == (accept ? .week : .keep),
+                    "only explicit confirmation changes the stored age policy")
+            }
+            await waitUntil("review to settle after retention") {
+                delete.isEnabled && reviewedFiles.string.contains("closed.txt")
+            }
+            for accept in [false, true] {
+                delete.performClick(nil)
+                let content = try requireValue(
+                    history.window.attachedSheet?.contentView, "selected batch deletion sheet")
+                let button = try requireValue(
+                    everyView(content).compactMap { $0 as? NSButton }.first {
+                        $0.title == (accept ? "Delete Batch" : "Cancel")
+                    },
+                    "batch deletion choice")
+                button.performClick(nil)
+                await waitUntil("private deletion choice to settle") {
+                    history.window.attachedSheet == nil
+                        && FileManager.default.fileExists(atPath: manifest.path) != accept
+                }
+                check(
+                    try FileManager.default.fileExists(atPath: manifest.path) != accept
+                        && Data(contentsOf: closedFile) == Data("needle closed\n".utf8),
+                    "deletion confirmation governs only the displayed private batch")
+            }
+            history.close()
             openDocument.close()
             document.close()
             // Package 21 (F293, G391, G400): Find in Folder is a panel that leaves the document

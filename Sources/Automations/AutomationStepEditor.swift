@@ -411,7 +411,7 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
                 panel.allowedContentTypes = [.json]
                 guard panel.runModal() == .OK, let url = panel.url else { return }
                 let imported = try AutomationRuleImport.ruleSets(
-                    from: AutomationFileInput.readData(url, limit: 1_048_576))
+                    from: AutomationFileInput.readData(url, limit: SizePolicy.standard.automationRule))
                 guard let chosen = imported.fromLibrary ? Self.chooseFromLibrary(imported.sets) : imported.sets.first
                 else { return }
                 selected = chosen
@@ -478,9 +478,9 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         let token = preview.begin()
         // The rules alone are tested; the name field plays no part until Use These Rules.
         let input = sample.string, steps = list.steps
-        guard input.utf8.count <= 65536 else {
+        guard input.utf8.count <= SizePolicy.standard.automationStepPreviewSample else {
             _ = preview.finish(token)
-            status.stringValue = "Use a sample of at most 64 KiB."
+            status.stringValue = "Use a sample of at most \(SizePolicy.describe(SizePolicy.standard.automationStepPreviewSample))."
             return
         }
         let control = AutomationRunControl()

@@ -89,7 +89,7 @@ enum ReviewApplyResult: Equatable, Sendable { case applied, noChange, rejected(R
             guard document.loadEpoch == proposal.target.loadEpoch else { throw ReviewRejection.reloaded }
             guard editor.revision == proposal.target.revision else { throw ReviewRejection.revisionChanged }
             // Cheap count/size guards precede even the live-byte copy.
-            guard proposal.edits.count <= 10_000, editor.byteLength <= 8 * 1024 * 1024 else {
+            guard proposal.edits.count <= 10_000, editor.byteLength <= SizePolicy.standard.reviewText else {
                 throw ReviewRejection.budgetExceeded
             }
             let target = DocumentTarget(

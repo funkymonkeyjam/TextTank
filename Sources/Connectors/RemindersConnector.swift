@@ -53,9 +53,9 @@ enum ReminderConnectorError: Error, LocalizedError {
         case .noRows: return "There are no items to send. No items were sent."
         case .tooManyRows(let limit): return "Send at most \(limit) items at once. No items were sent."
         case .invalidRow(let number):
-            return "Item \(number) must contain text and be at most 1 MiB. No items were sent."
+            return "Item \(number) must contain text and be at most \(SizePolicy.describe(SizePolicy.standard.reminderItem)). Shorten the item before exporting."
         case .journalTooLarge(let limit):
-            return "The export record exceeds the \(limit)-byte limit. The record was not written."
+            return "The export record exceeds the \(SizePolicy.describe(limit)) limit. Shorten item titles or use a smaller batch."
         case .busy: return "An export is already running."
         case .knownFailure(let message): return message
         case .uncertain(let message): return message
@@ -135,7 +135,7 @@ struct ReminderJournalIssue {
 /// Reads, lays out and updates one batch journal. Everything here is plain file work with no
 /// main-actor state, so an export runs it on `ReminderJournalFile`, off the main thread.
 enum ReminderJournal {
-    static let maximumBytes = 32 * 1024 * 1024
+    static let maximumBytes = SizePolicy.standard.reminderJournal
     // The v2 schema adds only this bounded header allowance to the existing v1 size limit.
     static let maximumActiveBytes = maximumBytes + 64
     /// Bytes reserved after each row for its status, reminder identifier and message, so a row's
@@ -570,7 +570,7 @@ actor ReminderJournalFile {
         guard !rows.isEmpty else { throw ReminderConnectorError.noRows }
         guard rows.count <= 10000 else { throw ReminderConnectorError.tooManyRows(limit: 10000) }
         for (index, row) in rows.enumerated() {
-            guard !row.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, row.utf8.count <= 1048576 else {
+            guard !row.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, row.utf8.count <= SizePolicy.standard.reminderItem else {
                 throw ReminderConnectorError.invalidRow(number: index + 1)
             }
         }

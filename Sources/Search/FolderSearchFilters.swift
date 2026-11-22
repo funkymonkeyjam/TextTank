@@ -120,7 +120,7 @@ package struct FolderSearchSettings: Codable, Equatable {
     }
 
     // Existing limits permit ~6.7 MiB after JSON escaping, plus bounded path/filter data.
-    static package let maximumBytes = 8 * 1024 * 1024
+    static package let maximumBytes = SizePolicy.standard.searchSettings
     package var version: Int
     package var folder: URL?
     package var workspaceScope: Bool, recursive: Bool, includeHidden: Bool
@@ -143,7 +143,7 @@ package struct FolderSearchSettings: Codable, Equatable {
     }
     static package func decode(_ data: Data) throws -> Self {
         guard data.count <= maximumBytes else {
-            throw FolderSearchError.invalidRequest("Saved folder search settings exceed their size limit.")
+            throw FolderSearchError.invalidRequest("Saved folder search settings exceed \(SizePolicy.describe(Self.maximumBytes)). Shorten the saved search or replacement.")
         }
         try PersistedFormat.check(data, context: "Find in Folder settings")
         let value = try JSONDecoder().decode(Self.self, from: data)

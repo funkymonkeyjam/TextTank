@@ -823,6 +823,24 @@ sys.exit(93)
             self.assertEqual(result.returncode, 2, result.stderr)
             self.assertNotIn('Traceback', result.stderr)
 
+    def test_review_packaging_rejects_debug_and_wrong_application_paths(self):
+        package = module('package_review', 'package_review.py')
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            destination = root / 'TextTank-review' / 'TextTank.app'
+            for configuration, app_directory in [('Debug', 'Debug'), ('Release', 'Debug')]:
+                application = root / 'build/DerivedData/Build/Products' / app_directory / 'TextTank.app'
+                with self.subTest(configuration=configuration, application=app_directory):
+                    with patch.dict(os.environ, {'CONFIGURATION': configuration, 'APP_PATH': str(application)}):
+                        with self.assertRaises(ValueError):
+                            package.copy_verified_release(root, destination)
+                    self.assertFalse(destination.exists())
+        result = subprocess.run(
+            [str(ROOT / 'scripts/package-review.sh')], capture_output=True, text=True,
+            env={**os.environ, 'CONFIGURATION': 'Debug'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('requires CONFIGURATION=Release', result.stderr)
+
     def test_package_rejects_dirty_mismatched_and_tampered_evidence(self):
         package = module('package_review', 'package_review.py')
         with tempfile.TemporaryDirectory() as work:
@@ -903,6 +921,8 @@ sys.exit(93)
 
 if __name__ == '__main__':
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(BuildPipelineChecks)
+    from CIEvidenceChecks import CIEvidenceChecks
+    suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(CIEvidenceChecks))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if result.wasSuccessful():
         print(f'PASS BuildPipelineChecks: {result.testsRun} fault scenarios; isolated fixtures, no app launch')

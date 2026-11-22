@@ -1243,6 +1243,7 @@ import NativeSearch
                         && failingStatus.toolTip == nil
                         && failingStatus.stringValue.hasPrefix("Edited — recovery copy kept"),
                     "successful recovery write shows the ordinary status and names the recovery copy")
+                let firstHealthyHeader = try Data(contentsOf: failingFile)
                 try corruptSnapshot.write(to: failingFile)
                 failing.editor.text = "ab"
                 failing.flushRecovery()
@@ -1266,7 +1267,9 @@ import NativeSearch
                 check(
                     try Data(contentsOf: failingFile) == corruptSnapshot,
                     "failed recovery writes never overwrite the unreadable snapshot")
-                try FileManager.default.removeItem(at: failingFile)
+                // Retire the fault-injected fixture through its restored header and associated payload.
+                try firstHealthyHeader.write(to: failingFile)
+                try TextDocument.recovery.remove(id: failing.recoveryID, throughRevision: .max)
                 failing.editor.text = "abcde"
                 failing.flushRecovery()
                 check(
@@ -1275,6 +1278,7 @@ import NativeSearch
                         && TextDocument.recovery.load(id: failing.recoveryID).text == "abcde",
                     "next successful recovery write clears the failure state")
                 // F202: a failed cleanup at close is recorded, never blocks, and leaves the file for the next launch's review.
+                let nextHealthyHeader = try Data(contentsOf: failingFile)
                 try corruptSnapshot.write(to: failingFile)
                 failing.close()
                 check(
@@ -1288,7 +1292,8 @@ import NativeSearch
                 check(
                     AppDelegate.recoveryIssueText(try TextDocument.recovery.scan().issues).contains(failingFile.path),
                     "recovery review lists the full path of each file")
-                try FileManager.default.removeItem(at: failingFile)
+                try nextHealthyHeader.write(to: failingFile)
+                try TextDocument.recovery.remove(id: failing.recoveryID, throughRevision: .max)
                 NativeFixtureEnvironment.recoveryFailureNotice = nil
                 TextDocument.recoveryFailureNoticeShown = false
             }

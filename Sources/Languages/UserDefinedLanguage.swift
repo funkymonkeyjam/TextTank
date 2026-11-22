@@ -248,11 +248,11 @@ package struct UserDefinedLanguage: Codable, Equatable {
     static package func decode(_ data: Data) throws -> [Self] {
         // XML has no U+0000, so a NUL byte means UTF-16 or UTF-32, which would hide a DTD from the
         // text scan below. The scan stays: nothing else rejects a DOCTYPE that declares nothing.
-        guard data.count <= 2 * 1024 * 1024, !data.contains(0), let text = String(data: data, encoding: .utf8),
+        guard data.count <= SizePolicy.standard.languageDefinition, !data.contains(0), let text = String(data: data, encoding: .utf8),
             text.range(of: "<!DOCTYPE", options: .caseInsensitive) == nil,
             text.range(of: "<!ENTITY", options: .caseInsensitive) == nil
         else {
-            throw LanguageError.invalid("UDL import accepts UTF-8 XML up to 2 MiB without DTD or external entities.")
+            throw LanguageError.invalid("UDL import accepts UTF-8 XML up to \(SizePolicy.describe(SizePolicy.standard.languageDefinition)) without DTD or external entities. Choose a smaller supported UDL file.")
         }
         let parser = XMLParser(data: data), delegate = UDLParser()
         parser.shouldResolveExternalEntities = false
@@ -323,7 +323,7 @@ private final class UDLParser: NSObject, XMLParserDelegate {
     // The parser honours the encoding a file declares (UTF-7, for one), so a DTD can reach it past
     // the UTF-8 text scan in decode. Any declaration it reports ends the import.
     private func rejectDeclaration(_ parser: XMLParser) {
-        error = LanguageError.invalid("UDL import accepts UTF-8 XML up to 2 MiB without DTD or external entities.")
+        error = LanguageError.invalid("UDL import accepts UTF-8 XML up to \(SizePolicy.describe(SizePolicy.standard.languageDefinition)) without DTD or external entities. Choose a smaller supported UDL file.")
         parser.abortParsing()
     }
     func parser(_ parser: XMLParser, foundInternalEntityDeclarationWithName name: String, value: String?) {

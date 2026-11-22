@@ -68,7 +68,7 @@ package struct LanguageProfile: Codable, Equatable, Identifiable {
             "numberSuffix2", "numberRange", "operators1", "foldersInCode1Open", "foldersInCode1Middle",
             "foldersInCode1Close", "delimiters"
         ].map { "userDefine." + $0 })
-    static package let userListPropertyLimit = 65536
+    static package let userListPropertyLimit = SizePolicy.standard.languageUserList
     static package func isHexColor(_ text: String) -> Bool {
         text.utf8.count == 6
             && text.utf8.allSatisfy { (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }
@@ -99,11 +99,11 @@ package struct LanguageProfile: Codable, Equatable, Identifiable {
             throw LanguageError.invalid("Language “\(languageName)” must contain at most 32 keyword lists.")
         }
         for (key, value) in keywordLists {
-            guard Int(key).map({ (0..<32).contains($0) }) == true, value.utf8.count <= 1048576,
+            guard Int(key).map({ (0..<32).contains($0) }) == true, value.utf8.count <= SizePolicy.standard.languageKeywords,
                 !value.contains("\0")
             else {
                 throw LanguageError.invalid(
-                    "Keyword list “\(String(key.prefix(40)))” of language “\(languageName)” must use a number from 0 to 31 and contain at most 1 MiB without NUL characters."
+                    "Keyword list “\(String(key.prefix(40)))” of language “\(languageName)” must use a number from 0 to 31 and contain at most \(SizePolicy.describe(SizePolicy.standard.languageKeywords)) without NUL characters."
                 )
             }
         }
@@ -111,12 +111,12 @@ package struct LanguageProfile: Codable, Equatable, Identifiable {
             throw LanguageError.invalid("Language “\(languageName)” must contain at most 100 properties.")
         }
         for (key, value) in properties {
-            let validSize =
-                lexer == "user" && Self.userListProperties.contains(key)
-                ? value.utf8.count <= Self.userListPropertyLimit : value.count <= 4096
+            let userList = lexer == "user" && Self.userListProperties.contains(key)
+            let validSize = userList ? value.utf8.count <= Self.userListPropertyLimit : value.count <= 4096
             guard !key.isEmpty, !key.contains("\0"), !value.contains("\0"), validSize else {
+                let limit = userList ? SizePolicy.describe(Self.userListPropertyLimit) : "4096 characters"
                 throw LanguageError.invalid(
-                    "Property “\(String(key.prefix(60)))” of language “\(languageName)” has an empty name, a NUL character or exceeds its size limit."
+                    "Property “\(String(key.prefix(60)))” of language “\(languageName)” requires a name and a value of at most \(limit). Remove any NUL characters."
                 )
             }
         }
@@ -203,7 +203,7 @@ package struct LanguageCatalog: VersionedLibrary, Equatable {
     }
 
     static package let libraryContext = "Language profiles"
-    static package var librarySizeError: Error { LanguageError.invalid("Language catalog exceeds 16 MiB.") }
+    static package var librarySizeError: Error { LanguageError.invalid("Language catalog exceeds \(SizePolicy.describe(SizePolicy.standard.languageCatalog)). Reduce the number or size of language profiles.") }
     package var version: Int
     package var sourceCommit: String
     package var sourceHashes: [String: String]
@@ -221,12 +221,12 @@ package struct LanguageCatalog: VersionedLibrary, Equatable {
         }
     }
     /// The reader's size limit; writers check against the same constant.
-    static package let maximumBytes = 16 * 1024 * 1024
+    static package let maximumBytes = SizePolicy.standard.languageCatalog
     /// The catalog a stored LanguageProfiles.json stands for. The current format holds only the
     /// user's changes (`LanguageOverrides`); a file written before that is a full copy of the
     /// catalog, and is read as the changes it makes to today's bundled catalog.
     static package func load(stored data: Data, over bundled: LanguageCatalog) throws -> Self {
-        guard data.count <= maximumBytes else { throw LanguageError.invalid("Language catalog exceeds 16 MiB.") }
+        guard data.count <= maximumBytes else { throw LanguageError.invalid("Language catalog exceeds \(SizePolicy.describe(SizePolicy.standard.languageCatalog)). Reduce the number or size of language profiles.") }
         try PersistedFormat.check(data, context: "Language profiles")
         struct Probe: Decodable { var overridesVersion: Int? }
         if try JSONInputFailure.decode(Probe.self, from: data, context: "Language profiles").overridesVersion != nil {
@@ -421,7 +421,7 @@ package struct LanguageOverrides: Codable, Equatable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         let data = try encoder.encode(self)
         guard data.count <= LanguageCatalog.maximumBytes else {
-            throw LanguageError.invalid("Language profiles exceed 16 MiB and could not be read back.")
+            throw LanguageError.invalid("Language profiles exceed \(SizePolicy.describe(SizePolicy.standard.languageCatalog)). Reduce their size before saving.")
         }
         return data
     }
@@ -447,8 +447,8 @@ package enum LanguageFunctions {
         -> [LanguageSymbol]
     {
         guard let pattern = profile.functionPattern else { return [] }
-        guard text.utf8.count <= 2 * 1024 * 1024 else {
-            throw LanguageError.invalid("Function navigation currently accepts documents up to 2 MiB.")
+        guard text.utf8.count <= SizePolicy.standard.functionNavigation else {
+            throw LanguageError.invalid("Function navigation accepts documents up to \(SizePolicy.describe(SizePolicy.standard.functionNavigation)). Use Find in this document or open a smaller file.")
         }
         try profile.validate()
         let regex = try NSRegularExpression(pattern: pattern)

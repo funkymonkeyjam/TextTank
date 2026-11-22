@@ -134,6 +134,15 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         needsLayout = true
     }
 
+    let largeFileButton = NSButton(title: "Enable Full Editing", target: nil, action: nil)
+    var showsLargeFileAction: Bool {
+        get { !largeFileButton.isHidden }
+        set {
+            guard newValue != showsLargeFileAction else { return }
+            largeFileButton.isHidden = !newValue
+            needsLayout = true
+        }
+    }
     private var popups: [StatusPopup] = []
     private var values: [StatusItem] = []
     private var leadingLabel: NSTextField?
@@ -160,6 +169,11 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         addSubview(stack)
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
         spacer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        largeFileButton.controlSize = .small
+        largeFileButton.isHidden = true
+        largeFileButton.toolTip = "Enable the detected language and your Wrap Lines setting for this large file."
+        largeFileButton.setAccessibilityLabel("Enable language highlighting and normal wrapping for this large file")
+        stack.addArrangedSubview(largeFileButton)
         stack.addArrangedSubview(spacer)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
@@ -259,7 +273,7 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
                     (text as NSString).size(withAttributes: [
                         .font: label.font ?? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
                     ]).width) + 2
-            let actionWidth = [diskAction, diskCompare].filter { $0.superview != nil && !$0.isHidden }.reduce(
+            let actionWidth = [diskAction, diskCompare, largeFileButton].filter { $0.superview != nil && !$0.isHidden }.reduce(
                 CGFloat(0)
             ) {
                 $0 + ceil($1.intrinsicContentSize.width) + stack.spacing

@@ -165,6 +165,11 @@ final class TextDocumentController: NSDocumentController {
         if nativeReviewDepth == 0 { didReviewOpenDocuments?(accepted) }
         callback.forward(controller, accepted: accepted)
     }
+
+    var recordsRecentDocuments = true
+    override func noteNewRecentDocumentURL(_ url: URL) {
+        if recordsRecentDocuments { super.noteNewRecentDocumentURL(url) }
+    }
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         if CompareCommandScope.blocksWorkspace,
             [#selector(openDocument(_:)), #selector(newDocument(_:)), #selector(saveAllDocuments(_:))].contains(
@@ -287,8 +292,13 @@ enum SnapshotLabel {
     static func originName(of snapshot: RecoverySnapshot) -> String? { origin(of: snapshot)?.lastPathComponent }
     /// One line of the launch prompt: name, folder and time.
     static func line(for snapshot: RecoverySnapshot) -> String {
-        guard let url = origin(of: snapshot) else { return "Untitled, saved \(savedAt(snapshot.savedAt))" }
-        return "\(url.lastPathComponent) in \(url.deletingLastPathComponent().path), saved \(savedAt(snapshot.savedAt))"
+        line(originalURL: snapshot.originalURL, saved: snapshot.savedAt)
+    }
+    static func line(originalURL: String?, saved: Date) -> String {
+        guard let text = originalURL, let url = URL(string: text), url.isFileURL else {
+            return "Untitled, saved \(savedAt(saved))"
+        }
+        return "\(url.lastPathComponent) in \(url.deletingLastPathComponent().path), saved \(savedAt(saved))"
     }
     /// The status line of a recovered draft.
     static func status(for snapshot: RecoverySnapshot) -> String {

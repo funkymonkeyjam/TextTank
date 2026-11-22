@@ -82,6 +82,21 @@ __attribute__((objc_subclassing_restricted))
 @property(nonatomic, readonly) TTLineEndingMode eol;
 - (instancetype)init NS_UNAVAILABLE;
 @end
+/// Immutable, strictly validated UTF-8 content. A leading U+FEFF and embedded NUL remain data.
+__attribute__((objc_subclassing_restricted))
+@interface TTDocumentUTF8 : NSObject
+@property(nonatomic, readonly, copy) NSData *data;
+- (nullable instancetype)initWithData:(NSData *)data NS_DESIGNATED_INITIALIZER;
+- (instancetype)init NS_UNAVAILABLE;
+@end
+
+/// An unmounted Scintilla document, discarded on any failed or cancelled initial read.
+__attribute__((objc_subclassing_restricted))
+@interface TTInitialUTF8Load : NSObject
+- (nullable instancetype)initWithByteCount:(NSUInteger)bytes;
+- (instancetype)init NS_UNAVAILABLE;
+- (BOOL)appendContent:(TTDocumentUTF8 *)bytes;
+@end
 /// Main-thread-only view. All positions remain inside the UTF-8 Scintilla model.
 ///
 /// A split view is two TTEditor views on one Scintilla document (shareDocumentWith:). State
@@ -96,6 +111,8 @@ __attribute__((objc_subclassing_restricted))
 /// Reading makes one copy, decoded straight from the engine's buffer. Do not read it only for
 /// its size (byteLength) or for a background scan of the bytes (utf8Data).
 @property(nonatomic, copy) NSString *text;
+/// Tests physical line content in bytes, excluding CR and LF, without copying the text.
+- (BOOL)hasLineLongerThan:(NSUInteger)limit;
 /// Length of the document in UTF-8 bytes, without copying it.
 @property(nonatomic, readonly) NSInteger byteLength;
 /// The document's exact UTF-8 bytes as one immutable copy, safe to hand to a background queue.
@@ -132,6 +149,10 @@ __attribute__((objc_subclassing_restricted))
 /// history is emptied and the result is the save point. NO, changing nothing, when read-only
 /// or unencodable.
 - (BOOL)loadDocumentText:(NSString *)text;
+/// The checked bytes are borrowed only for the synchronous native load.
+- (BOOL)loadDocumentUTF8:(TTDocumentUTF8 *)content NS_SWIFT_NAME(loadDocumentUTF8(_:));
+/// Adopt a completed load only into the original pristine editor. No existing buffer is replaced.
+- (BOOL)adoptInitialUTF8Load:(TTInitialUTF8Load *)load;
 /// Replaces ascending, non-overlapping byte ranges (TTByteRange values) under one undo action,
 /// without driving the selection per range. Revision, read-only state, bounds, UTF-8
 /// lead-byte alignment and encodability are all checked before the first edit; NO changes

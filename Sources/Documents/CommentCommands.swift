@@ -41,8 +41,8 @@ package enum CommentCommand: String, CaseIterable {
         package let text: String, selections: [EditorSelection], edits: [Edit]
     }
     package func plan(text: String, selections: [EditorSelection], profile: LanguageProfile) throws -> Plan {
-        guard text.utf8.count <= 16 * 1024 * 1024 else {
-            throw LanguageError.invalid("Comment commands currently accept documents up to 16 MiB.")
+        guard text.utf8.count <= SizePolicy.standard.commentDocument else {
+            throw LanguageError.invalid("Comment commands accept documents up to \(SizePolicy.describe(SizePolicy.standard.commentDocument)). Use a smaller document.")
         }
         guard let markers = profile.comments else {
             throw LanguageError.invalid("This language has no configured comment delimiters.")

@@ -78,6 +78,16 @@ jobs:
         run: scripts/test-performance.sh
       - name: Static analyzer
         run: xcodebuild -project TextTank.xcodeproj -scheme TextTank -configuration Debug -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO analyze
+      - name: Write strict native evidence
+        if: success() && !matrix.advisory
+        run: python3 scripts/ci_evidence.py
+      - name: Upload strict native evidence
+        if: success() && !matrix.advisory
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: strict-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: harness/logs/strict-native.json
+          if-no-files-found: error
       - name: Retain observed logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (upstream tag verified)

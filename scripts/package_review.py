@@ -10,7 +10,10 @@ import subprocess
 import tempfile
 import sys
 import re
+import zipfile
 from bootstrap import obtain_archive
+import runtime_artifacts
+import ci_evidence
 
 
 # Review documentation is an explicit product-facing set. Session state, agent
@@ -101,10 +104,30 @@ def prune_previous(output):
         shutil.rmtree(path)
 
 
+def copy_verified_release(root, destination):
+    if os.environ.get('CONFIGURATION') != 'Release':
+        raise ValueError('Review packaging requires CONFIGURATION=Release.')
+    app = root / 'build/DerivedData/Build/Products/Release/TextTank.app'
+    if os.environ.get('APP_PATH') != str(app):
+        raise ValueError('Use the canonical Release application selected by scripts/package-review.sh.')
+    manifest = root / 'build/artifacts/Release/manifest.json'
+    manifest_hash = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    producer = runtime_artifacts.validate(root, manifest, 'Release')
+    if pathlib.Path(producer['app']) != app or runtime_artifacts.digest(manifest) != manifest_hash:
+        raise ValueError('Release manifest or application changed during validation.')
+    subprocess.run(['ditto', '--norsrc', '--noextattr', '--noqtn', str(app), str(destination)], check=True)
+    if runtime_artifacts.snapshot(destination) != producer['app_files']:
+        raise ValueError('Packaged application differs from its verified Release producer.')
+    subprocess.run(['codesign', '--verify', '--deep', '--strict', str(destination)], check=True)
+    return manifest_hash
+
+
 def main():
     root = pathlib.Path(__file__).resolve().parents[1]
     os.chdir(root)
     sha = sys.argv[1]
+    if sha != subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip():
+        raise ValueError('The package source commit must match the checked-out Release producer.')
     output = root / 'output'
     output.mkdir(exist_ok=True)
     stage = pathlib.Path(tempfile.mkdtemp(prefix='.texttank-review-stage-', dir=output))
@@ -113,13 +136,7 @@ def main():
         package.mkdir()
         sources = package / 'Source'
         sources.mkdir()
-        if not os.environ.get('APP_PATH'):
-            raise ValueError('Use scripts/package-review.sh to select the canonical application path.')
-        app = pathlib.Path(os.environ['APP_PATH'])
-        if not app.is_dir():
-            raise SystemExit('Built application is missing')
-        subprocess.run(['ditto', '--norsrc', '--noextattr', '--noqtn', str(app), str(package / 'TextTank.app')], check=True)
-        subprocess.run(['codesign', '--verify', '--deep', '--strict', str(package / 'TextTank.app')], check=True)
+        release_manifest = copy_verified_release(root, package / 'TextTank.app')
         source_tar = sources / 'TextTank-source.tar.gz'
         archive = subprocess.Popen(['git', 'archive', '--format=tar', '--prefix=TextTank-source/', sha], stdout=subprocess.PIPE)
         with source_tar.open('wb') as target:
@@ -129,12 +146,11 @@ def main():
             raise SystemExit('git archive failed')
         source_tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
         validation = verify_validation(root, source_tree)
-        ci_path = root / 'harness/logs/candidate-ci.json'
-        validation['ci'] = {'status': 'not_observed', 'source_tree': source_tree}
-        if ci_path.exists():
-            ci = json.loads(ci_path.read_text())
-            if ci.get('source_tree') == source_tree:
-                validation['ci'] = {'status': 'self_reported', 'source_tree': source_tree, 'reported_status': ci.get('status', 'unknown')}
+        try:
+            validation['ci'] = ci_evidence.authenticate(sha, source_tree, os.environ.get('TEXTTANK_CI_RUN_ID'),
+                                                        os.environ.get('TEXTTANK_CI_RUN_ATTEMPT'))
+        except (KeyError, TypeError, zipfile.BadZipFile, subprocess.TimeoutExpired) as error:
+            raise ValueError('Hosted native evidence is unavailable or malformed.') from error
         validation['packaged_source_commit'] = sha
         log = root / 'harness/logs/full-acceptance.log'
         if not log.is_file():
@@ -191,6 +207,9 @@ def main():
             'source_commit': sha,
             'source_tree': source_tree,
             'built_from_clean_commit': True,
+            'build_configuration': 'Release',
+            'configuration': 'Release',
+            'release_manifest_sha256': release_manifest,
             'created_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'app_tree_sha256': tree_hash(package / 'TextTank.app'),
             'app_tree_hash_algorithm': 'Sorted relative paths: SHA256 of type byte F/L, NUL, UTF8 path, NUL, raw SHA256 file bytes or UTF8 symlink target, NUL; directories/xattrs excluded.',
@@ -201,21 +220,22 @@ def main():
             'signing': 'local ad-hoc; codesign deep/strict verification passed; not notarized',
             'dependencies': lock['dependencies'],
             'files': {str(p.relative_to(package)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(sources.iterdir())},
-            'ci_status': 'Not inferred by packaging. Consult the exact source-commit CI result.',
+            'ci_status': validation['ci']['conclusion'],
+            'ci_run': validation['ci']['url'],
             'limitations': 'Not full Notepad++ parity; see REVIEW-ME.md. No Intel/older-macOS runtime claim; live EventKit happy path is user-confirmed, remaining live failure/retry cases are unverified.',
         }
         validation['app_tree_sha256'] = manifest['app_tree_sha256']
         validation = public_diagnostics(validation, root)
         (package / 'validation.json').write_text(json.dumps(validation, indent=2) + '\n')
         (package / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-        zipfile = stage / 'TextTank-review.zip'
-        subprocess.run(['ditto', '-c', '-k', '--norsrc', '--noextattr', '--keepParent', str(package), str(zipfile)], check=True)
-        zip_hash = hashlib.sha256(zipfile.read_bytes()).hexdigest()
+        zip_path = stage / 'TextTank-review.zip'
+        subprocess.run(['ditto', '-c', '-k', '--norsrc', '--noextattr', '--keepParent', str(package), str(zip_path)], check=True)
+        zip_hash = hashlib.sha256(zip_path.read_bytes()).hexdigest()
         if capture('git', 'rev-parse', 'HEAD') != sha or capture('git', 'status', '--porcelain', '--untracked-files=normal'):
             raise SystemExit('Source changed during packaging; staged files were not delivered')
         # Complete the deliverable before replacing its directory. Staging is on the
         # output filesystem, so publication uses directory renames, never a cross-device move.
-        zipfile.rename(package / 'TextTank-review.zip')
+        zip_path.rename(package / 'TextTank-review.zip')
         manifest['zip_sha256'] = zip_hash
         (package / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         checks = [f'{zip_hash}  TextTank-review.zip'] + [f'{digest}  {name}' for name, digest in manifest['files'].items()]

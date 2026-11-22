@@ -23,7 +23,7 @@ enum DocumentMonitorStatus: Equatable, Sendable {
 /// Each poll looks at the file's metadata first and reads and hashes the file only when the
 /// metadata differs from the last settled sample. No descriptor is held between polls.
 @MainActor final class DocumentMonitor {
-    nonisolated static let maximumBytes = 32 * 1024 * 1024
+    nonisolated static let maximumBytes = SizePolicy.standard.monitorContent
     /// Polls that had to read the file, and polls answered from metadata alone.
     private(set) var fileReads = 0
     private(set) var metadataOnlyPolls = 0
@@ -99,8 +99,8 @@ enum DocumentMonitorStatus: Equatable, Sendable {
             if identity.size > contentLimit {
                 let message =
                     known?.signature == nil
-                    ? "File exceeds the 32 MiB monitoring limit; editor text is preserved."
-                    : "Disk metadata changed; the file exceeds the 32 MiB content check limit."
+                    ? "File exceeds the \(SizePolicy.describe(Self.maximumBytes)) monitoring limit. Check disk metadata or open a smaller file."
+                    : "Disk metadata changed. The file exceeds the \(SizePolicy.describe(Self.maximumBytes)) content check limit. Review the file before reloading."
                 return Inspection(status: .unavailable(message), sample: nil, readFile: false, identity: identity)
             }
             let sample = try WorkspaceStore.sample(
@@ -117,7 +117,7 @@ enum DocumentMonitorStatus: Equatable, Sendable {
             return Inspection(status: .missing, sample: nil, readFile: false)
         } catch WorkspaceError.fileTooLarge {
             return Inspection(
-                status: .unavailable("File exceeds the 32 MiB monitoring limit; editor text is preserved."),
+                status: .unavailable("File exceeds the \(SizePolicy.describe(Self.maximumBytes)) monitoring limit. Check disk metadata or open a smaller file."),
                 sample: nil, readFile: false)
         } catch { return Inspection(status: .unavailable(error.localizedDescription), sample: nil, readFile: false) }
     }

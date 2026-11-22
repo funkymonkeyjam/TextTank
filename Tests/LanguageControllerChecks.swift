@@ -764,30 +764,59 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             check(
                 applied && lexEditor.text == lexSource && lexEditor.revision == lexRevision && !lexEditor.modified,
                 "C++ profile applies to a 2 MiB buffer without editing it")
+            let length = lexSource.utf8.count
+            let firstViewportEnd = sci(SCI_GETENDSTYLED)
             check(
-                sci(SCI_GETLENGTH) == lexSource.utf8.count && sci(SCI_GETENDSTYLED) == lexSource.utf8.count,
-                "document is fully styled when apply returns")
-            let lastLine = lexSource.utf8.count - lexLine.utf8.count
+                sci(SCI_GETLENGTH) == length && firstViewportEnd >= lexLine.utf8.count && firstViewportEnd < length,
+                "applying C++ styles the visible prefix immediately and defers the remaining 2 MiB buffer")
+            let lastLine = length - lexLine.utf8.count
+            let SCI_GETLINECOUNT: UInt32 = 2154, SCI_SETFIRSTVISIBLELINE: UInt32 = 2613
+            @MainActor func paint(_ line: Int) throws {
+                _ = sci(SCI_SETFIRSTVISIBLELINE, UInt(line))
+                lexEditor.layoutSubtreeIfNeeded()
+                let bitmap = try requireValue(
+                    lexEditor.bitmapImageRepForCachingDisplay(in: lexEditor.bounds), "native viewport bitmap")
+                lexEditor.cacheDisplay(in: lexEditor.bounds, to: bitmap)
+            }
+            check(sci(SCI_GETSTYLEAT, 0) == 16 && sci(SCI_GETSTYLEAT, 8) == 5,
+                "the initially visible C++ keywords use the profile's final lists")
+            let bottom = sci(SCI_GETLINECOUNT) - 2
+            try paint(bottom)
             check(
-                sci(SCI_GETSTYLEAT, 0) == 16 && sci(SCI_GETSTYLEAT, 8) == 5 && sci(SCI_GETSTYLEAT, UInt(lastLine)) == 16
+                sci(SCI_GETENDSTYLED) == length && sci(SCI_GETSTYLEAT, UInt(lastLine)) == 16
                     && sci(SCI_GETSTYLEAT, UInt(lastLine + 8)) == 5,
-                "apply styles with the profile's final keyword lists from first line to last")
-            let sample = min(lexSource.utf8.count, 200_000),
-                appliedStyles = (0..<sample).map { sci(SCI_GETSTYLEAT, UInt($0)) }
+                "painting the last viewport styles the final C++ keywords with the same profile")
+            let sample = min(length, 200_000)
+            let appliedStyles = (0..<sample).map { sci(SCI_GETSTYLEAT, UInt($0)) }
             let after = (0..<3).map { _ in timed { _ = sci(SCI_COLOURISE, 0, -1) } }.min()!
             check(
                 (0..<sample).map { sci(SCI_GETSTYLEAT, UInt($0)) } == appliedStyles,
-                "styles after apply equal a fresh full pass with the final configuration")
+                "lazily rendered styles equal a fresh full pass with the final configuration")
             let onePass = max(before, after)
             check(
                 applyTime < 3 * onePass,
-                "applying a profile costs about one lexing pass (apply \(String(format:"%.3f",applyTime)) s, one pass \(String(format:"%.3f",onePass)) s)"
-            )
+                "applying a profile costs less than three lexing passes (apply \(String(format:"%.3f",applyTime)) s, one pass \(String(format:"%.3f",onePass)) s)")
+            try paint(0)
             check(
                 controller.apply(identifier: "python", to: lexEditor) && sci(SCI_GETSTYLEAT, 0) == 11
-                    && sci(SCI_GETSTYLEAT, UInt(lastLine + 8)) == 11 && sci(SCI_GETENDSTYLED) == lexSource.utf8.count
-                    && lexEditor.revision == lexRevision,
-                "switching profile replaces the previous lexer's styles across the whole document")
+                    && sci(SCI_GETENDSTYLED) < length, "switching to Python replaces the visible C++ styles immediately")
+            try paint(bottom)
+            check(
+                sci(SCI_GETSTYLEAT, UInt(lastLine + 8)) == 11 && sci(SCI_GETENDSTYLED) == length
+                    && lexEditor.revision == lexRevision && !lexEditor.modified && lexEditor.text == lexSource,
+                "scrolling to the last viewport replaces its C++ styles without editing the document")
+            let foldGroup = "if (true) {\n  return;\n}\n"
+            lexEditor.text = String(repeating: foldGroup, count: 2_000)
+            try paint(0)
+            check(controller.apply(identifier: "cpp", to: lexEditor), "C++ applies before a far folding request")
+            let farHeader = sci(SCI_GETLINECOUNT) - 4
+            try paint(farHeader)
+            let SCI_GETFOLDLEVEL: UInt32 = 2223, SCI_GETFOLDEXPANDED: UInt32 = 2230
+            check(sci(SCI_GETFOLDLEVEL, UInt(farHeader)) & 0x2000 != 0,
+                "the last visible C++ block has a real fold header after scrolling")
+            _ = lexEditor.executeCommand(TTEditorCommandIdentifier(rawValue: "foldAll"))
+            check(sci(SCI_GETFOLDEXPANDED, 0) == 0 && sci(SCI_GETFOLDEXPANDED, UInt(farHeader)) == 0,
+                "Fold All resolves and collapses both first and far C++ headers")
             // F248: the number of profiles that load is asserted, not only printed. A Lexilla upgrade
             // that gains or loses a lexer fails here on purpose; update the literal in the same change.
             let expectedMissing: Set<String> = ["objc", "searchResult"]
@@ -839,7 +868,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             }
             // G330: the TextTank-authored parts of the user-defined-language lexer. Expected styles
             // are Notepad++'s UDL 2.1 behaviour: style 4 is KEYWORDS1, 13 FOLDER IN CODE1, 1 COMMENTS.
-            let SCI_GETFOLDLEVEL: UInt32 = 2223, foldHeader = 0x2000, foldBase = 0x400, keyword1 = 4
+            let foldHeader = 0x2000, foldBase = 0x400, keyword1 = 4
             @MainActor func userProfile(
                 _ name: String, keywords: [String: String], prefix: [String: String] = [:],
                 nesting: [String: Int] = [:]

@@ -11,5 +11,10 @@ if [[ "${1:-}" == gate ]]; then
   suite_run performance-gate-checks harness/logs/performance-gate-checks.log build/tests/performance-checks
 else
   suite_run performance-checks harness/logs/performance-checks.log build/tests/performance-checks full
+  swift_suites="swift-open32-checks swift-save32-checks swift-recovery32-checks swift-recovery64-checks swift-replace100k-checks"
+  suite_build "$swift_suites" swiftc "${SWIFT_BASE[@]}" -F "$VENDOR_BUILD" -framework Scintilla -framework Cocoa -framework EventKit -Xlinker -rpath -Xlinker "$VENDOR_BUILD" "$SUITE_SUPPORT" Tests/SwiftPerformanceChecks.swift -Xlinker "$NATIVE_BRIDGE_LIBRARY" -Xlinker "$NATIVE_SEARCH_LIBRARY" -lc++ -o build/tests/swift-performance-checks
+  for scenario in open32 save32 recovery32 recovery64 replace100k; do
+    suite_run "swift-${scenario}-checks" "harness/logs/swift-${scenario}-checks.log" build/tests/swift-performance-checks "$scenario"
+  done
 fi
 suite_finish

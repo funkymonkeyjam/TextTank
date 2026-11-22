@@ -236,10 +236,15 @@ import EditorBridge
         try b.validate()
         guard !a.isStale, !b.isStale else { throw MergeFailure(.revisionChanged) }
     }
-    private func begin(_ command: CompareCommand) {
+    func retryPatch(_ command: CompareCommand) {
+        guard CompareCommand.patchCommands.contains(command) else { return }
+        begin(command, allowance: .extended)
+    }
+    private func begin(_ command: CompareCommand, allowance: CompareTimeAllowance = .standard) {
         guard canPerform(command), let comparison, let service = comparison.service,
             let a = comparison.original, let b = comparison.modified, let p = comparison.projection
         else { return }
+        comparison.clearRetry()
         let side = destination, chosen = side.flatMap(input), selected = selectedBlocks.sorted()
         let stamp = comparison.comparisonStamp, job = UUID()
         let hooks = workHooks, stage = stagePatchOutput
@@ -318,7 +323,7 @@ import EditorBridge
                     } else {
                         let bytes = try await UnifiedPatch.write(
                             original: a.snapshot, modified: b.snapshot,
-                            changes: p.changes, token: cancellation, hooks: hooks, raw: self.rawComparison)
+                            changes: p.changes, policy: allowance.patchPolicy, token: cancellation, hooks: hooks, raw: self.rawComparison)
                         try self.validate(comparison, p, stamp: stamp, job: job, a: a, b: b)
                         if command == .copyPatch {
                             guard let text = ReviewUTF8.text(bytes), Data(text.utf8) == bytes else {
@@ -364,7 +369,12 @@ import EditorBridge
                         comparison.showStatus("The operation was cancelled. No document was changed.")
                     } else {
                         self.lastOutcome = .failed
-                        comparison.showStatus(Self.message(error))
+                        if let failure = error as? MergeFailure, failure.budget == .time {
+                            comparison.showStatus("The patch time limit was reached. No patch was published.")
+                            if allowance == .standard { comparison.offerPatchRetry(command) }
+                        } else {
+                            comparison.showStatus(Self.message(error))
+                        }
                         comparison.pollSources()
                     }
                 }

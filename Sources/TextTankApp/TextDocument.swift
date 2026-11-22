@@ -2,6 +2,7 @@ import TextTankCore
 import EditorBridge
 import NativeSearch
 import AppKit
+import UniformTypeIdentifiers
 
 /// The Objective-C name is fixed, so `NSDocumentClass` in Info.plist does not depend on the
 /// name of the Swift module.
@@ -180,8 +181,24 @@ import AppKit
     /// Terminal once close starts: no timer or late completion may enqueue another copy.
     private var recoveryClosed = false
     var dependencies: DocumentDependencies
-    private var automaticRecoveryDelay: TimeInterval { dependencies.automaticRecoveryDelay }
-    private var maximumRecoveryDelay: TimeInterval { dependencies.maximumRecoveryDelay }
+    private var recoveryBurstStart: TimeInterval?
+    private var scheduledDeadline: TimeInterval?
+    static func automaticRecoveryScale(byteCount: Int) -> Double? {
+        let limits = SizePolicy.standard
+        switch byteCount {
+        case ...limits.recoverySmall: return 1
+        case ...limits.recoveryMedium: return 2
+        case ...limits.recoveryLarge: return 4
+        case ...limits.automaticRecovery: return 8
+        default: return nil
+        }
+    }
+    var automaticRecoveryPaused: Bool { Self.automaticRecoveryScale(byteCount: editor.byteLength) == nil }
+    var compactPausedRecoveryStatus: String? {
+        guard automaticRecoveryPaused else { return nil }
+        return shouldKeepRecoveryCopy
+            ? "Recovery paused · Save" : (fileURL == nil ? "Recovery paused" : "Saved · Recovery paused")
+    }
     private(set) var editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
     /// Encoding/BOM checkpoint paired with the save point from the latest completed read or save.
     private(set) var savedFormat = FileFormat(encoding: .utf8, bom: false)
@@ -238,7 +255,22 @@ import AppKit
     private(set) var languageIdentifier = LanguageProfile.plainTextID { didSet { languageResolved = true } }
     /// State notification after LanguageController already installed the lexer and view styles.
     /// Never applies a profile again: menu/style callbacks use this path.
-    func noteAppliedLanguage(_ identifier: String) { languageIdentifier = identifier }
+    private(set) var deferredLargeFileLanguage: String?
+    func noteAppliedLanguage(_ identifier: String) {
+        languageIdentifier = identifier
+        deferredLargeFileLanguage = nil
+    }
+    func enableLargeFileEditing() {
+        guard let identifier = deferredLargeFileLanguage else { return }
+        if identifier == LanguageProfile.plainTextID {
+            usePlainTextLanguage()
+        } else if !applyLanguage(identifier, using: EditorServices.current?.languages) {
+            presentations.forEach { $0.showTransientStatus("The saved language profile is unavailable. Choose a language.") }
+            return
+        }
+        for view in presentations.flatMap(\.views) { view.wrap = EditorServices.current?.settings?.value.wrap ?? false }
+        presentations.forEach { $0.refreshStatusDetails() }
+    }
     /// Explicit document-level language intent for loads/restores; metadata changes only after success.
     @discardableResult func applyLanguage(_ identifier: String, using controller: LanguageController?) -> Bool {
         guard let controller, controller.applyToDocument(identifier: identifier, through: editor) else { return false }
@@ -422,8 +454,7 @@ import AppKit
             throw DocumentActionError.unsavedChanges
         }
         let (bytes, sample) = try onDiskFile { try WorkspaceStore.readRegularFileSample($0, maximumBytes: Int.max) }
-        let decoded = try FileCodec.decode(bytes, encoding: encoding)
-        loadDecoded(decoded, sample: sample, explicitEncoding: rememberEncoding ? encoding : revertEncoding)
+        try loadFile(bytes, as: encoding, sample: sample, explicitEncoding: rememberEncoding ? encoding : revertEncoding)
         updateChangeCount(.changeCleared)
         flushRecovery()
     }
@@ -459,12 +490,29 @@ import AppKit
             guard let self, !self.loading else { return }
             self.updateChangeCount(self.hasUnsavedState ? .changeDone : .changeCleared)
             self.showSaveState(recoveryCopyKept: false)
-            self.recoveryTimer?.invalidate()
-            self.recoveryGeneration += 1
-            self.recoveryTimer = self.scheduleRecoveryTimer(after: self.automaticRecoveryDelay)
-            if self.recoveryDeadlineTimer == nil {
-                self.recoveryDeadlineTimer = self.scheduleRecoveryTimer(after: self.maximumRecoveryDelay)
-            }
+            self.rescheduleRecovery()
+        }
+    }
+    private func rescheduleRecovery() {
+        recoveryGeneration += 1
+        let scale = Self.automaticRecoveryScale(byteCount: editor.byteLength)
+        guard scale != nil || !shouldKeepRecoveryCopy else {
+            cancelRecoveryTimers()
+            deferredRecoveryCapture = false
+            return
+        }
+        // Undo back to a saved state still removes its obsolete draft, regardless of size.
+        let multiplier = scale ?? 1
+        let now = ProcessInfo.processInfo.systemUptime
+        let start = recoveryBurstStart ?? now
+        recoveryBurstStart = start
+        recoveryTimer?.invalidate()
+        recoveryTimer = scheduleRecoveryTimer(after: dependencies.automaticRecoveryDelay * multiplier)
+        let deadline = dependencies.maximumRecoveryDelay * multiplier
+        if scheduledDeadline != deadline || recoveryDeadlineTimer == nil {
+            recoveryDeadlineTimer?.invalidate()
+            scheduledDeadline = deadline
+            recoveryDeadlineTimer = scheduleRecoveryTimer(after: max(0, deadline - (now - start)))
         }
     }
     func promoteEditor(from retired: EditorWindowController, to survivor: EditorWindowController) {
@@ -490,6 +538,8 @@ import AppKit
         recoveryTimer = nil
         recoveryDeadlineTimer?.invalidate()
         recoveryDeadlineTimer = nil
+        recoveryBurstStart = nil
+        scheduledDeadline = nil
     }
     /// Editor bytes are content. A leading U+FEFF is text even when the eventual file has a BOM.
     private nonisolated static func capturedText(from bytes: Data?) throws -> String {
@@ -518,14 +568,19 @@ import AppKit
     /// "Edited" from the moment of the change, and says so about the recovery copy only once that
     /// copy has been written.
     func saveStateStatus(recoveryCopyKept: Bool) -> String {
-        if let recoveredOrigin { return recoveredOrigin }
-        let status: String
-        if isDocumentEdited {
+        var status: String
+        if let recoveredOrigin {
+            status = recoveredOrigin
+        } else if isDocumentEdited {
             status = recoveryCopyKept ? "Edited — recovery copy kept" : "Edited"
         } else if fileURL == nil {
             status = "Ready"
         } else {
             status = "Saved"
+        }
+        if automaticRecoveryPaused {
+            status += " · Automatic recovery paused above \(SizePolicy.describe(SizePolicy.standard.automaticRecovery))."
+                + (shouldKeepRecoveryCopy ? " Save to keep changes." : "")
         }
         return externalFile.notice.map { status + " — " + $0 } ?? status
     }
@@ -545,15 +600,27 @@ import AppKit
     /// Shows the save state now. A recovery failure stays on screen until a later write succeeds.
     private func showSaveState(recoveryCopyKept: Bool) {
         self.recoveryCopyKept = recoveryCopyKept
-        guard lastRecoveryError == nil else { return }
+        if let error = lastRecoveryError {
+            showRecoveryFailure(error)
+            return
+        }
         let message = saveStateStatus(recoveryCopyKept: recoveryCopyKept)
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach {
             $0.showRecoveryStatus(message, failed: false, preservingTransient: recoveryCopyKept)
         }
     }
+    private func showRecoveryFailure(_ error: Error) {
+        let summary = error is PublishedFileSyncFailure ? "⚠︎ Recovery copy unconfirmed" : "⚠︎ Recovery copy not written"
+        let paused = automaticRecoveryPaused
+        let message =
+            (paused ? "Automatic recovery paused above \(SizePolicy.describe(SizePolicy.standard.automaticRecovery)). Save to keep changes. " : "")
+            + summary + ": " + error.localizedDescription
+        windowControllers.compactMap { $0 as? EditorWindowController }.forEach {
+            $0.showRecoveryStatus(message, failed: true, failureSummary: paused ? "Recovery paused · Save" : summary)
+        }
+    }
     private func reportRecovery(_ error: Error?) {
         lastRecoveryError = error
-        let controllers = windowControllers.compactMap { $0 as? EditorWindowController }
         guard let error else {
             recoveryFailures.recordSuccess()
             showSaveState(recoveryCopyKept: true)
@@ -561,10 +628,7 @@ import AppKit
         }
         // The status line stays in its failure state until a later recovery write succeeds.
         recoveryCopyKept = false
-        let summary = error is PublishedFileSyncFailure ? "⚠︎ Recovery copy unconfirmed" : "⚠︎ Recovery copy not written"
-        controllers.forEach {
-            $0.showRecoveryStatus("\(summary): \(error.localizedDescription)", failed: true, failureSummary: summary)
-        }
+        showRecoveryFailure(error)
         let escalate = recoveryFailures.recordFailure(sessionAlreadyNotified: Self.recoveryFailureNoticeShown)
         if recoveryFailures.consecutiveFailures == 1 {
             NSLog(
@@ -592,6 +656,10 @@ import AppKit
     private func enqueueRecovery() {
         guard !recoveryClosed else { return }
         cancelRecoveryTimers()
+        guard !automaticRecoveryPaused || !shouldKeepRecoveryCopy else {
+            deferredRecoveryCapture = false
+            return
+        }
         guard preparingRecoveryGeneration == nil else {
             deferredRecoveryCapture = true
             return
@@ -618,6 +686,11 @@ import AppKit
         recoveryGeneration += 1
         preparingRecoveryGeneration = nil
         deferredRecoveryCapture = false
+        if automaticRecoveryPaused && shouldKeepRecoveryCopy {
+            recoveryWriter.waitForPendingWrites()
+            showSaveState(recoveryCopyKept: false)
+            return
+        }
         do {
             try recoveryWriter.finishPrepared {
                 let prepare = recoveryPreparation()
@@ -677,13 +750,123 @@ import AppKit
         // that read belongs to the bytes it read; anything else leaves the next check to hash.
         let now = WorkspaceStore.currentSecond()
         let before = try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max)
-        try super.read(from: url, ofType: typeName)
+        if let before, try readInitialUTF8IfEligible(from: url, signature: before, ofType: typeName) { return }
+        // AppKit may autorelease the source data. Release that read's temporaries before
+        // document registration and window construction need their own working storage.
+        try autoreleasepool { try super.read(from: url, ofType: typeName) }
         if let before, before.isSettled(at: now),
             (try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max)) == before
         {
             diskSignature = before
         }
     }
+    /// Only a first open of a regular, large UTF-8 file uses a staged native document. Other
+    /// formats and all existing editing sessions retain their exact ordinary read/reload paths.
+    func readInitialUTF8IfEligible(from url: URL, signature: FileSignature, ofType type: String,
+                                   isCancelled: () -> Bool = { false }) throws -> Bool {
+        guard signature.size >= SizePolicy.standard.streamedImportThreshold, signature.size <= Int32.max,
+              let contentType = UTType(type),
+              contentType.conforms(to: .plainText) || contentType == .json || contentType == .xml,
+              openEncoding == nil || openEncoding == .utf8,
+              !opened, !languageResolved, presentations.isEmpty, editor.byteLength == 0, editor.revision == 0,
+              !editor.readOnly else { return false }
+        let stream = InitialFileStream(capacity: UInt(signature.size), detectsEncoding: openEncoding == nil)
+        do {
+            let sample = try WorkspaceStore.readChunks(of: url, maximumBytes: Int.max, matching: signature,
+                                                       isCancelled: isCancelled) { bytes in
+                try autoreleasepool { try stream.consume(Data(bytes)) }
+            }
+            try stream.finish()
+            if isCancelled() { throw CancellationError() }
+            guard !opened, !languageResolved, presentations.isEmpty, editor.revision == 0, editor.byteLength == 0,
+                  !editor.readOnly else { throw CocoaError(.userCancelled) }
+            guard let loader = stream.loader else { throw CocoaError(.fileReadUnknown) }
+            try applyFile(.stream(loader, stream.lineEnding ?? .lf, stream.languageSample),
+                          format: .init(encoding: .utf8, bom: stream.bom), baseline: sample, explicitEncoding: openEncoding)
+            return true
+        } catch InitialFileStream.OrdinaryRead.required {
+            return false
+        }
+    }
+
+    private final class InitialFileStream {
+        enum OrdinaryRead: Error { case required }
+        private(set) var loader: TTInitialUTF8Load?
+        let capacity: UInt
+        let detectsEncoding: Bool
+        private var pending = Data()
+        private var started = false
+        private var pendingCR = false
+        private var sampleComplete = false
+        private(set) var bom = false
+        private(set) var lineEnding: LineEnding?
+        private(set) var languageSample = ""
+        init(capacity: UInt, detectsEncoding: Bool) {
+            self.capacity = capacity
+            self.detectsEncoding = detectsEncoding
+        }
+        func consume(_ chunk: Data) throws {
+            pending.append(chunk)
+            if !started {
+                guard pending.count >= 4 else { return }
+                if detectsEncoding, (try? FileCodec.detectedEncoding(pending)) != .utf8 { throw OrdinaryRead.required }
+                bom = pending.starts(with: [0xEF, 0xBB, 0xBF])
+                if bom { pending.removeFirst(3) }
+                loader = TTInitialUTF8Load(byteCount: capacity - (bom ? 3 : 0))
+                guard loader != nil else { throw CocoaError(.fileReadUnknown) }
+                started = true
+            }
+            // Retain at most three trailing bytes so independent native validations never split a scalar.
+            var end = pending.endIndex - min(3, pending.count)
+            while end < pending.endIndex && pending[end] & 0xC0 == 0x80 { end += 1 }
+            try append(pending[..<end])
+            pending = Data(pending[end...])
+        }
+        func finish() throws {
+            try append(pending)
+            if pendingCR { lineEnding = .cr }
+        }
+        private func append(_ data: Data) throws {
+            guard !data.isEmpty else { return }
+            guard let checked = TTDocumentUTF8(data: data) else { throw FileCodecError.invalidBytes(.utf8) }
+            guard loader?.appendContent(checked) == true else { throw CocoaError(.fileReadUnknown) }
+            if lineEnding == nil {
+                if pendingCR {
+                    lineEnding = data.first == 10 ? .crlf : .cr
+                    pendingCR = false
+                } else if let i = data.withUnsafeBytes({ bytes -> Int? in
+                    guard let base = bytes.baseAddress else { return nil }
+                    let lf = memchr(base, 10, bytes.count).map { base.distance(to: $0) }
+                    let cr = memchr(base, 13, lf ?? bytes.count).map { base.distance(to: $0) }
+                    return (cr ?? lf).map { data.startIndex + $0 }
+                }) {
+                    let next = data.index(after: i)
+                    if data[i] == 10 { lineEnding = .lf }
+                    else if next == data.endIndex { pendingCR = true }
+                    else { lineEnding = data[next] == 10 ? .crlf : .cr }
+                }
+            }
+            guard !sampleComplete else { return }
+            if languageSample.isEmpty && data.first != 35 {
+                sampleComplete = true
+                return
+            }
+            languageSample.append(String(decoding: data, as: UTF8.self))
+            if languageSample != "#" && !languageSample.hasPrefix("#!") {
+                languageSample = ""
+                sampleComplete = true
+                return
+            }
+            if languageSample.contains(where: \.isNewline) || languageSample.count > 513 {
+                languageSample = String(languageSample.prefix(513))
+                sampleComplete = true
+            } else if languageSample.utf8.count > 131072 {
+                // Extremely long grapheme clusters retain ordinary shebang recognition semantics.
+                throw OrdinaryRead.required
+            }
+        }
+    }
+
     /// Reads bytes the caller captured from `url` through the regular-file descriptor guard.
     /// Naming the file lets a UTF-32-looking signature offer the explicit UTF-16 LE open.
     /// `encoding` is the person's explicit choice, as in `read(from:ofType:as:)`.
@@ -707,23 +890,17 @@ import AppKit
         try MainActor.assumeIsolated { try readDataOnMain(from: data, ofType: typeName) }
     }
     private func readDataOnMain(from data: Data, ofType typeName: String) throws {
-        let decoded: DecodedFile
-        if let openEncoding {
-            decoded = try FileCodec.decode(data, encoding: openEncoding)
-        } else {
-            do { decoded = try FileCodec.decode(data) } catch FileCodecError.unsupportedUTF32 {
-                // FF FE 00 00 is also what UTF-16 LE with a BOM looks like when the text starts
-                // with NUL, which TextTank itself can save. Detection stays strict; the user is
-                // offered the explicit choice the codec's message asks for.
-                guard let readingURL, data.starts(with: [0xFF, 0xFE, 0, 0]) else {
-                    throw FileCodecError.unsupportedUTF32
-                }
-                throw ExplicitEncodingOpener(url: readingURL, typeName: typeName, encoding: .utf16LE).error()
+        do {
+            try loadFile(data, as: openEncoding,
+                         sample: capturedSample ?? FileSample(digest: WorkspaceStore.fingerprint(data), signature: nil),
+                         explicitEncoding: openEncoding)
+        } catch FileCodecError.unsupportedUTF32 {
+            // A UTF-16 LE file with a leading NUL shares this marker. Keep the explicit recovery offer.
+            guard openEncoding == nil, let readingURL, data.starts(with: [0xFF, 0xFE, 0, 0]) else {
+                throw FileCodecError.unsupportedUTF32
             }
+            throw ExplicitEncodingOpener(url: readingURL, typeName: typeName, encoding: .utf16LE).error()
         }
-        loadDecoded(
-            decoded, sample: capturedSample ?? FileSample(digest: WorkspaceStore.fingerprint(data), signature: nil),
-            explicitEncoding: openEncoding)
     }
     /// The same strict decode with an encoding the person chose, for callers that already hold
     /// the bytes. A failure throws the codec's error and loads nothing.
@@ -798,23 +975,84 @@ import AppKit
         doc.flushRecovery()
         return doc
     }
-    private func loadDecoded(_ decoded: DecodedFile, sample: FileSample, explicitEncoding: FileEncoding?) {
-        loadEpoch &+= 1
-        EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was reloaded.")
+    private enum FileContent {
+        case utf8(TTDocumentUTF8)
+        case text(String)
+        case stream(TTInitialUTF8Load, LineEnding, String)
+
+        var lineEnding: LineEnding {
+            switch self {
+            case .stream(_, let eol, _): return eol
+            case .text(let text): return .detect(in: text)
+            case .utf8(let content): return content.data.withUnsafeBytes { LineEnding.detect(inUTF8: $0) }
+            }
+        }
+
+        // Language detection consults at most the first 512 Characters and only for a shebang.
+        var languageSample: String {
+            switch self {
+            case .stream(_, _, let sample): return sample
+            case .text(let text): return text
+            case .utf8(let content):
+                let data = content.data
+                guard data.starts(with: [35, 33]) else { return "" }
+                var length = min(2048, data.count)
+                while true {
+                    let prefix = String(decoding: data.prefix(length), as: UTF8.self)
+                    if length == data.count || prefix.contains(where: \.isNewline) || prefix.count > 513 {
+                        return prefix
+                    }
+                    length += min(length, data.count - length)
+                }
+            }
+        }
+    }
+
+    private func loadFile(_ source: Data, as selected: FileEncoding?, sample: @autoclosure () -> FileSample,
+                          explicitEncoding: FileEncoding?) throws {
+        let encoding = try selected ?? FileCodec.detectedEncoding(source)
+        let content: FileContent, diskFormat: FileFormat
+        if encoding == .utf8 {
+            let bom = source.starts(with: [0xEF, 0xBB, 0xBF])
+            guard let checked = TTDocumentUTF8(data: source.dropFirst(bom ? 3 : 0)) else {
+                throw FileCodecError.invalidBytes(.utf8)
+            }
+            content = .utf8(checked)
+            diskFormat = .init(encoding: .utf8, bom: bom)
+        } else {
+            let decoded = try FileCodec.decode(source, encoding: encoding)
+            content = .text(decoded.text)
+            diskFormat = decoded.format
+        }
+        try applyFile(content, format: diskFormat, baseline: sample(), explicitEncoding: explicitEncoding)
+    }
+    private func applyFile(_ content: FileContent, format diskFormat: FileFormat, baseline: FileSample,
+                           explicitEncoding: FileEncoding?) throws {
         loading = true
         let locked = editor.readOnly
+        if case let .stream(staged, _, _) = content {
+            guard editor.adoptInitialUTF8Load(staged) else {
+                loading = false
+                throw CocoaError(.userCancelled)
+            }
+        }
+        loadEpoch &+= 1
+        EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was reloaded.")
         editor.readOnly = false
-        // One minimal-span edit: bookmarks, folds and the caret outside the changed bytes survive a
-        // reload. An empty buffer (first open) takes this as a plain insert.
-        // No undo record is kept: the history is emptied below, as for every open and reload.
-        _ = editor.loadDocumentText(decoded.text)
-        editor.setLineEndingMode(LineEnding.detect(in: decoded.text).nativeMode)
+        // Reload the existing document with a minimal-span edit so unaffected bookmarks, folds
+        // and the caret survive. A streamed first open has already adopted its finished buffer.
+        switch content {
+        case .stream: break
+        case .utf8(let bytes): _ = editor.loadDocumentUTF8(bytes)
+        case .text(let text): _ = editor.loadDocumentText(text)
+        }
+        editor.setLineEndingMode(content.lineEnding.nativeMode)
         editor.resetUndoHistory()
-        format = decoded.format
+        format = diskFormat
         savedFormat = format
         revertEncoding = explicitEncoding
-        diskDigest = sample.digest
-        diskSignature = sample.signature
+        diskDigest = baseline.digest
+        diskSignature = baseline.signature
         externalFile.invalidate()
         savepointMatchesDisk = true
         editor.setSavePoint()
@@ -822,10 +1060,15 @@ import AppKit
         loading = false
         guard !languageResolved else { return }
         languageResolved = true
-        if let languages = EditorServices.current?.languages,
-            let id = languages.detect(filename: fileURL?.lastPathComponent ?? "", text: decoded.text)
-        {
-            _ = applyLanguage(id, using: languages)
+        let languages = EditorServices.current?.languages
+        let detected = languages?.detect(filename: fileURL?.lastPathComponent ?? "", text: content.languageSample)
+        if editor.byteLength >= SizePolicy.standard.largeDocumentThreshold
+            || editor.hasLineLongerThan(UInt(SizePolicy.standard.largeLineThreshold)) {
+            // A newly opened editor has no installed lexer. Keep the detected choice for the opt-in action.
+            deferredLargeFileLanguage = detected ?? LanguageProfile.plainTextID
+            editor.wrap = false
+        } else if let detected {
+            _ = applyLanguage(detected, using: languages)
         }
     }
     /// The source's own extension; ".txt" only for an untitled document, nothing for a name without one.
@@ -875,7 +1118,7 @@ import AppKit
     }
     /// Printing lays the whole document out on the main thread before the print panel appears.
     /// At and above this many UTF-8 bytes the person is told so first and can cancel.
-    static var largePrintBytes = 4 * 1024 * 1024
+    static var largePrintBytes = SizePolicy.standard.printConfirmation
     /// Asks whether to go on with a slow print; returns false to cancel. Replaced in checks.
     var confirmLargePrint: (_ message: String, _ detail: String) -> Bool = { message, detail in
         let alert = TTAlert()

@@ -64,20 +64,25 @@ import EditorBridge
         let initialBytes = try Data(contentsOf: metadata)
         check(!String(decoding: initialBytes, as: UTF8.self).contains("SALMON"), "no document contents serialized")
         _ = docs[0].editor.replaceSelection("dirty unsaved text")
+        let dirtyBytes = docs[0].editor.utf8Data
+        let openDocuments = Set(controller.documents.map(ObjectIdentifier.init))
         var replies = [Bool](), requests = 0
         first.requestUnsavedReview = { _ in requests += 1 }
         first.replyToTerminate = { replies.append($0) }
         check(first.applicationShouldTerminate(app) == .terminateLater, "dirty quit defers to native review")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        guard spinUntil("first dirty quit to request native review", { requests >= 1 }) else { return }
         first.checkpointSession()
         first.reviewed(controller, didReviewAll: false, contextInfo: nil)
         let canceledBytes = try Data(contentsOf: metadata)
-        check(
-            requests == 1 && replies == [false] && canceledBytes == initialBytes && controller.documents.count == 8
-                && docs[0].editor.text.contains("dirty unsaved text"),
-            "cancel retains all dirty work and exact preceding periodic file")
+        check(requests == 1 && replies == [false], "cancel replies once to the first native review request")
+        check(canceledBytes == initialBytes, "cancel retains the exact preceding periodic file")
+        check(openDocuments.count == 8 && Set(controller.documents.map(ObjectIdentifier.init)) == openDocuments,
+              "cancel keeps all eight original documents open")
+        check(docs[0].isDocumentEdited && docs[0].editor.utf8Data == dirtyBytes
+              && docs[0].editor.text.contains("dirty unsaved text"), "cancel retains the exact dirty editor contents")
         check(first.applicationShouldTerminate(app) == .terminateLater, "second dirty attempt still requires review")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        guard spinUntil("second dirty quit to request native review", { requests >= 2 }) else { return }
+        check(requests == 2, "second dirty quit requests native review exactly once")
         // AppKit is allowed to have closed reviewed documents before the callback.
         docs[1].close()
         first.reviewed(controller, didReviewAll: true, contextInfo: nil)

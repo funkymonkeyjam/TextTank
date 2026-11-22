@@ -11,11 +11,13 @@ import NativeSearch
             NativeFixtureEnvironment.install()
             defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
+            try firstRunChecks()
             let document = TextDocument()
             document.makeWindowControllers()
             document.editor.text = "original"
             document.editor.resetUndoHistory()
             let controller = RunController(), sample = ConfiguredRun.uppercaseSample
+            controller.confirmFirstRun = { _, _ in true }
             // F278: applying a result is an unrecorded change; showing or refusing one is not.
             var unrecordable = 0
             controller.onUnrecordableAction = { unrecordable += 1 }
@@ -206,6 +208,165 @@ import NativeSearch
         }
     }
     /// The text of the result window titled `title`, if it is open.
+    @MainActor static func firstRunChecks() throws {
+        let controller = RunController(),
+            file = controller.storage.deletingLastPathComponent().appendingPathComponent("owned input.txt")
+        try Data("owned source".utf8).write(to: file)
+        controller.file = { file }
+        var command = ConfiguredRun(name: "Owned print", executable: "/usr/bin/printf", arguments: ["%s", "{file}"])
+        try controller.persist([command])
+        var invalidations = 0
+        controller.onUnrecordableAction = { invalidations += 1 }
+        @MainActor func decide(_ c: RunController, _ command: ConfiguredRun, run: Bool) throws -> (
+            [String], String, Bool
+        ) {
+            let item = try requireValue(
+                c.makeMenu().items.first { ($0.representedObject as? String) == command.id.uuidString },
+                "owned command menu")
+            var argv: [String] = [], directory = "", shellWarning = false
+            check(
+                NSApp.sendAction(item.action!, to: item.target, from: item), "saved Run dispatches its actual menu item"
+            )
+            let form = try requireValue(
+                FormPanel.visible.first { $0.window.identifier?.rawValue == "run.approval" }, "owned Run confirmation")
+            let views = descendants(form.window.contentView!)
+            let text = try requireValue(
+                views.compactMap { $0 as? NSTextView }.first { $0.identifier?.rawValue == "run.approval.invocation" },
+                "complete invocation text")
+            let json = try requireValue(
+                try JSONSerialization.jsonObject(with: Data(text.string.utf8)) as? [String: Any],
+                "resolved invocation JSON")
+            argv = try requireValue(json["argv"] as? [String], "resolved argv")
+            directory = try requireValue(json["workingDirectory"] as? String, "resolved working directory")
+            shellWarning = views.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("Shell mode") }
+            let action = try requireValue(
+                views.compactMap { $0 as? NSButton }.first {
+                    run ? $0.identifier?.rawValue == "run.approval.confirm" : $0.title == "Cancel"
+                }, "explicit decision")
+            check(
+                NSApp.modalWindow == nil && action.isEnabled,
+                "Run review leaves AppKit’s application-modal session unused")
+            action.performClick(nil)
+            return (argv, directory, shellWarning)
+        }
+        let previous = ConfiguredRun(name: "Earlier owned result", executable: "/usr/bin/printf", arguments: ["older"])
+        controller.show(
+            .success(RunResult(stdout: Data("earlier result".utf8), stderr: Data(), status: 0, reason: .finished)),
+            command: previous, target: nil, revision: 0, selection: false, anchor: 0, caret: 0)
+        let record = controller.storage.deletingLastPathComponent().appendingPathComponent("RunApprovals")
+            .appendingPathComponent(command.id.uuidString + ".sha256")
+        let rejected = try decide(controller, command, run: false)
+        check(
+            rejected.0 == ["/usr/bin/printf", "%s", file.path] && rejected.1 == file.deletingLastPathComponent().path,
+            "native first-run review shows exact resolved argv and working directory")
+        check(
+            !controller.isRunning && invalidations == 0 && !FileManager.default.fileExists(atPath: record.path)
+                && resultText(previous.name)?.contains("earlier result") == true,
+            "Cancel preserves the earlier result, macro state and approval store")
+        let accepted = try decide(controller, command, run: true)
+        spinUntil("approved harmless print result") { !controller.isRunning }
+        check(
+            try accepted.0 == rejected.0 && resultText(command.name)?.contains(file.path) == true
+                && Data(contentsOf: record) == command.approvalDigest() && invalidations == 1,
+            "approved argv launches once and remembers the exact saved command digest")
+        let restarted = RunController()
+        restarted.file = { file }
+        var asked = 0
+        restarted.confirmFirstRun = { _, _ in
+            asked += 1
+            return false
+        }
+        try choose(restarted, command)
+        spinUntil("remembered print") { !restarted.isRunning }
+        check(asked == 0, "unchanged saved digest survives a fresh controller without asking again")
+        let oldDigest = try Data(contentsOf: record)
+        command.arguments = ["%s", "changed owned output"]
+        try restarted.persist([command])
+        try choose(restarted, command)
+        check(
+            try asked == 1 && Data(contentsOf: record) == oldDigest && !restarted.isRunning,
+            "editing argv triggers review; cancellation keeps the prior saved identity")
+        var updated = command
+        updated.name = "Newer saved command"
+        restarted.confirmFirstRun = { _, _ in
+            try? restarted.persist([updated])
+            return true
+        }
+        do {
+            try restarted.start(command)
+            check(false, "Run stale command after modal review")
+        } catch {
+            check(
+                try !restarted.isRunning && Data(contentsOf: record) == oldDigest,
+                "changing the saved command during review keeps the approval and launches nothing")
+        }
+        let corrupt = Data(repeating: 7, count: 48)
+        try corrupt.write(to: record)
+        restarted.confirmFirstRun = { _, _ in
+            asked += 1
+            return false
+        }
+        try restarted.start(updated)
+        check(
+            try asked == 2 && Data(contentsOf: record) == corrupt && !restarted.isRunning,
+            "an unreadable approval asks again; cancel preserves prior bytes")
+        let shell = ConfiguredRun(
+            name: "Owned shell print", executable: "/bin/zsh",
+            arguments: ["-c", "printf '%s' 'owned shell text'"], shellMode: true)
+        let shellHost = RunController()
+        try shellHost.persist([shell])
+        let reviewed = try decide(shellHost, shell, run: true)
+        spinUntil("approved owned shell print") { !shellHost.isRunning }
+        check(
+            reviewed.0 == ["/bin/zsh", "-c", "printf '%s' 'owned shell text'"] && reviewed.2
+                && resultText(shell.name)?.contains("owned shell text") == true,
+            "shell review includes its exact script and explicit shell warning")
+        for becomesReadOnly in [true, false] {
+            let target = TTEditor(frame: NSRect(x: 0, y: 0, width: 320, height: 100))
+            target.text = "one two"
+            _ = target.setSelectionAnchor(0, caret: 3)
+            let window = NSWindow(
+                contentRect: target.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = target
+            let owner = RunController()
+            owner.editor = { target }
+            var starts = 0
+            owner.onUnrecordableAction = { starts += 1 }
+            let process = ConfiguredRun(
+                name: "Owned harmless extension", executable: "/usr/bin/printf", arguments: ["owned"],
+                extensionMode: true)
+            let receipt = owner.storage.deletingLastPathComponent().appendingPathComponent("RunApprovals")
+                .appendingPathComponent(process.id.uuidString + ".sha256")
+            try owner.start(process)
+            let sheet = try requireValue(
+                FormPanel.visible.first { $0.window.identifier?.rawValue == "run.approval" }, "active extension review")
+            check(sheet.window.sheetParent === window, "extension review is attached to the captured editor window")
+            if becomesReadOnly {
+                target.readOnly = true
+            } else {
+                _ = target.setSelectionRanges([
+                    TTSelectionRange(anchor: 0, caret: 3), TTSelectionRange(anchor: 4, caret: 7)
+                ])
+            }
+            let confirm = try requireValue(
+                descendants(sheet.window.contentView!).compactMap { $0 as? NSButton }.first {
+                    $0.identifier?.rawValue == "run.approval.confirm"
+                }, "review confirmation")
+            confirm.performClick(nil)
+            check(
+                !owner.isRunning && starts == 0 && !FileManager.default.fileExists(atPath: receipt.path)
+                    && !sheet.validation.stringValue.isEmpty,
+                "a changed selection count or new read-only state preserves editor, process and approval")
+            window.close()
+            check(!sheet.acceptsActions && !owner.isRunning, "closing the original window cancels the pending review")
+            owner.confirmFirstRun = { _, _ in false }
+            try owner.start(ConfiguredRun(name: "Later", executable: "/usr/bin/printf", arguments: ["later"]))
+            check(starts == 0, "closing the owner releases the pending confirmation gate")
+        }
+        NSApp.windows.filter { [command.name, previous.name, shell.name].contains($0.title) }.forEach { $0.close() }
+    }
+
     @MainActor static func resultText(_ title: String) -> String? {
         for window in NSApp.windows where window.title == title && window.isVisible {
             guard let stack = window.contentView as? NSStackView else { continue }
@@ -306,7 +467,8 @@ import NativeSearch
             let item = try requireValue(
                 menu.items.first { ($0.representedObject as? String) == command.id.uuidString }, "item for command")
             check(
-                item.toolTip?.contains(command.executable) == true && item.toolTip == command.summary(),
+                item.title == command.name + " — " + (command.executable as NSString).lastPathComponent
+                    && item.toolTip?.contains(command.executable) == true && item.toolTip == command.summary(),
                 "F137 the item for \(command.name) shows what it executes")
         }
         check(
@@ -389,7 +551,7 @@ import NativeSearch
             ($0.representedObject as? String) == other.id.uuidString
         }
         check(
-            editedItem?.title == "Renamed" && editedItem?.toolTip == edited.summary(),
+            editedItem?.title == edited.menuTitle && editedItem?.toolTip == edited.summary(),
             "F137 an edited command keeps its id and shows its new name after restart")
 
         // Delete: removing the entry removes the command, here and after restart.
@@ -634,7 +796,7 @@ import NativeSearch
             completed && stage == 2 && kept,
             "F214 a Run configuration error retains the name and invalid arguments for correction")
         check(
-            RunController().makeMenu().items.contains { $0.title == "Fixture retained Run draft" },
+            RunController().makeMenu().items.contains { $0.title == "Fixture retained Run draft — printf" },
             "F214 corrected Run configuration persists only after the next explicit Save")
         for invalidKind in ["name", "executable", "mode"] {
             var fieldStage = 0, focusedCorrectly = false, retainedName = false
@@ -683,7 +845,7 @@ import NativeSearch
                 retried && fieldStage == 2 && retainedName && focusedCorrectly,
                 "F214 Run \(invalidKind) rejection preserves the draft and identifies/focuses its actual control")
             check(
-                RunController().makeMenu().items.contains { $0.title == expectedName },
+                RunController().makeMenu().items.contains { $0.title == expectedName + " — printf" },
                 "F214 Run \(invalidKind) correction persists only on explicit Save")
         }
     }
@@ -816,7 +978,7 @@ import NativeSearch
             !conflicted.isVisible && conflicted.attachedSheet == nil,
             "explicit manager Cancel retains its discard convention")
         check(
-            RunController().makeMenu().items.contains { $0.title == entry.name },
+            RunController().makeMenu().items.contains { $0.title == entry.menuTitle },
             "reopening the library retains the newer saved value")
     }
     @MainActor static func explicitRunChecks(_ controller: RunController) throws {
@@ -840,6 +1002,7 @@ import NativeSearch
             .success(RunResult(stdout: Data(), stderr: Data(), status: 0, reason: .finished)), command: touch,
             target: nil, revision: 0, selection: false, anchor: 0, caret: 0)
         let delegate = AppDelegate()
+        delegate.runner.confirmFirstRun = { _, _ in true }
         _ = delegate.runner.makeMenu()
         delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
         RunLoop.current.run(until: Date().addingTimeInterval(0.4))

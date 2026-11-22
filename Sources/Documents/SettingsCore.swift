@@ -406,7 +406,7 @@ final package class SettingsStore {
     private var unreadableIdentity: FileSignature?
     /// Compare exactly the bytes last read or written, including an absent preferences file.
     private func currentBytes() throws -> Data? {
-        do { return try WorkspaceStore.readRegularFile(url, maximumBytes: 1024 * 1024) } catch
+        do { return try WorkspaceStore.readRegularFile(url, maximumBytes: SizePolicy.standard.editorSettings) } catch
             where error.isFileNotFound
         { return nil }
     }
@@ -441,7 +441,7 @@ final package class SettingsStore {
         self.url = url ?? AppStorage.url(.settings)
         loadState = StoreLoadState(url: self.url, displayName: "Editor settings")
         do {
-            let data = try WorkspaceStore.readRegularFile(self.url, maximumBytes: 1024 * 1024)
+            let data = try WorkspaceStore.readRegularFile(self.url, maximumBytes: SizePolicy.standard.editorSettings)
             diskBytes = data
             let loaded = try EditorSettings.load(data, reservedKeys: reservedKeys)
             value = loaded.settings
@@ -508,7 +508,7 @@ final package class SettingsStore {
         let accepted = try validated(result)
         try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
         try PrivateFileStore.write(
-            result, to: url, maximumBytes: 1024 * 1024, temporaryPrefix: ".settings-", beforeCommit: requireUnchanged)
+            result, to: url, maximumBytes: SizePolicy.standard.editorSettings, temporaryPrefix: ".settings-", beforeCommit: requireUnchanged)
         diskBytes = result
         value = accepted
     }
@@ -567,7 +567,7 @@ final package class SettingsStore {
         }
         do {
             try PrivateFileStore.write(
-                data, to: url, maximumBytes: 1024 * 1024, temporaryPrefix: ".settings-",
+                data, to: url, maximumBytes: SizePolicy.standard.editorSettings, temporaryPrefix: ".settings-",
                 beforeCommit: { if ordinary { try requireCurrent() } })
         } catch {
             // Put the original back so a failed replacement leaves the folder as it was.

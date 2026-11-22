@@ -2,6 +2,7 @@
 #import "TTEditor.h"
 #import "ScintillaView.h"
 #include "ILexer.h"
+#include "ILoader.h"
 #include "Lexilla.h"
 #include <vector>
 #include <string>
@@ -544,6 +545,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     NSIndexSet *_eligiblePairPositions;
     NSMutableIndexSet *_insertedPairPositions;
     char _pairBytes[2];
+    BOOL _hasSharedDocument;
     id _accessibilityDisplayObserver;
     BOOL _braceCacheValid;
     sptr_t _braceCaret, _braceEndStyled;
@@ -580,6 +582,54 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (void)applyComparisonStyle;
 - (void)comparisonViewportChanged;
 @end
+@implementation TTInitialUTF8Load {
+    Scintilla::ILoader *_loader;
+    NSUInteger _remainingBytes;
+}
+- (instancetype)initWithByteCount:(NSUInteger)bytes {
+    if (!(self = [super init]) || bytes > INT32_MAX) return nil;
+    // Creating a loader resets the requesting view's contraction state in Scintilla 5.6.9.
+    // Use a private view so a failed/cancelled read cannot disturb a live editing view.
+    _remainingBytes = bytes;
+    ScintillaView *factory = [[ScintillaView alloc] initWithFrame:NSZeroRect];
+    _loader = reinterpret_cast<Scintilla::ILoader *>([factory message:SCI_CREATELOADER wParam:bytes lParam:0]);
+    return _loader ? self : nil;
+}
+- (void)dealloc { if (_loader) _loader->Release(); }
+- (BOOL)appendContent:(TTDocumentUTF8 *)content {
+    NSData *data = content.data;
+    if (!_loader || !data || data.length > _remainingBytes) return NO;
+    if (data.length && _loader->AddData(static_cast<const char *>(data.bytes), data.length) != SC_STATUS_OK) return NO;
+    _remainingBytes -= data.length;
+    return YES;
+}
+- (void *)readyDocument { return _loader && !_remainingBytes ? _loader->ConvertToDocument() : nullptr; }
+- (void)finishTransfer { if (_loader) { _loader->Release(); _loader = nullptr; } }
+@end
+
+@implementation TTDocumentUTF8
+- (instancetype)initWithData:(NSData *)data {
+    if (!(self = [super init]) || !data) return nil;
+    // Freeze mutable NSData before validating it. Cocoa copies immutable NSData by reference.
+    NSData *snapshot = [data copy];
+    const auto *bytes = static_cast<const uint8_t *>(snapshot.bytes);
+    // Bound validation storage even for multibyte content. Foundation's decoder rejects malformed
+    // sequences and accepts valid noncharacters; the original bytes go straight to Scintilla.
+    for (NSUInteger start = 0; start < snapshot.length;) {
+        NSUInteger end = start + MIN(snapshot.length - start, (NSUInteger)65536);
+        while (end > start && end < snapshot.length && (bytes[end] & 0xc0) == 0x80) --end;
+        if (end == start) return nil;
+        CFStringRef decoded = CFStringCreateWithBytesNoCopy(kCFAllocatorDefault, bytes + start, end - start,
+                                                           kCFStringEncodingUTF8, false, kCFAllocatorNull);
+        if (!decoded) return nil;
+        CFRelease(decoded);
+        start = end;
+    }
+    _data = snapshot;
+    return self;
+}
+@end
+
 @implementation TTEditor
 @synthesize comparisonPresentation = _comparisonPresentation;
 @synthesize braceHighlightEnabled = _braceHighlightEnabled;
@@ -859,6 +909,20 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     // The pointer is valid only until the next message, and none is sent before the copy is done.
     return TTStringFromUTF8((const void *)[_engine message:SCI_GETRANGEPOINTER wParam:0 lParam:length], (NSUInteger)length);
 }
+- (BOOL)hasLineLongerThan:(NSUInteger)limit {
+    [self assertThread];
+    const NSUInteger length = self.byteLength;
+    if (length <= limit) return NO;
+    const auto *bytes = reinterpret_cast<const uint8_t *>(
+        [_engine message:SCI_GETRANGEPOINTER wParam:0 lParam:length]);
+    NSUInteger lineLength = 0;
+    for (NSUInteger index = 0; index < length; ++index) {
+        const uint8_t byte = bytes[index];
+        if (byte == '\r' || byte == '\n') lineLength = 0;
+        else if (++lineLength > limit) return YES;
+    }
+    return NO;
+}
 - (NSInteger)byteLength { [self assertThread]; return [_engine message:SCI_GETLENGTH]; }
 - (NSData *)utf8Data { return self.checkedUTF8Data ?: [NSData data]; }
 - (NSData * _Nullable)checkedUTF8Data {
@@ -1120,6 +1184,34 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self assertThread];
     if (self.readOnly) return NO;
     NSData *data = TTUTF8(text); if (!data || self.readOnly) return NO;
+    return [self loadEncodedDocumentData:data];
+}
+- (BOOL)loadDocumentUTF8:(TTDocumentUTF8 *)content {
+    [self assertThread];
+    return content && !self.readOnly && [self loadEncodedDocumentData:content.data];
+}
+- (BOOL)adoptInitialUTF8Load:(TTInitialUTF8Load *)load {
+    [self assertThread];
+    if (self.readOnly || _hasSharedDocument || [self undoGroupOpen] || self.revision || self.byteLength || [_engine message:SCI_CANUNDO] || [_engine message:SCI_CANREDO]) return NO;
+    void *document = [load readyDocument];
+    if (!document) return NO;
+    const sptr_t width = [_engine message:SCI_GETTABWIDTH];
+    const sptr_t tabs = [_engine message:SCI_GETUSETABS];
+    [_engine message:SCI_SETDOCPOINTER wParam:0 lParam:reinterpret_cast<sptr_t>(document)];
+    [load finishTransfer];
+    [_engine message:SCI_SETCODEPAGE wParam:SC_CP_UTF8];
+    [_engine message:SCI_SETTABWIDTH wParam:width];
+    [_engine message:SCI_SETUSETABS wParam:tabs];
+    [_engine message:SCI_SETUNDOCOLLECTION wParam:1];
+    ++_revision;
+    ++_selectionGeneration;
+    _braceCacheValid = NO;
+    [self updateLineNumberMargin:NO];
+    [self deliverChange];
+    [self scheduleStateNotification];
+    return YES;
+}
+- (BOOL)loadEncodedDocumentData:(NSData *)data {
     // No undo record is kept of a load: Scintilla would otherwise hold a second copy of the
     // replaced and the inserted bytes only for the history to be emptied straight afterwards.
     [_engine message:SCI_SETUNDOCOLLECTION wParam:0];
@@ -1276,6 +1368,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self assertThread];
     // SCI_SETDOCPOINTER acquires the new document before releasing the old one.
     // Each attached Scintilla view owns a reference, so either view may close first.
+    _hasSharedDocument = YES;
+    other->_hasSharedDocument = YES;
     [_engine message:SCI_SETDOCPOINTER wParam:0 lParam:[other.engine message:SCI_GETDOCPOINTER]];
     self.revision = other.revision;
     _braceCacheValid = NO;
@@ -1766,7 +1860,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     });
     return languages;
 }
-/// Installs the lexer and its defaults without lexing; every caller colourises exactly once afterwards.
+/// Install the lexer and defaults before styling the visible range with its completed configuration.
 - (void)installLexer:(NSString *)language {
     _braceCacheValid = NO;
     [self scheduleStateNotification];
@@ -1783,10 +1877,20 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     if (_cppDefaults) [_engine message:SCI_SETKEYWORDS wParam:0 lParam:(sptr_t)"if else for while return class struct import func let var true false null int void const static public private"];
     [self applyPalette];
 }
+- (void)styleVisibleDocumentPrefix {
+    const sptr_t length = [_engine message:SCI_GETLENGTH];
+    const sptr_t first = [_engine message:SCI_GETFIRSTVISIBLELINE];
+    const sptr_t visible = MAX(1, [_engine message:SCI_LINESONSCREEN]);
+    const sptr_t nextLine = [_engine message:SCI_DOCLINEFROMVISIBLE wParam:first + visible + 1];
+    const sptr_t lineCount = [_engine message:SCI_GETLINECOUNT];
+    const sptr_t end = nextLine < 0 || nextLine >= lineCount - 1 ? length
+        : [_engine message:SCI_POSITIONFROMLINE wParam:nextLine];
+    [_engine message:SCI_COLOURISE wParam:0 lParam:end];
+}
 - (void)setLanguage:(NSString *)language {
     [self assertThread];
     [self installLexer:language];
-    [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
+    [self styleVisibleDocumentPrefix];
 }
 - (void)setLanguage:(NSString *)language keywordLists:(NSDictionary<NSNumber *, NSString *> *)keywordLists properties:(NSDictionary<NSString *, NSString *> *)properties {
     [self assertThread];
@@ -1802,9 +1906,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         if ([name rangeOfString:@"\0"].location!=NSNotFound || [value rangeOfString:@"\0"].location!=NSNotFound) return;
         [self->_engine message:SCI_SETPROPERTY wParam:(uptr_t)name.UTF8String lParam:(sptr_t)value.UTF8String];
     }];
-    // Scintilla neither invalidates styling on a lexer swap nor repaints after a list or property
-    // change, so one explicit full pass is what makes the final configuration take effect.
-    [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
+    // Invalidate the prior lexer from byte zero; subsequent paints request additional styling.
+    [self styleVisibleDocumentPrefix];
 }
 - (NSAttributedString *)attributedTextForSelection:(BOOL)selection {
     [self assertThread]; [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
