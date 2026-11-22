@@ -119,30 +119,42 @@ def scintilla_plan(root):
     patches = lock.get('patches', [])
     if not patches:
         return root / 'Vendor/scintilla', upstream, None
-    if len(patches) != 1 or patches[0].get('dependency') != 'scintilla':
-        raise ValueError('Unsupported dependency patch set')
-    item = patches[0]
-    if item.get('path') != 'scripts/dependency-patches/scintilla-loader-styles.patch':
-        raise ValueError('Unsupported Scintilla patch path')
-    patch = root / item['path']
-    if patch.is_symlink() or not patch.is_file() or digest(patch) != item.get('sha256'):
-        raise ValueError('Scintilla patch checksum mismatch')
-    changes = item.get('files')
-    if not isinstance(changes, dict) or not changes:
-        raise ValueError('Missing pinned Scintilla patch results')
-    for path, result in changes.items():
-        if (path not in upstream or not re.fullmatch(r'src/[A-Za-z0-9_]+[.](h|cxx)', path)
-                or not isinstance(result, str) or not re.fullmatch(r'[0-9a-f]{64}', result)
-                or upstream[path] == result):
-            raise ValueError(f'Invalid pinned Scintilla patch result: {path}')
+    allowed = (
+        'scripts/dependency-patches/scintilla-loader-styles.patch',
+        'scripts/dependency-patches/scintilla-cocoa-bidi.patch',
+    )
+    if tuple(item.get('path') for item in patches) != allowed[:len(patches)]:
+        raise ValueError('Unsupported Scintilla patch path or order')
+
+    expected = upstream
+    layers = []
+    for item in patches:
+        if item.get('dependency') != 'scintilla':
+            raise ValueError('Unsupported dependency patch set')
+        patch = root / item['path']
+        if patch.is_symlink() or not patch.is_file() or digest(patch) != item.get('sha256'):
+            raise ValueError('Scintilla patch checksum mismatch')
+        changes = item.get('files')
+        if not isinstance(changes, dict) or not changes:
+            raise ValueError('Missing pinned Scintilla patch results')
+        source_path = r'src/[A-Za-z0-9_]+[.](h|cxx)'
+        if item['path'] == allowed[1]:
+            source_path += r'|cocoa/[A-Za-z0-9_]+[.](h|mm)'
+        for path, result in changes.items():
+            if (path not in upstream or not re.fullmatch(source_path, path)
+                    or not isinstance(result, str) or not re.fullmatch(r'[0-9a-f]{64}', result)
+                    or expected[path] == result):
+                raise ValueError(f'Invalid pinned Scintilla patch result: {path}')
+        expected = {**expected, **changes}
+        layers.append((patch, expected))
     dependency = next(entry for entry in lock['dependencies'] if entry['folder'] == 'scintilla')
-    key = hashlib.sha256(json.dumps([dependency['sha256'], item], sort_keys=True).encode()).hexdigest()
-    return root / 'build/scintilla-source' / key / 'scintilla', {**upstream, **changes}, patch
+    key = hashlib.sha256(json.dumps([dependency['sha256'], *patches], sort_keys=True).encode()).hexdigest()
+    return root / 'build/scintilla-source' / key / 'scintilla', expected, layers
 
 
 def prepare_scintilla(root):
-    target, expected, patch = scintilla_plan(root)
-    if not patch or target.exists() or target.is_symlink():
+    target, expected, layers = scintilla_plan(root)
+    if not layers or target.exists() or target.is_symlink():
         verify_tree(target, expected)
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -152,11 +164,12 @@ def prepare_scintilla(root):
         # Run outside any enclosing checkout so Git applies vendor-relative paths.
         environment = {k: v for k, v in os.environ.items() if k not in ('GIT_DIR', 'GIT_WORK_TREE')}
         environment['GIT_CEILING_DIRECTORIES'] = str(stage.parent.resolve())
-        applied = subprocess.run(['git', 'apply', '--whitespace=nowarn', str(patch)],
-                                 cwd=stage, env=environment, capture_output=True, text=True)
-        if applied.returncode:
-            raise ValueError('Could not apply pinned Scintilla patch: ' + applied.stderr.strip())
-        verify_tree(stage, expected)
+        for patch, layer_inputs in layers:
+            applied = subprocess.run(['git', 'apply', '--whitespace=nowarn', str(patch)],
+                                     cwd=stage, env=environment, capture_output=True, text=True)
+            if applied.returncode:
+                raise ValueError('Could not apply pinned Scintilla patch: ' + applied.stderr.strip())
+            verify_tree(stage, layer_inputs)
         try:
             stage.rename(target)
         except OSError as error:

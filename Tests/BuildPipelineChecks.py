@@ -629,7 +629,10 @@ sys.exit(93)
             source.write_bytes(b'original\n')
             patches = root / 'scripts/dependency-patches'
             patches.mkdir(parents=True)
-            original = {'src/CellBuffer.cxx': bootstrap.digest(source)}
+            cocoa = root / 'Vendor/scintilla/cocoa/PlatCocoa.mm'
+            cocoa.parent.mkdir()
+            cocoa.write_bytes(b'platform\n')
+            original = {'src/CellBuffer.cxx': bootstrap.digest(source), 'cocoa/PlatCocoa.mm': bootstrap.digest(cocoa)}
             (root / 'scripts/scintilla-source-hashes.json').write_text(json.dumps(original))
             patch_file = patches / 'scintilla-loader-styles.patch'
             patch_file.write_text('--- a/src/CellBuffer.cxx\n+++ b/src/CellBuffer.cxx\n@@ -1 +1 @@\n-original\n+changed\n')
@@ -644,6 +647,31 @@ sys.exit(93)
             self.assertEqual((target / 'src/CellBuffer.cxx').read_bytes(), b'changed\n')
             self.assertEqual(bootstrap.prepare_scintilla(root), target)
             self.assertEqual(source.read_bytes(), b'original\n')
+            second_file = patches / 'scintilla-cocoa-bidi.patch'
+            second_file.write_text('--- a/src/CellBuffer.cxx\n+++ b/src/CellBuffer.cxx\n@@ -1 +1 @@\n-changed\n+combined\n'
+                                   '--- a/cocoa/PlatCocoa.mm\n+++ b/cocoa/PlatCocoa.mm\n@@ -1 +1 @@\n-platform\n+cocoa\n')
+            second = dict(dependency='scintilla', path=str(second_file.relative_to(root)), sha256=bootstrap.digest(second_file),
+                          files={'src/CellBuffer.cxx': hashlib.sha256(b'combined\n').hexdigest(),
+                                 'cocoa/PlatCocoa.mm': hashlib.sha256(b'cocoa\n').hexdigest()})
+            lock['patches'] = [item, second]
+            lock_file.write_text(json.dumps(lock))
+            layered = bootstrap.prepare_scintilla(root)
+            self.assertNotEqual(layered, target)
+            self.assertEqual((layered / 'src/CellBuffer.cxx').read_bytes(), b'combined\n')
+            self.assertEqual((layered / 'cocoa/PlatCocoa.mm').read_bytes(), b'cocoa\n')
+            self.assertEqual(cocoa.read_bytes(), b'platform\n')
+            self.assertEqual(bootstrap.prepare_scintilla(root), layered)
+            # An overlapping second patch must never mask an invalid intermediate digest.
+            invalid = dict(item, files={'src/CellBuffer.cxx': '0' * 64})
+            lock_file.write_text(json.dumps(dict(lock, patches=[invalid, second])))
+            with self.assertRaisesRegex(ValueError, 'Pinned source mismatch'):
+                bootstrap.prepare_scintilla(root)
+            self.assertFalse(bootstrap.scintilla_plan(root)[0].exists())
+            lock_file.write_text(json.dumps(dict(lock, patches=[second, item])))
+            with self.assertRaisesRegex(ValueError, 'path or order'):
+                bootstrap.prepare_scintilla(root)
+            lock['patches'] = [item]
+            lock_file.write_text(json.dumps(lock))
             (target / 'src/extra.cxx').touch()
             with self.assertRaisesRegex(ValueError, 'Unexpected vendor file'):
                 bootstrap.prepare_scintilla(root)

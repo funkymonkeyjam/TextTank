@@ -30,6 +30,26 @@
         "src/Document.h": "b86942174e46b32fcd823d9d944c0854c1a2cf97ca0e2db9bb38e7a40d7d98ee",
         "src/Editor.cxx": "dac78a7654c5f85e5bffac73947d9ef17b514d47283700d02b71e3f7aaf79a50"
       }
+    },
+    {
+      "dependency": "scintilla",
+      "path": "scripts/dependency-patches/scintilla-cocoa-bidi.patch",
+      "sha256": "10cf03b91374cf95b6592146f45317219bfa6a2b4d2729aa873d7de097df71f1",
+      "files": {
+        "cocoa/PlatCocoa.h": "2ce2483cc5d89f77e0d6d9fbd8ba469b7eb4cf84220f2b6997ffa51da514cbed",
+        "cocoa/PlatCocoa.mm": "a35f11e8cd02566b28d269f9b397b32ac45bc2ac07bf9ebfcc40480de3c7535e",
+        "cocoa/ScintillaCocoa.h": "8bfee948898ed322cea35f4d69ea1f249e8f43a0df5f135996af4e655232ab57",
+        "cocoa/ScintillaCocoa.mm": "57a83bd083b08662b3b52bf7d1ad7c3869c39ad2e6fb7ae3d62ecb5d2b1c3476",
+        "cocoa/ScintillaView.mm": "9043129a82bc9ec4cccadeb1405780a5ab6c6a135ebb9877f62191961257d1e6",
+        "src/Document.cxx": "a9b63e7ebbb98510a7a2de21fc02e4ae130707649a922187d74731fecdfd70cb",
+        "src/Document.h": "fdb9d2b52b5c3cd5478ec535cf40ea0750dd8fa2d5919092b48e410035af26ee",
+        "src/EditModel.cxx": "008d0ddc25479bac5bc962b014faa2227507b1e73ada1a7f7a075a5f6edf855f",
+        "src/EditView.cxx": "487dda05cc3881b666437fdcd4255a1acd66b0b349d4ead15c8a6d4dded4b85c",
+        "src/EditView.h": "88dca1aaf7899ecffb34f2c1c280095a85fefe43f62fed62f36f06a475123d60",
+        "src/Platform.h": "862af0f7cfb3d507792bc687b9d4c3e433ddcb0525dbc8ec31ddd00a529f1b55",
+        "src/PositionCache.cxx": "3beef061fb424f7acc66e7787e390c50955359b6fa904dea4d81d45843951910",
+        "src/PositionCache.h": "4938bce73aaa7cb30d6eed5010b8c671be0b70ed663d6cea05385e160c4eff85"
+      }
     }
   ],
   "architecture": "arm64",

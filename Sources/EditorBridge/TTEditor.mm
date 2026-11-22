@@ -133,6 +133,7 @@ struct TTInteractionState { NSUInteger revision; sptr_t selections, anchor, care
 @interface TTEditor (MacroInteraction)
 - (void)performNativeMacroInput:(void (NS_NOESCAPE ^)(void))input;
 - (void)performReturn:(void (NS_NOESCAPE ^)(void))nativeReturn;
+- (BOOL)extendMacWordSelectionRight:(BOOL)right;
 - (BOOL)canBeginPairing;
 - (void)performPair:(NSString *)input closer:(char)closer commit:(void (NS_NOESCAPE ^)(void))commit;
 - (TTInteractionState)interactionState;
@@ -208,6 +209,10 @@ static char TTPairCloser(NSString *text) {
     const unichar key = input.length == 1 ? [input characterAtIndex:0] : 0;
     const NSEventModifierFlags shortcuts = NSEventModifierFlagCommand | NSEventModifierFlagOption | NSEventModifierFlagControl;
     TTEditor *editor = self.editor;
+    const NSEventModifierFlags wordModifiers = shortcuts | NSEventModifierFlagShift;
+    if ((key == NSRightArrowFunctionKey || key == NSLeftArrowFunctionKey) &&
+        (event.modifierFlags & wordModifiers) == (NSEventModifierFlagOption | NSEventModifierFlagShift) &&
+        !self.hasMarkedText && [editor extendMacWordSelectionRight:key == NSRightArrowFunctionKey]) return;
     if (editor && (key == '\r' || key == '\n' || key == NSEnterCharacter) &&
         !(event.modifierFlags & shortcuts) && !self.hasMarkedText) {
         [editor performReturn:^{ [super keyDown:event]; }];
@@ -734,6 +739,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         [self addSubview:_engine];
         _engine.delegate = self;
         [_engine message:SCI_SETCODEPAGE wParam:SC_CP_UTF8];
+        [_engine message:SCI_SETBIDIRECTIONAL wParam:SC_BIDIRECTIONAL_L2R];
         __weak TTEditor *weakEditor = self;
         _accessibilityDisplayObserver = [NSWorkspace.sharedWorkspace.notificationCenter
             addObserverForName:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification object:nil
@@ -1433,6 +1439,145 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
         useTabs:[_engine message:SCI_GETUSETABS] fontSize:MAX(1, [_engine message:SCI_STYLEGETSIZEFRACTIONAL wParam:STYLE_DEFAULT]/100.0+[_engine message:SCI_GETZOOM])
         eol:[_engine message:SCI_GETEOLMODE]];
 }
+
+// Move through long runs that cannot contain an interior word boundary without
+// passing the whole run to TextKit. Leave one character of context at either end.
+static sptr_t TTSkipWordRun(ScintillaView *engine, sptr_t cursor, sptr_t size, bool forward) {
+    const auto category = [](char c) {
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) return 1;
+        if (c >= '0' && c <= '9') return 3;
+        if (c == ' ' || c == '\t') return 2;
+        return 0;
+    };
+    const sptr_t original = cursor;
+    int run = 0;
+    char bytes[4097];
+    while (forward ? cursor < size : cursor > 0) {
+        const sptr_t length = std::min<sptr_t>(sizeof(bytes)-1, forward ? size-cursor : cursor);
+        const sptr_t start = forward ? cursor : cursor-length;
+        Sci_TextRangeFull range = {{start, start+length}, bytes};
+        if ([engine message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&range] != length) break;
+        if (!run) run = category(bytes[forward ? 0 : length-1]);
+        if (!run) break;
+        sptr_t n = 0;
+        while (n < length && category(bytes[forward ? n : length-1-n]) == run) ++n;
+        cursor += forward ? n : -n;
+        if (n != length) break;
+    }
+    return original == cursor ? cursor : cursor + (forward ? -1 : 1);
+}
+
+// UAX #9 P2/P3. A clipped fragment may start in an embedded run whose
+// direction differs from its paragraph. Resolve the first strong character
+// outside directional isolates without materializing a long line.
+static bool TTWordParagraphRTL(ScintillaView *engine, sptr_t start, sptr_t end) {
+    static NSRegularExpression *strongOrIsolate;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        strongOrIsolate = [NSRegularExpression regularExpressionWithPattern:
+            @"([\\p{bc=R}\\p{bc=AL}])|[\\p{bc=L}\\u2066-\\u2069]" options:0 error:nil];
+    });
+    __block NSInteger isolates = 0;
+    while (start < end) { @autoreleasepool {
+        sptr_t next = std::min<sptr_t>(start+4096, end);
+        while (next < end && ([engine message:SCI_GETCHARAT wParam:next] & 0xc0) == 0x80) --next;
+        char bytes[4097];
+        Sci_TextRangeFull slice = {{start, next}, bytes};
+        if ([engine message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&slice] != next-start) break;
+        NSString *text = TTStringFromUTF8(bytes, next-start);
+        __block BOOL rtl = NO, found = NO;
+        [strongOrIsolate enumerateMatchesInString:text options:0 range:NSMakeRange(0,text.length)
+            usingBlock:^(NSTextCheckingResult *match, NSMatchingFlags flags, BOOL *stop) {
+                const unichar c = [text characterAtIndex:match.range.location];
+                if (c >= 0x2066 && c <= 0x2068) ++isolates;
+                else if (c == 0x2069) isolates = MAX(0, isolates-1);
+                else if (!isolates) {
+                    rtl = [match rangeAtIndex:1].location != NSNotFound;
+                    found = YES; *stop = YES;
+                }
+            }];
+        if (found) return rtl;
+        start = next;
+    } }
+    return false;
+}
+
+// AppKit word selection ignores intervening punctuation and uses the system's
+// Unicode word segmentation and writing direction. Only the local text used for
+// that decision is copied. Scintilla continues to own the anchor, bytes and Undo.
+static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool right) {
+    const sptr_t size = [engine message:SCI_GETLENGTH];
+    if (!size) return caret;
+    NSTextContentStorage *storage = [NSTextContentStorage new];
+    NSTextLayoutManager *layout = [NSTextLayoutManager new];
+    [storage addTextLayoutManager:layout];
+    layout.textContainer = [[NSTextContainer alloc] initWithSize:NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX)];
+    auto direction = right ? NSTextSelectionNavigationDirectionRight : NSTextSelectionNavigationDirectionLeft;
+    sptr_t cursor = caret;
+    constexpr sptr_t radius = 1024;
+    while (true) { @autoreleasepool {
+        sptr_t start = std::max<sptr_t>(0, cursor-radius);
+        sptr_t end = std::min<sptr_t>(size, cursor+radius);
+        while (start && ([engine message:SCI_GETCHARAT wParam:start] & 0xc0) == 0x80) --start;
+        while (end < size && ([engine message:SCI_GETCHARAT wParam:end] & 0xc0) == 0x80) ++end;
+        NSMutableParagraphStyle *paragraph = nil;
+        if (cursor == caret && start > 0) {
+            const sptr_t line = [engine message:SCI_LINEFROMPOSITION wParam:caret];
+            const sptr_t lineStart = [engine message:SCI_POSITIONFROMLINE wParam:line];
+            if (lineStart < start) {
+                const bool rtl = TTWordParagraphRTL(engine, lineStart, [engine message:SCI_GETLINEENDPOSITION wParam:line]);
+                paragraph = [[NSMutableParagraphStyle alloc] init];
+                paragraph.baseWritingDirection = rtl ? NSWritingDirectionRightToLeft : NSWritingDirectionLeftToRight;
+            }
+        }
+        char bytes[2*radius+7];
+        Sci_TextRangeFull slice = {{start, end}, bytes};
+        if ([engine message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&slice] != end-start) return caret;
+        NSString *text = TTStringFromUTF8(bytes, end-start);
+        if (paragraph) {
+            NSMutableAttributedString *fragment = [[NSMutableAttributedString alloc] initWithString:text];
+            [fragment addAttribute:NSParagraphStyleAttributeName value:paragraph
+                range:[text paragraphRangeForRange:NSMakeRange(0, 0)]];
+            storage.attributedString = fragment;
+        } else {
+            storage.attributedString = [[NSAttributedString alloc] initWithString:text];
+        }
+        id<NSTextLocation> first = storage.documentRange.location;
+        const NSInteger offset = [engine message:SCI_COUNTCODEUNITS wParam:start lParam:cursor];
+        id<NSTextLocation> here = [storage locationFromLocation:first withOffset:offset];
+        if (!here) return caret;
+        NSTextSelection *selection = [[NSTextSelection alloc] initWithLocation:here affinity:NSTextSelectionAffinityDownstream];
+        NSTextSelection *next = [layout.textSelectionNavigation destinationSelectionForTextSelection:selection
+            direction:direction destination:NSTextSelectionNavigationDestinationWord extending:YES confined:NO];
+        NSTextRange *extended = next.textRanges.firstObject;
+        id<NSTextLocation> result = [extended.location compare:here] == NSOrderedSame ? extended.endLocation : extended.location;
+        if (!result) return cursor;
+        const NSInteger nextOffset = [storage offsetFromLocation:first toLocation:result];
+        const sptr_t target = [engine message:SCI_POSITIONRELATIVECODEUNITS wParam:start lParam:nextOffset];
+        if (target < start || target > end) return caret;
+        const bool forward = target > cursor;
+        if (target == cursor || (forward ? end == size || target < end-32 : start == 0 || target > start+32))
+            return target;
+        // A clipped word or separator may continue outside this neighborhood.
+        // Reconsider its last portion with more context, in the resolved direction.
+        sptr_t inside = forward ? end-64 : start+64;
+        while (([engine message:SCI_GETCHARAT wParam:inside] & 0xc0) == 0x80) --inside;
+        cursor = TTSkipWordRun(engine, inside, size, forward);
+        direction = forward ? NSTextSelectionNavigationDirectionForward : NSTextSelectionNavigationDirectionBackward;
+    } }
+}
+
+- (BOOL)extendMacWordSelectionRight:(BOOL)right {
+    if ([_engine message:SCI_GETSELECTIONMODE] != SC_SEL_STREAM || self.selectionCount != 1 ||
+        [_engine message:SCI_AUTOCACTIVE]) return NO;
+    const NSInteger caret = self.selectionCaret;
+    const NSInteger next = TTMacWordDestination(_engine, caret, right);
+    if (next != caret && [self setSelectionAnchor:self.selectionAnchor caret:next] && _macroRecording) {
+        [self reportMacroStep:[TTMacroAction unsupported:@"Mac word selection" message:0]];
+    }
+    return YES;
+}
+
 - (NSInteger)selectionCaret { [self assertThread]; return [_engine message:SCI_GETCURRENTPOS]; }
 - (BOOL)setSelectionAnchor:(NSInteger)anchor caret:(NSInteger)caret {
     [self assertThread];

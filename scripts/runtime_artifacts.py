@@ -103,8 +103,8 @@ def verify_dependencies(root, *, producer=True):
     for folder in ('scintilla', 'lexilla'):
         manifest = json.loads((root / 'scripts' / f'{folder}-source-hashes.json').read_text())
         bootstrap.verify_tree(root / 'Vendor' / folder, manifest)
-    selected, effective, patch = bootstrap.scintilla_plan(root)
-    if patch and producer:
+    selected, effective, layers = bootstrap.scintilla_plan(root)
+    if layers and producer:
         bootstrap.verify_tree(selected, effective)
 
 
