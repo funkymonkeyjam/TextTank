@@ -6,6 +6,7 @@
 #import <objc/runtime.h>
 #import "Checks.h"
 #import "EditorWordSelectionChecks.h"
+#import "BidiSelectionChecks.inc"
 // Count conversions on this string only; all encoded bytes come from Foundation.
 @interface TTLoadCountingString : NSString
 @property(nonatomic, copy) NSString *backing;
@@ -2444,6 +2445,8 @@ int main(int argc, char **argv) {
         [drop.draggingPasteboard releaseGlobally];
         ed.onMacroStep=nil;
         });
+        TTCheckBidiSelection();
+        TTCheckScrolledBidi();
         return ttchecks::finish("BridgeChecks", "IME, VoiceOver, UI focus and permission tests not covered");
     }
 }

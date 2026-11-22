@@ -739,6 +739,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         [self addSubview:_engine];
         _engine.delegate = self;
         [_engine message:SCI_SETCODEPAGE wParam:SC_CP_UTF8];
+        [_engine message:SCI_SETBIDIRECTIONAL wParam:SC_BIDIRECTIONAL_L2R];
         __weak TTEditor *weakEditor = self;
         _accessibilityDisplayObserver = [NSWorkspace.sharedWorkspace.notificationCenter
             addObserverForName:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification object:nil

@@ -1,0 +1,1171 @@
+--- a/cocoa/PlatCocoa.h
++++ b/cocoa/PlatCocoa.h
+@@ -106,6 +106,9 @@
+ 	void Ellipse(PRectangle rc, FillStroke fillStroke) override;
+ 	void Stadium(PRectangle rc, FillStroke fillStroke, Ends ends) override;
+ 	void Copy(PRectangle rc, Scintilla::Internal::Point from, Surface &surfaceSource) override;
++	bool BidiBaseRightToLeft(std::string_view text) const override;
++	size_t BidiSubdivision(std::string_view text, size_t offset, bool rtl) const override;
++	bool NeedsBidiLayout(std::string_view text) const override;
+ 	std::unique_ptr<IScreenLineLayout> Layout(const IScreenLine *screenLine) override;
+ 
+ 	void DrawTextNoClip(PRectangle rc, const Font *font_, XYPOSITION ybase, std::string_view text, ColourRGBA fore,
+--- a/cocoa/PlatCocoa.mm
++++ b/cocoa/PlatCocoa.mm
+@@ -145,11 +145,6 @@
+ 
+ namespace {
+ 
+-CFIndex IndexFromPosition(std::string_view text, size_t position) {
+-	const std::string_view textUptoPosition = text.substr(0, position);
+-	return UTF16Length(textUptoPosition);
+-}
+-
+ // Handling representations and tabs
+ 
+ struct Blob {
+@@ -171,72 +166,124 @@
+ class ScreenLineLayout : public IScreenLineLayout {
+ 	CTLineRef line = NULL;
+ 	const std::string text;
++	std::vector<size_t> characterBytes;
++	// Map Unicode glyph clusters to both caret affinity and visual coverage.
++	struct Cluster { CFIndex start; Interval span; bool rtl; CTRunRef run; CFIndex glyph; };
++	std::vector<Cluster> clusters;
+ public:
+ 	ScreenLineLayout(const IScreenLine *screenLine);
+ 	~ScreenLineLayout();
++	CFIndex CharacterIndex(size_t offset) const {
++		return std::lower_bound(characterBytes.begin(), characterBytes.end(), offset) - characterBytes.begin();
++	}
++	bool DrawRange(Surface *surface, PRectangle clip, XYPOSITION x, XYPOSITION y, ColourRGBA fore,
++		size_t start, size_t end) override;
+ 	// IScreenLineLayout implementation
+ 	size_t PositionFromX(XYPOSITION xDistance, bool charPosition) override;
+ 	XYPOSITION XFromPosition(size_t caretPosition) override;
+ 	std::vector<Interval> FindRangeIntervals(size_t start, size_t end) override;
+ };
+ 
+-ScreenLineLayout::ScreenLineLayout(const IScreenLine *screenLine) : text(screenLine->Text()) {
+-	const UInt8 *puiBuffer = reinterpret_cast<const UInt8 *>(text.data());
+-	std::string_view sv = text;
+-
+-	// Start with an empty mutable attributed string and add each character to it.
+-	CFMutableAttributedStringRef mas = CFAttributedStringCreateMutable(NULL, 0);
+-
+-	for (size_t bp=0; bp<text.length();) {
+-		const unsigned char uch = text[bp];
+-		const int utf8Status = UTF8Classify(sv);
+-		const unsigned int byteCount = utf8Status & UTF8MaskWidth;
+-		XYPOSITION repWidth = screenLine->RepresentationWidth(bp);
+-		if (uch == '\t') {
+-			// Find the size up to the tab
+-			NSMutableAttributedString *nas = (__bridge NSMutableAttributedString *)mas;
+-			const NSSize sizeUpTo = [nas size];
+-			const XYPOSITION nextTab = screenLine->TabPositionAfter(sizeUpTo.width);
+-			repWidth = nextTab - sizeUpTo.width;
+-		}
+-		CFAttributedStringRef as = NULL;
+-		if (repWidth > 0.0f) {
+-			CTRunDelegateCallbacks callbacks = {
+-				.version = kCTRunDelegateVersion1,
+-				.dealloc = BlobDealloc,
+-				.getWidth = BlobGetWidth
+-			};
+-			CTRunDelegateRef runDelegate = CTRunDelegateCreate(&callbacks, new Blob(repWidth));
+-			NSMutableAttributedString *masBlob = [[NSMutableAttributedString alloc] initWithString:@"X"];
+-			NSRange rangeX = NSMakeRange(0, 1);
+-			[masBlob addAttribute: (NSString *)kCTRunDelegateAttributeName value: (__bridge id)runDelegate range:rangeX];
++ScreenLineLayout::ScreenLineLayout(const IScreenLine *screenLine) :
++	text(screenLine->Text()) {
++	NSString *source = [[NSString alloc] initWithBytes:text.data() length:text.size() encoding:NSUTF8StringEncoding];
++	if (!source)
++		return;
++	NSMutableAttributedString *attributed = [[NSMutableAttributedString alloc] initWithString:source];
++	CTWritingDirection direction = screenLine->BaseRightToLeft() ? kCTWritingDirectionRightToLeft : kCTWritingDirectionLeftToRight;
++	const CTParagraphStyleSetting base = {kCTParagraphStyleSpecifierBaseWritingDirection, sizeof(direction), &direction};
++	CTParagraphStyleRef paragraph = CTParagraphStyleCreate(&base,1);
++	[attributed addAttribute:(NSString *)kCTParagraphStyleAttributeName value:(__bridge id)paragraph range:NSMakeRange(0,source.length)];
++	CFRelease(paragraph);
++	[attributed addAttribute:(NSString *)kCTForegroundColorFromContextAttributeName
++			   value:@YES range:NSMakeRange(0, source.length)];
++	size_t byte = 0;
++	NSUInteger character = 0;
++	while (byte < text.size()) {
++		const Font *font = screenLine->FontOfPosition(byte);
++		const auto width = screenLine->RepresentationWidth(byte);
++		const NSUInteger start = character;
++		do {
++			const auto count = UTF8DrawBytes(text.data()+byte, text.size()-byte);
++			characterBytes.push_back(byte);
++			if (count == 4) characterBytes.push_back(byte);
++			character += count == 4 ? 2 : 1;
++			byte += count;
++		} while (byte < text.size() && !width && !screenLine->RepresentationWidth(byte) &&
++				screenLine->FontOfPosition(byte) == font);
++		const NSRange range = NSMakeRange(start, character-start);
++		if (width > 0) {
++			// Replacement widths have already been measured by Scintilla, including tabs.
++			[attributed replaceCharactersInRange:range withString:range.length==2 ? @"\uFFFC\uFEFF" : @"\uFFFC"];
++			CTRunDelegateCallbacks callbacks = {};
++			callbacks.version = kCTRunDelegateVersion1;
++			callbacks.dealloc = BlobDealloc;
++			callbacks.getWidth = BlobGetWidth;
++			CTRunDelegateRef runDelegate = CTRunDelegateCreate(&callbacks, new Blob(width));
++			[attributed addAttribute:(NSString *)kCTRunDelegateAttributeName value:(__bridge id)runDelegate range:NSMakeRange(start,1)];
+ 			CFRelease(runDelegate);
+-			as = (CFAttributedStringRef)CFBridgingRetain(masBlob);
+-		} else {
+-			CFStringRef piece = CFStringCreateWithBytes(NULL,
+-								    &puiBuffer[bp],
+-								    byteCount,
+-								    kCFStringEncodingUTF8,
+-								    false);
+-			const QuartzTextStyle *qts = TextStyleFromFont(screenLine->FontOfPosition(bp));
+-			CFMutableDictionaryRef pieceAttributes = qts->getCTStyle();
+-			as = CFAttributedStringCreate(NULL, piece, pieceAttributes);
+-			CFRelease(piece);
+-		}
+-		CFAttributedStringReplaceAttributedString(mas,
+-							  CFRangeMake(CFAttributedStringGetLength(mas), 0),
+-							  as);
+-		bp += byteCount;
+-		sv.remove_prefix(byteCount);
+-		CFRelease(as);
+-	}
+-
+-	line = CTLineCreateWithAttributedString(mas);
+-	CFRelease(mas);
++		}
++		if (font)
++			[attributed addAttribute:(NSString *)kCTFontAttributeName
++					   value:(__bridge id)TextStyleFromFont(font)->getFontRef() range:range];
++	}
++	characterBytes.push_back(text.size());
++	line = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)attributed);
++	if (!line)
++		return;
++	for (id runObject in (__bridge NSArray *)CTLineGetGlyphRuns(line)) {
++		CTRunRef run = (__bridge CTRunRef)runObject;
++		const CFIndex count = CTRunGetGlyphCount(run);
++		std::vector<CFIndex> indices(count);
++		std::vector<CGPoint> origins(count);
++		std::vector<CGSize> advances(count);
++		CTRunGetStringIndices(run, CFRangeMake(0,0), indices.data());
++		CTRunGetPositions(run, CFRangeMake(0,0), origins.data());
++		CTRunGetAdvances(run, CFRangeMake(0,0), advances.data());
++		const bool rtl = (CTRunGetStatus(run) & kCTRunStatusRightToLeft) != 0;
++		for (CFIndex i = 0; i < count; i++) {
++			const auto x = static_cast<XYPOSITION>(origins[i].x);
++			const auto next = static_cast<XYPOSITION>(origins[i].x + advances[i].width);
++			clusters.push_back({indices[i],{std::min(x,next),std::max(x,next)},rtl,run,i});
++		}
++	}
++	std::sort(clusters.begin(), clusters.end(), [](const Cluster &a, const Cluster &b) { return a.start < b.start; });
++}
++
++bool ScreenLineLayout::DrawRange(Surface *surface, PRectangle clip, XYPOSITION x, XYPOSITION y, ColourRGBA fore,
++	size_t start, size_t end) {
++	CGContextRef context = static_cast<SurfaceImpl *>(surface)->GetContext();
++	if (!context || !line)
++		return false;
++	CGContextSaveGState(context);
++	CGContextClipToRect(context, PRectangleToCGRect(clip));
++	CGContextSetRGBFillColor(context,fore.GetRedComponent(),fore.GetGreenComponent(),fore.GetBlueComponent(),fore.GetAlphaComponent());
++	CGContextSetTextMatrix(context,CGAffineTransformMakeScale(1,-1));
++	CGContextSetTextPosition(context,x,y);
++	const auto firstIndex = CharacterIndex(start);
++	const auto endIndex = CharacterIndex(end);
++	auto it = std::lower_bound(clusters.begin(), clusters.end(), firstIndex,
++		[](const Cluster &c, CFIndex index) { return c.start < index; });
++	if (it != clusters.begin() && (it == clusters.end() || it->start > firstIndex))
++		--it;
++	while (it != clusters.end() && it->start < endIndex) {
++		const CTRunRef run = it->run;
++		CFIndex first = it->glyph, last = first;
++		++it;
++		while (it != clusters.end() && it->start < endIndex && it->run == run &&
++			(it->glyph == last+1 || it->glyph+1 == first)) {
++			first = std::min(first,it->glyph);
++			last = std::max(last,it->glyph);
++			++it;
++		}
++		CTRunDraw(run,context,CFRangeMake(first,last-first+1));
++	}
++	CGContextRestoreGState(context);
++	return true;
+ }
+ 
+ ScreenLineLayout::~ScreenLineLayout() {
+-	CFRelease(line);
++	if (line) CFRelease(line);
+ }
+ 
+ size_t ScreenLineLayout::PositionFromX(XYPOSITION xDistance, bool charPosition) {
+@@ -244,12 +291,18 @@
+ 		return 0;
+ 	}
+ 	const CGPoint ptDistance = CGPointMake(xDistance, 0);
++	if (charPosition) {
++		for (const Cluster &c : clusters) {
++			if (c.span.left <= xDistance && xDistance < c.span.right)
++				return characterBytes[c.start];
++		}
++	}
+ 	const CFIndex offset = CTLineGetStringIndexForPosition(line, ptDistance);
+ 	if (offset == kCFNotFound) {
+ 		return 0;
+ 	}
+ 	// Convert back to UTF-8 positions
+-	return UTF8PositionFromUTF16Position(text, offset);
++	return characterBytes[std::min<size_t>(offset, characterBytes.size()-1)];
+ }
+ 
+ XYPOSITION ScreenLineLayout::XFromPosition(size_t caretPosition) {
+@@ -257,10 +310,17 @@
+ 		return 0.0;
+ 	}
+ 	// Convert from UTF-8 position
+-	const CFIndex caretIndex = IndexFromPosition(text, caretPosition);
+-
+-	const CGFloat distance = CTLineGetOffsetForStringIndex(line, caretIndex, nullptr);
+-	return distance;
++	const CFIndex caretIndex = CharacterIndex(caretPosition);
++
++	const auto it = std::lower_bound(clusters.begin(), clusters.end(), caretIndex,
++		[](const Cluster &c, CFIndex index) { return c.start < index; });
++	if (it != clusters.end() && it->start == caretIndex && !it->span.Empty())
++		return it->rtl ? it->span.right : it->span.left;
++	if (it == clusters.end() && !clusters.empty()) {
++		const Cluster &last = clusters.back();
++		return last.rtl ? last.span.left : last.span.right;
++	}
++	return CTLineGetOffsetForStringIndex(line, caretIndex, nullptr);
+ }
+ 
+ void AddToIntervalVector(std::vector<Interval> &vi, XYPOSITION left, XYPOSITION right) {
+@@ -286,30 +346,22 @@
+ 	std::vector<Interval> ret;
+ 
+ 	// Convert from UTF-8 position
+-	const CFIndex startIndex = IndexFromPosition(text, start);
+-	const CFIndex endIndex = IndexFromPosition(text, end);
+-
+-	CFArrayRef runs = CTLineGetGlyphRuns(line);
+-	const CFIndex runCount = CFArrayGetCount(runs);
+-	for (CFIndex run=0; run<runCount; run++) {
+-		CTRunRef aRun = static_cast<CTRunRef>(CFArrayGetValueAtIndex(runs, run));
+-		const CFIndex glyphCount = CTRunGetGlyphCount(aRun);
+-		const CFRange rangeAll = CFRangeMake(0, glyphCount);
+-		std::vector<CFIndex> indices(glyphCount);
+-		CTRunGetStringIndices(aRun, rangeAll, indices.data());
+-		std::vector<CGPoint> positions(glyphCount);
+-		CTRunGetPositions(aRun, rangeAll, positions.data());
+-		std::vector<CGSize> advances(glyphCount);
+-		CTRunGetAdvances(aRun, rangeAll, advances.data());
+-		for (CFIndex glyph=0; glyph<glyphCount; glyph++) {
+-			const CFIndex glyphIndex = indices[glyph];
+-			const XYPOSITION xPosition = positions[glyph].x;
+-			const XYPOSITION width = advances[glyph].width;
+-			if ((glyphIndex >= startIndex) && (glyphIndex < endIndex)) {
+-				AddToIntervalVector(ret, xPosition, xPosition + width);
+-			}
+-		}
+-	}
++	const CFIndex startIndex = CharacterIndex(start);
++	const CFIndex endIndex = CharacterIndex(end);
++
++	auto first = std::lower_bound(clusters.begin(), clusters.end(), startIndex,
++		[](const Cluster &c, CFIndex index) { return c.start < index; });
++	if (first != clusters.begin() && (first == clusters.end() || first->start > startIndex))
++		--first; // The range begins inside a ligature or a supplementary character.
++	std::vector<Interval> boxes;
++	for (auto it = first; it != clusters.end() && it->start < endIndex; ++it) {
++		if (!it->span.Empty())
++			boxes.push_back(it->span);
++	}
++	std::sort(boxes.begin(), boxes.end(), [](Interval a, Interval b) { return a.left < b.left; });
++	for (Interval box : boxes)
++		AddToIntervalVector(ret, box.left, box.right);
++
+ 	return ret;
+ }
+ 
+@@ -1171,6 +1223,88 @@
+ 
+ // Bidirectional text support for Arabic and Hebrew.
+ 
++bool SurfaceImpl::BidiBaseRightToLeft(std::string_view text) const {
++	static NSRegularExpression *strong = [NSRegularExpression regularExpressionWithPattern:
++		@"(\\p{Bidi_Class=L})|([\\p{Bidi_Class=R}\\p{Bidi_Class=AL}])|([\\x{2066}-\\x{2068}])|(\\x{2069})" options:0 error:nil];
++	NSUInteger isolateDepth = 0;
++	while (!text.empty()) {
++		size_t n = std::min<size_t>(text.size(),4096);
++		while (n < text.size() && UTF8IsTrailByte(text[n])) --n;
++		NSString *chunk = [[NSString alloc] initWithBytes:text.data() length:n encoding:NSUTF8StringEncoding];
++		if (!chunk) return false;
++		NSRange rest = NSMakeRange(0,chunk.length);
++		while (rest.length) {
++			NSTextCheckingResult *match = [strong firstMatchInString:chunk options:0 range:rest];
++			if (!match) break;
++			if ([match rangeAtIndex:3].location!=NSNotFound) ++isolateDepth;
++			else if ([match rangeAtIndex:4].location!=NSNotFound) {
++				if (isolateDepth) --isolateDepth;
++			} else if (!isolateDepth) return [match rangeAtIndex:2].location!=NSNotFound;
++			const NSUInteger next = NSMaxRange(match.range);
++			rest = NSMakeRange(next,chunk.length-next);
++		}
++		text.remove_prefix(n);
++	}
++	return false;
++}
++
++size_t SurfaceImpl::BidiSubdivision(std::string_view text, size_t offset, bool rtl) const {
++	// Keep short opposite-direction words together at artificial boundaries.
++	// Prefer separators, then a base-direction letter close to the nominal cut.
++	const size_t min = offset > 256 ? offset-256 : 1;
++	const size_t max = std::min(text.size()-1,offset+256);
++	size_t best = offset, bestDistance = 257;
++	int bestRank = 0;
++	for (size_t i=min;i<=max;) {
++		const auto ch = static_cast<unsigned char>(text[i]);
++		const auto n = UTF8DrawBytes(text.data()+i,text.size()-i);
++		const size_t distance = i>offset ? i-offset : offset-i;
++		const bool latin = (ch>='A' && ch<='Z') || (ch>='a' && ch<='z');
++		const auto cp = UTF8IsAscii(ch) ? ch : UnicodeFromUTF8(text.substr(i));
++		const bool hebrewOrArabic = (cp>=0x05d0 && cp<=0x05ea) || (cp>=0x0620 && cp<=0x064a);
++		const bool baseLetter = rtl ? hebrewOrArabic : latin;
++		const int rank = ch==' ' ? 2 : baseLetter ? 1 : 0;
++		if (rank && (rank>bestRank || (rank==bestRank && distance<bestDistance))) {
++			best=i; bestRank=rank; bestDistance=distance;
++		}
++		i += n;
++	}
++	offset=best;
++	while (offset && UTF8IsTrailByte(text[offset]))
++		--offset;
++	// Ask Foundation for a composed-character boundary in a bounded
++	// neighborhood. Never split a UTF-8 scalar even in pathological input.
++	size_t begin = offset > 256 ? offset-256 : 0;
++	size_t end = std::min(text.size(),offset+256);
++	while (begin && UTF8IsTrailByte(text[begin])) --begin;
++	while (end<text.size() && UTF8IsTrailByte(text[end])) ++end;
++	NSString *context = [[NSString alloc] initWithBytes:text.data()+begin length:end-begin encoding:NSUTF8StringEncoding];
++	if (!context) return offset;
++	const NSUInteger index = UTF16Length(text.substr(begin,offset-begin));
++	const NSRange cluster = [context rangeOfComposedCharacterSequenceAtIndex:index];
++	return begin + UTF8PositionFromUTF16Position(text.substr(begin,end-begin),cluster.location);
++}
++
++bool SurfaceImpl::NeedsBidiLayout(std::string_view text) const {
++	// The Unicode bidi controls and script blocks containing strong RTL letters.
++	// False positives only request shaping; CoreText resolves the actual runs.
++	for (size_t offset = 0; offset < text.size();) {
++		if (UTF8IsAscii(text[offset])) { ++offset; continue; }
++		const auto tail = text.substr(offset);
++		const int status = UTF8Classify(tail);
++		if (status & UTF8MaskInvalid)
++			return false;
++		const int cp = UnicodeFromUTF8(tail);
++		if ((cp >= 0x0590 && cp <= 0x08ff) || cp == 0x200f ||
++			(cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069) ||
++			(cp >= 0xfb1d && cp <= 0xfdff) || (cp >= 0xfe70 && cp <= 0xfefc) ||
++			(cp >= 0x10800 && cp <= 0x10fff) || (cp >= 0x1e800 && cp <= 0x1efff))
++			return UTF8IsValid(tail);
++		offset += status & UTF8MaskWidth;
++	}
++	return false;
++}
++
+ std::unique_ptr<IScreenLineLayout> SurfaceImpl::Layout(const IScreenLine *screenLine) {
+ 	return std::make_unique<ScreenLineLayout>(screenLine);
+ }
+--- a/cocoa/ScintillaCocoa.h
++++ b/cocoa/ScintillaCocoa.h
+@@ -211,6 +211,7 @@
+ 	NSString *RangeTextAsString(NSRange rangePositions) const;
+ 	NSInteger VisibleLineForIndex(NSInteger index);
+ 	NSRange RangeForVisibleLine(NSInteger lineVisible);
++	std::optional<NSRect> BidiFrameForRange(NSRange bytes, Point start, Point end);
+ 	NSRect FrameForRange(NSRange rangeCharacters);
+ 	NSRect GetBounds() const;
+ 	void SelectOnlyMainSelection();
+--- a/cocoa/ScintillaCocoa.mm
++++ b/cocoa/ScintillaCocoa.mm
+@@ -1793,6 +1793,35 @@
+ //--------------------------------------------------------------------------------------------------
+ 
+ // Returns a rectangle that frames the range for use by the VoiceOver cursor.
++std::optional<NSRect> ScintillaCocoa::BidiFrameForRange(NSRange posRange, Point ptStart, Point ptEnd) {
++	// A logical range can cross directional run boundaries. Its two caret
++	// positions do not describe the selected glyphs in that case.
++	if (BidirectionalEnabled() && posRange.length && ptStart.y == ptEnd.y) {
++		const NSUInteger rangeEnd = NSMaxRange(posRange);
++		const Sci::Line line = pdoc->SciLineFromPosition(posRange.location);
++		const Sci::Position start = pdoc->LineStart(line);
++		AutoSurface surface(this);
++		auto ll = view.RetrieveLineLayout(line, *this);
++		if (surface && ll) {
++			view.LayoutLine(*this, surface, vs, ll.get(), wrapWidth);
++			if (ll->bidiText) {
++				view.UpdateBidiData(*this,vs,ll.get());
++				const int sub = ll->SubLineFromPosition(posRange.location-start, PointEnd::start);
++				const Sci::Position origin = start + ll->LineStart(sub);
++				const ScreenLine screen(ll.get(),sub,vs,GetTextRectangle().right,view.tabWidthMinimumPixels);
++				auto layout = screen.Layout(surface);
++				const auto intervals = layout->FindRangeIntervals(posRange.location-origin, rangeEnd-origin);
++				if (!intervals.empty()) {
++					const auto x = vs.fixedColumnWidth - xOffset + (sub ? ll->wrapIndent : 0);
++					return NSMakeRect(x+intervals.front().left,ptStart.y,
++						intervals.back().right-intervals.front().left,vs.lineHeight);
++				}
++			}
++		}
++	}
++	return std::nullopt;
++}
++
+ NSRect ScintillaCocoa::FrameForRange(NSRange rangeCharacters) {
+ 	const NSRange posRange = PositionsFromCharacters(rangeCharacters);
+ 
+@@ -1803,6 +1832,8 @@
+ 	Point ptStart = LocationFromPosition(posRange.location);
+ 	Point ptEnd = LocationFromPosition(rangeEnd, PointEnd::endEither);
+ 
++	if (const auto rect = BidiFrameForRange(posRange,ptStart,ptEnd))
++		return *rect;
+ 	NSRect rect = NSMakeRect(ptStart.x, ptStart.y,
+ 				 ptEnd.x - ptStart.x,
+ 				 ptEnd.y - ptStart.y);
+--- a/cocoa/ScintillaView.mm
++++ b/cocoa/ScintillaView.mm
+@@ -521,6 +521,13 @@
+ 	rect.size.width = [mOwner message: SCI_POINTXFROMPOSITION wParam: 0 lParam: rangeEnd] - rect.origin.x;
+ 	rect.size.height = [mOwner message: SCI_POINTYFROMPOSITION wParam: 0 lParam: rangeEnd] - rect.origin.y;
+ 	rect.size.height += [mOwner message: SCI_TEXTHEIGHT wParam: 0 lParam: 0];
++	if (aRange.length && [mOwner message:SCI_GETBIDIRECTIONAL] != SC_BIDIRECTIONAL_DISABLED) {
++		const Scintilla::Internal::Point start(rect.origin.x,rect.origin.y);
++		const Scintilla::Internal::Point end(rect.origin.x+rect.size.width,rect.origin.y+rect.size.height-
++			[mOwner message:SCI_TEXTHEIGHT wParam:0]);
++		if (auto visual = mOwner.backend->BidiFrameForRange(posRange,start,end))
++			rect = *visual;
++	}
+ 	const NSRect rectInWindow = [self.superview.superview convertRect: rect toView: nil];
+ 	const NSRect rectScreen = [self.window convertRectToScreen: rectInWindow];
+ 
+@@ -1026,7 +1033,12 @@
+  * NSAccessibility : Not implemented and not called by VoiceOver.
+  */
+ - (NSRange) accessibilityRangeForPosition: (NSPoint) point {
+-	return NSMakeRange(0, 0);
++	const NSUInteger index = [self characterIndexForPoint:point];
++	if (index == NSNotFound)
++		return NSMakeRange(NSNotFound,0);
++	const NSRange bytes = mOwner.backend->PositionsFromCharacters(NSMakeRange(index,0));
++	const sptr_t next = [mOwner message:SCI_POSITIONAFTER wParam:bytes.location];
++	return mOwner.backend->CharactersFromPositions(NSMakeRange(bytes.location,next-bytes.location));
+ }
+ 
+ //--------------------------------------------------------------------------------------------------
+--- a/src/Document.cxx
++++ b/src/Document.cxx
+@@ -1516,6 +1516,19 @@
+ /**
+  * Insert a string with a length.
+  */
++namespace {
++bool ContainsNonASCII(std::string_view bytes) noexcept {
++	while (bytes.size() >= sizeof(uint64_t)) {
++		uint64_t word;
++		std::memcpy(&word, bytes.data(), sizeof(word));
++		if (word & UINT64_C(0x8080808080808080))
++			return true;
++		bytes.remove_prefix(sizeof(word));
++	}
++	return std::any_of(bytes.begin(), bytes.end(), [](char ch) { return !UTF8IsAscii(ch); });
++}
++}
++
+ Sci::Position Document::InsertString(Sci::Position position, const char *s, Sci::Position insertLength) {
+ 	if (insertLength <= 0) {
+ 		return 0;
+@@ -1556,6 +1569,8 @@
+ 	const Sci::Line prevLinesTotal = LinesTotal();
+ 	const bool startSavePoint = cb.IsSavePoint();
+ 	bool startSequence = false;
++	if (!mayContainNonASCII)
++		mayContainNonASCII = ContainsNonASCII(std::string_view(s, insertLength));
+ 	const char *text = cb.InsertString(position, s, insertLength, startSequence);
+ 	if (startSavePoint && cb.IsCollectingUndo())
+ 		NotifySavePoint(false);
+--- a/src/Document.h
++++ b/src/Document.h
+@@ -384,6 +384,9 @@
+ 
+ 	Scintilla::EndOfLine eolMode;
+ 	/// Can also be SC_CP_UTF8 to enable UTF-8 mode
++	// An insertion can arrive in UTF-8 chunks, so only use this monotonic flag
++	// to rule out bidi for entirely ASCII documents. Undo and clones share it.
++	bool mayContainNonASCII = false;
+ 	int dbcsCodePage;
+ 	Scintilla::LineEndType lineEndBitSet;
+ 	static constexpr int standardTabSize = 8;
+--- a/src/EditModel.cxx
++++ b/src/EditModel.cxx
+@@ -130,6 +130,7 @@
+ 
+ bool EditModel::BidirectionalEnabled() const noexcept {
+ 	return (bidirectional != Bidirectional::Disabled) &&
++		(bidirectional == Bidirectional::R2L || pdoc->mayContainNonASCII) &&
+ 		(CpUtf8 == pdoc->dbcsCodePage);
+ }
+ 
+--- a/src/EditView.cxx
++++ b/src/EditView.cxx
+@@ -487,6 +487,7 @@
+ 		}
+ 	}
+ 	if (ll->validity == LineLayout::ValidLevel::invalid) {
++		ll->bidiData.reset();
+ 		ll->widthLine = LineLayout::wrapWidthInfinite;
+ 		ll->lines = 1;
+ 		if (vstyle.edgeState == EdgeVisualStyle::Background) {
+@@ -516,6 +517,10 @@
+ 		}
+ 		ll->xHighlightGuide = 0;
+ 		// Extra element at the end of the line to hold end x position and act as
++		ll->bidiText = model.BidirectionalEnabled() && (model.BidirectionalR2L() ||
++			surface->NeedsBidiLayout(std::string_view(ll->chars.get(), numCharsInLine)));
++		ll->rtlParagraph = ll->bidiText && (model.BidirectionalR2L() ||
++			surface->BidiBaseRightToLeft(std::string_view(ll->chars.get(), numCharsInLine)));
+ 		ll->chars[numCharsInLine] = 0;   // Also triggers processing in the loops as this is a control character
+ 		ll->styles[numCharsInLine] = styleByteLast;	// For eolFilled
+ 
+@@ -619,29 +624,9 @@
+ // Fill the LineLayout bidirectional data fields according to each char style
+ 
+ void EditView::UpdateBidiData(const EditModel &model, const ViewStyle &vstyle, LineLayout *ll) {
+-	if (model.BidirectionalEnabled() && (ll->numCharsInLine >= 0)) {
++	if (ll->bidiText && (ll->numCharsInLine >= 0)) {
+ 		ll->EnsureBidiData();
+-		for (int stylesInLine = 0; stylesInLine < ll->numCharsInLine; stylesInLine++) {
+-			ll->bidiData->stylesFonts[stylesInLine] = vstyle.styles[ll->styles[stylesInLine]].font;
+-		}
+-		ll->bidiData->stylesFonts[ll->numCharsInLine].reset();
+-
+-		for (int charsInLine = 0; charsInLine < ll->numCharsInLine; charsInLine++) {
+-			const int charWidth = UTF8DrawBytes(&ll->chars[charsInLine], ll->numCharsInLine - charsInLine);
+-			const Representation *repr = model.reprs->RepresentationFromCharacter(std::string_view(&ll->chars[charsInLine], charWidth));
+-
+-			ll->bidiData->widthReprs[charsInLine] = 0.0f;
+-			if (repr && (ll->chars[charsInLine] != '\t' || vstyle.tabDrawMode == TabDrawMode::ControlChar)) {
+-				ll->bidiData->widthReprs[charsInLine] = ll->GetWidth(charsInLine + charWidth, charsInLine);
+-			}
+-			if (charWidth > 1) {
+-				for (int c = 1; c < charWidth; c++) {
+-					charsInLine++;
+-					ll->bidiData->widthReprs[charsInLine] = 0.0f;
+-				}
+-			}
+-		}
+-		ll->bidiData->widthReprs[ll->numCharsInLine] = 0.0f;
++		ll->bidiData->representations = model.reprs.get();
+ 	} else {
+ 		ll->bidiData.reset();
+ 	}
+@@ -662,7 +647,7 @@
+ 	const Sci::Line lineVisible = model.pcs->DisplayFromDoc(lineDoc);
+ 	const XYPOSITION lineVisibleY = static_cast<XYPOSITION>((lineVisible - topLine) * vs.lineHeight);
+ 	const int posInLine = static_cast<int>(pos.Position() - posLineStart);
+-	if ((posInLine == 0) && (pos.VirtualSpace() == 0)) {
++	if ((posInLine == 0) && (pos.VirtualSpace() == 0) && !model.BidirectionalEnabled()) {
+ 		// Simple case at start of document line avoids expensive LayoutLine.
+ 		return Point(vs.textStart - model.xOffset, lineVisibleY);
+ 	}
+@@ -672,7 +657,7 @@
+ 		pt = ll->PointFromPosition(posInLine, vs.lineHeight, pe);
+ 		pt.x += vs.textStart - model.xOffset;
+ 
+-		if (model.BidirectionalEnabled()) {
++		if (ll->bidiText) {
+ 			// Fill the line bidi data
+ 			UpdateBidiData(model, vs, ll.get());
+ 
+@@ -682,8 +667,8 @@
+ 
+ 			// Get the point from current position
+ 			const ScreenLine screenLine(ll.get(), subLine, vs, rcClient.right, tabWidthMinimumPixels);
+-			std::unique_ptr<IScreenLineLayout> slLayout = surface->Layout(&screenLine);
+-			pt.x = slLayout->XFromPosition(caretPosition);
++			auto slLayout = screenLine.Layout(surface);
++			pt.x = slLayout->XFromPosition(caretPosition) + (subLine ? ll->wrapIndent : 0);
+ 
+ 			pt.x += vs.textStart - model.xOffset;
+ 
+@@ -747,12 +732,12 @@
+ 			if (subLine > 0)	// Wrapped
+ 				pt.x -= ll->wrapIndent;
+ 			Sci::Position positionInLine = 0;
+-			if (model.BidirectionalEnabled()) {
++			if (ll->bidiText) {
+ 				// Fill the line bidi data
+ 				UpdateBidiData(model, vs, ll.get());
+ 
+ 				const ScreenLine screenLine(ll.get(), subLine, vs, rcClient.right, tabWidthMinimumPixels);
+-				std::unique_ptr<IScreenLineLayout> slLayout = surface->Layout(&screenLine);
++				auto slLayout = screenLine.Layout(surface);
+ 				positionInLine = slLayout->PositionFromX(pt.x, charPosition) +
+ 					rangeSubLine.start;
+ 			} else {
+@@ -766,7 +751,7 @@
+ 				const XYPOSITION spaceWidth = vs.styles[ll->EndLineStyle()].spaceWidth;
+ 				const int spaceOffset = static_cast<int>(
+ 					(pt.x + subLineStart - ll->GetPosition(rangeSubLine.end) + (spaceWidth / 2)) / spaceWidth);
+-				return SelectionPosition(rangeSubLine.end + posLineStart, spaceOffset);
++				return SelectionPosition(rangeSubLine.end + posLineStart, std::max(0,spaceOffset));
+ 			}
+ 			if (canReturnInvalid) {
+ 				if (pt.x < (ll->GetPosition(rangeSubLine.end) - subLineStart)) {
+@@ -794,7 +779,14 @@
+ 		LayoutLine(model, surface, vs, ll.get(), model.wrapWidth);
+ 		const Range rangeSubLine = ll->SubLineRange(0, LineLayout::Scope::visibleOnly);
+ 		const XYPOSITION subLineStart = ll->GetPosition(rangeSubLine.start);
+-		const Sci::Position positionInLine = ll->FindPositionFromX(x + subLineStart, rangeSubLine, false);
++		Sci::Position positionInLine;
++		if (ll->bidiText) {
++			UpdateBidiData(model,vs,ll.get());
++			const ScreenLine screen(ll.get(),0,vs,ll->GetPosition(rangeSubLine.end),tabWidthMinimumPixels);
++			positionInLine = screen.Layout(surface)->PositionFromX(x,false);
++		} else {
++			positionInLine = ll->FindPositionFromX(x + subLineStart, rangeSubLine, false);
++		}
+ 		if (positionInLine < rangeSubLine.end) {
+ 			return SelectionPosition(model.pdoc->MovePositionOutsideChar(positionInLine + posLineStart, 1));
+ 		}
+@@ -1535,13 +1527,13 @@
+ 		const XYPOSITION virtualOffset = posCaret.VirtualSpaceWidth(spaceWidth);
+ 		if (ll->InLine(offset, subLine) && offset <= ll->numCharsBeforeEOL) {
+ 			XYPOSITION xposCaret = ll->GetWidth(offset, ll->LineStart(subLine)) + virtualOffset;
+-			if (model.BidirectionalEnabled() && (posCaret.VirtualSpace() == 0)) {
++			if (ll->bidiText && (posCaret.VirtualSpace() == 0)) {
+ 				// Get caret point
+ 				const ScreenLine screenLine(ll, subLine, vsDraw, rcLine.right, tabWidthMinimumPixels);
+ 
+ 				const int caretPosition = offset - ll->LineStart(subLine);
+ 
+-				std::unique_ptr<IScreenLineLayout> slLayout = surface->Layout(&screenLine);
++				auto slLayout = screenLine.Layout(surface);
+ 				const XYPOSITION caretLeft = slLayout->XFromPosition(caretPosition);
+ 
+ 				// In case of start of line, the cursor should be at the right
+@@ -1670,7 +1662,7 @@
+ 	return (caretAtStart || caretAtEnd) ? InSelection::inNone : InSelection::inMain;
+ }
+ 
+-void DrawBackground(Surface *surface, const EditModel &model, const ViewStyle &vsDraw, const LineLayout *ll,
++void DrawBackground(Surface *surface, IScreenLineLayout *visual, const EditModel &model, const ViewStyle &vsDraw, const LineLayout *ll,
+ 	int xStart, PRectangle rcLine, int subLine, ForwardRange lineRange, Sci::Position posLineStart,
+ 	ColourOptional background) {
+ 
+@@ -1682,7 +1674,12 @@
+ 	const XYPOSITION xStartVisible = subLineStart - xStart;
+ 
+ 	const BreakFinder::BreakFor breakFor = selBackDrawn ? BreakFinder::BreakFor::Selection : BreakFinder::BreakFor::Text;
+-	BreakFinder bfBack(ll, &model.sel, lineRange, posLineStart, xStartVisible, breakFor, model.pdoc, model.reprs.get(), &vsDraw);
++	ForwardRange visibleRange = lineRange;
++	if (visual) {
++		const auto [first,last] = visual->VisibleBytes(rcLine.left-xStart,rcLine.right-xStart,lineRange.Last()-lineRange.First());
++		visibleRange = ForwardRange(lineRange.First()+first,lineRange.First()+last);
++	}
++	BreakFinder bfBack(ll, &model.sel, visibleRange, posLineStart, visual ? 0 : xStartVisible, breakFor, model.pdoc, model.reprs.get(), &vsDraw);
+ 
+ 	const bool drawWhitespaceBackground = vsDraw.WhitespaceBackgroundDrawn() && !background;
+ 
+@@ -1693,7 +1690,7 @@
+ 		const Sci::Position i = ts.end() - 1;
+ 		const Sci::Position iDoc = i + posLineStart;
+ 
+-		const Interval horizontal = ll->Span(ts.start, ts.end()).Offset(horizontalOffset);
++		const auto paint = [&](Interval horizontal) {
+ 		// Only try to draw if really visible - enhances performance by not calling environment to
+ 		// draw strings that are completely past the right side of the window.
+ 		if (!horizontal.Empty() && rcLine.Intersects(horizontal)) {
+@@ -1740,8 +1737,17 @@
+ 					}
+ 				}
+ 			}
+-		} else if (horizontal.left > rcLine.right) {
+-			break;
++		}
++		};
++		if (visual) {
++			const auto intervals = visual->FindRangeIntervals(ts.start - lineRange.First(), ts.end() - lineRange.First());
++			for (const Interval bounds : intervals)
++				paint(bounds.Offset(xStart));
++		} else {
++			const Interval bounds = ll->Span(ts.start, ts.end()).Offset(horizontalOffset);
++			if (bounds.left > rcLine.right)
++				break;
++			paint(bounds);
+ 		}
+ 	}
+ }
+@@ -1808,11 +1814,11 @@
+ 				const Interval intervalVirtual{
+ 					portion.start.VirtualSpaceWidth(spaceWidth),
+ 					portion.end.VirtualSpaceWidth(spaceWidth) };
+-				if (model.BidirectionalEnabled()) {
++				if (ll->bidiText) {
+ 					const SelectionSegment portionInSubLine = portionInLine.Subtract(lineRange.First());
+ 
+ 					const ScreenLine screenLine(ll, subLine, vsDraw, rcLine.right, tabWidthMinimumPixels);
+-					std::unique_ptr<IScreenLineLayout> slLayout = surface->Layout(&screenLine);
++					auto slLayout = screenLine.Layout(surface);
+ 
+ 					if (slLayout) {
+ 						const std::vector<Interval> intervals = slLayout->FindRangeIntervals(
+@@ -1965,7 +1971,7 @@
+ 		ScreenLine screenLine(ll, subLine, vsDraw, rcLine.right - xStart, tabWidthMinimumPixels);
+ 		const ForwardRange lineRange = ForwardRange(ll->SubLineRange(subLine, LineLayout::Scope::visibleOnly));
+ 
+-		std::unique_ptr<IScreenLineLayout> slLayout = surface->Layout(&screenLine);
++		auto slLayout = screenLine.Layout(surface);
+ 		std::vector<Interval> intervals = slLayout->FindRangeIntervals(
+ 			startPos - lineRange.First(), endPos - lineRange.First());
+ 		for (const Interval &interval : intervals) {
+@@ -2013,7 +2019,7 @@
+ 					const Sci::Position posSecond = model.pdoc->MovePositionOutsideChar(rangeRun.First() + 1, 1);
+ 					DrawIndicator(deco->Indicator(), startPos - posLineStart, endPos - posLineStart,
+ 						surface, vsDraw, ll, xStart, rcLine, posSecond - posLineStart, subLine, state,
+-						value, model.BidirectionalEnabled(), tabWidthMinimumPixels);
++						value, ll->bidiText, tabWidthMinimumPixels);
+ 				}
+ 				startPos = endPos;
+ 			}
+@@ -2033,7 +2039,7 @@
+ 						const Sci::Position braceEnd = model.pdoc->MovePositionOutsideChar(model.braces[brace] + 1, 1) - posLineStart;
+ 						DrawIndicator(braceIndicator, braceOffset, braceEnd,
+ 							surface, vsDraw, ll, xStart, rcLine, braceEnd, subLine, Indicator::State::normal,
+-							1, model.BidirectionalEnabled(), tabWidthMinimumPixels);
++							1, ll->bidiText, tabWidthMinimumPixels);
+ 					}
+ 				}
+ 			}
+@@ -2055,7 +2061,7 @@
+ 					const Sci::Position posSecond = model.pdoc->MovePositionOutsideChar(rangeRun.First() + 1, 1);
+ 					DrawIndicator(indicator, startPos - posLineStart, endPos - posLineStart,
+ 						surface, vsDraw, ll, xStart, rcLine, posSecond - posLineStart, subLine, Indicator::State::normal,
+-						1, model.BidirectionalEnabled(), tabWidthMinimumPixels);
++						1, ll->bidiText, tabWidthMinimumPixels);
+ 				}
+ 				startPos = endPos;
+ 			}
+@@ -2071,7 +2077,7 @@
+ 						const int indicator = (edition * 2) + indexHistory + 1;
+ 						DrawIndicator(indicator, startPos - posLineStart, posSecond - posLineStart,
+ 							surface, vsDraw, ll, xStart, rcLine, posSecond - posLineStart, subLine, Indicator::State::normal,
+-							1, model.BidirectionalEnabled(), tabWidthMinimumPixels);
++							1, ll->bidiText, tabWidthMinimumPixels);
+ 					}
+ 				}
+ 				startPos = model.pdoc->EditionNextDelete(startPos);
+@@ -2135,7 +2141,7 @@
+ 		highlight ? *pixmapIndentGuideHighlight : *pixmapIndentGuide);
+ }
+ 
+-void EditView::DrawForeground(Surface *surface, const EditModel &model, const ViewStyle &vsDraw, const LineLayout *ll,
++void EditView::DrawForeground(Surface *surface, IScreenLineLayout *visual, const EditModel &model, const ViewStyle &vsDraw, const LineLayout *ll,
+ 	int xStart, PRectangle rcLine, int subLine, Sci::Line lineVisible, ForwardRange lineRange, Sci::Position posLineStart,
+ 	ColourOptional background) {
+ 
+@@ -2159,7 +2165,12 @@
+ 	// Foreground drawing loop
+ 	const BreakFinder::BreakFor breakFor = (((phasesDraw == PhasesDraw::One) && selBackDrawn) || vsDraw.SelectionTextDrawn())
+ 		? BreakFinder::BreakFor::ForegroundAndSelection : BreakFinder::BreakFor::Foreground;
+-	BreakFinder bfFore(ll, &model.sel, lineRange, posLineStart, xStartVisible, breakFor, model.pdoc, model.reprs.get(), &vsDraw);
++	ForwardRange visibleRange = lineRange;
++	if (visual) {
++		const auto [first,last] = visual->VisibleBytes(rcLine.left-xStart,rcLine.right-xStart,lineRange.Last()-lineRange.First());
++		visibleRange = ForwardRange(lineRange.First()+first,lineRange.First()+last);
++	}
++	BreakFinder bfFore(ll, &model.sel, visibleRange, posLineStart, visual ? 0 : xStartVisible, breakFor, model.pdoc, model.reprs.get(), &vsDraw);
+ 
+ 	while (bfFore.More()) {
+ 
+@@ -2167,7 +2178,7 @@
+ 		const Sci::Position i = ts.end() - 1;
+ 		const Sci::Position iDoc = i + posLineStart;
+ 
+-		const Interval horizontal = ll->Span(ts.start, ts.end()).Offset(horizontalOffset);
++		const auto paint = [&](Interval horizontal) {
+ 		// Only try to draw if really visible - enhances performance by not calling environment to
+ 		// draw strings that are completely past the right side of the window.
+ 		if (rcLine.Intersects(horizontal)) {
+@@ -2275,7 +2286,9 @@
+ 				// Normal text display
+ 				if (vsDraw.styles[styleMain].visible) {
+ 					const std::string_view text(&ll->chars[ts.start], i - ts.start + 1);
+-					if (phasesDraw != PhasesDraw::One) {
++					if (visual && visual->DrawRange(surface, Intersection(rcLine,horizontal), xStart, ybase, textFore, ts.start-lineRange.First(),ts.end()-lineRange.First())) {
++						// The full line is shaped before clipping to the current colour.
++					} else if (phasesDraw != PhasesDraw::One) {
+ 						surface->DrawTextTransparent(rcSegment, textFont,
+ 							ybase, text, textFore);
+ 					} else {
+@@ -2341,8 +2354,17 @@
+ 				}
+ 				surface->FillRectangleAligned(rcUL, colourUnderline);
+ 			}
+-		} else if (horizontal.left > rcLine.right) {
+-			break;
++		}
++		};
++		if (visual) {
++			const auto intervals = visual->FindRangeIntervals(ts.start - lineRange.First(), ts.end() - lineRange.First());
++			for (const Interval bounds : intervals)
++				paint(bounds.Offset(xStart));
++		} else {
++			const Interval bounds = ll->Span(ts.start, ts.end()).Offset(horizontalOffset);
++			if (bounds.left > rcLine.right)
++				break;
++			paint(bounds);
+ 		}
+ 	}
+ }
+@@ -2434,9 +2456,14 @@
+ 	}
+ 	const int xStart = xOrigin + ((subLine > 0) ? static_cast<int>(ll->wrapIndent) : 0);
+ 
++	std::unique_ptr<IScreenLineLayout> visual;
++	if (ll->bidiText && ll->bidiData) {
++		const ScreenLine screenLine(ll, subLine, vsDraw, rcLine.right, tabWidthMinimumPixels);
++		visual = screenLine.Layout(surface);
++	}
+ 	if (phasesDraw != PhasesDraw::One) {
+ 		if (FlagSet(phase, DrawPhase::back)) {
+-			DrawBackground(surface, model, vsDraw, ll,
++			DrawBackground(surface, visual.get(), model, vsDraw, ll,
+ 				xStart, rcLine, subLine, lineRange, posLineStart,
+ 				background);
+ 			DrawFoldDisplayText(surface, model, vsDraw, ll, line, xStart, rcLine, subLine, subLineStart, DrawPhase::back);
+@@ -2463,7 +2490,7 @@
+ 				line, xStart, rcLine, subLine, lineRange, tabWidthMinimumPixels, Layer::UnderText);
+ 		}
+ 		DrawTranslucentLineState(surface, model, vsDraw, ll, line, rcLine, subLine, Layer::UnderText);
+-		DrawForeground(surface, model, vsDraw, ll,
++		DrawForeground(surface, visual.get(), model, vsDraw, ll,
+ 			xStart, rcLine, subLine, lineVisible, lineRange, posLineStart,
+ 			background);
+ 	}
+@@ -2582,7 +2609,7 @@
+ 					ll = RetrieveLineLayout(lineDoc, model);
+ 					LayoutLine(model, surface, vsDraw, ll.get(), model.wrapWidth);
+ 					lineDocPrevious = lineDoc;
+-					if (ll && model.BidirectionalEnabled()) {
++					if (ll && ll->bidiText) {
+ 						// Fill the line bidi data
+ 						UpdateBidiData(model, vsDraw, ll.get());
+ 					}
+--- a/src/EditView.h
++++ b/src/EditView.h
+@@ -151,7 +151,7 @@
+ 	void DrawCarets(Surface *surface, const EditModel &model, const ViewStyle &vsDraw, const LineLayout *ll,
+ 		Sci::Line lineDoc, int xOrigin, PRectangle rcLine, int subLine) const;
+ 	void DrawIndentGuide(Surface *surface, XYPOSITION start, PRectangle rcSegment, bool highlight, bool offset) const;
+-	void DrawForeground(Surface *surface, const EditModel &model, const ViewStyle &vsDraw, const LineLayout *ll,
++	void DrawForeground(Surface *surface, IScreenLineLayout *visual, const EditModel &model, const ViewStyle &vsDraw, const LineLayout *ll,
+ 		int xStart, PRectangle rcLine, int subLine, Sci::Line lineVisible, ForwardRange lineRange, Sci::Position posLineStart,
+ 		ColourOptional background);
+ 	void DrawIndentGuidesOverEmpty(Surface *surface, const EditModel &model, const ViewStyle &vsDraw, const LineLayout *ll,
+--- a/src/Platform.h
++++ b/src/Platform.h
+@@ -152,6 +152,7 @@
+ public:
+ 	virtual std::string_view Text() const = 0;
+ 	virtual size_t Length() const = 0;
++	virtual bool BaseRightToLeft() const { return false; }
+ 	virtual size_t RepresentationCount() const = 0;
+ 	virtual XYPOSITION Width() const = 0;
+ 	virtual XYPOSITION Height() const = 0;
+@@ -162,9 +163,13 @@
+ 	virtual XYPOSITION TabPositionAfter(XYPOSITION xPosition) const = 0;
+ };
+ 
++class Surface;
++
+ class IScreenLineLayout {
+ public:
+ 	virtual ~IScreenLineLayout() noexcept = default;
++	virtual std::pair<size_t,size_t> VisibleBytes(XYPOSITION, XYPOSITION, size_t length) const { return {0,length}; }
++	virtual bool DrawRange(Surface *, PRectangle, XYPOSITION, XYPOSITION, ColourRGBA, size_t, size_t) { return false; }
+ 	virtual size_t PositionFromX(XYPOSITION xDistance, bool charPosition) = 0;
+ 	virtual XYPOSITION XFromPosition(size_t caretPosition) = 0;
+ 	virtual std::vector<Interval> FindRangeIntervals(size_t start, size_t end) = 0;
+@@ -231,6 +236,9 @@
+ 	virtual void Stadium(PRectangle rc, FillStroke fillStroke, Ends ends)=0;
+ 	virtual void Copy(PRectangle rc, Point from, Surface &surfaceSource)=0;
+ 
++	virtual bool BidiBaseRightToLeft(std::string_view) const { return false; }
++	virtual size_t BidiSubdivision(std::string_view, size_t offset, bool) const { return offset; }
++	virtual bool NeedsBidiLayout(std::string_view) const { return true; }
+ 	virtual std::unique_ptr<IScreenLineLayout> Layout(const IScreenLine *screenLine) = 0;
+ 
+ 	virtual void DrawTextNoClip(PRectangle rc, const Font *font_, XYPOSITION ybase, std::string_view text, ColourRGBA fore, ColourRGBA back) = 0;
+--- a/src/PositionCache.cxx
++++ b/src/PositionCache.cxx
+@@ -59,11 +59,6 @@
+ using namespace Scintilla;
+ using namespace Scintilla::Internal;
+ 
+-void BidiData::Resize(size_t maxLineLength_) {
+-	stylesFonts.resize(maxLineLength_ + 1);
+-	widthReprs.resize(maxLineLength_ + 1);
+-}
+-
+ void XPositions::SetSize(size_t size) {
+ 	positions = std::make_unique<XWidth[]>(size);
+ }
+@@ -150,7 +145,6 @@
+ void LineLayout::EnsureBidiData() {
+ 	if (!bidiData) {
+ 		bidiData = std::make_unique<BidiData>();
+-		bidiData->Resize(maxLineLength);
+ 	}
+ }
+ 
+@@ -450,7 +444,7 @@
+ 	const ViewStyle &vs,
+ 	XYPOSITION width_,
+ 	int tabWidthMinimumPixels_) :
+-	ll(ll_),
++	ll(ll_), style(vs),
+ 	start(ll->LineStart(subLine)),
+ 	len(ll->LineLength(subLine)),
+ 	width(width_),
+@@ -470,10 +464,149 @@
+ 	return len;
+ }
+ 
++ScreenLine::ScreenLine(const ScreenLine &parent, size_t offset, size_t length) :
++	ll(parent.ll), style(parent.style), start(parent.start+offset), len(length), width(parent.width),
++	height(parent.height), ctrlCharPadding(parent.ctrlCharPadding), tabWidth(parent.tabWidth),
++	tabWidthMinimumPixels(parent.tabWidthMinimumPixels) {
++}
++
++namespace {
++
++class VisualLine final : public IScreenLineLayout {
++	const ScreenLine line;
++	Surface *const surface;
++	static constexpr size_t tileBytes = 4096;
++	static constexpr size_t wholeLineBytes = 16384;
++	const size_t count;
++
++	size_t Boundary(size_t i) const {
++		if (!i) return 0;
++		if (i==count) return line.len;
++		auto &cut = line.ll->bidiData->cuts[i % std::size(line.ll->bidiData->cuts)];
++		const size_t nominal = i*tileBytes;
++		if (cut.start != line.start || cut.length != line.len || cut.nominal != nominal)
++			cut = {line.start,line.len,nominal,surface->BidiSubdivision(line.Text(),nominal,line.BaseRightToLeft())};
++		return cut.offset;
++	}
++
++	size_t TileAt(size_t byte) const {
++		size_t i = count==1 ? 0 : std::min(count-1,byte/tileBytes);
++		if (i && byte<Boundary(i)) --i;
++		else if (i+1<count && byte>=Boundary(i+1)) ++i;
++		return i;
++	}
++
++	XYPOSITION Origin(size_t pos) const {
++		return line.ll->GetWidth(line.start+pos,line.start);
++	}
++
++	Interval TileSpan(size_t begin, size_t finish) const {
++		if (line.BaseRightToLeft() && count>1) {
++			const auto width=Origin(line.len);
++			return {width-Origin(finish),width-Origin(begin)};
++		}
++		return {Origin(begin),Origin(finish)};
++	}
++
++	size_t TileAtX(XYPOSITION x) const {
++		if (count==1) return 0;
++		if (line.BaseRightToLeft()) x = Origin(line.len)-x;
++		const Range bounds(line.start,line.start+line.len);
++		const Sci::Position pos = line.ll->FindPositionFromX(x+line.ll->GetPosition(line.start),bounds,true);
++		return TileAt(pos-line.start);
++	}
++
++	ScreenLine Tile(size_t i) const {
++		const size_t begin = Boundary(i);
++		return ScreenLine(line,begin,Boundary(i+1)-begin);
++	}
++
++public:
++	VisualLine(const ScreenLine &source, Surface *surface_) :
++		line(source,0,source.len), surface(surface_),
++		count(source.len<=wholeLineBytes ? 1 : (source.len+tileBytes-1)/tileBytes) {
++	}
++
++	std::pair<size_t,size_t> VisibleBytes(XYPOSITION left, XYPOSITION right, size_t) const override {
++		const size_t first = TileAtX(left), last = TileAtX(right);
++		return {Boundary(std::min(first,last)),Boundary(std::max(first,last)+1)};
++	}
++
++	size_t PositionFromX(XYPOSITION x, bool character) override {
++		const auto tile = Tile(TileAtX(x));
++		const size_t start = tile.start-line.start;
++		return start + tile.Shape(surface)->PositionFromX(x-TileSpan(start,start+tile.len).left,character);
++	}
++
++	XYPOSITION XFromPosition(size_t byte) override {
++		const auto tile = Tile(TileAt(byte));
++		const size_t start = tile.start-line.start;
++		return TileSpan(start,start+tile.len).left + tile.Shape(surface)->XFromPosition(byte-start);
++	}
++
++	std::vector<Interval> FindRangeIntervals(size_t start, size_t end) override {
++		if (start>=end) return {};
++		const size_t first = TileAt(start), last = TileAt(end-1);
++		std::vector<Interval> spans;
++		auto append = [&](size_t i) {
++			const auto tile = Tile(i);
++			const size_t begin = tile.start-line.start, finish = begin+tile.len;
++			if (count>1 && start<=begin && finish<=end) {
++				spans.push_back(TileSpan(begin,finish));
++			} else {
++				for (Interval part : tile.Shape(surface)->FindRangeIntervals(
++					std::max(start,begin)-begin, std::min(end,finish)-begin))
++					spans.push_back(part.Offset(TileSpan(begin,finish).left));
++			}
++		};
++		append(first);
++		if (first+1<last)
++			spans.push_back(TileSpan(Boundary(first+1),Boundary(last)));
++		if (first!=last) append(last);
++		std::sort(spans.begin(),spans.end(),[](Interval a,Interval b){ return a.left<b.left; });
++		return spans;
++	}
++
++	bool DrawRange(Surface *drawing, PRectangle clip, XYPOSITION x, XYPOSITION y, ColourRGBA colour,
++		size_t start, size_t end) override {
++		if (start>=end || clip.Empty()) return true;
++		const size_t left = TileAtX(clip.left-x), right = TileAtX(clip.right-x);
++		const size_t first = std::max(TileAt(start),std::min(left,right));
++		const size_t last = std::min(TileAt(end-1),std::max(left,right));
++		for (size_t i=first; i<=last; ++i) {
++			const auto tile = Tile(i);
++			const size_t begin = tile.start-line.start;
++			if (!tile.Shape(surface)->DrawRange(drawing,clip,x+TileSpan(begin,begin+tile.len).left,y,colour,
++				std::max(start,begin)-begin,std::min(end,begin+tile.len)-begin))
++				return false;
++		}
++		return true;
++	}
++};
++
++}
++
++std::unique_ptr<IScreenLineLayout> ScreenLine::Layout(Surface *surface) const {
++	return std::make_unique<VisualLine>(*this,surface);
++}
++
++IScreenLineLayout *ScreenLine::Shape(Surface *surface) const {
++	auto &data = *ll->bidiData;
++	for (const auto &cached : data.recent)
++		if (cached.layout && cached.start == start && cached.length == len)
++			return cached.layout.get();
++	auto &slot = data.recent[data.next++ % std::size(data.recent)];
++	slot = {start,len,surface->Layout(this)};
++	return slot.layout.get();
++}
++
+ size_t ScreenLine::RepresentationCount() const {
+-	return std::count_if(&ll->bidiData->widthReprs[start],
+-		&ll->bidiData->widthReprs[start + len],
+-		[](XYPOSITION w) noexcept { return w > 0.0f; });
++	size_t count = 0;
++	for (size_t pos = 0; pos < len;) {
++		if (RepresentationWidth(pos)) ++count;
++		pos += UTF8DrawBytes(ll->chars.get()+start+pos, len-pos);
++	}
++	return count;
+ }
+ 
+ XYPOSITION ScreenLine::Width() const {
+@@ -493,11 +626,14 @@
+ }
+ 
+ const Font *ScreenLine::FontOfPosition(size_t position) const {
+-	return ll->bidiData->stylesFonts[start + position].get();
++	return style.styles[ll->styles[start + position]].font.get();
+ }
+ 
+ XYPOSITION ScreenLine::RepresentationWidth(size_t position) const {
+-	return ll->bidiData->widthReprs[start + position];
++	const auto offset = start+position;
++	const auto bytes = UTF8DrawBytes(ll->chars.get()+offset,len-position);
++	return ll->chars[offset]=='\t' || ll->bidiData->representations->RepresentationFromCharacter(
++		std::string_view(ll->chars.get()+offset,bytes)) ? ll->GetWidth(offset+bytes,offset) : 0;
+ }
+ 
+ XYPOSITION ScreenLine::TabPositionAfter(XYPOSITION xPosition) const {
+--- a/src/PositionCache.h
++++ b/src/PositionCache.h
+@@ -37,11 +37,23 @@
+ 	endEither = lineEnd | subLineEnd,
+ };
+ 
++class SpecialRepresentations;
++
+ class BidiData {
+ public:
+-	std::vector<std::shared_ptr<Font>> stylesFonts;
+-	std::vector<XYPOSITION> widthReprs;
+-	void Resize(size_t maxLineLength_);
++	const SpecialRepresentations *representations = nullptr;
++	struct Shape {
++		size_t start = 0, length = 0;
++		std::unique_ptr<IScreenLineLayout> layout;
++	};
++	// Wrapping one enormous paragraph must not retain an unbounded number
++	// of subline shapes as the user scrolls through it.
++	Shape recent[8];
++	struct Cut {
++		size_t start = 0, length = 0, nominal = 0, offset = 0;
++	};
++	Cut cuts[16];
++	size_t next = 0;
+ };
+ 
+ using XWidth = float;
+@@ -101,6 +113,8 @@
+ 	std::unique_ptr<char[]> chars;
+ 	std::unique_ptr<unsigned char[]> styles;
+ 
++	bool bidiText = false;
++	bool rtlParagraph = false;
+ 	std::unique_ptr<BidiData> bidiData;
+ 
+ 	// Wrapped line support
+@@ -139,6 +153,10 @@
+ 
+ struct ScreenLine : public IScreenLine {
+ 	const LineLayout *ll;
++	const ViewStyle &style;
++	std::unique_ptr<IScreenLineLayout> Layout(Surface *surface) const;
++	IScreenLineLayout *Shape(Surface *surface) const;
++	ScreenLine(const ScreenLine &parent, size_t offset, size_t length);
+ 	size_t start;
+ 	size_t len;
+ 	XYPOSITION width;
+@@ -156,6 +174,7 @@
+ 	virtual ~ScreenLine();
+ 
+ 	std::string_view Text() const override;
++	bool BaseRightToLeft() const override { return ll->rtlParagraph; }
+ 	size_t Length() const override;
+ 	size_t RepresentationCount() const override;
+ 	XYPOSITION Width() const override;
