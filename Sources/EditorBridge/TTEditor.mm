@@ -1364,6 +1364,12 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
 }
 - (void)scrollCaretIntoView { [self assertThread]; [_engine message:SCI_SCROLLCARET]; }
 - (NSInteger)firstVisibleLine { [self assertThread]; return [_engine message:SCI_GETFIRSTVISIBLELINE]; }
+- (NSInteger)horizontalScrollOffset { [self assertThread]; return [_engine message:SCI_GETXOFFSET]; }
+- (void)setHorizontalScrollOffset:(NSInteger)offset {
+    [self assertThread];
+    const NSInteger width = self.wrap ? 0 : [_engine message:SCI_GETSCROLLWIDTH];
+    [_engine message:SCI_SETXOFFSET wParam:(uptr_t)MAX(0, MIN(width, offset))];
+}
 - (void)restoreClosedTabViewWithAnchor:(NSInteger)anchor caret:(NSInteger)caret firstVisibleLine:(NSInteger)line {
     [self assertThread];
     const NSInteger length=[_engine message:SCI_GETLENGTH];

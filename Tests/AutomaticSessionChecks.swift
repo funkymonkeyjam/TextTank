@@ -28,7 +28,7 @@ import EditorBridge
         var docs = [TextDocument](), urls = [URL](), expectedBytes = [Data]()
         for i in 0..<8 {
             let url = root.appendingPathComponent("original-\(i).txt")
-            let text = "original content SALMON-\(i)\n" + String(repeating: "second line\n", count: 400)
+            let text = "original content SALMON-\(i) 🦊\n" + String(repeating: "second line\n", count: 400)
             let bytes = i == 5 ? try required(text.data(using: .utf16LittleEndian)) : Data(text.utf8)
             try bytes.write(to: url)
             let read = try WorkspaceStore.captureRegularFile(url)
@@ -51,6 +51,24 @@ import EditorBridge
         check(
             host.restoreSessionLayout(layout, documents: Dictionary(uniqueKeysWithValues: zip(ids, docs))),
             "two-column setup")
+        // A v1 tab without optional split metadata still opens as a single pane.
+        check(host.presentations.allSatisfy { $0.secondary == nil }, "legacy v1 tabs restore one pane each")
+        let backgroundSplit = try required(docs[3].presentation)
+        let foregroundSplit = try required(docs[6].presentation)
+        for presentation in [backgroundSplit, foregroundSplit] {
+            presentation.clone(nil)
+            let clone = try required(presentation.secondary)
+            presentation.split.setPosition(presentation.split.bounds.width * 0.63, ofDividerAt: 0)
+            presentation.primaryEditor.restoreClosedTabView(anchor: 43, caret: 32, firstVisibleLine: 3)
+            clone.restoreClosedTabView(anchor: 83, caret: 74, firstVisibleLine: 8)
+            presentation.primaryEditor.horizontalScrollOffset = 17
+            clone.horizontalScrollOffset = 41
+            if presentation === backgroundSplit { host.window?.makeFirstResponder(presentation.primaryEditor) }
+        }
+        // Return to the original group-active tabs without changing their last-focused panes.
+        host.activate(try required(docs[1].presentation))
+        host.activate(foregroundSplit)
+        check(foregroundSplit.activeEditor === foregroundSplit.secondary, "setup focuses the clone in the active tab")
         let expected = host.captureSessionLayout()
         first.checkpointSession()
         let stop = Date().addingTimeInterval(5)
@@ -100,6 +118,13 @@ import EditorBridge
             review: { originals in
                 savedDocs = originals
                 beforeRecover = second.workspaceWindow.captureSessionLayout()
+                let active = second.workspaceWindow.active
+                let responder = second.workspaceWindow.window?.firstResponder as? NSView
+                let ownsFocus = active?.secondary.map { responder?.isDescendant(of: $0) == true } ?? false
+                check(
+                    active?.document === originals[urls[6]] && ownsFocus && active?.activeEditor === active?.secondary,
+                    "restoration focuses the saved secondary Scintilla pane before recovery review")
+
                 let snap = RecoverySnapshot(
                     id: UUID(), text: "RECOVER-ONLY-AVOCADO", format: FileFormat(),
                     originalURL: urls[6].absoluteString, revision: 14)
@@ -162,9 +187,70 @@ import EditorBridge
             recoveries.contains { $0.id == draft?.recoveryID && $0.originalURL == urls[6].absoluteString },
             "a second interrupted recovery retains its informational original path")
         draft?.close()
+        let shown = try required(u6.presentation)
+        let hidden = try required(savedDocs[urls[3]]?.presentation)
+        let hiddenClone = try required(hidden.secondary)
+        let shownClone = try required(shown.secondary)
+        check(
+            hidden.activeEditor === hidden.primaryEditor && shown.activeEditor === shownClone
+                && shown.primaryEditor.selectionAnchor == 43 && shown.primaryEditor.selectionCaret == 32
+                && shownClone.selectionAnchor == 83 && shownClone.selectionCaret == 74
+                && hiddenClone.selectionAnchor == 83 && hiddenClone.selectionCaret == 74,
+            "an inactive split tab and the active split retain each pane's directed byte range and focused side")
+        for (presentation, clone, name) in [
+            (shown, shownClone, "original-6.txt"), (hidden, hiddenClone, "original-3.txt")
+        ] {
+            second.workspaceWindow.activate(presentation)
+            let fraction =
+                presentation.primaryEditor.frame.width
+                / (presentation.split.bounds.width - presentation.split.dividerThickness)
+            let prior = try required(expectedByName[name]?.split)
+            check(
+                abs(fraction - prior.primaryFraction) < 0.02
+                    && presentation.primaryEditor.firstVisibleLine == 3 && clone.firstVisibleLine == 8
+                    && presentation.primaryEditor.horizontalScrollOffset == 17 && clone.horizontalScrollOffset == 41,
+                "mounted split restores its divider and both native viewports " + name)
+        }
+        // A local file may become shorter, or an old byte position may now lie inside a scalar.
+        let originalState = shown.sessionTab(documentID: DocumentID(u6.recoveryID), pinned: false)
+        var stale = originalState
+        let emojiByte = "original content SALMON-6 ".utf8.count
+        stale.caretByte = emojiByte + 2
+        stale.anchorByte = Int.max
+        stale.split?.otherCaretByte = Int.max
+        stale.split?.otherAnchorByte = emojiByte + 1
+        stale.split?.otherFirstVisibleLine = Int.max
+        stale.split?.otherHorizontalOffset = Int.max
+        shown.restoreSessionTab(stale)
+        let length = try required(u6.editor.checkedUTF8Data).count
+        check(
+            shownClone.selectionAnchor == length && shownClone.selectionCaret == emojiByte
+                && shown.primaryEditor.selectionAnchor == emojiByte && shown.primaryEditor.selectionCaret == length
+                && shown.primaryEditor.firstVisibleLine < 402 && shown.primaryEditor.horizontalScrollOffset < Int32.max,
+            "each restored range clamps to existing UTF-8 and both viewports fit the current document")
+        shown.restoreSessionTab(originalState)
+        var invalid = expected
+        invalid.groups[1].tabs[2].split?.primaryFraction = 1.2
+        rejects("invalid optional divider geometry still refuses an invalid session layout") { try invalid.validate() }
+        let prior = shown.primaryEditor.checkedUTF8Data
+        let edited = shownClone.replaceSelection("shared clone smoke")
+        check(
+            edited && shown.primaryEditor.text.contains("shared clone smoke"), "restored split edits one shared buffer")
+        shown.primaryEditor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        check(
+            shownClone.checkedUTF8Data == prior && u6.isDocumentEdited == false,
+            "Undo through the other restored pane returns to identical bytes and save point")
+        second.workspaceWindow.activate(shown)
+        shown.closeSplit(nil)
         check(
             second.applicationShouldTerminate(app) == .terminateNow && controller.documents.isEmpty,
             "ordinary clean quit commits before closing each document")
+        let afterUnsplit = try required(LastSessionLayout.read(metadata))
+        let remainingSplits = Set(
+            afterUnsplit.layout.groups.flatMap(\.tabs).filter { $0.split != nil }.map(\.documentID))
+        check(
+            remainingSplits == Set(afterUnsplit.files.filter { $0.url == urls[3] }.map(\.id)),
+            "the next accepted clean quit removes only the explicitly closed split")
         let saved = try Data(contentsOf: metadata)
         let third = delegate()
         let reused = try DocumentFactory.openCaptured(
