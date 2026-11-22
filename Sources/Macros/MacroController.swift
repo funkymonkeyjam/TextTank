@@ -20,6 +20,7 @@ import Darwin
             namePanel?.setActionEnabled("macro.save.confirm", recordingEditor == nil)
         }
     }
+    func isRecording(in editor: TTEditor) -> Bool { recordingEditor === editor }
     private var recorded: [RecordedMacro.Step] = []
     private var lastRecording: RecordedMacro?
     private var captureError: Error?

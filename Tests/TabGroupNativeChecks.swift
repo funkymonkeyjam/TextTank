@@ -154,7 +154,8 @@ import Darwin
         b.showFind(nil)
         surface.layoutSubtreeIfNeeded()
         b.presentationRoot.layoutSubtreeIfNeeded()
-        for control in [b.findField, b.replaceField, b.caseBox, b.findNextButton, b.replaceMatchButton] as [NSView] {
+        let inlineFind = try requireValue(b.findBar, "T3 mounted Find bar")
+        for control in inlineFind.subviews {
             let rect = b.presentationRoot.convert(control.bounds, from: control)
             check(
                 b.presentationRoot.bounds.insetBy(dx: -1, dy: -1).contains(rect) && !control.isHidden,

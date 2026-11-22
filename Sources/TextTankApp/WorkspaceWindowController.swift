@@ -166,6 +166,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             groupSurfaces[group.slot]?.refresh()
         }
         presentations.forEach { $0.visibilityChanged() }
+        active?.resumeVisibleFindPreview()
         window?.contentView?.layoutSubtreeIfNeeded()
     }
     private func refreshLayoutPicker() {

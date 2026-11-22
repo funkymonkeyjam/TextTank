@@ -90,7 +90,7 @@ static BOOL TTValidatedByteRange(id candidate, NSUInteger documentLength, NSRang
 
 static const int TTBookmarkMarker = 1;
 static const int TTBookmarkMask = 1 << TTBookmarkMarker;
-static const int TTSearchIndicator = 20;
+static const int TTSearchIndicator = 20, TTFindPreviewIndicator = 25;
 // The native brace overlays are per view. They never fill a shared document indicator range.
 static const int TTMatchedBraceIndicator = 23, TTUnmatchedBraceIndicator = 24;
 struct TTBracePair { sptr_t position, match; };
@@ -689,10 +689,12 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 // the light outline and strengthens the fill.
 - (void)applySearchIndicatorStyle {
     const BOOL dark = [self usesDarkPalette], highContrast = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
-    [_engine message:SCI_INDICSETSTYLE wParam:TTSearchIndicator lParam:INDIC_ROUNDBOX];
-    [_engine message:SCI_INDICSETFORE wParam:TTSearchIndicator lParam:dark ? 0x5BF4C7 : (highContrast ? 0x00402E : 0x006B4D)];
-    [_engine message:SCI_INDICSETALPHA wParam:TTSearchIndicator lParam:highContrast ? 110 : 70];
-    [_engine message:SCI_INDICSETOUTLINEALPHA wParam:TTSearchIndicator lParam:255];
+    for (int indicator : {TTSearchIndicator, TTFindPreviewIndicator}) {
+        [_engine message:SCI_INDICSETSTYLE wParam:indicator lParam:INDIC_ROUNDBOX];
+        [_engine message:SCI_INDICSETFORE wParam:indicator lParam:dark ? 0x5BF4C7 : (highContrast ? 0x00402E : 0x006B4D)];
+        [_engine message:SCI_INDICSETALPHA wParam:indicator lParam:highContrast ? 110 : 70];
+        [_engine message:SCI_INDICSETOUTLINEALPHA wParam:indicator lParam:255];
+    }
 }
 - (void)applyPalette {
     const BOOL dark = [self usesDarkPalette], highContrast = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
@@ -2010,6 +2012,28 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self assertThread];[_engine message:SCI_SETINDICATORCURRENT wParam:TTSearchIndicator];[_engine message:SCI_INDICATORCLEARRANGE wParam:0 lParam:[_engine message:SCI_GETLENGTH]];
 }
 - (BOOL)setSearchHighlights:(NSArray<TTByteRange *> *)ranges {
+    return [self setHighlightRanges:ranges indicator:TTSearchIndicator];
+}
+- (NSUInteger)findPreviewLineLengthAtByte:(NSUInteger)position {
+    [self assertThread];
+    const sptr_t line = [_engine message:SCI_LINEFROMPOSITION wParam:position];
+    return [_engine message:SCI_LINELENGTH wParam:line];
+}
+- (NSUInteger)findPreviewLongestVisibleLine {
+    [self assertThread];
+    const sptr_t first = [_engine message:SCI_GETFIRSTVISIBLELINE];
+    const sptr_t last = first + [_engine message:SCI_LINESONSCREEN];
+    NSUInteger longest = 0;
+    for (sptr_t display = first; display <= last; ++display) {
+        const sptr_t line = [_engine message:SCI_DOCLINEFROMVISIBLE wParam:display];
+        longest = MAX(longest, (NSUInteger)[_engine message:SCI_LINELENGTH wParam:line]);
+    }
+    return longest;
+}
+- (BOOL)setFindPreviewHighlights:(NSArray<TTByteRange *> *)ranges {
+    return [self setHighlightRanges:ranges indicator:TTFindPreviewIndicator];
+}
+- (BOOL)setHighlightRanges:(NSArray<TTByteRange *> *)ranges indicator:(int)indicator {
     [self assertThread];
     if (![ranges isKindOfClass:NSArray.class] || ranges.count>100000) return NO;
     const NSUInteger length=[_engine message:SCI_GETLENGTH];
@@ -2019,7 +2043,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         for (NSUInteger p : {range.location,NSMaxRange(range)})
             if(p<length && ([_engine message:SCI_GETCHARAT wParam:p]&0xC0)==0x80) return NO;
     }
-    [self clearSearchHighlights]; [self applySearchIndicatorStyle];
+    [_engine message:SCI_SETINDICATORCURRENT wParam:indicator];
+    [_engine message:SCI_INDICATORCLEARRANGE wParam:0 lParam:length];
+    if (indicator == TTSearchIndicator) [self applySearchIndicatorStyle];
     for (TTByteRange *range in ranges)
         [_engine message:SCI_INDICATORFILLRANGE wParam:range.location lParam:range.length];
     return YES;

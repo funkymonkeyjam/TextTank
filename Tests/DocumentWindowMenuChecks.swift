@@ -1233,8 +1233,10 @@ extension DocumentChecks {
                 $0 as? NSButton
             }
             let replaceMatchButton = try requireValue(
-                barButtons.first { $0.title == "Replace Selection" }, "fixture: Replace Selection button")
-            let nextMatchButton = try requireValue(barButtons.first { $0.title == "Next" }, "fixture: Next button")
+                barButtons.first { $0.title == "Replace" }, "fixture: Replace button")
+            let nextMatchButton = try requireValue(descendants(try requireValue(controller.findBar, "fixture: Find bar"))
+                .compactMap { $0 as? NSSegmentedControl }.first { $0.segmentCount == 2 && $0.label(forSegment: 1) == "Next" },
+                "fixture: Previous and Next segmented control")
             controller.controlTextDidChange(
                 Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
             check(
@@ -1367,6 +1369,39 @@ extension DocumentChecks {
                 "DS35 backwards field navigation retains the field editor")
             // A real bar action records shared search only after the asynchronous result applies.
             sessionDelegate.noteActive(controller)
+            // Passive typing may select a result. Escape restores the exact opening direction.
+            let priorQuery = controller.findField.stringValue
+            controller.showFind(nil)
+            let previousWord = controller.wordBox.state
+            controller.wordBox.performClick(nil)
+            check(sessionDelegate.searchController.wordButton.state == controller.wordBox.state
+                    && controller.wordBox.state != previousWord,
+                  "a whole-word change uses the same option in the bar and Find window")
+            controller.wordBox.performClick(nil)
+            let priorMode = sessionDelegate.searchController.mode.indexOfSelectedItem
+            if controller.regexBox.state != .on { controller.regexBox.performClick(nil) }
+            controller.findField.stringValue = "["
+            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            spinUntil("inline regex error") { !controller.findCount.stringValue.isEmpty }
+            check(controller.regexBox.state == .on && controller.findCount.stringValue != "No matches"
+                    && !controller.findCount.stringValue.contains(" of ") && NSApp.modalWindow == nil,
+                  "a malformed bar regex reports its error in the Find bar")
+            sessionDelegate.searchController.mode.selectItem(at: priorMode)
+            _ = NSApp.sendAction(sessionDelegate.searchController.mode.action!, to: sessionDelegate.searchController,
+                                 from: sessionDelegate.searchController.mode)
+            controller.hideFind(nil)
+            _ = document.editor.setSelectionAnchor(3, caret: 1)
+            controller.showFind(nil)
+            controller.findField.stringValue = "alpha"
+            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            spinUntil("inline count publication") { !controller.findCount.stringValue.isEmpty }
+            check(document.editor.selectedText.lowercased() == "alpha" && !controller.findCount.stringValue.isEmpty,
+                  "live Find publishes a native selection and its count")
+            controller.hideFind(nil)
+            check(document.editor.selectionAnchor == 3 && document.editor.selectionCaret == 1,
+                  "closing an uncommitted live Find restores the reversed opening selection")
+            controller.findField.stringValue = priorQuery
+            controller.showFind(nil)
             let beforeBarRecording = document.editor.text
             let recordingAnchor = document.editor.selectionAnchor, recordingCaret = document.editor.selectionCaret
             sessionDelegate.macros.startRecording()
@@ -1377,10 +1412,11 @@ extension DocumentChecks {
             spinUntil("recorded bar replacement to finish") { !controller.inlineSearchPending }
             let capturedBar = try sessionDelegate.macros.finishRecording()
             check(
-                capturedBar?.steps.map(\.kind) == [.search, .search]
-                    && capturedBar?.steps.compactMap(\.search).map(\.action) == ["next", "replaceOne"],
+                capturedBar?.steps.map(\.kind) == [.search, .search, .search]
+                    && capturedBar?.steps.compactMap(\.search).map(\.action) == ["next", "replaceOne", "next"],
                 "the actual bar captures search steps for navigation and strict replacement")
             let replayedText = document.editor.text
+            let replayedAnchor = document.editor.selectionAnchor, replayedCaret = document.editor.selectionCaret
             // Native control: the original literal primitive plus its first edit. Scintilla Undo
             // remembers the first edit's selection; the preceding pure navigation is not an edit.
             document.editor.text = beforeBarRecording
@@ -1422,13 +1458,31 @@ extension DocumentChecks {
             try sessionDelegate.macros.play(
                 try requireValue(capturedBar, "fixture: captured inline macro"), on: document.editor)
             check(
-                document.editor.text.utf8.elementsEqual(replayedText.utf8),
-                "captured bar search steps replay to the exact same document bytes")
+                document.editor.text.utf8.elementsEqual(replayedText.utf8)
+                    && document.editor.selectionAnchor == replayedAnchor && document.editor.selectionCaret == replayedCaret,
+                "captured bar search steps replay the exact document bytes and final selection")
             document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
                 document.editor.text == beforeBarRecording && document.editor.selectionAnchor == firstEditAnchor
                     && document.editor.selectionCaret == firstEditCaret,
                 "one Undo of the replay restores the same text and first-edit selection as the native control")
+            let allDocument = DocumentFactory.makeUntitled(display: false)
+            let allController = try requireValue(allDocument.presentation, "fixture: current-document Replace All")
+            _ = allDocument.editor.loadDocumentText("x x x")
+            allController.showFind(nil)
+            allController.findField.stringValue = "x"
+            allController.replaceField.stringValue = "yy"
+            allController.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: allController.findField))
+            allController.replaceAllButton.performClick(nil)
+            spinUntil("bar Replace All to finish") { !allController.inlineSearchPending }
+            check(allDocument.editor.text == "yy yy yy" && allController.statusText.contains("Replaced 3 matches")
+                    && document.editor.text == beforeBarRecording,
+                  "bar Replace All counts changed matches and leaves the other open document alone")
+            allDocument.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            check(allDocument.editor.text == "x x x", "one Undo restores every inline Replace All edit")
+            allDocument.close()
+            controller.host.activate(controller, focus: false)
+            sessionDelegate.noteActive(controller)
             // The previously accepted oversized query is explicitly refused by the bounded shared path.
             sessionDelegate.macros.startRecording()
             document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))

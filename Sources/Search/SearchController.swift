@@ -26,7 +26,7 @@ enum SearchOutcome: Equatable {
 /// What a replacement did to one document; nothing is changed unless it is `applied`.
 enum ReplaceOutcome: Equatable { case applied(Int), readOnly, multipleSelections, closed, stale }
 /// A bar request has its own cancellation token; it never replaces the Find window's held results.
-enum InlineSearchOutcome { case applied, noMatch, stale, cancelled, failed(Error) }
+enum InlineSearchOutcome { case applied, replacedAll(Int), noMatch, stale, cancelled, failed(Error) }
 /// Documents the last Replace or Replace All left untouched, by reason.
 struct ReplaceSkips: Equatable {
     var readOnly = 0, multipleSelections = 0, closed = 0, stale = 0
@@ -39,6 +39,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     var openEditors: () -> [TTEditor] = { [] }
     var onCommand: ((SearchOptions, String, TTEditor) -> Void)?
     var readFindText: () -> String? = { nil }
+    var sharedFlagsChanged: (() -> Void)?
     var writeFindText: (String) -> Void = { _ in }
     var onUnrecordableCommand: ((String) -> Void)?
     private enum Scope: Int, CaseIterable {
@@ -190,6 +191,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         wordButton.state = options.wholeWord ? .on : .off
         dotButton.state = options.dotMatchesNewline ? .on : .off
         wrapButton.state = options.wrap ? .on : .off
+        for control in [mode as NSControl, caseButton, wordButton, dotButton, wrapButton] {
+            control.target = self
+            control.action = #selector(advancedFlagsChanged(_:))
+        }
         let actions: [(String, Selector)] = [
             ("Previous", #selector(previous(_:))), ("Next", #selector(next(_:))),
             ("Find All / Count", #selector(findAll(_:))), ("Replace", #selector(replaceOne(_:))),
@@ -261,17 +266,33 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     }
     @objc func showSearch(_ sender: Any?) {
         if let shared = readFindText(), !shared.isEmpty { queryField.stringValue = shared }
+        showPanel(sender)
+    }
+    func showFromInline(query: String, replacement: String, sender: Any?) {
+        window?.makeFirstResponder(nil)
+        queryField.stringValue = query
+        replacementField.stringValue = replacement
+        showPanel(sender)
+    }
+    private func showPanel(_ sender: Any?) {
         showWindow(sender)
         window?.makeKeyAndOrderFront(sender)
         window?.makeFirstResponder(queryField)
     }
-    private func readOptions() -> SearchOptions {
-        // NSTextFields share the window field editor. Commit it before reading
-        // distinct controls, otherwise the focused replacement can become query.
-        window?.makeFirstResponder(nil)
-        var o = SearchOptions()
-        o.query = queryField.stringValue
-        o.replacement = replacementField.stringValue
+    @objc private func advancedFlagsChanged(_ sender: NSControl) { sharedFlagsChanged?() }
+    enum InlineFlag { case matchCase, wholeWord, regex }
+    func setInlineFlag(_ flag: InlineFlag, enabled: Bool) {
+        switch flag {
+        case .matchCase: caseButton.state = enabled ? .on : .off
+        case .wholeWord: wordButton.state = enabled ? .on : .off
+        case .regex:
+            let desired: SearchOptions.Mode = enabled ? .regularExpression : .normal
+            mode.selectItem(at: mode.indexOfItem(withRepresentedObject: String(desired.rawValue)))
+        }
+        sharedFlagsChanged?()
+    }
+    func sharedOptions(query: String, replacement: String) -> SearchOptions {
+        var o = SearchOptions(query: query, replacement: replacement)
         o.mode =
             ControlPresentation.selectedID(mode).flatMap(Int.init).flatMap(SearchOptions.Mode.init(rawValue:))
             ?? .normal
@@ -279,6 +300,12 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         o.wholeWord = wordButton.state == .on
         o.dotMatchesNewline = dotButton.state == .on
         o.wrap = wrapButton.state == .on
+        return o
+    }
+    private func readOptions() -> SearchOptions {
+        // Commit the shared field editor before reading distinct window fields.
+        window?.makeFirstResponder(nil)
+        let o = sharedOptions(query: queryField.stringValue, replacement: replacementField.stringValue)
         do {
             try preferences.save(FindPreferences(options: o))
             preferenceNotice.isHidden = true
@@ -306,6 +333,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             wordButton.state = options.wholeWord ? .on : .off
             dotButton.state = options.dotMatchesNewline ? .on : .off
             wrapButton.state = options.wrap ? .on : .off
+            sharedFlagsChanged?()
             preferenceNotice.isHidden = true
             status.stringValue = "Saved search settings were reset. Documents were not changed."
         } catch { showPreferenceFailure(error) }
@@ -823,7 +851,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 }
                 let matched = try self.applySingleReport(
                     report, text: text, revision: revision, options: options, action: action, in: editor)
-                completion(matched ? .applied : .noMatch)
+                if matched && action == "replaceAll" { completion(.replacedAll(report.hits.count)) }
+                else { completion(matched ? .applied : .noMatch) }
             } catch {
                 guard !cancellation.cancelled else {
                     completion(.cancelled)
@@ -908,6 +937,53 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     }
 
     private static func recordedSearchStopped(_ reason: String) -> SearchFailure { .macroStopped(reason) }
+    struct InlinePreview: Sendable {
+        let highlights: [NSRange]
+        let selected: NSRange?
+        let countText: String
+    }
+    /// Read-only. Range conversion and searching operate only on the immutable editor snapshot.
+    nonisolated static func preview(_ snapshot: Data, options: SearchOptions, openingCaret: Int,
+                                    cancellation: TTSearchCancellation) throws -> InlinePreview {
+        guard !cancellation.cancelled else { throw CancellationError() }
+        guard (0...snapshot.count).contains(openingCaret),
+              openingCaret == snapshot.count || snapshot[snapshot.startIndex + openingCaret] & 0xc0 != 0x80,
+              let text = String(data: snapshot, encoding: .utf8) else { throw SearchFailure.positionMapping }
+        let limit = 256
+        let report = try SearchCore.search(text, options: options, cancellation: cancellation, limit: limit)
+        let utf16 = text.utf16, utf8 = text.utf8
+        let ascii = utf16.count == snapshot.count
+        func bytes(_ range: NSRange) throws -> NSRange {
+            guard !cancellation.cancelled else { throw CancellationError() }
+            if ascii { return range }
+            let start = utf16.index(utf16.startIndex, offsetBy: range.location)
+            let end = utf16.index(start, offsetBy: range.length)
+            guard let a = start.samePosition(in: utf8), let b = end.samePosition(in: utf8) else {
+                throw SearchFailure.positionMapping
+            }
+            return NSRange(location: utf8.distance(from: utf8.startIndex, to: a), length: utf8.distance(from: a, to: b))
+        }
+        let ranges = try report.hits.map { try bytes($0.range) }
+        var selected = ranges.first { $0.location >= openingCaret }
+        if report.truncated && selected == nil {
+            guard !cancellation.cancelled else { throw CancellationError() }
+            let caret = utf8.index(utf8.startIndex, offsetBy: openingCaret)
+            guard let start = caret.samePosition(in: utf16) else { throw SearchFailure.positionMapping }
+            let tail = NSRange(location: utf16.distance(from: utf16.startIndex, to: start),
+                               length: utf16.distance(from: start, to: utf16.endIndex))
+            let remaining = try SearchCore.search(text, options: options, range: tail, cancellation: cancellation, limit: 1)
+            if let hit = remaining.hits.first { selected = try bytes(hit.range) }
+        }
+        guard !cancellation.cancelled else { throw CancellationError() }
+        if selected == nil && options.wrap { selected = ranges.first }
+        var visible = ranges
+        if let selected, !visible.contains(selected) { visible.removeLast(); visible.append(selected) }
+        let count: String
+        if report.truncated { count = "\(limit)+ matches" }
+        else if let selected, let i = ranges.firstIndex(of: selected) { count = "\(i + 1) of \(ranges.count)" }
+        else { count = ranges.isEmpty ? "No matches" : "\(ranges.count) matches" }
+        return InlinePreview(highlights: visible, selected: selected, countText: count)
+    }
     /// `revision` is the staleness authority: every insert and delete moves it, in every view of a
     /// shared document, so an equal revision means `text` is still the editor's text (F223).
     @discardableResult static func highlight(_ hits: [SearchHit], text: String, revision: UInt, in editor: TTEditor)

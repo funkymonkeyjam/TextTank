@@ -102,6 +102,37 @@ private final class SelectionReadCounterEditor: TTEditor {
             NativeFixtureEnvironment.install()
             defer { NativeFixtureEnvironment.restore() }
             _ = NSApplication.shared
+            func preview(_ text: String, _ options: SearchOptions, _ caret: Int = 0) throws -> SearchController.InlinePreview {
+                try SearchController.preview(Data(text.utf8), options: options, openingCaret: caret,
+                                             cancellation: TTSearchCancellation())
+            }
+            let graphemes = "😀e\u{301} • e\u{301}\0"
+            let accents = try preview(graphemes, SearchOptions(query: "\u{301}", mode: .regularExpression), 7)
+            check(accents.highlights == [NSRange(location: 5, length: 2), NSRange(location: 13, length: 2)]
+                    && accents.selected == accents.highlights.last && accents.countText == "2 of 2",
+                  "inline preview maps scalar matches inside graphemes to exact UTF-8 offsets")
+            rejects("preview refuses a caret inside a UTF-8 scalar") {
+                _ = try preview(graphemes, SearchOptions(query: "e"), 6)
+            }
+            let dense = String(repeating: "a ", count: 400) + "😀e\u{301} a"
+            let capped = try preview(dense, SearchOptions(query: "a"), 805)
+            check(capped.highlights.count == 256 && capped.countText == "256+ matches"
+                    && capped.selected == NSRange(location: 808, length: 1) && capped.highlights.last == capped.selected,
+                  "a later caret finds a visible match beyond the bounded paint set")
+            let zero = try preview("aa", SearchOptions(query: "(?=a)", mode: .regularExpression))
+            check(zero.highlights == [NSRange(location: 0, length: 0), NSRange(location: 1, length: 0)]
+                    && zero.countText == "1 of 2", "preview counts zero-width results at native UTF-8 positions")
+            let noWrap = try preview("a b", SearchOptions(query: "a", wrap: false), 3)
+            check(noWrap.selected == nil && noWrap.highlights.count == 1, "preview respects disabled wrap at the end")
+            rejects("an invalid preview regex cannot yield a navigable or paintable result") {
+                _ = try preview("sample", SearchOptions(query: "[", mode: .regularExpression))
+            }
+            let cancelledPreview = TTSearchCancellation()
+            cancelledPreview.cancel()
+            rejects("a cancelled preview cannot publish a result") {
+                _ = try SearchController.preview(Data("a".utf8), options: SearchOptions(query: "a"),
+                                                 openingCaret: 0, cancellation: cancelledPreview)
+            }
             let closedEditor = SelectionReadCounterEditor(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
             closedEditor.text = "alpha"
             closedEditor.selectionReads = 0
