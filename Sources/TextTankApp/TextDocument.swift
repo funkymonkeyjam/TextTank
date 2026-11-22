@@ -607,7 +607,7 @@ import UniformTypeIdentifiers
         }
         let message = saveStateStatus(recoveryCopyKept: recoveryCopyKept)
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach {
-            $0.showRecoveryStatus(message, failed: false)
+            $0.showRecoveryStatus(message, failed: false, preservingTransient: recoveryCopyKept)
         }
     }
     private func showRecoveryFailure(_ error: Error) {

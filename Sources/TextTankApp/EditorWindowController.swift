@@ -377,27 +377,34 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     /// A failed recovery write is shown in red with a tooltip as well as in words, and stays
     /// until the document reports a successful write.
-    private var transientStatus: String?
+    private var transientStatus: (message: String, id: UUID)?
     /// Says why something the person just did had no effect, in the status line for a few seconds
     /// and to assistive technology, then shows the save state again. A standing recovery failure
     /// is never replaced.
     func showTransientStatus(
         _ message: String, compactMessage: String? = nil, seconds: TimeInterval = 4, announce: Bool = true
     ) {
-        guard transientStatus != message else { return }
+        guard transientStatus?.message != message else { return }
         if announce { Announce.say(message, from: hostWindow) }
         guard let doc = document as? TextDocument, doc.lastRecoveryError == nil, !recoveryStatusFailed else { return }
-        transientStatus = message
+        let id = UUID()
+        transientStatus = (message, id)
         applyStatusMessage(message, compactMessage: compactMessage)
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self, weak doc] in
-            guard let self, self.transientStatus == message else { return }
+            guard let self, self.transientStatus?.id == id else { return }
             self.transientStatus = nil
             if let doc, doc.lastRecoveryError == nil {
                 self.showRecoveryStatus(doc.currentSaveStateStatus, failed: false)
             }
         }
     }
-    func showRecoveryStatus(_ message: String, failed: Bool, failureSummary: String = "⚠︎ Recovery copy not written") {
+    func showRecoveryStatus(
+        _ message: String, failed: Bool, failureSummary: String = "⚠︎ Recovery copy not written",
+        preservingTransient: Bool = false
+    ) {
+        // The expiry handler reads the latest save state. A completed recovery copy
+        // need not cut short feedback from the command the person just performed.
+        if preservingTransient && !failed && transientStatus != nil { return }
         transientStatus = nil
         recoveryStatusFailed = failed
         if failed, fullStatusText != message { Announce.say(message, from: hostWindow) }
