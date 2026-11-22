@@ -218,6 +218,45 @@ import NativeSearch
                     try initial.updateViewPreference(.autoIndent) { !$0 }
                 }
                 check(try Data(contentsOf: editURL) == duplicate, "ambiguous duplicate View keys leave the file intact")
+                // Ordinary settings edits use the same source-byte preservation as a View toggle.
+                let fontSource =
+                    #"{"version":1,"tabWidth":4,"wrap":false,"useTabs":false,"appearance":"system","shortcuts":{}, "unknown":[123456789012345678901234567890123456789,{"fontSize":123}], "\u0066ontSize" : 14.00 }"#
+                for encoding: String.Encoding in [.utf8, .utf16LittleEndian, .utf16BigEndian, .utf32BigEndian] {
+                    let original = try requireValue(fontSource.data(using: encoding), "owned encoded settings")
+                    try original.write(to: editURL)
+                    let ordinary = SettingsStore(url: editURL)
+                    var edited = ordinary.value
+                    edited.fontSize = 17.5
+                    edited.fontName = "Monaco"
+                    _ = try ordinary.save(edited)
+                    let expected = fontSource.replacingOccurrences(of: "14.00 }", with: #"17.5 ,"fontName":"Monaco"}"#)
+                    let written = try Data(contentsOf: editURL)
+                    check(written == expected.data(using: encoding), "ordinary edit preserves other bytes and encoding")
+                    check(SettingsStore(url: editURL).value == edited, "ordinary font changes round-trip together")
+                    try ordinary.save(edited)
+                    check(try Data(contentsOf: editURL) == written, "an unchanged save retains every source byte")
+                    try original.write(to: editURL)
+                    edited.defaultZoom = 2
+                    rejects("ordinary save refuses an independent replacement") {
+                        try ordinary.save(edited, requiringCurrent: true)
+                    }
+                    check(try Data(contentsOf: editURL) == original, "independent replacement survives a stale edit")
+                    try ordinary.save(edited)
+                    check(
+                        SettingsStore(url: editURL).value == edited,
+                        "an explicit full configuration save can replace known settings after another writer")
+
+                }
+                let duplicateFont = Data(
+                    fontSource.replacingOccurrences(of: "14.00 }", with: #"14.00, "fontSize":14 }"#).utf8)
+                try duplicateFont.write(to: editURL)
+                let ambiguousFont = SettingsStore(url: editURL)
+                var changedFont = ambiguousFont.value
+                changedFont.fontSize = 18
+                rejects("ambiguous escaped and literal font size keys refuse the edit") {
+                    try ambiguousFont.save(changedFont)
+                }
+                check(try Data(contentsOf: editURL) == duplicateFont, "ambiguous font keys remain intact")
                 // F199: a settings file that failed to load is never overwritten without explicit confirmation.
                 var futureSettings = configured
                 futureSettings.version = 2
