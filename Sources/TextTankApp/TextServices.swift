@@ -79,12 +79,32 @@ import TextTankCore
             }
             try workflow.requireSuppliedText()
             let result = try workflow.transform(input)
-            guard board.changeCount == generation, let current = board.string(forType: .string),
-                current.utf8.elementsEqual(input.utf8)
-            else {
-                throw AutomationError.invalid("The calling app changed its selection during the service.")
+            func requireCurrentSelection() throws {
+                guard board.changeCount == generation, let current = board.string(forType: .string),
+                    current.utf8.elementsEqual(input.utf8), board.changeCount == generation
+                else {
+                    throw AutomationError.invalid("The calling app changed its selection during the service.")
+                }
             }
-            guard board.setString(result, forType: .string) else {
+            try requireCurrentSelection()
+            if board.setString(result, forType: .string) { return }
+
+            // A different process owns the incoming item. Only replace the single plain-text
+            // selection negotiated by this Service. Other items or promised formats belong to the caller.
+            let plainText: Set<NSPasteboard.PasteboardType> = [.string, .init("NSStringPboardType")]
+            guard let items = board.pasteboardItems, items.count == 1,
+                items[0].types.contains(.string), items[0].types.allSatisfy(plainText.contains),
+                let types = board.types, types.allSatisfy(plainText.contains)
+            else {
+                throw AutomationError.invalid("The calling app must supply a single plain-text selection.")
+            }
+            let reply = NSPasteboardItem()
+            guard reply.setString(result, forType: .string) else {
+                throw AutomationError.invalid("The transformed text could not be prepared.")
+            }
+            try requireCurrentSelection()
+            board.clearContents()
+            guard board.writeObjects([reply]) else {
                 throw AutomationError.invalid("The calling app could not receive the transformed text.")
             }
         } catch { failure.pointee = error.localizedDescription as NSString }

@@ -211,6 +211,28 @@ extension DocumentChecks {
                 try failure == nil && board.string(forType: .string) == "a\nb"
                     && documents.documents.count == before + 1 && Data(contentsOf: libraryURL) == lib,
                 "Services returns transformed selection through only the supplied pasteboard")
+            // A Services client writes its selection in a separate process. An in-process fixture
+            // owns the board and can setString directly, hiding an invalid cross-process reply.
+            let externalID = UUID()
+            let externalBoard = NSPasteboard(name: .init("org.texttank.tests.service." + externalID.uuidString))
+            defer { externalBoard.releaseGlobally() }
+            let sender = Process()
+            sender.executableURL = try requireValue(Bundle.main.executableURL, "document checks executable")
+            sender.arguments = ["--write-service-selection", externalID.uuidString]
+            try sender.run()
+            sender.waitUntilExit()
+            let incoming = "cafe\u{301}\nA\nA"
+            check(
+                sender.terminationStatus == 0
+                    && externalBoard.string(forType: .string)?.utf8.elementsEqual(incoming.utf8) == true,
+                "foreign Services client owns the exact decomposed UTF-8 selection")
+            let generation = externalBoard.changeCount
+            failure = nil
+            run.runTextTankAutomation(externalBoard, userData: nil, error: &failure)
+            check(
+                failure == nil && externalBoard.changeCount > generation
+                    && externalBoard.string(forType: .string)?.utf8.elementsEqual("cafe\u{301}\nA".utf8) == true,
+                "Services returns the transformed bytes to a different pasteboard owner")
             // A workflow called Cancel must remain distinguishable from the actual cancellation command.
             var namedCancel = good
             namedCancel.id = UUID()

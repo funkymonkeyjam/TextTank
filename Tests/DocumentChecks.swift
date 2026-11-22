@@ -33,6 +33,12 @@ import NativeSearch
     }
     @MainActor static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.count == 2, arguments.first == "--write-service-selection", let id = UUID(uuidString: arguments[1])
+        {
+            let board = NSPasteboard(name: .init("org.texttank.tests.service." + id.uuidString))
+            board.clearContents()
+            exit(board.setString("cafe\u{301}\nA\nA", forType: .string) ? 0 : 1)
+        }
         if arguments.count == 2, arguments.first == "--automatic-session-quit" {
             AutomaticSessionQuitChecks.runChild(mode: arguments[arguments.index(after: arguments.startIndex)])
         }
