@@ -75,8 +75,10 @@ import NativeSearch
     private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     @MainActor private final class EdgeCommandTarget: NSObject {
         let editor: TTEditor
+        private(set) var carets: [Int] = []
         init(_ editor: TTEditor) { self.editor = editor }
         @objc func duplicateLine(_ sender: Any?) {
+            carets.append(editor.selectionRanges.first?.caret ?? -1)
             _ = editor.executeCommand(TTEditorCommandIdentifier(rawValue: "duplicateLine"))
         }
     }
@@ -114,14 +116,36 @@ import NativeSearch
             editor.horizontalScrollOffset = Int((point(0.78).x - window.frame.width + 2).rounded())
             editor.displayIfNeeded()
         }
-        func send(_ type: NSEvent.EventType, _ location: NSPoint, clicks: Int = 1) throws {
-            let event = try requireValue(
-                NSEvent.mouseEvent(
-                    with: type, location: location, modifierFlags: [],
-                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                    context: nil, eventNumber: 1, clickCount: clicks, pressure: type == .leftMouseUp ? 0 : 1),
-                "frame mouse event")
-            window.sendEvent(event)
+        var eventNumber = 0
+        func click(_ location: NSPoint) throws {
+            eventNumber += 1
+            func mouse(_ type: NSEvent.EventType) throws -> NSEvent {
+                try requireValue(
+                    NSEvent.mouseEvent(
+                        with: type, location: location, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                        context: nil, eventNumber: eventNumber, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1),
+                    "frame mouse event")
+            }
+            let down = try mouse(.leftMouseDown), up = try mouse(.leftMouseUp)
+            // A system frame may track synchronously inside its mouseDown. Supply its
+            // matching release before dispatch, as the actual input stream does.
+            NSApp.postEvent(up, atStart: true)
+            NSApp.sendEvent(down)
+            if let next = NSApp.nextEvent(
+                matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: false),
+                next.window === window, next.eventNumber == up.eventNumber
+            {
+                if let release = NSApp.nextEvent(
+                    matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: true)
+                {
+                    NSApp.sendEvent(release)
+                }
+            } else {
+                print(
+                    "Window frame consumed mouseUp during native tracking", eventNumber,
+                    "current event", NSApp.currentEvent?.type.rawValue as Any)
+            }
         }
         func settle() { RunLoop.main.run(until: Date(timeIntervalSinceNow: NSEvent.doubleClickInterval + 0.08)) }
         prepare()
@@ -131,53 +155,63 @@ import NativeSearch
             window.frame.width - edge.x > 1 && window.frame.width - edge.x < 3
                 && border.hitTest(border.convert(edge, from: nil)) === border,
             "final glyph right half under native resize frame")
-        try send(.leftMouseDown, edge)
-        try send(.leftMouseUp, edge)
+        try click(edge)
         settle()
         check(
             editor.selectionRanges.first?.caret == byteAfter, "stationary frame click places caret after final period")
         prepare()
         let left = point(0.22)
-        try send(.leftMouseDown, left)
-        try send(.leftMouseUp, left)
+        try click(left)
         settle()
         check(editor.selectionRanges.first?.caret == byteAfter - 1, "left half places caret before final period")
         prepare()
         let p = point(0.78)
-        try send(.leftMouseDown, p)
-        try send(.leftMouseUp, p)
+        try click(p)
         _ = editor.setSelectionAnchor(2, caret: 2)
         settle()
         check(editor.selectionRanges.first?.caret == 2, "stale frame click preserves a newer selection")
 
-        // NSApp can dispatch a command equivalent through its menus before a window receives keyDown.
-        let previousMenu = NSApp.mainMenu
-        defer { NSApp.mainMenu = previousMenu }
-        let menu = NSMenu(), edit = NSMenu(title: "Edit")
-        let appMenu = NSMenuItem()
-        menu.addItem(appMenu)
-        appMenu.submenu = NSMenu(title: "Application")
-        let editItem = NSMenuItem()
-        menu.addItem(editItem)
-        editItem.submenu = edit
+        // Use an owned native control so key-equivalent dispatch has one known target
+        // without reconfiguring the process-wide menu after the full-screen suite.
         let target = EdgeCommandTarget(editor)
-        let duplicate = edit.addItem(
-            withTitle: "Duplicate Line", action: #selector(EdgeCommandTarget.duplicateLine(_:)),
-            keyEquivalent: "d")
-        duplicate.target = target
-        NSApp.mainMenu = menu
+        let button = NSButton(
+            title: "Duplicate Line", target: target, action: #selector(EdgeCommandTarget.duplicateLine(_:)))
+        button.frame = NSRect(x: 20, y: 10, width: 130, height: 24)
+        button.keyEquivalent = "d"
+        button.keyEquivalentModifierMask = .command
+        editor.addSubview(button)
+        func commandD() throws -> Bool {
+            let key = try requireValue(
+                NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: .command,
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                    characters: "d", charactersIgnoringModifiers: "d", isARepeat: false, keyCode: 2),
+                "duplicate-line shortcut")
+            return window.performKeyEquivalent(with: key)
+        }
         prepare(caret: byteAfter + 2)
-        let trailing = point(0.78)
-        try send(.leftMouseDown, trailing)
-        try send(.leftMouseUp, trailing)
-        let commandD = try requireValue(
-            NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: .command,
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
-                characters: "d", charactersIgnoringModifiers: "d", isARepeat: false, keyCode: 2),
-            "duplicate-line shortcut")
-        withExtendedLifetime(target) { NSApp.sendEvent(commandD) }
-        check(editor.text == line + "\n" + line + "\nshort", "immediate Command-D duplicates the clicked line")
+        let control = try commandD()
+        check(
+            control && target.carets == [byteAfter + 2] && editor.text == line + "\nshort\nshort",
+            "native Command-D control duplicates the seeded second line")
+        _ = editor.loadDocumentText(line + "\nshort")
+        prepare(caret: byteAfter + 2)
+        let trailing = point(0.78), offset = editor.horizontalScrollOffset
+        try click(trailing)
+        // Exercise an invalidation with the same range, without relying on paint timing.
+        let generation = editor.selectionGeneration
+        _ = editor.setSelectionAnchor(byteAfter + 2, caret: byteAfter + 2)
+        editor.horizontalScrollOffset = offset
+        check(
+            editor.selectionGeneration != generation && point(0.78) == trailing,
+            "selection cache invalidated while the same range and clicked glyph remain in place")
+        let handled = try commandD()
+        print(
+            "Frame key equivalent", "key window", window.isKeyWindow, "point", trailing,
+            "handled", handled, "action caret bytes", target.carets, "expected", byteAfter)
+        check(
+            handled && target.carets == [byteAfter + 2, byteAfter] && editor.text == line + "\n" + line + "\nshort",
+            "immediate Command-D duplicates the clicked line")
     }
     static func runApplicationProcess() -> Never {
         do { try WorkspaceCheckApplicationProcess().run() } catch {

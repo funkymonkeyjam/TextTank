@@ -127,7 +127,11 @@ final class DocumentTabWindow: NSWindow {
     private let editor: TTEditor
     private let character: Int
     private let revision: UInt
-    private let selection: UInt
+    private enum Selection: Equatable {
+        case stream(anchor: Int, caret: Int)
+        case other(generation: UInt)
+    }
+    private let selection: Selection
     private let loadEpoch: UInt?
 
     init?(window: NSWindow, down: NSEvent) {
@@ -148,15 +152,23 @@ final class DocumentTabWindow: NSWindow {
         self.editor = editor
         character = byte
         revision = editor.revision
-        selection = editor.selectionGeneration
+        // Scintilla may announce an earlier selection during the next repaint.
+        // Compare the actual range for a single stream selection. For many ranges
+        // keep the conservative generation check without copying them all.
+        if editor.selectionCount == 1, editor.commandIsChecked(EditorCommand.streamSelection.nativeIdentifier) {
+            selection = .stream(anchor: editor.selectionAnchor, caret: editor.selectionCaret)
+        } else {
+            selection = .other(generation: editor.selectionGeneration)
+        }
         loadEpoch = EditorLifetime.document(for: editor)?.loadEpoch
     }
 
     func placeCaret(in window: NSWindow, up: NSEvent) {
         guard window.isKeyWindow, window.frame == frame, view.window === window,
-            EditorLifetime.isOpen(editor), editor.revision == revision, editor.selectionGeneration == selection,
+            EditorLifetime.isOpen(editor), editor.revision == revision,
             let current = FrameTextClick(window: window, down: down),
             current.view === view, current.character == character, current.loadEpoch == loadEpoch,
+            current.selection == selection,
             window.makeFirstResponder(view)
         else { return }
         view.mouseDown(with: down)
