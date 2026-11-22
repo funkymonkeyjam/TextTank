@@ -112,6 +112,11 @@ import NativeSearch
         }
     }
     static func settingsFrameChecks(root: URL) throws {
+        // This suite runs in its own process. The public factory keeps the real AppKit
+        // panel and controls while observing calls made during its close transaction.
+        NSFontManager.setFontPanelFactory(CloseObservedFontPanel.self)
+        defer { NSFontManager.setFontPanelFactory(nil) }
+
         let suite = "TextTankDesignSettingsFrames-" + UUID().uuidString
         let defaults = try requireValue(UserDefaults(suiteName: suite), "DG fixture: private frame defaults")
         let previous = WindowFrames.defaults
@@ -175,6 +180,11 @@ import NativeSearch
             !reopened.window.isVisible && !FileManager.default.fileExists(atPath: controller.url.path),
             "DG Escape closes actual Settings without saving pending changes")
         if reopened.window.isVisible { reopened.close() }
+        let unknown = #""opaque" : [123456789012345678901234567890123456789,{"fontSize":"leave this alone"}]"#
+        let seed =
+            #"{"version":1,"tabWidth":4,"wrap":false,"useTabs":true,"appearance":"system","shortcuts":{},"#
+            + unknown + "}"
+        try Data(seed.utf8).write(to: controller.url)
         controller.showSettings(nil)
         let live = try requireValue(FormPanel.visible.last, "fixture: live Settings")
         let size = try field("settings.font.size", live.window), font = try button("settings.font.choose", live.window)
@@ -188,6 +198,9 @@ import NativeSearch
         check(
             live.window.isVisible && controller.value.fontSize == 18.75 && decoded.fontSize == 18.75,
             "committing fractional size persists it without closing modeless Settings")
+        check(
+            savedBytes == Data((String(seed.dropLast()) + #","fontSize":18.75}"#).utf8),
+            "a live size commit preserves every original byte outside the new member")
         size.stringValue = "73"
         _ = NSApp.sendAction(size.action!, to: size.target, from: size)
         let unchanged = try Data(contentsOf: controller.url)
@@ -201,8 +214,19 @@ import NativeSearch
         check(
             NSFontManager.shared.selectedFont?.pointSize == 31.75 && controller.value.fontSize == 31.75,
             "reopening the native Font panel retains the live field's latest fractional size")
-        NSFontManager.shared.fontPanel(false)?.performClose(nil)
+        let panel = try requireValue(
+            NSFontManager.shared.fontPanel(false) as? CloseObservedFontPanel, "native font panel")
+        let beforeClose = try Data(contentsOf: controller.url)
+        let fontClose = try requireValue(panel.standardWindowButton(.closeButton), "Fonts red close button")
+        fontClose.performClick(nil)
+        check(
+            panel.closeCount == 1 && panel.closingReloads == 0 && !panel.isVisible && live.window.isVisible,
+            "closing Fonts leaves Settings open and never reloads the closing family browser")
+        check(try Data(contentsOf: controller.url) == beforeClose, "closing Fonts changes no preference bytes")
+        font.performClick(nil)
+        check(panel.isVisible, "the same shared Fonts panel can be reopened")
         live.close()
+        check(!panel.isVisible, "closing Settings retires its reopened Fonts panel")
     }
     static func maintenanceSheetChecks(root: URL) throws {
         let url = root.appendingPathComponent("maintenance-settings.json")
@@ -719,5 +743,22 @@ extension DesignSettingsChecks {
             editorProvider: { editor }, languageProvider: { "plain" }, setLanguage: { _ in })
         language.configure()
         try checkInputs("language.json", [("Language profiles JSON", "AXTextArea")]).close()
+    }
+}
+
+@MainActor private final class CloseObservedFontPanel: NSFontPanel {
+    private(set) var closeCount = 0, closingReloads = 0
+    private var closing = false
+
+    override func close() {
+        closeCount += 1
+        closing = true
+        defer { closing = false }
+        super.close()
+    }
+
+    override func reloadDefaultFontFamilies() {
+        if closing { closingReloads += 1 }
+        super.reloadDefaultFontFamilies()
     }
 }
