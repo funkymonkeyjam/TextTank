@@ -1,0 +1,588 @@
+diff --git a/cocoa/PlatCocoa.h b/cocoa/PlatCocoa.h
+--- a/cocoa/PlatCocoa.h
++++ b/cocoa/PlatCocoa.h
+@@ -107,6 +107,7 @@
+ 	void Stadium(PRectangle rc, FillStroke fillStroke, Ends ends) override;
+ 	void Copy(PRectangle rc, Scintilla::Internal::Point from, Surface &surfaceSource) override;
+ 	bool BidiBaseRightToLeft(std::string_view text) const override;
++	std::vector<BidiLevelRun> BidiLevels(std::string_view text, bool rtl, size_t tileBytes) const override;
+ 	size_t BidiSubdivision(std::string_view text, size_t offset, bool rtl) const override;
+ 	bool NeedsBidiLayout(std::string_view text) const override;
+ 	std::unique_ptr<IScreenLineLayout> Layout(const IScreenLine *screenLine) override;
+diff --git a/cocoa/PlatCocoa.mm b/cocoa/PlatCocoa.mm
+--- a/cocoa/PlatCocoa.mm
++++ b/cocoa/PlatCocoa.mm
+@@ -163,8 +163,23 @@
+ 	return blob->width;
+ }
+ 
++// NSString's UTF-8 decoder consumes an initial BOM. These bytes are already
++// document text, including at substring boundaries, so retain every U+FEFF.
++static NSString *StringFromLineBytes(std::string_view text) {
++	size_t signatures = 0;
++	while (text.size() >= 3 && text.substr(0,3) == "\xEF\xBB\xBF") {
++		++signatures;
++		text.remove_prefix(3);
++	}
++	NSString *body = [[NSString alloc] initWithBytes:text.data() length:text.size() encoding:NSUTF8StringEncoding];
++	if (!signatures || !body) return body;
++	NSString *prefix = [@"" stringByPaddingToLength:signatures withString:@"\uFEFF" startingAtIndex:0];
++	return [prefix stringByAppendingString:body];
++}
++
+ class ScreenLineLayout : public IScreenLineLayout {
+ 	CTLineRef line = NULL;
++	XYPOSITION glyphOrigin = 0;
+ 	const std::string text;
+ 	std::vector<size_t> characterBytes;
+ 	// Map Unicode glyph clusters to both caret affinity and visual coverage.
+@@ -186,7 +201,7 @@
+ 
+ ScreenLineLayout::ScreenLineLayout(const IScreenLine *screenLine) :
+ 	text(screenLine->Text()) {
+-	NSString *source = [[NSString alloc] initWithBytes:text.data() length:text.size() encoding:NSUTF8StringEncoding];
++	NSString *source = StringFromLineBytes(text);
+ 	if (!source)
+ 		return;
+ 	NSMutableAttributedString *attributed = [[NSMutableAttributedString alloc] initWithString:source];
+@@ -195,6 +210,12 @@
+ 	CTParagraphStyleRef paragraph = CTParagraphStyleCreate(&base,1);
+ 	[attributed addAttribute:(NSString *)kCTParagraphStyleAttributeName value:(__bridge id)paragraph range:NSMakeRange(0,source.length)];
+ 	CFRelease(paragraph);
++	if (const int resolved = screenLine->ResolvedDirection(); resolved >= 0) {
++		// UAX #9 has already resolved neutrals, brackets, isolates, and overrides
++		// in their full context. Keep that direction when CoreText shapes this tile.
++		[attributed addAttribute:(NSString *)kCTWritingDirectionAttributeName
++			value:@[@(resolved | kCTWritingDirectionOverride)] range:NSMakeRange(0, source.length)];
++	}
+ 	[attributed addAttribute:(NSString *)kCTForegroundColorFromContextAttributeName
+ 			   value:@YES range:NSMakeRange(0, source.length)];
+ 	size_t byte = 0;
+@@ -247,6 +268,12 @@
+ 			clusters.push_back({indices[i],{std::min(x,next),std::max(x,next)},rtl,run,i});
+ 		}
+ 	}
++	// CoreText can hang an RTL tile's trailing spaces to the left of x=0.
++	// A partition inside a paragraph must occupy its full assigned advance.
++	if (screenLine->ResolvedDirection() >= 0 && !clusters.empty()) {
++		for (const auto &c : clusters) glyphOrigin = std::min(glyphOrigin,c.span.left);
++		for (auto &c : clusters) c.span = c.span.Offset(-glyphOrigin);
++	}
+ 	std::sort(clusters.begin(), clusters.end(), [](const Cluster &a, const Cluster &b) { return a.start < b.start; });
+ }
+ 
+@@ -259,7 +286,7 @@
+ 	CGContextClipToRect(context, PRectangleToCGRect(clip));
+ 	CGContextSetRGBFillColor(context,fore.GetRedComponent(),fore.GetGreenComponent(),fore.GetBlueComponent(),fore.GetAlphaComponent());
+ 	CGContextSetTextMatrix(context,CGAffineTransformMakeScale(1,-1));
+-	CGContextSetTextPosition(context,x,y);
++	CGContextSetTextPosition(context,x-glyphOrigin,y);
+ 	const auto firstIndex = CharacterIndex(start);
+ 	const auto endIndex = CharacterIndex(end);
+ 	auto it = std::lower_bound(clusters.begin(), clusters.end(), firstIndex,
+@@ -290,7 +317,7 @@
+ 	if (!line) {
+ 		return 0;
+ 	}
+-	const CGPoint ptDistance = CGPointMake(xDistance, 0);
++	const CGPoint ptDistance = CGPointMake(xDistance+glyphOrigin, 0);
+ 	if (charPosition) {
+ 		for (const Cluster &c : clusters) {
+ 			if (c.span.left <= xDistance && xDistance < c.span.right)
+@@ -320,7 +347,7 @@
+ 		const Cluster &last = clusters.back();
+ 		return last.rtl ? last.span.left : last.span.right;
+ 	}
+-	return CTLineGetOffsetForStringIndex(line, caretIndex, nullptr);
++	return CTLineGetOffsetForStringIndex(line, caretIndex, nullptr)-glyphOrigin;
+ }
+ 
+ void AddToIntervalVector(std::vector<Interval> &vi, XYPOSITION left, XYPOSITION right) {
+@@ -1230,7 +1257,7 @@
+ 	while (!text.empty()) {
+ 		size_t n = std::min<size_t>(text.size(),4096);
+ 		while (n < text.size() && UTF8IsTrailByte(text[n])) --n;
+-		NSString *chunk = [[NSString alloc] initWithBytes:text.data() length:n encoding:NSUTF8StringEncoding];
++		NSString *chunk = StringFromLineBytes(text.substr(0,n));
+ 		if (!chunk) return false;
+ 		NSRange rest = NSMakeRange(0,chunk.length);
+ 		while (rest.length) {
+@@ -1246,6 +1273,63 @@
+ 		text.remove_prefix(n);
+ 	}
+ 	return false;
++}
++
++std::vector<BidiLevelRun> SurfaceImpl::BidiLevels(std::string_view text, bool rtl, size_t tileBytes) const {
++	// Resolve the paragraph without creating glyphs or a CTTypesetter. The transient
++	// UTF-16 levels are compressed to runs; native shaping remains viewport-local.
++	NSString *string = StringFromLineBytes(text);
++	if (!string) return {{0, static_cast<unsigned char>(rtl)}};
++	NSAttributedString *paragraph = [[NSAttributedString alloc] initWithString:string];
++	std::vector<uint8_t> levels(string.length, rtl ? 1 : 0);
++	CFAttributedStringGetBidiLevelsAndResolvedDirections((__bridge CFAttributedStringRef)paragraph,
++		CFRangeMake(0, string.length), rtl ? NSWritingDirectionRightToLeft : NSWritingDirectionLeftToRight,
++		levels.data(), nullptr);
++	// A strong character resolved at the paragraph base is a safe restart.
++	// Pack those independent short spans into a single native tile, avoiding
++	// a retained descriptor per character in alternating Latin/Hebrew text.
++	struct Boundary { size_t byte, character; };
++	std::vector<Boundary> anchors = {{0,0}};
++	static NSRegularExpression *const leftStrong = [NSRegularExpression regularExpressionWithPattern:@"\\p{Bidi_Class=L}" options:0 error:nil];
++	static NSRegularExpression *const rightStrong = [NSRegularExpression regularExpressionWithPattern:@"[\\p{Bidi_Class=R}\\p{Bidi_Class=AL}]" options:0 error:nil];
++	size_t nominal = tileBytes;
++	for (size_t byte = 0, character = 0; byte < text.size();) {
++		const auto bytes = UTF8DrawBytes(text.data()+byte, text.size()-byte);
++		while (byte > nominal+256) nominal += tileBytes;
++		if (byte+256 >= nominal && levels[character] == static_cast<uint8_t>(rtl)) {
++			const auto cp = UnicodeFromUTF8(text.substr(byte));
++			const bool asciiLetter = (cp>='a' && cp<='z') || (cp>='A' && cp<='Z');
++			const NSRange one = NSMakeRange(character, bytes==4 ? 2 : 1);
++			const bool baseStrong = cp < 0x80 ? (!rtl && asciiLetter) :
++				[(rtl ? rightStrong : leftStrong) rangeOfFirstMatchInString:string
++					options:NSMatchingAnchored range:one].location != NSNotFound;
++			if (baseStrong && [string rangeOfComposedCharacterSequenceAtIndex:character].location==character) {
++				anchors.push_back({byte,character});
++				nominal += tileBytes;
++			}
++		}
++		character += bytes==4 ? 2 : 1;
++		byte += bytes;
++	}
++	anchors.push_back({text.size(),string.length});
++	std::vector<BidiLevelRun> runs;
++	for (size_t i=1; i<anchors.size(); ++i) {
++		auto [byte,character] = anchors[i-1];
++		const size_t end = anchors[i].byte;
++		if (end-byte <= tileBytes+512) {
++			runs.push_back({byte,static_cast<unsigned char>(rtl),false});
++			continue;
++		}
++		while (byte<end) {
++			const auto level = levels[character];
++			if (byte==anchors[i-1].byte || level!=runs.back().level)
++				runs.push_back({byte,level});
++			const auto bytes = UTF8DrawBytes(text.data()+byte,text.size()-byte);
++			character += bytes==4 ? 2 : 1;
++			byte += bytes;
++		}
++	}
++	return runs;
+ }
+ 
+ size_t SurfaceImpl::BidiSubdivision(std::string_view text, size_t offset, bool rtl) const {
+@@ -1278,7 +1362,7 @@
+ 	size_t end = std::min(text.size(),offset+256);
+ 	while (begin && UTF8IsTrailByte(text[begin])) --begin;
+ 	while (end<text.size() && UTF8IsTrailByte(text[end])) ++end;
+-	NSString *context = [[NSString alloc] initWithBytes:text.data()+begin length:end-begin encoding:NSUTF8StringEncoding];
++	NSString *context = StringFromLineBytes(text.substr(begin,end-begin));
+ 	if (!context) return offset;
+ 	const NSUInteger index = UTF16Length(text.substr(begin,offset-begin));
+ 	const NSRange cluster = [context rangeOfComposedCharacterSequenceAtIndex:index];
+diff --git a/src/Platform.h b/src/Platform.h
+--- a/src/Platform.h
++++ b/src/Platform.h
+@@ -148,11 +148,18 @@
+ 	static std::shared_ptr<Font> Allocate(const FontParameters &fp);
+ };
+ 
++struct BidiLevelRun {
++	size_t start;
++	unsigned char level;
++	bool resolved = true;
++};
++
+ class IScreenLine {
+ public:
+ 	virtual std::string_view Text() const = 0;
+ 	virtual size_t Length() const = 0;
+ 	virtual bool BaseRightToLeft() const { return false; }
++	virtual int ResolvedDirection() const { return -1; }
+ 	virtual size_t RepresentationCount() const = 0;
+ 	virtual XYPOSITION Width() const = 0;
+ 	virtual XYPOSITION Height() const = 0;
+@@ -168,7 +175,7 @@
+ class IScreenLineLayout {
+ public:
+ 	virtual ~IScreenLineLayout() noexcept = default;
+-	virtual std::pair<size_t,size_t> VisibleBytes(XYPOSITION, XYPOSITION, size_t length) const { return {0,length}; }
++	virtual std::vector<std::pair<size_t,size_t>> VisibleRanges(XYPOSITION, XYPOSITION, size_t length) const { return {{0,length}}; }
+ 	virtual bool DrawRange(Surface *, PRectangle, XYPOSITION, XYPOSITION, ColourRGBA, size_t, size_t) { return false; }
+ 	virtual size_t PositionFromX(XYPOSITION xDistance, bool charPosition) = 0;
+ 	virtual XYPOSITION XFromPosition(size_t caretPosition) = 0;
+@@ -237,6 +244,9 @@
+ 	virtual void Copy(PRectangle rc, Point from, Surface &surfaceSource)=0;
+ 
+ 	virtual bool BidiBaseRightToLeft(std::string_view) const { return false; }
++	virtual std::vector<BidiLevelRun> BidiLevels(std::string_view, bool rtl, size_t) const {
++		return {{0, static_cast<unsigned char>(rtl)}};
++	}
+ 	virtual size_t BidiSubdivision(std::string_view, size_t offset, bool) const { return offset; }
+ 	virtual bool NeedsBidiLayout(std::string_view) const { return true; }
+ 	virtual std::unique_ptr<IScreenLineLayout> Layout(const IScreenLine *screenLine) = 0;
+diff --git a/src/PositionCache.h b/src/PositionCache.h
+--- a/src/PositionCache.h
++++ b/src/PositionCache.h
+@@ -44,15 +44,24 @@
+ 	const SpecialRepresentations *representations = nullptr;
+ 	struct Shape {
+ 		size_t start = 0, length = 0;
++		int direction = -1;
+ 		std::unique_ptr<IScreenLineLayout> layout;
+ 	};
+ 	// Wrapping one enormous paragraph must not retain an unbounded number
+ 	// of subline shapes as the user scrolls through it.
+ 	Shape recent[8];
+-	struct Cut {
+-		size_t start = 0, length = 0, nominal = 0, offset = 0;
++	struct Tile {
++		unsigned int start;
++		unsigned char level;
++		bool resolved;
++		XYPOSITION left;
+ 	};
+-	Cut cuts[16];
++	struct Order {
++		size_t start = 0, length = 0;
++		std::vector<Tile> logical;
++		std::vector<unsigned int> visual;
++	};
++	Order order;
+ 	size_t next = 0;
+ };
+ 
+@@ -159,6 +168,7 @@
+ 	ScreenLine(const ScreenLine &parent, size_t offset, size_t length);
+ 	size_t start;
+ 	size_t len;
++	int direction = -1;
+ 	XYPOSITION width;
+ 	XYPOSITION height;
+ 	int ctrlCharPadding;
+@@ -174,7 +184,8 @@
+ 	virtual ~ScreenLine();
+ 
+ 	std::string_view Text() const override;
+-	bool BaseRightToLeft() const override { return ll->rtlParagraph; }
++	bool BaseRightToLeft() const override { return direction < 0 ? ll->rtlParagraph : direction != 0; }
++	int ResolvedDirection() const override { return direction; }
+ 	size_t Length() const override;
+ 	size_t RepresentationCount() const override;
+ 	XYPOSITION Width() const override;
+diff --git a/src/PositionCache.cxx b/src/PositionCache.cxx
+--- a/src/PositionCache.cxx
++++ b/src/PositionCache.cxx
+@@ -20,6 +20,7 @@
+ #include <set>
+ #include <optional>
+ #include <algorithm>
++#include <numeric>
+ #include <iterator>
+ #include <memory>
+ #include <mutex>
+@@ -477,111 +478,154 @@
+ 	Surface *const surface;
+ 	static constexpr size_t tileBytes = 4096;
+ 	static constexpr size_t wholeLineBytes = 16384;
+-	const size_t count;
+-
+-	size_t Boundary(size_t i) const {
+-		if (!i) return 0;
+-		if (i==count) return line.len;
+-		auto &cut = line.ll->bidiData->cuts[i % std::size(line.ll->bidiData->cuts)];
+-		const size_t nominal = i*tileBytes;
+-		if (cut.start != line.start || cut.length != line.len || cut.nominal != nominal)
+-			cut = {line.start,line.len,nominal,surface->BidiSubdivision(line.Text(),nominal,line.BaseRightToLeft())};
+-		return cut.offset;
+-	}
+-
+-	size_t TileAt(size_t byte) const {
+-		size_t i = count==1 ? 0 : std::min(count-1,byte/tileBytes);
+-		if (i && byte<Boundary(i)) --i;
+-		else if (i+1<count && byte>=Boundary(i+1)) ++i;
+-		return i;
+-	}
+-
+-	XYPOSITION Origin(size_t pos) const {
+-		return line.ll->GetWidth(line.start+pos,line.start);
+-	}
+-
+-	Interval TileSpan(size_t begin, size_t finish) const {
+-		if (line.BaseRightToLeft() && count>1) {
+-			const auto width=Origin(line.len);
+-			return {width-Origin(finish),width-Origin(begin)};
+-		}
+-		return {Origin(begin),Origin(finish)};
+-	}
+-
+-	size_t TileAtX(XYPOSITION x) const {
+-		if (count==1) return 0;
+-		if (line.BaseRightToLeft()) x = Origin(line.len)-x;
+-		const Range bounds(line.start,line.start+line.len);
+-		const Sci::Position pos = line.ll->FindPositionFromX(x+line.ll->GetPosition(line.start),bounds,true);
+-		return TileAt(pos-line.start);
+-	}
+-
+-	ScreenLine Tile(size_t i) const {
+-		const size_t begin = Boundary(i);
+-		return ScreenLine(line,begin,Boundary(i+1)-begin);
++	const BidiData::Order *order = nullptr;
++
++	size_t Start(size_t i) const { return order ? order->logical[i].start : 0; }
++	size_t End(size_t i) const { return order && i+1<order->logical.size() ? Start(i+1) : line.len; }
++	XYPOSITION Left(size_t i) const { return order ? order->logical[i].left : 0; }
++	XYPOSITION Width(size_t i) const { return line.ll->GetWidth(line.start+End(i),line.start+Start(i)); }
++
++	void BuildOrder(BidiData::Order &out) {
++		BidiData::Order next;
++		next.start = line.start;
++		next.length = line.len;
++		const auto text = line.Text();
++		const auto runs = surface->BidiLevels(text,line.BaseRightToLeft(),tileBytes);
++		for (size_t r=0; r<runs.size(); ++r) {
++			const size_t end = r+1<runs.size() ? runs[r+1].start : line.len;
++			const auto level = runs[r].level;
++			for (size_t begin = runs[r].start; begin < end;) {
++				next.logical.push_back({static_cast<unsigned int>(begin),level,runs[r].resolved,0});
++				if (!runs[r].resolved || end-begin <= tileBytes) break;
++				const auto cut = surface->BidiSubdivision(text,begin+tileBytes,level & 1);
++				begin = std::min(end,cut);
++			}
++		}
++		auto &visual = next.visual;
++		visual.resize(next.logical.size());
++		std::iota(visual.begin(),visual.end(),0U);
++		// UAX #9 L2, reversing contiguous spans from the highest resolved
++		// level down through the lowest odd level. Homogeneous tiles take
++		// part in the same reversal as the characters they contain.
++		int highest = 0, lowestOdd = 126;
++		for (const auto &t : next.logical) {
++			highest = std::max(highest,int(t.level));
++			if (t.level & 1) lowestOdd = std::min(lowestOdd,int(t.level));
++		}
++		for (int level = highest; level >= lowestOdd; --level) {
++			for (size_t a=0; a<visual.size();) {
++				if (next.logical[visual[a]].level < level) { ++a; continue; }
++				size_t b=a+1;
++				while (b<visual.size() && next.logical[visual[b]].level>=level) ++b;
++				std::reverse(visual.begin()+a,visual.begin()+b);
++				a=b;
++			}
++		}
++		XYPOSITION x = 0;
++		for (const size_t i : visual) {
++			auto &t = next.logical[i];
++			t.left = x;
++			const size_t end = i+1<next.logical.size() ? next.logical[i+1].start : line.len;
++			x += line.ll->GetWidth(line.start+end,line.start+t.start);
++		}
++		out = std::move(next);
++	}
++
++	size_t LogicalAt(size_t byte) const {
++		if (!order) return 0;
++		const auto &tiles = order->logical;
++		const auto it = std::upper_bound(tiles.begin(),tiles.end(),byte,
++			[](size_t pos,const BidiData::Tile &tile) { return pos<tile.start; });
++		return static_cast<size_t>(std::prev(it)-tiles.begin());
++	}
++
++	size_t VisualAt(XYPOSITION x) const {
++		if (!order) return 0;
++		const auto &ids = order->visual;
++		const auto it = std::upper_bound(ids.begin(),ids.end(),x,
++			[&](XYPOSITION pos,unsigned int id) { return pos<Left(id); });
++		return it==ids.begin() ? 0 : static_cast<size_t>(std::prev(it)-ids.begin());
++	}
++
++	IScreenLineLayout *Shape(size_t i) const {
++		ScreenLine tile(line,Start(i),End(i)-Start(i));
++		if (order && order->logical[i].resolved) tile.direction = order->logical[i].level & 1;
++		return tile.Shape(surface);
+ 	}
+ 
+ public:
+ 	VisualLine(const ScreenLine &source, Surface *surface_) :
+-		line(source,0,source.len), surface(surface_),
+-		count(source.len<=wholeLineBytes ? 1 : (source.len+tileBytes-1)/tileBytes) {
+-	}
+-
+-	std::pair<size_t,size_t> VisibleBytes(XYPOSITION left, XYPOSITION right, size_t) const override {
+-		const size_t first = TileAtX(left), last = TileAtX(right);
+-		return {Boundary(std::min(first,last)),Boundary(std::max(first,last)+1)};
++		line(source,0,source.len), surface(surface_) {
++		if (line.len>wholeLineBytes) {
++			auto &cached = line.ll->bidiData->order;
++			if (cached.start != line.start || cached.length != line.len) BuildOrder(cached);
++			order = &cached;
++		}
++	}
++
++	std::vector<std::pair<size_t,size_t>> VisibleRanges(XYPOSITION left, XYPOSITION right, size_t) const override {
++		if (!order) return {{0,line.len}};
++		std::vector<std::pair<size_t,size_t>> spans;
++		const size_t last = VisualAt(right);
++		for (size_t v=VisualAt(left); v<=last; ++v) {
++			const size_t i=order->visual[v];
++			spans.emplace_back(Start(i),End(i));
++		}
++		std::sort(spans.begin(),spans.end());
++		size_t count=0;
++		for (const auto &range : spans) {
++			if (count && range.first == spans[count-1].second) spans[count-1].second=range.second;
++			else spans[count++]=range;
++		}
++		spans.resize(count);
++		return spans;
+ 	}
+ 
+ 	size_t PositionFromX(XYPOSITION x, bool character) override {
+-		const auto tile = Tile(TileAtX(x));
+-		const size_t start = tile.start-line.start;
+-		return start + tile.Shape(surface)->PositionFromX(x-TileSpan(start,start+tile.len).left,character);
++		const size_t i = order ? order->visual[VisualAt(x)] : 0;
++		return Start(i) + Shape(i)->PositionFromX(x-Left(i),character);
+ 	}
+ 
+ 	XYPOSITION XFromPosition(size_t byte) override {
+-		const auto tile = Tile(TileAt(byte));
+-		const size_t start = tile.start-line.start;
+-		return TileSpan(start,start+tile.len).left + tile.Shape(surface)->XFromPosition(byte-start);
++		const size_t i = LogicalAt(byte);
++		return Left(i) + Shape(i)->XFromPosition(byte-Start(i));
+ 	}
+ 
+ 	std::vector<Interval> FindRangeIntervals(size_t start, size_t end) override {
+ 		if (start>=end) return {};
+-		const size_t first = TileAt(start), last = TileAt(end-1);
++		if (!order) return Shape(0)->FindRangeIntervals(start,end);
++		if (!start && end==line.len) return {{0,line.ll->GetWidth(line.start+line.len,line.start)}};
++		const size_t first=LogicalAt(start), last=LogicalAt(end-1);
+ 		std::vector<Interval> spans;
+-		auto append = [&](size_t i) {
+-			const auto tile = Tile(i);
+-			const size_t begin = tile.start-line.start, finish = begin+tile.len;
+-			if (count>1 && start<=begin && finish<=end) {
+-				spans.push_back(TileSpan(begin,finish));
+-			} else {
+-				for (Interval part : tile.Shape(surface)->FindRangeIntervals(
+-					std::max(start,begin)-begin, std::min(end,finish)-begin))
+-					spans.push_back(part.Offset(TileSpan(begin,finish).left));
+-			}
+-		};
+-		append(first);
+-		if (first+1<last)
+-			spans.push_back(TileSpan(Boundary(first+1),Boundary(last)));
+-		if (first!=last) append(last);
++		for (size_t i=first; i<=last; ++i) {
++			const size_t begin=Start(i), finish=End(i);
++			if (start<=begin && finish<=end) spans.push_back({Left(i),Left(i)+Width(i)});
++			else for (auto part : Shape(i)->FindRangeIntervals(std::max(start,begin)-begin,std::min(end,finish)-begin))
++				spans.push_back(part.Offset(Left(i)));
++		}
+ 		std::sort(spans.begin(),spans.end(),[](Interval a,Interval b){ return a.left<b.left; });
++		size_t count=0;
++		for (const auto &part : spans) {
++			if (count && part.left<=spans[count-1].right) spans[count-1].right=std::max(part.right,spans[count-1].right);
++			else spans[count++]=part;
++		}
++		spans.resize(count);
+ 		return spans;
+ 	}
+ 
+ 	bool DrawRange(Surface *drawing, PRectangle clip, XYPOSITION x, XYPOSITION y, ColourRGBA colour,
+ 		size_t start, size_t end) override {
+ 		if (start>=end || clip.Empty()) return true;
+-		const size_t left = TileAtX(clip.left-x), right = TileAtX(clip.right-x);
+-		const size_t first = std::max(TileAt(start),std::min(left,right));
+-		const size_t last = std::min(TileAt(end-1),std::max(left,right));
+-		for (size_t i=first; i<=last; ++i) {
+-			const auto tile = Tile(i);
+-			const size_t begin = tile.start-line.start;
+-			if (!tile.Shape(surface)->DrawRange(drawing,clip,x+TileSpan(begin,begin+tile.len).left,y,colour,
+-				std::max(start,begin)-begin,std::min(end,begin+tile.len)-begin))
+-				return false;
++		const size_t last=VisualAt(clip.right-x);
++		for (size_t v=VisualAt(clip.left-x); v<=last; ++v) {
++			const size_t i=order ? order->visual[v] : 0;
++			const size_t begin=Start(i), finish=End(i);
++			if (start<finish && end>begin && !Shape(i)->DrawRange(drawing,clip,x+Left(i),y,colour,
++					std::max(start,begin)-begin,std::min(end,finish)-begin)) return false;
+ 		}
+ 		return true;
+ 	}
++
+ };
+ 
+ }
+@@ -593,10 +637,10 @@
+ IScreenLineLayout *ScreenLine::Shape(Surface *surface) const {
+ 	auto &data = *ll->bidiData;
+ 	for (const auto &cached : data.recent)
+-		if (cached.layout && cached.start == start && cached.length == len)
++		if (cached.layout && cached.start == start && cached.length == len && cached.direction == direction)
+ 			return cached.layout.get();
+ 	auto &slot = data.recent[data.next++ % std::size(data.recent)];
+-	slot = {start,len,surface->Layout(this)};
++	slot = {start,len,direction,surface->Layout(this)};
+ 	return slot.layout.get();
+ }
+ 
+diff --git a/src/EditView.cxx b/src/EditView.cxx
+--- a/src/EditView.cxx
++++ b/src/EditView.cxx
+@@ -1674,11 +1674,7 @@
+ 	const XYPOSITION xStartVisible = subLineStart - xStart;
+ 
+ 	const BreakFinder::BreakFor breakFor = selBackDrawn ? BreakFinder::BreakFor::Selection : BreakFinder::BreakFor::Text;
+-	ForwardRange visibleRange = lineRange;
+-	if (visual) {
+-		const auto [first,last] = visual->VisibleBytes(rcLine.left-xStart,rcLine.right-xStart,lineRange.Last()-lineRange.First());
+-		visibleRange = ForwardRange(lineRange.First()+first,lineRange.First()+last);
+-	}
++	auto paintRange = [&](ForwardRange visibleRange) {
+ 	BreakFinder bfBack(ll, &model.sel, visibleRange, posLineStart, visual ? 0 : xStartVisible, breakFor, model.pdoc, model.reprs.get(), &vsDraw);
+ 
+ 	const bool drawWhitespaceBackground = vsDraw.WhitespaceBackgroundDrawn() && !background;
+@@ -1749,6 +1745,13 @@
+ 				break;
+ 			paint(bounds);
+ 		}
++	}
++	};
++	if (visual) {
++		for (auto [first,last] : visual->VisibleRanges(rcLine.left-xStart,rcLine.right-xStart,lineRange.Last()-lineRange.First()))
++			paintRange(ForwardRange(lineRange.First()+first,lineRange.First()+last));
++	} else {
++		paintRange(lineRange);
+ 	}
+ }
+ 
+@@ -2165,11 +2168,7 @@
+ 	// Foreground drawing loop
+ 	const BreakFinder::BreakFor breakFor = (((phasesDraw == PhasesDraw::One) && selBackDrawn) || vsDraw.SelectionTextDrawn())
+ 		? BreakFinder::BreakFor::ForegroundAndSelection : BreakFinder::BreakFor::Foreground;
+-	ForwardRange visibleRange = lineRange;
+-	if (visual) {
+-		const auto [first,last] = visual->VisibleBytes(rcLine.left-xStart,rcLine.right-xStart,lineRange.Last()-lineRange.First());
+-		visibleRange = ForwardRange(lineRange.First()+first,lineRange.First()+last);
+-	}
++	auto paintRange = [&](ForwardRange visibleRange) {
+ 	BreakFinder bfFore(ll, &model.sel, visibleRange, posLineStart, visual ? 0 : xStartVisible, breakFor, model.pdoc, model.reprs.get(), &vsDraw);
+ 
+ 	while (bfFore.More()) {
+@@ -2367,6 +2366,13 @@
+ 			paint(bounds);
+ 		}
+ 	}
++	};
++	if (visual) {
++		for (auto [first,last] : visual->VisibleRanges(rcLine.left-xStart,rcLine.right-xStart,lineRange.Last()-lineRange.First()))
++			paintRange(ForwardRange(lineRange.First()+first,lineRange.First()+last));
++	} else {
++		paintRange(lineRange);
++	}
+ }
+ 
+ void EditView::DrawIndentGuidesOverEmpty(Surface *surface, const EditModel &model, const ViewStyle &vsDraw, const LineLayout *ll,
