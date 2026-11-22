@@ -187,7 +187,7 @@ package enum SettingsError: Error, LocalizedError, Equatable {
         switch self {
         case .ambiguousViewPreference:
             return
-                "The saved View preference is ambiguous. Check Settings.json for duplicate preference keys, then try again."
+                "The saved preference is ambiguous. Check Settings.json for duplicate preference keys, then try again."
         case .changedOnDisk: return "The settings file changed before this edit finished. Try the command again."
         case .tabWidth: return "Tab width must be a whole number from 1 to 32. The settings were not changed."
         case .invalidFont: return "Choose a font name, a size from 6 to 72 points and a default zoom from −10 to 60."
@@ -262,6 +262,35 @@ package enum EditorViewPreference: String {
     /// The caller has already decoded and validated the complete settings object. Locate only
     /// this top-level member. Unrelated JSON values never pass through NSNumber or NSString.
     fileprivate func setting(_ enabled: Bool, in data: Data) throws -> Data {
+        try SettingsJSON.replacing([rawValue: enabled ? "true" : "false"], in: data)
+    }
+}
+
+/// Only recognized values being edited pass through the encoder. Preserve every other
+/// member's original bytes, including unknown numbers and the source's Unicode encoding.
+private enum SettingsJSON {
+    static func updating(_ old: EditorSettings, to new: EditorSettings, in data: Data) throws -> Data {
+        let encoder = JSONEncoder()
+        func fields(_ value: EditorSettings) throws -> [String: String] {
+            let bytes = try encoder.encode(value)
+            guard let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
+                throw SettingsError.invalid
+            }
+            return try object.mapValues {
+                let bytes = try JSONSerialization.data(withJSONObject: $0, options: [.fragmentsAllowed, .sortedKeys])
+                return String(decoding: bytes, as: UTF8.self)
+            }
+        }
+        let before = try fields(old), after = try fields(new)
+        var edits: [String: String] = [:]
+        for key in Set(before.keys).union(after.keys) where before[key] != after[key] {
+            edits[key] = after[key] ?? "null"
+        }
+        return try replacing(edits, in: data)
+    }
+
+    static func replacing(_ edits: [String: String], in data: Data) throws -> Data {
+        guard !edits.isEmpty else { return data }
         let bytes = Array(data)
         guard bytes.count >= 4 else { throw SettingsError.ambiguousViewPreference }
         // Project structural ASCII from the original JSON code units, including BOM-bearing
@@ -292,53 +321,78 @@ package enum EditorViewPreference: String {
             while i < ascii.count && whitespace(ascii[i]) { i += 1 }
             return i
         }
-        var depth = 0, i = 0, endOfObject: Int?, valueRange: Range<Int>?
-        while i < ascii.count {
-            switch ascii[i] {
-            case 123, 91: depth += 1 // { [
-            case 125, 93: // } ]
-                if depth == 1 && ascii[i] == 125 { endOfObject = i }
-                depth -= 1
-            case 34: // A string. Escape pairs cannot close it.
-                let start = i
-                i += 1
-                while i < ascii.count, ascii[i] != 34 { i += ascii[i] == 92 ? 2 : 1 }
-                guard i < ascii.count else { throw SettingsError.ambiguousViewPreference }
-                let end = i + 1, colon = nextToken(end)
-                if depth == 1, colon < ascii.count, ascii[colon] == 58,
-                    end - start <= rawValue.utf8.count * 6 + 2,
-                    let name = try? JSONDecoder().decode(String.self, from: Data(ascii[start..<end])),
-                    name.utf8.elementsEqual(rawValue.utf8)
-                {
-                    let begin = nextToken(colon + 1)
-                    guard valueRange == nil, begin < ascii.count else { throw SettingsError.ambiguousViewPreference }
-                    let rest = ascii[begin...]
-                    guard let token = ["true", "false", "null"].first(where: { rest.starts(with: $0.utf8) }) else {
-                        throw SettingsError.ambiguousViewPreference
-                    }
-                    valueRange = begin..<(begin + token.utf8.count)
+        func endOfString(_ start: Int) throws -> Int {
+            var i = start + 1
+            while i < ascii.count, ascii[i] != 34 { i += ascii[i] == 92 ? 2 : 1 }
+            guard i < ascii.count else { throw SettingsError.invalid }
+            return i + 1
+        }
+        // The canonical decoder has already validated this source. Only locate value boundaries.
+        func endOfValue(_ start: Int) throws -> Int {
+            var depth = 0, i = start
+            while i < ascii.count {
+                switch ascii[i] {
+                case 34: i = try endOfString(i)
+                case 91, 123:
+                    depth += 1
+                    i += 1
+                case 44 where depth == 0: return i
+                case 93, 125:
+                    if depth == 0 { return i }
+                    depth -= 1
+                    i += 1
+                default:
+                    if depth == 0 && whitespace(ascii[i]) { return i }
+                    i += 1
                 }
-            default: break
+                if depth == 0 && (ascii[start] == 34 || ascii[start] == 91 || ascii[start] == 123) { return i }
             }
-            i += 1
+            throw SettingsError.invalid
         }
-        guard let endOfObject else { throw SettingsError.ambiguousViewPreference }
-        let value = enabled ? "true" : "false"
-        let range = valueRange ?? endOfObject..<endOfObject
-        let text: String
-        if valueRange != nil {
-            text = value
-        } else {
-            var last = endOfObject - 1
-            while last >= 0 && whitespace(ascii[last]) { last -= 1 }
-            guard last >= 0 else { throw SettingsError.ambiguousViewPreference }
+        let encoding: String.Encoding
+        switch (width, lane) {
+        case (2, 0): encoding = .utf16LittleEndian
+        case (2, _): encoding = .utf16BigEndian
+        case (4, 0): encoding = .utf32LittleEndian
+        case (4, _): encoding = .utf32BigEndian
+        default: encoding = .utf8
+        }
+        var seen: Set<String> = [], changes: [(Range<Int>, String)] = []
+        guard let open = ascii.firstIndex(of: 123) else { throw SettingsError.invalid }
+        var i = nextToken(open + 1)
+        let longestKey = edits.keys.map { $0.utf8.count }.max() ?? 0
+        while i < ascii.count, ascii[i] == 34 {
+            let end = try endOfString(i), colon = nextToken(end)
+            guard colon < ascii.count && ascii[colon] == 58 else { throw SettingsError.invalid }
+            let begin = nextToken(colon + 1)
+            guard begin < ascii.count else { throw SettingsError.invalid }
+            let next = try endOfValue(begin)
+            if end - i <= longestKey * 6 + 2,
+                let key = try? JSONDecoder().decode(String.self, from: Data(ascii[i..<end])),
+                let replacement = edits[key]
+            {
+                guard seen.insert(key).inserted else { throw SettingsError.ambiguousViewPreference }
+                changes.append((begin..<next, replacement))
+            }
+            i = nextToken(next)
+            if i < ascii.count && ascii[i] == 44 { i = nextToken(i + 1) }
+        }
+        guard i < ascii.count && ascii[i] == 125 else { throw SettingsError.invalid }
+        let additions = edits.keys.filter { !seen.contains($0) }.sorted().map { "\"\($0)\":\(edits[$0]!)" }
+        if !additions.isEmpty {
+            var last = i - 1
+            while last > open && whitespace(ascii[last]) { last -= 1 }
             let comma = ascii[last] == 44 || ascii[last] == 123 ? "" : ","
-            text = comma + "\"" + rawValue + "\":" + value
+            changes.append((i..<i, comma + additions.joined(separator: ",")))
         }
-        var encoded = [UInt8](repeating: 0, count: width * text.utf8.count)
-        for (index, byte) in text.utf8.enumerated() { encoded[index * width + lane] = byte }
-        var output = data
-        output.replaceSubrange((range.lowerBound * width)..<(range.upperBound * width), with: encoded)
+        var output = Data(), cursor = 0
+        for (range, newValue) in changes {
+            guard let value = newValue.data(using: encoding) else { throw SettingsError.invalid }
+            output.append(data[cursor..<(range.lowerBound * width)])
+            output.append(value)
+            cursor = range.upperBound * width
+        }
+        output.append(data[cursor..<data.count])
         return output
     }
 }
@@ -349,6 +403,11 @@ final package class SettingsStore {
     private var diskBytes: Data?
     private var unreadableIdentity: FileSignature?
     /// Compare exactly the bytes last read or written, including an absent preferences file.
+    private func currentBytes() throws -> Data? {
+        do { return try WorkspaceStore.readRegularFile(url, maximumBytes: 1024 * 1024) } catch
+            where error.isFileNotFound
+        { return nil }
+    }
     package func fileIsCurrent() throws -> Bool {
         if diskBytes == nil, loadError != nil {
             var info = stat()
@@ -356,9 +415,7 @@ final package class SettingsStore {
             guard errno == ENOENT else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
             return unreadableIdentity == nil
         }
-        do { return try WorkspaceStore.readRegularFile(url, maximumBytes: 1024 * 1024) == diskBytes } catch
-            where error.isFileNotFound
-        { return diskBytes == nil }
+        return try currentBytes() == diskBytes
     }
     private(set) package var ignoredShortcutBindings: [ShortcutLoadIssue] = []
     package var shortcutLoadNotice: String? {
@@ -400,11 +457,6 @@ final package class SettingsStore {
         _ update: (Bool) throws -> Bool
     ) throws {
         guard loadError == nil, ignoredShortcutBindings.isEmpty else { throw SettingsError.unreadable }
-        func currentBytes() throws -> Data? {
-            do { return try WorkspaceStore.readRegularFile(url, maximumBytes: 1024 * 1024) } catch
-                where error.isFileNotFound
-            { return nil }
-        }
         let source = try currentBytes()
         let data = try source ?? JSONEncoder().encode(EditorSettings())
         func validated(_ bytes: Data) throws -> EditorSettings {
@@ -446,13 +498,36 @@ final package class SettingsStore {
     /// under a unique sibling name; it is renamed rather than copied because the load may have
     /// failed on size or permissions. Returns the backup location when one was made.
     @discardableResult package func save(
-        _ settings: EditorSettings, replacingUnreadable: Bool = false,
+        _ settings: EditorSettings, replacingUnreadable: Bool = false, requiringCurrent: Bool = false,
         reservedKeys: Set<String> = EditorSettings.protectedShortcuts
     ) throws -> URL? {
         try settings.validate(reservedKeys: reservedKeys)
         if loadError != nil && !replacingUnreadable { throw SettingsError.unreadable }
         try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
-        let data = try JSONEncoder().encode(settings)
+        let ordinary = loadError == nil && ignoredShortcutBindings.isEmpty
+        // Full configuration callers supply all known values. Live form edits additionally
+        // require their displayed generation; both protect the bytes used for publication.
+        let source = ordinary ? try currentBytes() : nil
+        if ordinary && requiringCurrent && source != diskBytes { throw SettingsError.changedOnDisk }
+        let data: Data
+        if let source {
+            let prior = try EditorSettings.load(source, reservedKeys: reservedKeys)
+            guard prior.issues.isEmpty else { throw SettingsError.unreadable }
+            data = try SettingsJSON.updating(prior.settings, to: settings, in: source)
+            let loaded = try EditorSettings.load(data, reservedKeys: reservedKeys)
+            guard loaded.settings == settings && loaded.issues.isEmpty else { throw SettingsError.invalid }
+        } else {
+            data = try JSONEncoder().encode(settings)
+        }
+        func requireCurrent() throws {
+            guard try currentBytes() == source else { throw SettingsError.changedOnDisk }
+        }
+        if ordinary, data == source {
+            try requireCurrent()
+            diskBytes = source
+            value = settings
+            return nil
+        }
         let priorError = loadError
         var backup: URL?
         if loadError != nil || !ignoredShortcutBindings.isEmpty {
@@ -462,8 +537,11 @@ final package class SettingsStore {
                 .unsafeLocation
             { throw WorkspaceError.unsafeLocation }
         }
-        do { try PrivateFileStore.write(data, to: url, maximumBytes: 1024 * 1024, temporaryPrefix: ".settings-") } catch
-        {
+        do {
+            try PrivateFileStore.write(
+                data, to: url, maximumBytes: 1024 * 1024, temporaryPrefix: ".settings-",
+                beforeCommit: { if ordinary { try requireCurrent() } })
+        } catch {
             // Put the original back so a failed replacement leaves the folder as it was.
             if let backup { _ = renamex_np(backup.path, url.path, UInt32(RENAME_EXCL)) }
             loadError = priorError
