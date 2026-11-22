@@ -140,14 +140,51 @@ package struct TabWorkspace: Equatable, Sendable {
     }
 }
 
-/// Explicit session layout value. Recovery and automatic launch restore never use it.
+/// Presentation metadata shared by explicit and automatic sessions; contains no document bytes.
 package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
+    /// The tab's existing fields still describe its active pane for earlier v1 readers.
+    /// Clone creates a vertical divider. The other pane shares the same document.
+    package enum PaneWrapping: Codable, Equatable, Sendable {
+        case unwrapped
+        case wrapped(documentLine: Int, subline: Int)
+
+        var valid: Bool {
+            if case let .wrapped(line, subline) = self { return line >= 0 && subline >= 0 }
+            return true
+        }
+    }
+    package struct Split: Codable, Equatable, Sendable {
+        package var activeWrapping: PaneWrapping?
+        package var otherWrapping: PaneWrapping?
+        package var otherAnchorByte: Int
+        package var otherCaretByte: Int
+        package var otherFirstVisibleLine: Int
+        package var otherHorizontalOffset: Int
+        package var activeHorizontalOffset: Int
+        package var secondaryActive: Bool
+        package var primaryFraction: Double
+
+        package init(
+            otherAnchorByte: Int, otherCaretByte: Int, otherFirstVisibleLine: Int,
+            otherHorizontalOffset: Int, activeHorizontalOffset: Int, secondaryActive: Bool,
+            primaryFraction: Double
+        ) {
+            self.otherAnchorByte = otherAnchorByte
+            self.otherCaretByte = otherCaretByte
+            self.otherFirstVisibleLine = otherFirstVisibleLine
+            self.otherHorizontalOffset = otherHorizontalOffset
+            self.activeHorizontalOffset = activeHorizontalOffset
+            self.secondaryActive = secondaryActive
+            self.primaryFraction = primaryFraction
+        }
+    }
     package struct Tab: Codable, Equatable, Sendable {
         package var documentID: DocumentID
         package var isPinned: Bool
         package var anchorByte: Int
         package var caretByte: Int
         package var firstVisibleLine: Int
+        package var split: Split?
         package init(documentID: DocumentID, isPinned: Bool, anchorByte: Int, caretByte: Int, firstVisibleLine: Int) {
             self.documentID = documentID
             self.isPinned = isPinned
@@ -191,6 +228,13 @@ package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
                 guard seen.insert(tab.documentID).inserted, !(unpinned && tab.isPinned),
                     tab.anchorByte >= 0, tab.caretByte >= 0, tab.firstVisibleLine >= 0
                 else { throw TabModelError.invalid }
+                if let split = tab.split {
+                    guard split.otherAnchorByte >= 0, split.otherCaretByte >= 0, split.otherFirstVisibleLine >= 0,
+                        split.otherHorizontalOffset >= 0, split.activeHorizontalOffset >= 0,
+                        split.activeWrapping?.valid != false, split.otherWrapping?.valid != false,
+                        (0...1).contains(split.primaryFraction)
+                    else { throw TabModelError.invalid }
+                }
                 if !tab.isPinned { unpinned = true }
             }
         }

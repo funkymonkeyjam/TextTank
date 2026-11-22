@@ -180,6 +180,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         presentations.forEach { $0.visibilityChanged() }
         active?.resumeVisibleFindPreview()
         window?.contentView?.layoutSubtreeIfNeeded()
+        for group in model.groups {
+            if let id = group.activeTab { entries[id]?.applyRestoredSplitIfMounted() }
+        }
     }
     private func refreshLayoutPicker() {
         let menu = groupCommands.layoutMenu(picker: true)
@@ -214,11 +217,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
                     slot: group.slot, activeTabIndex: group.tabs.firstIndex { $0.id == group.activeTab },
                     tabs: group.tabs.compactMap { tab in
                         guard let p = entries[tab.id], let doc = p.document as? TextDocument else { return nil }
-                        let editor = p.activeEditor
-                        return WorkspaceLayoutState.Tab(
-                            documentID: DocumentID(doc.recoveryID), isPinned: tab.isPinned,
-                            anchorByte: editor.selectionAnchor, caretByte: editor.selectionCaret,
-                            firstVisibleLine: editor.firstVisibleLine)
+                        return p.sessionTab(documentID: DocumentID(doc.recoveryID), pinned: tab.isPinned)
                     })
             })
     }
@@ -239,13 +238,16 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         }
         for (saved, actual) in zip(state.groups, model.groups) {
             for (view, tab) in zip(saved.tabs, actual.tabs) {
-                entries[tab.id]?.primaryEditor.restoreClosedTabView(
-                    anchor: view.anchorByte, caret: view.caretByte,
-                    firstVisibleLine: view.firstVisibleLine)
+                entries[tab.id]?.restoreSessionTab(view)
             }
         }
         syncGroups()
-        if let active { activate(active, focus: true, explicit: false) } else { window?.makeFirstResponder(nil) }
+        if let active {
+            activate(active, focus: false, explicit: false)
+            window?.makeFirstResponder(active.lastEditor ?? active.primaryEditor)
+        } else {
+            window?.makeFirstResponder(nil)
+        }
         return true
     }
     @discardableResult func setEditorLayout(_ layout: LayoutKind, availableContent: TabGroupExtent? = nil) -> Bool {

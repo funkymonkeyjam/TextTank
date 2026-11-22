@@ -101,6 +101,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     private var cachedEndings = "LF"
     private var statusSummaryItems: [StatusItem] = []
     private(set) var secondary: TTEditor?
+    private var pendingSplitLayout: WorkspaceLayoutState.Tab?
     /// The pane focused last. Written when the hostWindow's first responder moves into a pane, by
     /// each view's onFocus (see `wire`) and by closeSplit.
     private(set) weak var lastEditor: TTEditor?
@@ -1227,6 +1228,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             closeSplit(sender)
             return
         }
+        let clone = addClone()
+        hostWindow?.makeFirstResponder(clone)
+        refreshCloneToolbar()
+    }
+    private func addClone() -> TTEditor {
         let source = primaryEditor
         let clone = TTEditor(frame: split.bounds)
         // Everything document-level (text, read-only, tab settings, lexer and keyword lists,
@@ -1243,8 +1249,88 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         split.setPosition(split.bounds.width / 2, ofDividerAt: 0)
         split.layoutSubtreeIfNeeded()
         clone.layoutSubtreeIfNeeded()
-        hostWindow?.makeFirstResponder(clone)
-        refreshCloneToolbar()
+        return clone
+    }
+    func sessionTab(documentID: DocumentID, pinned: Bool) -> WorkspaceLayoutState.Tab {
+        let active = activeEditor
+        var state = WorkspaceLayoutState.Tab(
+            documentID: documentID, isPinned: pinned, anchorByte: active.selectionAnchor,
+            caretByte: active.selectionCaret, firstVisibleLine: active.firstVisibleLine)
+        if let secondary {
+            let other = active === secondary ? primaryEditor : secondary
+            let available = split.bounds.width - split.dividerThickness
+            if var pending = pendingSplitLayout, var geometry = pending.split {
+                // An unmounted tab has no final pane width. A checkpoint of it
+                // must retain the last real viewport until it can be restored.
+                pending.isPinned = pinned
+                pending.documentID = documentID
+                let savedActive = geometry.secondaryActive ? secondary : primaryEditor
+                let savedOther = geometry.secondaryActive ? primaryEditor : secondary
+                pending.anchorByte = savedActive.selectionAnchor
+                pending.caretByte = savedActive.selectionCaret
+                geometry.otherAnchorByte = savedOther.selectionAnchor
+                geometry.otherCaretByte = savedOther.selectionCaret
+                pending.split = geometry
+                return pending
+            }
+            let fraction = available > 0 ? primaryEditor.frame.width / available : 0.5
+            state.split = .init(
+                otherAnchorByte: other.selectionAnchor, otherCaretByte: other.selectionCaret,
+                otherFirstVisibleLine: other.firstVisibleLine, otherHorizontalOffset: other.horizontalScrollOffset,
+                activeHorizontalOffset: active.horizontalScrollOffset, secondaryActive: active === secondary,
+                primaryFraction: min(1, max(0, fraction)))
+            state.split?.activeWrapping = wrapping(of: active)
+            state.split?.otherWrapping = wrapping(of: other)
+        }
+        return state
+    }
+    private func wrapping(of editor: TTEditor) -> WorkspaceLayoutState.PaneWrapping {
+        editor.wrap ? .wrapped(documentLine: editor.sessionTopDocumentLine, subline: editor.sessionTopSubline)
+            : .unwrapped
+    }
+    func restoreSessionTab(_ tab: WorkspaceLayoutState.Tab) {
+        var active = primaryEditor
+        pendingSplitLayout = nil
+        if let state = tab.split {
+            let clone = secondary ?? addClone()
+            active = state.secondaryActive ? clone : primaryEditor
+            let other = state.secondaryActive ? primaryEditor : clone
+            // Establish live, byte-clamped selections immediately, even when the
+            // tab is hidden. Only geometry waits for the split's mounted width.
+            other.restoreClosedTabView(anchor: state.otherAnchorByte, caret: state.otherCaretByte, firstVisibleLine: 0)
+            active.restoreClosedTabView(anchor: tab.anchorByte, caret: tab.caretByte, firstVisibleLine: 0)
+            pendingSplitLayout = tab
+            applyRestoredSplitIfMounted()
+        } else {
+            if let clone = secondary { removeClone(clone) }
+            active.restoreClosedTabView(anchor: tab.anchorByte, caret: tab.caretByte, firstVisibleLine: tab.firstVisibleLine)
+        }
+        lastEditor = active
+    }
+    func applyRestoredSplitIfMounted() {
+        guard let tab = pendingSplitLayout, let state = tab.split, let secondary, split.window != nil else { return }
+        let available = split.bounds.width - split.dividerThickness
+        guard available >= 200 else { return }
+        pendingSplitLayout = nil
+        split.setPosition(max(100, min(available - 100, available * state.primaryFraction)), ofDividerAt: 0)
+        split.layoutSubtreeIfNeeded()
+        let active = state.secondaryActive ? secondary : primaryEditor
+        let other = state.secondaryActive ? primaryEditor : secondary
+        let deferred = (document as? TextDocument)?.deferredLargeFileLanguage != nil
+        func restore(_ pane: TTEditor, _ wrap: WorkspaceLayoutState.PaneWrapping?, _ row: Int, _ x: Int) {
+            if let wrap {
+                let enabled = !deferred && wrap != .unwrapped
+                if pane.wrap != enabled { pane.wrap = enabled }
+            }
+            if case let .wrapped(line, subline) = wrap {
+                pane.scrollTo(documentLine: line, subline: pane.wrap ? subline : 0)
+            } else {
+                pane.restoreClosedTabView(anchor: pane.selectionAnchor, caret: pane.selectionCaret, firstVisibleLine: row)
+            }
+            pane.horizontalScrollOffset = x
+        }
+        restore(other, state.otherWrapping, state.otherFirstVisibleLine, state.otherHorizontalOffset)
+        restore(active, state.activeWrapping, tab.firstVisibleLine, state.activeHorizontalOffset)
     }
     func splitView(
         _ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int
@@ -1271,17 +1357,21 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     @objc func closeSplit(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
         guard let clone = secondary else { return }
-        clone.onFocus = nil
         lastEditor = primaryEditor
         hostWindow?.makeFirstResponder(primaryEditor)
         // Recording across views is not supported; say so even if no focus event was sent.
         EditorServices.current?.macros?.editorDidFocus(primaryEditor)
+        removeClone(clone)
+        refreshCloneToolbar()
+    }
+    private func removeClone(_ clone: TTEditor) {
+        clone.onFocus = nil
+        pendingSplitLayout = nil
         // Deferred results that do not depend on the clone's selection move to the primary view.
         EditorLifetime.retire(clone)
         clone.retire(inFavorOf: primaryEditor)
         clone.removeFromSuperview()
         secondary = nil
-        refreshCloneToolbar()
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         guard !statusClosed, !CompareCommandScope.blocksWorkspace else { return false }

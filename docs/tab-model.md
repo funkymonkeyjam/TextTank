@@ -213,6 +213,16 @@ store SessionDocument IDs (not live runtime IDs), ordered groups, focused group,
 indices, pins and per-view selection/first visible line. Restore allocates fresh runtime
 and recovery identities, maps saved IDs explicitly and creates shared views of each
 single restored Scintilla document/Undo history. View offsets clamp to UTF-8 boundaries.
+A split tab also records its other pane's selection and first visible line, the two horizontal
+scroll positions, the focused side and the vertical divider's proportion. This optional v1
+metadata restores the Clone inside the same tab on automatic or explicit layout restoration.
+The tab's existing range and first visible line still refer to its active pane for older readers.
+Tabs without split metadata restore one pane. Split panes also retain their individual Wrap
+settings. A wrapped viewport records the physical document line and wrapped subrow at the top.
+An inactive tab retains these positions until its divider and pane widths are available. The
+native view completes the scroll as it paints the visible rows. An original that now opens in
+deferred large-file mode stays unwrapped until the user chooses otherwise. Older split fields
+without Wrap metadata use the current wrapping policy and their saved display rows.
 The original strict SessionDocument selection/format/text/envelope validation remains.
 
 All documents and the layout policy are validated before any document opens. Invalid,

@@ -643,6 +643,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @property(nonatomic, readwrite) NSUInteger revision;
 @property(nonatomic) BOOL macroRecording;
 @property(nonatomic, strong) NSObject *pendingMacroSearch;
+@property(nonatomic, copy) BOOL (^pendingWrappedViewport)(BOOL apply);
+@property(nonatomic) NSInteger pendingTopDocumentLine, pendingTopSubline;
 @property(nonatomic) BOOL inNativeMacroInput, retiredNativeMacroInput, nativeInputChanged, nativeInputReported;
 /// While recording: sees mouse events bound for the margins, which have no subclass hook.
 @property(nonatomic, strong) id macroMouseMonitor;
@@ -1364,8 +1366,65 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
 }
 - (void)scrollCaretIntoView { [self assertThread]; [_engine message:SCI_SCROLLCARET]; }
 - (NSInteger)firstVisibleLine { [self assertThread]; return [_engine message:SCI_GETFIRSTVISIBLELINE]; }
+- (NSInteger)firstVisibleDocumentLine {
+    [self assertThread]; return [_engine message:SCI_DOCLINEFROMVISIBLE wParam:self.firstVisibleLine];
+}
+- (NSInteger)firstVisibleSubline {
+    [self assertThread];
+    return MAX(0, self.firstVisibleLine - [_engine message:SCI_VISIBLEFROMDOCLINE wParam:self.firstVisibleDocumentLine]);
+}
+- (NSInteger)sessionTopDocumentLine {
+    return _pendingWrappedViewport && _pendingWrappedViewport(NO) ? _pendingTopDocumentLine : self.firstVisibleDocumentLine;
+}
+- (NSInteger)sessionTopSubline {
+    return _pendingWrappedViewport && _pendingWrappedViewport(NO) ? _pendingTopSubline : self.firstVisibleSubline;
+}
+// Use measured line heights only. SCI_SCROLLVERTICAL installs an independent
+// deferred engine scroll that could override a newer caret at first paint.
+- (void)scrollToMeasuredDocumentLine:(sptr_t)line subline:(sptr_t)subline {
+    const sptr_t first = [_engine message:SCI_VISIBLEFROMDOCLINE wParam:line];
+    const sptr_t next = [_engine message:SCI_VISIBLEFROMDOCLINE wParam:line + 1];
+    const sptr_t withinLine = MIN(subline, MAX(0, next - first - 1));
+    [_engine message:SCI_SETFIRSTVISIBLELINE wParam:first + withinLine];
+}
+- (void)scrollToDocumentLine:(NSInteger)line subline:(NSInteger)subline {
+    [self assertThread];
+    const sptr_t last = MAX(0, [_engine message:SCI_GETLINECOUNT] - 1);
+    const sptr_t docLine = MAX(0, MIN(line, last));
+    const sptr_t offset = MAX(0, MIN(subline, INT_MAX));
+    _pendingWrappedViewport = nil;
+    [self scrollToMeasuredDocumentLine:docLine subline:offset];
+    // The first visible paint measures wrapped sublines at the restored width.
+    // Reapply an unresolved anchor once, only while the same view state still
+    // owns the request. There is no delayed timer or document-wide reflow.
+    if (self.wrap && (self.firstVisibleDocumentLine != docLine || self.firstVisibleSubline != offset)) {
+        const auto revision = self.revision;
+        const auto identity = [_engine message:SCI_GETDOCPOINTER];
+        const auto anchor = self.selectionAnchor, caret = self.selectionCaret;
+        const auto beforeLine = self.firstVisibleDocumentLine, beforeSub = self.firstVisibleSubline;
+        __weak TTEditor *weakSelf = self;
+        _pendingTopDocumentLine = docLine;
+        _pendingTopSubline = offset;
+        _pendingWrappedViewport = ^BOOL(BOOL apply) {
+            TTEditor *pane = weakSelf;
+            if (!pane || [pane.engine message:SCI_GETDOCPOINTER] != identity || !pane.wrap ||
+                pane.revision != revision || pane.selectionAnchor != anchor ||
+                pane.selectionCaret != caret || pane.firstVisibleDocumentLine != beforeLine ||
+                pane.firstVisibleSubline != beforeSub) return NO;
+            if (apply) [pane scrollToMeasuredDocumentLine:docLine subline:offset];
+            return YES;
+        };
+    }
+}
+- (NSInteger)horizontalScrollOffset { [self assertThread]; return [_engine message:SCI_GETXOFFSET]; }
+- (void)setHorizontalScrollOffset:(NSInteger)offset {
+    [self assertThread];
+    const NSInteger width = self.wrap ? 0 : [_engine message:SCI_GETSCROLLWIDTH];
+    [_engine message:SCI_SETXOFFSET wParam:(uptr_t)MAX(0, MIN(width, offset))];
+}
 - (void)restoreClosedTabViewWithAnchor:(NSInteger)anchor caret:(NSInteger)caret firstVisibleLine:(NSInteger)line {
     [self assertThread];
+    _pendingWrappedViewport = nil;
     const NSInteger length=[_engine message:SCI_GETLENGTH];
     auto boundary=[&](NSInteger value) {
         value=MAX(0,MIN(length,value));
@@ -1373,9 +1432,9 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
         return value;
     };
     [_engine message:SCI_SETSEL wParam:(uptr_t)boundary(anchor) lParam:(sptr_t)boundary(caret)];
-    const NSInteger last=MAX(0,[_engine message:SCI_GETLINECOUNT]-1);
-    const NSInteger visible=MAX(0,[_engine message:SCI_VISIBLEFROMDOCLINE wParam:(uptr_t)last]);
-    [_engine message:SCI_SETFIRSTVISIBLELINE wParam:(uptr_t)MAX(0,MIN(line,visible))];
+    // Scintilla clamps to its actual display-row extent, including sublines of
+    // the final physical line. Querying every line's wrap count is unnecessary.
+    [_engine message:SCI_SETFIRSTVISIBLELINE wParam:(uptr_t)MAX(0, MIN(line, INT_MAX))];
     [self noteStateChange];
 }
 - (BOOL)replaceRanges:(NSArray<TTByteRange *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision {
@@ -1639,7 +1698,7 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
 }
 - (BOOL)wrap { [self assertThread]; return [_engine message:SCI_GETWRAPMODE] != SC_WRAP_NONE; }
 - (void)setWrap:(BOOL)wrap {
-    [self assertThread]; [_engine message:SCI_SETWRAPMODE wParam:wrap ? SC_WRAP_WORD : SC_WRAP_NONE];
+    [self assertThread]; _pendingWrappedViewport = nil; [_engine message:SCI_SETWRAPMODE wParam:wrap ? SC_WRAP_WORD : SC_WRAP_NONE];
     // Rows are re-wrapped lazily, so the row count compared by -invalidateLineNumbersIfChanged may not have moved yet.
     _emptyLineNumbers.needsDisplay = YES;
     [self scheduleStateNotification];
@@ -2756,6 +2815,11 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
 }
 - (void)notification:(SCNotification *)notification {
     const unsigned int code = notification->nmhdr.code;
+    if (code == SCN_PAINTED && _pendingWrappedViewport) {
+        BOOL (^apply)(BOOL) = _pendingWrappedViewport;
+        _pendingWrappedViewport = nil;
+        apply(YES);
+    }
     const int type = notification->modificationType;
     TTMacroMessage *frame = TTActiveMacroMessage;
     if (_macroRecording && _onMacroStep && !frame && code == SCN_MODIFIED &&
