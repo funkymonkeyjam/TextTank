@@ -422,7 +422,7 @@ import AppKit
         guard lastRecoveryError == nil else { return }
         let message = saveStateStatus(recoveryCopyKept: recoveryCopyKept)
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach {
-            $0.showRecoveryStatus(message, failed: false)
+            $0.showRecoveryStatus(message, failed: false, preservingTransient: recoveryCopyKept)
         }
     }
     private func reportRecovery(_ error: Error?) {

@@ -1542,15 +1542,41 @@ extension DocumentChecks {
                 document.editor.selectedText == "alpha" && controller.findField.stringValue == "alpha",
                 "DS35 Find Previous also routes to the open advanced window")
             advanced.window = originalFindWindow
+            // A preceding Undo can leave this fixture at its save point. Make the
+            // recovery boundary below a real write of a dirty document.
+            try require(document.editor.replaceSelection("owned recovery edit"), "Find fixture accepts an edit")
+            try require(document.isDocumentEdited, "Find fixture has unsaved text")
             // N4: a failed find is put into words and announced, not only beeped.
             NativeFixtureEnvironment.announcements.removeAll()
             controller.findField.stringValue = "zebra"
             controller.findFromMenu(backwards: false)
             spinUntil("inline Find to finish") { !controller.inlineSearchPending }
+            // A successful recovery may publish in the same run-loop turn as the no-match result.
+            // Force that ordering before observing the real status label and announcement.
+            document.flushRecovery()
+            let savedFindSnapshot = try TextDocument.recovery.load(id: document.recoveryID)
+            check(
+                document.lastRecoveryError == nil && document.currentSaveStateStatus == "Edited — recovery copy kept"
+                    && savedFindSnapshot.text.utf8.elementsEqual(document.editor.text.utf8),
+                "the edited Find fixture has a confirmed recovery copy containing its exact bytes")
             check(
                 controller.status.stringValue == "No matches for “zebra”."
+                    && controller.status.accessibilityLabel() == "No matches for “zebra”."
                     && NativeFixtureEnvironment.announcements.contains("No matches for “zebra”."),
                 "a failed find says No matches in the status line and to assistive technology")
+            // An intervening edit ends the first display. Its queued expiry must not dismiss
+            // another display of the same words. A second presentation witnesses expiry delivery.
+            let repeated = "Repeated Find feedback"
+            controller.showTransientStatus(repeated, seconds: 0, announce: false)
+            try require(document.editor.replaceSelection("edit"), "a real edit interrupts the first display")
+            check(controller.statusText != repeated, "editing clears the first transient before the next one")
+            controller.showTransientStatus(repeated, seconds: 60, announce: false)
+            let peer = try requireValue(plain.presentation, "fixture: independent status presentation")
+            peer.showTransientStatus("Queued expiry control", seconds: 0, announce: false)
+            spinUntil("a later queued transient expiry to run") { peer.statusText == plain.currentSaveStateStatus }
+            check(
+                controller.status.stringValue == repeated && controller.status.accessibilityLabel() == repeated,
+                "an earlier expiry cannot retire a newer display with identical text")
             check(
                 controller.control(
                     field, textView: NSTextView(), doCommandBy: #selector(NSResponder.cancelOperation(_:)))
