@@ -5,6 +5,7 @@
 #import "ScintillaView.h"
 #import <objc/runtime.h>
 #import "Checks.h"
+#import "EditorWordSelectionChecks.h"
 // Count conversions on this string only; all encoded bytes come from Foundation.
 @interface TTLoadCountingString : NSString
 @property(nonatomic, copy) NSString *backing;
@@ -2094,6 +2095,7 @@ int main(int argc, char **argv) {
         check(posts==1, "a selection-only change posts a state notification");
         [NSNotificationCenter.defaultCenter removeObserver:observer];
         });
+        ttchecks::section("Mac word selection", [&] { checkWordSelections(); });
         ttchecks::section("shared bulk-loader styles", [&] { bulkLoaderStyleChecks(); });
         ttchecks::section("loadDocumentText", [&] {
         TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
