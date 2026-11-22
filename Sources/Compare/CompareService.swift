@@ -81,13 +81,16 @@ import EditorBridge
     let parent: CompareDocumentInput
     let url: URL, encoding: FileEncoding
     let overrideEncoding: FileEncoding?
+    let expectedIdentity: FileSignature?
     private let edited: Bool
     private let savedFormat: FileFormat
     private let savedFingerprint: String?
-    init(_ parent: CompareDocumentInput, encoding: FileEncoding? = nil) throws {
+    init(_ parent: CompareDocumentInput, encoding: FileEncoding? = nil, expecting identity: FileSignature? = nil) throws
+    {
         let (doc, editor) = try parent.capture.resolve()
         guard let url = doc.diskURL ?? doc.fileURL else { throw ReviewRejection.closed }
         self.parent = parent
+        expectedIdentity = identity
         self.url = url
         self.overrideEncoding = encoding
         self.encoding = encoding ?? doc.savedFormat.encoding
@@ -257,6 +260,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
     private var auxiliary: [AuxiliaryJob] = []
     private(set) var marked: CompareDocumentInput?
     private var picker: CompareSourcePicker?
+    private var savedPickers: [DocumentID: CompareSourcePicker] = [:]
     var currentEditor: () -> TTEditor? = { nil }
     var prepareSelectedChange: ReviewChangePreparation?
     var allEditors: () -> [TTEditor] = {
@@ -356,6 +360,9 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         case .savedFile(let file):
             try file.validate()
             snapshot = try await fileSnapshot(file.url, file.encoding)
+            if let expected = file.expectedIdentity, snapshot.capturedFileIdentity != expected {
+                throw ReviewRejection.bytesChanged
+            }
             try file.validate()
             change = nil
         case .clipboard:
@@ -387,6 +394,7 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         } onCancel: {
             cancellation.cancel()
         }
+        try Task.checkCancellation()
         let controller = CompareController(service: self, original: pair.0, modified: pair.1)
         windows.append(controller)
         if showWindows {
@@ -478,6 +486,40 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         value.showWindow(nil)
         value.window?.makeKeyAndOrderFront(nil)
     }
+    func cancelPendingSavedComparisons() {
+        Array(savedPickers.values).forEach { $0.window?.close() }
+    }
+    func hasSavedSource(_ document: TextDocument) -> Bool {
+        EditorServices.current?.reviewingTermination() != true && document.isOpen && document.diskURL != nil
+            && document.editor.byteLength <= ReviewDiffPolicy.default.maximumInputBytes
+    }
+    func canCompareSaved(_ document: TextDocument) -> Bool {
+        hasSavedSource(document) && (savedPickers[document.runtimeID] != nil || windows.count + admissions < 2)
+    }
+    func compareSaved(_ document: TextDocument, expecting identity: FileSignature? = nil) {
+        guard hasSavedSource(document) else { return }
+        guard canCompareSaved(document) else {
+            report(CompareOpenFailure.limit)
+            return
+        }
+        let id = document.runtimeID
+        if let pending = savedPickers[id] {
+            if identity == nil {
+                pending.showWindow(nil)
+                pending.window?.makeKeyAndOrderFront(nil)
+                return
+            }
+            // A new notice click is bound to its own observed inode.
+            pending.window?.close()
+        }
+        let value = CompareSourcePicker(service: self, preferred: document.activeEditor)
+        savedPickers[id] = value
+        value.onClose = { [weak self] in self?.savedPickers.removeValue(forKey: id) }
+        value.showWindow(nil)
+        value.window?.makeKeyAndOrderFront(nil)
+        value.beginWithSavedVersion(expecting: identity)
+    }
+
     @objc func markCurrent(_ sender: Any?) {
         guard let editor = currentEditor() else { return }
         do { try mark(editor) } catch { report(error) }

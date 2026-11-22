@@ -51,6 +51,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
     }
     private let statusDetails = StatusBadgeRow()
+    func configureExternalReload() {
+        guard let doc = document as? TextDocument else { return }
+        statusDetails.setExternalAction(for: doc.externalFile)
+    }
+
     let host: WorkspaceWindowController
     let presentationRoot: NSView
     var hostWindow: NSWindow? { host.window }
@@ -277,6 +282,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             document.currentSaveStateStatus,
             compactMessage: document.recoveredOrigin == nil
                 ? document.currentSaveStateStatus : "Recovered copy — Save As to keep")
+        configureExternalReload()
         statusDetails.menuProvider = { [weak self] field in
             guard let self, self.focusPresentationChrome(explicit: false) else { return nil }
             EditorServices.current?.noteActiveController(self)

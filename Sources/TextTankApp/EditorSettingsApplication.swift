@@ -12,6 +12,9 @@ import AppKit
             previous?.fontName != value.fontName || previous?.basePointSize != value.basePointSize
             ? value.resolvedBaseFont : nil
         for doc in NSDocumentController.shared.documents.compactMap({ $0 as? TextDocument }) {
+            if previous?.diskChangeBehavior != value.diskChangeBehavior {
+                doc.externalFile.setPolicy(value.diskChangeBehavior)
+            }
             let views = doc.presentations.flatMap(\.views)
             for editor in views.isEmpty ? [doc.editor] : views {
                 if let font { editor.setBaseFontName(font.fontName, size: font.pointSize) }

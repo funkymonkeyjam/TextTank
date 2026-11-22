@@ -33,6 +33,7 @@ import EditorBridge
     private var task: Task<Void, Never>?
     private var isClosed = false, busy = false
     private var failure: String?
+    private var expectedSavedIdentity: FileSignature?
     private var filePanel: NSOpenPanel?
     var makeFilePanel: () -> NSOpenPanel = { NSOpenPanel() }
     private var sourceTimer: Timer?
@@ -258,6 +259,12 @@ import EditorBridge
     private func selectedEncoding(_ popup: NSPopUpButton) -> FileEncoding? {
         (popup.selectedItem?.representedObject as? String).flatMap(FileEncoding.init(rawValue:))
     }
+    /// This picker was initialized with the invoking saved editor, selected first in Original.
+    func beginWithSavedVersion(expecting identity: FileSignature?) {
+        expectedSavedIdentity = identity
+        kind.selectItem(at: 1)
+        begin(nil)
+    }
     @objc private func begin(_ sender: Any?) {
         update()
         guard !busy, let service, start.isEnabled else { return }
@@ -270,7 +277,9 @@ import EditorBridge
             case 1:
                 a = try selected(original)
                 guard case .document(let input) = a else { throw ReviewRejection.closed }
-                b = .savedFile(try CompareSavedFileInput(input, encoding: selectedEncoding(modifiedEncoding)))
+                b = .savedFile(
+                    try CompareSavedFileInput(
+                        input, encoding: selectedEncoding(modifiedEncoding), expecting: expectedSavedIdentity))
             case 2:
                 a = try selected(original)
                 b = .clipboard
@@ -282,6 +291,7 @@ import EditorBridge
                 a = .file(x, encoding: selectedEncoding(originalEncoding))
                 b = .file(y, encoding: selectedEncoding(modifiedEncoding))
             }
+            expectedSavedIdentity = nil
             busy = true
             update()
             status.stringValue = "Capturing comparison sources…"

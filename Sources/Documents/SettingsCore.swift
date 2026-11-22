@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
+package enum ExternalChangePolicy: String, Codable, Sendable, CaseIterable {
+    case ask, reloadIfUnmodified, ignore
+}
+
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
 package struct EditorSettings: Codable, Equatable {
@@ -34,8 +38,12 @@ package struct EditorSettings: Codable, Equatable {
     package var autoPairEnabled: Bool { autoPair ?? false }
     package var autoIndent: Bool?
     package var autoIndentEnabled: Bool { autoIndent ?? true }
+    package var reopenLastSession: Bool?
+    package var reopensLastSession: Bool { reopenLastSession ?? true }
     package var wrap: Bool
     package var appearance: String
+    package var externalChangePolicy: ExternalChangePolicy?
+    package var diskChangeBehavior: ExternalChangePolicy { externalChangePolicy ?? .ask }
     // Key equivalents use AppKit's uppercase convention for Shift.
     package var shortcuts: [String: String]
     static package let commands = EditorCommand.shortcutIdentifiers
@@ -259,13 +267,7 @@ package enum EditorViewPreference: String {
         case .indentGuides: return settings.indentGuidesEnabled
         }
     }
-    /// The caller has already decoded and validated the complete settings object. Locate only
-    /// this top-level member. Unrelated JSON values never pass through NSNumber or NSString.
-    fileprivate func setting(_ enabled: Bool, in data: Data) throws -> Data {
-        try SettingsJSON.replacing([rawValue: enabled ? "true" : "false"], in: data)
-    }
 }
-
 /// Only recognized values being edited pass through the encoder. Preserve every other
 /// member's original bytes, including unknown numbers and the source's Unicode encoding.
 private enum SettingsJSON {
@@ -456,6 +458,34 @@ final package class SettingsStore {
         _ preference: EditorViewPreference, reservedKeys: Set<String> = EditorSettings.protectedShortcuts,
         _ update: (Bool) throws -> Bool
     ) throws {
+        try updateMember(preference.rawValue, reservedKeys: reservedKeys) { latest in
+            let current = preference.enabled(in: latest)
+            let requested = try update(current)
+            return current == requested ? nil : (requested ? "true" : "false")
+        }
+    }
+    package func updateExternalChangePolicy(
+        from displayed: ExternalChangePolicy, to requested: ExternalChangePolicy,
+        reservedKeys: Set<String> = EditorSettings.protectedShortcuts
+    ) throws {
+        try updateMember("externalChangePolicy", reservedKeys: reservedKeys) { latest in
+            guard latest.diskChangeBehavior == displayed || latest.diskChangeBehavior == requested else {
+                throw SettingsError.changedOnDisk
+            }
+            return latest.diskChangeBehavior == requested ? nil : "\"" + requested.rawValue + "\""
+        }
+    }
+    package func updateLaunchPreference(from displayed: Bool, to requested: Bool, reservedKeys: Set<String>) throws {
+        try updateMember("reopenLastSession", reservedKeys: reservedKeys) { latest in
+            guard latest.reopensLastSession == displayed || latest.reopensLastSession == requested else {
+                throw SettingsError.changedOnDisk
+            }
+            return latest.reopensLastSession == requested ? nil : (requested ? "true" : "false")
+        }
+    }
+    private func updateMember(
+        _ key: String, reservedKeys: Set<String>, edit: (EditorSettings) throws -> String?
+    ) throws {
         guard loadError == nil, ignoredShortcutBindings.isEmpty else { throw SettingsError.unreadable }
         let source = try currentBytes()
         let data = try source ?? JSONEncoder().encode(EditorSettings())
@@ -465,18 +495,16 @@ final package class SettingsStore {
             return loaded.settings
         }
         let latest = try validated(data)
-        let enabled = preference.enabled(in: latest)
-        let requested = try update(enabled)
         func requireUnchanged() throws {
             guard try currentBytes() == source else { throw SettingsError.changedOnDisk }
         }
-        if enabled == requested {
+        guard let requested = try edit(latest) else {
             try requireUnchanged()
             diskBytes = source
             value = latest
             return
         }
-        let result = try preference.setting(requested, in: data)
+        let result = try SettingsJSON.replacing([key: requested], in: data)
         let accepted = try validated(result)
         try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
         try PrivateFileStore.write(

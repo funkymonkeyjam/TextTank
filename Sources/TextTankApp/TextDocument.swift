@@ -18,6 +18,7 @@ import AppKit
         guard let first = presentations.first else { return nil }
         return first.host.presentation(for: runtimeID) ?? first
     }
+    private var lastSaveConflict: SavedVersionDecision?
     private var tabClosePending = false
     override var windowForSheet: NSWindow? { isClosed ? nil : presentation?.hostWindow }
     private func revealForNativeAction() {
@@ -31,10 +32,49 @@ import AppKit
         revealForNativeAction()
         super.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: contextInfo)
     }
+    override func willPresentError(_ error: Error) -> Error {
+        let presented = super.willPresentError(error) as NSError
+        guard let conflict = lastSaveConflict, conflict.allowsComparison,
+            (error as NSError).userInfo[DocumentActionError.saveConflictAttemptKey] as? String == conflict.id.uuidString
+        else { return presented }
+        var info = presented.userInfo
+        info[NSLocalizedRecoveryOptionsErrorKey] = ["Cancel", "Compare…"]
+        info[NSLocalizedRecoverySuggestionErrorKey] =
+            "The file changed outside TextTank. Compare it with your edits, or use Save As to keep a separate copy."
+        info[NSRecoveryAttempterErrorKey] = conflict
+        return NSError(domain: presented.domain, code: presented.code, userInfo: info)
+    }
     override func save(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
         revealForNativeAction()
+        // AppKit asks whether to overwrite before it calls writeSafely. A proved
+        // byte conflict already prevents TextTank from writing this saved document.
+        if let window = windowForSheet, window.attachedSheet == nil, let conflict = conflictForSaveCommand() {
+            presentError(conflict, modalFor: window, delegate: nil, didPresent: nil, contextInfo: nil)
+            return
+        }
         super.save(sender)
+    }
+    private func conflictForSaveCommand() -> DocumentActionError? {
+        guard isDocumentEdited, let url = diskURL, let diskDigest,
+            presentation?.host.tabCommands.isBusy != true,
+            EditorServices.current?.compare?.canCompareSaved(self) == true
+        else { return nil }
+        let limit = ReviewDiffPolicy.default.maximumInputBytes
+        guard let identity = try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: limit),
+            identity != diskSignature,
+            let sample = try? WorkspaceStore.sample(ofRegularFileAt: url, maximumBytes: limit, matching: identity)
+        else { return nil }
+        guard sample.digest != diskDigest else {
+            diskSignature = sample.signature
+            return nil
+        }
+        return saveConflict(at: url, identity: identity)
+    }
+    private func saveConflict(at url: URL, identity: FileSignature? = nil) -> DocumentActionError {
+        let decision = SavedVersionDecision(self, at: url, observed: identity)
+        lastSaveConflict = decision
+        return .diskChanged(decision.id)
     }
     override func saveAs(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
@@ -54,8 +94,57 @@ import AppKit
     func requestTabClose(_ sender: Any?) {
         guard isOpen, !tabClosePending else { return }
         tabClosePending = true
+        if isDocumentEdited, let url = diskURL, let window = windowForSheet, window.attachedSheet == nil,
+            EditorServices.current?.compare?.canCompareSaved(self) == true
+        {
+            let decision = SavedVersionDecision(self, at: url)
+            if decision.allowsComparison {
+                reviewSingleTabClose(decision, in: window)
+                return
+            }
+        }
         canClose(
             withDelegate: self, shouldClose: #selector(tabCloseReviewed(_:shouldClose:contextInfo:)), contextInfo: nil)
+    }
+    /// Only the last view of one explicitly closed tab uses this review. AppKit owns
+    /// application quit; the existing bulk tab command collects its own separate decisions.
+    private func reviewSingleTabClose(_ decision: SavedVersionDecision, in window: NSWindow) {
+        let alert = TTAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(format: "Save changes to “%@” before closing?", displayName)
+        alert.informativeText = "Review Changes keeps this document open and compares your edits with the saved file."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don’t Save").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel", role: .cancel)
+        alert.addButton(withTitle: "Review Changes…")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            self.tabClosePending = false
+            guard decision.isCurrent, EditorServices.current?.reviewingTermination() != true else { return }
+            switch TTAlert.Result(response) {
+            case .button(0):
+                self.tabClosePending = true
+                TabSaveReply.save(self) { [weak self] error in
+                    guard let self else { return }
+                    self.tabClosePending = false
+                    if error == nil, decision.sameEditorState, !self.isDocumentEdited, !self.hasUnsavedState,
+                        EditorServices.current?.reviewingTermination() != true
+                    {
+                        self.close()
+                    }
+                }
+            case .button(1):
+                if decision.diskStillMatches {
+                    self.close()
+                } else {
+                    self.presentation?.showTransientStatus(
+                        "The saved file changed during review. The document remains open.")
+                }
+            case .button(3):
+                decision.compareAfterDismissal()
+            default: break
+            }
+        }
     }
     @objc private func tabCloseReviewed(
         _ document: NSDocument, shouldClose: Bool, contextInfo: UnsafeMutableRawPointer?
@@ -111,6 +200,29 @@ import AppKit
     private var diskSignature: FileSignature?
     /// A sample taken by a caller that read the bytes through its own descriptor.
     private var capturedSample: FileSample?
+    lazy var externalFile = ExternalFileObservation(document: self)
+    var savedDiskSample: FileSample? { diskDigest.map { FileSample(digest: $0, signature: diskSignature) } }
+    /// Used only after a renewed comparison with the visible notice's file, bytes and editor state.
+    func acceptExternalRead(_ read: CapturedFileRead, from url: URL) throws {
+        try self.read(
+            captured: read.data, sample: read.sample, from: url, ofType: fileType ?? Self.plainTextType,
+            as: revertEncoding)
+        fileModificationDate = read.modificationDate
+        updateChangeCount(.changeCleared)
+        flushRecovery()
+    }
+
+    func externalNoticeChanged() {
+        showSaveState(recoveryCopyKept: recoveryCopyKept)
+        for p in presentations { p.configureExternalReload() }
+        presentation?.host.metadataChanged()
+        if let notice = externalFile.notice, lastRecoveryError == nil, let visible = presentation,
+            visible.isActiveTab, visible.isPresented, visible.hostWindow?.isKeyWindow == true
+        {
+            Announce.say(notice, from: visible.hostWindow)
+        }
+    }
+
     /// Immutable bytes captured before a coordinated write; only data(ofType:) reads them during that write.
     private var savePayload: Data?
     /// False if edits arrived during a save, so Scintilla's save point no longer identifies the disk bytes.
@@ -143,12 +255,13 @@ import AppKit
     /// Status-line text for a recovered draft: what it is a draft of and when it was written.
     /// Cleared when the draft is saved under a name of its own.
     private(set) var recoveredOrigin: String?
+    private var recoveredOriginalURL: String?
     /// Suppresses ordinary edit/recovery callbacks while a read or restore establishes its checkpoints.
     private var loading = false
     /// A transient decoder override for one read; nil keeps automatic detection.
     private var openEncoding: FileEncoding?
     /// Explicit interpretation of the last successful disk baseline, independent of unsaved conversion.
-    private var revertEncoding: FileEncoding?
+    private(set) var revertEncoding: FileEncoding?
     private var readingURL: URL?
     /// A snapshot records the file it belongs to. A moved or renamed file is new snapshot
     /// metadata at the same text revision, so it needs a later recovery revision.
@@ -176,11 +289,16 @@ import AppKit
             if Thread.isMainThread {
                 MainActor.assumeIsolated {
                     recoveryBase += 1
+                    externalFile.invalidate()
                     // Only the existing main-thread setter route clears the recovered label.
                     recoveredOrigin = nil
+                    recoveredOriginalURL = nil
                 }
             } else {
-                DispatchQueue.main.async { [weak self] in self?.recoveryBase += 1 }
+                DispatchQueue.main.async { [weak self] in
+                    self?.recoveryBase += 1
+                    self?.externalFile.invalidate()
+                }
             }
         }
     }
@@ -268,12 +386,19 @@ import AppKit
     /// Everything NSDocument validates itself (Save, Revert to Saved and the rest) is left to it.
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         guard !CompareCommandScope.blocksWorkspace else { return false }
+        if item.action == #selector(compareWithSavedVersion(_:)) {
+            return EditorServices.current?.compare?.canCompareSaved(self) == true
+        }
         if item.action == #selector(checkExternalChanges(_:)) { return fileURL != nil }
         if item.action == #selector(toggleReadOnly(_:)) {
             (item as? NSMenuItem)?.state = editor.readOnly ? .on : .off
             return true
         }
         return super.validateUserInterfaceItem(item)
+    }
+    @objc func compareWithSavedVersion(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        EditorServices.current?.compare?.compareSaved(self)
     }
     @objc func checkExternalChanges(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
@@ -377,7 +502,8 @@ import AppKit
     private func recoveryPreparation() -> RecoveryWriter.Prepare {
         let store = Self.recovery, id = recoveryID, revision = recoveryRevision
         if shouldKeepRecoveryCopy {
-            let bytes = editor.checkedUTF8Data, capturedFormat = format, originalURL = fileURL?.absoluteString
+            let bytes = editor.checkedUTF8Data, capturedFormat = format,
+                originalURL = fileURL?.absoluteString ?? recoveredOriginalURL
             let capturedAt = Date()
             return {
                 let snapshot = try RecoverySnapshot(
@@ -401,7 +527,7 @@ import AppKit
         } else {
             status = "Saved"
         }
-        return status
+        return externalFile.notice.map { status + " — " + $0 } ?? status
     }
     /// Whether the last recovery write since the latest edit succeeded.
     private var recoveryCopyKept = false
@@ -504,6 +630,7 @@ import AppKit
         guard !isClosed else { return }
         presentation?.host.tabCommands.willClose(self)
         isClosed = true
+        externalFile.invalidate()
         EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was closed.")
         cancelRecoveryTimers()
         recoveryGeneration += 1
@@ -536,6 +663,7 @@ import AppKit
         let adapter = EditorWindowController(document: self)
         addWindowController(adapter)
         adapter.host.register(adapter, document: self)
+        externalFile.setApplicationActive(NSApp.isActive)
         NotificationCenter.default.post(name: .textTankDocumentsDidChange, object: self)
     }
     override func read(from url: URL, ofType typeName: String) throws {
@@ -646,7 +774,9 @@ import AppKit
         updateChangeCount(.changeDone)
     }
     /// Opens one recovery snapshot as a new unsaved document that keeps the snapshot's identity.
-    @discardableResult static func openRecovered(_ snapshot: RecoverySnapshot) throws -> TextDocument {
+    @discardableResult static func openRecovered(_ snapshot: RecoverySnapshot, originalGroup: String? = nil) throws
+        -> TextDocument
+    {
         let (base, overflow) = snapshot.revision.addingReportingOverflow(1)
         guard !overflow else { throw RecoveryError.invalidSnapshot }
         let doc = DocumentFactory.makeUntitled(
@@ -658,7 +788,10 @@ import AppKit
             populate: { document in
                 document.loadUnsavedSnapshot(text: snapshot.text, format: snapshot.format)
                 // Display only: recovery never opens or writes the original path.
-                document.recoveredOrigin = SnapshotLabel.status(for: snapshot)
+                document.recoveredOrigin =
+                    SnapshotLabel.status(for: snapshot)
+                    + (originalGroup.map { " · Original open in " + $0 } ?? "")
+                document.recoveredOriginalURL = SnapshotLabel.origin(of: snapshot)?.absoluteString
                 if let name = SnapshotLabel.originName(of: snapshot) { document.displayName = "Recovered " + name }
             })
         doc.showWindows()
@@ -682,6 +815,7 @@ import AppKit
         revertEncoding = explicitEncoding
         diskDigest = sample.digest
         diskSignature = sample.signature
+        externalFile.invalidate()
         savepointMatchesDisk = true
         editor.setSavePoint()
         editor.readOnly = locked
@@ -830,7 +964,7 @@ import AppKit
         if inPlace, diskDigest != nil, try diskState(trustingSettledMetadata: true) == .changed,
             saveOperation != .saveAsOperation
         {
-            throw DocumentActionError.diskChanged
+            throw saveConflict(at: destination)
         }
         let submitted = try FileCodec.encode(Self.capturedText(from: editor.checkedUTF8Data), format: format),
             submittedFormat = format,
@@ -848,6 +982,7 @@ import AppKit
             // another writer may already have replaced it, and only a hash can tell.
             diskDigest = WorkspaceStore.fingerprint(submitted)
             diskSignature = nil
+            externalFile.invalidate()
             // A successful conversion changes the baseline Revert will read from disk.
             if revertEncoding != nil || submittedFormat.encoding != savedFormat.encoding {
                 revertEncoding = submittedFormat.encoding
@@ -894,5 +1029,69 @@ enum EditorCaptureError: LocalizedError, Equatable {
         case .incomplete: return "TextTank could not read the entire editor buffer."
         case .invalidUTF8: return "The editor buffer contains invalid UTF-8 text."
         }
+    }
+}
+
+/// A native sheet can outlive the document state it described. Only a fresh, explicit
+/// decision may compare those inputs; it never resumes a failed save or closes a document.
+@MainActor private final class SavedVersionDecision: NSObject {
+    let id = UUID()
+    private weak var document: TextDocument?
+    private let url: URL
+    private let epoch: UInt
+    private let revision: UInt
+    private let format: FileFormat
+    private let baseline: String?
+    private let identity: FileSignature?
+    private var handled = false
+    init(_ document: TextDocument, at url: URL, observed: FileSignature? = nil) {
+        self.document = document
+        self.url = url
+        epoch = document.loadEpoch
+        revision = document.editor.revision
+        format = document.format
+        baseline = document.originalDiskFingerprint
+        identity =
+            observed
+            ?? (try? WorkspaceStore.signature(
+                ofRegularFileAt: url, maximumBytes: ReviewDiffPolicy.default.maximumInputBytes))
+    }
+    var sameEditorState: Bool {
+        guard let document else { return false }
+        return document.isOpen && document.diskURL == url && document.loadEpoch == epoch
+            && document.editor.revision == revision && document.format == format
+    }
+    var isCurrent: Bool { sameEditorState && document?.originalDiskFingerprint == baseline }
+    var diskStillMatches: Bool {
+        guard let identity else { return false }
+        return (try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int(clamping: identity.size)))
+            == identity
+    }
+    var allowsComparison: Bool {
+        guard identity != nil, isCurrent, let document, document.presentation?.host.tabCommands.isBusy != true
+        else { return false }
+        return EditorServices.current?.compare?.canCompareSaved(document) == true
+    }
+    func compareAfterDismissal() {
+        guard !handled else { return }
+        handled = true
+        DispatchQueue.main.async { [self] in
+            guard allowsComparison, let document, let identity else { return }
+            EditorServices.current?.compare?.compareSaved(document, expecting: identity)
+        }
+    }
+    override func attemptRecovery(fromError error: Error, optionIndex index: Int) -> Bool {
+        precondition(Thread.isMainThread)
+        MainActor.assumeIsolated {
+            if index == 1 { compareAfterDismissal() } else { handled = true }
+        }
+        return false
+    }
+    override func attemptRecovery(
+        fromError error: Error, optionIndex index: Int, delegate: Any?, didRecoverSelector: Selector?,
+        contextInfo: UnsafeMutableRawPointer?
+    ) {
+        let recovered = attemptRecovery(fromError: error, optionIndex: index)
+        ErrorRecoveryReply.send(recovered, to: delegate, selector: didRecoverSelector, contextInfo: contextInfo)
     }
 }

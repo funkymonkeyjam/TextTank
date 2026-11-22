@@ -4,6 +4,7 @@ import NativeSearch
 import AppKit
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+    private var automaticSession: AutomaticSession?
     private weak var knownWorkspace: WorkspaceWindowController?
     lazy var workspaceWindow: WorkspaceWindowController = {
         let host = WorkspaceWindowController()
@@ -139,8 +140,11 @@ import AppKit
         }
         return controller
     }()
+    private var reviewingTermination = false
+    private weak var initializedCompare: CompareService?
     @MainActor lazy var compare: CompareService = {
         let value = CompareService()
+        initializedCompare = value
         value.prepareSelectedChange = { [weak self] destination in
             self?.macros.prepareUnrecordedChange(
                 in: destination,
@@ -188,6 +192,22 @@ import AppKit
                     + " The previous recording is kept.")
         }
     }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        let front = currentDocument
+        front?.externalFile.setApplicationActive(true)
+        front?.externalFile.check(prioritized: true)
+        for case let document as TextDocument in NSDocumentController.shared.documents where document !== front {
+            document.externalFile.setApplicationActive(true)
+            document.externalFile.check()
+        }
+    }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        for case let document as TextDocument in NSDocumentController.shared.documents {
+            document.externalFile.setApplicationActive(false)
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenus()
         settings.apply()
@@ -245,19 +265,77 @@ import AppKit
             _ = alert.runModal()
         }
         NSApp.activate()
-        if NSDocumentController.shared.documents.isEmpty {
-            newDocument(nil)
+        var sessionNotices: [String] = []
+        restoreLaunchDocuments(review: restoreRecovery) { sessionNotices.append(contentsOf: $0) }
+        showSessionNotices(sessionNotices)
+    }
+    /// Restore and recovery review finish before reporting skipped paths in their workspace.
+    func showSessionNotices(_ notices: [String]) {
+        guard !notices.isEmpty, let window = workspaceWindow.window else { return }
+        let alert = TTAlert()
+        alert.messageText = "Some session items need review"
+        alert.informativeText =
+            notices.prefix(12).joined(separator: "\n")
+            + (notices.count > 12 ? "\n…and \(notices.count - 12) more." : "")
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window) { _ in }
+    }
+    func restoreLaunchDocuments(review: ([URL: TextDocument]) -> Void, report: ([String]) -> Void) {
+        let session = AutomaticSession()
+        automaticSession = session
+        var originals = [URL: TextDocument]()
+        do {
+            if let state = try session.read(), settings.value.reopensLastSession {
+                let result = session.reopen(state, in: workspaceWindow)
+                originals = result.files
+                if !result.notices.isEmpty { report(result.notices) }
+            }
+        } catch {
+            if settings.value.reopensLastSession { report([error.localizedDescription]) }
+        }
+        if let active = knownWorkspace?.active {
+            active.showWindow(nil)
         } else {
-            for document in NSDocumentController.shared.documents {
-                if document.windowControllers.isEmpty { document.makeWindowControllers() }
-                document.showWindows()
+            for doc in NSDocumentController.shared.documents {
+                if doc.windowControllers.isEmpty { doc.makeWindowControllers() }
+                doc.showWindows()
             }
         }
-        restoreRecovery()
+        review(originals)
+        if NSDocumentController.shared.documents.isEmpty { newDocument(nil) }
+        session.start { [weak self] in self?.checkpointSession() }
+    }
+    func checkpointSession() {
+        automaticSession?.checkpoint(knownWorkspace) { [weak self] error in
+            self?.knownWorkspace?.showTabMessage("The last session could not be saved. " + error.localizedDescription)
+        }
+    }
+    private func commitSession() {
+        do {
+            if try automaticSession?.commit(knownWorkspace) == false {
+                knownWorkspace?.showTabMessage("The existing last-session file was preserved.")
+            }
+        } catch {
+            let alert = TTAlert()
+            alert.messageText = "The last session could not be confirmed"
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: "OK")
+            _ = alert.runModal()
+        }
     }
     /// Installation is explicit and follows TextDocumentController construction in main.
     /// Weak providers preserve the lazy feature graph without retaining a discarded composition root.
     @MainActor func installEditorServices() {
+        if let controller = NSDocumentController.shared as? TextDocumentController {
+            controller.willReviewOpenDocuments = { [weak self] in
+                self?.initializedCompare?.cancelPendingSavedComparisons()
+                self?.automaticSession?.beginReview(self?.knownWorkspace)
+            }
+            controller.didReviewOpenDocuments = { [weak self] accepted in
+                self?.automaticSession?.nativeReviewEnded(accepted: accepted)
+            }
+            controller.didRegisterDocument = { [weak self] in self?.automaticSession?.documentOpened() }
+        }
         var services = EditorServices()
         services.activePresentationProvider = { [weak self] in self?.currentDocumentController }
         services.workspaceHostProvider = { [weak self] in self?.workspaceWindow }
@@ -266,6 +344,10 @@ import AppKit
         services.languagesProvider = { [weak self] in self?.languages }
         services.macrosProvider = { [weak self] in self?.macros }
         services.automationsProvider = { [weak self] in self?.automations }
+        services.reviewingTermination = { [weak self] in
+            self?.reviewingTermination == true
+                || (NSDocumentController.shared as? TextDocumentController)?.isReviewingOpenDocuments == true
+        }
         services.compareProvider = { [weak self] in self?.compare }
         services.searchProvider = { [weak self] in self?.searchController }
         services.newDocument = { [weak self] in self?.newDocument($0) }
@@ -306,9 +388,14 @@ import AppKit
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if NSDocumentController.shared.documents.allSatisfy({ !$0.isDocumentEdited }) {
+            commitSession()
             closeAllForTermination()
             return .terminateNow
         }
+        guard !reviewingTermination else { return .terminateLater }
+        reviewingTermination = true
+        initializedCompare?.cancelPendingSavedComparisons()
+        automaticSession?.beginReview(knownWorkspace)
         DispatchQueue.main.async { self.requestUnsavedReview(self) }
         return .terminateLater
     }
@@ -325,7 +412,13 @@ import AppKit
     }
     var replyToTerminate: @MainActor (Bool) -> Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
     @objc func reviewed(_ controller: NSDocumentController, didReviewAll: Bool, contextInfo: UnsafeMutableRawPointer?) {
-        if didReviewAll { closeAllForTermination() }
+        if didReviewAll {
+            commitSession()
+            closeAllForTermination()
+        } else {
+            automaticSession?.cancelReview()
+        }
+        reviewingTermination = false
         replyToTerminate(didReviewAll)
     }
     @MainActor func buildMenus() {
@@ -375,6 +468,7 @@ import AppKit
         automations.saveAllShortcutItem = file.addItem(
             title: "Save All", action: #selector(NSDocumentController.saveAllDocuments(_:)), fallback: .saveAll)
         file.addItem(title: "Revert to Saved…", action: #selector(NSDocument.revertToSaved(_:)))
+        file.addItem(title: "Compare with Saved Version", action: #selector(TextDocument.compareWithSavedVersion(_:)))
         file.addItem(title: "Check for External Changes", action: #selector(TextDocument.checkExternalChanges(_:)))
         file.addItem(title: "Read Only", action: #selector(TextDocument.toggleReadOnly(_:)))
         file.addItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
@@ -775,12 +869,24 @@ import AppKit
     }
     /// The Recover branch of the launch prompt. Documents are opened one at a time, so the
     /// snapshots before one that fails stay open when the error is shown.
-    @discardableResult func openRecovered(_ snapshots: [RecoverySnapshot]) throws -> [TextDocument] {
+    @discardableResult func openRecovered(_ snapshots: [RecoverySnapshot], originals: [URL: TextDocument] = [:]) throws
+        -> [TextDocument]
+    {
         var opened = [TextDocument]()
-        for snapshot in snapshots { opened.append(try TextDocument.openRecovered(snapshot)) }
+        for snapshot in snapshots {
+            var group: String?
+            if let url = SnapshotLabel.origin(of: snapshot)?.standardizedFileURL,
+                let original = originals[url], original.isOpen, let host = original.presentation?.host,
+                let pane = host.presentation(for: original.runtimeID)
+            {
+                host.activate(pane, focus: false, explicit: false)
+                group = host.groupLabel(host.model.focusedGroup)
+            }
+            opened.append(try TextDocument.openRecovered(snapshot, originalGroup: group))
+        }
         return opened
     }
-    private func restoreRecovery() {
+    private func restoreRecovery(_ originals: [URL: TextDocument]) {
         do {
             let scan = try TextDocument.recovery.scan()
             let snapshots = scan.snapshots
@@ -803,7 +909,7 @@ import AppKit
             alert.addButton(withTitle: "Discard…")
             switch alert.runModal() {
             case .alertFirstButtonReturn:
-                try openRecovered(snapshots)
+                try openRecovered(snapshots, originals: originals)
             case .alertThirdButtonReturn:
                 let confirm = TTAlert()
                 confirm.alertStyle = .warning

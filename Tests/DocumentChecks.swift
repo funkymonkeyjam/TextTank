@@ -33,6 +33,9 @@ import NativeSearch
     }
     @MainActor static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.count == 2, arguments.first == "--automatic-session-quit" {
+            AutomaticSessionQuitChecks.runChild(mode: arguments[arguments.index(after: arguments.startIndex)])
+        }
         if arguments == ["--tab-integrations"] { TabIntegrationNativeChecks.runApplicationProcess() }
         if arguments == ["--tab-groups"] { TabGroupNativeChecks.runApplicationProcess() }
         if arguments == ["--tab-organization"] { TabOrganizationNativeChecks.runApplicationProcess() }
@@ -1804,6 +1807,13 @@ import NativeSearch
             splitViewAndCurrentEditor(root: root, app: app) { name, line, body in section(name, line: line, body) }
             windowMenuAndKeyboard(root: root, app: app, sessionDelegate: sessionDelegate) { name, line, body in
                 section(name, line: line, body)
+            }
+            section("automatic last session") {
+                try withIsolatedSupportDirectory("automatic-session") { _ in
+                    let oldMenu = app.mainMenu
+                    defer { app.mainMenu = oldMenu }
+                    try AutomaticSessionChecks.run(app: app, controller: documentController)
+                }
             }
             section("clean quit") {
                 let termination = AppDelegate().applicationShouldTerminate(app)

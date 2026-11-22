@@ -332,6 +332,10 @@ extension DocumentChecks {
                 revision: 3)
             try TextDocument.recovery.save(named)
             try TextDocument.recovery.save(untitled)
+            let original = try DocumentFactory.openCaptured(
+                WorkspaceStore.captureRegularFile(namedURL), from: namedURL, display: false)
+            original.editor.replaceSelection("unsaved original ")
+            let originalDraft = original.editor.checkedUTF8Data
             let opened = try sessionDelegate.openRecovered([named, untitled])
             try require(opened.count == 2, "fixture: both snapshots opened")
             check(
@@ -347,14 +351,14 @@ extension DocumentChecks {
                 opened.allSatisfy {
                     NSDocumentController.shared.documents.contains($0) && $0.windowControllers.count == 1
                 }, "recovered documents are registered and have a window controller")
-            // The first write lands on originalURL nil. RecoveryStore rejects an equal revision whose
-            // metadata differs, so this is the case that separates revision+1 from revision.
+            // A recovered draft keeps its original location as metadata and acquires no save destination.
             opened[0].flushRecovery()
             let firstWrite = try TextDocument.recovery.load(id: named.id)
             check(
-                opened[0].lastRecoveryError == nil && firstWrite.revision > 41 && firstWrite.originalURL == nil
+                opened[0].lastRecoveryError == nil && firstWrite.revision > 41 && firstWrite.originalURL == named.originalURL
+                    && opened[0].fileURL == nil
                     && firstWrite.text == namedText && firstWrite.format == namedFormat,
-                "a recovered document's first flush, before any edit, is accepted at a later revision and detached from the original path"
+                "first flush advances the revision and keeps the original association on an unsaved recovered document"
             )
             opened[0].editor.replaceSelection("edited ")
             opened[0].flushRecovery()
@@ -371,9 +375,14 @@ extension DocumentChecks {
             let emptyOpened = try sessionDelegate.openRecovered([emptyNamed])
             let emptyWrite = try TextDocument.recovery.load(id: emptyNamed.id)
             check(
-                emptyOpened[0].lastRecoveryError == nil && emptyWrite.revision > 9 && emptyWrite.originalURL == nil
+                emptyOpened[0].lastRecoveryError == nil && emptyWrite.revision > 9 && emptyWrite.originalURL == emptyNamed.originalURL
+                    && emptyOpened[0].fileURL == nil && emptyWrite.text.isEmpty
                     && emptyOpened[0].isDocumentEdited,
                 "an empty named snapshot is rewritten at a later revision on recovery, not rejected as stale")
+            check(
+                original.fileURL == namedURL && original.isDocumentEdited && originalDraft != nil
+                    && original.editor.checkedUTF8Data == originalDraft,
+                "recovered drafts and their flushes preserve the registered original document and its unsaved edits")
             check(try Data(contentsOf: namedURL) == originalBytes, "launch recovery never writes the original file")
             let good = RecoverySnapshot(
                 id: UUID(), text: "before the bad one", format: FileFormat(), originalURL: nil, revision: 1)
