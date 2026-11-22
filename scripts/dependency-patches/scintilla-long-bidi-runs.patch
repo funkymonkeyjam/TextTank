@@ -532,7 +532,30 @@ diff --git a/src/PositionCache.cxx b/src/PositionCache.cxx
 diff --git a/src/EditView.cxx b/src/EditView.cxx
 --- a/src/EditView.cxx
 +++ b/src/EditView.cxx
-@@ -1674,11 +1674,7 @@
+@@ -738,8 +738,20 @@
+ 
+ 				const ScreenLine screenLine(ll.get(), subLine, vs, rcClient.right, tabWidthMinimumPixels);
+ 				auto slLayout = screenLine.Layout(surface);
+-				positionInLine = slLayout->PositionFromX(pt.x, charPosition) +
+-					rangeSubLine.start;
++				const size_t offset = slLayout->PositionFromX(pt.x, charPosition);
++				positionInLine = offset + rangeSubLine.start;
++				if (canReturnInvalid && charPosition) {
++					// Core Text clamps a point past a right-to-left row to its outer
++					// glyph. A close character hit requires a displayed glyph span.
++					if (positionInLine >= rangeSubLine.end)
++						return SelectionPosition(Sci::invalidPosition);
++					const size_t length = model.pdoc->LenChar(posLineStart + positionInLine);
++					const auto spans = slLayout->FindRangeIntervals(offset, offset + length);
++					if (std::none_of(spans.begin(), spans.end(), [x = pt.x](Interval span) {
++						return span.left <= x && x < span.right;
++					}))
++						return SelectionPosition(Sci::invalidPosition);
++				}
+ 			} else {
+ 				positionInLine = ll->FindPositionFromX(pt.x + subLineStart,
+ 					rangeSubLine, charPosition);
+@@ -1674,11 +1686,7 @@
  	const XYPOSITION xStartVisible = subLineStart - xStart;
  
  	const BreakFinder::BreakFor breakFor = selBackDrawn ? BreakFinder::BreakFor::Selection : BreakFinder::BreakFor::Text;
@@ -545,7 +568,7 @@ diff --git a/src/EditView.cxx b/src/EditView.cxx
  	BreakFinder bfBack(ll, &model.sel, visibleRange, posLineStart, visual ? 0 : xStartVisible, breakFor, model.pdoc, model.reprs.get(), &vsDraw);
  
  	const bool drawWhitespaceBackground = vsDraw.WhitespaceBackgroundDrawn() && !background;
-@@ -1749,6 +1745,13 @@
+@@ -1749,6 +1757,13 @@
  				break;
  			paint(bounds);
  		}
@@ -559,7 +582,7 @@ diff --git a/src/EditView.cxx b/src/EditView.cxx
  	}
  }
  
-@@ -2165,11 +2168,7 @@
+@@ -2165,11 +2180,7 @@
  	// Foreground drawing loop
  	const BreakFinder::BreakFor breakFor = (((phasesDraw == PhasesDraw::One) && selBackDrawn) || vsDraw.SelectionTextDrawn())
  		? BreakFinder::BreakFor::ForegroundAndSelection : BreakFinder::BreakFor::Foreground;
@@ -572,7 +595,7 @@ diff --git a/src/EditView.cxx b/src/EditView.cxx
  	BreakFinder bfFore(ll, &model.sel, visibleRange, posLineStart, visual ? 0 : xStartVisible, breakFor, model.pdoc, model.reprs.get(), &vsDraw);
  
  	while (bfFore.More()) {
-@@ -2367,6 +2366,13 @@
+@@ -2367,6 +2378,13 @@
  			paint(bounds);
  		}
  	}
