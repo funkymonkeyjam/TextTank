@@ -1125,7 +1125,12 @@ private struct AutomationCheckboxEdits {
         return (lines + (issues.count > 10 ? ["and \(issues.count - 10) more"] : [])).joined(separator: "\n")
     }
     nonisolated static func journalFailureHeader(_ underlying: Error) -> String {
-        "The export journal could not be updated (\(underlying.localizedDescription)), so sending stopped. The list below is the outcome held in memory. Export History will show the last attempted item as uncertain, possibly although it was saved, and may be unavailable until the journal folder can be written again. Check Reminders before sending any of these items again."
+        if underlying is PublishedFileSyncFailure {
+            return
+                "Sending stopped. \(underlying.localizedDescription) The list below shows the outcome held in memory. Export History may already show the updated result. Check Reminders before sending again."
+        }
+        return
+            "The export journal could not be updated (\(underlying.localizedDescription)), so sending stopped. The list below is the outcome held in memory. Export History may show the last attempted item as uncertain, even if it was saved, and may be unavailable until the journal folder can be written again. Check Reminders before sending any of these items again."
     }
     /// Told about an export in which every item was confirmed. The app shows it in the document
     /// window's status line; it is always announced.

@@ -1338,18 +1338,44 @@ import NativeSearch
                     try Data(contentsOf: nulURL) == (try FileCodec.encode("\0hello again", format: nulFormat))
                         && !reopened.isDocumentEdited, "explicitly opened file saves back byte-exactly")
                 reopened.editor.replaceSelection("unsaved")
+                try reopened.revert(toContentsOf: nulURL, ofType: "Plain Text")
+                let explicitRevertBytes = try reopened.data(ofType: "Plain Text")
+                let savedBytes = try Data(contentsOf: nulURL)
+                check(
+                    NSDocumentController.shared.document(for: nulURL) === reopened
+                        && reopened.editor.text == "\0hello again" && reopened.format == nulFormat
+                        && !reopened.isDocumentEdited
+                        && explicitRevertBytes == savedBytes,
+                    "Revert reuses the explicitly selected UTF-16 LE decoder and preserves the document")
+                reopened.close()
+
+                let automaticURL = root.appendingPathComponent("automatic-to-ambiguous.txt")
+                try Data("original automatic text".utf8).write(to: automaticURL)
+                let automatic = try DocumentFactory.openCaptured(
+                    WorkspaceStore.captureRegularFile(automaticURL), from: automaticURL, display: false)
+                automatic.editor.replaceSelection("unsaved")
+                let edited = automatic.editor.text, editedRevision = automatic.editor.revision
+                try nulBytes.write(to: automaticURL, options: .atomic)
                 var revertFailure: NSError?
-                do { try reopened.revert(toContentsOf: nulURL, ofType: "Plain Text") } catch {
+                do { try automatic.revert(toContentsOf: automaticURL, ofType: "Plain Text") } catch {
                     revertFailure = error as NSError
                 }
                 let reverter = try requireValue(
                     revertFailure?.recoveryAttempter as? ExplicitEncodingOpener,
-                    "revert offers the explicit UTF-16 LE choice")
-                check(reopened.isDocumentEdited, "failed automatic revert keeps the edited buffer")
+                    "automatic Revert offers an explicit UTF-16 LE choice when disk bytes become ambiguous")
                 check(
-                    try reverter.open(display: false) === reopened && reopened.editor.text == "\0hello again"
-                        && !reopened.isDocumentEdited, "explicit choice completes the revert on the open document")
-                reopened.close()
+                    automatic.isDocumentEdited && automatic.editor.text == edited && automatic.editor.revision == editedRevision,
+                    "failed automatic Revert preserves the full edited buffer and revision")
+                check(
+                    !reverter.attemptRecovery(fromError: revertFailure!, optionIndex: 1)
+                        && automatic.editor.text == edited && automatic.isDocumentEdited,
+                    "declining ambiguous Revert preserves the pending edits")
+                check(
+                    try reverter.open(display: false) === automatic && automatic.editor.text == "\0hello"
+                        && automatic.format == nulFormat && !automatic.isDocumentEdited
+                        && automatic.data(ofType: "Plain Text") == nulBytes,
+                    "explicit recovery completes ambiguous Revert on the open document with exact disk bytes")
+                automatic.close()
                 let bigEndianURL = root.appendingPathComponent("utf32-be-signature.bin")
                 try Data([0, 0, 0xFE, 0xFF, 0, 0, 0, 0x41]).write(to: bigEndianURL)
                 let bigEndian = TextDocument()

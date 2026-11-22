@@ -31,6 +31,68 @@ extension DocumentChecks {
             document.editor.replaceSelection(text)
         }
 
+        section("invalid editor bytes preserve saved files and recovery", #line) {
+            let source = area.appendingPathComponent("checked-capture.txt"), disk = Data("saved file".utf8)
+            let doc = try loaded(source, disk)
+            defer { doc.close() }
+            doc.dependencies.automaticRecoveryDelay = 0.02
+            doc.dependencies.recoveryFailureNotice = { _, _ in false }
+            let good = "\u{feff}draft\0\r\n😀"
+            doc.editor.text = good
+            doc.flushRecovery()
+            let snapshotURL = TextDocument.recovery.fileURL(for: doc.recoveryID)
+            let previous = try Data(contentsOf: snapshotURL)
+            check(
+                try TextDocument.recovery.load(id: doc.recoveryID).text == good,
+                "valid recovery preserves content BOM and NUL")
+
+            // Bypass normal UTF-8-producing input only in this owned fixture (SCI_APPENDTEXT).
+            var bad: UInt8 = 0xff
+            _ = withUnsafePointer(to: &bad) { sci(doc.editor, 2282, 1, Int(bitPattern: $0)) }
+            let damaged = Data(good.utf8) + Data([0xff])
+            check(doc.editor.checkedUTF8Data == damaged, "invalid byte reaches the real owned document")
+            rejects("save refuses invalid editor bytes", expecting: EditorCaptureError.invalidUTF8) {
+                try doc.writeSafely(to: source, ofType: "Plain Text", for: .saveOperation)
+            }
+            rejects("data representation refuses invalid editor bytes", expecting: EditorCaptureError.invalidUTF8) {
+                _ = try doc.data(ofType: "Plain Text")
+            }
+            rejects("print refuses invalid editor bytes", expecting: EditorCaptureError.invalidUTF8) {
+                _ = try doc.printOperation(withSettings: [:])
+            }
+            let originalFormat = doc.format
+            rejects("format conversion refuses invalid editor bytes", expecting: EditorCaptureError.invalidUTF8) {
+                try doc.convertEncoding(to: "utf16BE")
+            }
+            spinUntil("recovery timer delivers the checked capture error") {
+                doc.lastRecoveryError as? EditorCaptureError == .invalidUTF8
+            }
+            check(
+                try Data(contentsOf: snapshotURL) == previous,
+                "failed automatic capture preserves the prior JSON exactly")
+            doc.flushRecovery()
+            check(
+                try Data(contentsOf: snapshotURL) == previous
+                    && doc.lastRecoveryError as? EditorCaptureError == .invalidUTF8,
+                "failed synchronous capture preserves the prior JSON exactly")
+            check(
+                try Data(contentsOf: source) == disk && doc.editor.modified && doc.editor.checkedUTF8Data == damaged
+                    && doc.format == originalFormat,
+                "refusal preserves the file, damaged buffer, format and dirty state")
+            doc.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            check(doc.editor.checkedUTF8Data == Data(good.utf8), "undo removes just the injected byte")
+            doc.flushRecovery()
+            check(
+                try TextDocument.recovery.load(id: doc.recoveryID).text == good && doc.lastRecoveryError == nil,
+                "repaired editor clears the failure and writes a readable v1 snapshot")
+            let printed = try doc.printOperation(withSettings: [:]).view as? NSTextView
+            check(printed?.string == good, "printing preserves a content BOM, NUL and Unicode")
+            try doc.writeSafely(to: source, ofType: "Plain Text", for: .saveOperation)
+            check(
+                try Data(contentsOf: source) == Data(good.utf8) && !doc.editor.modified,
+                "normal save resumes and sets the checkpoint on exact submitted bytes")
+        }
+
         section("F316 actual document completion transport ownership", #line) {
             let shared = NSDocumentController.shared
             let url = area.appendingPathComponent("completion-owned.txt")
@@ -222,6 +284,19 @@ extension DocumentChecks {
             check(
                 asked.isEmpty && answered?.0 === viaOpen && answered?.1 == true && answered?.2 == nil,
                 "a successful open is passed through untouched")
+            edit(viaOpen, "private draft")
+            _ = viaOpen.editor.setSelectionAnchor(0, caret: 7)
+            rejects("failed reinterpretation retains the prior decoder") {
+                try viaOpen.reload(using: .utf8, discard: true)
+            }
+            check(
+                viaOpen.editor.selectedText == "private" && viaOpen.isDocumentEdited
+                    && viaOpen.format.encoding == .latin1,
+                "failed reinterpretation keeps the dirty selection and its previously selected encoding")
+            try viaOpen.revert(toContentsOf: latinURL, ofType: TextDocument.plainTextType)
+            check(
+                viaOpen.editor.text == "café" && viaOpen.format.encoding == .latin1 && !viaOpen.isDocumentEdited,
+                "Revert preserves the legacy encoding selected through the actual open completion")
             viaOpen.close()
             answers = [nil]
             asked = []
@@ -255,12 +330,33 @@ extension DocumentChecks {
             check(
                 wide.editor.text == "héllo wörld" && wide.format == wideFormat && !wide.isDocumentEdited,
                 "BOM-less UTF-16 opens with its text and stays BOM-less")
+            edit(wide, "private draft")
+            try wide.revert(toContentsOf: wideURL, ofType: TextDocument.plainTextType)
+            check(
+                wide.editor.text == "héllo wörld" && wide.format == wideFormat && !wide.isDocumentEdited,
+                "Revert keeps the chosen BOM-less UTF-16 interpretation and clears the discarded draft")
             edit(wide, "héllo")
             try wide.writeSafely(to: wideURL, ofType: "Plain Text", for: .saveOperation)
             check(
                 try Data(contentsOf: wideURL) == (try FileCodec.encode("héllo", format: wideFormat)),
                 "a BOM-less UTF-16 file opened by choice saves back without a BOM")
             wide.close()
+
+            let autoURL = area.appendingPathComponent("monitored-auto-encoding.txt")
+            try Data("plain".utf8).write(to: autoURL)
+            let autoDocument = try DocumentFactory.openCaptured(
+                WorkspaceStore.captureRegularFile(autoURL), from: autoURL, display: false)
+            let autoMonitor = DocumentMonitor()
+            try autoMonitor.start(autoDocument)
+            try autoMonitor.reload(expectedRevision: autoDocument.editor.revision)
+            autoMonitor.stop()
+            let marked = FileFormat(encoding: .utf16BE, bom: true)
+            try FileCodec.encode("new representation", format: marked).write(to: autoURL)
+            try autoDocument.revert(toContentsOf: autoURL, ofType: TextDocument.plainTextType)
+            check(
+                autoDocument.format == marked && autoDocument.editor.text == "new representation",
+                "monitor reload of an automatically decoded document keeps Revert's encoding detection")
+            autoDocument.close()
 
             // The workspace browser: only row activation asks; open(_:) itself never does.
             let browser = WorkspaceBrowserController(

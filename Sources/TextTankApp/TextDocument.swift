@@ -82,6 +82,10 @@ import AppKit
     private var recoveryTimer: Timer?
     private var recoveryDeadlineTimer: Timer?
     private let recoveryWriter = RecoveryWriter()
+    /// One immutable capture can be preparing. A timer that fires meanwhile requests one fresh
+    /// capture after preparation, without copying bytes or waiting for validation or disk I/O.
+    private var preparingRecoveryGeneration: Int?
+    private var deferredRecoveryCapture = false
     /// Invalidates completion callbacks whenever recovery is rescheduled, flushed or closed.
     private var recoveryGeneration = 0
     /// Terminal once close starts: no timer or late completion may enqueue another copy.
@@ -141,8 +145,10 @@ import AppKit
     private(set) var recoveredOrigin: String?
     /// Suppresses ordinary edit/recovery callbacks while a read or restore establishes its checkpoints.
     private var loading = false
-    /// Set only while an explicit open-with-encoding is reading the file.
+    /// A transient decoder override for one read; nil keeps automatic detection.
     private var openEncoding: FileEncoding?
+    /// Explicit interpretation of the last successful disk baseline, independent of unsaved conversion.
+    private var revertEncoding: FileEncoding?
     private var readingURL: URL?
     /// A snapshot records the file it belongs to. A moved or renamed file is new snapshot
     /// metadata at the same text revision, so it needs a later recovery revision.
@@ -283,7 +289,7 @@ import AppKit
     }
     /// Explicit reinterpretation is a reload, not encoding conversion. Unsaved edits
     /// require a native confirmation before this method is called with discard=true.
-    func reload(using encoding: FileEncoding, discard: Bool = false) throws {
+    func reload(using encoding: FileEncoding, discard: Bool = false, rememberEncoding: Bool = true) throws {
         guard fileURL != nil else {
             throw DocumentActionError.notSaved
         }
@@ -292,7 +298,7 @@ import AppKit
         }
         let (bytes, sample) = try onDiskFile { try WorkspaceStore.readRegularFileSample($0, maximumBytes: Int.max) }
         let decoded = try FileCodec.decode(bytes, encoding: encoding)
-        loadDecoded(decoded, sample: sample)
+        loadDecoded(decoded, sample: sample, explicitEncoding: rememberEncoding ? encoding : revertEncoding)
         updateChangeCount(.changeCleared)
         flushRecovery()
     }
@@ -360,14 +366,27 @@ import AppKit
         recoveryDeadlineTimer?.invalidate()
         recoveryDeadlineTimer = nil
     }
-    private func recoveryOperation() -> @Sendable () throws -> Void {
+    /// Editor bytes are content. A leading U+FEFF is text even when the eventual file has a BOM.
+    private nonisolated static func capturedText(from bytes: Data?) throws -> String {
+        guard let bytes else { throw EditorCaptureError.incomplete }
+        guard let text = bytes.withUnsafeBytes(FileCodec.decodeUTF8Content) else {
+            throw EditorCaptureError.invalidUTF8
+        }
+        return text
+    }
+    private func recoveryPreparation() -> RecoveryWriter.Prepare {
         let store = Self.recovery, id = recoveryID, revision = recoveryRevision
         if shouldKeepRecoveryCopy {
-            let snapshot = RecoverySnapshot(
-                id: id, text: editor.text, format: format, originalURL: fileURL?.absoluteString, revision: revision)
-            return { try store.save(snapshot) }
+            let bytes = editor.checkedUTF8Data, capturedFormat = format, originalURL = fileURL?.absoluteString
+            let capturedAt = Date()
+            return {
+                let snapshot = try RecoverySnapshot(
+                    id: id, text: Self.capturedText(from: bytes), format: capturedFormat,
+                    originalURL: originalURL, revision: revision, savedAt: capturedAt)
+                return { try store.save(snapshot) }
+            }
         }
-        return { try store.remove(id: id, throughRevision: revision) }
+        return { { try store.remove(id: id, throughRevision: revision) } }
     }
     /// The words for this document's save state. An edited document never reads "Saved": it reads
     /// "Edited" from the moment of the change, and says so about the recovery copy only once that
@@ -415,13 +434,15 @@ import AppKit
             return
         }
         // The status line stays in its failure state until a later recovery write succeeds.
+        recoveryCopyKept = false
+        let summary = error is PublishedFileSyncFailure ? "⚠︎ Recovery copy unconfirmed" : "⚠︎ Recovery copy not written"
         controllers.forEach {
-            $0.showRecoveryStatus("⚠︎ Recovery copy not written: \(error.localizedDescription)", failed: true)
+            $0.showRecoveryStatus("\(summary): \(error.localizedDescription)", failed: true, failureSummary: summary)
         }
         let escalate = recoveryFailures.recordFailure(sessionAlreadyNotified: Self.recoveryFailureNoticeShown)
         if recoveryFailures.consecutiveFailures == 1 {
             NSLog(
-                "TextTank: recovery snapshot %@ could not be written: %@", recoveryID.uuidString,
+                "TextTank: recovery snapshot %@ could not be confirmed: %@", recoveryID.uuidString,
                 error.localizedDescription)
         }
         if escalate { Self.recoveryFailureNoticeShown = presentRecoveryFailureNotice(error) }
@@ -435,9 +456,9 @@ import AppKit
         }
         let alert = TTAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Unsaved changes are not being backed up"
+        alert.messageText = "TextTank could not confirm the recovery copy"
         alert.informativeText =
-            "TextTank could not write the crash-recovery copy of “\(displayName ?? "this document")” more than once in a row. If the app quit unexpectedly now, recent edits could be lost. The document itself is unchanged; save it to keep your work.\n\nReason: \(error.localizedDescription)\n\nThis notice appears once per session. The status line keeps showing the failure until a recovery copy is written again."
+            "TextTank could not confirm the crash-recovery copy of “\(displayName ?? "this document")” more than once in a row. If the app quit unexpectedly now, recent edits could be lost. The document itself is unchanged; save it to keep your work.\n\nReason: \(error.localizedDescription)\n\nThis notice appears once per session. The status line keeps showing the failure until a recovery copy is written again."
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window)
         return true
@@ -445,27 +466,37 @@ import AppKit
     private func enqueueRecovery() {
         guard !recoveryClosed else { return }
         cancelRecoveryTimers()
-        let generation = recoveryGeneration, operation = recoveryOperation()
+        guard preparingRecoveryGeneration == nil else {
+            deferredRecoveryCapture = true
+            return
+        }
+        let generation = recoveryGeneration
+        preparingRecoveryGeneration = generation
+        deferredRecoveryCapture = false
+        let resume: @MainActor @Sendable () -> Void = { [weak self] in
+            guard let self, self.preparingRecoveryGeneration == generation else { return }
+            self.preparingRecoveryGeneration = nil
+            if self.deferredRecoveryCapture { self.enqueueRecovery() }
+        }
         let deliver: @MainActor @Sendable (Error?) -> Void = { [weak self] error in
             guard let self, !self.recoveryClosed, self.recoveryGeneration == generation else { return }
             self.reportRecovery(error)
         }
-        recoveryWriter.submit {
-            let error: Error?
-            do {
-                try operation()
-                error = nil
-            } catch let failure { error = failure }
-            DispatchQueue.main.async { deliver(error) }
-        }
+        recoveryWriter.submitPrepared(
+            recoveryPreparation(), didPrepare: { DispatchQueue.main.async { resume() } },
+            completion: { error in DispatchQueue.main.async { deliver(error) } })
     }
     func flushRecovery() {
         guard !recoveryClosed else { return }
         cancelRecoveryTimers()
         recoveryGeneration += 1
-        let operation: @Sendable () throws -> Void = recoveryOperation()
+        preparingRecoveryGeneration = nil
+        deferredRecoveryCapture = false
         do {
-            try recoveryWriter.finish(operation)
+            try recoveryWriter.finishPrepared {
+                let prepare = recoveryPreparation()
+                return try prepare()
+            }
             reportRecovery(nil)
         } catch { reportRecovery(error) }
     }
@@ -477,6 +508,8 @@ import AppKit
         cancelRecoveryTimers()
         recoveryGeneration += 1
         recoveryClosed = true
+        preparingRecoveryGeneration = nil
+        deferredRecoveryCapture = false
         editor.onReadOnlyAttempt = nil
         editor.readOnly = true
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.prepareForClose() }
@@ -561,13 +594,15 @@ import AppKit
             }
         }
         loadDecoded(
-            decoded, sample: capturedSample ?? FileSample(digest: WorkspaceStore.fingerprint(data), signature: nil))
+            decoded, sample: capturedSample ?? FileSample(digest: WorkspaceStore.fingerprint(data), signature: nil),
+            explicitEncoding: openEncoding)
     }
     /// The same strict decode with an encoding the person chose, for callers that already hold
     /// the bytes. A failure throws the codec's error and loads nothing.
     func read(from data: Data, ofType typeName: String, as encoding: FileEncoding) throws {
+        let previous = openEncoding
         openEncoding = encoding
-        defer { openEncoding = nil }
+        defer { openEncoding = previous }
         try read(from: data, ofType: typeName)
     }
     /// Explicit open-with-encoding. An already open document is reloaded from disk instead;
@@ -589,6 +624,9 @@ import AppKit
     /// suppresses change handling. Remove the discarded draft's snapshot now. If the revert
     /// throws, the buffer is still dirty and its snapshot must survive.
     override func revert(toContentsOf url: URL, ofType typeName: String) throws {
+        let previous = openEncoding
+        openEncoding = revertEncoding
+        defer { openEncoding = previous }
         try super.revert(toContentsOf: url, ofType: typeName)
         flushRecovery()
     }
@@ -627,7 +665,7 @@ import AppKit
         doc.flushRecovery()
         return doc
     }
-    private func loadDecoded(_ decoded: DecodedFile, sample: FileSample) {
+    private func loadDecoded(_ decoded: DecodedFile, sample: FileSample, explicitEncoding: FileEncoding?) {
         loadEpoch &+= 1
         EditorServices.current?.macros?.editorWillReset(editor, reason: "The recording document was reloaded.")
         loading = true
@@ -641,6 +679,7 @@ import AppKit
         editor.resetUndoHistory()
         format = decoded.format
         savedFormat = format
+        revertEncoding = explicitEncoding
         diskDigest = sample.digest
         diskSignature = sample.signature
         savepointMatchesDisk = true
@@ -695,7 +734,7 @@ import AppKit
         guard let target = FileFormat.convertTargets.first(where: { $0.code == code })?.format else {
             throw FileCodecError.invalidConversionTarget
         }
-        _ = try FileCodec.encode(editor.text, format: target)
+        _ = try FileCodec.encode(Self.capturedText(from: editor.checkedUTF8Data), format: target)
         format = target
         flushRecovery()
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.refreshStatusDetails() }
@@ -735,6 +774,7 @@ import AppKit
     }
     override func printOperation(withSettings printSettings: [NSPrintInfo.AttributeKey: Any]) throws -> NSPrintOperation
     {
+        let text = try Self.capturedText(from: editor.checkedUTF8Data)
         let settings = printInfo.copy() as! NSPrintInfo
         settings.dictionary().addEntries(from: printSettings)
         settings.horizontalPagination = .fit
@@ -753,7 +793,7 @@ import AppKit
         printable.isVerticallyResizable = true
         printable.textContainer?.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
         printable.textContainer?.widthTracksTextView = true
-        printable.string = editor.text
+        printable.string = text
         if let container = printable.textContainer, let layout = printable.layoutManager {
             layout.ensureLayout(for: container)
             printable.setFrameSize(NSSize(width: width, height: max(1, ceil(layout.usedRect(for: container).height))))
@@ -769,7 +809,7 @@ import AppKit
     private func dataOnMain(ofType typeName: String) throws -> Data {
         dependencies.duringWrite?()
         if let savePayload { return savePayload }
-        return try FileCodec.encode(editor.text, format: format)
+        return try FileCodec.encode(Self.capturedText(from: editor.checkedUTF8Data), format: format)
     }
     override func writeSafely(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType)
         throws
@@ -792,7 +832,8 @@ import AppKit
         {
             throw DocumentActionError.diskChanged
         }
-        let submitted = try FileCodec.encode(editor.text, format: format), submittedFormat = format,
+        let submitted = try FileCodec.encode(Self.capturedText(from: editor.checkedUTF8Data), format: format),
+            submittedFormat = format,
             submittedRevision = editor.revision
         savePayload = submitted
         defer { savePayload = nil }
@@ -807,6 +848,10 @@ import AppKit
             // another writer may already have replaced it, and only a hash can tell.
             diskDigest = WorkspaceStore.fingerprint(submitted)
             diskSignature = nil
+            // A successful conversion changes the baseline Revert will read from disk.
+            if revertEncoding != nil || submittedFormat.encoding != savedFormat.encoding {
+                revertEncoding = submittedFormat.encoding
+            }
             savedFormat = submittedFormat
             if editor.revision == submittedRevision && format == submittedFormat {
                 savepointMatchesDisk = true
@@ -838,5 +883,16 @@ private final class DocumentDiskLocation: @unchecked Sendable {
         value = next
         lock.unlock()
         withExtendedLifetime(displaced) {}
+    }
+}
+
+/// Snapshot failure is distinct from successfully capturing an empty editor.
+enum EditorCaptureError: LocalizedError, Equatable {
+    case incomplete, invalidUTF8
+    var errorDescription: String? {
+        switch self {
+        case .incomplete: return "TextTank could not read the entire editor buffer."
+        case .invalidUTF8: return "The editor buffer contains invalid UTF-8 text."
+        }
     }
 }

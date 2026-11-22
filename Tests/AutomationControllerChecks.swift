@@ -1908,6 +1908,16 @@ final class Audit24RecoverySpy: NSObject {
                             CocoaError(.fileWriteNoPermission).localizedDescription),
                     "the journal failure header names the cause and the uncertain item in Export History")
 
+                let unconfirmed = PublishedFileSyncFailure(
+                    failure: FileOperationFailure(
+                        EIO, operation: "synchronize export record", path: "/owned/export.json"))
+                let unconfirmedHeader = AutomationController.journalFailureHeader(unconfirmed)
+                check(
+                    unconfirmedHeader.contains(unconfirmed.localizedDescription)
+                        && unconfirmedHeader.contains("may already show the updated result")
+                        && unconfirmedHeader.contains("Check Reminders"),
+                    "a visible but unconfirmed acknowledgement explains the retained result and how to reconcile it")
+
                 // Clearing through the connector, with an injected store: no EventKit access.
                 let exportsFolder = FileManager.default.temporaryDirectory.appendingPathComponent(
                     "TextTankReminderClear-" + UUID().uuidString)

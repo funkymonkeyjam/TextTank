@@ -5,6 +5,23 @@
 #import "ScintillaView.h"
 #import <objc/runtime.h>
 #import "Checks.h"
+// Count conversions on this string only; all encoded bytes come from Foundation.
+@interface TTLoadCountingString : NSString
+@property(nonatomic, copy) NSString *backing;
+@property(nonatomic) NSUInteger utf8Conversions;
+@property(nonatomic, copy) void (^onUTF8Conversion)(void);
+@end
+@implementation TTLoadCountingString
+- (NSUInteger)length { return self.backing.length; }
+- (unichar)characterAtIndex:(NSUInteger)index { return [self.backing characterAtIndex:index]; }
+- (NSData *)dataUsingEncoding:(NSStringEncoding)encoding {
+    if (encoding == NSUTF8StringEncoding) {
+        ++_utf8Conversions;
+        if (_onUTF8Conversion) _onUTF8Conversion();
+    }
+    return [self.backing dataUsingEncoding:encoding];
+}
+@end
 // Stands in for the system's drag information so a real drop runs through the content view.
 @interface TTFakeDrop : NSObject
 @property(nonatomic,strong) NSPasteboard *draggingPasteboard;
@@ -1688,6 +1705,16 @@ int main(int argc, char **argv) {
         TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
         auto bytesOf = [](NSString *text) { return [text dataUsingEncoding:NSUTF8StringEncoding]; };
         check(ed.text!=nil && ed.text.length==0 && [ed.text isEqual:@""] && ed.byteLength==0 && ed.utf8Data.length==0, "an empty document reads as an empty string with no bytes");
+        check(ed.checkedUTF8Data != nil && ed.checkedUTF8Data.length == 0, "checked capture succeeds on empty content");
+        {
+            const unsigned char invalid[]={0xff};
+            ScintillaView *native=(ScintillaView *)ed.subviews.firstObject;
+            [native message:SCI_APPENDTEXT wParam:sizeof(invalid) lParam:(sptr_t)invalid];
+            NSData *snapshot=ed.checkedUTF8Data;
+            [ed executeCommand:@"undo"];
+            check([snapshot isEqual:[NSData dataWithBytes:invalid length:sizeof(invalid)]] && ed.checkedUTF8Data.length==0,
+                  "checked bytes are immutable and preserve invalid input for the strict consumer");
+        }
         ed.text=@"﻿";
         const unsigned char bom[]={0xEF,0xBB,0xBF};
         check(ed.text.length==1 && [bytesOf(ed.text) isEqual:[NSData dataWithBytes:bom length:3]] && ed.byteLength==3, "a document that is exactly U+FEFF reads back as that one scalar");
@@ -1749,6 +1776,28 @@ int main(int argc, char **argv) {
         });
         ttchecks::section("loadDocumentText", [&] {
         TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        TTEditor *countedEditor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 600, 400)];
+        TTLoadCountingString *counted = [[TTLoadCountingString alloc] init];
+        const unichar units[] = {'a', 0, 0x03b2, '\r', '\n', 0xd83d, 0xde42};
+        counted.backing = [NSString stringWithCharacters:units length:sizeof(units) / sizeof(units[0])];
+        NSData *expected = [counted.backing dataUsingEncoding:NSUTF8StringEncoding];
+        check([countedEditor loadDocumentText:counted] && counted.utf8Conversions == 1 && [countedEditor.utf8Data isEqual:expected],
+              "a load performs one UTF-8 conversion and retains NUL, multibyte text, and CRLF");
+        NSUInteger unchanged = countedEditor.revision;
+        check([countedEditor loadDocumentText:counted] && counted.utf8Conversions == 2 && countedEditor.revision == unchanged && !countedEditor.modified,
+              "an equal reload converts once and stays at the same revision and save point");
+        [countedEditor setSelectionAnchor:0 caret:0]; [countedEditor replaceSelection:@"edit"];
+        NSData *dirtyBytes = countedEditor.utf8Data;
+        NSUInteger dirtyRevision = countedEditor.revision;
+        counted.onUTF8Conversion = ^{ countedEditor.readOnly = YES; };
+        check(![countedEditor loadDocumentText:counted] && counted.utf8Conversions == 3 && countedEditor.readOnly
+                  && [countedEditor.utf8Data isEqual:dirtyBytes] && countedEditor.revision == dirtyRevision,
+              "a read-only transition during conversion refuses the load before Undo is disabled");
+        [countedEditor loadDocumentText:counted];
+        check(counted.utf8Conversions == 3, "an initially read-only load skips conversion");
+        countedEditor.readOnly = NO; [countedEditor executeCommand:@"undo"];
+        check([countedEditor.utf8Data isEqual:expected] && !countedEditor.modified,
+              "the preceding dirty edit still undoes after a read-only transition during conversion");
         NSString *original=numbered(50);
         check([ed loadDocumentText:original] && [ed.text isEqual:original] && !ed.modified, "loading into an empty editor sets the text at the save point");
         [ed executeCommand:@"undo"];
