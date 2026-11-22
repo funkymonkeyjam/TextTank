@@ -56,9 +56,14 @@ static void TTCheckBidiSelection(void) {
     [native message:SCI_SETFOCUS wParam:1];
     [native message:SCI_STYLESETFONT wParam:0 lParam:(sptr_t)"Menlo"];
     [native message:SCI_STYLESETSIZE wParam:0 lParam:16];
-    [native message:SCI_SETSELFORE wParam:1 lParam:0xFFFFFF];
-    [native message:SCI_SETSELBACK wParam:1 lParam:0xA04000];
-    [native message:SCI_SETELEMENTCOLOUR wParam:SC_ELEMENT_SELECTION_INACTIVE_BACK lParam:0xFFA04000];
+    auto setSelectionColors = [&](unsigned foreground, unsigned background) {
+        [native message:SCI_SETSELFORE wParam:1 lParam:foreground];
+        [native message:SCI_SETSELBACK wParam:1 lParam:background];
+        [native message:SCI_SETELEMENTCOLOUR wParam:SC_ELEMENT_SELECTION_INACTIVE_TEXT lParam:0xFF000000 | foreground];
+        [native message:SCI_SETELEMENTCOLOUR wParam:SC_ELEMENT_SELECTION_INACTIVE_BACK lParam:0xFF000000 | background];
+    };
+    constexpr unsigned white = 0xFFFFFF, blue = 0xA04000, green = 0x00A040;
+    setSelectionColors(white, blue);
     NSFont *refFont=[NSFont fontWithName:@"Menlo" size:16];
     NSArray<NSArray<NSString *> *> *cases=@[
         @[@"ABC אבגד XYZ.",@"א"], @[@"ABC אבגד XYZ.",@"ד"], @[@"אבגד",@"א"], @[@"אבגד",@"ד"],
@@ -94,7 +99,7 @@ static void TTCheckBidiSelection(void) {
         if(directional && r.length==1) {
             const CGFloat scale=before.pixelsWide/NSWidth(e.bounds);
             const NSInteger lo=floor((left-2)*scale), hi=ceil((right+2)*scale);
-            NSUInteger changes=0, foreign=0, selectedBlue=0, selectedInk=0;
+            NSUInteger changes=0, foreign=0;
             const NSInteger yEnd=std::min<NSInteger>(before.pixelsHigh,
                 ceil([native message:SCI_TEXTHEIGHT wParam:0]*scale));
             for(NSInteger y=0;y<yEnd;y++) for(NSInteger x=0;x<before.pixelsWide;x++) {
@@ -102,13 +107,35 @@ static void TTCheckBidiSelection(void) {
                 const auto *b=after.bitmapData+y*after.bytesPerRow+x*(after.bitsPerPixel/8);
                 if(memcmp(a,b,before.bitsPerPixel/8)) {
                     ++changes;if(x<lo || x>hi) ++foreign;
-                    NSColor *c=[[after colorAtX:x y:y] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
-                    if(c.blueComponent>0.48 && c.redComponent<0.14) ++selectedBlue;
-                    if(c.redComponent>.85 && c.greenComponent>.85 && c.blueComponent>.85) ++selectedInk;
                 }
             }
             pixels &= foreign==0 && changes>5;
-            painted &= selectedBlue>0 && selectedInk>0;
+            // Keep the glyph and selection fixed. Alter only the ink, then only the fill.
+            // A thin, antialiased stroke at 1× need never contain a fully covered pixel.
+            setSelectionColors(0, blue);
+            NSBitmapImageRep *darkInk = TTBidiBitmap(e);
+            setSelectionColors(white, green);
+            NSBitmapImageRep *greenFill = TTBidiBitmap(e);
+            setSelectionColors(white, blue);
+            NSUInteger inkPixels = 0, fillPixels = 0;
+            for (NSInteger y = 0; y < yEnd; ++y) {
+                for (NSInteger x = std::max<NSInteger>(0, lo); x <= hi && x < after.pixelsWide; ++x) {
+                    auto sample = [&](NSBitmapImageRep *image) {
+                        return [[image colorAtX:x y:y] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+                    };
+                    NSColor *selected = sample(after), *dark = sample(darkInk), *greenBack = sample(greenFill);
+                    if (selected.redComponent - dark.redComponent > 0.10 &&
+                        selected.greenComponent - dark.greenComponent > 0.10 &&
+                        selected.blueComponent - dark.blueComponent > 0.10) ++inkPixels;
+                    if ([selected isEqual:dark] && greenBack.greenComponent - selected.greenComponent > 0.10 &&
+                        selected.blueComponent - greenBack.blueComponent > 0.10) ++fillPixels;
+                }
+            }
+            if (!inkPixels || !fillPixels) {
+                printf("Selection paint for %s in %s at %.1fx: %lu ink pixels, %lu fill pixels\n",
+                       word.UTF8String, line.UTF8String, scale, (unsigned long)inkPixels, (unsigned long)fillPixels);
+            }
+            painted &= inkPixels > 0 && fillPixels > 0;
         }
     }
     check(reference,"fixed whole-line CoreText glyph bounds agree with editor AX rectangles for mixed, pure, marked and Arabic text");
