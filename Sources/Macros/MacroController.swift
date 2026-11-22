@@ -23,6 +23,20 @@ import Darwin
     func isRecording(in editor: TTEditor) -> Bool { recordingEditor === editor }
     private var recorded: [RecordedMacro.Step] = []
     private var lastRecording: RecordedMacro?
+    private var lastPlayed: RecordedMacro?
+    private var repeatable: RecordedMacro? { lastPlayed ?? lastRecording }
+    static let recordingDidChange = Notification.Name("TextTankMacroRecordingDidChange")
+    enum RecordingStatus: Equatable { case idle, recording, discarded(String) }
+    var recordingStatus: RecordingStatus {
+        guard let recordingEditor else { return .idle }
+        if recordingEditor.onMacroStep == nil, let discardReason { return .discarded(discardReason) }
+        return .recording
+    }
+    private func publishRecording() { NotificationCenter.default.post(name: Self.recordingDidChange, object: self) }
+    private var canPlayAgain: Bool {
+        guard repeatable != nil, recordingEditor == nil, !playing, let editor = editorProvider() else { return false }
+        return EditorLifetime.isOpen(editor) && editor.selectionCount == 1 && !editor.readOnly
+    }
     private var captureError: Error?
     private var playing = false { didSet { manager?.refresh() } }
     private var playbackCancelled = false
@@ -47,20 +61,35 @@ import Darwin
         return macroMenu
     }
     func menuNeedsUpdate(_ menu: NSMenu) { rebuild() }
-    /// No item in this menu has a key equivalent, so a key press never needs it brought up to date.
     func menuHasKeyEquivalent(
         _ menu: NSMenu, for event: NSEvent, target: AutoreleasingUnsafeMutablePointer<AnyObject?>,
         action: UnsafeMutablePointer<Selector?>
-    ) -> Bool { false }
+    ) -> Bool {
+        guard event.charactersIgnoringModifiers == MenuShortcut.recordMacro.key else { return false }
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if flags == MenuShortcut.recordMacro.appKitModifiers && !playing
+            && (recordingEditor != nil || editorProvider() != nil)
+        {
+            action.pointee = recordingEditor == nil ? #selector(startRecording) : #selector(stopRecording)
+        } else if flags == MenuShortcut.playMacroAgain.appKitModifiers && canPlayAgain {
+            action.pointee = #selector(playAgain)
+        } else {
+            return false
+        }
+        target.pointee = self
+        return true
+    }
     private func rebuild() {
         macroMenu.removeAllItems()
         macroMenu.autoenablesItems = false
         macroMenu.addItem(
-            title: "Start Recording", action: #selector(startRecording), target: self,
-            isEnabled: recordingEditor == nil && !playing)
+            title: "Start Recording", action: #selector(startRecording),
+            fallback: recordingEditor == nil ? .recordMacro : nil, target: self,
+            isEnabled: recordingEditor == nil && !playing && editorProvider() != nil)
         macroMenu.addItem(
             title: discardReason == nil ? "Stop Recording" : "Stop Recording (Already Discarded)",
-            action: #selector(stopRecording), target: self, isEnabled: recordingEditor != nil)
+            action: #selector(stopRecording), fallback: recordingEditor != nil ? .recordMacro : nil, target: self,
+            isEnabled: recordingEditor != nil)
         macroMenu.addItem(
             title: "Play Last Recording…", action: #selector(playLast), target: self,
             isEnabled: lastRecording != nil && recordingEditor == nil && !playing)
@@ -70,6 +99,11 @@ import Darwin
         macroMenu.addItem(
             title: "Manage Saved Macros…", action: #selector(manage), target: self,
             isEnabled: recordingEditor == nil && !playing)
+        let again = macroMenu.addItem(
+            title: "Play Again", action: #selector(playAgain), fallback: .playMacroAgain, target: self,
+            isEnabled: canPlayAgain)
+        again.toolTip =
+            "Play the last successfully played macro once in the active editor, or the latest completed recording before the first playback."
         if !library.macros.isEmpty { macroMenu.addItem(.separator()) }
         for macro in library.macros {
             macroMenu.addItem(
@@ -117,6 +151,7 @@ import Darwin
         }
         editor.startRecording()
         rebuild()
+        publishRecording()
     }
     /// Invalidated recordings remain stoppable, but can never become a saved partial macro.
     func invalidateRecording(reason: String) {
@@ -148,6 +183,7 @@ import Darwin
         editor.stopRecording()
         editor.onMacroStep = nil
         rebuild()
+        publishRecording()
         onInvalidated?(error.localizedDescription)
     }
     /// An application-layer caret jump (Go to Line, Clear Selection, a function-list or result
@@ -194,7 +230,10 @@ import Darwin
         editor.stopRecording()
         editor.onMacroStep = nil
         recordingEditor = nil
-        defer { rebuild() }
+        defer {
+            rebuild()
+            publishRecording()
+        }
         if let captureError {
             throw MacroError.invalid("Recording was discarded: \(captureError.localizedDescription)")
         }
@@ -207,6 +246,12 @@ import Darwin
         do { _ = try finishRecording() } catch { TTAlert.present(error) }
     }
     func recordSearch(_ search: RecordedMacro.Search, editor: TTEditor) {
+        if search.action == "replaceOne" || search.action == "replaceAll" {
+            // A Stop/restart inside the native edit cannot donate an older search step to the new recording.
+            guard recordingEditor === editor, captureError == nil, editor.confirmRecordedSearchReplacement() else {
+                return
+            }
+        }
         append(.search(search), editor: editor)
     }
     private func append(_ step: RecordedMacro.Step, editor: TTEditor) {
@@ -226,6 +271,13 @@ import Darwin
         } catch {
             discard(error, editor: editor)
         }
+    }
+    @objc func playAgain() {
+        guard canPlayAgain, let macro = repeatable else { return }
+        do {
+            guard let editor = try playbackEditor() else { return }
+            try playInteractively(macro, on: editor, repeats: 1, untilEnd: false)
+        } catch { TTAlert.present(error) }
     }
     @objc private func playLast() { if let lastRecording { choosePlayback(lastRecording) } }
     @objc private func playSaved(_ sender: NSMenuItem) {
@@ -293,7 +345,7 @@ import Darwin
             macro: macro, editor: editor, repeats: repeats, untilEnd: untilEnd, searchPlayback: searchPlayback)
         playing = true
         playbackCancelled = false
-        editor.beginUndoGroup()
+        editor.beginUndoGroup(named: "Play Macro")
         defer {
             editor.endUndoGroup()
             playing = false
@@ -338,6 +390,7 @@ import Darwin
         timer.invalidate()
         panel.orderOut(nil)
         if let failure = outcome.failure { throw failure }
+        lastPlayed = macro
     }
     func play(
         _ macro: RecordedMacro, on editor: TTEditor, repeats: Int = 1, untilEnd: Bool = false,
@@ -347,13 +400,14 @@ import Darwin
         let session = try MacroPlayback(
             macro: macro, editor: editor, repeats: repeats, untilEnd: untilEnd, searchPlayback: searchPlayback)
         playing = true
-        editor.beginUndoGroup()
+        editor.beginUndoGroup(named: "Play Macro")
         defer {
             editor.endUndoGroup()
             playing = false
             rebuild()
         }
         while try !session.advance(budget: 100, shouldCancel: shouldCancel) {}
+        lastPlayed = macro
     }
     private var namePanel: FormPanel?
     @objc private func saveLast() {
@@ -513,6 +567,11 @@ import Darwin
         try PrivateFileStore.prepareDirectory(storage.deletingLastPathComponent())
         try PrivateFileStore.write(
             data, to: storage, maximumBytes: MacroLibrary.maximumBytes, temporaryPrefix: ".macros-")
+        if let lastPlayed, library.macros.contains(where: { $0.id == lastPlayed.id }),
+            !proposed.macros.contains(lastPlayed)
+        {
+            self.lastPlayed = nil
+        }
         library = proposed
         rebuild()
     }

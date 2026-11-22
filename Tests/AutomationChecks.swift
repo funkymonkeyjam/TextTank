@@ -4,6 +4,51 @@ import Foundation
 import Darwin
 
 @main struct AutomationChecks {
+    static func suppliedTextReader() throws {
+        let privateArea = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: privateArea, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: privateArea) }
+        let url = privateArea.appendingPathComponent("Automations.json")
+        check(
+            try AutomationLibrary.readIfPresent(at: url) == nil
+                && AutomationLibrary.forSuppliedText(at: url).workflows.count
+                    == AutomationDefinition.firstRunPresets.count
+                && !FileManager.default.fileExists(atPath: url.path),
+            "fresh read-only library offers defaults without writing")
+        let wf = AutomationDefinition(
+            id: UUID(), name: "Clean", input: .selection, steps: [.init(kind: .removeBlankLines)], output: .editor)
+        let data = try AutomationLibrary(workflows: [wf]).encoded()
+        var json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        json["newerMetadata"] = ["opaque": 42]
+        let stored = try JSONSerialization.data(withJSONObject: json)
+        try stored.write(to: url)
+        let value = try AutomationLibrary.forSuppliedText(at: url)
+        check(
+            try value.namedForSuppliedText("Clean").id == wf.id && Data(contentsOf: url) == stored,
+            "known workflows load without rewriting unknown fields")
+        var other = wf
+        other.id = UUID()
+        rejects("duplicate automation names do not select an arbitrary workflow") {
+            _ = try AutomationLibrary(workflows: [wf, other]).namedForSuppliedText("Clean")
+        }
+        for output in [AutomationDefinition.Output.clipboard, .file, .reminders, .newDocument] {
+            other.output = output
+            rejects("headless read refuses interactive and external outputs") { try other.requireSuppliedText() }
+        }
+        other = wf
+        other.previewBeforeApply = true
+        rejects("headless read preserves explicit preview requirement") { try other.requireSuppliedText() }
+        other = wf
+        other.steps = [.init(kind: .replaceLiteral, find: "x", replacement: "y", askForFind: true)]
+        rejects("headless read refuses configured prompts") { try other.requireSuppliedText() }
+        try Data("invalid".utf8).write(to: url)
+        rejects("unreadable existing library does not fall back to presets") {
+            _ = try AutomationLibrary.forSuppliedText(at: url)
+        }
+        check(try Data(contentsOf: url) == Data("invalid".utf8), "failed read preserves stored bytes")
+    }
     static func progressReentry(_ mode: String) throws {
         DispatchQueue.global().asyncAfter(deadline: .now() + 3) { exit(70) }
         let control = AutomationRunControl(), done = DispatchSemaphore(value: 0)
@@ -39,6 +84,7 @@ import Darwin
             }
         }
         Checks.run("AutomationChecks") {
+            try suppliedTextReader()
             for mode in ["release", "invoke"] {
                 let child = Process(), output = Pipe()
                 child.executableURL = Checks.executable
@@ -566,7 +612,8 @@ import Darwin
             let manyLines = String(repeating: "2 cups flour, sifted\n", count: lineCount)
             check(
                 try rule.transform(manyLines).utf8.elementsEqual(manyLines.utf8),
-                "F55 two heading patterns leave \(lineCount) short non-matching lines unchanged without a false time limit")
+                "F55 two heading patterns leave \(lineCount) short non-matching lines unchanged without a false time limit"
+            )
             rule.steps = [.init(kind: .clearLinesMatching, find: "(a+)+$")]
             let slowLines = String(repeating: "aaaaaaaaaaaaaaaaaaaaaaaa!\n", count: 5000)
             let slowLinesStarted = ProcessInfo.processInfo.systemUptime
@@ -742,13 +789,26 @@ import Darwin
                     try answered?.transform("drop\nkeep") == "\nkeep",
                     "F71 \(kind.rawValue) runs with the value supplied at run time")
             }
+            let regexRule = AutomationDefinition.Step(kind: .replaceRegex, find: "(雪)([0-9]+)", replacement: "$2·$1")
+            let regexSample = try AutomationDefinition.testRules([regexRule], sample: "雪12\r\n👩🏽‍🚀雪3")
+            check(regexSample == "12·雪\r\n👩🏽‍🚀3·雪", "Regex Replace uses Find captures and preserves unmatched Unicode")
+            let zeroMatches = try AutomationDefinition.testRules([regexRule], sample: "unchanged")
+            check(zeroMatches == "unchanged", "Regex Replace with zero matches preserves bytes")
+            let zeroWidth = try AutomationDefinition.testRules(
+                [.init(kind: .replaceRegex, find: "(?=雪)", replacement: "A")], sample: "雪雪")
+            check(zeroWidth == "A雪A雪", "Regex Replace advances after zero-width Unicode matches")
+            rejects("Regex Replace rejects partial sample results", message: "1 MiB") {
+                _ = try AutomationDefinition.testRules(
+                    [.init(kind: .replaceRegex, find: "x", replacement: String(repeating: "雪", count: 2000))],
+                    sample: String(repeating: "x", count: 200))
+            }
             // F188: Swift names say what a rule does; the stored spellings are pinned.
             check(
                 AutomationDefinition.Step.Kind.allCases.map(\.rawValue) == [
                     "removeListMarkers", "removeBlankLines", "sortLines", "deduplicateLines", "replaceLiteral",
                     "removeLinesEqualTo", "removeLinesContaining", "removeLinesStartingWith", "trimWhitespace",
                     "removeMatchingLines", "removeMarkdownHeadings", "removeMarkdownFormatting",
-                    "removeCheckboxMarkers", "removeNoteReferences", "keepMarkedListRows", "sortLinesLocalized"
+                    "removeCheckboxMarkers", "removeNoteReferences", "keepMarkedListRows", "sortLinesLocalized", "replaceRegex"
                 ], "F188 every persisted step spelling and its order is unchanged")
             check(
                 AutomationDefinition.Step.Kind.clearLinesEqualTo.rawValue == "removeLinesEqualTo"
@@ -929,9 +989,9 @@ import Darwin
                 // G387: one list of find-accepting kinds, used by validation.
                 check(
                     Set(kinds.filter(\.acceptsFind)) == [
-                        .replaceLiteral, .clearLinesMatching, .clearLinesEqualTo, .clearLinesContaining,
+                        .replaceLiteral, .replaceRegex, .clearLinesMatching, .clearLinesEqualTo, .clearLinesContaining,
                         .clearLinesStartingWith
-                    ] && kinds.filter(\.acceptsReplacement) == [.replaceLiteral],
+                    ] && kinds.filter(\.acceptsReplacement) == [.replaceLiteral, .replaceRegex],
                     "G387 the kinds that take text to match and a replacement are listed once on the kind")
                 for kind in kinds {
                     let withFind = Step(kind: kind, find: "x", replacement: kind.acceptsReplacement ? "y" : nil)

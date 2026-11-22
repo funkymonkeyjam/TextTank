@@ -14,7 +14,7 @@ enum EditorToolbarCommand: String, CaseIterable {
         case .open: return Strings.text("toolbar.open", "Open…")
         case .save: return Strings.text("toolbar.save", "Save")
         case .find: return Strings.text("toolbar.find", "Find…")
-        case .split: return Strings.text("toolbar.split", "Clone")
+        case .split: return Strings.text("toolbar.split", "Split Tab View")
         }
     }
     var action: Selector {
@@ -43,7 +43,7 @@ enum EditorToolbarCommand: String, CaseIterable {
         case .find: return Strings.text("toolbar.find.help", "Find text in the current document.")
         case .split:
             return Strings.text(
-                "toolbar.split.help", "Show a second view of the current document, or return to a single view.")
+                "toolbar.split.help", "Split this tab into two views of the same document, or return to one view.")
         }
     }
     @MainActor func makeItem() -> NSToolbarItem {

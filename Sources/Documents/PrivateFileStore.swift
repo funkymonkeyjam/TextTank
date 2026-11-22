@@ -8,7 +8,7 @@ package enum AppStorage {
     package enum Location: String {
         case settings = "Settings.json", macros = "Macros.json", automations = "Automations.json"
         case languages = "LanguageProfiles.json", commands = "RunCommands.json", workspace = "WorkspaceBrowser.json"
-        case recovery = "Recovery", reminders = "ReminderExports", lastSession = "LastSession.json"
+        case recovery = "Recovery", reminders = "ReminderExports", pasteThroughChoice = "PasteThroughChoice.json", lastSession = "LastSession.json"
         case find = "FindPreferences.json", folderSearch = "FolderSearchPreferences.json"
         case folderReplacements = "FolderReplacements"
         package var isDirectory: Bool { self == .recovery || self == .reminders || self == .folderReplacements }

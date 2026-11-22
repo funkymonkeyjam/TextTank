@@ -7,13 +7,18 @@ import AppKit
 /// stock File/Open/Finder path still constructs its NSDocumentClass in the normal AppKit way.
 @MainActor enum DocumentFactory {
     @discardableResult static func makeUntitled(
-        display: Bool = true, focus: Bool = true,
-        prepare: (TextDocument) -> Void = { _ in }, populate: (TextDocument) -> Void = { _ in }
+        display: Bool = true, focus: Bool = true, populate: (TextDocument) -> Void = { _ in }
     ) -> TextDocument {
+        makeUntitled(display: display, focus: focus, prepare: { _ in }, populate: populate)
+    }
+    @discardableResult static func makeUntitled(
+        display: Bool = true, focus: Bool = true,
+        prepare: (TextDocument) throws -> Void, populate: (TextDocument) -> Void = { _ in }
+    ) rethrows -> TextDocument {
         let document = TextDocument()
         document.fileType = TextDocument.plainTextType
         // Recovery identity must be installed before window wiring or the first edit.
-        prepare(document)
+        try prepare(document)
         NSDocumentController.shared.addDocument(document)
         document.makeWindowControllers()
         populate(document)

@@ -68,6 +68,90 @@ import Foundation
                     && (id == nil || ($0.representedObject as? String) == id?.uuidString)
             }
         }
+        @MainActor static func recordingVisibilityAndReplay() throws {
+            let first = TTEditor(frame: .init(x: 0, y: 0, width: 500, height: 120))
+            let second = TTEditor(frame: first.frame)
+            let window = NSWindow(contentRect: first.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView?.addSubview(first)
+            window.contentView?.addSubview(second)
+            defer { window.orderOut(nil) }
+            final class Target { var active: TTEditor? }
+            let target = Target()
+            target.active = first
+            let controller = MacroController { target.active }
+            let row = StatusBadgeRow(frame: .init(x: 0, y: 0, width: 800, height: 24))
+            row.bindRecorder(controller)
+            let badge = try requireValue(
+                control("status.macroRecording", NSButton.self, in: descendants(row)), "owned native badge")
+            let savedMenu = NSApp.mainMenu
+            let bar = NSMenu(), item = NSMenuItem()
+            item.submenu = controller.menu()
+            bar.addItem(item)
+            NSApp.mainMenu = bar
+            defer { NSApp.mainMenu = savedMenu }
+            func chord(shift: Bool = false) -> Bool {
+                let key = MenuShortcut.recordMacro.key
+                guard
+                    let keyDown = NSEvent.keyEvent(
+                        with: .keyDown, location: .zero, modifierFlags: shift ? [.shift, .function] : [.function],
+                        timestamp: 0, windowNumber: 0, context: nil, characters: key, charactersIgnoringModifiers: key,
+                        isARepeat: false, keyCode: 101)
+                else { return false }
+                return bar.performKeyEquivalent(with: keyDown)
+            }
+            func replayItem() throws -> NSMenuItem {
+                try requireValue(
+                    controller.menu().items.first { $0.action == #selector(MacroController.playAgain) },
+                    "Play Again menu item")
+            }
+            check(try badge.isHidden && !replayItem().isEnabled, "empty replay history and idle badge")
+            first.text = "abc"
+            _ = first.setSelectionAnchor(3, caret: 3)
+            check(
+                chord() && controller.isRecording(in: first) && !badge.isHidden
+                    && badge.accessibilityLabel() == "Stop macro recording",
+                "F9 starts recording and updates accessible badge immediately")
+            first.executeCommand(TTEditorCommandIdentifier(rawValue: "deleteBack"))
+            badge.performClick(nil)
+            check(
+                try badge.isHidden && replayItem().isEnabled && first.text == "ab",
+                "badge Stop ends one recording and makes it replayable")
+            target.active = second
+            second.text = "xy"
+            second.resetUndoHistory()
+            second.setSavePoint()
+            _ = second.setSelectionAnchor(2, caret: 2)
+            check(
+                chord(shift: true) && second.text == "x" && first.text == "ab",
+                "Shift-F9 runs latest recording once on current target")
+            second.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+            check(second.text == "xy" && !second.modified, "one Undo restores destination bytes and save point")
+            let stored = RecordedMacro(id: UUID(), name: "Owned", steps: [.insertText("雪")])
+            try controller.play(stored, on: second)
+            target.active = first
+            _ = first.setSelectionAnchor(2, caret: 2)
+            controller.playAgain()
+            check(first.text == "ab雪", "successful prior playback takes precedence over latest recording")
+            first.readOnly = true
+            check(try !replayItem().isEnabled, "read-only active target disables instant replay")
+            controller.playAgain()
+            check(first.text == "ab雪", "refused replay leaves exact bytes")
+            first.readOnly = false
+            target.active = nil
+            check(try !replayItem().isEnabled, "missing target disables replay")
+            target.active = first
+            controller.startRecording()
+            let clone = TTEditor(frame: first.frame)
+            clone.shareDocument(with: first)
+            controller.editorDidFocus(clone)
+            check(
+                try badge.title == "Macro Discarded" && !badge.isHidden && !replayItem().isEnabled,
+                "changing to clone immediately exposes discarded recording without enabling playback")
+            do {
+                _ = try controller.finishRecording()
+                check(false, "invalid recording cannot finish successfully")
+            } catch { check(badge.isHidden, "stopping discarded recording clears badge") }
+        }
         /// F253: Save Last Recording, a restart, then playback from the Macros menu.
         @MainActor static func menuFlowChecks(editor: TTEditor, support: URL) throws {
             let storage = support.appendingPathComponent("Macros.json")
@@ -450,6 +534,33 @@ import Foundation
             }
             func commands(_ macro: RecordedMacro?) -> [String] { macro?.steps.compactMap(\.command) ?? [] }
 
+            do {
+                let recorder = MacroController(editorProvider: { editor })
+                load("saved", caret: 5)
+                recorder.startRecording()
+                type("X")
+                let range = [TTByteRange(location: 0, length: 1)]
+                check(
+                    editor.replaceRanges(range, withTexts: ["s"], expectedRevision: editor.revision),
+                    "same-byte generic edit succeeds")
+                check(
+                    try recorder.finishRecording()?.steps == [.insertText("X")],
+                    "same-byte generic edit preserves the complete recorded literal")
+                _ = editor.setSelectionAnchor(editor.byteLength, caret: editor.byteLength)
+                recorder.startRecording()
+                type("X")
+                check(
+                    editor.replaceRanges(range, withTexts: ["S"], expectedRevision: editor.revision),
+                    "generic edit removed from any application-level macro registration still commits")
+                do {
+                    _ = try recorder.finishRecording()
+                    check(false, "unregistered generic edit must refuse to save a partial recording")
+                } catch {
+                    check(
+                        error.localizedDescription.contains("without a recorded macro step"),
+                        "unregistered generic edit rejects the partial recording")
+                }
+            }
             do {
                 let isolated = try IsolatedSupportDirectory("ReturnMacroCodec")
                 let previousEnding = editor.statusInfo.eol
@@ -1465,6 +1576,7 @@ import Foundation
                 }
                 Checks.section("Recording fidelity") { try fidelityChecks(editor: editor, window: window) }
                 Checks.section("Macros menu save and playback") {
+                    try recordingVisibilityAndReplay()
                     try menuFlowChecks(editor: editor, support: isolatedSupport.url)
                 }
                 Checks.section("F155 Macro JSON manager") { try jsonManagerChecks(editor: editor) }

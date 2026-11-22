@@ -6,11 +6,16 @@ import AppKit
 
 /// A filtered, keyboard-operable chooser. Row identity is independent of its displayed name.
 @MainActor final class ChoicePanel: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
-    struct Row { let id: String, title: String }
+    struct Row {
+        let id: String, title: String
+        var detail: String = ""
+        var enabled = true
+    }
     let form: FormPanel
     let filter = NSTextField(string: "")
     let table = ActivatingTableView()
     var rows: () -> [Row] = { [] }
+    var filteredRows: ((String) -> [Row])?
     var onClose: (() -> Void)?
     private var controllerOwner: AnyObject?
     func retainController(_ owner: AnyObject) { controllerOwner = owner }
@@ -18,6 +23,7 @@ import AppKit
         let callback = onClose
         onClose = nil
         rows = { [] }
+        filteredRows = nil
         choose = { _ in false }
         canChoose = { false }
         callback?()
@@ -64,14 +70,15 @@ import AppKit
         form.button("Cancel", identifier: identifier + ".cancel", cancel: true) { [weak self] in self?.form.close() }
         form.window.initialFirstResponder = filter
     }
-    func show() {
+    func show(parent: NSWindow? = nil) {
         refresh()
-        form.show()
+        form.show(parent: parent)
     }
     func refresh() {
         let selected = displayed.indices.contains(table.selectedRow) ? displayed[table.selectedRow].id : nil
         let query = filter.stringValue
-        displayed = rows().filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }
+        displayed = filteredRows?(query) ?? rows().filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }
+        table.rowHeight = displayed.contains { !$0.detail.isEmpty } ? 46 : 30
         table.reloadData()
         if let index = displayed.firstIndex(where: { $0.id == selected }) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
@@ -81,13 +88,13 @@ import AppKit
         updateChoice()
     }
     private func updateChoice() {
-        chooseButton?.isEnabled = canChoose() && displayed.indices.contains(table.selectedRow)
+        chooseButton?.isEnabled = canChoose() && displayed.indices.contains(table.selectedRow) && displayed[table.selectedRow].enabled
     }
     @objc private func activate() {
         guard !activating, form.acceptsActions else { return }
         activating = true
         defer { activating = false }
-        guard form.commitEditing(), canChoose(), displayed.indices.contains(table.selectedRow) else { return }
+        guard form.commitEditing(), canChoose(), displayed.indices.contains(table.selectedRow), displayed[table.selectedRow].enabled else { return }
         do { if try choose(displayed[table.selectedRow].id) { form.close() } } catch {
             form.showValidation(error, field: filter)
         }
@@ -107,6 +114,16 @@ import AppKit
         label.identifier = NSUserInterfaceItemIdentifier(value.id)
         label.setAccessibilityLabel(value.title)
         label.toolTip = value.title
-        return label
+        guard !value.detail.isEmpty else { return label }
+        if !value.enabled { label.textColor = .disabledControlTextColor }
+        let detail = NSTextField(labelWithString: value.detail)
+        detail.font = .preferredFont(forTextStyle: .caption1)
+        detail.textColor = .secondaryLabelColor
+        let pair = NSStackView(views: [label, detail])
+        pair.orientation = .vertical
+        pair.alignment = .leading
+        pair.spacing = 1
+        pair.toolTip = value.detail
+        return pair
     }
 }

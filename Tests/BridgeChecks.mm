@@ -809,6 +809,25 @@ int main(int argc, char **argv) {
         check([first.text isEqual:@"changed 🦋"] && first.modified && second.modified, "Clone edit updates shared bytes and dirty state");
         [first executeCommand:@"undo"];
         check([second.text isEqual:unicode], "Undo from other clone restores shared bytes");
+        {
+            TTEditor *history = [[TTEditor alloc] initWithFrame:NSZeroRect];
+            TTEditor *clone = [[TTEditor alloc] initWithFrame:NSZeroRect];
+            [clone shareDocumentWith:history];
+            [history beginUndoGroupNamed:@"Sort Lines"];
+            [clone beginUndoGroupNamed:@"Inner"];
+            [clone replaceSelection:@"a\nb"];
+            [clone endUndoGroup];
+            [history endUndoGroup];
+            check([[clone historyNameForRedo:NO] isEqual:@"Sort Lines"], "native outer group names Undo on both views");
+            [clone executeCommand:@"undo"];
+            check(history.text.length == 0 && [[history historyNameForRedo:YES] isEqual:@"Sort Lines"],
+                  "Redo reads the same native history after Undo on a clone");
+            [history executeCommand:@"redo"];
+            check([history.text isEqual:@"a\nb"], "named Redo restores the exact edit");
+            [history resetUndoHistory];
+            check(![clone historyNameForRedo:YES] && ![clone historyNameForRedo:NO],
+                  "resetting shared Undo history clears both labels");
+        }
         [second executeCommand:@"redo"];
         first = nil;
         check([second.text isEqual:@"changed 🦋"] && second.modified, "Closing original retains edited clone");
@@ -2291,6 +2310,47 @@ int main(int argc, char **argv) {
         [(id<NSDraggingSource>)content draggingSession:noSession endedAtPoint:NSZeroPoint operation:NSDragOperationDelete];
         check([ed.text hasPrefix:@" beta"] && steps.count>=1 && steps.lastObject.kind==TTMacroActionKindUnsupported, "text dragged out of the recording editor and removed is not left as a saveable recording");
         [ed stopRecording];
+        // A cloned drag deletes through the native backend. Its rejection must precede
+        // the first change callback, where a client can stop and start a new recording.
+        reset(); [ed setSelectionAnchor:0 caret:0]; [clone setSelectionAnchor:0 caret:5];
+        __weak TTEditor *dragRecorder=ed;
+        __block NSArray<TTMacroAction *> *initialDragSteps=nil;
+        const NSUInteger postDragRevision=ed.revision;
+        ed.onChange=^{
+            if (initialDragSteps || dragRecorder.revision==postDragRevision) return;
+            initialDragSteps=[steps copy];
+            [dragRecorder stopRecording]; [steps removeAllObjects]; [dragRecorder startRecording];
+        };
+        [ed startRecording];
+        [(id<NSDraggingSource>)cloneContent draggingSession:noSession endedAtPoint:NSZeroPoint operation:NSDragOperationDelete];
+        ed.onChange=nil; [sv insertText:@"z"]; [ed stopRecording];
+        check(initialDragSteps.count==1 && initialDragSteps[0].kind==TTMacroActionKindUnsupported
+              && [initialDragSteps[0].name containsString:@"drag and drop"],
+              "a clone drag reports one rejection before a change observer can finish recording");
+        check(steps.count==1 && steps[0].kind==TTMacroActionKindInsertText && [steps[0].text isEqual:@"z"]
+              && [ed.text hasPrefix:@"z beta"],
+              "a recording begun after the drag's bytes changed accepts the next native insertion");
+
+        // A restart in the rejection callback is earlier: the deletion still lies
+        // ahead. A Stop in the next change callback must also reject this new session.
+        reset(); [ed setSelectionAnchor:0 caret:0]; [clone setSelectionAnchor:0 caret:5];
+        __block BOOL restartedBeforeChange=NO;
+        ed.onMacroStep=^(TTMacroAction *step){
+            [steps addObject:step];
+            if (!restartedBeforeChange) {
+                restartedBeforeChange=YES;
+                [dragRecorder stopRecording]; [dragRecorder startRecording];
+            }
+        };
+        const NSUInteger preDragRevision=ed.revision;
+        ed.onChange=^{ if (dragRecorder.revision!=preDragRevision) [dragRecorder stopRecording]; };
+        [ed startRecording];
+        [(id<NSDraggingSource>)cloneContent draggingSession:noSession endedAtPoint:NSZeroPoint operation:NSDragOperationDelete];
+        ed.onChange=nil; [ed stopRecording];
+        check([ed.text hasPrefix:@" beta"] && steps.count==2 && steps[0].kind==TTMacroActionKindUnsupported
+              && steps[1].kind==TTMacroActionKindUnsupported,
+              "both recordings that overlap an unrecordable clone deletion reject before they can finish");
+        ed.onMacroStep=^(TTMacroAction *step){ [steps addObject:step]; };
         // An unrelated editor is never the recorded document: a drop there leaves the recording alone.
         reset();
         TTEditor *other=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];

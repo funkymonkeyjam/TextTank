@@ -655,8 +655,13 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     skips.stale += 1
                     continue
                 }
+                let capture = action == .replaceAll && !chosen.isEmpty ? BulkChangeCapture(editor, name: "Replace All") : nil
+                let priorName = editor.exchangeNextUndoName(action == .replaceAll ? "Replace All" : "Replace")
+                defer { _ = editor.exchangeNextUndoName(priorName) }
                 switch Self.replace(chosen, text: buffer.text, revision: buffer.revision, in: editor) {
-                case .applied(let count): changed += count
+                case .applied(let count):
+                    changed += count
+                    capture?.finish()
                 case .readOnly: skips.readOnly += 1
                 case .multipleSelections: skips.multipleSelections += 1
                 case .closed: skips.closed += 1
@@ -1013,7 +1018,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         // Undo returns to the selection the command began with.
         let anchor = editor.selectionAnchor, caret = editor.selectionCaret
         guard let ranges = SearchCore.byteRanges(hits.map(\.range), in: text),
-            editor.replaceRanges(
+            editor.replaceSearchRanges(
                 ranges.map { TTByteRange(location: $0.location, length: $0.length) },
                 withTexts: hits.map(\.replacement), expectedRevision: revision)
         else { return .stale }

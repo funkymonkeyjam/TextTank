@@ -3,7 +3,10 @@ import EditorBridge
 import NativeSearch
 import AppKit
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
+    var firstLaunchProfile = false
+    var helpResourceDirectory = Bundle.main.resourceURL
+    private var defaultDocumentLaunch = false
     private var automaticSession: AutomaticSession?
     var smokeFile: URL?
     private weak var knownWorkspace: WorkspaceWindowController?
@@ -152,12 +155,17 @@ import AppKit
                 reason: "Applying selected comparison changes cannot be recorded. No partial macro will be saved.")
         }
         value.currentEditor = { [weak self] in self?.currentEditor }
+        value.visibleEditors = { [weak self] in self?.knownWorkspace?.visibleComparisonEditors }
         return value
     }()
     @MainActor lazy var macros = MacroController(editorProvider: { [weak self] in self?.currentEditor })
+    let commandDiscovery = CommandDiscovery()
     @MainActor lazy var automations: AutomationController = {
         let controller = AutomationController(
             editorProvider: { [weak self] in self?.currentEditor }, newDocument: AppDelegate.openAutomationOutput)
+        controller.commandDiscovery = { [weak self] in
+            self?.commandDiscovery.show(editor: { [weak self] in self?.currentEditor })
+        }
         controller.onQuietExportResult = { [weak self] message in
             let window = self?.currentDocumentController
             window?.showTransientStatus(
@@ -165,6 +173,10 @@ import AppKit
                 compactMessage: Strings.text(
                     "status.remindersAdded", "Items were added in Reminders. Editor Undo does not remove them."),
                 seconds: 8, announce: false)
+        }
+        controller.comparisonService = { [weak self] in self?.compare }
+        controller.prepareTransformedPaste = { [weak self] editor in
+            self?.macros.prepareUnrecordedChange(in: editor, reason: "Paste Through changed the recorded document.")
         }
         controller.onInvocation = { [weak self] in
             self?.macros.invalidateRecording(
@@ -194,6 +206,7 @@ import AppKit
         }
     }
     func applicationDidBecomeActive(_ notification: Notification) {
+        startForegroundInterfaceIfNeeded()
         let front = currentDocument
         front?.externalFile.setApplicationActive(true)
         front?.externalFile.check(prioritized: true)
@@ -210,7 +223,7 @@ import AppKit
     }
 
     private var replacementRetentionTimer: DispatchSourceTimer?
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    private func startReplacementRetention() {
         let cleanup = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "TextTank.folder-replacement-retention", qos: .utility))
         cleanup.schedule(deadline: .now() + 2, repeating: .seconds(86_400), leeway: .seconds(120))
         cleanup.setEventHandler {
@@ -223,6 +236,74 @@ import AppKit
         }
         replacementRetentionTimer = cleanup
         cleanup.resume()
+    }
+    private lazy var commandLine = CommandLineController { [weak self] in self?.compare }
+    @objc func handleCommandLine(_ notice: Notification) {
+        guard let raw = notice.userInfo?["request"] as? String,
+            let id = UUID(uuidString: raw)
+        else { return }
+        Task { await commandLine.accept(id) }
+    }
+    @objc func installCommandLine(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.title = "Install the tt Command-Line Tool"
+        panel.message = "Choose a folder you own for a link to TextTank’s tt tool."
+        panel.prompt = "Install"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+        panel.begin { [weak self] result in
+            guard result == .OK, let url = panel.url else { return }
+            do {
+                let path = try CommandLineController.install(
+                    helper: Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/tt"), in: url)
+                self?.knownWorkspace?.showTabMessage("Installed tt at " + path.path)
+            } catch { TTAlert.present(error) }
+        }
+    }
+    private lazy var textServices = TextServices(newDocument: Self.openAutomationOutput)
+
+    func installTextServices() { NSApp.servicesProvider = textServices }
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        installTextServices()
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(handleCommandLine(_:)),
+            name: TTInvocation.wakeName, object: String(ProcessInfo.processInfo.processIdentifier),
+            suspensionBehavior: .deliverImmediately)
+        NSAppleEventManager.shared().setEventHandler(
+            self, andSelector: #selector(handleOpenTextURL(_:reply:)), forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL))
+    }
+    @objc func handleOpenTextURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        do {
+            guard let raw = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue else {
+                throw TextOpenRequest.invalidURL
+            }
+            _ = try TextOpenRequest(raw).open()
+        } catch {
+            reply.setParam(NSAppleEventDescriptor(int32: Int32(paramErr)), forKeyword: keyErrorNumber)
+            reply.setParam(NSAppleEventDescriptor(string: error.localizedDescription), forKeyword: keyErrorString)
+            knownWorkspace?.showTabMessage(error.localizedDescription)
+        }
+    }
+    private enum LaunchInterface { case waitingForLaunch, waitingForForeground, started }
+    private var launchInterface = LaunchInterface.waitingForLaunch
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard launchInterface == .waitingForLaunch else { return }
+        defaultDocumentLaunch = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool == true
+        launchInterface = .waitingForForeground
+        if smokeFile != nil || NSApp.isActive { startForegroundInterfaceIfNeeded() }
+    }
+
+    /// A background App Intent can finish entirely inside the app's normal process without
+    /// displaying startup alerts, restoring tabs, seeding manager presets or starting a session timer.
+    private func startForegroundInterfaceIfNeeded() {
+        guard launchInterface == .waitingForForeground else { return }
+        launchInterface = .started
         buildMenus()
         settings.apply()
         searchController.onCommand = { [weak self] options, action, editor in
@@ -282,7 +363,7 @@ import AppKit
             openSmokeDocument(smokeFile)
             return
         }
-        NSApp.activate()
+        startReplacementRetention()
         TextDocument.recovery.scanForLaunch { [weak self] result in
             self?.launchInventory = result
             self?.deliverLaunchInventory()
@@ -297,7 +378,11 @@ import AppKit
         else { return }
         launchInventory = nil
         var sessionNotices: [String] = []
-        restoreLaunchDocuments(review: { originals in self.restoreRecovery(result, originals: originals) }) {
+        restoreLaunchDocuments(
+            createUntitledIfEmpty: !CommandLine.arguments.contains("--texttank-external-request"),
+            welcomeIfEmpty: firstLaunchProfile && defaultDocumentLaunch,
+            review: { originals in self.restoreRecovery(result, originals: originals) }
+        ) {
             sessionNotices.append(contentsOf: $0)
         }
         showSessionNotices(sessionNotices)
@@ -313,7 +398,10 @@ import AppKit
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window) { _ in }
     }
-    func restoreLaunchDocuments(review: ([URL: TextDocument]) -> Void, report: ([String]) -> Void) {
+    func restoreLaunchDocuments(
+        createUntitledIfEmpty: Bool = true, welcomeIfEmpty: Bool = false,
+        review: ([URL: TextDocument]) -> Void, report: ([String]) -> Void
+    ) {
         let session = AutomaticSession()
         automaticSession = session
         var originals = [URL: TextDocument]()
@@ -335,7 +423,14 @@ import AppKit
             }
         }
         review(originals)
-        if NSDocumentController.shared.documents.isEmpty { newDocument(nil) }
+        if createUntitledIfEmpty, NSDocumentController.shared.documents.isEmpty {
+            if welcomeIfEmpty {
+                do { try openHelpDocument(welcome: true) } catch {
+                    newDocument(nil)
+                    report([error.localizedDescription])
+                }
+            } else { newDocument(nil) }
+        }
         session.start { [weak self] in self?.checkpointSession() }
     }
     func checkpointSession() {
@@ -487,6 +582,22 @@ import AppKit
             DispatchQueue.main.async { [weak self] in self?.deliverLaunchInventory() }
         }
     }
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        Self.updateHistoryTitles(in: menu, responder: (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder)
+    }
+    static func updateHistoryTitles(in menu: NSMenu, responder: NSResponder?) {
+        var view = responder as? NSView
+        while let current = view, !(current is TTEditor) { view = current.superview }
+        let editor = view as? TTEditor
+        for item in menu.items {
+            guard let id = item.representedObject as? String, id == "undo" || id == "redo" else { continue }
+            let redo = id == "redo", base = redo ? EditorCommand.redo.title : EditorCommand.undo.title
+            if let name = editor?.historyName(redo: redo) { item.title = base + " " + name }
+            else if editor == nil, let manager = responder?.undoManager {
+                item.title = redo ? manager.redoMenuItemTitle : manager.undoMenuItemTitle
+            } else { item.title = base }
+        }
+    }
     @MainActor func buildMenus() {
         let bar = NSMenu()
         NSApp.mainMenu = bar
@@ -503,6 +614,9 @@ import AppKit
         app.addItem(
             title: "Settings…", action: #selector(SettingsController.showSettings(_:)), keyEquivalent: ",",
             target: settings)
+        app.addItem(
+            title: "Install tt Command-Line Tool…", action: #selector(installCommandLine(_:)), keyEquivalent: "",
+            target: self)
         app.addItem(.separator())
         // The standard application items. AppKit fills the Services menu.
         let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
@@ -564,6 +678,7 @@ import AppKit
                 action: #selector(TextDocument.reloadEncoding(_:)), representedObject: value.rawValue)
         }
         let edit = menu("Edit")
+        edit.delegate = self
         // Grouped by what the command acts on. Every item keeps its command identifier as its
         // represented object, so shortcuts, macros and validation find it wherever it sits.
         @MainActor func group(_ title: String) -> NSMenu {
@@ -611,6 +726,10 @@ import AppKit
             title: EditorCommand.paste.title, action: #selector(NSText.paste(_:)),
             keyEquivalent: EditorCommand.paste.defaultMenuShortcut,
             representedObject: EditorCommand.paste.rawValue)
+        let pasteChoices = automations.pasteThroughMenu()
+        let transformedPaste = NSMenuItem(title: pasteChoices.title, action: nil, keyEquivalent: "")
+        transformedPaste.submenu = pasteChoices
+        edit.addItem(transformedPaste)
         edit.addItem(
             title: EditorCommand.selectAll.title, action: #selector(NSText.selectAll(_:)),
             keyEquivalent: EditorCommand.selectAll.defaultMenuShortcut,
@@ -721,6 +840,7 @@ import AppKit
             item.submenu = menu
             compareMenu.addItem(item)
         }
+        compareMenu.addItem(title: "Compare Two Visible Tabs", action: #selector(CompareService.compareVisibleTabs(_:)), target: compare)
         comparisons.submenu = compareMenu
         search.addItem(.separator())
         search.addItem(comparisons)
@@ -822,7 +942,9 @@ import AppKit
         // AppKit puts its search field in the Help menu; it finds any command in the menus above.
         let help = menu("Help")
         NSApp.helpMenu = help
-        help.addItem(title: "TextTank Help (Online)", action: #selector(openOnlineHelp(_:)), keyEquivalent: "?")
+        help.addItem(title: "TextTank User Guide", action: #selector(openUserGuide(_:)), keyEquivalent: "?")
+        help.addItem(title: "Welcome to TextTank", action: #selector(openWelcome(_:)))
+        help.addItem(title: "TextTank Help (Online)", action: #selector(openOnlineHelp(_:)))
         func alias(
             _ menu: NSMenu, title: String, action: Selector, key: MenuShortcut, target: AnyObject?,
             object: String? = nil
@@ -846,8 +968,24 @@ import AppKit
         settings.reconcileShortcuts(with: bar)
         EditorSettingsApplication.applyShortcuts(settings.value, to: bar)
     }
-    /// The project page, which carries the review guide and where each command lives. There is no
-    /// bundled help book yet.
+    @discardableResult func openHelpDocument(welcome: Bool) throws -> TextDocument {
+        let name = welcome ? "TextTank-Welcome" : "TextTank-User-Guide"
+        guard let url = helpResourceDirectory?.appendingPathComponent(name + ".txt") else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        let data = try Data(contentsOf: url)
+        return try DocumentFactory.makeUntitled(prepare: { document in
+            try document.read(from: data, ofType: TextDocument.plainTextType)
+            document.displayName = welcome ? "Welcome to TextTank" : "TextTank User Guide"
+        })
+    }
+    @objc func openUserGuide(_ sender: Any?) {
+        do { try openHelpDocument(welcome: false) } catch { TTAlert.present(error) }
+    }
+    @objc func openWelcome(_ sender: Any?) {
+        do { try openHelpDocument(welcome: true) } catch { TTAlert.present(error) }
+    }
+    /// The optional online project page.
     @objc func openOnlineHelp(_ sender: Any?) {
         if let url = URL(string: "https://github.com/funkymonkeyjam/TextTank#readme") { NSWorkspace.shared.open(url) }
     }

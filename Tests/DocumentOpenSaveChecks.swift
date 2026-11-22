@@ -8,6 +8,32 @@ import AppKit
 import EditorBridge
 import NativeSearch
 
+/// Exercise the real menu during its own native tracking loop, without global input.
+@MainActor private final class ServiceMenuSelection: NSObject {
+    let title: String
+    var tracked: NSMenu?
+    var selected = false
+
+    init(title: String) { self.title = title }
+
+    @objc func beganTracking(_ notification: Notification) {
+        guard let menu = notification.object as? NSMenu, menu.title == "Run TextTank Automation" else { return }
+        tracked = menu
+        let timer = Timer(timeInterval: 0.02, repeats: false) { [self] _ in
+            MainActor.assumeIsolated {
+                guard let menu = tracked else { return }
+                let index = menu.indexOfItem(withTitle: title)
+                if index >= 0 {
+                    selected = true
+                    menu.performActionForItem(at: index)
+                }
+                menu.cancelTrackingWithoutAnimation()
+            }
+        }
+        for mode: RunLoop.Mode in [.eventTracking, .common, .modalPanel] { RunLoop.main.add(timer, forMode: mode) }
+    }
+}
+
 extension DocumentChecks {
     @MainActor static func openSaveRecovery(root: URL, documents: TextDocumentController, section: SectionRunner) {
         let files = FileManager.default
@@ -112,7 +138,134 @@ extension DocumentChecks {
             check(
                 completed.wait(timeout: .now() + 2) == .success && wrote.wait(timeout: .now()) == .success,
                 "an invalid newer capture cannot displace the last valid queued draft at the cutoff")
+        }
 
+        section("bundled command-line request contents and receipt", #line) {
+            let sender = try TTInvocation(create: true)
+            let recipient = try TTInvocation(id: sender.id, create: false)
+            try sender.publish(.request) { try $0.write(contentsOf: JSONEncoder().encode(TTRequest.input(wait: true))) }
+            let content = Data("first\r\n雪".utf8)
+            try sender.publish(.input) { try $0.write(contentsOf: content) }
+            check(try recipient.claim() && !recipient.claim(), "one receiver claims the request once")
+            let bytes = try requireValue(try recipient.read(.processing), "receiver can inspect claimed request")
+            guard case .input(let wait) = try JSONDecoder().decode(TTRequest.self, from: bytes) else {
+                throw TTToolError("The request changed during handoff.")
+            }
+            check(
+                try wait && recipient.consumeInput() == content && recipient.read(.input) == nil,
+                "UTF-8 input survives handoff and private input is retired after capture")
+            try recipient.report(.closed)
+            let reply = try requireValue(try sender.read(.reply), "client receives document close")
+            let receipt = try JSONDecoder().decode(TTReply.self, from: reply)
+            check(
+                receipt.pid == ProcessInfo.processInfo.processIdentifier && receipt.state == .closed,
+                "completion carries the responding process identity and closed state")
+        }
+        section("macOS Services selected text", #line) {
+            let originalProvider = NSApp.servicesProvider
+            defer { NSApp.servicesProvider = originalProvider }
+            let delegate = AppDelegate()
+            delegate.installTextServices()
+            let provider = try requireValue(
+                NSApp.servicesProvider as? TextServices, "native Services provider installed")
+            let board = NSPasteboard(name: .init("org.texttank.tests.service." + UUID().uuidString))
+            defer { board.releaseGlobally() }
+            let selected = "first\r\n雪\n"
+            _ = board.setString(selected, forType: .string)
+            var failure: NSString?
+            let before = documents.documents.count
+            provider.newTextTankDocument(board, userData: nil, error: &failure)
+            let doc = try requireValue(documents.documents.last as? TextDocument, "Services routes into TextDocument")
+            defer { doc.close() }
+            check(
+                failure == nil && documents.documents.count == before + 1 && doc.fileURL == nil
+                    && doc.editor.checkedUTF8Data == Data(selected.utf8) && board.string(forType: .string) == selected,
+                "selection opens as an independent untitled document")
+            let libraryURL = AppStorage.url(.automations)
+            let old = try? Data(contentsOf: libraryURL)
+            defer {
+                if let old {
+                    try? old.write(to: libraryURL, options: .atomic)
+                } else {
+                    try? FileManager.default.removeItem(at: libraryURL)
+                }
+            }
+            let good = AutomationDefinition(
+                id: UUID(), name: "Duplicate removal", input: .selection, steps: [.init(kind: .deduplicateLines)],
+                output: .editor)
+            var bad = good
+            bad.id = UUID()
+            bad.name = "External"
+            bad.output = .reminders
+            let lib = try AutomationLibrary(workflows: [good, bad]).encoded()
+            try lib.write(to: libraryURL, options: .atomic)
+            let run = TextServices(
+                newDocument: { _ in check(false, "transform opened a document") },
+                choose: { options in
+                    check(options.map(\.id) == [good.id], "chooser offers only supplied-text automations")
+                    return options.first
+                })
+            _ = board.setString("a\na\nb", forType: .string)
+            run.runTextTankAutomation(board, userData: nil, error: &failure)
+            check(
+                try failure == nil && board.string(forType: .string) == "a\nb"
+                    && documents.documents.count == before + 1 && Data(contentsOf: libraryURL) == lib,
+                "Services returns transformed selection through only the supplied pasteboard")
+            // A workflow called Cancel must remain distinguishable from the actual cancellation command.
+            var namedCancel = good
+            namedCancel.id = UUID()
+            namedCancel.name = "Cancel"
+            namedCancel.steps = [.init(kind: .sortLines)]
+            try AutomationLibrary(workflows: [good, namedCancel, bad]).encoded().write(to: libraryURL, options: .atomic)
+            for (title, expected) in [("Run “Cancel”", "a\na\nb"), ("Cancel", "b\na\na")] {
+                let selection = ServiceMenuSelection(title: title)
+                NotificationCenter.default.addObserver(
+                    selection, selector: #selector(ServiceMenuSelection.beganTracking(_:)),
+                    name: NSMenu.didBeginTrackingNotification, object: nil)
+                defer { NotificationCenter.default.removeObserver(selection) }
+                _ = board.setString("b\na\na", forType: .string)
+                failure = nil
+                provider.runTextTankAutomation(board, userData: nil, error: &failure)
+                check(
+                    failure == nil && selection.selected && board.string(forType: .string) == expected,
+                    "actual Services tracking dispatches \(title) synchronously to the invocation pasteboard")
+            }
+            try lib.write(to: libraryURL, options: .atomic)
+            let staleWorkflow = TextServices(
+                newDocument: { _ in },
+                choose: { options in
+                    do {
+                        try AutomationLibrary(workflows: [bad]).encoded().write(to: libraryURL, options: .atomic)
+                    } catch { check(false, "owned automation change failed") }
+                    return options.first
+                })
+            _ = board.setString("a\na\nb", forType: .string)
+            staleWorkflow.runTextTankAutomation(board, userData: nil, error: &failure)
+            check(
+                failure?.contains("saved automation changed") == true && board.string(forType: .string) == "a\na\nb",
+                "removal of the selected workflow while choosing leaves supplied bytes intact")
+            try lib.write(to: libraryURL, options: .atomic)
+            failure = nil
+            let cancel = TextServices(newDocument: { _ in }, choose: { _ in nil })
+            let gen = board.changeCount
+            cancel.runTextTankAutomation(board, userData: nil, error: &failure)
+            check(failure == nil && board.changeCount == gen, "cancel preserves invocation pasteboard")
+            let mutation = TextServices(
+                newDocument: { _ in },
+                choose: { options in
+                    _ = board.setString("newer selection", forType: .string)
+                    return options.first
+                })
+            mutation.runTextTankAutomation(board, userData: nil, error: &failure)
+            check(
+                failure != nil && board.string(forType: .string) == "newer selection",
+                "stale service refuses to replace the changed selection")
+        }
+
+        section("explicit local text URL", #line) {
+            let folder = area.appendingPathComponent("explicit-url", isDirectory: true)
+            try files.createDirectory(at: folder, withIntermediateDirectories: true)
+            try checkTextURL(in: folder, delegate: AppDelegate())
         }
         section("invalid editor bytes preserve saved files and recovery", #line) {
             let source = area.appendingPathComponent("checked-capture.txt"), disk = Data("saved file".utf8)
@@ -896,6 +1049,78 @@ extension DocumentChecks {
             check(try WorkspaceStore.load(from: renamed) == session, "a snapshot saved under any name still loads")
         }
     }
+    @MainActor static func checkTextURL(in root: URL, delegate: AppDelegate) throws {
+        let name = "space # +&% and 雪.txt", file = root.appendingPathComponent(name)
+        let disk = Data("first\r\n甲\t🍋é\r\nlast".utf8)
+        try disk.write(to: file)
+        func address(_ url: URL, _ line: String?, _ column: String?) -> String {
+            var request = URLComponents()
+            request.scheme = "texttank"
+            request.host = "open"
+            request.queryItems = [.init(name: "path", value: url.path)]
+            if let line { request.queryItems?.append(.init(name: "line", value: line)) }
+            if let column { request.queryItems?.append(.init(name: "column", value: column)) }
+            return request.string!
+        }
+        func event(_ url: String) -> NSAppleEventDescriptor {
+            let input = NSAppleEventDescriptor(
+                eventClass: AEEventClass(kInternetEventClass), eventID: AEEventID(kAEGetURL),
+                targetDescriptor: .currentProcess(), returnID: AEReturnID(kAutoGenerateReturnID),
+                transactionID: AETransactionID(kAnyTransactionID))
+            input.setParam(NSAppleEventDescriptor(string: url), forKeyword: keyDirectObject)
+            return input
+        }
+        let docs = NSDocumentController.shared
+        let count = docs.documents.count
+        let raw = address(file, "2", "6")
+        let reply = NSAppleEventDescriptor.list()
+        delegate.handleOpenTextURL(event(raw), reply: reply)
+        let doc = try requireValue(
+            docs.document(for: file) as? TextDocument, "URL opens exactly the encoded local path")
+        defer { doc.close() }
+        doc.editor.configureTabWidth(4, useTabs: false)
+        let again = try TextOpenRequest(raw).open()
+        check(
+            again === doc && docs.documents.count == count + 1 && !doc.isDocumentEdited
+                && doc.editor.statusInfo.line == 2 && doc.editor.statusInfo.column == 6,
+            "one-based line and tab-expanded column reuse the same native document")
+        let end = try TextOpenRequest(address(file, "1000", "99999")).open()
+        check(end === doc && doc.editor.selectionCaret == disk.count, "coordinates past EOF clamp to last line end")
+        doc.editor.replaceSelection(" unsaved")
+        let changed = doc.editor.checkedUTF8Data
+        _ = try TextOpenRequest(address(file, "1", "1")).open()
+        check(
+            try doc.editor.checkedUTF8Data == changed && doc.isDocumentEdited && doc.editor.selectionCaret == 0
+                && Data(contentsOf: file) == disk,
+            "reopening navigates without reloading or saving an existing dirty original")
+        let retained = docs.documents.count
+        for invalid in [
+            "texttank://run?path=/owned", "texttank://open?path=relative", "texttank://open?path=/a&path=/b",
+            "texttank://open?path=//server/share", "texttank://open?path=/a&command=no",
+            "texttank://open?path=/a&line=-1", "texttank://open?path=/a&column=0", "texttank://open?path=/a#x",
+            "texttank://user@open?path=/a", "texttank://open?path=%00", "https://open?path=/a"
+        ] {
+            rejects("invalid open request is refused") { _ = try TextOpenRequest(invalid) }
+        }
+        let bin = root.appendingPathComponent("binary.txt")
+        try Data([0, 1, 2, 3]).write(to: bin)
+        let alias = root.appendingPathComponent("link.txt")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: file)
+        for invalid in [root, bin, alias, root.appendingPathComponent("missing.txt")] {
+            rejects("nonregular, missing or binary URL cannot register a document") {
+                _ = try TextOpenRequest(address(invalid, nil, nil)).open()
+            }
+        }
+        check(
+            docs.documents.count == retained && doc.editor.checkedUTF8Data == changed,
+            "rejections preserve the document registry and dirty text")
+        let valid16 = root.appendingPathComponent("utf16.txt")
+        try FileCodec.encode("wide雪", format: FileFormat(encoding: .utf16LE, bom: true)).write(to: valid16)
+        let utf16 = try TextOpenRequest(address(valid16, nil, nil)).open()
+        defer { utf16.close() }
+        check(utf16.editor.text == "wide雪", "BOM-marked UTF-16 remains eligible text")
+    }
+
 }
 
 /// Only the worker's opened URL crosses this test's file-presenter wait. No UI or callback

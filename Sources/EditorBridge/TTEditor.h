@@ -115,6 +115,7 @@ __attribute__((objc_subclassing_restricted))
 - (BOOL)hasLineLongerThan:(NSUInteger)limit;
 /// Length of the document in UTF-8 bytes, without copying it.
 @property(nonatomic, readonly) NSInteger byteLength;
+@property(nonatomic, readonly) NSInteger lineCount;
 /// The document's exact UTF-8 bytes as one immutable copy, safe to hand to a background queue.
 @property(nonatomic, readonly) NSData *utf8Data;
 /// Immutable editor bytes for persistence and printing. Nil means the full range could not be copied.
@@ -158,6 +159,10 @@ __attribute__((objc_subclassing_restricted))
 /// lead-byte alignment and encodability are all checked before the first edit; NO changes
 /// nothing. Afterwards there is one caret, just after the first replacement, scrolled into view.
 - (BOOL)replaceRanges:(NSArray<TTByteRange *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision NS_SWIFT_NAME(replaceRanges(_:withTexts:expectedRevision:));
+/// Search publishes its semantic macro step after the validated native edit returns. A Stop or a
+/// second search before confirmation discards the unfinished recording.
+- (BOOL)replaceSearchRanges:(NSArray<TTByteRange *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision NS_SWIFT_NAME(replaceSearchRanges(_:withTexts:expectedRevision:));
+- (BOOL)confirmRecordedSearchReplacement;
 @property(nonatomic) BOOL readOnly;
 /// The one read-only guard: every command that edits text calls it before anything else,
 /// including before any dialog, so the reason is always the same and always stated first.
@@ -187,6 +192,9 @@ __attribute__((objc_subclassing_restricted))
 /// Moves the caret to the start of a one-based line in the engine's own line model, unfolding
 /// it if hidden, and scrolls it into view. NO, changing nothing, when the line does not exist.
 - (BOOL)goToLine:(NSInteger)line NS_SWIFT_NAME(goToLine(_:));
+/// One-based display coordinates, with tab stops matching the status bar. Coordinates beyond the text
+/// resolve to the last line or its end. Navigation does not change text, Undo, or the saved selection of another view.
+- (void)showLine:(NSInteger)line column:(NSInteger)column NS_SWIFT_NAME(show(line:column:));
 - (void)scrollCaretIntoView;
 /// Zero-based display line at the top of this view.
 @property(nonatomic, readonly) NSInteger firstVisibleLine;
@@ -218,6 +226,12 @@ __attribute__((objc_subclassing_restricted))
 - (void)stopRecording;
 - (BOOL)executeMacroStep:(TTMacroAction *)step;
 - (void)beginUndoGroup;
+/// The outermost named group appends a native container token only after a real edit.
+- (void)beginUndoGroupNamed:(NSString *)name NS_SWIFT_NAME(beginUndoGroup(named:));
+/// Overrides the next group actually opened by a validated synchronous bridge operation.
+/// Returns the previous override so callers can restore a nesting scope.
+- (nullable NSString *)exchangeNextUndoName:(nullable NSString *)name;
+- (nullable NSString *)historyNameForRedo:(BOOL)redo NS_SWIFT_NAME(historyName(redo:));
 - (void)endUndoGroup;
 /// Inherit the current line’s leading tabs and spaces on interactive Return. Defaults to YES.
 @property(nonatomic) BOOL autoIndentEnabled;

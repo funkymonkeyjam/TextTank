@@ -58,8 +58,25 @@ import AppKit
                 && NSDocumentController.shared === documents)
         LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")
         delegate.installEditorServices()
-        delegate.buildMenus()
-        delegate.restoreLaunchDocuments(review: { _ in }, report: { _ in self.require(false, "startup notice") })
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        require(
+            documents.documents.isEmpty && !NSApp.windows.contains(where: \.isVisible)
+                && !FileManager.default.fileExists(atPath: AppStorage.url(.lastSession).path),
+            "cold background invocation creates no editor or visible window")
+        let foreground = Notification(name: NSApplication.didBecomeActiveNotification)
+        delegate.applicationDidBecomeActive(foreground)
+        let restoreDeadline = Date().addingTimeInterval(5)
+        while documents.documents.isEmpty && Date() < restoreDeadline {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        let initial = documents.documents.first
+        require(
+            initial != nil && documents.documents.count == 1,
+            "foreground restores the single ordinary first-run document")
+        delegate.applicationDidBecomeActive(foreground)
+        require(
+            documents.documents.count == 1 && documents.documents.first === initial,
+            "repeated activation preserves the same first window")
         documents.documents.forEach { $0.close() }
         func open(_ name: String) throws -> TextDocument {
             let u = AppStorage.supportDirectory.appendingPathComponent(name + ".txt")

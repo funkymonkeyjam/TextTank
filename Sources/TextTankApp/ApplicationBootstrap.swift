@@ -31,6 +31,7 @@ package enum TextTankApplication {
         exit(EXIT_FAILURE)
     }
     @MainActor static func run(smokeFile: URL? = nil, onRecoveryFailure: (Error) -> Void) {
+        let freshProfile = smokeFile == nil && isNewProfile(at: AppStorage.supportDirectory)
         do {
             try TextDocument.recovery.claimOwnership()
         } catch {
@@ -44,6 +45,7 @@ package enum TextTankApplication {
         documents.recordsRecentDocuments = smokeFile == nil
         let delegate = AppDelegate()
         delegate.smokeFile = smokeFile
+        delegate.firstLaunchProfile = freshProfile
         app.delegate = delegate
         delegate.installEditorServices()
         if NSDocumentController.shared !== documents {
@@ -51,5 +53,23 @@ package enum TextTankApplication {
         }
         app.run()
         withExtendedLifetime(delegate) {}
+    }
+
+    static func isNewProfile(at directory: URL) -> Bool {
+        do {
+            return try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty
+        } catch let error as CocoaError {
+            return error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile
+        } catch { return false }
+    }
+}
+
+extension TextTankApplication {
+    /// Explicit Shortcuts file input follows the same bounded local-text open path as the URL and tt tool.
+    @MainActor package static func openSuppliedTextFile(_ url: URL) throws {
+        guard url.isFileURL else { throw TextOpenRequest.invalidURL }
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        _ = try TextOpenRequest(path: url.path, line: nil).open()
     }
 }

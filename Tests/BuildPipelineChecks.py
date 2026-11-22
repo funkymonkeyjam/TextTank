@@ -151,6 +151,11 @@ func rawMode() throws {
             main = fixture / 'main.c'
             main.write_text(''.join(f'extern int fixture_{name}(void);\n' for name in images)
                 + 'int main(void) { return ' + ' + '.join(f'fixture_{name}()' for name in images) + '; }\n')
+            helper = app / 'Contents/Helpers/tt'
+            helper.parent.mkdir()
+            helper_source = fixture / 'tool.c'
+            helper_source.write_text('int main(void) { return 0; }\n')
+            build([str(helper_source), '-o', str(helper)])
             def link(rpaths):
                 build([str(main), *map(str, images.values()), '-Wl,-headerpad_max_install_names', *[argument for path in rpaths for argument in ['-Xlinker', '-rpath', '-Xlinker', path]], '-o', str(executable)])
             for identity, accepted in [('/Library/Frameworks/NativeSearch.framework/Versions/A/NativeSearch', False),
@@ -158,7 +163,14 @@ func rawMode() throws {
                 build(['-dynamiclib', str(sources['NativeSearch']), '-install_name', identity, '-o', str(images['NativeSearch'])])
                 link(['@executable_path/../Frameworks'])
                 if accepted:
-                    self.assertEqual(len(linkage.verify(app)['images']), 6)
+                    closure = linkage.verify(app)
+                    self.assertEqual(len(closure['runtime_images']), 6)
+                    self.assertEqual(closure['command_line_images'], ['Contents/Helpers/tt'])
+                    self.assertEqual(len(closure['images']), 7)
+                    helper.rename(fixture / 'saved-tt')
+                    with self.assertRaisesRegex(ValueError, 'missing code images'):
+                        linkage.verify(app)
+                    (fixture / 'saved-tt').rename(helper)
                 else:
                     with self.assertRaisesRegex(ValueError, 'install name'):
                         linkage.verify(app)
@@ -224,6 +236,13 @@ export APP_PATH
             core_framework.mkdir()
             runtime_framework = app / 'Contents/Frameworks/TextTankRuntime.framework'
             runtime_framework.mkdir()
+            helper = app / 'Contents/Helpers/tt'
+            helper.parent.mkdir()
+            helper.write_bytes(b'fixture helper')
+            helper.chmod(0o755)
+            built_tool = fixture / 'build/DerivedData/Build/Products/Debug/tt'
+            built_tool.parent.mkdir(parents=True)
+            shutil.copy2(helper, built_tool)
             binary = fixture / 'bin'
             binary.mkdir()
             tool_source = '''#!/usr/bin/env python3
@@ -247,6 +266,8 @@ if tool == 'xattr':
     sys.exit(0)
 if tool != 'codesign':
     sys.exit(92)
+if args == ['--force', '--sign', '-', str(app / 'Contents/Helpers/tt')]:
+    sys.exit(79 if scenario == 'helper-sign-error' else 0)
 if args == ['--force', '--sign', '-', str(app / 'Contents/Frameworks/TextTankRuntime.framework')]:
     sys.exit(78 if scenario == 'runtime-sign-error' else 0)
 if args == ['--force', '--sign', '-', str(app / 'Contents/Frameworks/TextTankCore.framework')]:
@@ -277,6 +298,7 @@ sys.exit(93)
             events = fixture / 'events.jsonl'
             metadata = fixture / 'metadata-flag'
             expected = [
+                ['--force', '--sign', '-', str(helper)],
                 ['--force', '--sign', '-', str(framework)],
                 ['--force', '--sign', '-', str(search_framework)],
                 ['--force', '--sign', '-', str(editor_framework)],
@@ -286,7 +308,7 @@ sys.exit(93)
                 ['--verify', '--deep', '--strict', str(app)],
             ]
             for scenario, code in [('arrival-between-steps', 0), ('persistent-metadata', 1),
-                                   ('ordinary-sign-error', 73), ('strict-verify-error', 74), ('nested-sign-error', 75), ('editor-sign-error', 76), ('core-sign-error', 77), ('runtime-sign-error', 78)]:
+                                   ('ordinary-sign-error', 73), ('strict-verify-error', 74), ('nested-sign-error', 75), ('editor-sign-error', 76), ('core-sign-error', 77), ('runtime-sign-error', 78), ('helper-sign-error', 79)]:
                 with self.subTest(scenario=scenario):
                     events.write_text('')
                     if metadata.exists():
@@ -300,7 +322,8 @@ sys.exit(93)
                     self.assertEqual(result.returncode, code, result.stderr)
                     trace = [json.loads(line) for line in events.read_text().splitlines()]
                     signing = [args for tool, args in trace if tool == 'codesign']
-                    self.assertEqual(signing, expected if code in (0, 74) else expected[:2 if code == 75 else 3 if code == 76 else 4 if code == 77 else 5 if code == 78 else 6])
+                    attempted = {79: 1, 75: 3, 76: 4, 77: 5, 78: 6, 1: 7, 73: 7}
+                    self.assertEqual(signing, expected[:attempted.get(code, len(expected))])
                     for tool, args in trace:
                         if tool == 'xattr':
                             self.assertEqual(args[0], '-dr')
@@ -507,7 +530,9 @@ sys.exit(93)
             self.assertEqual(original.read_bytes(), b'pinned source')
 
     def test_every_native_check_keeps_an_explicit_script_source_reference(self):
-        scripts = '\n'.join(path.read_text() for path in (ROOT / 'scripts').glob('*.sh'))
+        script_root = ROOT / 'scripts'
+        drivers = [*script_root.glob('*.sh'), *script_root.glob('test-*.py')]
+        scripts = '\n'.join(path.read_text() for path in drivers)
         native_checks = [path for path in (ROOT / 'Tests').glob('*Checks.*') if path.suffix in ('.swift', '.mm')]
         self.assertGreater(len(native_checks), 20)
         for path in native_checks:
@@ -653,11 +678,13 @@ sys.exit(93)
             compiler = subprocess.check_output(['xcrun', '--find', 'clang'], text=True).strip()
             sdk = json.loads(Path(os.environ['TEXTTANK_ARTIFACT_MANIFEST']).read_text())['toolchain']['sdk']
             project, sources = {}, {}
-            for name in [*artifacts.FRAMEWORKS, 'TextTank']:
+            for name in [*artifacts.FRAMEWORKS, 'TextTank', 'tt']:
                 source = fixture / ('Vendor/scintilla/fixture.c' if name == 'Scintilla' else f'Sources/{name}.c')
                 if name == 'TextTank':
                     source.write_text(''.join(f'extern int fixture_{other}(void);\n' for other in artifacts.FRAMEWORKS)
                         + 'int main(void) { return ' + ' + '.join(f'fixture_{other}()' for other in artifacts.FRAMEWORKS) + '; }\n')
+                elif name == 'tt':
+                    source.write_text('int main(void) { return 0; }\n')
                 else:
                     source.write_text(f'int fixture_{name}(void) {{ return 0; }}\n')
                 sources[name] = source
@@ -724,11 +751,16 @@ sys.exit(93)
                 built_images.append(image)
                 shutil.copytree(framework, embedded / framework.name, symlinks=True)
             link('TextTank', app / 'Contents/MacOS/TextTank', [*map(str, built_images), '-Xlinker', '-rpath', '-Xlinker', '@executable_path/../Frameworks'])
+            helper = app / 'Contents/Helpers/tt'
+            helper.parent.mkdir()
+            link('tt', products / 'tt', [])
+            shutil.copy2(products / 'tt', helper)
             for lane, lines in logs.items():
                 path = fixture / 'harness/logs' / (lane+'-build.log')
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('\n'.join(lines))
             artifacts.capture_links(fixture, app, 'Debug', fixture / 'build/artifacts/Debug/link-before-sign.json', before_path)
+            subprocess.run(['codesign', '--force', '--sign', '-', str(helper)], check=True, capture_output=True)
             for copied in embedded.glob('*.framework'):
                 for attribute in ['com.apple.FinderInfo', 'com.apple.ResourceFork']:
                     subprocess.run(['xattr', '-dr', attribute, str(app)], capture_output=True)

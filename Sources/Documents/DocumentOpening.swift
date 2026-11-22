@@ -306,3 +306,92 @@ enum SnapshotLabel {
         return "\(name) · saved \(savedAt(snapshot.savedAt)) · original file not changed · Save As to keep"
     }
 }
+
+/// The URL scheme has exactly one operation: present an explicitly named local text file.
+struct TextOpenRequest {
+    static let invalidURL = WorkspaceError.invalid(
+        "Use texttank://open with an absolute local path and optional positive line and column.")
+    let file: URL
+    let line: Int?
+    let column: Int?
+    init(_ raw: String) throws {
+        guard let parts = URLComponents(string: raw, encodingInvalidCharacters: false),
+            parts.scheme?.lowercased() == "texttank", parts.percentEncodedHost?.lowercased() == "open",
+            parts.user == nil, parts.password == nil, parts.port == nil, parts.path.isEmpty, parts.fragment == nil,
+            let items = parts.queryItems
+        else { throw Self.invalidURL }
+        var fields = [String: String]()
+        for item in items {
+            guard ["path", "line", "column"].contains(item.name), fields[item.name] == nil,
+                let value = item.value, !value.isEmpty
+            else { throw Self.invalidURL }
+            fields[item.name] = value
+        }
+        guard let path = fields["path"], path.hasPrefix("/"), !path.hasPrefix("//"), !path.contains("\0") else {
+            throw Self.invalidURL
+        }
+        func coordinate(_ key: String) throws -> Int? {
+            guard let raw = fields[key] else { return nil }
+            guard raw.utf8.allSatisfy({ (48...57).contains($0) }), let n = Int(raw), n > 0 else {
+                throw Self.invalidURL
+            }
+            return n
+        }
+        file = URL(fileURLWithPath: path).standardizedFileURL
+        line = try coordinate("line")
+        column = try coordinate("column")
+    }
+    init(path: String, line: Int?) throws {
+        guard path.hasPrefix("/"), !path.hasPrefix("//"), !path.contains("\0"), line.map({ $0 > 0 }) ?? true else {
+            throw Self.invalidURL
+        }
+        self.file = URL(fileURLWithPath: path).standardizedFileURL
+        self.line = line
+        self.column = nil
+    }
+    static func localFile(_ file: URL) throws -> URL {
+        let folder = file.deletingLastPathComponent().resolvingSymlinksInPath()
+        let url = folder.appendingPathComponent(file.lastPathComponent)
+        let properties = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .volumeIsLocalKey])
+        guard properties.isRegularFile == true, properties.isSymbolicLink != true, properties.volumeIsLocal == true
+        else {
+            throw WorkspaceError.invalid("Choose a regular text file on a local volume.")
+        }
+        return url
+    }
+    /// The document decoder enforces the encoding. Reject binary control bytes before registering a document.
+    static func textFile(_ file: URL) throws -> CapturedFileRead {
+        let captured = try WorkspaceStore.captureRegularFile(file, maximumBytes: Int.max)
+        let bytes = captured.data
+        let le = bytes.starts(with: [0xff, 0xfe]), be = bytes.starts(with: [0xfe, 0xff])
+        let binary = bytes.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
+            if le || be {
+                var i = 2
+                while i + 1 < raw.count {
+                    let word = le ? UInt16(raw[i]) | UInt16(raw[i + 1]) << 8 : UInt16(raw[i]) << 8 | UInt16(raw[i + 1])
+                    if word < 32 && !(9...13).contains(word) { return true }
+                    i += 2
+                }
+                return false
+            }
+            return raw.contains { $0 < 32 && !(9...13).contains($0) }
+        }
+        guard !binary else { throw WorkspaceError.invalid("The requested file contains binary control bytes.") }
+        return captured
+    }
+    @MainActor @discardableResult func open() throws -> TextDocument {
+        let url = try Self.localFile(file)
+        let document: TextDocument
+        if let existing = NSDocumentController.shared.document(for: url) as? TextDocument {
+            document = existing
+            existing.showWindows()
+        } else {
+            document = try DocumentFactory.openCaptured(Self.textFile(url), from: url)
+        }
+        if line != nil || column != nil {
+            let editor = document.presentation?.activeEditor ?? document.editor
+            editor.show(line: line ?? 1, column: column ?? 1)
+        }
+        return document
+    }
+}

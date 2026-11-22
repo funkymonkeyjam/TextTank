@@ -44,6 +44,10 @@ python3 scripts/runtime_artifacts.py links --configuration "$CONFIGURATION" --ap
 # Finder/file-provider metadata is not part of the generated application resources.
 xattr -dr com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
 xattr -dr com.apple.ResourceFork "$APP_PATH" 2>/dev/null || true
+helper="$APP_PATH/Contents/Helpers/tt"
+test -x "$helper"
+cmp "$helper" "$PWD/build/DerivedData/Build/Products/$CONFIGURATION/tt"
+codesign --force --sign - "$helper"
 for framework in Scintilla NativeSearch EditorBridge TextTankCore TextTankRuntime; do
   codesign --force --sign - "$APP_PATH/Contents/Frameworks/$framework.framework"
 done

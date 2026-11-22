@@ -14,7 +14,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     let caseBox = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
     let wordBox = NSButton(checkboxWithTitle: "Whole word", target: nil, action: nil)
     let regexBox = NSButton(checkboxWithTitle: "Regex", target: nil, action: nil)
-    let findNavigation = NSSegmentedControl(labels: ["Previous", "Next"], trackingMode: .momentary, target: nil, action: nil)
+    let findNavigation = NSSegmentedControl(
+        labels: ["Previous", "Next"], trackingMode: .momentary, target: nil, action: nil)
     let replaceMatchButton = NSButton(title: "Replace", target: nil, action: nil)
     let replaceAllButton = NSButton(title: "Replace All", target: nil, action: nil)
     private(set) var findBar: NSView?
@@ -241,9 +242,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         regexBox.setAccessibilityLabel("Use regular expressions in document")
         let more = NSButton(title: "More…", target: self, action: #selector(showMoreFindOptions(_:)))
         more.setAccessibilityLabel("Open Find and Replace with these options")
-        let search = EditorFindBar(find: findField, replace: replaceField, navigation: findNavigation,
-                                   count: findCount, flags: [caseBox, wordBox, regexBox],
-                                   replaceActions: [replaceMatchButton, replaceAllButton], more: more, done: doneButton)
+        let search = EditorFindBar(
+            find: findField, replace: replaceField, navigation: findNavigation,
+            count: findCount, flags: [caseBox, wordBox, regexBox],
+            replaceActions: [replaceMatchButton, replaceAllButton], more: more, done: doneButton)
         // Return in the field finds the next match, Shift-Return the previous one, Escape closes.
         findField.delegate = self
         replaceField.delegate = self
@@ -289,6 +291,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         configureExternalReload()
         statusDetails.largeFileButton.target = self
         statusDetails.largeFileButton.action = #selector(enableLargeFileEditing(_:))
+        statusDetails.bindRecorder(EditorServices.current?.macros)
         statusDetails.menuProvider = { [weak self] field in
             guard let self, self.focusPresentationChrome(explicit: false) else { return nil }
             EditorServices.current?.noteActiveController(self)
@@ -510,6 +513,19 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     /// The menu a status bar field opens, for the active pane. Building it changes nothing, so
     /// its wording can be checked without showing it.
+    @objc private func showBulkChanges(_ sender: Any?) {
+        guard let receipt = (document as? TextDocument)?.bulkReceipt, let before = receipt.before,
+            let after = receipt.after, let compare = EditorServices.current?.compare else { return }
+        Task { [weak self] in
+            do {
+                let pair = try await Task.detached {
+                    try (TextSnapshot(bytes: before, source: .freeText(UUID()), label: receipt.name + " — Before"),
+                         TextSnapshot(bytes: after, source: .freeText(UUID()), label: receipt.name + " — After"))
+                }.value
+                _ = try await compare.open(original: .snapshot(pair.0), modified: .snapshot(pair.1))
+            } catch { self?.showTransientStatus(error.localizedDescription) }
+        }
+    }
     func statusOptionsMenu(_ key: String) -> NSMenu? {
         let field =
             key == "count"
@@ -617,6 +633,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 menu.addItem(item)
             }
         case .document, .readOnly:
+            if let receipt = doc.bulkReceipt {
+                heading(receipt.summary)
+                add("Show Changes", #selector(showBulkChanges(_:)), self, nil, false, receipt.before != nil)
+                menu.addItem(.separator())
+            }
             add("Save", #selector(NSDocument.save(_:)), doc)
             add("Save As…", #selector(NSDocument.saveAs(_:)), doc)
             add("Read Only", #selector(TextDocument.toggleReadOnly(_:)), doc, nil, editor.readOnly)
@@ -728,7 +749,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             let help =
                 secondary == nil
                 ? EditorToolbarCommand.split.scope
-                : Strings.text("toolbar.split.close.help", "Return to a single view of the current document.")
+                : Strings.text("toolbar.split.close.help", "Return this tab to one view of the document.")
             if item.toolTip != help {
                 item.toolTip = help
                 item.image = NSImage(
@@ -848,7 +869,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             try editor.requireWritable()
             EditorServices.current?.macros?.invalidateRecording(
                 reason: "This text transform is not yet recorded.")
+            let capture = BulkChangeCapture(editor, name: transform.title)
             try transform.apply(to: editor)
+            capture?.finish()
             return
         }
         guard let command = EditorCommand(rawValue: id) else { throw EditorCommandFailure.unsupported }
@@ -857,7 +880,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         let finishing: ((Bool) -> Void)?
         if command == .bookmarkCutLines || command == .bookmarkDeleteLines {
             finishing = recorder?.prepareUnrecordedChange(
-                in: editor, reason: "The command ‘\(command.title)’ cannot be recorded. No partial macro will be saved.")
+                in: editor, reason: "The command ‘\(command.title)’ cannot be recorded. No partial macro will be saved."
+            )
         } else {
             recorder?.willExecuteCommand(id, on: editor)
             finishing = nil
@@ -865,7 +889,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         let before = editor.revision
         let usesClipboard = command == .bookmarkCutLines || command == .bookmarkCopyLines
         let board = usesClipboard ? RuntimeEnvironment.current.generalPasteboard() : nil
+        let priorName = editor.exchangeNextUndoName(command.title)
         let accepted = editor.executeCommand(command.nativeIdentifier, using: board)
+        _ = editor.exchangeNextUndoName(priorName)
         finishing?(accepted && editor.revision != before)
         guard accepted else { throw EditorCommandFailure.unsupported }
     }
@@ -930,7 +956,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             ?? SearchOptions(query: findField.stringValue, replacement: replacement)
     }
     private func scheduleFindPreview() {
-        guard findBarVisible, isActiveTab, !statusClosed, let document = document as? TextDocument, document.isOpen else {
+        guard findBarVisible, isActiveTab, !statusClosed, let document = document as? TextDocument, document.isOpen
+        else {
             endFindPreview()
             return
         }
@@ -943,16 +970,19 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         findCount.stringValue = ""
         findCount.toolTip = nil
         findCount.setAccessibilityHelp(nil)
-        findPreview?.search(options: options, isCurrent: { [weak self, weak editor] in
-            guard let self, let editor else { return false }
-            return self.findBarVisible && self.isActiveTab && self.activeEditor === editor
-                && !self.statusClosed && self.findField.stringValue.utf8.elementsEqual(options.query.utf8)
-                && self.inlineOptions() == options
-        }, publish: { [weak self] message, detail in
-            self?.findCount.stringValue = message
-            self?.findCount.toolTip = detail ?? message
-            self?.findCount.setAccessibilityHelp(detail)
-        })
+        findPreview?.search(
+            options: options,
+            isCurrent: { [weak self, weak editor] in
+                guard let self, let editor else { return false }
+                return self.findBarVisible && self.isActiveTab && self.activeEditor === editor
+                    && !self.statusClosed && self.findField.stringValue.utf8.elementsEqual(options.query.utf8)
+                    && self.inlineOptions() == options
+            },
+            publish: { [weak self] message, detail in
+                self?.findCount.stringValue = message
+                self?.findCount.toolTip = detail ?? message
+                self?.findCount.setAccessibilityHelp(detail)
+            })
     }
     @objc func showFind(_ sender: Any?) {
         guard (document as? TextDocument)?.isOpen == true else { return }
@@ -1022,7 +1052,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         guard let button = sender as? NSButton else { return }
         let enabled = button.state == .on
         guard focusPresentationChrome(), let search = EditorServices.current?.searchController else { return }
-        let flag: SearchController.InlineFlag = button === regexBox ? .regex : (button === wordBox ? .wholeWord : .matchCase)
+        let flag: SearchController.InlineFlag =
+            button === regexBox ? .regex : (button === wordBox ? .wholeWord : .matchCase)
         search.setInlineFlag(flag, enabled: enabled)
     }
     @objc private func navigateFromBar(_ sender: NSSegmentedControl) {
@@ -1056,7 +1087,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     @objc func replaceAllFromBar(_ sender: Any?) {
         guard focusPresentationChrome() else { return }
         let editor = activeEditor
-        guard !editor.readOnly else { (document as? TextDocument)?.noteReadOnlyAttempt(); return }
+        guard !editor.readOnly else {
+            (document as? TextDocument)?.noteReadOnlyAttempt()
+            return
+        }
         guard editor.selectionCount == 1 else {
             showTransientStatus("Use a single selection before replacing all matches.")
             return
@@ -1083,7 +1117,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         let ready =
             !statusClosed && !inlineSearchPending && !query.isEmpty && query.utf16.prefix(65_537).count <= 65_536
         findNavigation.isEnabled = ready
-        let canReplace = ready && !editor.readOnly && editor.selectionCount == 1
+        let canReplace =
+            ready && !editor.readOnly && editor.selectionCount == 1
             && replaceField.stringValue.utf16.prefix(1_048_577).count <= 1_048_576
         replaceMatchButton.isEnabled = canReplace && editor.selectionStart < editor.selectionEnd
         replaceAllButton.isEnabled = canReplace
@@ -1124,7 +1159,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             options: options, action: action, on: editor, cancellation: flag,
             isCurrent: { [weak self, weak editor, weak capturedWindow] in
                 guard let self, let editor, let capturedWindow else { return false }
-                return !self.statusClosed && self.isActiveTab && self.inlineSearchGeneration == token && self.hostWindow === capturedWindow
+                return !self.statusClosed && self.isActiveTab && self.inlineSearchGeneration == token
+                    && self.hostWindow === capturedWindow
                     && self.activeEditor === editor && self.findField.stringValue.utf8.elementsEqual(options.query.utf8)
                     && self.inlineOptions(replacement: options.replacement) == options
                     && (!replacing
@@ -1142,7 +1178,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     guard let editor else { return }
                     delegate.macros?.recordSearch(.init(options: options, action: action), editor: editor)
                     if case .replacedAll(let count) = result {
-                        self.showTransientStatus(count == 1 ? "Replaced 1 match. Undo restores it." : "Replaced \(count) matches. Undo restores them.")
+                        self.showTransientStatus(
+                            count == 1
+                                ? "Replaced 1 match. Undo restores it."
+                                : "Replaced \(count) matches. Undo restores them.")
                     } else if action == "replaceOne" {
                         // Record the accepted edit now. Cancellation or a stale next result may
                         // leave just this legacy step in the macro, as in the advanced window.
@@ -1165,14 +1204,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                             "No matches for “\(query.count > 60 ? String(query.prefix(60)) + "…" : query)”.")
                     }
                 case .stale:
-                    self.showTransientStatus(afterReplacement
-                        ? "Replaced the selected match. The document, selection or Find text changed before the next match."
-                        : "The document, selection or Find text changed. Search again.")
+                    self.showTransientStatus(
+                        afterReplacement
+                            ? "Replaced the selected match. The document, selection or Find text changed before the next match."
+                            : "The document, selection or Find text changed. Search again.")
                 case .cancelled: break
                 case .failed(let error):
                     if afterReplacement {
-                        self.showTransientStatus("Replaced the selected match. Find Next failed. " + error.localizedDescription)
-                    } else { self.showSearchFailure(error) }
+                        self.showTransientStatus(
+                            "Replaced the selected match. Find Next failed. " + error.localizedDescription)
+                    } else {
+                        self.showSearchFailure(error)
+                    }
                 }
             })
     }

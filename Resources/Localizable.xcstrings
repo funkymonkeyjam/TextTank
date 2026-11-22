@@ -7,7 +7,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Edit the JSON below. Rename by changing name and keeping id unchanged. Input: selection, document, clipboard, file. Output: editor, clipboard, newDocument, file, reminders. Each entry of steps has a kind from the list below and only the fields that kind takes. Set askForFind or askForReplacement true to be asked for that text on every run. Optional shortcut: one lowercase letter, bound to Command-Option. Set previewBeforeApply true for a preview before the result is applied. Set pinToToolbar true to mark the automation as a favorite. Favorites appear first in the Automations drop-down and the editor context menu. The menu bar and Run Automation list keep the saved order. No automation runs when saved or imported."
+            "value": "Edit the JSON below. Rename by changing name and keeping id unchanged. Input: selection, document, clipboard, file. Output: editor, clipboard, newDocument, file, reminders, previewChanges. Each entry of steps has a kind from the list below and only the fields that kind takes. Set askForFind or askForReplacement true to be asked for that text on every run. Optional shortcut: one lowercase letter, bound to Command-Option. Set previewBeforeApply true for a preview before the result is applied. Set pinToToolbar true to mark the automation as a favorite. Favorites appear first in the Automations drop-down and the editor context menu. The menu bar and Run Automation list keep the saved order. No automation runs when saved or imported."
           }
         }
       }
@@ -118,6 +118,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Input: %@. Replace the captured selection. Edit the preview; delete rows you do not want. Apply commits it. Cancel makes no changes. You can turn this preview off in Manage Automations."
+          }
+        }
+      }
+    },
+    "automation.paste_through": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paste Through"
+          }
+        }
+      }
+    },
+    "automation.preview_changes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview as Changes"
           }
         }
       }
@@ -1432,7 +1454,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Clone"
+            "value": "Split Tab View"
           }
         }
       }
@@ -1482,7 +1504,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Return to a single view of the current document."
+            "value": "Return this tab to one view of the document."
           }
         }
       }
@@ -1492,7 +1514,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Show a second view of the current document, or return to a single view."
+            "value": "Split this tab into two views of the same document, or return to one view."
           }
         }
       }

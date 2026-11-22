@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import Darwin
+import NativeSearch
 
 package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable {
     package init(
@@ -31,9 +32,10 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
         }
     }
     package enum Output: String, Codable, CaseIterable, Sendable {
-        case editor, clipboard, newDocument, file, reminders
+        case editor, clipboard, newDocument, file, reminders, previewChanges
         package var displayName: String {
             switch self {
+            case .previewChanges: return Strings.text("automation.preview_changes", "Preview as Changes")
             case .editor: return Strings.text("automation.captured_document", "Captured document")
             case .clipboard: return Strings.text("automation.clipboard", "Clipboard")
             case .newDocument: return Strings.text("automation.new_document", "New document")
@@ -67,7 +69,7 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
             case clearMarkdownHeadings = "removeMarkdownHeadings"
             case removeMarkdownFormatting, removeCheckboxMarkers, removeNoteReferences, keepMarkedListRows
             /// Locale-aware order (`LineOrder.localizedAscending`); `sortLines` stays code-point order.
-            case sortLinesLocalized
+            case sortLinesLocalized, replaceRegex
         }
         package var kind: Kind
         package var find: String?
@@ -163,6 +165,17 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
         try resolved.validate(requiringValues: true)
         return resolved
     }
+    package func requireSuppliedText() throws {
+        guard (input == .selection || input == .document), output == .editor,
+            previewBeforeApply != true,
+            !steps.contains(where: { $0.askForFind == true || $0.askForReplacement == true })
+        else {
+            throw AutomationError.invalid(
+                "This automation requires app interaction or another input or output. Choose an editor-text automation without prompts or preview."
+            )
+        }
+    }
+
     package func transform(_ input: String, control: AutomationRunControl? = nil) throws -> String {
         try validate(requiringValues: true)
         try control?.checkCancellation()
@@ -204,7 +217,8 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
     /// One rule applied to the whole text. A run and a sample test both go through here and pass
     /// the same regex budget along, so they follow the same rules.
     private static func apply(
-        _ step: Step, to input: String, regexTimeRemaining: inout TimeInterval, control: AutomationRunControl?
+        _ step: Step, to input: String, regexTimeRemaining: inout TimeInterval, control: AutomationRunControl?,
+        maximumResultBytes: Int = maximumTransformBytes
     ) throws -> String {
         var result = input
         switch step.kind {
@@ -255,6 +269,25 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
                 throw AutomationError.invalid(
                     "The line-matching pattern exceeded its time limit. Nothing was changed. Simplify the removeMatchingLines regex or use literal replacement steps."
                 )
+            }
+        case .replaceRegex:
+            guard regexTimeRemaining > 0 else {
+                throw AutomationError.invalid("The workflow exceeded its regex time limit. Nothing was changed.")
+            }
+            let options = SearchOptions(
+                query: step.find ?? "", replacement: step.replacement ?? "", mode: .regularExpression, matchCase: true)
+            let token = control?.cancellation ?? TTSearchCancellation()
+            let started = ProcessInfo.processInfo.systemUptime
+            let found = try SearchCore.search(input, options: options, cancellation: token, timeLimit: regexTimeRemaining)
+            regexTimeRemaining -= ProcessInfo.processInfo.systemUptime - started
+            try control?.checkCancellation()
+            guard regexTimeRemaining >= 0 else {
+                throw AutomationError.invalid("The workflow exceeded its regex time limit. Nothing was changed.")
+            }
+            guard !found.truncated else { throw SearchFailure.inlineResultLimit }
+            if !found.hits.isEmpty {
+                result = try SearchCore.replacing(
+                    input, with: found.hits, cancellation: token, maximumResultBytes: maximumResultBytes)
             }
         case .replaceLiteral:
             result = try boundedReplacement(
@@ -398,7 +431,8 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
                     )
                 }
             }
-            text = try Self.apply(step, to: text, regexTimeRemaining: &regexTimeRemaining, control: control)
+            text = try Self.apply(
+                step, to: text, regexTimeRemaining: &regexTimeRemaining, control: control, maximumResultBytes: SizePolicy.standard.automationSample)
             guard text.utf8.count <= SizePolicy.standard.automationSample else { throw AutomationError.invalid("Sample result exceeds \(SizePolicy.describe(SizePolicy.standard.automationSample)). Use a smaller sample or shorten the replacement.") }
         }
         try control?.checkpoint(completed: steps.count, total: steps.count)
@@ -581,6 +615,7 @@ extension AutomationDefinition.Step.Kind {
         case .sortLinesLocalized: return "Sort lines in locale order"
         case .deduplicateLines: return "Remove duplicate lines"
         case .replaceLiteral: return "Find and replace text"
+        case .replaceRegex: return "Replace regular expression"
         case .clearLinesEqualTo: return "Clear lines equal to text"
         case .clearLinesContaining: return "Clear lines containing text"
         case .clearLinesStartingWith: return "Clear lines starting with text"
@@ -597,15 +632,15 @@ extension AutomationDefinition.Step.Kind {
     /// reference all read it here.
     package var acceptsFind: Bool {
         switch self {
-        case .replaceLiteral, .clearLinesMatching, .clearLinesEqualTo, .clearLinesContaining,
+        case .replaceLiteral, .replaceRegex, .clearLinesMatching, .clearLinesEqualTo, .clearLinesContaining,
             .clearLinesStartingWith:
             return true
         default: return false
         }
     }
-    package var acceptsReplacement: Bool { self == .replaceLiteral }
+    package var acceptsReplacement: Bool { self == .replaceLiteral || self == .replaceRegex }
     /// The kind whose text to match is a regular expression.
-    package var findIsPattern: Bool { self == .clearLinesMatching }
+    package var findIsPattern: Bool { self == .clearLinesMatching || self == .replaceRegex }
     /// What the rule dialog and the run-time prompt call the text to match for this kind.
     package var findTitle: String { findIsPattern ? "Pattern" : "Text to match" }
     /// What the rule dialog and the run-time prompt call the replacement.
@@ -615,7 +650,12 @@ extension AutomationDefinition.Step.Kind {
     /// The JSON fields this kind takes, for the reference.
     package var parameters: String {
         guard acceptsFind else { return "no parameters" }
-        let find = findIsPattern ? "find (whole-line regular expression)" : "find (literal text)"
+        let find: String
+        switch self {
+        case .clearLinesMatching: find = "find (whole-line regular expression)"
+        case .replaceRegex: find = "find (Boost regular expression)"
+        default: find = "find (literal text)"
+        }
         return acceptsReplacement
             ? find + ", replacement, askForFind, askForReplacement" : find + ", askForFind"
     }
@@ -646,7 +686,18 @@ extension AutomationDefinition.Step {
             }
             return
         }
-        if kind.findIsPattern {
+        if kind == .replaceRegex {
+            let pattern = find ?? ""
+            guard awaitsValue || !pattern.isEmpty, pattern.count <= 500, let replacement,
+                replacement.utf16.count <= 1_048_576
+            else {
+                throw AutomationError.invalid("Regex Replace needs a pattern of 1–500 characters and a replacement of at most 1 Mi UTF-16 units, which may be empty.")
+            }
+            if !pattern.isEmpty {
+                _ = try SearchCore.search("", options: .init(query: pattern, mode: .regularExpression, matchCase: true),
+                    limit: 1, timeLimit: AutomationDefinition.regexBudget)
+            }
+        } else if kind == .clearLinesMatching {
             let pattern = find ?? ""
             guard awaitsValue || !pattern.isEmpty, pattern.count <= 500, replacement == nil else {
                 throw AutomationError.invalid(
@@ -721,7 +772,7 @@ extension AutomationDefinition {
     static package var advancedHelp: String {
         Strings.text(
             "automation.advanced.help",
-            "Edit the JSON below. Rename by changing name and keeping id unchanged. Input: selection, document, clipboard, file. Output: editor, clipboard, newDocument, file, reminders. Each entry of steps has a kind from the list below and only the fields that kind takes. Set askForFind or askForReplacement true to be asked for that text on every run. Optional shortcut: one lowercase letter, bound to Command-Option. Set previewBeforeApply true for a preview before the result is applied. Set pinToToolbar true to mark the automation as a favorite. Favorites appear first in the Automations drop-down and the editor context menu. The menu bar and Run Automation list keep the saved order. No automation runs when saved or imported."
+            "Edit the JSON below. Rename by changing name and keeping id unchanged. Input: selection, document, clipboard, file. Output: editor, clipboard, newDocument, file, reminders, previewChanges. Each entry of steps has a kind from the list below and only the fields that kind takes. Set askForFind or askForReplacement true to be asked for that text on every run. Optional shortcut: one lowercase letter, bound to Command-Option. Set previewBeforeApply true for a preview before the result is applied. Set pinToToolbar true to mark the automation as a favorite. Favorites appear first in the Automations drop-down and the editor context menu. The menu bar and Run Automation list keep the saved order. No automation runs when saved or imported."
         )
     }
 }
@@ -840,6 +891,34 @@ package struct AutomationLibrary: VersionedLibrary, Equatable {
     static package let maximumBytes = SizePolicy.standard.automationLibrary
     package var version: Int
     package var workflows: [AutomationDefinition]
+    /// Reads existing versioned bytes through the same private-parent policy as the manager.
+    /// A missing library is distinct from an unreadable or unsupported existing one.
+    static package func readIfPresent(at url: URL) throws -> Self? {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else {
+            if errno == ENOENT { return nil }
+            throw FileOperationFailure(errno, operation: "inspect saved automations", path: url.path)
+        }
+        return try decode(AutomationFileInput.readData(url, limit: maximumBytes, parent: .strict))
+    }
+
+    /// External text consumers do not install the presets, create a configuration, or write back decoded data.
+    static package func forSuppliedText(at url: URL = AppStorage.url(.automations)) throws -> Self {
+        try readIfPresent(at: url) ?? Self(workflows: AutomationDefinition.firstRunPresets)
+    }
+
+    package func namedForSuppliedText(_ name: String) throws -> AutomationDefinition {
+        let matches = workflows.filter { $0.name == name }
+        guard matches.count == 1, let workflow = matches.first else {
+            throw AutomationError.invalid(
+                matches.isEmpty
+                    ? "No saved automation has that name."
+                    : "More than one saved automation has that name. Rename one in Manage Automations.")
+        }
+        try workflow.requireSuppliedText()
+        return workflow
+    }
+
     package func validate() throws {
         guard version == 1 else { throw AutomationError.invalid("Unsupported library version \(version).") }
         guard workflows.count <= 200 else { throw AutomationError.invalid("At most 200 automations are supported.") }
@@ -862,8 +941,8 @@ final package class AutomationRunControl: @unchecked Sendable {
     package init() {}
 
     private let lock = NSLock()
-    private var cancelled = false
-    // The complete mutable state is protected by lock. Callbacks are copied while locked,
+    fileprivate let cancellation = TTSearchCancellation()
+    // The callback state is protected by lock. Callbacks are copied while locked,
     // then invoked and destroyed after unlock so arbitrary reentry cannot deadlock.
     private var progressCallback: (@Sendable (Int, Int) -> Void)?
     package var onProgress: (@Sendable (Int, Int) -> Void)? {
@@ -881,15 +960,10 @@ final package class AutomationRunControl: @unchecked Sendable {
         }
     }
     package func cancel() {
-        lock.lock()
-        cancelled = true
-        lock.unlock()
+        cancellation.cancel()
     }
     package func checkCancellation() throws {
-        lock.lock()
-        let value = cancelled
-        lock.unlock()
-        if value { throw AutomationError.invalid("Automation cancelled. Nothing was changed.") }
+        if cancellation.cancelled { throw AutomationError.invalid("Automation cancelled. Nothing was changed.") }
     }
     package func checkpoint(completed: Int, total: Int) throws {
         try checkCancellation()

@@ -97,5 +97,14 @@
     "modifiers": "1048576",
     "target": "responder",
     "object": "copyPatch"
+  },
+  {
+    "position": "5.13.18",
+    "title": "Compare Two Visible Tabs",
+    "action": "compareVisibleTabs:",
+    "key": "",
+    "modifiers": "1048576",
+    "target": "explicit",
+    "object": ""
   }
 ]

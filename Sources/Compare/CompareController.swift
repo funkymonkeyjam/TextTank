@@ -79,7 +79,8 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
         }
         return nil
     }
-    lazy var merge = MergeController(comparison: self)
+    private let initialDestination: CompareSide?
+    lazy var merge = MergeController(comparison: self, destination: initialDestination)
     var comparisonStamp: UUID { generation }
     var readyForMerge: Bool {
         !isClosed && !isBusy && !outOfDate && !hasPendingGeometry && presentationComplete && projection != nil
@@ -155,7 +156,8 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
     var unifiedTableView: NSTableView { table }
     var currentChange: Int? { navigation.current }
     var hasPendingGeometry: Bool { arranging || geometryRequested }
-    init(service: CompareService, original: CompareSource, modified: CompareSource) {
+    init(service: CompareService, original: CompareSource, modified: CompareSource, destination: CompareSide? = nil) {
+        initialDestination = destination
         self.service = service
         self.original = original
         self.modified = modified
@@ -677,7 +679,10 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
                 progress.stopAnimation(nil)
                 cancelButton.isHidden = true
                 window?.toolbar?.validateVisibleItems()
-                if presentationComplete { showResultStatus() }
+                if presentationComplete {
+                    merge.presentationCompleted()
+                    showResultStatus()
+                }
             }
         }
         let stamp = generation, oldLeft = left.top, oldRight = right.top
@@ -889,7 +894,6 @@ final class CompareController: NSWindowController, CompareWindowScope, NSWindowD
             1000, CGFloat(maxBytes + 120) * ("M" as NSString).size(withAttributes: [.font: font]).width)
         table.reloadData()
         presentationComplete = true
-        merge.presentationCompleted()
         rollback = nil
         split.isHidden = unifiedMode
         tableScroll.isHidden = !unifiedMode

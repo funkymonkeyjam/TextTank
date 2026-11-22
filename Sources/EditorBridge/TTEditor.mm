@@ -131,6 +131,7 @@ static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
 // difference is reported as an unrecordable action (F59).
 struct TTInteractionState { NSUInteger revision; sptr_t selections, anchor, caret; };
 @interface TTEditor (MacroInteraction)
+- (void)performNativeMacroInput:(void (NS_NOESCAPE ^)(void))input;
 - (void)performReturn:(void (NS_NOESCAPE ^)(void))nativeReturn;
 - (BOOL)canBeginPairing;
 - (void)performPair:(NSString *)input closer:(char)closer commit:(void (NS_NOESCAPE ^)(void))commit;
@@ -147,14 +148,39 @@ static NSHashTable<TTEditor *> *TTRecordingEditors() {
     dispatch_once(&once, ^{ table = [NSHashTable weakObjectsHashTable]; });
     return table;
 }
+// A drop can produce several before-change notifications followed by a caret move.
+// Deliver its first rejection immediately, once per recording, including on a clone.
+struct TTMouseRecording {
+    TTEditor *editor;
+    TTInteractionState before;
+    bool reported;
+};
+struct TTMouseMacroInteraction {
+    std::vector<TTMouseRecording> recordings;
+    TTMouseRecording *find(TTEditor *editor) {
+        for (auto &recording : recordings) if (recording.editor == editor) return &recording;
+        return nullptr;
+    }
+    void capture(TTEditor *editor) {
+        TTMouseRecording recording{editor, [editor interactionState], false};
+        if (auto *existing = find(editor)) *existing = recording;
+        else recordings.push_back(recording);
+    }
+};
+static thread_local TTMouseMacroInteraction *TTActiveMouseInteraction = nullptr;
 static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
-    NSArray<TTEditor *> *recording = TTRecordingEditors().allObjects;
-    if (!recording.count) { handle(); return; }
-    std::vector<TTInteractionState> before;
-    for (TTEditor *editor in recording) before.push_back([editor interactionState]);
-    handle();
-    NSUInteger index = 0;
-    for (TTEditor *editor in recording) [editor noteUnrecordedInteractionSince:before[index++]];
+    if (TTActiveMouseInteraction || !TTRecordingEditors().count) { handle(); return; }
+    TTMouseMacroInteraction interaction;
+    for (TTEditor *editor in TTRecordingEditors().allObjects) interaction.capture(editor);
+    TTActiveMouseInteraction = &interaction;
+    @try {
+        handle();
+        // Copy before calling observers, which may start another recording.
+        for (size_t i = 0; i < interaction.recordings.size(); ++i) {
+            const auto recording = interaction.recordings[i];
+            if (!recording.reported) [recording.editor noteUnrecordedInteractionSince:recording.before];
+        }
+    } @finally { TTActiveMouseInteraction = nullptr; }
 }
 static char TTPairCloser(NSString *text) {
     if (text.length != 1) return 0;
@@ -173,6 +199,11 @@ static char TTPairCloser(NSString *text) {
 @end
 @implementation TTContentView
 - (void)keyDown:(NSEvent *)event {
+    TTEditor *editor = self.editor;
+    if (!editor) { [self dispatchNativeKey:event]; return; }
+    [editor performNativeMacroInput:^{ [self dispatchNativeKey:event]; }];
+}
+- (void)dispatchNativeKey:(NSEvent *)event {
     NSString *input = event.charactersIgnoringModifiers;
     const unichar key = input.length == 1 ? [input characterAtIndex:0] : 0;
     const NSEventModifierFlags shortcuts = NSEventModifierFlagCommand | NSEventModifierFlagOption | NSEventModifierFlagControl;
@@ -191,6 +222,11 @@ static char TTPairCloser(NSString *text) {
     }
 }
 - (void)insertText:(id)text replacementRange:(NSRange)replacement {
+    TTEditor *editor = self.editor;
+    if (!editor) { [self dispatchNativeText:text replacementRange:replacement]; return; }
+    [editor performNativeMacroInput:^{ [self dispatchNativeText:text replacementRange:replacement]; }];
+}
+- (void)dispatchNativeText:(id)text replacementRange:(NSRange)replacement {
     NSString *plain = [text isKindOfClass:NSAttributedString.class] ? [text string] : text;
     if (_directPairKey && replacement.location == NSNotFound && !self.hasMarkedText &&
         [_directPairKey isEqual:plain] && self.editor) {
@@ -302,10 +338,51 @@ static char TTPairCloser(NSString *text) {
     TTAroundUnrecordedInteraction(^{ [super draggingSession:session endedAtPoint:screenPoint operation:operation]; });
 }
 @end
+// A native message may call back into another editor before returning. Keep the origin and
+// any matching MacroRecord on this call's stack frame, never on the next or nested message.
+struct TTMacroMessage {
+    __unsafe_unretained ScintillaView *source;
+    unsigned int message;
+    __unsafe_unretained NSObject *search;
+    uptr_t length;
+    sptr_t data;
+    bool sourceStepReported = false;
+    bool targetCompared = false;
+    bool targetUnchanged = false;
+};
+static thread_local TTMacroMessage *TTActiveMacroMessage = nullptr;
+static thread_local bool TTWatchMacroMessages = false;
 @interface TTScintillaView : ScintillaView
+- (sptr_t)dispatchMessage:(unsigned int)message wParam:(uptr_t)wParam lParam:(sptr_t)lParam search:(NSObject *)search;
 @end
 @implementation TTScintillaView
 + (Class)contentViewClass { return TTContentView.class; }
+- (void)insertText:(id)text {
+    // ScintillaView's public insertion selector calls the backend directly.
+    TTEditor *editor = ((TTContentView *)self.content).editor;
+    if (!editor) { [super insertText:text]; return; }
+    [editor performNativeMacroInput:^{ [super insertText:text]; }];
+}
+- (sptr_t)dispatchMessage:(unsigned int)message wParam:(uptr_t)wParam lParam:(sptr_t)lParam search:(NSObject *)search {
+    if (!TTWatchMacroMessages) return [super message:message wParam:wParam lParam:lParam];
+    TTMacroMessage frame{self, message, search, wParam, lParam};
+    TTMacroMessage *outer = TTActiveMacroMessage;
+    TTActiveMacroMessage = &frame;
+    @try { return [super message:message wParam:wParam lParam:lParam]; }
+    @finally { TTActiveMacroMessage = outer; }
+}
+- (sptr_t)message:(unsigned int)message wParam:(uptr_t)wParam lParam:(sptr_t)lParam {
+    if (!TTWatchMacroMessages) return [super message:message wParam:wParam lParam:lParam];
+    return [self dispatchMessage:message wParam:wParam lParam:lParam search:nil];
+}
+- (sptr_t)message:(unsigned int)message wParam:(uptr_t)wParam {
+    if (!TTWatchMacroMessages) return [super message:message wParam:wParam];
+    return [self dispatchMessage:message wParam:wParam lParam:0 search:nil];
+}
+- (sptr_t)message:(unsigned int)message {
+    if (!TTWatchMacroMessages) return [super message:message];
+    return [self dispatchMessage:message wParam:0 lParam:0 search:nil];
+}
 @end
 
 // Extend the number gutter through the unused viewport without editing the document.
@@ -539,6 +616,10 @@ static NSHashTable *TTDeferredEditors() {
 struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @interface TTEditor () <ScintillaNotificationProtocol> {
     TTLineNumberState _lineNumberState;
+    NSMutableArray<NSString *> *_historyNames;
+    NSString *_pendingUndoName, *_nextUndoName, *_cachedRedoName;
+    NSUInteger _namedStartRevision, _cachedRedoRevision;
+    sptr_t _cachedRedoCursor, _cachedRedoActions;
     NSInteger _defaultZoomLevel;
     BOOL _followsDefaultZoom;
     BOOL _indentingReturn;
@@ -556,6 +637,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 @property(nonatomic,strong) TTEmptyLineNumbersView *emptyLineNumbers;
 @property(nonatomic, readwrite) NSUInteger revision;
 @property(nonatomic) BOOL macroRecording;
+@property(nonatomic, strong) NSObject *pendingMacroSearch;
+@property(nonatomic) BOOL inNativeMacroInput, retiredNativeMacroInput, nativeInputChanged, nativeInputReported;
 /// While recording: sees mouse events bound for the margins, which have no subclass hook.
 @property(nonatomic, strong) id macroMouseMonitor;
 @property(nonatomic) BOOL marginMouseDown;
@@ -638,6 +721,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
         NSAssert(NSThread.isMainThread, @"Editor must be created on the main thread");
+        _historyNames = [NSMutableArray array];
+        _cachedRedoCursor = -1;
         _syntaxStyles=[NSMutableDictionary dictionary];_syntaxFonts=[NSMutableDictionary dictionary];
         _engine = [[TTScintillaView alloc] initWithFrame:NSZeroRect];
         ((TTContentView *)_engine.content).editor = self;
@@ -822,13 +907,40 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 /// Every undo group of the bridge goes through this pair. `revision` still advances with each
 /// modification step inside a group; only the change callback waits, for the outermost end or
 /// the next turn of the main run loop, whichever comes first.
+- (NSString *)exchangeNextUndoName:(NSString *)name {
+    [self assertThread];
+    NSString *previous = _nextUndoName;
+    _nextUndoName = [name copy];
+    return previous;
+}
 - (void)openUndoGroup {
+    if (_nextUndoName) {
+        if (!_pendingUndoName && ![self undoGroupOpen]) {
+            _pendingUndoName = _nextUndoName;
+            _namedStartRevision = self.revision;
+        }
+        _nextUndoName = nil;
+    }
     NSNumber *key = @([_engine message:SCI_GETDOCPOINTER]);
     [TTOpenGroups() setObject:@([[TTOpenGroups() objectForKey:key] integerValue] + 1) forKey:key];
     _ownGroups += 1;
     [_engine message:SCI_BEGINUNDOACTION];
 }
+// Persist the name's small index as a Scintilla container action inside the real undo group.
+static constexpr int TTNamedHistoryBase = 0x54540000;
 - (void)closeUndoGroup {
+    if (_ownGroups == 1 && _pendingUndoName) {
+        NSString *name = _pendingUndoName;
+        _pendingUndoName = nil;
+        if (self.revision != _namedStartRevision && [_engine message:SCI_GETUNDOCOLLECTION]) {
+            NSUInteger index = [_historyNames indexOfObject:name];
+            if (index == NSNotFound) {
+                index = _historyNames.count;
+                [_historyNames addObject:name];
+            }
+            [_engine message:SCI_ADDUNDOACTION wParam:TTNamedHistoryBase + index lParam:0];
+        }
+    }
     [_engine message:SCI_ENDUNDOACTION];
     if (_ownGroups <= 0) return;
     _ownGroups -= 1;
@@ -923,6 +1035,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     }
     return NO;
 }
+- (NSInteger)lineCount { [self assertThread]; return [_engine message:SCI_GETLINECOUNT]; }
 - (NSInteger)byteLength { [self assertThread]; return [_engine message:SCI_GETLENGTH]; }
 - (NSData *)utf8Data { return self.checkedUTF8Data ?: [NSData data]; }
 - (NSData * _Nullable)checkedUTF8Data {
@@ -1218,6 +1331,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     const BOOL loaded = [self replaceDocumentWithEncodedUTF8:data];
     [_engine message:SCI_SETUNDOCOLLECTION wParam:1];
     [_engine message:SCI_EMPTYUNDOBUFFER];
+    [_historyNames removeAllObjects];
+    _cachedRedoCursor = -1;
     return loaded;
 }
 - (BOOL)goToLine:(NSInteger)line {
@@ -1231,6 +1346,15 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     else [_engine message:SCI_GOTOLINE wParam:line - 1];
     [self noteStateChange];
     return YES;
+}
+- (void)showLine:(NSInteger)line column:(NSInteger)column {
+    [self assertThread];
+    if (line < 1 || column < 1) return;
+    const sptr_t row = std::min<sptr_t>(line, [_engine message:SCI_GETLINECOUNT]) - 1;
+    const sptr_t offset = [_engine message:SCI_FINDCOLUMN wParam:row lParam:std::min<sptr_t>(column - 1, INT_MAX)];
+    [_engine message:SCI_ENSUREVISIBLE wParam:row];
+    [self setSelectionAnchor:offset caret:offset];
+    [self scrollCaretIntoView];
 }
 - (void)scrollCaretIntoView { [self assertThread]; [_engine message:SCI_SCROLLCARET]; }
 - (NSInteger)firstVisibleLine { [self assertThread]; return [_engine message:SCI_GETFIRSTVISIBLELINE]; }
@@ -1249,6 +1373,12 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self noteStateChange];
 }
 - (BOOL)replaceRanges:(NSArray<TTByteRange *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision {
+    return [self replaceRanges:ranges withTexts:texts expectedRevision:revision search:nil];
+}
+- (BOOL)replaceSearchRanges:(NSArray<TTByteRange *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision {
+    return [self replaceRanges:ranges withTexts:texts expectedRevision:revision search:TTWatchMacroMessages ? [NSObject new] : nil];
+}
+- (BOOL)replaceRanges:(NSArray<TTByteRange *> *)ranges withTexts:(NSArray<NSString *> *)texts expectedRevision:(NSUInteger)revision search:(NSObject *)search {
     [self assertThread];
     if (revision!=self.revision || self.readOnly || ![ranges isKindOfClass:NSArray.class] || ![texts isKindOfClass:NSArray.class] || ranges.count==0 || texts.count!=ranges.count) return NO;
     const NSUInteger length=(NSUInteger)[_engine message:SCI_GETLENGTH]; NSUInteger previousEnd=0;
@@ -1272,7 +1402,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     for (NSUInteger i=ranges.count;i-->0;) {
         const NSRange range=NSMakeRange((NSUInteger)ranges[i].location,(NSUInteger)ranges[i].length);
         [_engine message:SCI_SETTARGETRANGE wParam:range.location lParam:NSMaxRange(range)];
-        [_engine message:SCI_REPLACETARGET wParam:encoded[i].length lParam:(sptr_t)encoded[i].bytes];
+        [(TTScintillaView *)_engine dispatchMessage:SCI_REPLACETARGET wParam:encoded[i].length lParam:(sptr_t)encoded[i].bytes search:search];
     }
     const sptr_t caret=(sptr_t)((NSUInteger)ranges[0].location+encoded[0].length);
     [_engine message:SCI_SETSEL wParam:caret lParam:caret];
@@ -1350,7 +1480,12 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (BOOL)modified { [self assertThread]; return [_engine message:SCI_GETMODIFY] != 0; }
 - (void)setSavePoint { [self assertThread]; [_engine message:SCI_SETSAVEPOINT]; }
-- (void)resetUndoHistory { [self assertThread]; [_engine message:SCI_EMPTYUNDOBUFFER]; }
+- (void)resetUndoHistory {
+    [self assertThread];
+    [_engine message:SCI_EMPTYUNDOBUFFER];
+    [_historyNames removeAllObjects];
+    _cachedRedoCursor = -1;
+}
 - (NSString *)accessibilityDocumentName { return _engine.content.accessibilityLabel; }
 - (void)setAccessibilityDocumentName:(NSString *)name {
     [self assertThread];
@@ -1372,6 +1507,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     other->_hasSharedDocument = YES;
     [_engine message:SCI_SETDOCPOINTER wParam:0 lParam:[other.engine message:SCI_GETDOCPOINTER]];
     self.revision = other.revision;
+    _historyNames = other->_historyNames;
+    _cachedRedoCursor = -1;
     _braceCacheValid = NO;
     [self noteStateChange];
     // The line count changed with no modification notification.
@@ -1767,15 +1904,30 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 - (TTInteractionState)interactionState {
     return {_revision, [_engine message:SCI_GETSELECTIONS], [_engine message:SCI_GETANCHOR], [_engine message:SCI_GETCURRENTPOS]};
 }
+- (void)reportUnrecordedMouseInteraction {
+    if (TTActiveMouseInteraction) {
+        if (auto *recording = TTActiveMouseInteraction->find(self)) {
+            if (recording->reported) return;
+            recording->reported = true;
+        }
+    }
+    [self reportMacroStep:[TTMacroAction unsupported:@"A mouse click, mouse selection or drag and drop" message:0]];
+}
 - (void)noteUnrecordedInteractionSince:(TTInteractionState)before {
     if (!_macroRecording || !_onMacroStep) return;
     const TTInteractionState now = [self interactionState];
     if (now.revision == before.revision && now.selections == before.selections && now.anchor == before.anchor && now.caret == before.caret) return;
-    [self reportMacroStep:[TTMacroAction unsupported:@"A mouse click, mouse selection or drag and drop" message:0]];
+    [self reportUnrecordedMouseInteraction];
 }
 /// The handler may clear itself while it runs (a discard does), so it is held for the call.
 - (void)reportMacroStep:(TTMacroAction *)step {
     void (^handler)(TTMacroAction *) = _onMacroStep;
+    // Stop/restart can run in onChange before Scintilla reports the literal for this key.
+    if (_inNativeMacroInput && _retiredNativeMacroInput && !TTActiveMacroMessage &&
+        step.kind != TTMacroActionKindUnsupported) return;
+    if (_pendingMacroSearch && step.kind != TTMacroActionKindUnsupported) {
+        step = [TTMacroAction unsupported:@"An editing action interleaved with an unfinished search replacement" message:SCI_REPLACETARGET];
+    }
     if (handler) handler(step);
 }
 - (void)settlePendingInteraction {
@@ -1801,7 +1953,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (void)startRecording {
     [self assertThread]; _macroRecording = YES; _interactionPending = NO; _marginMouseDown = NO;
+    if (TTActiveMouseInteraction) TTActiveMouseInteraction->capture(self);
     [TTRecordingEditors() addObject:self];
+    TTWatchMacroMessages = true;
     if (!_macroMouseMonitor) {
         __weak TTEditor *weakSelf = self;
         _macroMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp | NSEventMaskRightMouseDown handler:^NSEvent *(NSEvent *event) {
@@ -1815,10 +1969,59 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self assertThread];
     // A margin click still waiting for its comparison is settled before the recording can be saved.
     [self settlePendingInteraction];
+    if (TTActiveMouseInteraction) {
+        auto *recording = TTActiveMouseInteraction->find(self);
+        if (recording && !recording->reported) [self noteUnrecordedInteractionSince:recording->before];
+    }
+    if (_inNativeMacroInput) _retiredNativeMacroInput = YES;
+    if (_inNativeMacroInput && _nativeInputChanged && !_nativeInputReported) {
+        _nativeInputChanged = NO;
+        [self reportMacroStep:[TTMacroAction unsupported:@"Unfinished native input without its recorded step" message:0]];
+    }
+    if (_pendingMacroSearch) {
+        _pendingMacroSearch = nil;
+        [self reportMacroStep:[TTMacroAction unsupported:@"A search replacement without its recorded step" message:SCI_REPLACETARGET]];
+    }
     _macroRecording = NO;
     [TTRecordingEditors() removeObject:self];
+    TTWatchMacroMessages = TTRecordingEditors().count != 0;
     if (_macroMouseMonitor) { [NSEvent removeMonitor:_macroMouseMonitor]; _macroMouseMonitor = nil; }
     [_engine message:SCI_STOPRECORD];
+}
+- (void)beginUndoGroupNamed:(NSString *)name {
+    [self assertThread];
+    if (![self undoGroupOpen]) {
+        _pendingUndoName = [name copy];
+        _namedStartRevision = self.revision;
+    }
+    [self openUndoGroup];
+}
+- (NSString *)historyNameForRedo:(BOOL)redo {
+    [self assertThread];
+    const sptr_t current = [_engine message:SCI_GETUNDOCURRENT], actions = [_engine message:SCI_GETUNDOACTIONS];
+    if ((redo && current >= actions) || (!redo && current <= 0)) return nil;
+    if (redo && current == _cachedRedoCursor && actions == _cachedRedoActions && self.revision == _cachedRedoRevision)
+        return _cachedRedoName;
+    sptr_t end = redo ? current : current - 1;
+    // Scintilla's serialized action type uses bit 0x100 for 'coalesces with next'.
+    // This follows UndoHistory::StartRedo, including the open final action.
+    static constexpr int coalescesWithNext = 0x100, containerType = 2;
+    if (redo) {
+        while (end + 1 < actions && ([_engine message:SCI_GETUNDOACTIONTYPE wParam:end] & coalescesWithNext)) end++;
+    }
+    const NSInteger type = [_engine message:SCI_GETUNDOACTIONTYPE wParam:end] & ~coalescesWithNext;
+    NSString *name = nil;
+    if (type == containerType) {
+        const NSInteger index = [_engine message:SCI_GETUNDOACTIONPOSITION wParam:end] - TTNamedHistoryBase;
+        if (index >= 0 && static_cast<NSUInteger>(index) < _historyNames.count) name = _historyNames[index];
+    }
+    if (redo) {
+        _cachedRedoCursor = current;
+        _cachedRedoActions = actions;
+        _cachedRedoRevision = self.revision;
+        _cachedRedoName = name;
+    }
+    return name;
 }
 - (void)beginUndoGroup { [self assertThread]; [self openUndoGroup]; }
 - (void)endUndoGroup { [self assertThread]; [self closeUndoGroup]; }
@@ -2367,9 +2570,72 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     }
     [_engine message:SCI_CHANGEINSERTION wParam:insertion.length lParam:(sptr_t)insertion.bytes];
 }
+- (void)performNativeMacroInput:(void (NS_NOESCAPE ^)(void))input {
+    // Cocoa's text system can call the backend directly. Wait for Scintilla's matching
+    // literal notification, which follows the bytes, before accepting this input transaction.
+    if (!_macroRecording || _inNativeMacroInput) { input(); return; }
+    _inNativeMacroInput = YES;
+    _retiredNativeMacroInput = NO;
+    _nativeInputChanged = _nativeInputReported = NO;
+    @try { input(); }
+    @finally {
+        _inNativeMacroInput = NO;
+        if (_macroRecording && !_retiredNativeMacroInput && _nativeInputChanged && !_nativeInputReported)
+            [self reportMacroStep:[TTMacroAction unsupported:@"Native input without a recorded macro step" message:0]];
+    }
+}
+- (BOOL)confirmRecordedSearchReplacement {
+    [self assertThread];
+    if (!_pendingMacroSearch) return NO;
+    _pendingMacroSearch = nil;
+    return YES;
+}
+// Identical targets can notify Delete followed by Insert. Compare explicit UTF-8 ranges in
+// fixed-size pages before the first change, without relocating Scintilla's gap or allocating.
+- (BOOL)macroTargetIsUnchanged:(TTMacroMessage &)frame {
+    if (frame.targetCompared) return frame.targetUnchanged;
+    frame.targetCompared = true;
+    if (frame.message != SCI_REPLACETARGET || !frame.data) return NO;
+    const sptr_t begin = [frame.source message:SCI_GETTARGETSTART], end = [frame.source message:SCI_GETTARGETEND];
+    if (begin < 0 || end < begin || (uptr_t)(end - begin) != frame.length) return NO;
+    char chunk[4097];
+    for (sptr_t pos = begin; pos < end;) {
+        const sptr_t next = pos + std::min<sptr_t>(end - pos, sizeof(chunk) - 1);
+        Sci_TextRangeFull range = {{pos, next}, chunk};
+        if ([frame.source message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&range] != next - pos ||
+            std::memcmp(chunk, (const char *)frame.data + (pos - begin), (size_t)(next - pos))) return NO;
+        pos = next;
+    }
+    frame.targetUnchanged = true;
+    return YES;
+}
 - (void)notification:(SCNotification *)notification {
     const unsigned int code = notification->nmhdr.code;
     const int type = notification->modificationType;
+    TTMacroMessage *frame = TTActiveMacroMessage;
+    if (_macroRecording && _onMacroStep && !frame && code == SCN_MODIFIED &&
+        (type & (SC_MOD_BEFOREINSERT | SC_MOD_BEFOREDELETE)) && !(type & (SC_PERFORMED_UNDO | SC_PERFORMED_REDO))) {
+        if (_inNativeMacroInput && _retiredNativeMacroInput)
+            [self reportMacroStep:[TTMacroAction unsupported:@"Native input crossed the start of this recording" message:0]];
+        else if (_inNativeMacroInput) _nativeInputChanged = YES;
+        else if (TTActiveMouseInteraction) [self reportUnrecordedMouseInteraction];
+        else [self reportMacroStep:[TTMacroAction unsupported:@"A native editing operation without a recorded macro step" message:0]];
+    }
+    if (_macroRecording && _onMacroStep && frame && code == SCN_MODIFIED &&
+        (type & (SC_MOD_BEFOREINSERT | SC_MOD_BEFOREDELETE)) && !(frame->source == _engine && frame->sourceStepReported)) {
+        // A clone gets its own notification for this same native document. Its source cannot
+        // supply steps to this view's recorder. The underlying exposure is per document.
+        if (frame->source == _engine && frame->search &&
+            (!_pendingMacroSearch || _pendingMacroSearch == frame->search)) {
+            _pendingMacroSearch = frame->search;
+        } else if (frame->source == _engine && frame->message == SCI_NEWLINE) {
+            // Scintilla reports its literal EOL(s) after insertion, followed by the inherited indent.
+        } else if ([self macroTargetIsUnchanged:*frame]) {
+            // A same-byte target replacement is a textual no-op.
+        } else {
+            [self reportMacroStep:[TTMacroAction unsupported:@"An editing operation without a recorded macro step" message:frame->message]];
+        }
+    }
     if (_braceCacheValid && _braceHighlightEnabled && !_comparisonPresentation &&
         code == SCN_MODIFIED && (type & (SC_MOD_CHANGESTYLE | SC_MOD_LEXERSTATE))) {
         _braceCacheValid = NO;
@@ -2413,6 +2679,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
             NSString *name = TTMacroNamesByMessage()[@(notification->message)];
             if (name) step = [TTMacroAction command:name];
         }
+        if (_inNativeMacroInput && !frame) _nativeInputReported = YES;
+        if (step && frame && frame->source == _engine && frame->message == (unsigned int)notification->message)
+            frame->sourceStepReported = YES;
         [self reportMacroStep:step ?: TTUnrecordableStep(notification->message)];
     }
     if (code == SCN_FOCUSIN) { if (_onFocus) _onFocus(); [self scheduleStateNotification]; }

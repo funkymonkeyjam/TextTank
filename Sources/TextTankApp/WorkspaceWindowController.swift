@@ -31,6 +31,17 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         return Self.fallback === self
     }
     var presentations: [EditorWindowController] { model.groups.flatMap(\.tabs).compactMap { presentation(for: $0.id) } }
+    /// Visual order is stable when keyboard focus moves between groups.
+    var visibleComparisonEditors: (TTEditor, TTEditor)? {
+        guard model.groups.count == 2 else { return nil }
+        let editors = model.groups.compactMap { group -> TTEditor? in
+            guard let tab = group.activeTab, let view = presentation(for: tab),
+                groupSurfaces[group.slot]?.mounted === view.presentationRoot else { return nil }
+            return view.activeEditor
+        }
+        guard editors.count == 2 else { return nil }
+        return (editors[0], editors[1])
+    }
     var active: EditorWindowController? { model.activeTab.flatMap { presentation(for: $0.id) } }
     private var openIDs: Set<DocumentID> { Set(documents.keys) }
     private(set) var groupSurfaces: [GroupSlot: EditorGroupSurface] = [:]
@@ -69,7 +80,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         layoutPicker.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(groupContainer)
         content.addSubview(layoutPicker)
-        layoutPicker.setAccessibilityLabel("Editor layout")
+        layoutPicker.setAccessibilityLabel("Editor group layout")
         refreshLayoutPicker()
         NSLayoutConstraint.activate([
             layoutPicker.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),

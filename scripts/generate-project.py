@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def resource_paths(root):
-    paths = ['Resources/AutomationTemplates/recipe-ingredient-cleanup.rules.json', 'Resources/AutomationTemplates/sort-unique-lines.rules.json', 'Resources/AutomationTemplates/trim-and-remove-empty-lines.rules.json', 'Resources/Brand/Inter-OFL.txt', 'Resources/Brand/SpaceGrotesk-OFL.txt', 'Resources/Credits.rtf', 'Resources/LanguageProfiles.json', 'Resources/Localizable.xcstrings', 'Resources/TextTank-License.txt', 'Resources/TextTank.icns', 'Resources/boost-License.txt', 'Resources/lexilla-License.txt', 'Resources/scintilla-License.txt']
+    paths = ['Resources/AutomationTemplates/recipe-ingredient-cleanup.rules.json', 'Resources/AutomationTemplates/sort-unique-lines.rules.json', 'Resources/AutomationTemplates/trim-and-remove-empty-lines.rules.json', 'Resources/Brand/Inter-OFL.txt', 'Resources/Brand/SpaceGrotesk-OFL.txt', 'Resources/Credits.rtf', 'Resources/LanguageProfiles.json', 'Resources/Localizable.xcstrings', 'Resources/TextTank-License.txt', 'Resources/TextTank-User-Guide.txt', 'Resources/TextTank-Welcome.txt', 'Resources/TextTank.icns', 'Resources/boost-License.txt', 'Resources/lexilla-License.txt', 'Resources/scintilla-License.txt']
     for path in paths:
         if not (root / path).is_file():
             raise ValueError(f"Required bundled resource missing: {path}")
@@ -56,6 +56,16 @@ def main():
     for path in sorted(Path('Sources').rglob('*.h')):
         header_refs[str(path)] = add(str(path), 'PBXFileReference', lastKnownFileType='sourcecode.c.h', path=str(path), sourceTree='<group>')
         files.append(header_refs[str(path)])
+    tool_file = add('Tools/tt/Tool.swift', 'PBXFileReference', lastKnownFileType='sourcecode.swift', path='Tools/tt/Tool.swift', sourceTree='<group>')
+    tool_entry = add('Tools/tt/TTMain.swift', 'PBXFileReference', lastKnownFileType='sourcecode.swift', path='Tools/tt/TTMain.swift', sourceTree='<group>')
+    files.extend([tool_file, tool_entry])
+    tool_sources = add('tt:sources', 'PBXSourcesBuildPhase', buildActionMask='2147483647',
+                       files=[add('tt:main', 'PBXBuildFile', fileRef=tool_entry), add('tt:logic', 'PBXBuildFile', fileRef=tool_file),
+                              add('tt:protocol', 'PBXBuildFile', fileRef=uid('Sources/TextTankApp/CommandLineRequest.swift'))],
+                       runOnlyForDeploymentPostprocessing='0')
+    tool_product = add('tt:product', 'PBXFileReference', explicitFileType='compiled.mach-o.executable', path='tt', sourceTree='BUILT_PRODUCTS_DIR')
+    tool_embed = add('tt:embed', 'PBXCopyFilesBuildPhase', buildActionMask='2147483647', dstPath='Contents/Helpers', dstSubfolderSpec='1',
+                     files=[add('tt:copy', 'PBXBuildFile', fileRef=tool_product)], runOnlyForDeploymentPostprocessing='0')
     resources = []
     for relative in resource_paths(ROOT):
         path = Path(relative)
@@ -70,7 +80,7 @@ def main():
     editor_product = add('EditorBridge:product', 'PBXFileReference', explicitFileType='wrapper.framework', path='EditorBridge.framework', sourceTree='BUILT_PRODUCTS_DIR')
     core_product = add('TextTankCore:product', 'PBXFileReference', explicitFileType='wrapper.framework', path='TextTankCore.framework', sourceTree='BUILT_PRODUCTS_DIR')
     runtime_product = add('TextTankRuntime:product', 'PBXFileReference', explicitFileType='wrapper.framework', path='TextTankRuntime.framework', sourceTree='BUILT_PRODUCTS_DIR')
-    products = add('products', 'PBXGroup', children=[product, search_product, editor_product, core_product, runtime_product], name='Products', sourceTree='<group>')
+    products = add('products', 'PBXGroup', children=[product, search_product, editor_product, core_product, runtime_product, tool_product], name='Products', sourceTree='<group>')
     group = add('root', 'PBXGroup', children=files + [products], sourceTree='<group>')
     sources = add('sources', 'PBXSourcesBuildPhase', buildActionMask='2147483647', files=builds, runOnlyForDeploymentPostprocessing='0')
     res = add('resources', 'PBXResourcesBuildPhase', buildActionMask='2147483647', files=resources, runOnlyForDeploymentPostprocessing='0')
@@ -126,6 +136,7 @@ def main():
     core_link = add('TextTankCore:link', 'PBXFrameworksBuildPhase', buildActionMask='2147483647', files=[add('TextTankCore:native-search-link', 'PBXBuildFile', fileRef=search_product)], runOnlyForDeploymentPostprocessing='0')
     runtime_sources = add('TextTankRuntime:sources', 'PBXSourcesBuildPhase', buildActionMask='2147483647', files=runtime_builds, runOnlyForDeploymentPostprocessing='0')
     runtime_link = add('TextTankRuntime:link', 'PBXFrameworksBuildPhase', buildActionMask='2147483647', files=[add('TextTankRuntime:core-link', 'PBXBuildFile', fileRef=core_product), add('TextTankRuntime:bridge-link', 'PBXBuildFile', fileRef=editor_product), add('TextTankRuntime:search-link', 'PBXBuildFile', fileRef=search_product)], runOnlyForDeploymentPostprocessing='0')
+    tool_configs = []
     runtime_configs = []
     core_configs = []
     editor_configs = []
@@ -133,7 +144,7 @@ def main():
     configs = []
     pconfigs = []
     for name in ['Debug', 'Release']:
-        configs.append(add('config' + name, 'XCBuildConfiguration', name=name, buildSettings={**settings, **({'SWIFT_OPTIMIZATION_LEVEL': '-O', 'GCC_OPTIMIZATION_LEVEL': '3', 'DEBUG_INFORMATION_FORMAT': 'dwarf-with-dsym', 'ENABLE_TESTABILITY': 'NO'} if name == 'Release' else {'SWIFT_OPTIMIZATION_LEVEL': '-Onone', 'GCC_OPTIMIZATION_LEVEL': '0', 'GCC_PREPROCESSOR_DEFINITIONS': ['$(inherited)', 'DEBUG=1'], 'SWIFT_ACTIVE_COMPILATION_CONDITIONS': 'DEBUG', 'ONLY_ACTIVE_ARCH': 'YES', 'ENABLE_TESTABILITY': 'YES'})}))
+        configs.append(add('config' + name, 'XCBuildConfiguration', name=name, buildSettings={**settings, 'COPY_PHASE_STRIP': 'NO', **({'SWIFT_OPTIMIZATION_LEVEL': '-O', 'GCC_OPTIMIZATION_LEVEL': '3', 'DEBUG_INFORMATION_FORMAT': 'dwarf-with-dsym', 'ENABLE_TESTABILITY': 'NO'} if name == 'Release' else {'SWIFT_OPTIMIZATION_LEVEL': '-Onone', 'GCC_OPTIMIZATION_LEVEL': '0', 'GCC_PREPROCESSOR_DEFINITIONS': ['$(inherited)', 'DEBUG=1'], 'SWIFT_ACTIVE_COMPILATION_CONDITIONS': 'DEBUG', 'ONLY_ACTIVE_ARCH': 'YES', 'ENABLE_TESTABILITY': 'YES'})}))
         search_settings = {**settings, 'PRODUCT_NAME': 'NativeSearch', 'PRODUCT_MODULE_NAME': 'NativeSearch', 'PRODUCT_BUNDLE_IDENTIFIER': 'app.texttank.NativeSearch', 'DEFINES_MODULE': 'YES', 'GENERATE_INFOPLIST_FILE': 'YES', 'MODULEMAP_FILE': 'Sources/Search/module.modulemap', 'SKIP_INSTALL': 'YES', 'LD_DYLIB_INSTALL_NAME': '@rpath/$(EXECUTABLE_PATH)', 'HEADER_SEARCH_PATHS': ['$(PROJECT_DIR)/Sources/Search/Boost'], 'FRAMEWORK_SEARCH_PATHS': ['$(inherited)'], 'SWIFT_OPTIMIZATION_LEVEL': '-O' if name == 'Release' else '-Onone', 'OTHER_LDFLAGS': ['$(inherited)', '-framework', 'Foundation', '-lc++'], 'GCC_OPTIMIZATION_LEVEL': '3' if name == 'Release' else '0'}
         for key in ['INFOPLIST_FILE', 'SWIFT_OBJC_BRIDGING_HEADER']:
             search_settings.pop(key, None)
@@ -156,6 +167,11 @@ def main():
         runtime_settings.pop('INFOPLIST_FILE', None)
         if name == 'Debug':
             runtime_settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] = 'DEBUG'
+        tool_settings = {k: v for k, v in runtime_settings.items() if k in {
+            'ARCHS', 'ONLY_ACTIVE_ARCH', 'MACOSX_DEPLOYMENT_TARGET', 'SWIFT_VERSION', 'SWIFT_STRICT_CONCURRENCY',
+            'SWIFT_TREAT_WARNINGS_AS_ERRORS', 'SWIFT_OPTIMIZATION_LEVEL', 'SKIP_INSTALL'}}
+        tool_settings.update({'PRODUCT_NAME': 'tt', 'ALWAYS_SEARCH_USER_PATHS': 'NO', 'OTHER_SWIFT_FLAGS': ['$(inherited)', '-parse-as-library']})
+        tool_configs.append(add('tt:config:' + name, 'XCBuildConfiguration', name=name, buildSettings=tool_settings))
         runtime_configs.append(add('TextTankRuntime:config:' + name, 'XCBuildConfiguration', name=name, buildSettings=runtime_settings))
         pconfigs.append(add('pconfig' + name, 'XCBuildConfiguration', name=name, buildSettings={'SDKROOT': 'macosx', 'ARCHS': identity['architecture']}))
     cl = add('configs', 'XCConfigurationList', buildConfigurations=configs, defaultConfigurationIsVisible='0', defaultConfigurationName='Debug')
@@ -174,8 +190,12 @@ def main():
     runtime_dependencies = [add('TextTankRuntime:dependency:' + name, 'PBXTargetDependency', target=value) for name, value in [('Core', core_target), ('EditorBridge', editor_target), ('NativeSearch', search_target)]]
     runtime_target = add('TextTankRuntime:target', 'PBXNativeTarget', buildConfigurationList=runtime_cl, buildPhases=[runtime_sources, runtime_link], buildRules=[], dependencies=runtime_dependencies, name='TextTankRuntime', productName='TextTankRuntime', productReference=runtime_product, productType='com.apple.product-type.framework')
     app_runtime_dependency = add('TextTankRuntime:app-dependency', 'PBXTargetDependency', target=runtime_target)
-    target = add('target', 'PBXNativeTarget', buildConfigurationList=cl, buildPhases=[sources, link, res, embed], buildRules=[], dependencies=[search_dependency, editor_dependency, app_core_dependency, app_runtime_dependency], name='TextTank', productName='TextTank', productReference=product, productType='com.apple.product-type.application')
-    project = add('project', 'PBXProject', attributes={'LastUpgradeCheck': '1600'}, buildConfigurationList=pcl, compatibilityVersion='Xcode 14.0', developmentRegion='en', hasScannedForEncodings='0', knownRegions=['en', 'Base'], mainGroup=group, productRefGroup=products, projectDirPath='', projectRoot='', targets=[target, search_target, editor_target, core_target, runtime_target])
+    tool_cl = add('tt:configs', 'XCConfigurationList', buildConfigurations=tool_configs, defaultConfigurationIsVisible='0', defaultConfigurationName='Debug')
+    tool_target = add('tt:target', 'PBXNativeTarget', buildConfigurationList=tool_cl, buildPhases=[tool_sources], buildRules=[],
+                      dependencies=[], name='tt', productName='tt', productReference=tool_product, productType='com.apple.product-type.tool')
+    tool_dependency = add('tt:app-dependency', 'PBXTargetDependency', target=tool_target)
+    target = add('target', 'PBXNativeTarget', buildConfigurationList=cl, buildPhases=[sources, link, res, embed, tool_embed], buildRules=[], dependencies=[search_dependency, editor_dependency, app_core_dependency, app_runtime_dependency, tool_dependency], name='TextTank', productName='TextTank', productReference=product, productType='com.apple.product-type.application')
+    project = add('project', 'PBXProject', attributes={'LastUpgradeCheck': '1600'}, buildConfigurationList=pcl, compatibilityVersion='Xcode 14.0', developmentRegion='en', hasScannedForEncodings='0', knownRegions=['en', 'Base'], mainGroup=group, productRefGroup=products, projectDirPath='', projectRoot='', targets=[target, search_target, editor_target, core_target, runtime_target, tool_target])
     Path('TextTank.xcodeproj/project.pbxproj').write_text('// !$*UTF8*$!\n' + q({'archiveVersion': 1, 'classes': {}, 'objectVersion': 56, 'objects': objects, 'rootObject': project}) + '\n')
     Path('TextTank.xcodeproj/xcshareddata/xcschemes/TextTank.xcscheme').write_text(f'<?xml version="1.0" encoding="UTF-8"?><Scheme LastUpgradeVersion="1600" version="1.3"><BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries><BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{target}" BuildableName="TextTank.app" BlueprintName="TextTank" ReferencedContainer="container:TextTank.xcodeproj"/></BuildActionEntry></BuildActionEntries></BuildAction><LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES"><BuildableProductRunnable runnableDebuggingMode="0"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{target}" BuildableName="TextTank.app" BlueprintName="TextTank" ReferencedContainer="container:TextTank.xcodeproj"/></BuildableProductRunnable></LaunchAction></Scheme>')
 

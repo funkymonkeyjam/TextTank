@@ -1,0 +1,22 @@
+Welcome to TextTank
+
+This untitled document is yours to edit. Use Help → Welcome to TextTank to open a fresh copy.
+
+Try a saved automation
+
+Choose File → New. Copy the two lines below into that blank document.
+
+- tea
+- milk
+
+Choose Automations → Clean up recipe list. This built-in automation reads the whole document and removes the list markers. The two lines now read “tea” and “milk”. Choose Edit → Undo to restore the markers.
+
+Compare an edit with its saved file
+
+Save your sample in a folder you choose. Change “tea” to “green tea” and leave the edit unsaved. Choose File → Compare with Saved Version. Review the comparison and close its window when finished. Your unsaved edit stays in the original tab.
+
+Use two editor groups
+
+With your sample active, choose View → Editor Group Layout → Two Columns. Choose View → Show Tab in Another Group and select the other group. Edit one view and observe the same document in the other. Choose View → Editor Group Layout → Single Group to return.
+
+Choose Help → TextTank User Guide for more ways to open, search and review text.
