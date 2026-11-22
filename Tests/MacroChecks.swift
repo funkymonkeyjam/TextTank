@@ -488,6 +488,39 @@ import Foundation
                 check(editor.utf8Data == Data((original + "\r\n").utf8), "a legacy New Line macro remains literal")
             }
 
+            do {
+                let isolated = try IsolatedSupportDirectory("AutoPairMacroCodec")
+                let previous = editor.autoPairEnabled
+                defer {
+                    editor.autoPairEnabled = previous
+                    isolated.restore()
+                }
+                editor.autoPairEnabled = true
+                load("", caret: 0)
+                let recorder = MacroController(editorProvider: { editor })
+                recorder.startRecording()
+                try key(91, code: 33)
+                let macro = try requireValue(try recorder.finishRecording(), "captured bracket pair")
+                check(
+                    macro.steps == [.insertText("["), .insertText("]"), .command("charLeft")]
+                        && editor.text == "[]" && editor.selectionCaret == 1,
+                    "the native pair records both literal bytes and its interior caret")
+                try recorder.persist(MacroLibrary(macros: [macro]))
+                let saved = try requireValue(
+                    try MacroLibrary.decode(Data(contentsOf: AppStorage.url(.macros))).macros.first,
+                    "persisted bracket pair")
+                for enabled in [true, false] {
+                    editor.autoPairEnabled = enabled
+                    load("", caret: 0)
+                    try MacroController(editorProvider: { editor }).play(saved, on: editor)
+                    check(
+                        editor.text == "[]" && editor.selectionCaret == 1,
+                        "persisted pair replays once with either preference")
+                    editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+                    check(editor.text.isEmpty && !editor.modified, "one Undo removes the replayed pair")
+                }
+            }
+
             // G367: the canonical "prefix each line" macro, recorded with the standard Mac keys.
             let lines = "one\ntwo\nthree"
             load(lines, caret: 2)

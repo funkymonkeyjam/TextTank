@@ -17,6 +17,7 @@ import AppKit
                 if let font { editor.setBaseFontName(font.fontName, size: font.pointSize) }
                 if previous?.initialZoom != value.initialZoom { editor.applyDefaultZoomLevel(value.initialZoom) }
                 editor.autoIndentEnabled = value.autoIndentEnabled
+                editor.autoPairEnabled = value.autoPairEnabled
                 editor.braceHighlightEnabled = value.braceHighlightEnabled
                 editor.currentLineHighlightEnabled = value.currentLineHighlightEnabled
                 editor.indentGuidesEnabled = value.indentGuidesEnabled

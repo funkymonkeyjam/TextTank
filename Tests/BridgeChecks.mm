@@ -31,6 +31,18 @@
 @end
 @implementation TTFakeDrop
 @end
+// The live fixture uses only named NSPasteboards. This local receiver exercises AppKit refusing the write.
+@interface TTRejectedBookmarkWrite : NSObject
+@property(nonatomic) BOOL attempted;
+@end
+@implementation TTRejectedBookmarkWrite
+- (NSInteger)clearContents { return 0; }
+- (BOOL)setData:(NSData *)data forType:(NSPasteboardType)type {
+    self.attempted = [type isEqual:NSPasteboardTypeString] && data.length != 0;
+    return NO;
+}
+@end
+
 static void immutableFields(NSObject *value, NSDictionary<NSString *, id> *attempts) {
     NSArray *keys=attempts.allKeys;
     for (NSString *key in keys) {
@@ -539,6 +551,86 @@ static void baseFontMetricsChecks() {
           ![engine message:SCI_CANUNDO] && !editor.modified, "style, zoom and clone operations preserve bytes, revision and Undo");
 }
 
+static void pressPairKey(TTEditor *editor, NSString *characters, unsigned short keyCode, NSEventModifierFlags flags = 0) {
+    ScintillaView *engine = (ScintillaView *)editor.subviews.firstObject;
+    NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:flags timestamp:0
+        windowNumber:0 context:nil characters:characters charactersIgnoringModifiers:characters isARepeat:NO keyCode:keyCode];
+    [engine.content keyDown:event];
+}
+static void autoPairChecks() {
+    TTEditor *ed = [[TTEditor alloc] initWithFrame:NSMakeRect(0,0,500,180)];
+    check(!ed.autoPairEnabled, "Auto-Pair starts off for a newly created editor");
+    pressPairKey(ed, @"(", 25, NSEventModifierFlagShift);
+    check([ed.text isEqual:@"("] && ed.selectionCaret == 1, "default native typing inserts only the opening character");
+    ed.autoPairEnabled = YES;
+    NSArray<NSString *> *opens = @[@"(", @"[", @"{", @"\"", @"'"];
+    NSArray<NSString *> *pairs = @[@"()", @"[]", @"{}", @"\"\"", @"''"];
+    unsigned short keys[] = {25,33,33,39,39};
+    for (NSUInteger i=0; i<opens.count; ++i) {
+        ed.text = @""; [ed setSelectionAnchor:0 caret:0]; [ed resetUndoHistory];
+        pressPairKey(ed, opens[i], keys[i], (i==0 || i==2 || i==3) ? NSEventModifierFlagShift:0);
+        check([ed.text isEqual:pairs[i]] && ed.selectionCaret == 1, "direct opening key inserts its matching close and leaves the caret between");
+        [ed executeCommand:@"undo"]; check(!ed.text.length, "one Undo removes both delimiters");
+        [ed executeCommand:@"redo"]; check([ed.text isEqual:pairs[i]] && ed.selectionCaret==1, "Redo restores the paired bytes");
+    }
+    ed.text = @"a\nbx\nc\t";
+    [ed setSelectionRanges:@[S(1,1), S(3,3), S(6,6)]]; [ed resetUndoHistory];
+    pressPairKey(ed, @"[", 33);
+    check([ed.text isEqual:@"a[]\nb[x\nc[]\t"] && [ed.selectionRanges isEqual:@[S(2,2), S(6,6), S(10,10)]],
+        "three real carets pair independently by EOL, ordinary text and tab");
+    [ed executeCommand:@"undo"]; check([ed.text isEqual:@"a\nbx\nc\t"], "all three insertions share one Undo");
+    check([ed.selectionRanges isEqual:@[S(1,1), S(3,3), S(6,6)]], "native Undo restores all original empty selections");
+    [ed executeCommand:@"redo"];
+    check([ed.selectionRanges isEqual:@[S(2,2), S(6,6), S(10,10)]], "native Redo restores interior and literal carets");
+    ed.text = @"x\u2003"; [ed setSelectionAnchor:1 caret:1]; pressPairKey(ed, @"{", 33, NSEventModifierFlagShift);
+    check([ed.text isEqual:@"x{}\u2003"], "one Unicode whitespace scalar is sufficient");
+    ed.text = @"ab"; [ed setSelectionAnchor:1 caret:1]; pressPairKey(ed, @"[", 33);
+    check([ed.text isEqual:@"a[b"], "typing before text keeps only the opening delimiter");
+    ed.text = @"\\"; [ed setSelectionAnchor:1 caret:1]; pressPairKey(ed, @"'", 39);
+    check([ed.text isEqual:@"\\'"], "an escaped quote remains literal");
+    ed.text = @"\\\\"; [ed setSelectionAnchor:2 caret:2]; pressPairKey(ed, @"'", 39);
+    check([ed.text isEqual:@"\\\\''"] && ed.selectionCaret==3, "an even escape run leaves the quote eligible");
+    ed.text = @"xy"; [ed setSelectionAnchor:0 caret:2]; pressPairKey(ed, @"[", 33);
+    check([ed.text isEqual:@"["], "ordinary replacement of selected text stays native");
+    ed.text = @"  "; [ed setSelectionAnchor:2 caret:2]; pressReturn(ed);
+    check([ed.text isEqual:@"  \n  "], "Return continues to inherit indentation");
+    ed.text = @""; [ed setSelectionAnchor:0 caret:0];
+    ScintillaView *engine=(ScintillaView *)ed.subviews.firstObject;
+    [engine.content insertText:@"{" replacementRange:NSMakeRange(NSNotFound,0)];
+    check([ed.text isEqual:@"{"], "standalone text insertion never implicitly pairs");
+    TTEditor *clone=[[TTEditor alloc] initWithFrame:ed.frame];
+    [clone shareDocumentWith:ed]; [clone adoptViewStateFrom:ed];
+    check(clone.autoPairEnabled, "a clone inherits the per-view option");
+    NSMutableArray *completions=[NSMutableArray array], *marked=[NSMutableArray array];
+    for (NSNumber *on in @[@NO,@YES]) {
+        TTEditor *view=[[TTEditor alloc] initWithFrame:ed.frame]; view.autoPairEnabled=on.boolValue; view.text=@"ab ";
+        [view setSelectionAnchor:2 caret:2]; ScintillaView *native=(ScintillaView *)view.subviews.firstObject;
+        [view showCompletions:@[@"abc", @"abd"]];
+        check([native message:SCI_AUTOCACTIVE], "real Scintilla completion before opening key");
+        pressPairKey(view,@"[",33); [completions addObject:@[view.utf8Data,view.selectionRanges,@([native message:SCI_AUTOCACTIVE])]];
+        [native message:SCI_AUTOCCANCEL]; view.text=@"x "; [view setSelectionAnchor:1 caret:1];
+        [native.content setMarkedText:@"雪" selectedRange:NSMakeRange(1,0) replacementRange:NSMakeRange(NSNotFound,0)];
+        check(native.content.hasMarkedText,"native marked input before opening key");
+        pressPairKey(view,@"[",33); [marked addObject:@[view.utf8Data,view.selectionRanges,@(native.content.hasMarkedText)]];
+        [native.content unmarkText];
+    }
+    check([completions[0] isEqual:completions[1]] && [marked[0] isEqual:marked[1]], "native completion and marked text preserve baseline behavior");
+    NSMutableArray *rectangles=[NSMutableArray array];
+    for (NSNumber *on in @[@NO,@YES]) {
+        TTEditor *view=[[TTEditor alloc] initWithFrame:ed.frame]; view.autoPairEnabled=on.boolValue; view.text=@"a  \nb  ";
+        ScintillaView *native=(ScintillaView *)view.subviews.firstObject;
+        [native message:SCI_SETSELECTIONMODE wParam:SC_SEL_RECTANGLE];
+        [native message:SCI_SETRECTANGULARSELECTIONANCHOR wParam:1]; [native message:SCI_SETRECTANGULARSELECTIONCARET wParam:5];
+        pressPairKey(view,@"[",33);
+        [rectangles addObject:@[view.utf8Data,view.selectionRanges,@([native message:SCI_GETSELECTIONMODE])]];
+    }
+    check([rectangles[0] isEqual:rectangles[1]], "rectangular native editing retains its original text, mode and selections");
+    ed.text=@"  "; [ed setSelectionAnchor:0 caret:0]; [ed executeCommand:@"toggleOvertype"]; pressPairKey(ed,@"[",33);
+    check([ed.text isEqual:@"[ "], "native overtype replaces one character without a closer");
+    [ed executeCommand:@"toggleOvertype"]; ed.text=@"{";
+    ed.readOnly=YES; pressPairKey(ed, @"[", 33);
+    check([ed.text isEqual:@"{"], "read-only cannot be changed by a pairing key"); ed.readOnly=NO;
+}
 static void cancellationContract() {
     TTSearchCancellation *token=[TTSearchCancellation new];
     check(!token.cancelled && ![[token valueForKey:@"cancelled"] boolValue], "F316 native cancellation starts false and retains its safe KVC getter");
@@ -563,6 +655,7 @@ int main(int argc, char **argv) {
         }
         cancellationContract();
         [NSApplication sharedApplication];
+        ttchecks::section("direct character pairing", autoPairChecks);
         ttchecks::section("Return indentation", returnIndentChecks);
         ttchecks::section("Current line and indentation guides", currentLineAndGuideChecks);
         ttchecks::section("Base font metrics", baseFontMetricsChecks);
@@ -817,6 +910,154 @@ int main(int argc, char **argv) {
         check([native message:SCI_GETLINEVISIBLE wParam:1] == 0, "Fold all hides actual lexer-derived body lines");
         [second executeCommand:@"unfoldAll"];
         check([native message:SCI_GETLINEVISIBLE wParam:1] == 1, "Unfold all restores body visibility");
+        {
+            TTEditor *fold = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 480, 240)];
+            TTEditor *neighbor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 480, 240)];
+            NSString *original = @"void f() {\n  if (a) {\n    if (b) {\n      work();\n    }\n  }\n  if (c) {\n    other();\n  }\n}\nvoid g() {\n  last();\n}\n";
+            fold.text = original;
+            [fold setLanguage:@"cpp"];
+            [neighbor shareDocumentWith:fold];
+            ScintillaView *engine = (ScintillaView *)fold.subviews.firstObject;
+            ScintillaView *peer = (ScintillaView *)neighbor.subviews.firstObject;
+            auto visible = [&](NSInteger line) { return [engine message:SCI_GETLINEVISIBLE wParam:line] != 0; };
+            [engine message:SCI_EMPTYUNDOBUFFER];
+            [fold setSavePoint];
+            const NSUInteger revision = fold.revision;
+            [fold goToLine:4]; // inside the deepest block
+            const NSInteger caret = fold.selectionCaret;
+            check([fold executeCommand:@"foldCurrent"] && !visible(3) && visible(2) && visible(7),
+                  "Fold Current at a body line contracts the nearest real header only");
+            check(fold.selectionCaret == caret && [peer message:SCI_GETLINEVISIBLE wParam:3],
+                  "Fold Current preserves the caret byte position and the other view");
+            check([fold goToLine:4] && visible(3), "Explicit Go To Line reveals the target after folding");
+            [fold goToLine:1];
+            [fold executeCommand:@"foldLevel2"];
+            check(visible(1) && !visible(2) && visible(6) && !visible(7) && visible(11),
+                  "Fold Level 2 collapses both sibling headers and leaves root peers expanded");
+            [fold executeCommand:@"foldLevel1"];
+            check(!visible(1) && visible(10) && !visible(11), "Fold Level 1 contracts both top-level C++ functions");
+            [fold executeCommand:@"unfoldAll"];
+            [fold goToLine:3];
+            [fold executeCommand:@"foldCurrent"];
+            [fold executeCommand:@"foldCurrent"];
+            check(visible(2) && !visible(3) && visible(7), "Fold Current at a header is idempotent");
+            check([fold.text isEqualToString:original] && fold.revision == revision && !fold.modified
+                  && ![engine message:SCI_CANUNDO], "Folding leaves text, revision, savepoint and Undo untouched");
+            [fold executeCommand:@"unfoldAll"];
+            [fold executeCommand:@"foldLevel8"];
+            check(visible(3) && visible(7), "An absent fold level has no effect");
+            fold.text = @"def f():\n    if yes:\n        thing()\n    more()\nend()\n";
+            [fold setLanguage:@"python"];
+            [fold executeCommand:@"foldLevel2"];
+            check(visible(1) && !visible(2) && visible(3), "Python indentation columns map to structural depth");
+            NSMutableString *deep = [NSMutableString string];
+            for (NSInteger i = 0; i < 9; ++i) [deep appendString:@"if (v) {\n"];
+            [deep appendString:@"leaf();\n"];
+            for (NSInteger i = 0; i < 9; ++i) [deep appendString:@"}\n"];
+            fold.text = deep;
+            [fold setLanguage:@"cpp"];
+            fold.readOnly = YES;
+            for (NSInteger depth = 1; depth <= 8; ++depth) {
+                [fold executeCommand:@"unfoldAll"];
+                NSString *name = [NSString stringWithFormat:@"foldLevel%ld", (long)depth];
+                check([fold executeCommand:name] && visible(depth - 1) && !visible(depth)
+                      && [peer message:SCI_GETLINEVISIBLE wParam:depth],
+                      [NSString stringWithFormat:@"Read-only Fold Level %ld targets its exact header and one view", (long)depth].UTF8String);
+            }
+            [fold executeCommand:@"unfoldAll"];
+            fold.readOnly = NO;
+            fold.text = @"alpha\nbeta\ngamma";
+            [fold setLanguage:@"null"];
+            [fold goToLine:2];
+            [fold executeCommand:@"foldCurrent"];
+            [fold executeCommand:@"foldLevel1"];
+            check(visible(0) && visible(1) && visible(2), "Plain text with no fold headers remains visible");
+        }
+        {
+            TTEditor *book = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 480, 240)];
+            ScintillaView *sci = (ScintillaView *)book.subviews.firstObject;
+            NSPasteboard *board = [NSPasteboard pasteboardWithUniqueName];
+            NSString *original = @"first\r\n♣\nkept\rtail";
+            book.text = original;
+            [book setSavePoint]; [book resetUndoHistory];
+            [book setBookmarks:@[@1,@3]];
+            const sptr_t kept = [sci message:SCI_POSITIONFROMLINE wParam:2];
+            [sci message:SCI_SETSEL wParam:kept + 2 lParam:kept + 1];
+            [sci message:SCI_MARKERADD wParam:2 lParam:9];
+            check([book executeCommand:@"bookmarkCopyLines" usingPasteboard:board] && [[board stringForType:NSPasteboardTypeString] isEqualToString:@"♣\ntail"] && [book.text isEqual:original] && !book.modified,
+                  "Bookmarked Copy preserves physical terminators and unterminated Unicode text");
+            check(![book executeCommand:@"bookmarkCutLines" usingPasteboard:nil] && [book.text isEqual:original],
+                  "Missing clipboard leaves every byte present on Cut");
+            book.readOnly = YES;
+            check(![book executeCommand:@"bookmarkCutLines" usingPasteboard:board] && ![book executeCommand:@"bookmarkDeleteLines"] && [book.text isEqual:original],
+                  "Read-only Cut and Delete preserve marked text");
+            book.readOnly = NO;
+            check([book executeCommand:@"bookmarkCutLines" usingPasteboard:board] && [book.text isEqual:@"first\r\nkept\r"] && !book.hasBookmarks,
+                  "Cut removes exactly the two marked lines and leaves no transferred bookmarks");
+            check(book.selectionAnchor == 9 && book.selectionCaret == 8 && ([sci message:SCI_MARKERGET wParam:1] & (1 << 9)),
+                  "Reverse selection and another marker type follow their surviving Unicode-adjacent line");
+            [book executeCommand:@"undo"];
+            check([book.text isEqual:original] && !book.modified && ![sci message:SCI_CANUNDO],
+                  "One Undo restores exact Cut bytes and the original savepoint");
+            [book setBookmarks:@[@0,@1]];
+            check([book executeCommand:@"bookmarkDeleteLines"] && [book.text isEqual:@"kept\rtail"], "Adjacent bookmarked lines delete in source order without touching the clipboard");
+            [book executeCommand:@"undo"];
+            check([book.text isEqual:original] && ![sci message:SCI_CANUNDO], "One Undo restores an adjacent Delete");
+            book.text = @"A\r\n\r\nB\rC\n";
+            [book setBookmarks:@[@0,@1,@3]];
+            [book executeCommand:@"bookmarkCopyLines" usingPasteboard:board];
+            check([[board stringForType:NSPasteboardTypeString] isEqual:@"A\r\n\r\nC\n"], "Clipboard preserves adjacent empty and mixed-EOL lines");
+            [book executeCommand:@"bookmarkInvert"];
+            check([book.bookmarkLines isEqual:@[@2,@4]], "Invert includes final empty physical line and complementary marks");
+            [book executeCommand:@"bookmarkClearAll"];
+            check(!book.hasBookmarks && [book.text isEqual:@"A\r\n\r\nB\rC\n"], "Clear only changes bookmark markers");
+            [book setBookmarks:@[@4]];
+            [book setSavePoint];[book resetUndoHistory];
+            [book executeCommand:@"bookmarkCutLines" usingPasteboard:board];
+            check(!book.modified && ![sci message:SCI_CANUNDO] && [book.bookmarkLines isEqual:@[@4]]
+                  && [[board stringForType:NSPasteboardTypeString] isEqual:@"A\r\n\r\nC\n"], "Terminal empty-line Cut preserves prior clipboard, mark and clean Undo");
+            book.text = @"ab\nmarked\n0123456789\n";
+            [book setBookmarks:@[@1]];
+            [sci message:SCI_SETMULTIPLESELECTION wParam:1];
+            [sci message:SCI_SETSELECTION wParam:2 lParam:1];
+            [sci message:SCI_ADDSELECTION wParam:13 lParam:14];
+            [sci message:SCI_ADDSELECTION wParam:10 lParam:10];
+            [book executeCommand:@"bookmarkDeleteLines"];
+            check([sci message:SCI_GETSELECTIONS] == 3 && [sci message:SCI_GETSELECTIONNCARET wParam:0] == 2
+                  && [sci message:SCI_GETSELECTIONNANCHOR wParam:1] == 7 && [sci message:SCI_GETSELECTIONNCARET wParam:1] == 6
+                  && [sci message:SCI_GETSELECTIONNCARET wParam:2] == 3,
+                  "Three native carets and reverse/empty selections track their surviving byte positions");
+            [book setBookmarks:@[@0,@1]];
+            [sci message:SCI_SETSELECTION wParam:1 lParam:1]; [sci message:SCI_ADDSELECTION wParam:2 lParam:2];
+            [book executeCommand:@"bookmarkCopyLines" usingPasteboard:board];
+            check([[board stringForType:NSPasteboardTypeString] isEqual:@"ab\n0123456789\n"], "Two carets on the same marked line copy it exactly once");
+            NSString *leading = @"before\r\uFEFF雪\0A\r\nafter";
+            book.text = leading;
+            [book resetUndoHistory]; [book setSavePoint]; [book setBookmarks:@[@1]];
+            NSData *fullLine = [@"\uFEFF雪\0A\r\n" dataUsingEncoding:NSUTF8StringEncoding];
+            check([book executeCommand:@"bookmarkCopyLines" usingPasteboard:board]
+                  && [[board dataForType:NSPasteboardTypeString] isEqual:fullLine],
+                  "Copy publishes every UTF-8 byte including an initial U+FEFF and embedded NUL");
+            check([book executeCommand:@"bookmarkCutLines" usingPasteboard:board]
+                  && [[board dataForType:NSPasteboardTypeString] isEqual:fullLine] && [book.text isEqual:@"before\rafter"],
+                  "Cut publishes byte-exact clipboard content before removing that physical line");
+            [book executeCommand:@"undo"];
+            check([book.text isEqual:leading] && !book.modified && ![sci message:SCI_CANUNDO], "One Undo restores U+FEFF, NUL and CRLF");
+            [book setBookmarks:@[@1]];
+            TTRejectedBookmarkWrite *rejected = [TTRejectedBookmarkWrite new];
+            check(![book executeCommand:@"bookmarkCutLines" usingPasteboard:(NSPasteboard *)(id)rejected] && rejected.attempted
+                  && [book.text isEqual:leading] && [book.bookmarkLines isEqual:@[@1]] && !book.modified && ![sci message:SCI_CANUNDO],
+                  "Explicitly refused pasteboard write leaves Cut bytes, markers, savepoint and Undo intact");
+            const char malformed[] = {'a', (char)0xFF, 'b'};
+            [sci message:SCI_SETTARGETRANGE wParam:0 lParam:book.byteLength];
+            [sci message:SCI_REPLACETARGET wParam:sizeof(malformed) lParam:(sptr_t)malformed];
+            [book setBookmarks:@[@0]]; [book setSavePoint]; [book resetUndoHistory];
+            check(![book executeCommand:@"bookmarkCutLines" usingPasteboard:board] && !book.modified
+                  && [book.checkedUTF8Data isEqual:[NSData dataWithBytes:malformed length:sizeof(malformed)]]
+                  && [book.bookmarkLines isEqual:@[@0]] && [[board dataForType:NSPasteboardTypeString] isEqual:fullLine],
+                  "Undecodable native bytes refuse Cut before touching clipboard, text, markers or Undo");
+            [board releaseGlobally];
+        }
         check([[TTEditor availableLanguages] containsObject:@"cpp"] && [[TTEditor availableLanguages] containsObject:@"python"], "Language inventory enumerates linked lexer factories");
         // F22: the built-in keyword list and palette belong to the bare cpp lexer only.
         check([native message:SCI_STYLEGETFORE wParam:5] != [native message:SCI_STYLEGETFORE wParam:STYLE_DEFAULT], "Bare cpp lexer keeps its built-in keyword colour");

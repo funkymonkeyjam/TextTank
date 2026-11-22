@@ -339,27 +339,34 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     /// A failed recovery write is shown in red with a tooltip as well as in words, and stays
     /// until the document reports a successful write.
-    private var transientStatus: String?
+    private var transientStatus: (message: String, id: UUID)?
     /// Says why something the person just did had no effect, in the status line for a few seconds
     /// and to assistive technology, then shows the save state again. A standing recovery failure
     /// is never replaced.
     func showTransientStatus(
         _ message: String, compactMessage: String? = nil, seconds: TimeInterval = 4, announce: Bool = true
     ) {
-        guard transientStatus != message else { return }
+        guard transientStatus?.message != message else { return }
         if announce { Announce.say(message, from: hostWindow) }
         guard let doc = document as? TextDocument, doc.lastRecoveryError == nil, !recoveryStatusFailed else { return }
-        transientStatus = message
+        let id = UUID()
+        transientStatus = (message, id)
         applyStatusMessage(message, compactMessage: compactMessage)
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self, weak doc] in
-            guard let self, self.transientStatus == message else { return }
+            guard let self, self.transientStatus?.id == id else { return }
             self.transientStatus = nil
             if let doc, doc.lastRecoveryError == nil {
                 self.showRecoveryStatus(doc.currentSaveStateStatus, failed: false)
             }
         }
     }
-    func showRecoveryStatus(_ message: String, failed: Bool, failureSummary: String = "⚠︎ Recovery copy not written") {
+    func showRecoveryStatus(
+        _ message: String, failed: Bool, failureSummary: String = "⚠︎ Recovery copy not written",
+        preservingTransient: Bool = false
+    ) {
+        // The expiry handler reads the latest save state. A completed recovery copy
+        // need not cut short feedback from the command the person just performed.
+        if preservingTransient && !failed && transientStatus != nil { return }
         transientStatus = nil
         recoveryStatusFailed = failed
         if failed, fullStatusText != message { Announce.say(message, from: hostWindow) }
@@ -806,8 +813,21 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
         guard let command = EditorCommand(rawValue: id) else { throw EditorCommandFailure.unsupported }
         if TTEditor.commandModifiesText(command.nativeIdentifier) { try editor.requireWritable() }
-        EditorServices.current?.macros?.willExecuteCommand(id, on: editor)
-        guard editor.executeCommand(command.nativeIdentifier) else { throw EditorCommandFailure.unsupported }
+        let recorder = EditorServices.current?.macros
+        let finishing: ((Bool) -> Void)?
+        if command == .bookmarkCutLines || command == .bookmarkDeleteLines {
+            finishing = recorder?.prepareUnrecordedChange(
+                in: editor, reason: "The command ‘\(command.title)’ cannot be recorded. No partial macro will be saved.")
+        } else {
+            recorder?.willExecuteCommand(id, on: editor)
+            finishing = nil
+        }
+        let before = editor.revision
+        let usesClipboard = command == .bookmarkCutLines || command == .bookmarkCopyLines
+        let board = usesClipboard ? RuntimeEnvironment.current.generalPasteboard() : nil
+        let accepted = editor.executeCommand(command.nativeIdentifier, using: board)
+        finishing?(accepted && editor.revision != before)
+        guard accepted else { throw EditorCommandFailure.unsupported }
     }
     deinit {
         precondition(Thread.isMainThread)
@@ -1089,6 +1109,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 return !activeEditor.readOnly
             }
             guard let command = EditorCommand(rawValue: id) else { return false }
+            switch command {
+            case .bookmarkClearAll, .bookmarkCopyLines, .bookmarkCutLines, .bookmarkDeleteLines:
+                guard activeEditor.hasBookmarks else { return false }
+            default: break
+            }
             item.state = command.isToggle && activeEditor.commandIsChecked(command.nativeIdentifier) ? .on : .off
             return !TTEditor.commandModifiesText(command.nativeIdentifier) || !activeEditor.readOnly
         case #selector(toggleWrap(_:)):

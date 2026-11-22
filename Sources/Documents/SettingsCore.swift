@@ -30,6 +30,8 @@ package struct EditorSettings: Codable, Equatable {
     package var indentGuidesEnabled: Bool { indentGuides ?? true }
     package var braceHighlight: Bool?
     package var braceHighlightEnabled: Bool { braceHighlight ?? true }
+    package var autoPair: Bool?
+    package var autoPairEnabled: Bool { autoPair ?? false }
     package var autoIndent: Bool?
     package var autoIndentEnabled: Bool { autoIndent ?? true }
     package var wrap: Bool
@@ -247,10 +249,11 @@ package struct SettingsShortcutDraft {
     }
 }
 package enum EditorViewPreference: String {
-    case autoIndent, braceHighlight, currentLineHighlight, indentGuides
+    case autoIndent, autoPair, braceHighlight, currentLineHighlight, indentGuides
     fileprivate func enabled(in settings: EditorSettings) -> Bool {
         switch self {
         case .autoIndent: return settings.autoIndentEnabled
+        case .autoPair: return settings.autoPairEnabled
         case .braceHighlight: return settings.braceHighlightEnabled
         case .currentLineHighlight: return settings.currentLineHighlightEnabled
         case .indentGuides: return settings.indentGuidesEnabled

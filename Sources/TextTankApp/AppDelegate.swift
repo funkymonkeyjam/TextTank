@@ -559,6 +559,13 @@ import AppKit
         comparisons.submenu = compareMenu
         search.addItem(.separator())
         search.addItem(comparisons)
+        let marked = NSMenu(title: "Bookmarked Lines")
+        for value: EditorCommand in [.bookmarkCutLines, .bookmarkCopyLines, .bookmarkDeleteLines, .bookmarkInvert, .bookmarkClearAll] {
+            command(marked, value)
+        }
+        let markedItem = NSMenuItem(title: marked.title, action: nil, keyEquivalent: "")
+        markedItem.submenu = marked
+        search.addItem(markedItem)
 
         let runRoot = NSMenuItem()
         runRoot.title = "Run"
@@ -575,7 +582,15 @@ import AppKit
         command(view, .zoomIn)
         command(view, .zoomOut)
         view.addItem(title: "Actual Size", action: #selector(actualSize(_:)), fallback: .actualSize, target: self)
-        for value: EditorCommand in [.foldAll, .unfoldAll, .showWhitespace, .toggleEOL, .toggleLineNumbers] {
+        let folding = NSMenu(title: "Folding")
+        let foldingItem = NSMenuItem(title: folding.title, action: nil, keyEquivalent: "")
+        foldingItem.submenu = folding
+        view.addItem(foldingItem)
+        for value: EditorCommand in [
+            .foldCurrent, .foldAll, .unfoldAll, .foldLevel1, .foldLevel2, .foldLevel3, .foldLevel4,
+            .foldLevel5, .foldLevel6, .foldLevel7, .foldLevel8
+        ] { command(folding, value) }
+        for value: EditorCommand in [.showWhitespace, .toggleEOL, .toggleLineNumbers] {
             command(view, value)
         }
         view.addItem(.separator())
@@ -588,6 +603,9 @@ import AppKit
         view.addItem(
             title: "Auto-Indent on Return", action: #selector(SettingsController.toggleAutoIndent(_:)), target: settings
         )
+        view.addItem(
+            title: "Auto-Pair Brackets and Quotes", action: #selector(SettingsController.toggleAutoPair(_:)),
+            target: settings)
         view.addItem(
             title: "Highlight Matching Braces", action: #selector(SettingsController.toggleBraceHighlight(_:)),
             target: settings)

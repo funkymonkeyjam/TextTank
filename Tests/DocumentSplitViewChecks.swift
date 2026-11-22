@@ -318,6 +318,19 @@ extension DocumentChecks {
                     && clone.autoIndentEnabled
                     && delegate.settings.validateMenuItem(autoIndent) && autoIndent.state == .on,
                 "the View toggle persists and updates both open editors and its checkmark")
+            let autoPair = NSMenuItem(
+                title: "Auto-Pair Brackets and Quotes",
+                action: #selector(SettingsController.toggleAutoPair(_:)), keyEquivalent: "")
+            check(
+                !document.editor.autoPairEnabled && !clone.autoPairEnabled
+                    && delegate.settings.validateMenuItem(autoPair) && autoPair.state == .off,
+                "older settings default Auto-Pair off in the document and clone")
+            delegate.settings.toggleAutoPair(autoPair)
+            let paired = try JSONDecoder().decode(EditorSettings.self, from: Data(contentsOf: delegate.settings.url))
+            check(
+                paired.autoPair == true && document.editor.autoPairEnabled && clone.autoPairEnabled
+                    && delegate.settings.validateMenuItem(autoPair) && autoPair.state == .on,
+                "the guarded Auto-Pair toggle saves and applies to both open panes")
             let braces = NSMenuItem(
                 title: "Highlight Matching Braces", action: #selector(SettingsController.toggleBraceHighlight(_:)),
                 keyEquivalent: "")

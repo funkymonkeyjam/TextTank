@@ -22,10 +22,12 @@ package struct MenuShortcut: Equatable, Sendable {
 /// Stable editor identifiers are storage and bridge contracts. Menu placement remains literal;
 /// recording and shortcut assignment are explicit security/behavior subsets, never inferred from a title.
 package enum EditorCommand: String, CaseIterable {
-    case addNextOccurrence, backTab, bookmarkNext, bookmarkPrevious, bookmarkToggle, cancel, charLeft, charLeftExtend,
+    case addNextOccurrence, backTab, bookmarkClearAll, bookmarkCopyLines, bookmarkCutLines, bookmarkDeleteLines,
+        bookmarkInvert, bookmarkNext, bookmarkPrevious, bookmarkToggle, cancel, charLeft, charLeftExtend,
         charRight, charRightExtend, clearAdditionalSelections, copy, cut, deleteBack, deleteForward, deleteLine,
         deleteLineLeft, deleteLineRight, deleteWordLeft, deleteWordRight, documentEnd, documentEndExtend, documentStart,
-        documentStartExtend, duplicateLine, duplicateSelection, foldAll, gotoMatchingBrace, home, homeDisplay,
+        documentStartExtend, duplicateLine, duplicateSelection, foldAll, foldCurrent, foldLevel1, foldLevel2, foldLevel3,
+        foldLevel4, foldLevel5, foldLevel6, foldLevel7, foldLevel8, gotoMatchingBrace, home, homeDisplay,
         homeExtend, indent, joinLines, lineCopy, lineCut, lineDown, lineDownExtend, lineEnd, lineEndDisplay,
         lineEndExtend, lineUp, lineUpExtend, lower, moveLineDown, moveLineUp, newLine, pageDown, pageDownExtend, pageUp,
         pageUpExtend, paraDown, paraDownExtend, paraUp, paraUpExtend, paste, rectangularSelection, redo, selectAll,
@@ -50,7 +52,8 @@ package enum EditorCommand: String, CaseIterable {
     }
     package var isViewOnly: Bool {
         switch self {
-        case .foldAll, .showWhitespace, .toggleEOL, .toggleLineNumbers, .unfoldAll, .zoomIn, .zoomOut: return true
+        case .foldAll, .foldCurrent, .foldLevel1, .foldLevel2, .foldLevel3, .foldLevel4, .foldLevel5, .foldLevel6,
+            .foldLevel7, .foldLevel8, .showWhitespace, .toggleEOL, .toggleLineNumbers, .unfoldAll, .zoomIn, .zoomOut: return true
         default: return false
         }
     }
@@ -74,6 +77,11 @@ package enum EditorCommand: String, CaseIterable {
         switch self {
         case .addNextOccurrence: return "Add Next Occurrence"
         case .backTab: return "Back Tab"
+        case .bookmarkClearAll: return "Clear All Bookmarks"
+        case .bookmarkCopyLines: return "Copy Bookmarked Lines"
+        case .bookmarkCutLines: return "Cut Bookmarked Lines"
+        case .bookmarkDeleteLines: return "Delete Bookmarked Lines"
+        case .bookmarkInvert: return "Invert Bookmarks"
         case .bookmarkNext: return "Next Bookmark"
         case .bookmarkPrevious: return "Previous Bookmark"
         case .bookmarkToggle: return "Toggle Bookmark"
@@ -99,6 +107,15 @@ package enum EditorCommand: String, CaseIterable {
         case .duplicateLine: return "Duplicate Line"
         case .duplicateSelection: return "Duplicate Selection"
         case .foldAll: return "Fold All"
+        case .foldCurrent: return "Fold Current"
+        case .foldLevel1: return "Fold Level 1"
+        case .foldLevel2: return "Fold Level 2"
+        case .foldLevel3: return "Fold Level 3"
+        case .foldLevel4: return "Fold Level 4"
+        case .foldLevel5: return "Fold Level 5"
+        case .foldLevel6: return "Fold Level 6"
+        case .foldLevel7: return "Fold Level 7"
+        case .foldLevel8: return "Fold Level 8"
         case .gotoMatchingBrace: return "Matching Brace"
         case .home: return "Move to Line Start"
         case .homeDisplay: return "Home Display"

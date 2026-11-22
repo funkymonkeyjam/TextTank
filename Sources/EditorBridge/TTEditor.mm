@@ -131,6 +131,8 @@ static NSString *TTStringFromUTF8(const void *bytes, NSUInteger length) {
 struct TTInteractionState { NSUInteger revision; sptr_t selections, anchor, caret; };
 @interface TTEditor (MacroInteraction)
 - (void)performReturn:(void (NS_NOESCAPE ^)(void))nativeReturn;
+- (BOOL)canBeginPairing;
+- (void)performPair:(NSString *)input closer:(char)closer commit:(void (NS_NOESCAPE ^)(void))commit;
 - (TTInteractionState)interactionState;
 - (void)reportMacroStep:(TTMacroAction *)step;
 - (void)noteUnrecordedInteractionSince:(TTInteractionState)before;
@@ -153,8 +155,20 @@ static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
     NSUInteger index = 0;
     for (TTEditor *editor in recording) [editor noteUnrecordedInteractionSince:before[index++]];
 }
+static char TTPairCloser(NSString *text) {
+    if (text.length != 1) return 0;
+    switch ([text characterAtIndex:0]) {
+        case '(': return ')';
+        case '[': return ']';
+        case '{': return '}';
+        case '"': return '"';
+        case 0x27: return 0x27;
+        default: return 0;
+    }
+}
 @interface TTContentView : SCIContentView
 @property(nonatomic, weak) TTEditor *editor;
+@property(nonatomic, copy) NSString *directPairKey;
 @end
 @implementation TTContentView
 - (void)keyDown:(NSEvent *)event {
@@ -165,8 +179,23 @@ static void TTAroundUnrecordedInteraction(void (NS_NOESCAPE ^handle)(void)) {
     if (editor && (key == '\r' || key == '\n' || key == NSEnterCharacter) &&
         !(event.modifierFlags & shortcuts) && !self.hasMarkedText) {
         [editor performReturn:^{ [super keyDown:event]; }];
+    } else if (editor.autoPairEnabled && !self.hasMarkedText &&
+               !(event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagControl)) &&
+               TTPairCloser(event.characters) && [editor canBeginPairing]) {
+        NSString *outer = _directPairKey;
+        _directPairKey = event.characters;
+        @try { [super keyDown:event]; } @finally { _directPairKey = outer; }
     } else {
         [super keyDown:event];
+    }
+}
+- (void)insertText:(id)text replacementRange:(NSRange)replacement {
+    NSString *plain = [text isKindOfClass:NSAttributedString.class] ? [text string] : text;
+    if (_directPairKey && replacement.location == NSNotFound && !self.hasMarkedText &&
+        [_directPairKey isEqual:plain] && self.editor) {
+        [self.editor performPair:plain closer:TTPairCloser(plain) commit:^{ [super insertText:text replacementRange:replacement]; }];
+    } else {
+        [super insertText:text replacementRange:replacement];
     }
 }
 - (NSRect)accessibilityFrame {
@@ -330,6 +359,11 @@ struct TTCommandEntry { const char *identifier; unsigned int message; bool repla
 static const TTCommandEntry TTCommandEntries[] = {
     {"addNextOccurrence", 0, false, false, false},
     {"backTab", SCI_BACKTAB, true, true, true},
+    {"bookmarkClearAll", 0, false, false, false},
+    {"bookmarkCopyLines", 0, false, false, false},
+    {"bookmarkCutLines", 0, false, false, true},
+    {"bookmarkDeleteLines", 0, false, false, true},
+    {"bookmarkInvert", 0, false, false, false},
     {"bookmarkNext", 0, false, false, false},
     {"bookmarkPrevious", 0, false, false, false},
     {"bookmarkToggle", 0, false, false, false},
@@ -355,6 +389,15 @@ static const TTCommandEntry TTCommandEntries[] = {
     {"duplicateLine", SCI_LINEDUPLICATE, true, true, true},
     {"duplicateSelection", SCI_SELECTIONDUPLICATE, true, true, true},
     {"foldAll", 0, false, false, false},
+    {"foldCurrent", 0, false, false, false},
+    {"foldLevel1", 0, false, false, false},
+    {"foldLevel2", 0, false, false, false},
+    {"foldLevel3", 0, false, false, false},
+    {"foldLevel4", 0, false, false, false},
+    {"foldLevel5", 0, false, false, false},
+    {"foldLevel6", 0, false, false, false},
+    {"foldLevel7", 0, false, false, false},
+    {"foldLevel8", 0, false, false, false},
     {"gotoMatchingBrace", 0, false, false, false},
     {"home", SCI_HOME, true, true, false},
     {"homeDisplay", SCI_HOMEDISPLAY, true, true, false},
@@ -498,6 +541,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     NSInteger _defaultZoomLevel;
     BOOL _followsDefaultZoom;
     BOOL _indentingReturn;
+    NSIndexSet *_eligiblePairPositions;
+    NSMutableIndexSet *_insertedPairPositions;
+    char _pairBytes[2];
     id _accessibilityDisplayObserver;
     BOOL _braceCacheValid;
     sptr_t _braceCaret, _braceEndStyled;
@@ -1257,6 +1303,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     _basePointSize = other.basePointSize;
     [self adoptSyntaxStylesFrom:other];
     self.autoIndentEnabled = other.autoIndentEnabled;
+    self.autoPairEnabled = other.autoPairEnabled;
     self.braceHighlightEnabled = other.braceHighlightEnabled;
     self.currentLineHighlightEnabled = other.currentLineHighlightEnabled;
     self.indentGuidesEnabled = other.indentGuidesEnabled;
@@ -1315,7 +1362,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (BOOL)executeCommand:(TTEditorCommandIdentifier)identifier {
     [self assertThread];
-    if (![self runCommand:identifier]) return NO;
+    return [self executeCommand:identifier usingPasteboard:nil];
+}
+- (BOOL)executeCommand:(TTEditorCommandIdentifier)identifier usingPasteboard:(NSPasteboard *)pasteboard {
+    [self assertThread];
+    if (![self runCommand:identifier usingPasteboard:pasteboard]) return NO;
     // Folding, the margin toggle and selection commands raise no synchronous notification.
     [self invalidateLineNumbersIfChanged];
     [self noteStateChange];
@@ -1417,7 +1468,62 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     _indentGuidesEnabled = enabled;
     [self applyIndentGuides];
 }
-- (BOOL)runCommand:(NSString *)identifier {
+- (BOOL)hasBookmarks { [self assertThread]; return [_engine message:SCI_MARKERNEXT wParam:0 lParam:TTBookmarkMask] >= 0; }
+
+- (BOOL)processBookmarkedLines:(NSString *)identifier pasteboard:(NSPasteboard *)board {
+    const bool copies = ![identifier isEqualToString:@"bookmarkDeleteLines"];
+    const bool removes = ![identifier isEqualToString:@"bookmarkCopyLines"];
+    if ((removes && self.readOnly) || (copies && !board)) return NO;
+    // A physical line owns its own terminator. The final unterminated line owns only its bytes.
+    const sptr_t count = [_engine message:SCI_GETLINECOUNT], length = [_engine message:SCI_GETLENGTH];
+    std::vector<Sci_CharacterRangeFull> spans;
+    size_t total = 0;
+    for (sptr_t line = [_engine message:SCI_MARKERNEXT wParam:0 lParam:TTBookmarkMask]; line >= 0;
+         line = [_engine message:SCI_MARKERNEXT wParam:line + 1 lParam:TTBookmarkMask]) {
+        const sptr_t start = [_engine message:SCI_POSITIONFROMLINE wParam:line];
+        const sptr_t end = line + 1 < count ? [_engine message:SCI_POSITIONFROMLINE wParam:line + 1] : length;
+        if (start < 0 || end < start || end > length) return NO;
+        if (start == end) continue;
+        if (!spans.empty() && spans.back().cpMax == start) spans.back().cpMax = end;
+        else spans.push_back({start,end});
+        total += (size_t)(end - start);
+    }
+    if (spans.empty()) return YES;
+    const NSUInteger revision = self.revision;
+    NSArray<NSNumber *> *cutMarks = copies && removes ? self.bookmarkLines : nil;
+    if (copies) {
+        NSMutableData *data = [NSMutableData dataWithLength:total + 1];
+        char *write = (char *)data.mutableBytes;
+        for (const auto &span : spans) {
+            Sci_TextRangeFull part = {span,write};
+            const sptr_t n = span.cpMax - span.cpMin;
+            if ([_engine message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&part] != n) return NO;
+            write += n;
+        }
+        data.length = total;
+        // The .string pasteboard flavor is UTF-8. Validate without re-encoding: Foundation's
+        // external string decoder can consume a legitimate leading U+FEFF from document content.
+        if (![[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]) return NO;
+        [board clearContents];
+        if (![board setData:data forType:NSPasteboardTypeString]) return NO;
+    }
+    if (removes) {
+        if (self.readOnly || self.revision != revision || (cutMarks && ![cutMarks isEqual:self.bookmarkLines])) return NO;
+        [self openUndoGroup];
+        // Remove these marks first. Scintilla otherwise transfers a removed line's markers to a neighbor.
+        for (auto it = spans.rbegin(); it != spans.rend(); ++it) {
+            const sptr_t start = [_engine message:SCI_LINEFROMPOSITION wParam:it->cpMin];
+            const sptr_t last = [_engine message:SCI_LINEFROMPOSITION wParam:it->cpMax - 1];
+            for (sptr_t line = start; line <= last; ++line)
+                [_engine message:SCI_MARKERDELETE wParam:line lParam:TTBookmarkMarker];
+            [_engine message:SCI_DELETERANGE wParam:it->cpMin lParam:it->cpMax - it->cpMin];
+        }
+        [self closeUndoGroup];
+    }
+    return YES;
+}
+
+- (BOOL)runCommand:(NSString *)identifier usingPasteboard:(NSPasteboard *)pasteboard {
     if (![identifier isKindOfClass:NSString.class]) return NO;
     // Rectangular Selection is the keyboard column mode: its sticky extend mode lets plain arrow
     // keys grow the rectangle, and choosing it again switches that off.
@@ -1435,6 +1541,37 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     }
     if ([identifier isEqualToString:@"addNextOccurrence"] || [identifier isEqualToString:@"selectAllOccurrences"]) {
         [_engine message:[identifier isEqualToString:@"addNextOccurrence"] ? SCI_MULTIPLESELECTADDNEXT : SCI_MULTIPLESELECTADDEACH]; return YES;
+    }
+    if ([identifier isEqualToString:@"foldCurrent"]) {
+        const sptr_t caret = [_engine message:SCI_GETCURRENTPOS];
+        sptr_t line = [_engine message:SCI_LINEFROMPOSITION wParam:caret];
+        [_engine message:SCI_COLOURISE wParam:0 lParam:[_engine message:SCI_POSITIONFROMLINE wParam:line + 1]];
+        if (!([_engine message:SCI_GETFOLDLEVEL wParam:line] & SC_FOLDLEVELHEADERFLAG)) {
+            line = [_engine message:SCI_GETFOLDPARENT wParam:line];
+        }
+        if (line >= 0) [_engine message:SCI_FOLDLINE wParam:line lParam:SC_FOLDACTION_CONTRACT];
+        return YES;
+    }
+    if ([identifier hasPrefix:@"foldLevel"] && identifier.length == 10) {
+        const NSInteger depth = [identifier characterAtIndex:9] - '0';
+        if (depth < 1 || depth > 8) return NO;
+        // Nesting is the parent chain. Indentation lexers can advance several numeric levels per header.
+        [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
+        const sptr_t count = [_engine message:SCI_GETLINECOUNT];
+        sptr_t lastChild[8];
+        NSInteger parents = 0;
+        for (sptr_t line = 0; line < count; ++line) {
+            while (parents > 0 && line > lastChild[parents - 1]) --parents;
+            if (!([_engine message:SCI_GETFOLDLEVEL wParam:line] & SC_FOLDLEVELHEADERFLAG)) continue;
+            const sptr_t end = [_engine message:SCI_GETLASTCHILD wParam:line lParam:-1];
+            if (parents + 1 == depth) {
+                [_engine message:SCI_FOLDLINE wParam:line lParam:SC_FOLDACTION_CONTRACT];
+                line = end;
+            } else {
+                lastChild[parents++] = end;
+            }
+        }
+        return YES;
     }
     if ([identifier isEqualToString:@"foldAll"] || [identifier isEqualToString:@"unfoldAll"]) {
         [_engine message:SCI_COLOURISE wParam:0 lParam:-1];
@@ -1487,6 +1624,22 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         return YES;
     }
     if ([identifier hasPrefix:@"bookmark"]) {
+        if ([identifier isEqualToString:@"bookmarkClearAll"]) {
+            [_engine message:SCI_MARKERDELETEALL wParam:TTBookmarkMarker];
+            return YES;
+        }
+        if ([identifier isEqualToString:@"bookmarkInvert"]) {
+            const sptr_t count = [_engine message:SCI_GETLINECOUNT];
+            for (sptr_t line = 0; line < count; ++line) {
+                const bool marked = [_engine message:SCI_MARKERGET wParam:line] & TTBookmarkMask;
+                [_engine message:marked ? SCI_MARKERDELETE : SCI_MARKERADD wParam:line lParam:TTBookmarkMarker];
+            }
+            return YES;
+        }
+        if ([identifier isEqualToString:@"bookmarkCutLines"] || [identifier isEqualToString:@"bookmarkCopyLines"] ||
+            [identifier isEqualToString:@"bookmarkDeleteLines"]) {
+            return [self processBookmarkedLines:identifier pasteboard:pasteboard];
+        }
         if (![@[@"bookmarkToggle", @"bookmarkNext", @"bookmarkPrevious"] containsObject:identifier]) return NO;
         sptr_t line = [_engine message:SCI_LINEFROMPOSITION wParam:[_engine message:SCI_GETCURRENTPOS]];
         if ([identifier isEqualToString:@"bookmarkToggle"]) {
@@ -1968,6 +2121,71 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [self noteStateChange];
     return YES;
 }
+- (BOOL)canBeginPairing { return _autoPairEnabled && ![_engine message:SCI_AUTOCACTIVE]; }
+// Scintilla inserts at each caret from right to left. Its insert-check and actual insertion
+// notifications use the original positions; the engine tracks all final selections.
+- (BOOL)canPairAt:(sptr_t)position length:(sptr_t)length quote:(BOOL)quote {
+    if (position < length) {
+        const unsigned char next = (unsigned char)[_engine message:SCI_GETCHARAT wParam:position];
+        if (next < 0x80) {
+            if (next != ' ' && !(next >= 9 && next <= 13)) return NO;
+        } else {
+            const sptr_t end = [_engine message:SCI_POSITIONAFTER wParam:position];
+            if (end <= position || end-position > 4) return NO;
+            char bytes[4];
+            for (sptr_t i = position; i < end; ++i) bytes[i-position] = [_engine message:SCI_GETCHARAT wParam:i];
+            NSString *character = [[NSString alloc] initWithBytes:bytes length:end-position encoding:NSUTF8StringEncoding];
+            if (!character || [character rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].location == NSNotFound) return NO;
+        }
+    }
+    if (quote) {
+        sptr_t count = 0;
+        while (count < position && count < 128 && [_engine message:SCI_GETCHARAT wParam:position-count-1] == '\\') ++count;
+        if (count == 128 && count < position && [_engine message:SCI_GETCHARAT wParam:position-count-1] == '\\') return NO;
+        if (count & 1) return NO;
+    }
+    return YES;
+}
+- (void)performPair:(NSString *)input closer:(char)closer commit:(void (NS_NOESCAPE ^)(void))commit {
+    if (!closer || !_autoPairEnabled || _eligiblePairPositions || self.readOnly || [_engine message:SCI_AUTOCACTIVE] ||
+        [_engine message:SCI_GETOVERTYPE] || [_engine message:SCI_GETSELECTIONMODE] != SC_SEL_STREAM ||
+        ![_engine message:SCI_GETSELECTIONEMPTY]) { commit(); return; }
+    const sptr_t count = [_engine message:SCI_GETSELECTIONS], length = [_engine message:SCI_GETLENGTH];
+    if (count > 1 && ![_engine message:SCI_GETADDITIONALSELECTIONTYPING]) { commit(); return; }
+    NSMutableIndexSet *eligible = [NSMutableIndexSet indexSet];
+    std::vector<sptr_t> original;
+    for (sptr_t i = 0; i < count; ++i) {
+        const sptr_t position = [_engine message:SCI_GETSELECTIONNCARET wParam:i];
+        original.push_back(position);
+        if ([_engine message:SCI_GETSELECTIONNCARETVIRTUALSPACE wParam:i] ||
+            [_engine message:SCI_GETSELECTIONNANCHORVIRTUALSPACE wParam:i]) { commit(); return; }
+        if ([self canPairAt:position length:length quote:closer == '"' || closer == 0x27]) [eligible addIndex:position];
+    }
+    if (!eligible.count) { commit(); return; }
+    _eligiblePairPositions = eligible;
+    _insertedPairPositions = [NSMutableIndexSet indexSet];
+    _pairBytes[0] = (char)[input characterAtIndex:0];
+    _pairBytes[1] = closer;
+    [self openUndoGroup];
+    @try {
+        commit();
+        if (count != [_engine message:SCI_GETSELECTIONS]) return;
+        for (sptr_t i = 0; i < count; ++i) {
+            if (![_insertedPairPositions containsIndex:original[i]]) continue;
+            const sptr_t between = [_engine message:SCI_GETSELECTIONNCARET wParam:i]-1;
+            [_engine message:SCI_SETSELECTIONNCARET wParam:i lParam:between];
+            [_engine message:SCI_SETSELECTIONNANCHOR wParam:i lParam:between];
+        }
+        if (_macroRecording && count == 1 && _insertedPairPositions.count) {
+            [self reportMacroStep:[TTMacroAction insertText:[[NSString alloc] initWithBytes:&closer length:1 encoding:NSASCIIStringEncoding]]];
+            [self reportMacroStep:[TTMacroAction command:@"charLeft"]];
+        }
+    } @finally {
+        _eligiblePairPositions = nil;
+        _insertedPairPositions = nil;
+        [self closeUndoGroup];
+    }
+}
 // NewLine inserts once per caret. Changing that insertion keeps the engine in charge of selection
 // replacement, EOL mode, caret movement and Undo. Paste and macro playback never enter this scope.
 - (void)performReturn:(void (NS_NOESCAPE ^)(void))nativeReturn {
@@ -2027,6 +2245,14 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         code == SCN_MODIFIED && (type & (SC_MOD_CHANGESTYLE | SC_MOD_LEXERSTATE))) {
         _braceCacheValid = NO;
         [self scheduleStateNotification];
+    }
+    if (_eligiblePairPositions && code == SCN_MODIFIED &&
+        [_eligiblePairPositions containsIndex:notification->position] && notification->text) {
+        if ((type & SC_MOD_INSERTCHECK) && notification->length == 1 && notification->text[0] == _pairBytes[0]) {
+            [_engine message:SCI_CHANGEINSERTION wParam:2 lParam:(sptr_t)_pairBytes];
+        } else if ((type & SC_MOD_INSERTTEXT) && notification->length == 2 && !memcmp(notification->text, _pairBytes, 2)) {
+            [_insertedPairPositions addIndex:notification->position];
+        }
     }
     if (_indentingReturn && code == SCN_MODIFIED && (type & SC_MOD_INSERTCHECK)) {
         [self inheritIndentAtInsertion:notification];
