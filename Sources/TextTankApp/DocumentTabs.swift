@@ -76,6 +76,11 @@ final class DocumentTabWindow: NSWindow {
             RunLoop.main.add(timer, forMode: .common)
         }
     }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Main-menu shortcuts can run before the keyDown reaches sendEvent.
+        if event.type == .keyDown { frameClickTimer?.fire() }
+        return super.performKeyEquivalent(with: event)
+    }
     @objc private func commitFrameClick(_ timer: Timer) {
         guard timer === frameClickTimer, let press = framePress, let up = timer.userInfo as? NSEvent else { return }
         cancelFrameClick()

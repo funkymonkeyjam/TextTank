@@ -73,6 +73,13 @@ import NativeSearch
 @MainActor enum TabWorkspaceNativeChecks {
     @MainActor private final class Observation { var switched = false }
     private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    @MainActor private final class EdgeCommandTarget: NSObject {
+        let editor: TTEditor
+        init(_ editor: TTEditor) { self.editor = editor }
+        @objc func duplicateLine(_ sender: Any?) {
+            _ = editor.executeCommand(TTEditorCommandIdentifier(rawValue: "duplicateLine"))
+        }
+    }
     /// Use an actual resizable AppKit frame. Dispatching directly to the text view would bypass the defect.
     private static func checkFrameTextClicks(returningTo host: NSWindow) throws {
         let window = DocumentTabWindow(
@@ -100,8 +107,8 @@ import NativeSearch
             let rect = window.convertFromScreen(view.accessibilityFrame(for: glyph))
             return NSPoint(x: rect.minX + rect.width * fraction, y: rect.midY)
         }
-        func prepare() {
-            _ = editor.setSelectionAnchor(1, caret: 1)
+        func prepare(caret: Int = 1) {
+            _ = editor.setSelectionAnchor(caret, caret: caret)
             editor.horizontalScrollOffset = 0
             editor.displayIfNeeded()
             editor.horizontalScrollOffset = Int((point(0.78).x - window.frame.width + 2).rounded())
@@ -142,6 +149,35 @@ import NativeSearch
         _ = editor.setSelectionAnchor(2, caret: 2)
         settle()
         check(editor.selectionRanges.first?.caret == 2, "stale frame click preserves a newer selection")
+
+        // NSApp can dispatch a command equivalent through its menus before a window receives keyDown.
+        let previousMenu = NSApp.mainMenu
+        defer { NSApp.mainMenu = previousMenu }
+        let menu = NSMenu(), edit = NSMenu(title: "Edit")
+        let appMenu = NSMenuItem()
+        menu.addItem(appMenu)
+        appMenu.submenu = NSMenu(title: "Application")
+        let editItem = NSMenuItem()
+        menu.addItem(editItem)
+        editItem.submenu = edit
+        let target = EdgeCommandTarget(editor)
+        let duplicate = edit.addItem(
+            withTitle: "Duplicate Line", action: #selector(EdgeCommandTarget.duplicateLine(_:)),
+            keyEquivalent: "d")
+        duplicate.target = target
+        NSApp.mainMenu = menu
+        prepare(caret: byteAfter + 2)
+        let trailing = point(0.78)
+        try send(.leftMouseDown, trailing)
+        try send(.leftMouseUp, trailing)
+        let commandD = try requireValue(
+            NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: .command,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                characters: "d", charactersIgnoringModifiers: "d", isARepeat: false, keyCode: 2),
+            "duplicate-line shortcut")
+        withExtendedLifetime(target) { NSApp.sendEvent(commandD) }
+        check(editor.text == line + "\n" + line + "\nshort", "immediate Command-D duplicates the clicked line")
     }
     static func runApplicationProcess() -> Never {
         do { try WorkspaceCheckApplicationProcess().run() } catch {
@@ -217,7 +253,6 @@ import NativeSearch
         check(
             window.validateMenuItem(closeMenuItem) && window.validateUserInterfaceItem(closeMenuItem),
             "T0-R18 active window Close validation retains its single-tab route")
-        try checkFrameTextClicks(returningTo: window)
         let frame = window.frame, editor = a.editor
         a.showWindows()
         pa.clone(nil)
@@ -654,6 +689,7 @@ import NativeSearch
                 exited && !fullWindow.styleMask.contains(.fullScreen),
                 "T0-R16 actual native full-screen exit notification and state")
         }
+        try checkFrameTextClicks(returningTo: fullWindow)
         print(
             "T0 physical keyboard/VoiceOver/full-screen interaction: unverified; native API transitions recorded above")
     }
