@@ -223,7 +223,8 @@ VENDOR_BUILD="$PWD/build/vendor/Debug"
 APP_PATH="$PWD/build/Fixture App.app"
 export APP_PATH
 ''')
-            for name in ['bootstrap.py', 'build-lexilla.py', 'check-runtime-linkage.py', 'runtime_artifacts.py']:
+            (scripts / 'bootstrap.py').write_text('from pathlib import Path\nprint(Path.cwd() / "Vendor/scintilla")\n')
+            for name in ['build-lexilla.py', 'check-runtime-linkage.py', 'runtime_artifacts.py']:
                 (scripts / name).write_text('# isolated build fixture; no acquisition\n')
             app = fixture / 'build/Fixture App.app'
             framework = app / 'Contents/Frameworks/Scintilla.framework'
@@ -618,6 +619,52 @@ sys.exit(93)
             (folder / 'src/main.cxx').write_bytes(b'modified')
             with self.assertRaisesRegex(ValueError, 'mismatch'):
                 bootstrap.verify_tree(folder, manifest)
+
+    def test_patched_scintilla_is_verified_before_publication_and_reuse(self):
+        bootstrap = module('bootstrap', 'bootstrap.py')
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work).resolve()
+            source = root / 'Vendor/scintilla/src/CellBuffer.cxx'
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b'original\n')
+            patches = root / 'scripts/dependency-patches'
+            patches.mkdir(parents=True)
+            original = {'src/CellBuffer.cxx': bootstrap.digest(source)}
+            (root / 'scripts/scintilla-source-hashes.json').write_text(json.dumps(original))
+            patch_file = patches / 'scintilla-loader-styles.patch'
+            patch_file.write_text('--- a/src/CellBuffer.cxx\n+++ b/src/CellBuffer.cxx\n@@ -1 +1 @@\n-original\n+changed\n')
+            result_hash = hashlib.sha256(b'changed\n').hexdigest()
+            item = dict(dependency='scintilla', path=str(patch_file.relative_to(root)),
+                        sha256=bootstrap.digest(patch_file), files={'src/CellBuffer.cxx': result_hash})
+            lock = dict(dependencies=[dict(folder='scintilla', sha256='1' * 64)], patches=[item])
+            lock_file = root / 'Dependencies.lock.json'
+            lock_file.write_text(json.dumps(lock))
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            target = bootstrap.prepare_scintilla(root)
+            self.assertEqual((target / 'src/CellBuffer.cxx').read_bytes(), b'changed\n')
+            self.assertEqual(bootstrap.prepare_scintilla(root), target)
+            self.assertEqual(source.read_bytes(), b'original\n')
+            (target / 'src/extra.cxx').touch()
+            with self.assertRaisesRegex(ValueError, 'Unexpected vendor file'):
+                bootstrap.prepare_scintilla(root)
+            (target / 'src/extra.cxx').unlink()
+            patch_file.write_text(patch_file.read_text().replace('-original', '-incorrect'))
+            with self.assertRaisesRegex(ValueError, 'patch checksum'):
+                bootstrap.prepare_scintilla(root)
+            item['sha256'] = bootstrap.digest(patch_file)
+            lock_file.write_text(json.dumps(lock))
+            rejected, _, _ = bootstrap.scintilla_plan(root)
+            self.assertNotEqual(rejected, target)
+            with self.assertRaisesRegex(ValueError, 'Could not apply'):
+                bootstrap.prepare_scintilla(root)
+            self.assertEqual(list(rejected.parent.iterdir()), [])
+            patch_file.write_text(patch_file.read_text().replace('-incorrect', '-original'))
+            item.update(sha256=bootstrap.digest(patch_file), files={'src/CellBuffer.cxx': '0' * 64})
+            lock_file.write_text(json.dumps(lock))
+            with self.assertRaisesRegex(ValueError, 'Pinned source mismatch'):
+                bootstrap.prepare_scintilla(root)
+            self.assertEqual(list(bootstrap.scintilla_plan(root)[0].parent.iterdir()), [])
+            self.assertEqual((target / 'src/CellBuffer.cxx').read_bytes(), b'changed\n')
 
     def test_download_never_publishes_partial_or_wrong_bytes(self):
         bootstrap = module('bootstrap', 'bootstrap.py')

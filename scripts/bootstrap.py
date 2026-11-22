@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Verify pinned sources; publish verified downloads and extracted trees atomically."""
+import argparse
+import errno
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
+import subprocess
 import tarfile
 import tempfile
 import urllib.request
@@ -21,6 +25,8 @@ def digest(path):
 
 
 def verify_tree(folder, manifest):
+    if folder.is_symlink() or not folder.is_dir():
+        raise ValueError(f'Missing or linked dependency tree: {folder}')
     for relative, expected in manifest.items():
         path = folder / relative
         if path.is_symlink() or not path.is_file() or digest(path) != expected:
@@ -106,10 +112,65 @@ def extract_archive(archive, vendor, folder, manifest):
         os.replace(stage / folder, target)
 
 
+def scintilla_plan(root):
+    """Identify the exact compiler input without acquiring or changing any files."""
+    lock = json.loads((root / 'Dependencies.lock.json').read_text())
+    upstream = json.loads((root / 'scripts/scintilla-source-hashes.json').read_text())
+    patches = lock.get('patches', [])
+    if not patches:
+        return root / 'Vendor/scintilla', upstream, None
+    if len(patches) != 1 or patches[0].get('dependency') != 'scintilla':
+        raise ValueError('Unsupported dependency patch set')
+    item = patches[0]
+    if item.get('path') != 'scripts/dependency-patches/scintilla-loader-styles.patch':
+        raise ValueError('Unsupported Scintilla patch path')
+    patch = root / item['path']
+    if patch.is_symlink() or not patch.is_file() or digest(patch) != item.get('sha256'):
+        raise ValueError('Scintilla patch checksum mismatch')
+    changes = item.get('files')
+    if not isinstance(changes, dict) or not changes:
+        raise ValueError('Missing pinned Scintilla patch results')
+    for path, result in changes.items():
+        if (path not in upstream or not re.fullmatch(r'src/[A-Za-z0-9_]+[.](h|cxx)', path)
+                or not isinstance(result, str) or not re.fullmatch(r'[0-9a-f]{64}', result)
+                or upstream[path] == result):
+            raise ValueError(f'Invalid pinned Scintilla patch result: {path}')
+    dependency = next(entry for entry in lock['dependencies'] if entry['folder'] == 'scintilla')
+    key = hashlib.sha256(json.dumps([dependency['sha256'], item], sort_keys=True).encode()).hexdigest()
+    return root / 'build/scintilla-source' / key / 'scintilla', {**upstream, **changes}, patch
+
+
+def prepare_scintilla(root):
+    target, expected, patch = scintilla_plan(root)
+    if not patch or target.exists() or target.is_symlink():
+        verify_tree(target, expected)
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.prepare-', dir=target.parent) as work:
+        stage = Path(work) / 'scintilla'
+        shutil.copytree(root / 'Vendor/scintilla', stage, symlinks=True)
+        # Run outside any enclosing checkout so Git applies vendor-relative paths.
+        environment = {k: v for k, v in os.environ.items() if k not in ('GIT_DIR', 'GIT_WORK_TREE')}
+        environment['GIT_CEILING_DIRECTORIES'] = str(stage.parent.resolve())
+        applied = subprocess.run(['git', 'apply', '--whitespace=nowarn', str(patch)],
+                                 cwd=stage, env=environment, capture_output=True, text=True)
+        if applied.returncode:
+            raise ValueError('Could not apply pinned Scintilla patch: ' + applied.stderr.strip())
+        verify_tree(stage, expected)
+        try:
+            stage.rename(target)
+        except OSError as error:
+            if error.errno not in (errno.EEXIST, errno.ENOTEMPTY):
+                raise
+            verify_tree(target, expected)
+    return target
+
+
 def main():
     lock = json.loads((ROOT / 'Dependencies.lock.json').read_text())
-    if lock.get('patches'):
-        raise ValueError('Dependency patches require an explicit verification workflow.')
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--print-scintilla-source', action='store_true')
+    arguments = parser.parse_args()
     for dependency in lock['dependencies']:
         folder = dependency['folder']
         if folder not in ('scintilla', 'lexilla') or PurePosixPath(dependency['file']).name != dependency['file']:
@@ -121,6 +182,9 @@ def main():
             continue
         archive = obtain_archive(dependency, ROOT / 'build/downloads' / dependency['file'])
         extract_archive(archive, ROOT / 'Vendor', folder, manifest)
+    source = prepare_scintilla(ROOT)
+    if arguments.print_scintilla_source:
+        print(source)
 
 
 if __name__ == '__main__':

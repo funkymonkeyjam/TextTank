@@ -18,7 +18,20 @@
       "version": "5.5.5"
     }
   ],
-  "patches": [],
+  "patches": [
+    {
+      "dependency": "scintilla",
+      "path": "scripts/dependency-patches/scintilla-loader-styles.patch",
+      "sha256": "6e9b3faf970c07821df56d892ab3b0794a9582cb1e5859c7839aa49ef2df6cbe",
+      "files": {
+        "src/CellBuffer.cxx": "e60ee6b921e516f29cfad4f06c08f0e645656345452df00501c6ad336ab6af41",
+        "src/CellBuffer.h": "75a535d0bc53e6bad0d6cb0bcfebfbc318cc45a53403980fb17a0a96bb996147",
+        "src/Document.cxx": "c521f35e8b236f77ef33ccd6c7bb8d94cbf55abf070eac3edf87a5a5f263f783",
+        "src/Document.h": "b86942174e46b32fcd823d9d944c0854c1a2cf97ca0e2db9bb38e7a40d7d98ee",
+        "src/Editor.cxx": "dac78a7654c5f85e5bffac73947d9ef17b514d47283700d02b71e3f7aaf79a50"
+      }
+    }
+  ],
   "architecture": "arm64",
   "vendoredInTree": [
     {
