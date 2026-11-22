@@ -62,8 +62,8 @@ final class DocumentTabWindow: NSWindow {
             break
         }
         super.sendEvent(event)
-        if event.type == .leftMouseUp, let press = framePress {
-            guard event.locationInWindow == press.down.locationInWindow else {
+        if let press = framePress, frameClickTimer == nil, let up = frameMouseUp(after: event) {
+            guard up.locationInWindow == press.down.locationInWindow else {
                 cancelFrameClick()
                 return
             }
@@ -71,10 +71,19 @@ final class DocumentTabWindow: NSWindow {
             // second down priority; a single followed by typing is committed above.
             let timer = Timer(
                 fireAt: Date(timeIntervalSinceNow: NSEvent.doubleClickInterval), interval: 0,
-                target: self, selector: #selector(commitFrameClick(_:)), userInfo: event, repeats: false)
+                target: self, selector: #selector(commitFrameClick(_:)), userInfo: up, repeats: false)
             frameClickTimer = timer
             RunLoop.main.add(timer, forMode: .common)
         }
+    }
+    private func frameMouseUp(after event: NSEvent) -> NSEvent? {
+        if event.type == .leftMouseUp { return event }
+        // Some AppKit versions consume the release inside the frame's native resize
+        // tracking loop. Use that actual event only if it belongs to this press.
+        guard event.type == .leftMouseDown, let up = currentEvent, up.type == .leftMouseUp,
+            up.window === self, up.timestamp >= event.timestamp, up.eventNumber == event.eventNumber
+        else { return nil }
+        return up
     }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // Main-menu shortcuts can run before the keyDown reaches sendEvent.

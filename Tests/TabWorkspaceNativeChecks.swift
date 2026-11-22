@@ -117,34 +117,31 @@ import NativeSearch
             editor.displayIfNeeded()
         }
         var eventNumber = 0
-        func click(_ location: NSPoint) throws {
+        func click(_ location: NSPoint, draggingTo end: NSPoint? = nil) throws {
             eventNumber += 1
-            func mouse(_ type: NSEvent.EventType) throws -> NSEvent {
+            func mouse(_ type: NSEvent.EventType, _ point: NSPoint) throws -> NSEvent {
                 try requireValue(
                     NSEvent.mouseEvent(
-                        with: type, location: location, modifierFlags: [],
+                        with: type, location: point, modifierFlags: [],
                         timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                         context: nil, eventNumber: eventNumber, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1),
                     "frame mouse event")
             }
-            let down = try mouse(.leftMouseDown), up = try mouse(.leftMouseUp)
-            // A system frame may track synchronously inside its mouseDown. Supply its
-            // matching release before dispatch, as the actual input stream does.
+            let down = try mouse(.leftMouseDown, location)
+            let drag = try end.map { try mouse(.leftMouseDragged, $0) }
+            let up = try mouse(.leftMouseUp, end ?? location)
+            // A system frame may track synchronously inside its mouseDown. Supply
+            // the whole gesture first, then dispatch only events AppKit left queued.
             NSApp.postEvent(up, atStart: true)
+            if let drag { NSApp.postEvent(drag, atStart: true) }
             NSApp.sendEvent(down)
-            if let next = NSApp.nextEvent(
-                matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: false),
-                next.window === window, next.eventNumber == up.eventNumber
+            let remaining: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
+            while let next = NSApp.nextEvent(
+                matching: remaining, until: .distantPast, inMode: .default, dequeue: false),
+                next.window === window, next.eventNumber == eventNumber,
+                let owned = NSApp.nextEvent(matching: remaining, until: .distantPast, inMode: .default, dequeue: true)
             {
-                if let release = NSApp.nextEvent(
-                    matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: true)
-                {
-                    NSApp.sendEvent(release)
-                }
-            } else {
-                print(
-                    "Window frame consumed mouseUp during native tracking", eventNumber,
-                    "current event", NSApp.currentEvent?.type.rawValue as Any)
+                NSApp.sendEvent(owned)
             }
         }
         func settle() { RunLoop.main.run(until: Date(timeIntervalSinceNow: NSEvent.doubleClickInterval + 0.08)) }
@@ -164,6 +161,14 @@ import NativeSearch
         try click(left)
         settle()
         check(editor.selectionRanges.first?.caret == byteAfter - 1, "left half places caret before final period")
+        prepare()
+        let dragOrigin = point(0.78), originalFrame = window.frame
+        try click(dragOrigin, draggingTo: NSPoint(x: dragOrigin.x - 32, y: dragOrigin.y))
+        settle()
+        check(
+            editor.selectionCaret == 1 && editor.selectionAnchor == 1,
+            "moving the native resize edge leaves the original caret unchanged")
+        window.setFrame(originalFrame, display: true)
         prepare()
         let p = point(0.78)
         try click(p)
