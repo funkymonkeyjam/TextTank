@@ -50,6 +50,19 @@
         "src/PositionCache.cxx": "3beef061fb424f7acc66e7787e390c50955359b6fa904dea4d81d45843951910",
         "src/PositionCache.h": "4938bce73aaa7cb30d6eed5010b8c671be0b70ed663d6cea05385e160c4eff85"
       }
+    },
+    {
+      "dependency": "scintilla",
+      "path": "scripts/dependency-patches/scintilla-long-bidi-runs.patch",
+      "sha256": "b05f5b395bd064967935a1fc3cc3d4eade8957267c88c1e3d6dcb7cab359f16f",
+      "files": {
+        "cocoa/PlatCocoa.h": "4e47e2e773b9d8b3952577ea90293a7a5be7815020834b8d5669c86c86abc9a0",
+        "cocoa/PlatCocoa.mm": "afeb72ca362c5906d93436762b142071aef9a1c769fcbcea43f78d087edcb1e9",
+        "src/EditView.cxx": "c73209b9b50effd1ad40cad02b5d4af213655771a662f759b39d86c535f8e285",
+        "src/Platform.h": "6bf9f9632052767e9fdcd8df187274b0adc3f344721864aa24cd41c1c204ed94",
+        "src/PositionCache.cxx": "9501f076f0146f42840d124d7b26453bf3c4d2d0302b792898c1ac59a2066916",
+        "src/PositionCache.h": "5714997b6edfb830bfc4fac8836efda76d66bcf722f65f550383d964a4d90f90"
+      }
     }
   ],
   "architecture": "arm64",

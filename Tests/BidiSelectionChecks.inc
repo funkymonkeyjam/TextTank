@@ -7,7 +7,11 @@
 
 static NSRect TTReferenceRange(NSString *line, NSRange characters, NSFont *font) {
     NSAttributedString *string = [[NSAttributedString alloc] initWithString:line attributes:@{NSFontAttributeName:font}];
-    CTLineRef layout = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)string);
+    // Tell the independent oracle to retain full paragraph bidi ordering even for giant rows.
+    CTTypesetterRef typesetter = CTTypesetterCreateWithAttributedStringAndOptions((__bridge CFAttributedStringRef)string,
+        (__bridge CFDictionaryRef)@{(__bridge NSString *)kCTTypesetterOptionAllowUnboundedLayout: @YES});
+    CTLineRef layout = CTTypesetterCreateLine(typesetter, CFRangeMake(0,line.length));
+    CFRelease(typesetter);
     NSRect result = NSZeroRect;
     for (id item in (__bridge NSArray *)CTLineGetGlyphRuns(layout)) {
         CTRunRef run = (__bridge CTRunRef)item;
@@ -239,4 +243,51 @@ static void TTCheckScrolledBidi(void) {
         }
     }
     check(seam,"a styled four-letter Hebrew word with a combining mark and its Latin suffix preserve reference ordering across bounded layout seams");
+}
+
+static void TTCheckLongHebrewParagraph(void) {
+    TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0,0,620,100)];
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:editor.bounds styleMask:NSWindowStyleMaskTitled
+                                                    backing:NSBackingStoreBuffered defer:NO];
+    window.releasedWhenClosed = NO;
+    window.contentView = editor;
+    ScintillaView *native = (id)editor.subviews.firstObject;
+    NSFont *font = [NSFont fontWithName:@"Menlo" size:16];
+    [native message:SCI_STYLESETFONT wParam:0 lParam:(sptr_t)"Menlo"];
+    [native message:SCI_STYLESETSIZE wParam:0 lParam:16];
+    [native message:SCI_SETSCROLLWIDTH wParam:1000000];
+    BOOL geometry = YES, hits = YES, selection = YES;
+    for (NSNumber *count in @[@8183,@8184,@8191,@8192,@8193,@20480,@20001]) {
+        NSString *word = [@"" stringByPaddingToLength:count.unsignedIntegerValue withString:@"אשמהת" startingAtIndex:0];
+        NSString *prefix = count.unsignedIntegerValue == 20001 ? @"\uFEFF\uFEFFABC " : @"ABC ";
+        NSString *line = [NSString stringWithFormat:@"%@%@ 23 גד XYZ.",prefix,word];
+        [editor loadDocumentText:[line stringByAppendingString:@"\nQ"]];
+        [native message:SCI_SETXOFFSET wParam:0];
+        const NSUInteger bytes = [line lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+        const CGFloat origin = [native message:SCI_POINTXFROMPOSITION wParam:0 lParam:bytes+1];
+        for (NSNumber *index in @[@(prefix.length), @(prefix.length+word.length/2), @(prefix.length+word.length-1), @([line rangeOfString:@"2"].location),
+                                   @([line rangeOfString:@"ג"].location), @([line rangeOfString:@"X"].location)]) {
+            const NSRange range = NSMakeRange(index.unsignedIntegerValue,1);
+            const NSRect ref = TTReferenceRange(line,range,font);
+            const NSPoint middle = NSMakePoint(origin + NSMidX(ref), 5);
+            [native message:SCI_SETXOFFSET wParam:static_cast<uptr_t>(std::max<CGFloat>(0,middle.x-300))];
+            const auto scroll = [native message:SCI_GETXOFFSET];
+            NSRect screen = [(id)native.content accessibilityFrameForRange:range];
+            NSRect local = [editor convertRect:[window convertRectFromScreen:screen] fromView:nil];
+            geometry &= fabs(NSMinX(local)-(origin+NSMinX(ref)-scroll)) < 1.5 && fabs(NSWidth(local)-NSWidth(ref)) < 1.5;
+            const auto byte = [[line substringToIndex:range.location] lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+            const auto click = [native message:SCI_CHARPOSITIONFROMPOINTCLOSE wParam:static_cast<uptr_t>(middle.x-scroll) lParam:5];
+            if (click != static_cast<sptr_t>(byte) || fabs(NSMinX(local)-(origin+NSMinX(ref)-scroll)) >= 1.5) {
+                printf("length=%lu index=%lu screen x=%.2f vs %.2f, hit=%ld vs %lu, origin=%.1f scroll=%ld\n",
+                    (unsigned long)word.length,(unsigned long)range.location,NSMinX(local),origin+NSMinX(ref)-scroll,
+                    (long)click,(unsigned long)byte,origin,(long)scroll);
+            }
+            hits &= click == static_cast<sptr_t>(byte);
+            NSString *glyph = [line substringWithRange:range];
+            [editor setSelectionAnchor:byte caret:byte+[glyph lengthOfBytesUsingEncoding:NSUTF8StringEncoding]];
+            selection &= [editor.selectedText isEqualToString:glyph];
+        }
+    }
+    check(geometry,"both ends and the middle of a multi-tile Hebrew run follow whole-paragraph CoreText at its visual viewport, including adjacent numbers and Latin");
+    check(hits && selection,"hits at independently predicted scrolled glyphs preserve their logical UTF-8 selection");
 }

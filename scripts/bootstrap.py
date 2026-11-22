@@ -122,6 +122,7 @@ def scintilla_plan(root):
     allowed = (
         'scripts/dependency-patches/scintilla-loader-styles.patch',
         'scripts/dependency-patches/scintilla-cocoa-bidi.patch',
+        'scripts/dependency-patches/scintilla-long-bidi-runs.patch',
     )
     if tuple(item.get('path') for item in patches) != allowed[:len(patches)]:
         raise ValueError('Unsupported Scintilla patch path or order')
@@ -138,7 +139,7 @@ def scintilla_plan(root):
         if not isinstance(changes, dict) or not changes:
             raise ValueError('Missing pinned Scintilla patch results')
         source_path = r'src/[A-Za-z0-9_]+[.](h|cxx)'
-        if item['path'] == allowed[1]:
+        if item['path'] in allowed[1:]:
             source_path += r'|cocoa/[A-Za-z0-9_]+[.](h|mm)'
         for path, result in changes.items():
             if (path not in upstream or not re.fullmatch(source_path, path)

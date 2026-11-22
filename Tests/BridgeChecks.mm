@@ -2447,6 +2447,7 @@ int main(int argc, char **argv) {
         });
         TTCheckBidiSelection();
         TTCheckScrolledBidi();
+        TTCheckLongHebrewParagraph();
         return ttchecks::finish("BridgeChecks", "IME, VoiceOver, UI focus and permission tests not covered");
     }
 }
