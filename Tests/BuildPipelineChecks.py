@@ -661,6 +661,23 @@ sys.exit(93)
             self.assertEqual((layered / 'cocoa/PlatCocoa.mm').read_bytes(), b'cocoa\n')
             self.assertEqual(cocoa.read_bytes(), b'platform\n')
             self.assertEqual(bootstrap.prepare_scintilla(root), layered)
+            third_file = patches / 'scintilla-long-bidi-runs.patch'
+            third_file.write_text('--- a/cocoa/PlatCocoa.mm\n+++ b/cocoa/PlatCocoa.mm\n@@ -1 +1 @@\n-cocoa\n+long-run\n')
+            third = dict(dependency='scintilla', path=str(third_file.relative_to(root)), sha256=bootstrap.digest(third_file),
+                         files={'cocoa/PlatCocoa.mm': hashlib.sha256(b'long-run\n').hexdigest()})
+            lock['patches'] = [item, second, third]
+            lock_file.write_text(json.dumps(lock))
+            final = bootstrap.prepare_scintilla(root)
+            self.assertNotEqual(final, layered)
+            self.assertEqual((final / 'cocoa/PlatCocoa.mm').read_bytes(), b'long-run\n')
+            self.assertEqual((layered / 'cocoa/PlatCocoa.mm').read_bytes(), b'cocoa\n')
+            self.assertEqual(bootstrap.prepare_scintilla(root), final)
+            lock['patches'] = [item, third, second]
+            lock_file.write_text(json.dumps(lock))
+            with self.assertRaisesRegex(ValueError, 'path or order'):
+                bootstrap.prepare_scintilla(root)
+            lock['patches'] = [item, second]
+            lock_file.write_text(json.dumps(lock))
             # An overlapping second patch must never mask an invalid intermediate digest.
             invalid = dict(item, files={'src/CellBuffer.cxx': '0' * 64})
             lock_file.write_text(json.dumps(dict(lock, patches=[invalid, second])))
