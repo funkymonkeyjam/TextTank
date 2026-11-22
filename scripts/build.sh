@@ -33,9 +33,10 @@ if [[ "$#" != 0 ]]; then
   exit 64
 fi
 rm -f harness/logs/app-build-diagnostics.json
-python3 scripts/bootstrap.py
+SCINTILLA_SOURCE="$(python3 scripts/bootstrap.py --print-scintilla-source)"
+SCINTILLA_BUILD="$PWD/build/ScintillaDerived/$CONFIGURATION/$(basename "$(dirname "$SCINTILLA_SOURCE")")"
 python3 scripts/runtime_artifacts.py begin --configuration "$CONFIGURATION" --manifest "build/artifacts/$CONFIGURATION/before.json"
-logged scintilla-build xcodebuild -project Vendor/scintilla/cocoa/Scintilla/Scintilla.xcodeproj -scheme Scintilla -configuration "$CONFIGURATION" -derivedDataPath "$PWD/build/ScintillaDerived/$CONFIGURATION" ARCHS="$ARCH" ONLY_ACTIVE_ARCH=YES MACOSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$VENDOR_BUILD" CLANG_MODULE_CACHE_PATH="$PWD/build/ModuleCache"
+logged scintilla-build xcodebuild -project "$SCINTILLA_SOURCE/cocoa/Scintilla/Scintilla.xcodeproj" -scheme Scintilla -configuration "$CONFIGURATION" -derivedDataPath "$SCINTILLA_BUILD" ARCHS="$ARCH" ONLY_ACTIVE_ARCH=YES MACOSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$VENDOR_BUILD" CLANG_MODULE_CACHE_PATH="$PWD/build/ModuleCache"
 logged lexilla-build python3 scripts/build-lexilla.py
 logged app-build xcodebuild -project TextTank.xcodeproj -scheme TextTank -configuration "$CONFIGURATION" -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO build
 python3 scripts/compile_diagnostics.py --log harness/logs/app-build.log --log-warning-policy "$log_warning_policy" --report harness/logs/app-build-diagnostics.json

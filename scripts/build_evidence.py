@@ -14,8 +14,10 @@ def sha(path):
 
 
 def resolved_settings(root, configuration):
+    from bootstrap import scintilla_plan
     from build_config import load_identity
     identity = load_identity(root)
+    scintilla, _, _ = scintilla_plan(root)
     shared = ['-showBuildSettings', '-json', '-configuration', configuration, 'CODE_SIGNING_ALLOWED=NO']
     # Xcode rejects -scheme together with -alltargets. Query every product target
     # with the canonical DerivedData products/intermediates paths explicitly.
@@ -23,8 +25,8 @@ def resolved_settings(root, configuration):
                  'SYMROOT=' + str(root / 'build/DerivedData/Build/Products'),
                  'OBJROOT=' + str(root / 'build/DerivedData/Build/Intermediates.noindex')],
                 {'TextTank', 'NativeSearch', 'EditorBridge', 'TextTankCore', 'TextTankRuntime', 'tt'}),
-               (['-project', 'Vendor/scintilla/cocoa/Scintilla/Scintilla.xcodeproj', '-scheme', 'Scintilla',
-                 '-derivedDataPath', str(root / 'build/ScintillaDerived' / configuration),
+               (['-project', str(scintilla / 'cocoa/Scintilla/Scintilla.xcodeproj'), '-scheme', 'Scintilla',
+                 '-derivedDataPath', str(root / 'build/ScintillaDerived' / configuration / scintilla.parent.name),
                  'ARCHS=' + identity['architecture'], 'ONLY_ACTIVE_ARCH=YES',
                  'MACOSX_DEPLOYMENT_TARGET=' + identity['deploymentTarget'],
                  'CONFIGURATION_BUILD_DIR=' + str(root / 'build/vendor' / configuration),

@@ -1,0 +1,222 @@
+diff --git a/src/CellBuffer.cxx b/src/CellBuffer.cxx
+index a12b697..995dc6c 100644
+--- a/src/CellBuffer.cxx	
++++ b/src/CellBuffer.cxx
+@@ -370,7 +370,7 @@ char CellBuffer::StyleAt(Sci::Position position) const noexcept {
+ }
+ 
+ void CellBuffer::GetStyleRange(unsigned char *buffer, Sci::Position position, Sci::Position lengthRetrieve) const {
+-	if (lengthRetrieve < 0)
++	if (lengthRetrieve <= 0)
+ 		return;
+ 	if (position < 0)
+ 		return;
+@@ -378,11 +378,15 @@ void CellBuffer::GetStyleRange(unsigned char *buffer, Sci::Position position, Sc
+ 		std::fill(buffer, buffer + lengthRetrieve, static_cast<unsigned char>(0));
+ 		return;
+ 	}
+-	if ((position + lengthRetrieve) > style.Length()) {
++	if (position > Length() || lengthRetrieve > Length() - position) {
+ 		Platform::DebugPrintf("Bad GetStyleRange %.0f for %.0f of %.0f\n",
+ 				      static_cast<double>(position),
+ 				      static_cast<double>(lengthRetrieve),
+-				      static_cast<double>(style.Length()));
++				      static_cast<double>(Length()));
++		return;
++	}
++	if (stylesDeferred) {
++		std::fill_n(buffer, lengthRetrieve, static_cast<unsigned char>(0));
+ 		return;
+ 	}
+ 	style.GetRange(reinterpret_cast<char *>(buffer), position, lengthRetrieve);
+@@ -490,10 +494,25 @@ Lengths SplitUpdate(const SplitVector<char> &style, Sci::Position position, Sci:
+ 
+ }
+ 
+-ChangedRange CellBuffer::SetStyles(Sci::Position position, const char *styles, Sci::Position length) noexcept {
+-	if (!hasStyles || (position < 0) || (length <= 0)) {
++// Bulk loaders initially contain only default style bytes. Keep that zero plane
++// implicit until a non-default write; all views continue to share this CellBuffer.
++void CellBuffer::MaterializeStyles() {
++	SplitVector<char> materialized;
++	materialized.InsertValue(0, Length(), 0);
++	style = std::move(materialized);
++	stylesDeferred = false;
++}
++
++ChangedRange CellBuffer::SetStyles(Sci::Position position, const char *styles, Sci::Position length) {
++	if (!hasStyles || position < 0 || position >= Length() || length <= 0) {
+ 		return {};
+ 	}
++	if (stylesDeferred) {
++		const Sci::Position count = std::min(length, Length() - position);
++		if (std::all_of(styles, styles + count, [](char value) { return value == 0; }))
++			return {};
++		MaterializeStyles();
++	}
+ 
+ 	const Lengths lengths = SplitUpdate(style, position, length);
+ 	ChangedRange cr = CopyBytes(&style[position], styles, lengths.length1, position);
+@@ -505,10 +524,15 @@ ChangedRange CellBuffer::SetStyles(Sci::Position position, const char *styles, S
+ 	return cr;
+ }
+ 
+-ChangedRange CellBuffer::SetStyleFor(Sci::Position position, Sci::Position length, char value) noexcept {
+-	if (!hasStyles || (position < 0) || (length <= 0)) {
++ChangedRange CellBuffer::SetStyleFor(Sci::Position position, Sci::Position length, char value) {
++	if (!hasStyles || position < 0 || position >= Length() || length <= 0) {
+ 		return {};
+ 	}
++	if (stylesDeferred) {
++		if (value == 0)
++			return {};
++		MaterializeStyles();
++	}
+ 
+ 	const Lengths lengths = SplitUpdate(style, position, length);
+ 	ChangedRange cr = SetBytes(&style[position], value, lengths.length1, position);
+@@ -547,12 +571,14 @@ Sci::Position CellBuffer::Length() const noexcept {
+ 	return substance.Length();
+ }
+ 
+-void CellBuffer::Allocate(Sci::Position newSize) {
++void CellBuffer::Allocate(Sci::Position newSize, bool deferStyles) {
+ 	if (!largeDocument && (newSize > INT32_MAX)) {
+ 		throw std::runtime_error("CellBuffer::Allocate: size of standard document limited to 2G.");
+ 	}
+ 	substance.ReAllocate(newSize);
+-	if (hasStyles) {
++	if (deferStyles && hasStyles && Length() == 0)
++		stylesDeferred = true;
++	if (hasStyles && !stylesDeferred) {
+ 		style.ReAllocate(newSize);
+ 	}
+ }
+@@ -862,7 +888,7 @@ void CellBuffer::BasicInsertString(Sci::Position position, const char *s, Sci::P
+ 	}
+ 
+ 	substance.InsertFromArray(position, s, 0, insertLength);
+-	if (hasStyles) {
++	if (hasStyles && !stylesDeferred) {
+ 		style.InsertValue(position, insertLength, 0);
+ 	}
+ 
+@@ -1104,7 +1130,7 @@ void CellBuffer::BasicDeleteChars(Sci::Position position, Sci::Position deleteLe
+ 	if (lineRecalculateStart >= 0) {
+ 		RecalculateIndexLineStarts(lineRecalculateStart, lineRecalculateStart);
+ 	}
+-	if (hasStyles) {
++	if (hasStyles && !stylesDeferred) {
+ 		style.DeleteRange(position, deleteLength);
+ 	}
+ }
+diff --git a/src/CellBuffer.h b/src/CellBuffer.h
+index c7e078f..d18bf51 100644
+--- a/src/CellBuffer.h	
++++ b/src/CellBuffer.h
+@@ -98,6 +98,7 @@ struct ChangedRange {
+ class CellBuffer {
+ private:
+ 	bool hasStyles;
++	bool stylesDeferred = false;
+ 	bool largeDocument;
+ 	SplitVector<char> substance;
+ 	SplitVector<char> style;
+@@ -121,6 +122,7 @@ private:
+ 	void BasicInsertString(Sci::Position position, const char *s, Sci::Position insertLength);
+ 	void BasicDeleteChars(Sci::Position position, Sci::Position deleteLength);
+ 
++	void MaterializeStyles();
+ public:
+ 
+ 	CellBuffer(bool hasStyles_, bool largeDocument_);
+@@ -143,7 +145,7 @@ public:
+ 	[[nodiscard]] SplitView AllView() const noexcept;
+ 
+ 	[[nodiscard]] Sci::Position Length() const noexcept;
+-	void Allocate(Sci::Position newSize);
++	void Allocate(Sci::Position newSize, bool deferStyles = false);
+ 	void SetUTF8Substance(bool utf8Substance_) noexcept;
+ 	[[nodiscard]] Scintilla::LineEndType GetLineEndTypes() const noexcept { return utf8LineEnds; }
+ 	void SetLineEndTypes(Scintilla::LineEndType utf8LineEnds_);
+@@ -165,8 +167,8 @@ public:
+ 
+ 	/// Setting styles for positions outside the range of the buffer is safe and has no effect.
+ 	/// @return range where style of characters changed.
+-	ChangedRange SetStyles(Sci::Position position, const char *styles, Sci::Position length) noexcept;
+-	ChangedRange SetStyleFor(Sci::Position position, Sci::Position length, char value) noexcept;
++	ChangedRange SetStyles(Sci::Position position, const char *styles, Sci::Position length);
++	ChangedRange SetStyleFor(Sci::Position position, Sci::Position length, char value);
+ 
+ 	const char *DeleteChars(Sci::Position position, Sci::Position deleteLength, bool &startSequence);
+ 
+diff --git a/src/Document.cxx b/src/Document.cxx
+index d13ba74..1b5e7e7 100644
+--- a/src/Document.cxx	
++++ b/src/Document.cxx
+@@ -77,6 +77,10 @@ void LexInterface::Colourise(Sci::Position start, Sci::Position end) {
+ 		// Protect against reentrance, which may occur, for example, when
+ 		// fold points are discovered while performing styling and the folding
+ 		// code looks for child lines which may trigger styling.
++		struct ResetStyling {
++			bool &flag;
++			~ResetStyling() { flag = false; }
++		} reset { performingStyle };
+ 		performingStyle = true;
+ 
+ 		const Sci::Position lengthDoc = pdoc->Length();
+@@ -95,8 +99,6 @@ void LexInterface::Colourise(Sci::Position start, Sci::Position end) {
+ 			instance->Lex(start, len, styleStart, pdoc);
+ 			instance->Fold(start, len, styleStart, pdoc);
+ 		}
+-
+-		performingStyle = false;
+ 	}
+ }
+ 
+@@ -2621,8 +2623,8 @@ bool SCI_METHOD Document::SetStyleFor(Sci_Position length, char style) {
+ 	if (enteredStyling != 0) {
+ 		return false;
+ 	}
+-	enteredStyling++;
+ 	const ChangedRange cr = cb.SetStyleFor(endStyled, length, style);
++	enteredStyling++;
+ 	if (!cr.Empty()) {
+ 		const DocModification mh(ModificationFlags::ChangeStyle | ModificationFlags::User,
+ 			                cr.start, cr.end - cr.start + 1);
+@@ -2637,8 +2639,8 @@ bool SCI_METHOD Document::SetStyles(Sci_Position length, const char *styles) {
+ 	if (enteredStyling != 0) {
+ 		return false;
+ 	}
+-	enteredStyling++;
+ 	const ChangedRange cr = cb.SetStyles(endStyled, styles, length);
++	enteredStyling++;
+ 	endStyled += length;
+ 	if (!cr.Empty()) {
+ 		const DocModification mh(ModificationFlags::ChangeStyle | ModificationFlags::User,
+diff --git a/src/Document.h b/src/Document.h
+index 6ad0ee9..248cc95 100644
+--- a/src/Document.h	
++++ b/src/Document.h
+@@ -578,7 +578,7 @@ public:
+ 	Sci::Position NextWordEnd(Sci::Position pos, int delta) const;
+ 	Sci_Position SCI_METHOD Length() const override { return cb.Length(); }
+ 	Sci::Position LengthNoExcept() const noexcept { return cb.Length(); }
+-	void Allocate(Sci::Position newSize) { cb.Allocate(newSize); }
++	void Allocate(Sci::Position newSize, bool deferStyles = false) { cb.Allocate(newSize, deferStyles); }
+ 
+ 	CharacterExtracted ExtractCharacter(Sci::Position position) const noexcept;
+ 
+diff --git a/src/Editor.cxx b/src/Editor.cxx
+index f181dc5..1280c32 100644
+--- a/src/Editor.cxx	
++++ b/src/Editor.cxx
+@@ -8468,7 +8468,7 @@ sptr_t Editor::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
+ 	case Message::CreateLoader: {
+ 			Document *doc = new Document(static_cast<DocumentOption>(lParam));
+ 			doc->AddRef();
+-			doc->Allocate(PositionFromUPtr(wParam));
++			doc->Allocate(PositionFromUPtr(wParam), true);
+ 			doc->SetUndoCollection(false);
+ 			pcs = ContractionStateCreate(pdoc->IsLarge());
+ 			ILoader *loader = doc;

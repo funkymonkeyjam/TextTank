@@ -43,6 +43,60 @@
 }
 @end
 
+static void bulkLoaderStyleChecks() {
+    NSString *source = @"int main() {\n  return 42; // café\n}\n";
+    NSData *bytes = [source dataUsingEncoding:NSUTF8StringEncoding];
+    for (BOOL vectorWrite : { NO, YES }) {
+        TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 400, 200)];
+        TTInitialUTF8Load *load = [[TTInitialUTF8Load alloc] initWithByteCount:bytes.length];
+        check([load appendContent:[[TTDocumentUTF8 alloc] initWithData:bytes]] && [editor adoptInitialUTF8Load:load],
+              "bulk loader transfers the original UTF-8 file into a mutable editor");
+        TTEditor *clone = [[TTEditor alloc] initWithFrame:NSZeroRect];
+        [clone shareDocumentWith:editor];
+        ScintillaView *first = (ScintillaView *)editor.subviews.firstObject;
+        ScintillaView *second = (ScintillaView *)clone.subviews.firstObject;
+        const sptr_t identity = [first message:SCI_GETDOCPOINTER];
+        auto style = [&](NSUInteger position) { return [second message:SCI_GETSTYLEINDEXAT wParam:position]; };
+        [editor setSelectionAnchor:0 caret:0];
+        [editor replaceSelection:@"//\n"];
+        [clone executeCommand:@"undo"];
+        check([editor.checkedUTF8Data isEqual:bytes] && !editor.modified && !style(0) && !style(bytes.length - 1),
+              "an unstyled shared bulk document retains its original bytes and save point across a clone Undo");
+
+        const unsigned char zeros[] = {0, 0, 0};
+        [first message:SCI_STARTSTYLING wParam:0];
+        [first message:SCI_SETSTYLINGEX wParam:sizeof(zeros) lParam:(sptr_t)zeros];
+        [first message:SCI_STARTSTYLING wParam:bytes.length];
+        [first message:SCI_SETSTYLING wParam:0 lParam:17];
+        check(!style(0) && !style(bytes.length - 1), "zero styles and an empty end range retain default styles");
+        const NSUInteger revision = editor.revision;
+        [second message:SCI_STARTSTYLING wParam:1];
+        if (vectorWrite) {
+            const unsigned char mixed[] = {201, 0, 203};
+            [second message:SCI_SETSTYLINGEX wParam:sizeof(mixed) lParam:(sptr_t)mixed];
+        } else {
+            [second message:SCI_SETSTYLING wParam:3 lParam:201];
+        }
+        check(style(1) == 201 && style(2) == (vectorWrite ? 0 : 201)
+                  && style(3) == (vectorWrite ? 203 : 201) && !style(4)
+                  && [first message:SCI_GETSTYLEINDEXAT wParam:1] == 201 && !editor.modified
+                  && editor.revision == revision && [first message:SCI_CANREDO],
+              "the first scalar or vector style write is visible in both panes and leaves edit history intact");
+        [editor setSelectionAnchor:1 caret:1]; [editor replaceSelection:@"x"];
+        check(!style(1) && style(2) == 201, "insertion shifts materialized styles and starts the new byte unstyled");
+        [clone executeCommand:@"undo"];
+        check(style(1) == 201 && [editor.checkedUTF8Data isEqual:bytes] && !editor.modified,
+              "deletion during Undo restores the original byte and style positions");
+        clone.readOnly = YES;
+        [clone setLanguage:@"cpp"];
+        check([first message:SCI_GETSTYLEINDEXAT wParam:0] == 5
+                  && ([second message:SCI_GETFOLDLEVEL wParam:0] & SC_FOLDLEVELHEADERFLAG)
+                  && [second message:SCI_GETDOCPOINTER] == identity && [editor sharesDocumentWith:clone]
+                  && clone.readOnly && [editor.checkedUTF8Data isEqual:bytes] && !editor.modified,
+              "late read-only C++ lexing and folding use the same shared document without dirtying it");
+    }
+}
+
 static void immutableFields(NSObject *value, NSDictionary<NSString *, id> *attempts) {
     NSArray *keys=attempts.allKeys;
     for (NSString *key in keys) {
@@ -2040,6 +2094,7 @@ int main(int argc, char **argv) {
         check(posts==1, "a selection-only change posts a state notification");
         [NSNotificationCenter.defaultCenter removeObserver:observer];
         });
+        ttchecks::section("shared bulk-loader styles", [&] { bulkLoaderStyleChecks(); });
         ttchecks::section("loadDocumentText", [&] {
         TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
         TTEditor *countedEditor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 600, 400)];

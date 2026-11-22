@@ -99,10 +99,13 @@ def toolchain():
             'machine': platform.machine(), 'host_macos': platform.mac_ver()[0]}
 
 
-def verify_dependencies(root):
+def verify_dependencies(root, *, producer=True):
     for folder in ('scintilla', 'lexilla'):
         manifest = json.loads((root / 'scripts' / f'{folder}-source-hashes.json').read_text())
         bootstrap.verify_tree(root / 'Vendor' / folder, manifest)
+    selected, effective, patch = bootstrap.scintilla_plan(root)
+    if patch and producer:
+        bootstrap.verify_tree(selected, effective)
 
 
 def uuid(image):
@@ -254,7 +257,7 @@ def validate(root, manifest, configuration):
         raise ValueError('Stale artifact: source/configuration/header input bytes or modes changed')
     if load_identity(root) != value['identity'] or toolchain() != value['toolchain']:
         raise ValueError('Stale artifact: target identity or compiler/SDK changed')
-    verify_dependencies(root)
+    verify_dependencies(root, producer=False)
     build_root, app = Path(value['build_root']), Path(value['app'])
     if inputs(build_root) != value['inputs']:
         raise ValueError('Built archive source/configuration/header inputs changed')

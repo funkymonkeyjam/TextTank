@@ -201,6 +201,9 @@ def source_objects(root, target, objects, membership, compiles, previous):
         return {'map': regular(mapping), 'sources': {source: {**regular(root / source), 'object': value} for source, value in sorted(pairs.items())}}
     prior = previous.get('source_objects', {}).get('sources', {}) if previous else {}
     by_object = {value['object']: source for source, value in prior.items()}
+    if target == 'Scintilla':
+        from bootstrap import scintilla_plan
+        scintilla = scintilla_plan(root)[0].resolve()
     pairs = {}
     for item in objects:
         selected = compiles.get(item['path'], by_object.get(item['path']))
@@ -211,7 +214,7 @@ def source_objects(root, target, objects, membership, compiles, previous):
             source = root / source
         if target == 'Scintilla':
             generated = Path(item['path']).parents[2] / 'DerivedSources/Scintilla_vers.c'
-            if not source.resolve().is_relative_to((root / 'Vendor/scintilla').resolve()) and source != generated:
+            if not source.resolve().is_relative_to(scintilla) and source != generated:
                 raise ValueError('Scintilla object comes from outside pinned Scintilla/actual version source')
             if source == generated and str(source) not in compiles['__generated__'] and str(source) not in prior:
                 raise ValueError('Scintilla version source has no actual generated-file producer')
