@@ -210,6 +210,25 @@ extension DocumentChecks {
                 guide.contains("A new installation includes one automation, " + AutomationDefinition.remindersExample.name + ",")
                     && !guide.localizedCaseInsensitiveContains("recipe"),
                 "the user guide names the one automation a new installation has")
+            // DS-D4: the help text names commands where the nine-menu bar lists them.
+            let helpPaths = [
+                "Find → Find…", "Help → Command Palette…", "Compare → Compare with Saved Version",
+                "View → Editor Groups → Editor Group Layout → Two Columns",
+                "View → Editor Groups → Show Tab in Another Group", "Tools → Automations → Manage Automations…",
+                "File → Quick Open…", "Find → Find and Replace…", "Tools → Macros", "Tools → Run Commands",
+                "View → Syntax Highlighting", "Help → TextTank User Guide", "Help → Welcome to TextTank",
+                "Edit → Undo", "File → New", "File → Save"
+            ]
+            let listed = Set(walk(try requireValue(NSApp.mainMenu, "actual menu bar")).map(\.path))
+            let unlisted = helpPaths.filter { !listed.contains($0.replacingOccurrences(of: " → ", with: " > ")) }
+            let unmentioned = helpPaths.filter { !(welcome + guide).contains($0) }
+            let help = (welcome + guide).replacingOccurrences(of: "Tools → Automations → ", with: "")
+            let former = [
+                "Search → ", "Automations → ", "The Automations menu", "The Run menu", "Language → ", "Encoding → "
+            ].filter { help.contains($0) }
+            check(
+                unlisted.isEmpty && unmentioned.isEmpty && former.isEmpty,
+                "the welcome and user guide name menu paths that exist (unlisted: \(unlisted); unmentioned: \(unmentioned); former: \(former))")
         }
 
         section("command discovery uses ordinary menu validation", #line) {

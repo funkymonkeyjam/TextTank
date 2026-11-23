@@ -43,7 +43,7 @@ This table names ownership rather than asserting full parity. Dated per-capabili
 
 ## Editor commands and shortcut repair
 
-`EditorCommand` in `Sources/Documents/EditorCommandCatalog.swift` owns stable Swift identifiers, display names, fixed menu keys, assignable defaults and explicit recordable/view-only/assignable subsets. Menu placement stays literal. The bridge derives dispatch, replay and canonical recording maps from one numeric table; replay-only `indent`/`unindent` aliases never compete with `tab`/`backTab` in recordings. The frozen pre-refactor contract retains all 84 supported identifiers, 62 replayable names, 60 canonical recording messages and the exact text-changing subset. A routed unknown identifier returns failure before text, selection-generation or notification changes. Custom menu validation disables unavailable/text-changing commands when necessary and reads actual per-view toggle states; status menus use the same command names and current keys.
+`EditorCommand` in `Sources/Documents/EditorCommandCatalog.swift` owns stable Swift identifiers, display names, fixed menu keys, assignable defaults and explicit recordable/view-only/assignable subsets. Menu placement stays literal, in one function per top-level menu in `Sources/TextTankApp/MainMenu.swift`; each controller builds its own items and the menu bar only decides where they are listed (DS-D4). The bridge derives dispatch, replay and canonical recording maps from one numeric table; replay-only `indent`/`unindent` aliases never compete with `tab`/`backTab` in recordings. The frozen pre-refactor contract retains all 84 supported identifiers, 62 replayable names, 60 canonical recording messages and the exact text-changing subset. A routed unknown identifier returns failure before text, selection-generation or notification changes. Custom menu validation disables unavailable/text-changing commands when necessary and reads actual per-view toggle states; status menus use the same command names and current keys.
 
 Editor Settings keeps version 1 and `shortcuts: [String: String]`. The optional Boolean `autoIndent` controls indentation on Return in all editor views. The optional Boolean `braceHighlight` controls live brace feedback at each view’s primary caret. Automatic feedback examines up to 4,096 bytes in each candidate’s search direction and clears its cue when the result is indeterminate. Matching Brace and Select to Matching Brace search the full document. The optional Booleans `currentLineHighlight` and `indentGuides` control a frame around the focused editor's caret line and native dotted indentation guides. Existing files without these four keys default to enabled. Comparison panes suppress both the frame and guides. The guides use the current profile's indentation-guide style, including explicit style 37 colors. Optional fontName, fontSize (6–72 fractional points) and defaultZoom (−10 through 60) default to Menlo, 14 and zero. An unavailable saved face uses Menlo and preserves the preference. Base metrics apply to all document views; a pane already zoomed away from the previous default retains its zoom. Language style face and size inherit independently. Comparison snapshot panes share effective metrics and retain their local zoom adjustment within their existing 6–96 point display range. Missing required keys, wrong JSON types, unsupported schema/minimum-reader metadata and unsafe/unreadable files still fail closed. Shortcut-only problems are handled separately on load: unknown, unsupported, reserved or duplicate string bindings are ignored individually, valid shortcuts and unrelated settings remain usable, and the ignored entries are reported. The original file is unchanged until explicit repair. That repair validates strictly, keeps the original as a unique sibling and retains the existing rollback behavior. This is not automatic repair or universal detection of later external rewrites.
 
@@ -92,7 +92,7 @@ The original full recovered-copy and error wording is retained in the model.
 
 The visible-only 0.2-second polling timer remains under DB-R8. A lexer change now
 schedules a coalesced editor-state notification so that brace feedback and Language
-status reflect the new profile. The native check observes the first Language menu
+status reflect the new profile. The native check observes the first language menu
 action with the timer disabled, then invokes a second action and runs one real
 polling tick before that action’s queued notification. Both paths update the field.
 Existing
@@ -259,7 +259,7 @@ First-party Swift under `Sources/` and `Tests/` is laid out by the `swift-format
 
 Both formats are JSON written by `JSONEncoder` with its default date strategy, so a date is a number of seconds since 1 January 2001 00:00 UTC (`784000000` is 5 November 2025). Key names and the date encoding are fixed for version 1; a new format should use ISO 8601 dates and `schemaVersion`. "Required" means the decoder rejects a file without the key.
 
-Session snapshot (`WorkspaceSession`, written by File > Save Session Snapshot; proposed extension `.texttanksession`, exported as `app.texttank.session`). A snapshot loads under any file name. Opening a `.texttanksession` file from Finder or File > Open goes to the restore prompt instead of showing the JSON as an editable document.
+Session snapshot (`WorkspaceSession`, written by File > Workspace > Save Session Snapshot…; proposed extension `.texttanksession`, exported as `app.texttank.session`). A snapshot loads under any file name. Opening a `.texttanksession` file from Finder or File > Open goes to the restore prompt instead of showing the JSON as an editable document.
 
 | Key | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -377,7 +377,11 @@ grapheme count and Unicode normalization are not substituted for this documented
 
 App entry, composition, documents, encoding recovery, tabs, recent documents, status items and
 editor windows live in separate files under `Sources/TextTankApp/`. The first split preserves
-the declarations, menu tree and lifecycle; subsequent changes have their own focused checks.
+the declarations and lifecycle; subsequent changes have their own focused checks. The menu tree
+is the nine-menu map of DS-D4, pinned by `Tests/Fixtures/menu-tree.json`; the commands of the
+earlier fourteen-menu bar are accounted for by `menu-command-identities-before-nine-menus.json`.
+The Command Palette matches a command by its menu path or by its former one
+(`CommandDiscovery.legacyLocations`).
 `TextDocumentController` is still constructed before `NSApplication.shared`, before constructing
 the application delegate. The intended shared document controller must win that bootstrap order.
 The Objective-C document name and Info.plist document class remain unchanged.

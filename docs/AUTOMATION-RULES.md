@@ -4,12 +4,12 @@ An automation is a saved, named workflow: one input, an ordered list of rules, a
 
 ## Running and managing
 
-The Automations menu and the Automations toolbar dropdown list every saved automation. Favorites come first in the dropdown and the context menu and are marked with a star. A keyboard shortcut is optional: one lowercase letter, bound to Command-Option, refused if an application command already uses it. Automations do not get toolbar buttons of their own from the dialogs; the `pinToToolbar` field of a saved automation is shown as its favorite status.
+Tools → Automations and the Automations toolbar dropdown list every saved automation. Favorites come first in the dropdown and the context menu and are marked with a star. A keyboard shortcut is optional: one lowercase letter, bound to Command-Option, refused if an application command already uses it. Automations do not get toolbar buttons of their own from the dialogs; the `pinToToolbar` field of a saved automation is shown as its favorite status.
 
-The management commands are in the Automations menu:
+The management commands are in Tools → Automations:
 
+- **Run Automation…** runs one from a list.
 - **Manage Automations…** lists the saved automations. Two automations may share a name; both are listed, and each keeps its own identifier.
-- **Choose Automation…** runs one from a list.
 - **Review Reminder Export History…** shows recorded Reminders exports, newest first. A record file that cannot be read is named there and left unchanged; a new export then asks before sending, because the unreadable file may record the same items. **Clear Confirmed History…** in that dialog removes, after a confirmation, TextTank's record of exports whose every item was confirmed. Exports with unsent, failed or uncertain items are kept, Reminders itself is not changed, and a cleared list no longer triggers the already-sent warning. Nothing is removed automatically.
 - **Restore Default Automations…** adds a fresh copy of the automation a new installation starts with (Add to Reminders), under a new identifier. Nothing already saved is replaced, including an edited copy of the same automation.
 

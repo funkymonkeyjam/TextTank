@@ -4,7 +4,7 @@
 
 Plain text. Sharp tools.
 
-An independent native macOS plain-text and code editor using Swift/AppKit, Scintilla Cocoa and Lexilla. **Incomplete preview:** standard Notepad++ capability coverage remains required and is not certified. User-named automations, recorded macros, explicit Run commands and local text tools are implemented with focused checks; they are not a full-parity claim. Core editing and deterministic automations require no account or paid service.
+An independent native macOS plain-text and code editor using Swift/AppKit, Scintilla Cocoa and Lexilla. **Incomplete preview:** TextTank is a close approximation of Notepad++ for familiar editing tasks, not a behaviour-by-behaviour copy; coverage of its capability matrix is incomplete and not certified. User-named automations, recorded macros, explicit Run commands and local text tools are implemented with focused checks; they are not a full-parity claim. Core editing and deterministic automations require no account or paid service.
 
 ## Requirements
 

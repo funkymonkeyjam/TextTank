@@ -1,25 +1,27 @@
 TextTank User Guide
 
 Getting started
-Open a local file with File → Open or create a blank tab with File → New. Use File → Save to choose a destination for a new document. A document with unsaved edits remains open when you cancel a close review. Help → Welcome to TextTank opens an editable tutorial.
+The menu bar has nine menus. File opens, saves and re-encodes documents. Edit changes the text. Find searches and moves through it. View changes how it is shown. Compare, Tools, Window and Help hold comparisons, macros and automations, tabs, and these guides.
+
+Open a local file with File → Open… or create a blank tab with File → New. Use File → Save to choose a destination for a new document. A document with unsaved edits remains open when you cancel a close review. Help → Welcome to TextTank opens an editable tutorial.
 
 Finding a command or file
-Press Shift-Command-P to search commands. Read the scope shown beside an action before choosing it. Unavailable actions depend on the current document or comparison. Use Quick Open to search file names under the folders you selected for your workspace. Opening an already edited file returns you to its open tab.
+Press Shift-Command-P, or choose Help → Command Palette…, to search commands. Type the words of a command in any order, or the menu you remember it in. Read the scope shown beside an action before choosing it. Unavailable actions depend on the current document or comparison. Use File → Quick Open… to search file names under the folders you selected for your workspace. Opening an already edited file returns you to its open tab.
 
 Editing and searching
-Use Command-F for the current document's Find bar. Use the controls there to move through matches and change the search options. Find and Replace offers additional search and replacement actions. Before changing many files, choose the search folder and review which results will be replaced.
+Use Find → Find… (Command-F) for the current document's Find bar. Use the controls there to move through matches and change the search options. Find → Find and Replace… offers additional search and replacement actions. Edit groups the commands that change text: Lines, Indentation and Whitespace, Convert Case, Comment, Selection, Delete, Line Endings, and Encode and Decode. View → Syntax Highlighting chooses the document's language. Before changing many files, choose the search folder and review which results will be replaced.
 
 Comparing versions
-File → Compare with Saved Version compares the active file on disk with its editor contents. A comparison has its own window. Review its changes there and return to the original tab to continue editing. If a file changes outside TextTank, review the notice in its tab before choosing Reload.
+Compare → Compare with Saved Version compares the active file on disk with its editor contents. A comparison has its own window. Review its changes there and return to the original tab to continue editing. If a file changes outside TextTank, review the notice in its tab before choosing Reload.
 
 Editor groups
-View → Editor Group Layout lets you place groups side by side. Move to Group moves a tab. Show Tab in Another Group shows the same document in both groups, with independent views and shared edits. Returning to Single Group brings the tabs together.
+View → Editor Groups → Editor Group Layout lets you place groups side by side. Move to Group moves a tab. Show Tab in Another Group shows the same document in both groups, with independent views and shared edits. Returning to Single Group brings the tabs together.
 
 Automations and macros
-The Automations menu lists saved automations. Read the input and destination before running one. A new installation includes one automation, Add to Reminders, which asks you to choose a Reminders list and sends nothing until you choose Send. Add your own in Automations → Manage Automations…; the Welcome document walks through a first one. Macros can record supported editing commands for replay. Stop recording before saving a macro. Edit → Undo reverses a change in the active document.
+Tools → Automations lists saved automations. Read the input and destination before running one. A new installation includes one automation, Add to Reminders, which asks you to choose a Reminders list and sends nothing until you choose Send. Add your own in Tools → Automations → Manage Automations…; the Welcome document walks through a first one. Tools → Macros can record supported editing commands for replay. Stop recording before saving a macro. Edit → Undo reverses a change in the active document.
 
 Command review
-The Run menu lists configured commands. On first use or after a configuration changes, inspect the executable, arguments and working directory. A shell-mode entry passes the displayed script to the shell. Cancel leaves the command unstarted.
+Tools → Run Commands lists configured commands. On first use or after a configuration changes, inspect the executable, arguments and working directory. A shell-mode entry passes the displayed script to the shell. Cancel leaves the command unstarted.
 
 Keeping your work
 Save changes you intend to keep in their file. After an interruption TextTank can offer recovery copies of unsaved text. A recovery copy opens separately so you can decide where to save it. Compare the recovery copy with the file before replacing either version.
