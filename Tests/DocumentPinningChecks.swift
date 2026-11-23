@@ -1078,7 +1078,14 @@ extension DocumentChecks {
                     with: Data(
                         contentsOf: TestPaths.fixtures.appendingPathComponent(
                             "menu-command-identities-before-nine-menus.json"))) as! [[String: String]]
-            let deliberatelyRemoved: [[String: String]] = [], deliberatelyAdded: [[String: String]] = []
+            // Added with the nine-menu bar: the Source, Preview and Both views of a document.
+            let deliberatelyRemoved: [[String: String]] = []
+            let deliberatelyAdded: [[String: String]] = ["source", "preview", "both"].map {
+                [
+                    "action": "setDocumentViewMode:", "object": $0, "key": "", "modifiers": "1048576",
+                    "target": "responder",
+                ]
+            }
             var accounted = identities(formerCommands + deliberatelyAdded)
             for removed in identities(deliberatelyRemoved) {
                 if let index = accounted.firstIndex(of: removed) { accounted.remove(at: index) }

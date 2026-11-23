@@ -7,6 +7,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     NSMenuItemValidation, NSSearchFieldDelegate, NSSplitViewDelegate
 {
     let split = NSSplitView()
+    /// Holds `split` and, for Preview and Both, the preview pane beside it. The mode logic is in
+    /// EditorWindowController+Preview.swift, which is the only writer of the three properties below.
+    private(set) lazy var viewContainer = DocumentViewContainer(source: split)
+    /// What this tab shows of its document. Every tab starts with Source.
+    var viewMode = DocumentViewMode.source
+    /// Present only while the tab shows Preview or Both; it owns the preview pane's work.
+    var previewCoordinator: PreviewCoordinator?
     let findField = NSSearchField()
     /// Announced: a count or “No matches” that only changes this label is otherwise silent (DS-36).
     let findCount = AnnouncingLabel(labelWithString: "")
@@ -77,7 +84,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         statusTimer?.invalidate()
         statusTimer = nil
     }
-    private var statusClosed = false
+    private(set) var statusClosed = false
     private var inlineSearchGeneration = UUID()
     private var inlineCancellation: TTSearchCancellation?
     private(set) var inlineSearchPending = false
@@ -206,6 +213,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     if self.host.active !== self { self.host.tabCommands.cancelReopen() }
                     self.host.activate(self, focus: false, explicit: false, preserveSelection: true)
                     self.lastEditor = pane
+                    // Something put the keyboard in the source while only the preview shows
+                    // (a search result, a jump): show the source so typing is never invisible.
+                    self.revealSource()
                     self.resumeVisibleFindPreview()
                 } else {
                     _ = self.focusPresentationChrome(explicit: false)
@@ -263,24 +273,26 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         // The bar is out of the way until Find is chosen, so the text is the hostWindow's main surface.
         search.isHidden = true
         findBar = search
-        [search, split, statusDetails].forEach {
+        // The source split sits inside the container that can place a preview beside it.
+        let content = viewContainer
+        [search, content, statusDetails].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview($0)
         }
         NSLayoutConstraint.activate([
-            split.heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
+            content.heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
             search.topAnchor.constraint(equalTo: root.topAnchor, constant: 4),
             search.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 8),
             search.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -8),
-            split.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            split.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            split.bottomAnchor.constraint(equalTo: statusDetails.topAnchor, constant: -2),
+            content.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            content.bottomAnchor.constraint(equalTo: statusDetails.topAnchor, constant: -2),
             statusDetails.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             statusDetails.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             statusDetails.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -2)
         ])
-        splitBelowFindBar = split.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 4)
-        splitBelowTabs = split.topAnchor.constraint(equalTo: root.topAnchor)
+        splitBelowFindBar = content.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 4)
+        splitBelowTabs = content.topAnchor.constraint(equalTo: root.topAnchor)
         splitBelowTabs?.isActive = true
         statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         statusLabel.textColor = .secondaryLabelColor
@@ -316,6 +328,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     }
                     if self.isPresented { self.refreshStatusDetails(source: .editorEvent) }
                 }
+                // Another tab's view of the same document changes this tab's preview too.
+                if let preview = self.previewCoordinator,
+                    editor === self.primaryEditor || editor.sharesDocument(with: self.primaryEditor)
+                {
+                    preview.documentStateChanged()
+                }
 
             }
         }
@@ -347,6 +365,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// Starts the recurring status refresh when the hostWindow comes on screen and stops it when the
     /// hostWindow leaves, so a hidden tab has no timer at all.
     func visibilityChanged() {
+        previewVisibilityChanged()
         if !isActiveTab && findPreview != nil { endFindPreview() }
         let visible = isPresented && !statusClosed && statusTimerInterval != nil
         if !visible {
@@ -687,6 +706,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     private var linePanel: FormPanel?
     @objc func goToLine(_ sender: Any?) {
         guard !statusClosed else { return }
+        revealSource()
         if let linePanel {
             linePanel.window.makeKeyAndOrderFront(nil)
             return
@@ -813,6 +833,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         presentationRoot.subviews.forEach { $0.removeFromSuperview() }
     }
     func prepareForClose() {
+        tearDownPreview()
         linePanel?.close()
         saveToolbarArrangement()
         endFindPreview(restore: false)
@@ -988,6 +1009,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     @objc func showFind(_ sender: Any?) {
         guard (document as? TextDocument)?.isOpen == true else { return }
+        revealSource()
         host.activate(self, focus: false)
         cancelInlineSearch()
         // Remember the pane the find bar acts on before focus leaves it.
@@ -1272,7 +1294,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 geometry.otherAnchorByte = savedOther.selectionAnchor
                 geometry.otherCaretByte = savedOther.selectionCaret
                 pending.split = geometry
-                return pending
+                return recordingViewMode(in: pending)
             }
             let fraction = available > 0 ? primaryEditor.frame.width / available : 0.5
             state.split = .init(
@@ -1283,7 +1305,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             state.split?.activeWrapping = wrapping(of: active)
             state.split?.otherWrapping = wrapping(of: other)
         }
-        return state
+        return recordingViewMode(in: state)
     }
     private func wrapping(of editor: TTEditor) -> WorkspaceLayoutState.PaneWrapping {
         editor.wrap ? .wrapped(documentLine: editor.sessionTopDocumentLine, subline: editor.sessionTopSubline)
@@ -1307,6 +1329,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             active.restoreClosedTabView(anchor: tab.anchorByte, caret: tab.caretByte, firstVisibleLine: tab.firstVisibleLine)
         }
         lastEditor = active
+        restoreViewMode(from: tab)
     }
     func applyRestoredSplitIfMounted() {
         guard let tab = pendingSplitLayout, let state = tab.split, let secondary, split.window != nil else { return }
@@ -1381,6 +1404,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             item.state = secondary == nil ? .off : .on
             return true
         case #selector(closeSplit(_:)): return secondary != nil
+        case #selector(setDocumentViewMode(_:)): return validateDocumentViewMode(item)
         case #selector(command(_:)):
             if (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder is NSTextView { return false }
             guard let id = item.representedObject as? String else { return false }

@@ -140,6 +140,13 @@ package struct TabWorkspace: Equatable, Sendable {
     }
 }
 
+/// What one tab shows of its document. `source` is the editable text and the default; `preview`
+/// is the read-only rendered view alone; `both` shows them side by side. The raw values are part
+/// of the version-1 session format (docs/tab-model.md).
+package enum DocumentViewMode: String, Codable, Sendable, CaseIterable {
+    case source, preview, both
+}
+
 /// Presentation metadata shared by explicit and automatic sessions; contains no document bytes.
 package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
     /// The tab's existing fields still describe its active pane for earlier v1 readers.
@@ -185,6 +192,11 @@ package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
         package var caretByte: Int
         package var firstVisibleLine: Int
         package var split: Split?
+        /// Which of Source, Preview or Both the tab shows. Absent in files written before the
+        /// field existed and for a tab that shows Source, so those files are unchanged.
+        package var viewMode: DocumentViewMode?
+        /// The share of the tab's width given to the source while the tab shows Both, from 0 to 1.
+        package var previewSourceFraction: Double?
         package init(documentID: DocumentID, isPinned: Bool, anchorByte: Int, caretByte: Int, firstVisibleLine: Int) {
             self.documentID = documentID
             self.isPinned = isPinned
@@ -234,6 +246,9 @@ package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
                         split.activeWrapping?.valid != false, split.otherWrapping?.valid != false,
                         (0...1).contains(split.primaryFraction)
                     else { throw TabModelError.invalid }
+                }
+                if let fraction = tab.previewSourceFraction {
+                    guard (0...1).contains(fraction) else { throw TabModelError.invalid }
                 }
                 if !tab.isPinned { unpinned = true }
             }

@@ -231,6 +231,7 @@ extension AppDelegate {
     /// choices; the items here stay within DS-23 with those three added.
     private func viewMenu() -> NSMenu {
         let view = NSMenu(title: "View")
+        DocumentViewCommands.addItems(to: view)
         view.addItem(title: EditorToolbarCommand.split.title, action: EditorToolbarCommand.split.action)
         view.addItem(title: "Close Split View", action: #selector(EditorWindowController.closeSplit(_:)))
         view.addItem(.separator())

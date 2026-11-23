@@ -59,6 +59,7 @@ suite_script scripts/test-review.sh
 suite_script scripts/test-compare.sh
 suite_script scripts/test-merge.sh
 suite_script scripts/test-preview.sh
+suite_script scripts/test-preview-ui.sh
 
 suite_script scripts/test-documents.sh
 
