@@ -155,6 +155,23 @@ extension EditorSettings {
             if let liveForm { liveForm.showViewPreferenceError(error) } else { TTAlert.present(error) }
         }
     }
+    /// The rendered mode chosen last when the settings file could not take it (it is unreadable
+    /// or needs repair). It is then remembered until TextTank quits.
+    private var unsavedRenderedMode: DocumentViewMode?
+    /// What Toggle Preview shows from Source: Preview or Both, whichever the person chose last.
+    var toggledPreviewMode: DocumentViewMode { unsavedRenderedMode ?? value.toggledPreviewMode }
+    /// Called when the person chooses Preview or Both for a tab. Writes one member of the
+    /// settings file, and only when the choice differs from the one remembered.
+    func noteRenderedMode(_ mode: DocumentViewMode) {
+        guard mode != .source, mode != toggledPreviewMode else { return }
+        do {
+            try store.updateLastRenderedPreviewMode(mode, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
+            unsavedRenderedMode = nil
+        } catch {
+            // Losing this convenience is not worth an alert in the middle of a view change (DS-40).
+            unsavedRenderedMode = mode
+        }
+    }
     /// The composition root applies this synchronous change to open documents and menus.
     func apply(replacing previous: EditorSettings? = nil) { onApply(value, previous) }
     static func reservedShortcuts(in menu: NSMenu?) -> Set<String> {
@@ -203,6 +220,10 @@ extension EditorSettings {
     private let launchBehavior = NSPopUpButton()
     private let appearance = NSPopUpButton()
     private let diskChanges = NSPopUpButton()
+    /// One pair of pop-ups for the five preview formats, as the shortcut rows are one pair for
+    /// the assignable commands: five more rows would not fit a small screen (DS-67).
+    private let previewFormat = NSPopUpButton()
+    private let previewOpenMode = NSPopUpButton()
     private let face = NSTextField(labelWithString: "")
     private let fontButton = NSButton(title: "Font…", target: nil, action: nil)
     private let shortcuts: SettingsShortcutEditor
@@ -290,6 +311,22 @@ extension EditorSettings {
         diskChanges.target = self
         diskChanges.action = #selector(selectDiskChangePolicy(_:))
         form.add(row("External file changes", diskChanges, "settings.externalChanges"))
+        ControlPresentation.populate(
+            previewFormat, choices: PreviewFormat.allCases.map { ($0.rawValue, Self.title($0)) },
+            selected: PreviewFormat.markdown.rawValue)
+        previewFormat.target = self
+        previewFormat.action = #selector(selectPreviewFormat(_:))
+        form.add(
+            row(Strings.text("settings.preview.format", "Preview format"), previewFormat, "settings.preview.format"))
+        ControlPresentation.populate(
+            previewOpenMode, choices: DocumentViewMode.allCases.map { ($0.rawValue, DocumentViewCommands.title($0)) },
+            selected: displayed.previewOpenMode(for: .markdown).rawValue)
+        previewOpenMode.target = self
+        previewOpenMode.action = #selector(selectPreviewOpenMode(_:))
+        previewOpenMode.toolTip = Strings.text(
+            "settings.preview.openIn.help",
+            "What a document of this format shows when you open it. Tabs that are already open, and tabs reopened from the last session, keep what they show.")
+        form.add(row(Strings.text("settings.preview.openIn", "Open in"), previewOpenMode, "settings.preview.openIn"))
         fontButton.target = self
         fontButton.action = #selector(openFontPanel(_:))
         fontButton.identifier = .init("settings.font.choose")
@@ -338,6 +375,8 @@ extension EditorSettings {
         diskChanges.select(
             diskChanges.itemArray.first { ($0.representedObject as? String) == latest.diskChangeBehavior.rawValue })
         launchBehavior.selectItem(at: latest.reopensLastSession ? 0 : 1)
+        showPreviewOpenMode(latest)
+        displayed.previewOpenModes = latest.previewOpenModes
         displayed.reopenLastSession = latest.reopenLastSession
         displayed.externalChangePolicy = latest.externalChangePolicy
         face.stringValue =
@@ -472,6 +511,45 @@ extension EditorSettings {
             showError(error, field: sender)
         }
     }
+    private static func title(_ format: PreviewFormat) -> String {
+        switch format {
+        case .markdown: return Strings.text("settings.preview.markdown", "Markdown")
+        case .html: return Strings.text("settings.preview.html", "HTML")
+        case .delimited: return Strings.text("settings.preview.delimited", "CSV and TSV")
+        case .svg: return Strings.text("settings.preview.svg", "SVG")
+        case .json: return Strings.text("settings.preview.json", "JSON")
+        }
+    }
+    private var selectedPreviewFormat: PreviewFormat {
+        ControlPresentation.selectedID(previewFormat).flatMap(PreviewFormat.init(rawValue:)) ?? .markdown
+    }
+    /// Shows the selected format's choice, and names the format in the second pop-up's
+    /// accessibility label, which would otherwise say only "Open in" (DS-70).
+    private func showPreviewOpenMode(_ settings: EditorSettings) {
+        let format = selectedPreviewFormat
+        previewOpenMode.selectItem(
+            at: previewOpenMode.indexOfItem(withRepresentedObject: settings.previewOpenMode(for: format).rawValue))
+        let label = String(
+            format: Strings.text("settings.preview.openIn.label", "Open %@ documents in"), Self.title(format))
+        previewOpenMode.setAccessibilityLabel(label)
+        previewOpenMode.cell?.setAccessibilityLabel(label)
+    }
+    @objc private func selectPreviewFormat(_ sender: NSPopUpButton) { showPreviewOpenMode(owner.value) }
+    @objc private func selectPreviewOpenMode(_ sender: NSPopUpButton) {
+        guard form.acceptsActions, let mode = ControlPresentation.selectedID(sender).flatMap(DocumentViewMode.init(rawValue:))
+        else { return }
+        let format = selectedPreviewFormat
+        do {
+            try owner.store.updatePreviewOpenMode(
+                for: format, from: displayed.previewOpenMode(for: format), to: mode,
+                reservedKeys: SettingsController.reservedShortcuts(in: NSApp.mainMenu))
+            valuesChanged()
+            form.clearValidation()
+        } catch {
+            valuesChanged()
+            showError(error, field: sender)
+        }
+    }
     @objc private func clearShortcut(_ sender: Any?) {
         shortcuts.clearShortcut(sender)
         commitShortcuts(reveal: false)
@@ -525,7 +603,7 @@ extension EditorSettings {
         case .reset:
             alert.messageText = "Reset all editor settings to their defaults?"
             alert.informativeText =
-                "This resets font, zoom, indentation, view preferences, launch behavior, appearance and assigned shortcuts."
+                "This resets font, zoom, indentation, view preferences, how documents with a preview open, launch behavior, appearance and assigned shortcuts."
             title = "Reset Defaults"
         }
         alert.addButton(withTitle: "Cancel", role: .cancel)

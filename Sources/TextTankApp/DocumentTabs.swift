@@ -230,8 +230,19 @@ private final class DocumentTabButton: NSButton {
         guard strip?.allowsSelection == true else { return [] }
         return super.accessibilityCustomActions()
     }
-    func updateSelectionActions(selected: Bool, canToggle: Bool) {
+    /// `viewAction` is the tab's Source, Preview and Both step, named for what it will do. It is
+    /// how the mark that appears under the pointer is reached without one (DS-73).
+    func updateSelectionActions(
+        selected: Bool, canToggle: Bool, viewAction: (name: String, mode: DocumentViewMode)? = nil
+    ) {
         var actions: [NSAccessibilityCustomAction] = []
+        if let viewAction {
+            actions.append(
+                NSAccessibilityCustomAction(name: viewAction.name) { [weak self] in
+                    guard let self, let id = self.tabID else { return false }
+                    return self.strip?.setViewMode(viewAction.mode, for: id) ?? false
+                })
+        }
         if canToggle {
             actions.append(
                 NSAccessibilityCustomAction(name: selected ? "Remove from Selection" : "Add to Selection") {
@@ -254,6 +265,16 @@ private final class DocumentTabButton: NSButton {
         guard let tabID, let menu = strip?.contextMenu(for: tabID) else { return false }
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: bounds.maxY), in: self)
         return true
+    }
+}
+/// The eye on a tab. It is an ordinary button: a press neither selects the tab nor starts a
+/// reorder, because it never reaches the tab's own button.
+private final class DocumentTabModeButton: NSButton {
+    var tabID: TabID?
+    weak var strip: DocumentTabStrip?
+    override func menu(for event: NSEvent) -> NSMenu? { tabID.flatMap { strip?.contextMenu(for: $0) } }
+    override func rightMouseDown(with event: NSEvent) {
+        if let menu = menu(for: event) { NSMenu.popUpContextMenu(menu, with: event, for: self) }
     }
 }
 private final class DocumentTabBackground: NSView {
@@ -287,7 +308,18 @@ final class DocumentTabStrip: NSView {
     private let scroll = NSScrollView(), row = NSView()
     @MainActor private final class Controls {
         let background = DocumentTabBackground(), select = DocumentTabButton(), close = DocumentTabButton()
+        let mode = DocumentTabModeButton()
+        /// Nil for a document with no preview; otherwise what the tab shows.
+        var viewMode: DocumentViewMode?
+        var name = ""
     }
+    /// The tab the pointer is over, which shows its mark even in Source.
+    private var hoveredTab: TabID?
+    private var hoverArea: NSTrackingArea?
+    /// A tab narrower than this has no room for a mark that only appears under the pointer: its
+    /// title would fall below the 82 points a tab at the minimum width has always had. The mark
+    /// of a tab in Preview or Both is state, and is shown at every width.
+    static let hoverMarkMinimumTabWidth: CGFloat = 162
     private var controls: [TabID: Controls] = [:]
     private var order: [TabID] = []
     private struct ReorderCapture {
@@ -326,6 +358,8 @@ final class DocumentTabStrip: NSView {
         super.layout()
         scroll.frame = bounds
         layoutTabs()
+        // A narrower tab may have lost the mark it showed under the pointer.
+        publishAccessibilityChildren()
     }
     func refresh() {
         guard let host else { return }
@@ -333,9 +367,10 @@ final class DocumentTabStrip: NSView {
         if let reorder, reorder.tabs != tabs { cancelReorder() }
         for id in Array(controls.keys) where !ids.contains(id) {
             if let c = controls.removeValue(forKey: id) {
-                ([c.background, c.select, c.close] as [NSView]).forEach { $0.removeFromSuperview() }
+                ([c.background, c.select, c.mode, c.close] as [NSView]).forEach { $0.removeFromSuperview() }
             }
         }
+        if let hoveredTab, !ids.contains(hoveredTab) { self.hoveredTab = nil }
         order = tabs.map(\.id)
         for tab in tabs {
             guard let presentation = host.presentation(for: tab.id), let doc = presentation.document as? TextDocument
@@ -368,12 +403,34 @@ final class DocumentTabStrip: NSView {
                 c.close.action = #selector(closeTab(_:))
                 c.close.tabID = tab.id
                 c.close.strip = self
-                ([c.background, c.select, c.close] as [NSView]).forEach { row.addSubview($0) }
+                c.mode.isBordered = false
+                c.mode.imagePosition = .imageOnly
+                c.mode.target = self
+                c.mode.action = #selector(toggleTabViewMode(_:))
+                c.mode.tabID = tab.id
+                c.mode.strip = self
+                c.mode.setAccessibilityParent(self)
+                // An image-only, borderless button is otherwise reported without a role.
+                c.mode.setAccessibilityElement(true)
+                c.mode.setAccessibilityRole(.button)
+                c.mode.identifier = NSUserInterfaceItemIdentifier("tab.viewMode." + tab.id.rawValue.uuidString)
+                ([c.background, c.select, c.mode, c.close] as [NSView]).forEach { row.addSubview($0) }
             }
             let active = group?.activeTab == tab.id, name = doc.displayName ?? "Untitled"
             let selection = host.tabSelection.selected(in: host.model, group: groupSlot)
             let selected = selection.contains(tab.id)
-            c.select.updateSelectionActions(selected: selected, canToggle: !active || selection.count > 1)
+            c.viewMode = host.tabCommands.viewMode(of: tab.id)
+            c.name = name
+            c.select.updateSelectionActions(
+                selected: selected, canToggle: !active || selection.count > 1,
+                viewAction: c.viewMode.map { mode in
+                    (
+                        mode == .source
+                            ? Strings.text("tabs.viewMode.action.both", "Show Preview Beside Source")
+                            : Strings.text("tabs.viewMode.action.source", "Show Source"),
+                        mode == .source ? .both : .source
+                    )
+                })
             c.background.active = active
             c.background.isHidden = !selected
             c.background.needsDisplay = true
@@ -402,6 +459,24 @@ final class DocumentTabStrip: NSView {
                 c.select.title += " ↔"
                 c.select.setAccessibilityLabel((c.select.accessibilityLabel() ?? name) + ", selected for comparison")
             }
+            // DS-14: the label says what the tab shows when that is not the source alone.
+            if let mode = c.viewMode, mode != .source {
+                c.select.setAccessibilityLabel(
+                    (c.select.accessibilityLabel() ?? name) + ", "
+                        + (mode == .preview
+                            ? Strings.text("tabs.viewMode.showingPreview", "showing Preview")
+                            : Strings.text("tabs.viewMode.showingBoth", "showing Source and Preview")))
+            }
+            // DS-70: the mark names the document and what a press will do; the tooltip says the same.
+            let rendered = c.viewMode != nil && c.viewMode != .source
+            let markLabel = String(
+                format: rendered
+                    ? Strings.text("tabs.viewMode.showSource", "Show source for %@")
+                    : Strings.text("tabs.viewMode.showBoth", "Show preview beside source for %@"), name)
+            c.mode.image = NSImage(systemSymbolName: rendered ? "eye.fill" : "eye", accessibilityDescription: nil)
+            c.mode.toolTip = markLabel
+            c.mode.setAccessibilityLabel(markLabel)
+            c.mode.isEnabled = host.tabCommands.viewModeState(target: tab.id).enabled
             c.select.setAccessibilityHelp(
                 "Command-click to change selection. Shift-click to select a range. Selection actions are also in the accessibility Actions menu."
             )
@@ -410,15 +485,28 @@ final class DocumentTabStrip: NSView {
             c.close.setAccessibilityLabel(c.close.toolTip)
             c.close.isEnabled = host.tabCommands.state(.close, target: tab.id).enabled
         }
+        layoutTabs()
+        publishAccessibilityChildren()
+    }
+    /// Each tab, then its mark while it is shown, then its close button, in the order they are
+    /// drawn. A mark that is hidden is not offered: the tab's own actions and menu reach it.
+    private func publishAccessibilityChildren() {
         let accessible = order.flatMap { id -> [NSView] in
             guard let c = controls[id] else { return [] }
-            return [c.select, c.close]
+            return c.mode.isHidden ? [c.select, c.close] : [c.select, c.mode, c.close]
         }
         setAccessibilityChildren(accessible)
         setAccessibilityChildrenInNavigationOrder(accessible)
-        layoutTabs()
     }
-    private func layoutTabs() {
+    /// Whether the tab shows its mark at `width`: always in Preview or Both; in Source only for
+    /// a document with a preview, while the pointer is over the tab and the tab has room.
+    private func showsMark(_ c: Controls, id: TabID, width: CGFloat) -> Bool {
+        guard let mode = c.viewMode else { return false }
+        return mode != .source || (hoveredTab == id && width >= Self.hoverMarkMinimumTabWidth)
+    }
+    /// `revealingActive` is false when only the pointer moved: showing a mark must not scroll
+    /// the strip back to the active tab under the person's hand.
+    private func layoutTabs(revealingActive: Bool = true) {
         guard !order.isEmpty else {
             row.frame = NSRect(x: 0, y: 0, width: bounds.width, height: 36)
             return
@@ -429,14 +517,19 @@ final class DocumentTabStrip: NSView {
         for id in order {
             guard let c = controls[id] else { continue }
             c.background.frame = NSRect(x: x, y: 0, width: width, height: 36)
-            // Four points separate the selection and close hit targets (DS-14/70/74).
-            c.select.frame = NSRect(x: x + 8, y: 0, width: width - 48, height: 36)
+            // Four points separate the selection and close hit targets (DS-14/70/74). The mark,
+            // when shown, is a third 28 by 28 target with the same four points on either side,
+            // taken from the title, which truncates at its tail.
+            let marked = showsMark(c, id: id, width: width)
+            c.mode.isHidden = !marked
+            c.select.frame = NSRect(x: x + 8, y: 0, width: width - (marked ? 80 : 48), height: 36)
+            c.mode.frame = NSRect(x: x + width - 68, y: 4, width: 28, height: 28)
             c.close.frame = NSRect(x: x + width - 36, y: 4, width: 28, height: 28)
             if group?.activeTab == id { active = c.background.frame }
             x += width
         }
         row.frame = NSRect(x: 0, y: 0, width: max(x, bounds.width), height: 36)
-        row.scrollToVisible(active)
+        if revealingActive { row.scrollToVisible(active) }
     }
     func revealOrganizationChange(_ id: TabID) {
         guard let moved = controls[id]?.background.frame, let activeID = group?.activeTab,
@@ -498,6 +591,43 @@ final class DocumentTabStrip: NSView {
         reorder = nil
         proposedIndex = nil
         dropIndicator.isHidden = true
+    }
+    // MARK: The mark for Source, Preview and Both
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeInActiveApp, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+    override func mouseEntered(with event: NSEvent) { pointerMoved(to: convert(event.locationInWindow, from: nil)) }
+    override func mouseMoved(with event: NSEvent) { pointerMoved(to: convert(event.locationInWindow, from: nil)) }
+    override func mouseExited(with event: NSEvent) { pointerMoved(to: nil) }
+    /// `point` is in the strip's coordinates, or nil when the pointer has left the strip.
+    func pointerMoved(to point: NSPoint?) {
+        let inRow = point.flatMap { bounds.contains($0) ? row.convert($0, from: self) : nil }
+        let over = inRow.flatMap { p in order.first { controls[$0]?.background.frame.contains(p) == true } }
+        guard over != hoveredTab else { return }
+        hoveredTab = over
+        layoutTabs(revealingActive: false)
+        publishAccessibilityChildren()
+    }
+    /// The mark's own action: a tab in Preview or Both returns to Source, and a tab in Source
+    /// shows Both. The tab is not selected.
+    @objc private func toggleTabViewMode(_ sender: DocumentTabModeButton) {
+        guard let id = sender.tabID, let mode = controls[id]?.viewMode else { return }
+        setViewMode(mode == .source ? .both : .source, for: id)
+    }
+    @discardableResult func setViewMode(_ mode: DocumentViewMode, for id: TabID) -> Bool {
+        host?.tabCommands.setViewMode(mode, target: id) ?? false
+    }
+    /// The frames of a tab's three controls and whether its mark is shown, for layout checks.
+    func tabLayout(_ id: TabID) -> (title: NSRect, mark: NSRect, close: NSRect, markShown: Bool)? {
+        guard let c = controls[id] else { return nil }
+        return (c.select.frame, c.mode.frame, c.close.frame, !c.mode.isHidden)
     }
     func contextMenu(for id: TabID) -> NSMenu? { host?.tabCommands.contextMenu(for: id) }
     func clickTab(_ id: TabID, modifiers: NSEvent.ModifierFlags = []) {

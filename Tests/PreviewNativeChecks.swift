@@ -369,6 +369,10 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         Checks.section("narrow pane") { try narrowPane() }
         Checks.section("limits and timing") { try limitsAndTiming(root: root) }
         Checks.section("session capture and restore") { try sessionRestore(root: root, host: host) }
+        Checks.section("tab context menu") { try tabContextMenu(root: root, host: host) }
+        Checks.section("mark on the tab") { try tabMark(root: root, app: app, host: host) }
+        Checks.section("Toggle Preview") { try togglePreview(root: root, app: app, host: host) }
+        Checks.section("Open in, per format") { try openInPerFormat(root: root, app: app, host: host) }
         Checks.section("fail closed") { try failClosed(root: root) }
         settle(0.5)
         check(
@@ -548,8 +552,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             "View has Source, Preview and Both as first-responder commands with no shortcut")
         let view = try requireValue(NSApp.mainMenu?.items.first { $0.title == "View" }?.submenu, "View menu")
         check(
-            Array(view.items.prefix(3)).map(\.title) == ["Source", "Preview", "Both"] && view.items[3].isSeparatorItem,
-            "the three commands and a separator open the View menu")
+            Array(view.items.prefix(4)).map(\.title) == ["Source", "Preview", "Both", "Toggle Preview"]
+                && view.items[4].isSeparatorItem,
+            "the three commands, Toggle Preview and a separator open the View menu")
 
         let document = DocumentFactory.makeUntitled()
         document.editor.text = "# Title\n\nplain so far\n"
@@ -1629,6 +1634,584 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             "a restored mode is not applied to a document that no longer has a preview")
         markdown.close()
         plain.close()
+    }
+
+    // MARK: Switching from the tab
+
+    private static func strip(of host: WorkspaceWindowController) throws -> DocumentTabStrip {
+        try requireValue(host.tabStrips.first, "fixture: the focused group's tab strip")
+    }
+    private static func tabButton(_ tab: EditorWindowController, in strip: DocumentTabStrip) throws -> NSButton {
+        let id = try requireValue(tab.tabID, "fixture: tab identity")
+        return try requireValue(
+            descendants(of: strip, as: NSButton.self).first { $0.identifier?.rawValue == "tab." + id.rawValue.uuidString },
+            "fixture: the tab's own button")
+    }
+    private static func markButton(_ tab: EditorWindowController, in strip: DocumentTabStrip) throws -> NSButton {
+        let id = try requireValue(tab.tabID, "fixture: tab identity")
+        return try requireValue(
+            descendants(of: strip, as: NSButton.self).first {
+                $0.identifier?.rawValue == "tab.viewMode." + id.rawValue.uuidString
+            }, "fixture: the tab's mark")
+    }
+    /// Moves the pointer, as the strip's tracking area reports it, to the middle of a tab's title.
+    private static func hover(_ tab: EditorWindowController?, in strip: DocumentTabStrip) throws {
+        guard let tab else {
+            strip.pointerMoved(to: nil)
+            return
+        }
+        let button = try tabButton(tab, in: strip)
+        strip.pointerMoved(to: strip.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), from: button))
+    }
+    /// True when the keyboard is in `view` or in one of its subviews (an editor's text area is
+    /// a subview of the editor).
+    private static func keyboard(in view: NSView, of host: WorkspaceWindowController) -> Bool {
+        (host.window?.firstResponder as? NSView)?.isDescendant(of: view) == true
+    }
+    private static func viewModeItems(in menu: NSMenu) -> [NSMenuItem] {
+        menu.items.filter { $0.identifier?.rawValue.hasPrefix("tabs.command.viewMode.") == true }
+    }
+    private static func choose(_ item: NSMenuItem) {
+        if let action = item.action { _ = NSApp.sendAction(action, to: item.target, from: item) }
+    }
+
+    private static func tabContextMenu(root: URL, host: WorkspaceWindowController) throws {
+        let folder = root.appendingPathComponent("tab-menu")
+        let (notes, notesTab) = try open("notes.md", "# Notes\n\nfirst\n", in: folder)
+        let (plain, plainTab) = try open("plain.txt", "plain text\n", in: folder)
+        let commands = host.tabCommands
+        let notesID = try requireValue(notesTab.tabID, "fixture: notes tab"), plainID = try requireValue(
+            plainTab.tabID, "fixture: plain tab")
+        check(host.active === plainTab && notesTab.viewMode == .source, "fixture: the plain-text tab is the active one")
+
+        var items = viewModeItems(in: commands.contextMenu(for: notesID))
+        check(
+            items.map(\.title) == ["Source", "Preview", "Both"]
+                && items.map { $0.identifier?.rawValue ?? "" }
+                    == ["tabs.command.viewMode.source", "tabs.command.viewMode.preview", "tabs.command.viewMode.both"],
+            "DS-20 a previewable tab's menu has Source, Preview and Both, titled as in the View menu, with stable identifiers")
+        check(
+            items.map(\.state) == [.on, .off, .off] && items.allSatisfy(\.isEnabled),
+            "DS-22 the checkmark is on what that tab shows, and all three are enabled")
+        let menu = commands.contextMenu(for: notesID)
+        let first = try requireValue(menu.items.firstIndex { $0 === viewModeItems(in: menu).first }, "section start")
+        check(
+            first > 0 && menu.items[first - 1].isSeparatorItem
+                && menu.items.filter { !$0.isSeparatorItem }.count <= 20,
+            "the three items are a section of their own, and the menu stays within DS-23 (\(menu.items.filter { !$0.isSeparatorItem }.count) items)")
+        check(
+            viewModeItems(in: commands.contextMenu(for: plainID)).isEmpty,
+            "DS-21 a tab whose document has no preview has no such section")
+
+        // Choosing Preview for the tab that is not active changes that tab where it is.
+        _ = plainTab.primaryEditor.setSelectionAnchor(2, caret: 5)
+        _ = plainTab.primaryEditor.replaceSelection("PLAIN")
+        _ = notesTab.primaryEditor.setSelectionAnchor(0, caret: 0)
+        _ = notesTab.primaryEditor.replaceSelection("edited ")
+        _ = notesTab.primaryEditor.setSelectionAnchor(3, caret: 6)
+        host.window?.makeFirstResponder(plainTab.primaryEditor)
+        struct State: Equatable {
+            var text: String, revision: UInt, anchor: Int, caret: Int, modified: Bool
+            @MainActor init(_ editor: TTEditor) {
+                text = editor.text
+                revision = editor.revision
+                anchor = editor.selectionAnchor
+                caret = editor.selectionCaret
+                modified = editor.modified
+            }
+        }
+        let before = (State(notesTab.primaryEditor), State(plainTab.primaryEditor))
+        let responder = host.window?.firstResponder
+        let selection = host.tabSelection.selected(in: host.model, group: host.model.focusedGroup)
+        let announced = NativeFixtureEnvironment.announcements.count
+        choose(items[1])
+        check(notesTab.viewMode == .preview, "choosing Preview in a background tab's menu changes that tab")
+        check(
+            host.active === plainTab && plainTab.viewMode == .source && host.model.activeTab?.id == plainID,
+            "the active tab stays active and stays in Source")
+        check(host.window?.firstResponder === responder, "the keyboard focus does not move")
+        check(
+            host.tabSelection.selected(in: host.model, group: host.model.focusedGroup) == selection,
+            "the tab selection is unchanged")
+        check(
+            State(notesTab.primaryEditor) == before.0 && State(plainTab.primaryEditor) == before.1,
+            "neither document's text, revision, selection or edited state changes")
+        check(
+            NativeFixtureEnvironment.announcements.dropFirst(announced).contains("notes.md now shows Preview."),
+            "DS-72 the change to a tab that is not showing is announced")
+        check(
+            plainTab.primaryEditor.executeCommand(undo) && plainTab.primaryEditor.text == "plain text\n"
+                && plainTab.primaryEditor.executeCommand(redo) && plainTab.primaryEditor.text == before.1.text,
+            "Undo in the active document still reverses its own last edit, and Redo restores it")
+        check(
+            notesTab.primaryEditor.executeCommand(undo) && notesTab.primaryEditor.text == "# Notes\n\nfirst\n"
+                && notesTab.primaryEditor.executeCommand(redo) && notesTab.primaryEditor.text == before.0.text,
+            "and the background document's Undo history is intact")
+        items = viewModeItems(in: commands.contextMenu(for: notesID))
+        check(items.map(\.state) == [.off, .on, .off], "the checkmark follows the tab to Preview")
+        check(
+            notesTab.previewCoordinator != nil && !notesTab.isPresented,
+            "the background tab has its preview ready without having been shown")
+
+        // The active tab's own menu behaves as the View menu does.
+        host.activate(notesTab)
+        host.window?.makeFirstResponder(notesTab.keyboardFocusView)
+        choose(viewModeItems(in: commands.contextMenu(for: notesID))[0])
+        check(
+            notesTab.viewMode == .source && keyboard(in: notesTab.primaryEditor, of: host),
+            "for the active tab Source returns the keyboard to the editor, as View > Source does")
+        choose(viewModeItems(in: commands.contextMenu(for: notesID))[2])
+        check(
+            notesTab.viewMode == .both && keyboard(in: notesTab.primaryEditor, of: host)
+                && plainTab.viewMode == .source, "and Both leaves it in the source")
+
+        let stale = viewModeItems(in: commands.contextMenu(for: plainID))
+        check(stale.isEmpty, "fixture: the plain tab still offers nothing")
+        let captured = viewModeItems(in: commands.contextMenu(for: notesID))
+        notes.close()
+        choose(captured[0])
+        check(
+            !commands.setViewMode(.preview, target: notesID) && commands.viewMode(of: notesID) == nil
+                && host.active === plainTab && plainTab.viewMode == .source,
+            "a menu kept from a tab that has since closed changes nothing")
+        plain.close()
+    }
+
+    private static func tabMark(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
+        let folder = root.appendingPathComponent("tab-mark")
+        let (notes, notesTab) = try open("notes.md", "# Notes\n", in: folder)
+        let (plain, plainTab) = try open("plain.txt", "plain\n", in: folder)
+        let (table, tableTab) = try open("table.csv", "a,b\n1,2\n", in: folder)
+        let strip = try strip(of: host)
+        let notesID = try requireValue(notesTab.tabID, "fixture: notes tab")
+        let plainID = try requireValue(plainTab.tabID, "fixture: plain tab")
+        let tableID = try requireValue(tableTab.tabID, "fixture: table tab")
+        host.activate(plainTab)
+        check(tableTab.setViewMode(.preview), "fixture: the table tab shows Preview")
+        func layout(_ id: TabID) throws -> (title: NSRect, mark: NSRect, close: NSRect, markShown: Bool) {
+            try requireValue(strip.tabLayout(id), "fixture: tab layout")
+        }
+        func width(_ id: TabID) throws -> CGFloat { try layout(id).close.maxX + 8 - (layout(id).title.minX - 8) }
+        check(
+            try width(notesID) >= DocumentTabStrip.hoverMarkMinimumTabWidth,
+            "fixture: three tabs are wide enough for a mark under the pointer (\(try width(notesID)) pt)")
+
+        // The three cases, with the pointer elsewhere.
+        try hover(nil, in: strip)
+        check(
+            try !layout(notesID).markShown && markButton(notesTab, in: strip).isHidden,
+            "a previewable tab in Source shows no mark while the pointer is elsewhere")
+        check(
+            try !layout(plainID).markShown && layout(plainID).title.width == width(plainID) - 48,
+            "a tab with no preview has no mark and its title keeps the full width")
+        check(
+            try layout(tableID).markShown && !markButton(tableTab, in: strip).isHidden,
+            "a tab in Preview always shows its mark")
+        try hover(plainTab, in: strip)
+        check(try !layout(plainID).markShown, "the pointer over a tab with no preview brings up no mark")
+        try hover(notesTab, in: strip)
+        var mark = try markButton(notesTab, in: strip)
+        check(try layout(notesID).markShown && !mark.isHidden, "the pointer over a previewable tab in Source shows its mark")
+        check(
+            mark.accessibilityLabel() == "Show preview beside source for notes.md" && mark.toolTip == mark.accessibilityLabel()
+                && mark.accessibilityRole() == .button && mark.image != nil,
+            "DS-70 the mark is a button that names the document and the result, with the same tooltip")
+        var frames = try layout(notesID)
+        check(
+            frames.mark.width == 28 && frames.mark.height == 28 && frames.close.width == 28 && frames.close.height == 28,
+            "DS-74 the mark and the close button are 28 by 28 points")
+        check(
+            frames.mark.minX - frames.title.maxX == 4 && frames.close.minX - frames.mark.maxX == 4
+                && !frames.title.intersects(frames.mark) && !frames.mark.intersects(frames.close),
+            "DS-14 four points separate the title, the mark and the close button")
+        let point = strip.convert(NSPoint(x: mark.bounds.midX, y: mark.bounds.midY), from: mark)
+        check(
+            strip.hitTest(strip.superview?.convert(point, from: strip) ?? point) === mark,
+            "a press on the mark reaches the mark, not the tab's own button, so it cannot select or drag the tab")
+        var children = (strip.accessibilityChildren() ?? []).compactMap { $0 as? NSView }
+        let own = try tabButton(notesTab, in: strip)
+        let index = try requireValue(children.firstIndex { $0 === own }, "fixture: the tab among the strip's children")
+        check(
+            children.count > index + 2 && children[index + 1] === mark
+                && children[index + 2].accessibilityLabel() == "Close notes.md"
+                && (strip.accessibilityChildrenInNavigationOrder() ?? []).compactMap { $0 as? NSView } == children,
+            "the mark is one of the strip's accessibility children, between the tab and its close button")
+
+        // A press on a tab that is not active changes that tab without selecting it.
+        let selection = host.tabSelection.selected(in: host.model, group: host.model.focusedGroup)
+        host.window?.makeFirstResponder(plainTab.primaryEditor)
+        mark.performClick(nil)
+        check(notesTab.viewMode == .both, "pressing the mark of a tab in Source shows Both")
+        check(
+            host.active === plainTab && host.model.activeTab?.id == plainID && !strip.isReordering
+                && host.tabSelection.selected(in: host.model, group: host.model.focusedGroup) == selection
+                && keyboard(in: plainTab.primaryEditor, of: host),
+            "the pressed tab is not selected, nothing is dragged, and the keyboard stays where it was")
+        try hover(nil, in: strip)
+        mark = try markButton(notesTab, in: strip)
+        check(
+            try layout(notesID).markShown && mark.accessibilityLabel() == "Show source for notes.md"
+                && mark.toolTip == "Show source for notes.md",
+            "in Both the mark stays without the pointer and offers the way back to Source")
+        check(
+            try tabButton(notesTab, in: strip).accessibilityLabel() == "notes.md, showing Source and Preview"
+                && tabButton(tableTab, in: strip).accessibilityLabel() == "table.csv, showing Preview"
+                && tabButton(plainTab, in: strip).accessibilityLabel() == "plain.txt",
+            "DS-14 a tab's own label says when it shows Preview or Both")
+        mark.performClick(nil)
+        check(
+            try notesTab.viewMode == .source && !layout(notesID).markShown && host.active === plainTab
+                && tabButton(notesTab, in: strip).accessibilityLabel() == "notes.md",
+            "pressing the mark of a tab in Both returns it to Source, and the mark goes")
+        children = (strip.accessibilityChildren() ?? []).compactMap { $0 as? NSView }
+        check(!children.contains { $0 === mark }, "a mark that is not shown is not among the accessibility children")
+
+        // Without a pointer: an action on the tab itself.
+        var actions = try tabButton(notesTab, in: strip).accessibilityCustomActions() ?? []
+        let show = try requireValue(
+            actions.first { $0.name == "Show Preview Beside Source" }, "DS-73 a Source tab offers the preview as an action")
+        check(
+            show.handler?() == true && notesTab.viewMode == .both && host.active === plainTab,
+            "the action shows Both without selecting the tab")
+        actions = try tabButton(notesTab, in: strip).accessibilityCustomActions() ?? []
+        let plainActions = try tabButton(plainTab, in: strip).accessibilityCustomActions() ?? []
+        check(
+            actions.contains { $0.name == "Show Source" } && !actions.contains { $0.name == "Show Preview Beside Source" }
+                && !plainActions.contains { $0.name.hasPrefix("Show ") },
+            "the action names what it will do next; a tab with no preview has none")
+
+        // The mark follows a change made by any other route.
+        host.activate(notesTab)
+        let viewItems = try viewModeItems()
+        notesTab.setDocumentViewMode(viewItems[0])
+        check(try !layout(notesID).markShown, "View > Source removes the mark")
+        notesTab.setDocumentViewMode(viewItems[1])
+        check(
+            try layout(notesID).markShown
+                && tabButton(notesTab, in: strip).accessibilityLabel() == "notes.md, showing Preview",
+            "View > Preview brings it back, and the tab's label follows")
+        var record = try requireValue(
+            host.captureSessionLayout().groups.flatMap(\.tabs).first { $0.documentID == DocumentID(notes.recoveryID) },
+            "fixture: session record")
+        record.viewMode = nil
+        record.previewSourceFraction = nil
+        notesTab.restoreSessionTab(record)
+        check(try notesTab.viewMode == .source && !layout(notesID).markShown, "a restored Source removes the mark")
+        record.viewMode = .both
+        notesTab.restoreSessionTab(record)
+        check(try notesTab.viewMode == .both && layout(notesID).markShown, "and a restored Both shows it")
+
+        // Language: gaining a preview offers the mark, losing it removes mark and mode.
+        let untitled = DocumentFactory.makeUntitled()
+        let untitledTab = try requireValue(untitled.presentation, "untitled tab")
+        let untitledID = try requireValue(untitledTab.tabID, "untitled tab identity")
+        try hover(untitledTab, in: strip)
+        check(try !layout(untitledID).markShown, "an untitled plain-text tab has no mark under the pointer")
+        check(untitled.applyLanguage("markdown", using: app.languages), "fixture: Markdown language applied")
+        check(
+            try layout(untitledID).markShown && untitledTab.viewMode == .source,
+            "choosing a previewable language offers the mark at once, and the tab stays in Source")
+        try markButton(untitledTab, in: strip).performClick(nil)
+        try hover(nil, in: strip)
+        check(try untitledTab.viewMode == .both && layout(untitledID).markShown, "fixture: the untitled tab shows Both")
+        untitled.usePlainTextLanguage()
+        check(
+            try untitledTab.viewMode == .source && !layout(untitledID).markShown
+                && markButton(untitledTab, in: strip).isHidden,
+            "changing the language to one with no preview removes the mark")
+        try hover(untitledTab, in: strip)
+        check(try !layout(untitledID).markShown, "and the pointer no longer brings one up")
+        untitled.close()
+
+        // At the minimum tab width the title keeps its room: no mark under the pointer, but the
+        // mark that shows state stays.
+        let window = try requireValue(host.window, "workspace window")
+        let size = window.contentView?.bounds.size ?? .zero
+        window.setContentSize(NSSize(width: 800, height: size.height))
+        var fillers: [TextDocument] = []
+        for number in 1...4 { fillers.append(try open("filler\(number).md", "# Filler\n", in: folder).0) }
+        window.contentView?.layoutSubtreeIfNeeded()
+        strip.layout()
+        check(
+            try width(notesID) < DocumentTabStrip.hoverMarkMinimumTabWidth && width(notesID) >= 130,
+            "fixture: seven tabs in an 800-point window are below the width a pointer mark needs (\(try width(notesID)) pt)")
+        notesTab.setViewMode(.source)
+        try hover(notesTab, in: strip)
+        frames = try layout(notesID)
+        let narrow = try width(notesID)
+        check(
+            !frames.markShown && frames.title.width == narrow - 48,
+            "at that width the pointer brings up no mark and the title keeps its full width (\(frames.title.width) pt)")
+        try hover(nil, in: strip)
+        notesTab.setViewMode(.both)
+        frames = try layout(notesID)
+        check(
+            frames.markShown && frames.title.width >= 50 && frames.mark.minX - frames.title.maxX == 4
+                && frames.close.minX - frames.mark.maxX == 4,
+            "a tab in Both keeps its mark at the minimum width, with \(frames.title.width) pt left for the title")
+        check(
+            try tabButton(notesTab, in: strip).lineBreakMode == .byTruncatingTail,
+            "and the title truncates at its tail")
+        window.setContentSize(size)
+        fillers.forEach { $0.close() }
+        notes.close()
+        plain.close()
+        table.close()
+    }
+
+    // MARK: Toggle Preview
+
+    private static func togglePreview(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
+        let bar = try requireValue(NSApp.mainMenu, "menu bar")
+        let view = try requireValue(bar.items.first { $0.title == "View" }?.submenu, "View menu")
+        let toggle = try requireValue(
+            view.items.first { $0.action == #selector(EditorWindowController.toggleDocumentPreview(_:)) },
+            "View > Toggle Preview")
+        check(
+            view.items.firstIndex { $0 === toggle } == 3 && view.items[2].title == "Both" && view.items[4].isSeparatorItem
+                && toggle.title == "Toggle Preview" && toggle.target == nil,
+            "Toggle Preview is directly under Source, Preview and Both, and goes to the first responder")
+        check(
+            toggle.keyEquivalent == "V" && toggle.keyEquivalentModifierMask == .command && toggle is DefaultShortcutItem,
+            "its shortcut is Shift-Command-V, a default that yields to a shortcut assigned in Settings")
+        var chords: [String] = []
+        func walk(_ menu: NSMenu, _ path: String) {
+            for item in menu.items {
+                let here = path + " > " + item.title
+                var key = item.keyEquivalent, flags = item.keyEquivalentModifierMask.intersection([.command, .shift, .option, .control])
+                if key.count == 1, key != key.lowercased() {
+                    key = key.lowercased()
+                    flags.insert(.shift)
+                }
+                if key == "v", flags == [.command, .shift] { chords.append(here) }
+                if let child = item.submenu { walk(child, here) }
+            }
+        }
+        walk(bar, "")
+        check(chords == [" > View > Toggle Preview"], "no other menu item uses Shift-Command-V: \(chords)")
+        check(
+            !EditorSettings.protectedShortcuts.contains("V") && !EditorCommand.defaultShortcuts.values.contains("V")
+                && !SettingsController.reservedShortcuts(in: bar).contains("V"),
+            "the key is not a protected, default or reserved editor shortcut, so saved shortcuts still load")
+        var custom = app.settings.value
+        custom.setShortcut("V", for: EditorCommand.upper.rawValue)
+        try app.settings.save(custom)
+        check(
+            toggle.keyEquivalent.isEmpty && app.settings.ignoredShortcutBindings.isEmpty,
+            "a person's own Shift-Command-V shortcut is kept, and Toggle Preview gives up the key")
+        custom.setShortcut("", for: EditorCommand.upper.rawValue)
+        try app.settings.save(custom)
+        check(toggle.keyEquivalent == "V", "fixture: the default shortcut returns")
+        check(
+            view.items.filter { !$0.isSeparatorItem && !$0.isHidden }.count <= 20,
+            "DS-23 View lists no more than twenty items (\(view.items.filter { !$0.isSeparatorItem && !$0.isHidden }.count))")
+
+        let untitled = DocumentFactory.makeUntitled()
+        let plainTab = try requireValue(untitled.presentation, "untitled tab")
+        check(!host.validateMenuItem(toggle), "DS-21 Toggle Preview is disabled for a document with no preview")
+        plainTab.toggleDocumentPreview(nil)
+        check(plainTab.viewMode == .source, "and does nothing if it is sent anyway")
+        untitled.close()
+
+        let (document, tab) = try open("toggle.md", "# Toggle\n", in: root.appendingPathComponent("toggle"))
+        check(host.active === tab && host.validateMenuItem(toggle), "Toggle Preview is enabled for a Markdown document")
+        check(app.settings.toggledPreviewMode == .both, "fixture: no rendered mode has been chosen by hand yet")
+        tab.toggleDocumentPreview(toggle)
+        check(tab.viewMode == .both, "from Source the first Toggle Preview shows Both")
+        tab.toggleDocumentPreview(toggle)
+        check(tab.viewMode == .source && tab.previewCoordinator == nil, "from Both it returns to Source")
+        let items = try viewModeItems()
+        tab.setDocumentViewMode(items[1])
+        check(tab.viewMode == .preview && app.settings.toggledPreviewMode == .preview, "choosing View > Preview is remembered")
+        tab.toggleDocumentPreview(toggle)
+        check(tab.viewMode == .source, "from Preview it returns to Source")
+        tab.toggleDocumentPreview(toggle)
+        check(tab.viewMode == .preview, "and from Source it now shows Preview, the mode used last")
+        let stored = SettingsStore(url: app.settings.url)
+        check(
+            stored.loadError == nil && stored.value.lastRenderedPreviewMode == "preview"
+                && stored.value.toggledPreviewMode == .preview,
+            "the remembered mode is in the settings file, so it survives a relaunch")
+        // Changes the person did not choose by hand are not remembered.
+        tab.setViewMode(.source)
+        tab.setViewMode(.both)
+        tab.revealSource()
+        check(app.settings.toggledPreviewMode == .preview, "a mode set by the app itself does not change what is remembered")
+        tab.setViewMode(.source)
+        let id = try requireValue(tab.tabID, "fixture: tab identity")
+        check(
+            host.tabCommands.setViewMode(.both, target: id) && app.settings.toggledPreviewMode == .both,
+            "Both chosen from the tab is remembered like Both chosen from the View menu")
+
+        // Recording a macro: the mode commands are view changes, and Toggle Preview is the same.
+        let macros = app.macros
+        host.window?.makeFirstResponder(tab.primaryEditor)
+        tab.setViewMode(.source)
+        macros.startRecording()
+        check(macros.recordingStatus == .recording, "fixture: a macro is being recorded")
+        tab.setDocumentViewMode(items[2])
+        let afterMode = macros.recordingStatus
+        tab.toggleDocumentPreview(toggle)
+        tab.toggleDocumentPreview(toggle)
+        check(
+            afterMode == .recording && macros.recordingStatus == .recording && macros.discardReason == nil,
+            "Toggle Preview leaves a recording as valid as the three mode commands do")
+        // Finished through the non-presenting path: Stop Recording would show an alert for a
+        // recording with no steps, and a check never puts a dialog on the desktop.
+        rejects(
+            "and neither is recorded as a step: the recording ends empty, not discarded",
+            message: "No supported editing actions were recorded."
+        ) { _ = try macros.finishRecording() }
+        check(macros.recordingStatus == .idle, "fixture: the recording has ended")
+        document.close()
+    }
+
+    // MARK: Open in, per format
+
+    private static func openInPerFormat(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
+        let folder = root.appendingPathComponent("open-in")
+        let samples: [(PreviewFormat, String, String)] = [
+            (.markdown, "page.md", "# Page\n"), (.html, "page.html", "<p>Page</p>\n"),
+            (.delimited, "rows.csv", "a,b\n1,2\n"), (.svg, "shape.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n"),
+            (.json, "data.json", "{\"a\": 1}\n")
+        ]
+        func openFresh(_ url: URL) throws -> (TextDocument, EditorWindowController) {
+            let document = try DocumentFactory.openCaptured(
+                WorkspaceStore.captureRegularFile(url, maximumBytes: Int.max), from: url)
+            return (document, try requireValue(document.presentation, "fixture: tab for \(url.lastPathComponent)"))
+        }
+        func setOpenMode(_ mode: DocumentViewMode, for format: PreviewFormat) throws {
+            var value = app.settings.value
+            value.setPreviewOpenMode(mode, for: format)
+            try app.settings.save(value)
+        }
+
+        // Unchanged until the person changes it.
+        for (format, name, text) in samples {
+            let (document, tab) = try openFresh(write(text, name, in: folder))
+            check(
+                tab.viewMode == .source && tab.previewKind?.format == format,
+                "with default settings \(name) opens in Source")
+            document.close()
+        }
+
+        // Each of the five formats, with the other four left at Source.
+        for (index, (format, name, _)) in samples.enumerated() {
+            let wanted: DocumentViewMode = index.isMultiple(of: 2) ? .preview : .both
+            try setOpenMode(wanted, for: format)
+            let url = folder.appendingPathComponent(name)
+            let (document, tab) = try openFresh(url)
+            check(
+                tab.viewMode == wanted && tab.previewCoordinator != nil && host.active === tab,
+                "\(name) opens in \(wanted.rawValue) when Settings says so")
+            check(
+                wanted == .preview
+                    ? tab.previewCoordinator.map { keyboard(in: $0.pane, of: host) } == true
+                    : keyboard(in: tab.primaryEditor, of: host),
+                "and the keyboard goes to what that tab shows")
+            let other = samples[(index + 1) % samples.count]
+            let (otherDocument, otherTab) = try openFresh(folder.appendingPathComponent(other.1))
+            check(otherTab.viewMode == .source, "while \(other.1) still opens in Source")
+            otherDocument.close()
+            document.close()
+            try setOpenMode(.source, for: format)
+        }
+
+        // The NSDocument route that File > Open, a dropped file and a file named on the command
+        // line take: the document reads its file, is registered, and is then shown. This bare
+        // check process has no document types, so the three steps are made here directly.
+        try setOpenMode(.both, for: .markdown)
+        let page = folder.appendingPathComponent("page.md")
+        let viaController = try TextDocument(contentsOf: page, ofType: TextDocument.plainTextType)
+        NSDocumentController.shared.addDocument(viaController)
+        viaController.makeWindowControllers()
+        viaController.showWindows()
+        let controllerTab = try requireValue(viaController.presentation, "fixture: its tab")
+        check(
+            controllerTab.viewMode == .both && viaController.languageIdentifier == "markdown",
+            "a Markdown file read by NSDocument and then registered shows Both")
+
+        // A setting change leaves open tabs alone, and so does a tab changed by hand.
+        try setOpenMode(.preview, for: .markdown)
+        check(controllerTab.viewMode == .both, "changing the setting does not change a tab that is already open")
+        controllerTab.setDocumentViewMode(try viewModeItems()[0])
+        try setOpenMode(.both, for: .markdown)
+        check(controllerTab.viewMode == .source, "nor a tab the person has returned to Source by hand")
+        viaController.makeWindowControllers()
+        viaController.showWindows()
+        check(
+            controllerTab.viewMode == .source && viaController.presentations.count == 1,
+            "showing a document that is already open selects its tab as it is")
+
+        // Untitled documents and Save As: no automatic switch.
+        let untitled = DocumentFactory.makeUntitled()
+        let untitledTab = try requireValue(untitled.presentation, "untitled tab")
+        check(untitled.applyLanguage("markdown", using: app.languages), "fixture: Markdown language applied")
+        check(
+            untitledTab.viewMode == .source && untitledTab.previewKind == .markdown,
+            "an untitled document whose language becomes Markdown stays in Source")
+        let (text, textTab) = try openFresh(write("plain\n", "plain.txt", in: folder))
+        text.fileURL = folder.appendingPathComponent("renamed.md")
+        check(
+            textTab.viewMode == .source && textTab.previewKind == .markdown,
+            "a document saved under a previewable name stays in Source")
+        untitled.close()
+        text.close()
+
+        // A reopened session keeps each tab's recorded mode, whatever the setting says.
+        let (kept, keptTab) = try openFresh(write("# Kept\n", "kept.md", in: folder))
+        keptTab.setViewMode(.preview)
+        controllerTab.setViewMode(.source)
+        check(keptTab.viewMode == .preview && controllerTab.viewMode == .source, "fixture: one tab in Preview, one in Source")
+        let session = try OpenSessionLayout(host).diskLayout()
+        check(
+            session.files.count == 2 && session.layout.groups.flatMap(\.tabs).compactMap(\.viewMode) == [.preview],
+            "fixture: the session records Preview for one tab and nothing for the other")
+        kept.close()
+        viaController.close()
+        check(host.active == nil, "fixture: the workspace is empty before the session is reopened")
+        let reopened = AutomaticSession(url: folder.appendingPathComponent("last-session.json")).reopen(session, in: host)
+        check(reopened.notices.isEmpty && reopened.files.count == 2, "fixture: the session reopens both files \(reopened.notices)")
+        let restoredKept = try requireValue(
+            reopened.files[TextDocument.canonicalDiskURL(folder.appendingPathComponent("kept.md"))]
+                ?? reopened.files.first { $0.key.lastPathComponent == "kept.md" }?.value, "fixture: kept.md reopened")
+        let restoredPage = try requireValue(
+            reopened.files.first { $0.key.lastPathComponent == "page.md" }?.value, "fixture: page.md reopened")
+        check(
+            restoredKept.presentation?.viewMode == .preview,
+            "the tab the session recorded in Preview is restored in Preview, not in the setting's Both")
+        check(
+            restoredPage.presentation?.viewMode == .source,
+            "and the tab the session recorded in Source stays in Source although Markdown now opens in Both")
+        check(!PreviewOpenDefault.isSuspended, "the setting applies again once the session has been reopened")
+        let (after, afterTab) = try openFresh(write("# After\n", "after.md", in: folder))
+        check(afterTab.viewMode == .both, "a file opened after the session is restored opens in Both")
+        after.close()
+        restoredKept.close()
+        restoredPage.close()
+
+        // A settings file from before the choice existed, and one with a value this build does
+        // not know, both open everything in Source.
+        let older = try Data(contentsOf: TestPaths.fixtures.appendingPathComponent("persistence/Settings.json"))
+        for (label, bytes) in [
+            ("an earlier settings file", older),
+            (
+                "a settings file with an unknown value",
+                Data(
+                    #"{"tabWidth":4,"wrap":false,"useTabs":true,"version":1,"appearance":"system","shortcuts":{},"previewOpenModes":{"markdown":"sideways"}}"#
+                        .utf8)
+            )
+        ] {
+            let url = folder.appendingPathComponent("settings-\(UUID().uuidString).json")
+            try bytes.write(to: url)
+            let loaded = SettingsController(url: url)
+            check(
+                loaded.loadError == nil
+                    && PreviewFormat.allCases.allSatisfy { loaded.value.previewOpenMode(for: $0) == .source }
+                    && loaded.toggledPreviewMode == .both, "\(label) loads and reads as Source for every format")
+        }
+        try setOpenMode(.source, for: .markdown)
+        check(app.settings.value.previewOpenModes == nil, "fixture: the settings are back to Source everywhere")
     }
 
     // MARK: Scheme handler responses

@@ -18,6 +18,15 @@ import EditorBridge
         self.scope = scope
     }
 }
+/// One of Source, Preview and Both for the tab that was clicked, which need not be the active one.
+@MainActor private final class TabViewModeInvocation: NSObject {
+    let mode: DocumentViewMode
+    let targetID: TabID
+    init(_ mode: DocumentViewMode, _ targetID: TabID) {
+        self.mode = mode
+        self.targetID = targetID
+    }
+}
 @MainActor final class TabSaveReply: NSObject {
     private static var pending: [UUID: TabSaveReply] = [:]
     let id = UUID()
@@ -164,6 +173,7 @@ import EditorBridge
                 item.isEnabled = stateFor(item).enabled
             }
         }
+        addViewModeItems(to: menu, target: target)
         if let compare = EditorServices.current?.compare {
             compare.addTabItems(to: menu) { [weak host] in
                 guard let doc = host?.presentation(for: target)?.document as? TextDocument, doc.isOpen else {
@@ -177,7 +187,84 @@ import EditorBridge
         menu.addItem(groups)
         return menu
     }
+    // MARK: Source, Preview and Both for one tab
+
+    /// What the tab shows, or nil when its document has no preview: then the tab offers no
+    /// choice at all, in its menu or on the tab (DS-21).
+    func viewMode(of target: TabID) -> DocumentViewMode? {
+        guard tab(target) != nil, let presentation = host.presentation(for: target), !presentation.isRetired,
+            presentation.previewKind != nil
+        else { return nil }
+        return presentation.viewMode
+    }
+    /// The same conditions as the tab commands and the View menu: no comparison in front, no
+    /// tab operation or sheet in progress, and a tab that is still open.
+    func viewModeState(target: TabID) -> (enabled: Bool, reason: String?) {
+        if CompareCommandScope.blocksWorkspace {
+            return (false, "Close or leave the comparison window before managing document tabs.")
+        }
+        if host.isMutatingGroups || isBusy || isReopening || host.window?.attachedSheet != nil {
+            return (false, "Wait for the current tab operation to finish.")
+        }
+        guard tab(target) != nil, let doc = document(target), doc.isOpen else {
+            return (false, "This tab is no longer open.")
+        }
+        return viewMode(of: target) == nil ? (false, "This document has no preview.") : (true, nil)
+    }
+    /// Shows `mode` in the tab. The active tab behaves as it does for the View menu; any other
+    /// tab changes where it is, without being selected and without taking the keyboard.
+    @discardableResult func setViewMode(_ mode: DocumentViewMode, target: TabID) -> Bool {
+        guard viewModeState(target: target).enabled, let presentation = host.presentation(for: target) else {
+            return false
+        }
+        let isActive = host.active === presentation, before = presentation.viewMode
+        guard presentation.chooseViewMode(mode, movingFocus: isActive) else { return false }
+        // A tab that is not showing changes out of sight; say what happened (DS-72).
+        if !isActive, presentation.viewMode != before {
+            let name = (presentation.document as? TextDocument)?.displayName ?? "Untitled"
+            Announce.say(String(format: Self.viewModeAnnouncement(mode), name), from: host.window)
+        }
+        return true
+    }
+    private static func viewModeAnnouncement(_ mode: DocumentViewMode) -> String {
+        switch mode {
+        case .source: return Strings.text("tabs.viewMode.nowSource", "%@ now shows Source.")
+        case .preview: return Strings.text("tabs.viewMode.nowPreview", "%@ now shows Preview.")
+        case .both: return Strings.text("tabs.viewMode.nowBoth", "%@ now shows Source and Preview.")
+        }
+    }
+    /// The identifier of a mode's item in a tab's context menu.
+    static func viewModeIdentifier(_ mode: DocumentViewMode) -> String { "tabs.command.viewMode." + mode.rawValue }
+    /// Adds Source, Preview and Both with the View menu's titles (DS-20) and a checkmark on what
+    /// the tab shows (DS-22). A tab whose document has no preview gets no section.
+    private func addViewModeItems(to menu: NSMenu, target: TabID) {
+        guard viewMode(of: target) != nil else { return }
+        menu.addItem(.separator())
+        for mode in DocumentViewMode.allCases {
+            let item = menu.addItem(
+                title: DocumentViewCommands.title(mode), action: #selector(invokeViewMode(_:)), target: self,
+                representedObject: TabViewModeInvocation(mode, target))
+            item.identifier = NSUserInterfaceItemIdentifier(Self.viewModeIdentifier(mode))
+            item.isEnabled = validateMenuItem(item)
+        }
+    }
+    @objc private func invokeViewMode(_ item: NSMenuItem) {
+        guard let call = item.representedObject as? TabViewModeInvocation else { return }
+        guard tab(call.targetID) != nil else {
+            host.showTabMessage("This tab is no longer open. No document was changed.")
+            return
+        }
+        let available = viewModeState(target: call.targetID)
+        guard available.enabled else {
+            host.showTabMessage(available.reason ?? "This tab command is unavailable.")
+            return
+        }
+        setViewMode(call.mode, target: call.targetID)
+    }
     private func stateFor(_ item: NSMenuItem) -> (enabled: Bool, reason: String?) {
+        if let call = item.representedObject as? TabViewModeInvocation {
+            return viewModeState(target: call.targetID)
+        }
         guard let call = item.representedObject as? TabMenuInvocation else {
             return (false, "This tab command is unavailable.")
         }
@@ -189,6 +276,9 @@ import EditorBridge
         if let call = item.representedObject as? TabMenuInvocation {
             item.title = title(call.command, target: call.targetID, scope: call.scope)
             item.state = pinState(call.command, target: call.targetID, scope: call.scope)
+        }
+        if let call = item.representedObject as? TabViewModeInvocation {
+            item.state = viewMode(of: call.targetID) == call.mode ? .on : .off
         }
         item.toolTip = s.reason
         return s.enabled

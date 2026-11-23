@@ -1407,6 +1407,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             return true
         case #selector(closeSplit(_:)): return secondary != nil
         case #selector(setDocumentViewMode(_:)): return validateDocumentViewMode(item)
+        case #selector(toggleDocumentPreview(_:)): return validateToggleDocumentPreview(item)
         case #selector(command(_:)):
             if (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder is NSTextView { return false }
             guard let id = item.representedObject as? String else { return false }

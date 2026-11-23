@@ -2258,6 +2258,215 @@
           }
         }
       }
+    },
+    "settings.preview.delimited": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CSV and TSV"
+          }
+        }
+      }
+    },
+    "settings.preview.format": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview format"
+          }
+        }
+      }
+    },
+    "settings.preview.html": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HTML"
+          }
+        }
+      }
+    },
+    "settings.preview.json": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "JSON"
+          }
+        }
+      }
+    },
+    "settings.preview.markdown": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Markdown"
+          }
+        }
+      }
+    },
+    "settings.preview.openIn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open in"
+          }
+        }
+      }
+    },
+    "settings.preview.openIn.help": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What a document of this format shows when you open it. Tabs that are already open, and tabs reopened from the last session, keep what they show."
+          }
+        }
+      }
+    },
+    "settings.preview.openIn.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open %@ documents in"
+          }
+        }
+      }
+    },
+    "settings.preview.svg": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SVG"
+          }
+        }
+      }
+    },
+    "tabs.viewMode.action.both": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Preview Beside Source"
+          }
+        }
+      }
+    },
+    "tabs.viewMode.action.source": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Source"
+          }
+        }
+      }
+    },
+    "tabs.viewMode.nowBoth": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ now shows Source and Preview."
+          }
+        }
+      }
+    },
+    "tabs.viewMode.nowPreview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ now shows Preview."
+          }
+        }
+      }
+    },
+    "tabs.viewMode.nowSource": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ now shows Source."
+          }
+        }
+      }
+    },
+    "tabs.viewMode.showBoth": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show preview beside source for %@"
+          }
+        }
+      }
+    },
+    "tabs.viewMode.showSource": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show source for %@"
+          }
+        }
+      }
+    },
+    "tabs.viewMode.showingBoth": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "showing Source and Preview"
+          }
+        }
+      }
+    },
+    "tabs.viewMode.showingPreview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "showing Preview"
+          }
+        }
+      }
+    },
+    "view.mode.toggle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toggle Preview"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
