@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def resource_paths(root):
-    paths = ['Resources/AutomationTemplates/recipe-ingredient-cleanup.rules.json', 'Resources/AutomationTemplates/sort-unique-lines.rules.json', 'Resources/AutomationTemplates/trim-and-remove-empty-lines.rules.json', 'Resources/Brand/Inter-OFL.txt', 'Resources/Brand/SpaceGrotesk-OFL.txt', 'Resources/Credits.rtf', 'Resources/LanguageProfiles.json', 'Resources/Localizable.xcstrings', 'Resources/TextTank-License.txt', 'Resources/TextTank-User-Guide.txt', 'Resources/TextTank-Welcome.txt', 'Resources/TextTank.icns', 'Resources/boost-License.txt', 'Resources/lexilla-License.txt', 'Resources/scintilla-License.txt']
+    paths = ['Resources/AutomationTemplates/recipe-ingredient-cleanup.rules.json', 'Resources/AutomationTemplates/sort-unique-lines.rules.json', 'Resources/AutomationTemplates/trim-and-remove-empty-lines.rules.json', 'Resources/Brand/Inter-OFL.txt', 'Resources/Brand/SpaceGrotesk-OFL.txt', 'Resources/Credits.rtf', 'Resources/LanguageProfiles.json', 'Resources/Localizable.xcstrings', 'Resources/Preview/preview.css', 'Resources/TextTank-License.txt', 'Resources/TextTank-User-Guide.txt', 'Resources/TextTank-Welcome.txt', 'Resources/TextTank.icns', 'Resources/boost-License.txt', 'Resources/lexilla-License.txt', 'Resources/scintilla-License.txt']
     for path in paths:
         if not (root / path).is_file():
             raise ValueError(f"Required bundled resource missing: {path}")
