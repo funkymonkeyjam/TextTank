@@ -49,9 +49,11 @@ import TextTankCore
     private var requestedRevision: UInt?
 
     /// How many times the web content process ended while the pane showed `revision`.
-    private var contentLosses: (revision: UInt, count: Int)?
+    private var contentLosses: (revision: UInt, count: Int, at: TimeInterval)?
     /// After this many losses for the same text, the preview stops trying.
     static let contentLossLimit = 2
+    /// Losses further apart than this many seconds are unrelated.
+    static let contentLossWindow: TimeInterval = 30
 
     /// Renders started, and results applied to the pane, since the coordinator was made. Read
     /// only by the checks.
@@ -94,8 +96,12 @@ import TextTankCore
             return
         }
         let revision = editor.revision
-        let count = (contentLosses?.revision == revision ? contentLosses?.count ?? 0 : 0) + 1
-        contentLosses = (revision, count)
+        // Only losses close together count: a page that stops the process does so as it loads,
+        // while an unrelated loss long after a good render deserves a fresh attempt.
+        let now = ProcessInfo.processInfo.systemUptime
+        let repeated = contentLosses.map { $0.revision == revision && now - $0.at < Self.contentLossWindow } ?? false
+        let count = (repeated ? contentLosses?.count ?? 0 : 0) + 1
+        contentLosses = (revision, count, now)
         guard count >= Self.contentLossLimit else {
             shown = nil
             refresh(after: 0)

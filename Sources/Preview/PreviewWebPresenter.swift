@@ -161,7 +161,7 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
         (function () {
           var pressed = null;
           function linkOf(event) {
-            return event.target && event.target.closest ? event.target.closest('a[href], area[href]') : null;
+            return event.target && event.target.closest ? event.target.closest('a, area') : null;
           }
           document.addEventListener('mousedown', function (event) { pressed = linkOf(event); }, true);
           function activate(event) {
@@ -169,7 +169,11 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
             var wasPressed = link !== null && link === pressed && event.detail > 0;
             pressed = null;
             if (!link) { return; }
-            var address = String(link.href);
+            // An SVG link's `href` is an animated string, also when written as `xlink:href`.
+            var written = link.href && typeof link.href === 'object' ? link.href.baseVal : link.getAttribute('href');
+            if (written === null || written === undefined) { return; }
+            var address;
+            try { address = new URL(String(written), document.baseURI).href; } catch (error) { return; }
             if (/^(https?|mailto):/i.test(address)) {
               event.preventDefault();
               event.stopPropagation();

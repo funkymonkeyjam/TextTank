@@ -843,6 +843,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             <iframe src="\(base)/frame.html"></iframe>
             <video src="\(base)/movie.mp4" autoplay></video>
             <a id="external" href="\(base)/clicked">external link</a>
+            <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="40" height="20">
+            <a id="drawn" href="\(base)/drawn"><text y="15">a</text></a>
+            <a id="drawnOld" xlink:href="\(base)/drawn-old"><text x="20" y="15">b</text></a></svg>
             <a id="pinged" href="#heading" ping="\(base)/ping">anchor with a ping</a>
             <a id="local" href="other.html">local page</a>
             <a id="anchor" href="#heading">anchor</a>
@@ -973,6 +976,22 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         _ = script(web, "document.getElementById('external').click(); 1")
         settle(0.3)
         check(opened.value.isEmpty, "the earlier press does not carry over to a later activation without one")
+        // A link drawn inside an SVG, with either spelling of its address, behaves the same way.
+        for (id, path) in [("drawn", "drawn"), ("drawnOld", "drawn-old")] {
+            opened.value = []
+            _ = script(web, press + "pointer('click', '\(id)', 1); 1")
+            settle(0.3)
+            check(
+                opened.value.isEmpty && listener.connections == 1 && handler.checkRecord.pageServeCount == 1,
+                "an SVG link clicked with no pointer press opens nothing and connects nowhere (\(id))")
+            _ = script(web, press + "pointer('mousedown', '\(id)', 1); pointer('click', '\(id)', 1); 1")
+            wait("SVG link routed") { !opened.value.isEmpty }
+            settle(0.3)
+            check(
+                opened.value == [URL(string: "\(base)/\(path)")!] && listener.connections == 1,
+                "a pressed SVG link is handed to the opener once and the web view makes no connection (\(id)): \(opened.value)")
+        }
+        opened.value = []
         // An http: load started through the web view's own API is not checked against the
         // listener: WebKit connects ahead of asking the navigation delegate for such a load, and
         // nothing in the application makes one. The rule itself is checked above as a function.
