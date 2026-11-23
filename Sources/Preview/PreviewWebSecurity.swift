@@ -67,7 +67,7 @@ import WebKit
         callbacks.forEach { $0() }
     }
 
-    /// For checks: puts the rules in a known state without compiling.
+    /// Called only by the checks: puts the rules in a known state without compiling.
     func replaceStateForChecks(_ replacement: State) { settle(replacement) }
 }
 
@@ -104,6 +104,10 @@ enum PreviewNavigationPolicy {
 
 /// Serves a preview page and what it may load. Everything comes from memory or from a file that
 /// `PreviewResourceResolver` approved; the URL's host is never looked at.
+///
+/// Every response carries the content security policy as a response header. That header is the
+/// policy in force for the page: unlike the `<meta>` copy inside the document, no markup in the
+/// document can move it, precede it or switch it off.
 @MainActor final class PreviewSchemeHandler: NSObject, WKURLSchemeHandler {
     /// What the handler serves until the next render replaces it.
     struct Site {
@@ -111,27 +115,47 @@ enum PreviewNavigationPolicy {
         var resolver: PreviewResourceResolver
     }
 
+    /// What the checks read to see what was served. Counters and short names only: no document
+    /// or file bytes are kept for them.
+    struct CheckRecord {
+        static let listLength = 16
+        /// How many times the page and the image have been served since the handler was made.
+        var pageServeCount = 0
+        var imageServeCount = 0
+        /// The length in bytes of the image last served.
+        var lastImageLength: Int?
+        /// The paths of the most recent requests, newest last.
+        var recentRequestPaths: [String] = []
+        /// The names of the local files most recently served to the current page, newest last.
+        var servedLocalFileNames: [String] = []
+
+        fileprivate static func appending(_ value: String, to list: [String]) -> [String] {
+            Array((list + [value]).suffix(listLength))
+        }
+    }
+
     /// Replacing the site makes every address of the previous one unknown and resets the counts.
     var site: Site? {
         didSet {
+            siteGeneration += 1
             missingLocalFiles = 0
             refusedLocalFiles = 0
-            servedLocalFiles = []
+            broadFolderLocalFiles = 0
+            checkRecord.servedLocalFileNames = []
         }
     }
+    /// Raised whenever the site is replaced, so a file read that finishes late can tell that the
+    /// page it was for is gone.
+    private var siteGeneration = 0
     /// Local files the current page asked for that do not exist.
     private(set) var missingLocalFiles = 0
-    /// Local files the current page asked for that the resolver refused for any other reason.
+    /// Local files the current page asked for that the resolver refused: outside the document's
+    /// folder, not a stylesheet or image, or too large.
     private(set) var refusedLocalFiles = 0
-    /// Local files served to the current page, as resolved file URLs.
-    private(set) var servedLocalFiles: [URL] = []
-    /// How many times the page and the image have been served since the handler was made.
-    private(set) var pageServeCount = 0
-    private(set) var imageServeCount = 0
-    /// The bytes last served for the image, for checks.
-    private(set) var lastServedImage: Data?
-    /// The paths of the most recent requests, newest last, for checks and diagnosis.
-    private(set) var recentRequestPaths: [String] = []
+    /// Local files the current page asked for while its document is saved directly in the home
+    /// folder or at the top of the disk.
+    private(set) var broadFolderLocalFiles = 0
+    private(set) var checkRecord = CheckRecord()
     var onCountsChanged: (() -> Void)?
 
     /// Requests whose file is being read. A request leaves when it is answered or stopped;
@@ -143,6 +167,7 @@ enum PreviewNavigationPolicy {
         case served(URL, Data, mimeType: String)
         case missing
         case refused
+        case refusedBroadFolder
     }
 
     func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {
@@ -151,15 +176,15 @@ enum PreviewNavigationPolicy {
             return
         }
         let path = url.path(percentEncoded: true)
-        recentRequestPaths = Array((recentRequestPaths + [path]).suffix(64))
+        checkRecord.recentRequestPaths = CheckRecord.appending(path, to: checkRecord.recentRequestPaths)
         if path == site.page.pagePath {
-            pageServeCount += 1
+            checkRecord.pageServeCount += 1
             respond(task, url: url, data: site.page.html, mimeType: "text/html; charset=utf-8")
             return
         }
         if let imagePath = site.page.imagePath, let image = site.page.image, path == imagePath {
-            imageServeCount += 1
-            lastServedImage = image
+            checkRecord.imageServeCount += 1
+            checkRecord.lastImageLength = image.count
             respond(task, url: url, data: image, mimeType: "image/svg+xml")
             return
         }
@@ -176,9 +201,11 @@ enum PreviewNavigationPolicy {
         let request = nextRequest
         nextRequest += 1
         reading[request] = task
+        // A read that finishes after the page was replaced must not count against the new page.
+        let countedFor = fromCurrentPage ? siteGeneration : nil
         Task.detached(priority: .userInitiated) { [weak self] in
             let outcome = Self.load(relativePath, resolver: resolver)
-            await self?.finish(request, url: url, outcome: outcome, counts: fromCurrentPage)
+            await self?.finish(request, url: url, outcome: outcome, countedFor: countedFor)
         }
     }
 
@@ -186,17 +213,21 @@ enum PreviewNavigationPolicy {
         reading = reading.filter { $0.value !== task }
     }
 
-    private func finish(_ request: Int, url: URL, outcome: FileOutcome, counts: Bool) {
+    private func finish(_ request: Int, url: URL, outcome: FileOutcome, countedFor: Int?) {
         guard let task = reading.removeValue(forKey: request) else { return }
+        let counts = countedFor == siteGeneration
         switch outcome {
         case .served(let file, let data, let mimeType):
-            if counts { servedLocalFiles.append(file) }
+            if counts {
+                checkRecord.servedLocalFileNames = CheckRecord.appending(
+                    file.lastPathComponent, to: checkRecord.servedLocalFileNames)
+            }
             respond(task, url: url, data: data, mimeType: mimeType)
         case .missing:
-            if counts { note(.missing) }
+            if counts { note(outcome) }
             task.didFailWithError(URLError(.fileDoesNotExist))
-        case .refused:
-            if counts { note(.refused) }
+        case .refused, .refusedBroadFolder:
+            if counts { note(outcome) }
             task.didFailWithError(URLError(.noPermissionsToReadFile))
         }
     }
@@ -205,16 +236,23 @@ enum PreviewNavigationPolicy {
         switch outcome {
         case .missing: missingLocalFiles += 1
         case .refused: refusedLocalFiles += 1
+        case .refusedBroadFolder: broadFolderLocalFiles += 1
         case .served: return
         }
         onCountsChanged?()
     }
 
-    private func respond(_ task: any WKURLSchemeTask, url: URL, data: Data, mimeType: String) {
-        let headers = [
-            "Content-Type": mimeType, "Content-Length": String(data.count), "Cache-Control": "no-store",
-            "X-Content-Type-Options": "nosniff"
+    /// The headers of every response: the page, the SVG image and each local file.
+    static func responseHeaders(mimeType: String, length: Int) -> [String: String] {
+        [
+            "Content-Type": mimeType, "Content-Length": String(length), "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": StaticHTMLPolicy.contentSecurityPolicy()
         ]
+    }
+
+    private func respond(_ task: any WKURLSchemeTask, url: URL, data: Data, mimeType: String) {
+        let headers = Self.responseHeaders(mimeType: mimeType, length: data.count)
         guard let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)
         else {
             task.didFailWithError(URLError(.cannotParseResponse))
@@ -231,6 +269,7 @@ enum PreviewNavigationPolicy {
     private nonisolated static func load(_ relativePath: String, resolver: PreviewResourceResolver) -> FileOutcome {
         switch resolver.resolve(requestPath: relativePath) {
         case .denied(.missing): return .missing
+        case .denied(.documentFolderTooBroad): return .refusedBroadFolder
         case .denied: return .refused
         case .allowed(let file, let mimeType):
             let descriptor = open(file.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)

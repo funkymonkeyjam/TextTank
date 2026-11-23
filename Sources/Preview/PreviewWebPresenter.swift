@@ -45,6 +45,8 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
 /// A click on an `http`, `https` or `mailto` link is caught by the application's own script
 /// before the web view starts a navigation, and handed to the person's browser. The web view
 /// would otherwise open a connection to the link's server while it asked whether to navigate.
+/// Only a pointer press and release on the link opens it. A page can take the keyboard focus for
+/// a link by itself (`autofocus`), so Return on a focused link opens nothing (DS-97).
 @MainActor final class PreviewWebPresenter: NSObject, WKNavigationDelegate {
     /// The view to place in the pane. It holds the web view once there is one.
     let view = NSView()
@@ -69,13 +71,17 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
     private var restoreScroll: CGPoint?
     private var accessibilityName = ""
 
-    /// The most recent navigation decisions, newest last, for checks and diagnosis.
-    private(set) var recentDecisions: [(url: URL?, decision: PreviewNavigationPolicy.Decision)] = []
-    /// Pages loaded since the presenter was made, and loads that finished or failed.
-    private(set) var loadCount = 0
-    private(set) var finishedCount = 0
-    /// Times the web content process ended and the page had to be rendered again.
-    private(set) var contentLostCount = 0
+    /// What the checks read. Counters and a short list of addresses; nothing of the page.
+    struct CheckRecord {
+        /// The most recent navigation decisions, newest last, at most sixteen.
+        var recentDecisions: [(url: URL?, decision: PreviewNavigationPolicy.Decision)] = []
+        /// Pages loaded since the presenter was made, and loads that finished or failed.
+        var loadCount = 0
+        var finishedCount = 0
+        /// Times the web content process ended.
+        var contentLostCount = 0
+    }
+    private(set) var checkRecord = CheckRecord()
     /// True when nothing is waiting or loading: what the web view shows is the last page given.
     var isSettled: Bool { waiting == nil && !navigating && !isReadingScroll }
 
@@ -138,7 +144,7 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
         pageURL = url
         startingOwnLoad = true
         navigating = true
-        loadCount += 1
+        checkRecord.loadCount += 1
         onUnavailable?(nil)
         webView.load(URLRequest(url: url))
     }
@@ -147,25 +153,36 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
 
     private static let linkMessageName = "textTankPreviewLink"
     /// Runs in the application's own script world, which page scripts being off does not affect.
-    /// It stops an external link from navigating and reports its address instead.
-    private static let linkScript = """
+    /// It stops every activation of an external link from navigating, and reports the link's
+    /// address only when a pointer was pressed and released on that same link. An activation
+    /// from the keyboard (Return on a focused link) has no press before it and a click count of
+    /// zero, and is not reported: a page can focus a link by itself with `autofocus`.
+    static let linkScript = """
         (function () {
-          function report(event) {
-            var link = event.target && event.target.closest ? event.target.closest('a[href], area[href]') : null;
+          var pressed = null;
+          function linkOf(event) {
+            return event.target && event.target.closest ? event.target.closest('a[href], area[href]') : null;
+          }
+          document.addEventListener('mousedown', function (event) { pressed = linkOf(event); }, true);
+          function activate(event) {
+            var link = linkOf(event);
+            var wasPressed = link !== null && link === pressed && event.detail > 0;
+            pressed = null;
             if (!link) { return; }
             var address = String(link.href);
             if (/^(https?|mailto):/i.test(address)) {
               event.preventDefault();
               event.stopPropagation();
-              window.webkit.messageHandlers.\(linkMessageName).postMessage(address);
+              if (wasPressed) { window.webkit.messageHandlers.\(linkMessageName).postMessage(address); }
             }
           }
-          document.addEventListener('click', report, true);
-          document.addEventListener('auxclick', report, true);
+          document.addEventListener('click', activate, true);
+          document.addEventListener('auxclick', activate, true);
         })();
         """
 
-    /// A link the person clicked. Only `http`, `https` and `mailto` addresses are opened (DS-97).
+    /// A link the person pressed and released the pointer on. Only `http`, `https` and `mailto`
+    /// addresses are opened (DS-97).
     fileprivate func openClickedLink(_ url: URL?) {
         let decision = PreviewNavigationPolicy.decide(
             url: url, pageURL: pageURL, isOwnLoad: false, isLinkActivation: true, isMainFrame: true)
@@ -174,14 +191,15 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
     }
 
     private func note(_ url: URL?, _ decision: PreviewNavigationPolicy.Decision) {
-        recentDecisions = Array((recentDecisions + [(url, decision)]).suffix(64))
+        checkRecord.recentDecisions = Array((checkRecord.recentDecisions + [(url, decision)]).suffix(16))
     }
 
     private func publishSummary() {
         onSummaryChanged?(
             PreviewMessages.joined([
                 PreviewSummary.text(for: report, missingLocalFiles: handler.missingLocalFiles),
-                PreviewMessages.refusedLocalFiles(handler.refusedLocalFiles)
+                PreviewMessages.refusedLocalFiles(handler.refusedLocalFiles),
+                PreviewMessages.broadFolderLocalFiles(handler.broadFolderLocalFiles)
             ]))
     }
 
@@ -242,21 +260,19 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
         decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
     ) {
         let isOwnLoad = startingOwnLoad && action.navigationType == .other
+        // Nothing is opened from here. An external link is opened only by `openClickedLink`,
+        // after the link script saw a pointer press on it; a link activation that reaches the
+        // web view any other way, such as Return on a link the page focused itself, is cancelled.
         let decision = PreviewNavigationPolicy.decide(
-            url: action.request.url, pageURL: pageURL, isOwnLoad: isOwnLoad,
-            isLinkActivation: action.navigationType == .linkActivated,
+            url: action.request.url, pageURL: pageURL, isOwnLoad: isOwnLoad, isLinkActivation: false,
             isMainFrame: action.targetFrame?.isMainFrame == true)
         note(action.request.url, decision)
         switch decision {
         case .allow:
             if isOwnLoad, action.request.url?.fragment == nil { startingOwnLoad = false }
             decisionHandler(.allow)
-        case .cancel:
+        case .cancel, .openExternally:
             decisionHandler(.cancel)
-        case .openExternally(let url):
-            // The person clicked this link; opening it is their explicit choice (DS-97).
-            decisionHandler(.cancel)
-            RuntimeEnvironment.current.openExternalURL(url)
         }
     }
 
@@ -283,14 +299,14 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
         guard navigating else { return }
         navigating = false
         startingOwnLoad = false
-        finishedCount += 1
+        checkRecord.finishedCount += 1
         publishSummary()
         // A page that arrived while this one was loading is shown next.
         if waiting != nil { loadWaitingPage() }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        contentLostCount += 1
+        checkRecord.contentLostCount += 1
         navigating = false
         pageURL = nil
         onContentLost?()

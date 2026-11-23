@@ -51,7 +51,15 @@ enum PreviewMessages {
     static var unavailable: String {
         Strings.text(
             "preview.web.unavailable",
-            "The preview cannot be shown because its safety rules could not be prepared. Nothing was loaded.")
+            "The preview cannot be shown because its safety rules could not be prepared. Nothing was loaded. Quit TextTank and open it again to try once more."
+        )
+    }
+    /// The web content process ended twice while it showed the same text.
+    static var stoppedRepeatedly: String {
+        Strings.text(
+            "preview.web.stoppedRepeatedly",
+            "The preview stopped twice while showing this document, so it is not shown. The document is not changed. Edit the document to try the preview again."
+        )
     }
     static var noLongerPreviewable: String {
         Strings.text(
@@ -73,6 +81,21 @@ enum PreviewMessages {
             : Strings.text(
                 "preview.summary.refused.other",
                 "%@ local files were not loaded. Only stylesheets and images in the document's folder are loaded.")
+        return String(format: format, Strings.number(count))
+    }
+    /// Local files a page asked for while its document has no folder of its own.
+    static func broadFolderLocalFiles(_ count: Int) -> String? {
+        guard count > 0 else { return nil }
+        let format =
+            count == 1
+            ? Strings.text(
+                "preview.summary.broadFolder.one",
+                "%@ local file was not loaded because this document is saved directly in your home folder or at the top of the disk. Save the document in a folder of its own to load it."
+            )
+            : Strings.text(
+                "preview.summary.broadFolder.other",
+                "%@ local files were not loaded because this document is saved directly in your home folder or at the top of the disk. Save the document in a folder of its own to load them."
+            )
         return String(format: format, Strings.number(count))
     }
     static func moreQuotingProblems(_ count: Int) -> String? {
