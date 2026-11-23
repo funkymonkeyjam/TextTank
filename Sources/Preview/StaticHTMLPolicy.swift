@@ -17,6 +17,10 @@ package enum HTMLPreparation: Sendable, Equatable {
 /// The rules that keep previewed HTML static: no scripts, no network, and local files only
 /// through the preview scheme. The web view enforces the same rules again (JavaScript disabled,
 /// a content rule list, a scheme handler); this type provides the parts that are pure text.
+///
+/// The content security policy is enforced by the response header the scheme handler sends
+/// with every response. The `<meta>` tag written here is a second copy of it, and markup can
+/// defeat a `<meta>` (see `prepare`), so nothing may rely on the tag alone.
 package enum StaticHTMLPolicy {
     /// The content security policy for every previewed page. Images and stylesheets load only
     /// from `scheme`; inline styles are allowed; everything else is refused.
@@ -64,7 +68,13 @@ package enum StaticHTMLPolicy {
     /// `<head>` and reports what the preview will block. The document is not otherwise rewritten.
     ///
     /// When there is no `<head>`, one is added after the `<html>` start tag, or after the doctype,
-    /// or at the very start. A policy placed first applies to everything after it.
+    /// or at the very start.
+    ///
+    /// The tag is a second layer only. This scan is not an HTML parser: a `<head>` found inside a
+    /// title, a text area, a template, a comment in a script or foreign content, or after the
+    /// body has begun, is not where a browser's head is, and a browser ignores a policy `<meta>`
+    /// outside its head. Anything before the tag, such as an earlier `<base>`, is also outside
+    /// its reach. The policy that holds for every document is the response header.
     package static func prepare(
         html: String, limits: PreviewLimits = .standard, scheme: String = PreviewScheme.name,
         isCancelled: @escaping () -> Bool = { Task.isCancelled }
@@ -77,18 +87,20 @@ package enum StaticHTMLPolicy {
         var endOfHead: Int?
         var endOfHTMLTag: Int?
         var endOfDoctype: Int?
-        var tokenizer = MarkupTokenizer(bytes, isXML: false, poll: CancellationPoll(isCancelled))
+        let poll = CancellationPoll(isCancelled)
+        var tokenizer = MarkupTokenizer(bytes, isXML: false, poll: poll)
         do {
             while let token = try tokenizer.next() {
                 switch token {
                 case .tag(let tag):
-                    MarkupScan.note(tag, in: &report)
+                    try MarkupScan.note(tag, in: &report, poll: poll)
                     guard !tag.isClosing else { continue }
                     if tag.name == "head", endOfHead == nil { endOfHead = tag.range.upperBound }
                     if tag.name == "html", endOfHTMLTag == nil { endOfHTMLTag = tag.range.upperBound }
                 case .rawText(let element, let range):
                     if element == "style" {
-                        MarkupScan.noteStyleSheet(String(decoding: bytes[range], as: UTF8.self), in: &report)
+                        try MarkupScan.noteStyleSheet(
+                            String(decoding: bytes[range], as: UTF8.self), in: &report, poll: poll)
                     }
                 case .doctype(let range):
                     if endOfDoctype == nil { endOfDoctype = range.upperBound }
@@ -195,16 +207,18 @@ package enum SVGPolicy {
         }
         var report = PreviewContentReport()
         var rootName: String?
-        var tokenizer = MarkupTokenizer(bytes, isXML: true, poll: CancellationPoll(isCancelled))
+        let poll = CancellationPoll(isCancelled)
+        var tokenizer = MarkupTokenizer(bytes, isXML: true, poll: poll)
         do {
             while let token = try tokenizer.next() {
                 switch token {
                 case .tag(let tag):
                     if rootName == nil, !tag.isClosing { rootName = tag.name }
-                    MarkupScan.note(tag, in: &report)
+                    try MarkupScan.note(tag, in: &report, poll: poll)
                 case .rawText(let element, let range):
                     if element == "style" {
-                        MarkupScan.noteStyleSheet(String(decoding: bytes[range], as: UTF8.self), in: &report)
+                        try MarkupScan.noteStyleSheet(
+                            String(decoding: bytes[range], as: UTF8.self), in: &report, poll: poll)
                     }
                 case .doctype:
                     break

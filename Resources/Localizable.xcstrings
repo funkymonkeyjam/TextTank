@@ -2138,6 +2138,17 @@
         }
       }
     },
+    "preview.limit.tableCells": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This document is too large to preview. Its tables have more than %@ cells."
+          }
+        }
+      }
+    },
     "preview.summary.external.one": {
       "extractionState": "manual",
       "localizations": {

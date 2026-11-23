@@ -6,7 +6,8 @@ package struct DelimitedDiagnostic: Sendable, Equatable {
     package enum Kind: Sendable, Equatable {
         /// A quoted value was opened and the document ended before its closing quote.
         case unterminatedQuote
-        /// A quote appeared inside a value that is not quoted, or after a closing quote.
+        /// A quote appeared inside a value that is not quoted, or text followed a closing quote.
+        /// The value is then every byte between its delimiters, quotes included.
         case strayQuote
     }
 
@@ -47,7 +48,7 @@ package struct DelimitedTable: Sendable, Equatable {
     /// The most diagnostics that are kept. `diagnosticCount` still counts all of them.
     package static let maxListedDiagnostics = 100
 
-    /// The unquoted bytes of every cell, one after another.
+    /// The bytes of every cell, one after another: unquoted for a well-formed quoted value.
     private var cellBytes: [UInt8] = []
     /// For each cell, the offset in `cellBytes` just after it. A document is at most
     /// `PreviewLimits.maxSourceBytes` long, far below what 32 bits can hold.
@@ -118,6 +119,8 @@ package enum DelimitedParsing: Sendable, Equatable {
 
 extension DelimitedTable {
     /// Parses UTF-8 text. `delimiter` is a comma or a tab; any other ASCII character also works.
+    /// A delimiter that is not ASCII is a programming error and stops the program: it could only
+    /// be read as some other character, which would show a table the document does not contain.
     ///
     /// A byte order mark is skipped. Rows end at LF, CRLF or CR; a line break at the very end of
     /// the document does not start another row. Bytes that are not valid UTF-8 are shown as the
@@ -130,9 +133,11 @@ extension DelimitedTable {
         guard source.count <= limits.maxSourceBytes, source.count <= Int(UInt32.max) else {
             return .limited(.sourceTooLarge(maxBytes: limits.maxSourceBytes))
         }
+        guard let delimiterByte = delimiter.asciiValue else {
+            preconditionFailure("DelimitedTable.parse needs an ASCII delimiter")
+        }
         var reader = DelimitedReader(
-            bytes: Array(source), delimiter: delimiter.asciiValue ?? PreviewByte.comma, limits: limits,
-            poll: CancellationPoll(isCancelled))
+            bytes: Array(source), delimiter: delimiterByte, limits: limits, poll: CancellationPoll(isCancelled))
         do {
             try reader.readAll()
             return .parsed(reader.table)
@@ -199,15 +204,19 @@ private struct DelimitedReader {
 
     /// Reads one value and the delimiter or line break after it.
     private mutating func readField(into field: inout [UInt8]) throws -> FieldEnd {
+        // Counted here as well, so that a row of empty values is polled too.
+        try poll.checkpoint()
+        let fieldStart = position
         var hasStrayQuote = false
+        var hasTextAfterClosingQuote = false
         if position < bytes.count, bytes[position] == PreviewByte.quote {
             position += 1
             guard try readQuotedText(into: &field) else {
                 table.note(.unterminatedQuote)
                 return .endOfInput
             }
-            // Anything between the closing quote and the delimiter is kept as written.
-            hasStrayQuote = position < bytes.count && !isFieldEnd(bytes[position])
+            hasTextAfterClosingQuote = position < bytes.count && !isFieldEnd(bytes[position])
+            hasStrayQuote = hasTextAfterClosingQuote
         }
         while position < bytes.count, !isFieldEnd(bytes[position]) {
             try poll.checkpoint()
@@ -215,6 +224,9 @@ private struct DelimitedReader {
             field.append(bytes[position])
             position += 1
         }
+        // The quotes of such a value were not quoting, so nothing is removed: the value is its
+        // bytes as written. This keeps "shown as written" true for malformed rows as well.
+        if hasTextAfterClosingQuote { field = Array(bytes[fieldStart..<position]) }
         if hasStrayQuote { table.note(.strayQuote) }
         guard position < bytes.count else { return .endOfInput }
         if bytes[position] == delimiter {

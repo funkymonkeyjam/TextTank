@@ -49,7 +49,9 @@ package struct JSONSyntaxError: Sendable, Equatable {
     }
 
     package var kind: Kind
-    /// The byte offset of the problem, from 0. It is never past the end of the document.
+    /// The byte offset of the problem, from 0: the offset of the offending byte, or, for
+    /// `unexpectedEnd`, the length of the document, which is the place just after its last
+    /// byte. Go to Error puts the caret there. It is never greater than the length.
     package var byteOffset: Int
     /// 1-based.
     package var line: Int

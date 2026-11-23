@@ -35,7 +35,8 @@ struct MarkdownTable {
     enum Alignment { case none, left, center, right }
     var alignments: [Alignment]
     var header: [[UInt8]]
-    /// Every row has exactly as many cells as the header.
+    /// The cells of each row as written, at most as many as the header has. A shorter row is
+    /// padded with empty cells when it is written, where the output limit applies.
     var rows: [[[UInt8]]]
 }
 
@@ -277,12 +278,18 @@ struct MarkdownBlockParser {
     }
 
     let maxNesting: Int
+    let maxTableColumns: Int
+    let maxTableCells: Int
     let poll: CancellationPoll
     /// Link reference definitions found so far, by normalized label. The first definition wins.
     private(set) var references: [String: MarkdownReference] = [:]
+    /// Table cells in the document so far, counting every row as wide as its header.
+    private var tableCellCount = 0
 
-    init(maxNesting: Int, poll: CancellationPoll) {
-        self.maxNesting = maxNesting
+    init(limits: PreviewLimits, poll: CancellationPoll) {
+        self.maxNesting = limits.markdownMaxNesting
+        self.maxTableColumns = limits.markdownMaxTableColumns
+        self.maxTableCells = limits.markdownMaxTableCells
         self.poll = poll
     }
 
@@ -315,7 +322,7 @@ struct MarkdownBlockParser {
     ) throws -> Int {
         let line = lines[index]
         if MarkdownText.indentColumns(line) >= 4 {
-            return parseIndentedCode(at: index, in: lines, into: &blocks)
+            return try parseIndentedCode(at: index, in: lines, into: &blocks)
         }
         if let fence = MarkdownFence(opening: line) {
             return try parseFencedCode(fence, at: index, in: lines, into: &blocks)
@@ -336,10 +343,10 @@ struct MarkdownBlockParser {
                 return try parseList(marker, at: index, in: lines, depth: depth, into: &blocks)
             }
         }
-        if let table = Self.tableStart(at: index, in: lines) {
-            return parseTable(table, at: index, in: lines, into: &blocks)
+        if let table = Self.tableStart(at: index, in: lines, maxColumns: maxTableColumns) {
+            return try parseTable(table, at: index, in: lines, into: &blocks)
         }
-        return parseParagraph(at: index, in: lines, into: &blocks)
+        return try parseParagraph(at: index, in: lines, into: &blocks)
     }
 
     // MARK: Leaf blocks
@@ -392,12 +399,15 @@ struct MarkdownBlockParser {
         return nil
     }
 
-    private func parseIndentedCode(at start: Int, in lines: [MarkdownLine], into blocks: inout [MarkdownBlock]) -> Int {
+    private func parseIndentedCode(
+        at start: Int, in lines: [MarkdownLine], into blocks: inout [MarkdownBlock]
+    ) throws -> Int {
         var codeLines: [MarkdownLine] = []
         var endOfCode = start
         var index = start
         while index < lines.count {
             let line = lines[index]
+            try poll.checkpoint(line.count + 1)
             let isBlank = MarkdownText.isBlank(line)
             guard isBlank || MarkdownText.indentColumns(line) >= 4 else { break }
             codeLines.append(MarkdownText.removingIndent(line, columns: 4))
@@ -436,13 +446,14 @@ struct MarkdownBlockParser {
 
     private mutating func parseParagraph(
         at start: Int, in lines: [MarkdownLine], into blocks: inout [MarkdownBlock]
-    ) -> Int {
+    ) throws -> Int {
         var textLines = [MarkdownText.trimmingLeadingBlanks(lines[start])]
         var headingLevel: Int?
         var underline: MarkdownLine?
         var index = start + 1
         while index < lines.count {
             let line = lines[index]
+            try poll.checkpoint(line.count + 1)
             if MarkdownText.isBlank(line) { break }
             if let level = Self.setextLevel(line) {
                 headingLevel = level
@@ -450,7 +461,9 @@ struct MarkdownBlockParser {
                 index += 1
                 break
             }
-            if Self.startsBlock(line) || Self.tableStart(at: index, in: lines) != nil { break }
+            if Self.startsBlock(line) || Self.tableStart(at: index, in: lines, maxColumns: maxTableColumns) != nil {
+                break
+            }
             textLines.append(MarkdownText.trimmingLeadingBlanks(line))
             index += 1
         }
@@ -670,8 +683,8 @@ struct MarkdownBlockParser {
     }
 
     /// A table starts at a line with a pipe whose next line is a delimiter row (`| --- | :-: |`)
-    /// with the same number of cells.
-    private static func tableStart(at index: Int, in lines: [MarkdownLine]) -> TableStart? {
+    /// with the same number of cells, at most `maxColumns` of them.
+    private static func tableStart(at index: Int, in lines: [MarkdownLine], maxColumns: Int) -> TableStart? {
         guard index + 1 < lines.count else { return nil }
         let headerLine = lines[index]
         let delimiterLine = lines[index + 1]
@@ -689,7 +702,7 @@ struct MarkdownBlockParser {
             alignments.append(alignment)
         }
         let header = tableCells(headerLine)
-        guard !alignments.isEmpty, header.count == alignments.count else { return nil }
+        guard !alignments.isEmpty, alignments.count <= maxColumns, header.count == alignments.count else { return nil }
         return TableStart(header: header, alignments: alignments)
     }
 
@@ -740,16 +753,20 @@ struct MarkdownBlockParser {
         return cells
     }
 
-    private func parseTable(
+    /// Rows are kept as written and never padded here: padding every short row of a wide table
+    /// would cost far more memory than the source. The cell budget counts the padded size.
+    private mutating func parseTable(
         _ start: TableStart, at index: Int, in lines: [MarkdownLine], into blocks: inout [MarkdownBlock]
-    ) -> Int {
+    ) throws -> Int {
         let columnCount = start.header.count
         var table = MarkdownTable(alignments: start.alignments, header: start.header, rows: [])
+        tableCellCount += columnCount
         var next = index + 2
         while next < lines.count, !MarkdownText.isBlank(lines[next]), !Self.startsBlock(lines[next]) {
-            var cells = Array(Self.tableCells(lines[next]).prefix(columnCount))
-            while cells.count < columnCount { cells.append([]) }
-            table.rows.append(cells)
+            try poll.checkpoint(lines[next].count + 1)
+            tableCellCount += columnCount
+            guard tableCellCount <= maxTableCells else { throw PreviewStop.tooManyTableCells }
+            table.rows.append(Array(Self.tableCells(lines[next]).prefix(columnCount)))
             next += 1
         }
         blocks.append(.table(table))

@@ -71,6 +71,11 @@ private struct MarkdownInlinePass {
     /// The longest link destination or title, in bytes, that is recognized.
     private static let maxLinkPartLength = 2048
     private static let maxParenthesisDepth = 32
+    /// The most bytes read, in one paragraph, by attempts to read `(destination "title")` that
+    /// found no link. An attempt can read thousands of bytes, so text such as `[](a (` repeated
+    /// would otherwise cost that much for every few bytes. When the allowance is used up, the
+    /// rest of the paragraph has no inline links; reference links are not affected.
+    private static let failedTargetAllowance = 64 * maxLinkPartLength
 
     private static let isSpecial: [Bool] = {
         var table = [Bool](repeating: false, count: 256)
@@ -91,6 +96,7 @@ private struct MarkdownInlinePass {
     private var textStart = 0
     /// Start offsets of every backtick run, by run length. Built on first use.
     private var backtickRuns: [Int: [Int]]?
+    private var failedTargetBytesLeft = Self.failedTargetAllowance
 
     init(text: [UInt8], references: [String: MarkdownReference], poll: CancellationPoll) {
         self.text = text
@@ -490,9 +496,11 @@ private struct MarkdownInlinePass {
     /// A `]` completes a link or image when a target follows it; otherwise it is literal text and
     /// so is the bracket it would have closed.
     private mutating func closeBracket() throws {
-        guard let opener = brackets.popLast(), opener.isActive,
-            let target = linkTarget(afterBracketAt: position, opener: opener)
-        else {
+        guard let opener = brackets.popLast(), opener.isActive else {
+            position += 1
+            return
+        }
+        guard let target = linkTarget(afterBracketAt: position, opener: opener) else {
             position += 1
             return
         }
@@ -546,10 +554,12 @@ private struct MarkdownInlinePass {
 
     /// Finds what the bracket pair ending at `close` links to: `(destination "title")`, a
     /// `[label]` naming a definition, or the bracket's own text naming a definition.
-    private func linkTarget(afterBracketAt close: Int, opener: Bracket) -> LinkTarget? {
+    private mutating func linkTarget(afterBracketAt close: Int, opener: Bracket) -> LinkTarget? {
         let after = close + 1
-        if after < text.count, text[after] == PreviewByte.openParen, let target = inlineLinkTarget(openParen: after) {
-            return target
+        if after < text.count, text[after] == PreviewByte.openParen, failedTargetBytesLeft > 0 {
+            var furthest = after
+            if let target = inlineLinkTarget(openParen: after, furthest: &furthest) { return target }
+            failedTargetBytesLeft -= furthest - after
         }
         guard !references.isEmpty else { return nil }
         var label = text[opener.contentStart..<close]
@@ -565,19 +575,22 @@ private struct MarkdownInlinePass {
         return LinkTarget(destination: reference.destination, title: reference.title, end: end)
     }
 
-    /// Parses `(destination)` or `(destination "title")` starting at the `(`.
-    private func inlineLinkTarget(openParen: Int) -> LinkTarget? {
+    /// Parses `(destination)` or `(destination "title")` starting at the `(`. `furthest` is set
+    /// to the last index read, which is what a failed attempt cost.
+    private func inlineLinkTarget(openParen: Int, furthest: inout Int) -> LinkTarget? {
         var index = indexAfterWhitespace(from: openParen + 1)
+        furthest = index
         guard index < text.count else { return nil }
         let destination: ArraySlice<UInt8>
         if text[index] == PreviewByte.lessThan {
             guard
-                let close = endOfDelimitedPart(from: index + 1, closer: PreviewByte.greaterThan, allowsLineBreak: false)
+                let close = endOfDelimitedPart(
+                    from: index + 1, closer: PreviewByte.greaterThan, allowsLineBreak: false, furthest: &furthest)
             else { return nil }
             destination = text[(index + 1)..<close]
             index = close + 1
         } else {
-            guard let end = endOfBareDestination(from: index) else { return nil }
+            guard let end = endOfBareDestination(from: index, furthest: &furthest) else { return nil }
             destination = text[index..<end]
             index = end
         }
@@ -585,12 +598,14 @@ private struct MarkdownInlinePass {
         index = indexAfterWhitespace(from: index)
         var title: [UInt8]?
         if index < text.count, index > afterDestination, let closer = Self.titleCloser(for: text[index]) {
-            guard let close = endOfDelimitedPart(from: index + 1, closer: closer, allowsLineBreak: true) else {
-                return nil
-            }
+            guard
+                let close = endOfDelimitedPart(
+                    from: index + 1, closer: closer, allowsLineBreak: true, furthest: &furthest)
+            else { return nil }
             title = MarkdownText.unescaped(text[(index + 1)..<close])
             index = indexAfterWhitespace(from: close + 1)
         }
+        furthest = max(furthest, index)
         guard index < text.count, text[index] == PreviewByte.closeParen else { return nil }
         return LinkTarget(destination: MarkdownText.unescaped(destination), title: title, end: index + 1)
     }
@@ -611,9 +626,12 @@ private struct MarkdownInlinePass {
     }
 
     /// The index of the unescaped `closer` that ends a `<destination>` or a title.
-    private func endOfDelimitedPart(from start: Int, closer: UInt8, allowsLineBreak: Bool) -> Int? {
+    private func endOfDelimitedPart(from start: Int, closer: UInt8, allowsLineBreak: Bool, furthest: inout Int)
+        -> Int?
+    {
         var index = start
         let limit = min(text.count, start + Self.maxLinkPartLength)
+        defer { furthest = max(furthest, min(index, limit)) }
         while index < limit {
             let byte = text[index]
             if byte == PreviewByte.backslash {
@@ -630,10 +648,11 @@ private struct MarkdownInlinePass {
 
     /// The end of a destination written without angle brackets: it stops at whitespace or at the
     /// `)` that closes the link, and may contain balanced parentheses.
-    private func endOfBareDestination(from start: Int) -> Int? {
+    private func endOfBareDestination(from start: Int, furthest: inout Int) -> Int? {
         var index = start
         var depth = 0
         let limit = min(text.count, start + Self.maxLinkPartLength)
+        defer { furthest = max(furthest, min(index, limit)) }
         while index < limit {
             let byte = text[index]
             if byte == PreviewByte.backslash, index + 1 < text.count, PreviewByte.isPunctuation(text[index + 1]) {

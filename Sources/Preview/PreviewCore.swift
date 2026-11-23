@@ -74,6 +74,11 @@ package struct PreviewLimits: Sendable, Equatable {
     package var maxOutputBytes = 16 * 1024 * 1024
     /// The deepest nesting of Markdown block quotes and lists. Deeper markers are shown as text.
     package var markdownMaxNesting = 32
+    /// The most columns a Markdown table may have. A wider header is not a table: its lines are
+    /// shown as text.
+    package var markdownMaxTableColumns = 4096
+    /// The most Markdown table cells, empty ones included, in one document.
+    package var markdownMaxTableCells = 1_000_000
     /// The largest local file, in bytes, that the preview serves to a page (a stylesheet or image).
     package var maxResourceBytes = 8 * 1024 * 1024
 
@@ -89,6 +94,7 @@ package enum PreviewLimit: Sendable, Equatable {
     case tooManyColumns(shown: Int)
     case tooManyValues(shown: Int)
     case nestedTooDeeply(maxDepth: Int)
+    case tooManyTableCells(maxCells: Int)
 
     package var message: String {
         switch self {
@@ -121,6 +127,12 @@ package enum PreviewLimit: Sendable, Equatable {
                 format: Strings.text(
                     "preview.limit.depth", "Only the first %@ levels of nesting are shown."),
                 Strings.number(maxDepth))
+        case .tooManyTableCells(let maxCells):
+            return String(
+                format: Strings.text(
+                    "preview.limit.tableCells",
+                    "This document is too large to preview. Its tables have more than %@ cells."),
+                Strings.number(maxCells))
         }
     }
 }
@@ -130,6 +142,7 @@ package enum PreviewLimit: Sendable, Equatable {
 enum PreviewStop: Error {
     case cancelled
     case outputTooLarge
+    case tooManyTableCells
 }
 
 /// Asks the caller's cancellation closure about once for every `interval` units of work, so a
@@ -302,14 +315,18 @@ package enum PreviewURLPolicy {
     }
 
     /// True for `http:`, `https:` and `mailto:` addresses and for relative addresses. False for
-    /// every other scheme (`javascript:`, `data:`, `file:`, ...) and for any address containing a
-    /// control character, because browsers ignore some of them when they read the scheme.
+    /// every other scheme (`javascript:`, `data:`, `file:`, ...), for an address that starts
+    /// with `//`, and for any address containing a control character, because browsers ignore
+    /// some of them when they read the scheme.
     package static func allowsMarkdownDestination(_ url: String) -> Bool {
         let scalars = Array(url.unicodeScalars.drop(while: { $0.value <= 0x20 }))
         if scalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) { return false }
         var trimmed = String.UnicodeScalarView()
         trimmed.append(contentsOf: scalars)
-        guard let scheme = scheme(of: String(trimmed)) else { return true }
+        let address = String(trimmed)
+        // "//host/path" names another computer without naming a scheme.
+        if address.hasPrefix("//") { return false }
+        guard let scheme = scheme(of: address) else { return true }
         return allowedSchemes.contains(scheme)
     }
 }

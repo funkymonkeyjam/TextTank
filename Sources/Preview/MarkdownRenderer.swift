@@ -42,7 +42,7 @@ package enum MarkdownRenderer {
         }
         let poll = CancellationPoll(isCancelled)
         do {
-            var parser = MarkdownBlockParser(maxNesting: limits.markdownMaxNesting, poll: poll)
+            var parser = MarkdownBlockParser(limits: limits, poll: poll)
             let blocks = try parser.parse(MarkdownText.lines(of: bytes), depth: 0).blocks
             var writer = MarkdownHTMLWriter(
                 inline: MarkdownInlineRenderer(references: parser.references, poll: poll),
@@ -51,6 +51,8 @@ package enum MarkdownRenderer {
             return .rendered(String(decoding: writer.output, as: UTF8.self))
         } catch PreviewStop.outputTooLarge {
             return .limited(.outputTooLarge(maxBytes: limits.maxOutputBytes))
+        } catch PreviewStop.tooManyTableCells {
+            return .limited(.tooManyTableCells(maxCells: limits.markdownMaxTableCells))
         } catch {
             return .cancelled
         }
@@ -173,16 +175,20 @@ private struct MarkdownHTMLWriter {
         append("</table>\n")
     }
 
+    /// Writes one cell per column. A row with fewer cells than the header is padded with empty
+    /// ones here, so the padding is bounded by the output limit.
     private mutating func write(row: [[UInt8]], cellTag: String, alignments: [MarkdownTable.Alignment]) throws {
         append("<tr>\n")
-        for (cell, alignment) in zip(row, alignments) {
+        for (column, alignment) in alignments.enumerated() {
+            try poll.checkpoint()
+            if output.count > maxOutputBytes { throw PreviewStop.outputTooLarge }
             switch alignment {
             case .none: append("<\(cellTag)>")
             case .left: append("<\(cellTag) align=\"left\">")
             case .center: append("<\(cellTag) align=\"center\">")
             case .right: append("<\(cellTag) align=\"right\">")
             }
-            try inline.render(cell, into: &output)
+            if column < row.count { try inline.render(row[column], into: &output) }
             append("</\(cellTag)>\n")
         }
         append("</tr>\n")

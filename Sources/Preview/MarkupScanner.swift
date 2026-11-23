@@ -109,13 +109,17 @@ struct MarkupTokenizer {
         return bytes.count
     }
 
-    /// The index of the `</name` that ends a raw-text element, or the end of the input.
+    /// The index of the `</name` that ends a raw-text element, or the end of the input. The
+    /// name must end there: `</scriptx` does not end a script.
     private func startOfEndTag(named name: String, from start: Int) throws -> Int {
         let endTag = Array(("</" + name).utf8)
         var index = start
         while index < bytes.count {
             try poll.checkpoint()
-            if bytes[index] == PreviewByte.lessThan, hasPrefix(endTag, at: index) { return index }
+            if bytes[index] == PreviewByte.lessThan, hasPrefix(endTag, at: index) {
+                let after = index + endTag.count
+                if after >= bytes.count || Self.endsName(bytes[after]) { return index }
+            }
             index += 1
         }
         return bytes.count
@@ -198,7 +202,8 @@ package struct PreviewContentReport: Sendable, Equatable {
     package var externalReferences: [String] = []
     /// Script elements, inline event handlers (`onclick=...`) and `javascript:` addresses.
     package var scriptCount = 0
-    /// True when the document has a `<base>` tag. The content security policy ignores it.
+    /// True when the document has a `<base>` tag. The content security policy sent with the
+    /// page (`base-uri 'none'`) makes the browser ignore it.
     package var hasBaseTag = false
     /// Every listed reference, for a fast "already listed" test.
     private var listed: Set<String> = []
@@ -231,8 +236,8 @@ enum MarkupScan {
         return lowercased.hasPrefix("http:") || lowercased.hasPrefix("https:") || lowercased.hasPrefix("//")
     }
 
-    /// Records what one start tag loads or would run.
-    static func note(_ tag: MarkupTag, in report: inout PreviewContentReport) {
+    /// Records what one start tag loads or would run. Throws only when cancelled.
+    static func note(_ tag: MarkupTag, in report: inout PreviewContentReport, poll: CancellationPoll) throws {
         guard !tag.isClosing else { return }
         if tag.name == "script" { report.scriptCount += 1 }
         if tag.name == "base" { report.hasBaseTag = true }
@@ -242,7 +247,7 @@ enum MarkupScan {
             if scriptAddressAttributes.contains(attribute.name), isScriptAddress(attribute.value) {
                 report.scriptCount += 1
             }
-            if attribute.name == "style" { noteStyleSheet(attribute.value, in: &report) }
+            if attribute.name == "style" { try noteStyleSheet(attribute.value, in: &report, poll: poll) }
             guard loadsResources else { continue }
             if addressAttributes.contains(attribute.name) {
                 report.noteReference(attribute.value)
@@ -264,21 +269,26 @@ enum MarkupScan {
         return String(String.UnicodeScalarView(significant)).lowercased() == "javascript:"
     }
 
-    /// Records every `url(...)` and `@import "..."` address in CSS text.
-    static func noteStyleSheet(_ css: String, in report: inout PreviewContentReport) {
+    private static let urlKeyword = Array("url(".utf8)
+    private static let importKeyword = Array("@import".utf8)
+
+    /// Records every `url(...)` and `@import "..."` address in CSS text. Throws only when
+    /// cancelled.
+    static func noteStyleSheet(_ css: String, in report: inout PreviewContentReport, poll: CancellationPoll) throws {
         let lowercased = Array(css.lowercased().utf8)
         let original = Array(css.utf8)
         // Lowercasing can change the length of non-ASCII text; then scan the original as written.
         let bytes = lowercased.count == original.count ? lowercased : original
         var index = 0
         while index < bytes.count {
-            if matches("url(", in: bytes, at: index) {
+            try poll.checkpoint()
+            if matches(urlKeyword, in: bytes, at: index) {
                 let start = index + 4
                 var end = start
                 while end < bytes.count, bytes[end] != PreviewByte.closeParen { end += 1 }
                 report.noteReference(unquoted(original[start..<end]))
                 index = end
-            } else if matches("@import", in: bytes, at: index) {
+            } else if matches(importKeyword, in: bytes, at: index) {
                 var start = index + 7
                 while start < bytes.count, PreviewByte.isWhitespace(bytes[start]) { start += 1 }
                 if start < bytes.count, bytes[start] == PreviewByte.quote || bytes[start] == PreviewByte.apostrophe {
@@ -295,9 +305,9 @@ enum MarkupScan {
         }
     }
 
-    private static func matches(_ keyword: String, in bytes: [UInt8], at index: Int) -> Bool {
-        let expected = Array(keyword.utf8)
-        return index + expected.count <= bytes.count && bytes[index..<index + expected.count].elementsEqual(expected)
+    private static func matches(_ keyword: [UInt8], in bytes: [UInt8], at index: Int) -> Bool {
+        guard bytes[index] == keyword[0], index + keyword.count <= bytes.count else { return false }
+        return bytes[index..<index + keyword.count].elementsEqual(keyword)
     }
 
     /// Removes surrounding whitespace and one pair of quotes.

@@ -11,6 +11,9 @@ package struct PreviewResourceResolver: Sendable {
         /// The document has never been saved, so it has no folder.
         case untitledDocument
         case outsideDocumentFolder
+        /// The document is directly in the top folder of the disk or in the home folder itself,
+        /// so "the document's folder" would be the whole disk or everything the person owns.
+        case documentFolderTooBroad
         case typeNotAllowed
         case tooLarge
         case missing
@@ -31,20 +34,25 @@ package struct PreviewResourceResolver: Sendable {
 
     private let documentURL: URL?
     private let maxBytes: Int
+    private let homeDirectory: URL
     private let resolveSymlinks: @Sendable (URL) -> URL
     private let fileSize: @Sendable (URL) -> Int?
 
     /// - Parameters:
     ///   - documentURL: the saved document's file URL, or nil for an untitled document.
+    ///   - homeDirectory: the person's home folder. A document saved directly in it, or directly
+    ///     in the top folder of the disk, is served no local file; one in a subfolder is.
     ///   - resolveSymlinks: returns the real location of a file. Injected so tests need no disk.
     ///   - fileSize: the size in bytes of a regular file, or nil when there is no such file.
     package init(
         documentURL: URL?, maxBytes: Int = PreviewLimits.standard.maxResourceBytes,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         resolveSymlinks: @escaping @Sendable (URL) -> URL = { $0.resolvingSymlinksInPath() },
         fileSize: @escaping @Sendable (URL) -> Int? = { PreviewResourceResolver.regularFileSize($0) }
     ) {
         self.documentURL = documentURL
         self.maxBytes = maxBytes
+        self.homeDirectory = homeDirectory
         self.resolveSymlinks = resolveSymlinks
         self.fileSize = fileSize
     }
@@ -61,6 +69,8 @@ package struct PreviewResourceResolver: Sendable {
         guard !components.isEmpty else { return .denied(.missing) }
 
         let folder = documentURL.deletingLastPathComponent().standardizedFileURL
+        let realFolder = resolveSymlinks(folder).standardizedFileURL
+        guard !isTooBroad(folder), !isTooBroad(realFolder) else { return .denied(.documentFolderTooBroad) }
         var requested = folder
         for component in components { requested.appendPathComponent(String(component)) }
         requested = requested.standardizedFileURL
@@ -69,7 +79,6 @@ package struct PreviewResourceResolver: Sendable {
         guard Self.mimeTypes[requested.pathExtension.lowercased()] != nil else { return .denied(.typeNotAllowed) }
 
         // Then where the file really is.
-        let realFolder = resolveSymlinks(folder).standardizedFileURL
         let realFile = resolveSymlinks(requested).standardizedFileURL
         guard Self.isInside(realFile, folder: realFolder) else { return .denied(.outsideDocumentFolder) }
         guard let mimeType = Self.mimeTypes[realFile.pathExtension.lowercased()] else {
@@ -78,6 +87,19 @@ package struct PreviewResourceResolver: Sendable {
         guard let size = fileSize(realFile) else { return .denied(.missing) }
         guard size <= maxBytes else { return .denied(.tooLarge) }
         return .allowed(realFile, mimeType: mimeType)
+    }
+
+    /// True for the top folder of the disk and for the home folder itself.
+    private func isTooBroad(_ folder: URL) -> Bool {
+        let path = Self.withoutTrailingSlash(folder.path)
+        if path.isEmpty { return true }
+        let home = Self.withoutTrailingSlash(homeDirectory.standardizedFileURL.path)
+        let realHome = Self.withoutTrailingSlash(resolveSymlinks(homeDirectory).standardizedFileURL.path)
+        return path == home || path == realHome
+    }
+
+    private static func withoutTrailingSlash(_ path: String) -> String {
+        path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : (path == "/" ? "" : path)
     }
 
     private static func isInside(_ file: URL, folder: URL) -> Bool {

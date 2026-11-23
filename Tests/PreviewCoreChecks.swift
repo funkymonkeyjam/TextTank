@@ -240,10 +240,13 @@ private func seconds(_ work: () -> Void) -> Double {
             "JSON limits are 500,000 values and 512 levels")
         check(limits.maxOutputBytes == 16 * 1024 * 1024, "the Markdown output limit is 16 MiB")
         check(limits.maxResourceBytes == 8 * 1024 * 1024, "the local resource limit is 8 MiB")
+        check(
+            limits.markdownMaxTableColumns == 4096 && limits.markdownMaxTableCells == 1_000_000,
+            "Markdown tables are limited to 4,096 columns and 1,000,000 cells in a document")
         let messages: [PreviewLimit] = [
             .sourceTooLarge(maxBytes: limits.maxSourceBytes), .outputTooLarge(maxBytes: limits.maxOutputBytes),
             .tooManyRows(shown: 100_000), .tooManyColumns(shown: 512), .tooManyValues(shown: 500_000),
-            .nestedTooDeeply(maxDepth: 512)
+            .nestedTooDeeply(maxDepth: 512), .tooManyTableCells(maxCells: limits.markdownMaxTableCells)
         ]
         for limit in messages {
             let message = limit.message
@@ -463,15 +466,30 @@ private func seconds(_ work: () -> Void) -> Double {
         check(
             rendered("[x](../other/page.md#part)")?.contains("href=\"../other/page.md#part\"") == true,
             "a relative link is kept")
+        // "//host/path" asks for another computer. Written out, it would be counted once as an
+        // external resource and again as a local file that was refused.
         check(
-            rendered("[x](//example.com/a)")?.contains("href=\"//example.com/a\"") == true,
-            "a scheme-relative link is kept; it resolves inside the preview scheme")
+            rendered("[x](//example.com/a) ![alt](//example.com/i.png) [y](<//example.com/b>)")
+                == "<p>x alt y</p>\n",
+            "a destination that starts with two slashes is refused: the link keeps its text, the image its description")
+        check(
+            rendered("[x]: //example.com/a\n\n[x] and [z](/one//two)")
+                == "<p>x and <a href=\"/one//two\">z</a></p>\n",
+            "through a reference too; two slashes later in a path are ordinary")
+        if case .rendered(let fragment) = MarkdownRenderer.render("![alt](//example.com/i.png)", isCancelled: never),
+            case .prepared(let scanned) = StaticHTMLPolicy.prepare(html: fragment, isCancelled: never)
+        {
+            check(scanned.report.externalReferences.isEmpty, "so nothing is left to report twice")
+        } else {
+            check(false, "a refused image renders")
+        }
         for (url, allowed) in [
             ("http://a", true), ("HTTPS://a", true), ("mailto:a@b", true), ("a/b.png", true), ("#x", true),
             ("?q=1", true),
             ("a:b/c d", false), ("javascript:1", false), (" javascript:1", false), ("java\nscript:1", false),
             ("data:,x", false), ("file:///x", false), ("ftp://a", false), ("tel:1", false), ("x-custom://a", false),
-            ("1a:b", true), ("a b:c", true), ("", true)
+            ("1a:b", true), ("a b:c", true), ("", true), ("//a/b", false), (" //a/b", false), ("/a//b", true),
+            ("/a", true)
         ] {
             check(
                 PreviewURLPolicy.allowsMarkdownDestination(url) == allowed,
@@ -550,6 +568,9 @@ private func seconds(_ work: () -> Void) -> Double {
             check(false, "a huge table renders")
         }
 
+        checkMarkdownTableBounds()
+        checkLinkTargetScan()
+
         let storms: [(String, String)] = [
             ("unclosed brackets", String(repeating: "[", count: 200_000)),
             ("closing brackets", String(repeating: "]", count: 200_000)),
@@ -605,6 +626,128 @@ private func seconds(_ work: () -> Void) -> Double {
             MarkdownRenderer.render(expanding, limits: smallOutput, isCancelled: never)
                 == .limited(.outputTooLarge(maxBytes: 2_000)),
             "Markdown whose HTML passes the output limit is refused with the reason")
+    }
+
+    /// The most memory this process has used so far, in bytes.
+    private static func peakMemory() -> Int {
+        var usage = rusage()
+        getrusage(RUSAGE_SELF, &usage)
+        return Int(usage.ru_maxrss)
+    }
+
+    /// A table whose rows are much shorter than its header must not be padded in memory: 100 KB
+    /// of source once asked for 300 million empty cells.
+    static func checkMarkdownTableBounds() {
+        func table(columns: Int, rows: Int) -> String {
+            String(repeating: "|a", count: columns) + "\n" + String(repeating: "|-", count: columns) + "\n"
+                + String(repeating: "|\n", count: rows)
+        }
+        let megabyte = 1_048_576
+        let limits = PreviewLimits.standard
+
+        // Wider than the column cap: not a table at all.
+        let tooWide = table(columns: 12_500, rows: 25_000)
+        var memoryBefore = peakMemory()
+        var outcome = MarkdownRendering.cancelled
+        var elapsed = seconds { outcome = MarkdownRenderer.render(tooWide, isCancelled: never) }
+        var growth = (peakMemory() - memoryBefore) / megabyte
+        if case .rendered(let html) = outcome {
+            check(
+                !html.contains("<table>") && html.contains("|a|a") && markdownOutputViolation(html) == nil,
+                "a header wider than \(limits.markdownMaxTableColumns) columns is shown as text, not as a table")
+        } else {
+            check(false, "a 12,500-column header with 25,000 short rows renders as text: \(outcome)")
+        }
+        check(
+            elapsed < 5 && growth < 200,
+            "100 KB of table-shaped text costs little: \(String(format: "%.2f", elapsed)) s, peak memory grew \(growth) MB")
+
+        // Inside the column cap, but 96 million cells once padded.
+        let manyCells = table(columns: 4_000, rows: 24_000)
+        memoryBefore = peakMemory()
+        elapsed = seconds { outcome = MarkdownRenderer.render(manyCells, isCancelled: never) }
+        growth = (peakMemory() - memoryBefore) / megabyte
+        check(
+            outcome == .limited(.tooManyTableCells(maxCells: limits.markdownMaxTableCells)),
+            "a table of 4,000 columns and 24,000 short rows stops at the cell limit")
+        check(
+            elapsed < 5 && growth < 200,
+            "and stops early: \(String(format: "%.2f", elapsed)) s, peak memory grew \(growth) MB")
+        check(
+            PreviewLimit.tooManyTableCells(maxCells: 1_000_000).message
+                == "This document is too large to preview. Its tables have more than \(Strings.number(1_000_000)) cells.",
+            "the cell limit has a plain sentence")
+
+        // With the cell limit out of the way, the rows are still not padded in memory, the
+        // output limit ends the work, and cancellation is seen while the rows are read.
+        var unlimitedCells = limits
+        unlimitedCells.markdownMaxTableCells = Int.max
+        memoryBefore = peakMemory()
+        elapsed = seconds { outcome = MarkdownRenderer.render(manyCells, limits: unlimitedCells, isCancelled: never) }
+        growth = (peakMemory() - memoryBefore) / megabyte
+        check(
+            outcome == .limited(.outputTooLarge(maxBytes: limits.maxOutputBytes)) && elapsed < 10 && growth < 300,
+            "short rows are padded only as they are written, under the output limit: \(String(format: "%.2f", elapsed)) s, peak memory grew \(growth) MB")
+        let tallTable = table(columns: 2, rows: 400_000)
+        let rowProbe = CancellationProbe()
+        _ = MarkdownRenderer.render(tallTable, limits: unlimitedCells, isCancelled: rowProbe.isCancelled)
+        let cancelling = CancellationProbe(cancelAtPoll: 20)
+        elapsed = seconds {
+            outcome = MarkdownRenderer.render(tallTable, limits: unlimitedCells, isCancelled: cancelling.isCancelled)
+        }
+        check(
+            outcome == .cancelled && cancelling.polls == 20 && rowProbe.polls >= 2 * (tallTable.utf8.count / 8192),
+            "table rows are polled as they are read and as they are written (\(rowProbe.polls) polls for \(tallTable.utf8.count) bytes), and cancelling stops at once")
+        let wideCancel = CancellationProbe(cancelAtPoll: 2)
+        memoryBefore = peakMemory()
+        elapsed = seconds {
+            outcome = MarkdownRenderer.render(manyCells, limits: unlimitedCells, isCancelled: wideCancel.isCancelled)
+        }
+        growth = (peakMemory() - memoryBefore) / megabyte
+        check(
+            outcome == .cancelled && wideCancel.polls == 2 && elapsed < 1 && growth < 100,
+            "cancelling a wide table is prompt: \(String(format: "%.3f", elapsed)) s, peak memory grew \(growth) MB")
+
+        check(
+            rendered("| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 | 4 |")
+                == "<table>\n<thead>\n<tr>\n<th>a</th>\n<th>b</th>\n<th>c</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>1</td>\n<td></td>\n<td></td>\n</tr>\n<tr>\n<td>1</td>\n<td>2</td>\n<td>3</td>\n</tr>\n</tbody>\n</table>\n",
+            "a short row is still padded and a long row still cut to the header's width")
+        var narrow = limits
+        narrow.markdownMaxTableColumns = 2
+        check(
+            rendered("|a|b|\n|-|-|\n|1|2|", limits: narrow)?.contains("<table>") == true
+                && rendered("|a|b|c|\n|-|-|-|\n|1|2|3|", limits: narrow)?.contains("<table>") == false,
+            "the column cap is exact")
+    }
+
+    /// `[](a (` repeated: every `](` once started a scan of up to 2,048 bytes for a closing
+    /// parenthesis that is not there.
+    static func checkLinkTargetScan() {
+        let hostile = String(repeating: "[](a (", count: 1_048_576 / 6)
+        let plain = String(repeating: "word ", count: hostile.utf8.count / 5)
+        var plainHTML: String?
+        var hostileHTML: String?
+        let plainSeconds = seconds { plainHTML = rendered(plain) }
+        let hostileSeconds = seconds { hostileHTML = rendered(hostile) }
+        check(
+            plainHTML != nil && hostileHTML != nil && hostileSeconds < 10 * plainSeconds + 0.3,
+            "1 MB of failed link targets takes time in proportion to its size: \(String(format: "%.2f", hostileSeconds)) s against \(String(format: "%.2f", plainSeconds)) s for plain text of the same size")
+        check(
+            hostileHTML == "<p>" + hostile + "</p>\n" && markdownOutputViolation(hostileHTML ?? "") == nil,
+            "and is shown as the text that was typed")
+        let later = String(repeating: "[](a (", count: 100) + " [real](https://example.com/x \"t\")"
+        check(
+            rendered(later)?.contains("<a href=\"https://example.com/x\" title=\"t\">real</a>") == true,
+            "a link after a few failed attempts is still a link")
+        let exhausted = String(repeating: "[](a (", count: 4_000) + " [real](https://example.com/x) [ref]\n\n[ref]: /r"
+        check(
+            rendered(exhausted)?.contains("[real](https://example.com/x)") == true
+                && rendered(exhausted)?.contains("<a href=\"/r\">ref</a>") == true,
+            "once the allowance is used up the paragraph has no more inline links; reference links still work")
+        check(
+            rendered(exhausted + "\n\n[next](https://example.com/y)")?.contains(
+                "<a href=\"https://example.com/y\">next</a>") == true,
+            "the next paragraph starts with a full allowance")
     }
 
     /// A document of about two mebibytes that mixes every block construct.
@@ -676,6 +819,20 @@ private func seconds(_ work: () -> Void) -> Double {
         check(
             lineProbe.polls >= longLine.utf8.count / 8192,
             "a single 1 MiB line is polled as often as many short lines (\(lineProbe.polls) polls)")
+
+        // Blocks that are read line by line before any inline text is rendered are polled there.
+        let codeBlock = String(repeating: "    indented code\n", count: 60_000)
+        let codeProbe = CancellationProbe()
+        _ = MarkdownRenderer.render(codeBlock, isCancelled: codeProbe.isCancelled)
+        check(
+            codeProbe.polls >= codeBlock.utf8.count / 4096 - 1,
+            "one indented code block of \(codeBlock.utf8.count) bytes is polled while it is read (\(codeProbe.polls) polls)")
+        let paragraph = String(repeating: "one line of a long paragraph\n", count: 40_000)
+        let paragraphProbe = CancellationProbe()
+        _ = MarkdownRenderer.render(paragraph, isCancelled: paragraphProbe.isCancelled)
+        check(
+            paragraphProbe.polls >= paragraph.utf8.count / 4096 + paragraph.utf8.count / 8192,
+            "one paragraph of \(paragraph.utf8.count) bytes is polled while its lines are gathered and again while it is rendered (\(paragraphProbe.polls) polls)")
 
         // The default closure reads the cancellation state of the calling task.
         let detached = Task.detached { () -> MarkdownRendering in
@@ -861,6 +1018,46 @@ private func seconds(_ work: () -> Void) -> Double {
             report("<base href='/x'>").hasBaseTag && !report("<p>base</p><!-- <base> -->").hasBaseTag,
             "only a real base tag is reported")
         check(report("< p><3 <-- a < b > c <\n").scriptCount == 0, "stray angle brackets are tolerated")
+
+        // A script ends at "</script" followed by a space, a slash or ">", not at "</scriptx".
+        let longerName = report("<script>a</scriptx><img src='http://inside.example/a.png'></script><img src='http://after.example/b.png'>")
+        check(
+            longerName.externalReferences == ["http://after.example/b.png"] && longerName.scriptCount == 1,
+            "\"</scriptx\" does not end a script: \(longerName.externalReferences)")
+        check(
+            preparedHTML("<script></scriptx><head></script><p>")?.html == "<head>" + policyTag + "</head><script></scriptx><head></script><p>",
+            "so a head tag written inside that script is not taken for the document's head")
+        for ending in ["</script>", "</SCRIPT >", "</script/>", "</script\n>"] {
+            check(
+                report("<script>x\(ending)<img src='http://after.example/b.png'>").externalReferences
+                    == ["http://after.example/b.png"], "a script ends at \(ending.debugDescription)")
+        }
+        check(
+            report("<style>a{}</stylesheet>b{background:url(http://in.example/a.png)}</style>").externalReferences
+                == ["http://in.example/a.png"], "\"</stylesheet\" does not end a style element")
+
+        // Style sheets are polled like everything else.
+        let sheet = String(repeating: "a { color: red; background: none }\n", count: 30_000)
+        // The tokenizer polls a style element byte by byte and a tag once; the style scan then
+        // reads the same bytes again, polling as it goes.
+        for (name, document, passes) in [
+            ("a style element", "<style>" + sheet + "</style>", 2),
+            ("a style attribute", "<p style=\"" + sheet + "\">", 1)
+        ] {
+            let probe = CancellationProbe()
+            _ = StaticHTMLPolicy.prepare(html: document, isCancelled: probe.isCancelled)
+            check(
+                probe.polls >= passes * (document.utf8.count / 4096) - 2,
+                "\(name) of \(document.utf8.count) bytes is polled while its addresses are read (\(probe.polls) polls)")
+            let cancelling = CancellationProbe(cancelAtPoll: probe.polls - 1)
+            check(
+                StaticHTMLPolicy.prepare(html: document, isCancelled: cancelling.isCancelled) == .cancelled,
+                "and cancelling near the end of \(name) stops it")
+        }
+        let svgSheet = "<svg><style>" + sheet + "</style></svg>"
+        let svgProbe = CancellationProbe()
+        _ = SVGPolicy.scan(svgSheet, isCancelled: svgProbe.isCancelled)
+        check(svgProbe.polls >= 2 * (svgSheet.utf8.count / 4096) - 2, "an SVG style sheet is polled too")
         check(
             report(String(repeating: "<img src='http://x.example/a.png'>", count: 5_000)).externalReferences.count == 1,
             "a repeated reference is listed once")
@@ -929,9 +1126,35 @@ private func seconds(_ work: () -> Void) -> Double {
             }
             return URL(fileURLWithPath: path)
         }
+        let home = URL(fileURLWithPath: "/Users/reader")
         let resolver = PreviewResourceResolver(
-            documentURL: document, resolveSymlinks: resolveLinks, fileSize: { files[$0.path] })
+            documentURL: document, homeDirectory: home, resolveSymlinks: resolveLinks, fileSize: { files[$0.path] })
         func resolve(_ path: String) -> PreviewResourceResolver.Resolution { resolver.resolve(requestPath: path) }
+
+        // A document saved directly in the home folder or at the top of the disk has no folder
+        // of its own: "its folder" would be everything the person owns, or the whole disk.
+        func resolve(_ path: String, documentAt location: String) -> PreviewResourceResolver.Resolution {
+            PreviewResourceResolver(
+                documentURL: URL(fileURLWithPath: location), homeDirectory: home, resolveSymlinks: resolveLinks,
+                fileSize: { _ in 1 }
+            ).resolve(requestPath: path)
+        }
+        check(
+            resolve("secret.png", documentAt: "/Users/reader/page.html") == .denied(.documentFolderTooBroad)
+                && resolve("Site/style.css", documentAt: "/Users/reader/page.html") == .denied(.documentFolderTooBroad),
+            "a document in the home folder itself is served no local file")
+        check(
+            resolve("etc/x.png", documentAt: "/page.html") == .denied(.documentFolderTooBroad),
+            "a document at the top of the disk is served no local file")
+        check(
+            resolve("x.png", documentAt: "/Users/reader/Site/linkdir/page.html") == .denied(.documentFolderTooBroad),
+            "a folder that is a link to the home folder counts as the home folder")
+        check(
+            resolve("x.png", documentAt: "/Users/reader/Documents/page.html")
+                == .allowed(URL(fileURLWithPath: "/Users/reader/Documents/x.png"), mimeType: "image/png")
+                && resolve("x.png", documentAt: "/Users/other/page.html")
+                    == .allowed(URL(fileURLWithPath: "/Users/other/x.png"), mimeType: "image/png"),
+            "a subfolder of the home folder, and another folder beside it, are ordinary document folders")
         func allowed(_ path: String, _ mimeType: String) -> PreviewResourceResolver.Resolution {
             .allowed(URL(fileURLWithPath: path), mimeType: mimeType)
         }
@@ -1187,15 +1410,29 @@ private func seconds(_ work: () -> Void) -> Double {
             "the unterminated-quote message is a sentence naming the row")
         let stray = try requireValue(parsedTable("x\na,b\"c,d\n\"e\"f,g\nh\"\n"), "stray quotes parse")
         check(
-            stray.rows == [["x", "", ""], ["a", "b\"c", "d"], ["ef", "g", ""], ["h\"", "", ""]],
+            stray.rows == [["x", "", ""], ["a", "b\"c", "d"], ["\"e\"f", "g", ""], ["h\"", "", ""]],
             "a stray quote is kept literally")
         check(
             stray.diagnostics.map(\.row) == [2, 3, 4] && stray.diagnostics.allSatisfy { $0.kind == .strayQuote },
             "each stray quote is reported with its row")
         check(stray.diagnostics.map(\.line) == [2, 3, 4], "each stray quote is reported with its line")
+        // The message says "It is shown as written", so nothing may be removed from such a value.
         check(
-            rows("\"a\" ,b") == [["a ", "b"]] && parsedTable("\"a\" ,b")?.diagnosticCount == 1,
-            "text after a closing quote is kept and reported")
+            rows("\"a\"b,c") == [["\"a\"b", "c"]] && parsedTable("\"a\"b,c")?.diagnostics.map(\.kind) == [.strayQuote],
+            "a value with text after its closing quote keeps every byte, quotes included: \(rows("\"a\"b,c") ?? [])")
+        check(
+            rows("\"a\" ,b") == [["\"a\" ", "b"]] && parsedTable("\"a\" ,b")?.diagnosticCount == 1,
+            "a space after a closing quote keeps the quotes and the space: \(rows("\"a\" ,b") ?? [])")
+        check(
+            rows("\"a,\"\"b\nc\"x,d\ne") == [["\"a,\"\"b\nc\"x", "d"], ["e", ""]]
+                && parsedTable("\"a,\"\"b\nc\"x,d\ne")?.rowLines == [1, 3],
+            "such a value keeps its delimiter, doubled quote and line break as written, and lines are still counted")
+        check(
+            rows("\"a\",\"b\"\"c\"") == [["a", "b\"c"]] && parsedTable("\"a\",\"b\"\"c\"")?.diagnosticCount == 0,
+            "a well-formed quoted value is still unquoted")
+        check(
+            parsedTable("\"a\"b,c")?.diagnostics.first?.message.contains("shown as written") == true,
+            "the stray-quote sentence says the value is shown as written")
         check(
             rows("\"") == [[""]] && parsedTable("\"")?.diagnostics.first?.kind == .unterminatedQuote,
             "a lone quote is an unterminated empty value")
@@ -1267,6 +1504,15 @@ private func seconds(_ work: () -> Void) -> Double {
         check(
             parsedTable(emptyCells)?.columnCount == limits.delimitedMaxColumns,
             "a million empty cells on one row are bounded by the column limit")
+        let emptyProbe = CancellationProbe()
+        _ = DelimitedTable.parse(emptyCells, delimiter: ",", isCancelled: emptyProbe.isCancelled)
+        check(
+            emptyProbe.polls >= emptyCells.utf8.count / 8192,
+            "a row of empty values is polled too (\(emptyProbe.polls) polls)")
+        let emptyCancel = CancellationProbe(cancelAtPoll: 3)
+        check(
+            DelimitedTable.parse(emptyCells, delimiter: ",", isCancelled: emptyCancel.isCancelled) == .cancelled
+                && emptyCancel.polls == 3, "and stops when cancelled")
     }
 
     // MARK: JSON
